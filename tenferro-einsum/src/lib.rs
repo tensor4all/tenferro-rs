@@ -4,6 +4,8 @@
 //! values. It supports:
 //!
 //! - **String notation**: `"ij,jk->ik"` (NumPy/PyTorch compatible)
+//! - **Parenthesized contraction order**: `"ij,(jk,kl)->il"` to control
+//!   pairwise contraction sequence in string notation
 //! - **Integer label notation**: omeinsum-rs compatible, using `u32` labels
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
@@ -88,11 +90,17 @@ impl Subscripts {
     /// Input tensors are separated by commas, and `->` separates inputs
     /// from the output.
     ///
+    /// Parentheses can be used to specify contraction order explicitly.
+    /// Grouped operands are contracted first, enabling manual control
+    /// over the pairwise contraction sequence without using
+    /// [`ContractionTree::from_pairs`].
+    ///
     /// # Examples
     ///
     /// - `"ij,jk->ik"` — matrix multiplication
     /// - `"ii->i"` — diagonal extraction
     /// - `"ijk->"` — full contraction (scalar result)
+    /// - `"ij,(jk,kl)->il"` — contract B and C first, then with A
     ///
     /// # Errors
     ///
@@ -180,6 +188,10 @@ impl ContractionTree {
 /// executes the contraction. The backend is selected automatically from
 /// the tensors' device.
 ///
+/// Parentheses in the subscript string specify contraction order
+/// explicitly (e.g., `"ij,(jk,kl)->il"` contracts B and C first).
+/// Without parentheses, the contraction order is optimized automatically.
+///
 /// # Arguments
 ///
 /// * `subscripts` — Einstein summation notation (e.g., `"ij,jk->ik"`)
@@ -196,6 +208,9 @@ impl ContractionTree {
 ///
 /// // Batch matrix multiplication
 /// let c = einsum("bij,bjk->bik", &[&a, &b]).unwrap();
+///
+/// // Explicit contraction order: contract B*C first, then A
+/// let d = einsum("ij,(jk,kl)->il", &[&a, &b, &c]).unwrap();
 /// ```
 ///
 /// # Errors
