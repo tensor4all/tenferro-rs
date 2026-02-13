@@ -50,12 +50,25 @@
 //! ## Batch operations
 //!
 //! ```ignore
-//! // Batch of 10 matrices, each 3×4 and 4×5
+//! // Batched GEMM: 10 independent matrix multiplications in one call
+//! // A: (batch=10, m=3, k=4), B: (batch=10, k=4, n=5) -> C: (batch=10, m=3, n=5)
 //! let a = Tensor::<f64>::zeros(&[10, 3, 4], Device::Cpu, col);
 //! let b = Tensor::<f64>::zeros(&[10, 4, 5], Device::Cpu, col);
-//!
-//! // Batch matrix multiplication
 //! let c = einsum("bij,bjk->bik", &[&a, &b]).unwrap();
+//! assert_eq!(c.dims(), &[10, 3, 5]);
+//!
+//! // Multiple batch dimensions: (batch1=2, batch2=3, m, k) x (batch1=2, batch2=3, k, n)
+//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], Device::Cpu, col);
+//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], Device::Cpu, col);
+//! let c = einsum("abij,abjk->abik", &[&a, &b]).unwrap();
+//! assert_eq!(c.dims(), &[2, 3, 4, 6]);
+//!
+//! // Broadcast batch: A has batch dim, B is shared across batch
+//! // A: (batch=10, m=3, k=4), B: (k=4, n=5) -> C: (batch=10, m=3, n=5)
+//! let a = Tensor::<f64>::zeros(&[10, 3, 4], Device::Cpu, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], Device::Cpu, col);
+//! let c = einsum("bij,jk->bik", &[&a, &b]).unwrap();
+//! assert_eq!(c.dims(), &[10, 3, 5]);
 //! ```
 //!
 //! ## Integer label notation
