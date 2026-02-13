@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "tenferro-device",
+    "tenferro-tensorops",
+    "tenferro-tensor",
+    "tenferro-einsum",
+]
+resolver = "2"

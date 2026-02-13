@@ -1,0 +1,11 @@
+[package]
+name = "tenferro-device"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Device abstraction and shared error types for the tenferro workspace."
+publish = false
+
+[dependencies]
+strided-view = { git = "https://github.com/tensor4all/strided-rs" }
+thiserror = "1.0"
