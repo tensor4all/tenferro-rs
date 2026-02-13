@@ -25,8 +25,35 @@ jobs:
       - name: Build documentation
         run: cargo doc --no-deps --workspace
 
-      - name: Add redirect index.html
-        run: echo '<meta http-equiv="refresh" content="0; url=tenferro_device/index.html">' > target/doc/index.html
+      - name: Add index.html
+        run: |
+          cat > target/doc/index.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"><title>tenferro-rs</title>
+          <style>
+            body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; color: #333; }
+            h1 { border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+            ul { list-style: none; padding: 0; }
+            li { margin: 12px 0; }
+            a { color: #4078c0; text-decoration: none; font-size: 18px; font-family: monospace; }
+            a:hover { text-decoration: underline; }
+            .desc { color: #666; font-size: 14px; margin-left: 8px; font-family: sans-serif; }
+          </style>
+          </head>
+          <body>
+          <h1>tenferro-rs</h1>
+          <p>A general-purpose tensor computation library in Rust with CPU/GPU support.</p>
+          <ul>
+            <li><a href="tenferro_einsum/index.html">tenferro-einsum</a> <span class="desc">High-level einsum with N-ary contraction tree optimization</span></li>
+            <li><a href="tenferro_tensor/index.html">tenferro-tensor</a> <span class="desc">Dense tensor type with CPU/GPU support</span></li>
+            <li><a href="tenferro_prims/index.html">tenferro-prims</a> <span class="desc">Backend-agnostic TensorPrims&lt;A&gt; trait, plan-based execution</span></li>
+            <li><a href="tenferro_algebra/index.html">tenferro-algebra</a> <span class="desc">HasAlgebra, Semiring, Standard algebra types</span></li>
+            <li><a href="tenferro_device/index.html">tenferro-device</a> <span class="desc">Device enum, Error/Result types</span></li>
+          </ul>
+          </body>
+          </html>
+          HTMLEOF
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
