@@ -94,6 +94,11 @@ version = "0.1.0"
 [[package]]
 name = "tenferro-tensorops"
 version = "0.1.0"
+dependencies = [
+ "strided-traits",
+ "strided-view",
+ "tenferro-device",
+]
 
 [[package]]
 name = "thiserror"

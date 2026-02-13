@@ -2,4 +2,11 @@
 name = "tenferro-tensorops"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "cuTENSOR-compatible tensor operation protocol (TensorOps trait) for the tenferro workspace."
 publish = false
+
+[dependencies]
+tenferro-device = { path = "../tenferro-device" }
+strided-view = { git = "https://github.com/tensor4all/strided-rs" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
