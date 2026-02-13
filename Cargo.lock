@@ -107,6 +107,7 @@ version = "0.1.0"
 dependencies = [
  "strided-traits",
  "strided-view",
+ "tenferro-algebra",
  "tenferro-device",
 ]
 
