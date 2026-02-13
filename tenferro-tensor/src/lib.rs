@@ -328,4 +328,24 @@ impl<T: ScalarBase> Tensor<T> {
     pub fn is_contiguous(&self) -> bool {
         todo!()
     }
+
+    /// Return a tensor with complex-conjugated elements.
+    ///
+    /// For real types (`f32`, `f64`), returns a copy unchanged.
+    /// For complex types (`Complex32`, `Complex64`), negates the imaginary part.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use num_complex::Complex64;
+    ///
+    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
+    /// let a = Tensor::from_slice(&data, &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let a_conj = a.conj();
+    /// // a_conj contains [1.0 - 2.0i, 3.0 + 4.0i]
+    /// ```
+    pub fn conj(&self) -> Tensor<T> {
+        todo!()
+    }
 }
