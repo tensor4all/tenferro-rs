@@ -1,6 +1,6 @@
 # tenferro-rs
 
-Unified tensor backend library for the [tensor4all](https://github.com/tensor4all) ecosystem.
+A general-purpose tensor computation library in Rust with CPU/GPU support.
 
 ## Overview
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**tenferro-rs** is a Rust workspace for a unified tensor backend library (`tenferro-*` crates). It provides:
+**tenferro-rs** is a general-purpose tensor computation library in Rust (`tenferro-*` crates). It provides:
 - Dense tensor types with CPU/GPU support
 - cuTENSOR/hipTensor-compatible operation protocol (`TensorOps` trait)
 - High-level einsum with N-ary contraction tree optimization
