@@ -1,10 +1,10 @@
-# t4a-rs
+# tenferro-rs
 
 Unified tensor backend library for the [tensor4all](https://github.com/tensor4all) ecosystem.
 
 ## Overview
 
-`t4a-rs` is a Rust workspace providing:
+`tenferro-rs` is a Rust workspace providing:
 
 - Dense tensor types with CPU/GPU support
 - cuTENSOR/hipTensor-compatible operation protocol (`TensorOps` trait)

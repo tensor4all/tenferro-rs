@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**t4a-rs** is a Rust workspace for a unified tensor backend library (`t4a-*` crates). It provides:
+**tenferro-rs** is a Rust workspace for a unified tensor backend library (`tenferro-*` crates). It provides:
 - Dense tensor types with CPU/GPU support
 - cuTENSOR/hipTensor-compatible operation protocol (`TensorOps` trait)
 - High-level einsum with N-ary contraction tree optimization
@@ -16,7 +16,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `strided-view`: Dynamic-rank strided views (`StridedView`/`StridedViewMut`)
 - `strided-kernel`: Cache-optimized map/reduce/broadcast kernels
 
-t4a-rs depends on strided-rs but does not absorb it. strided-rs has no BLAS dependency and can be used standalone.
+tenferro-rs depends on strided-rs but does not absorb it. strided-rs has no BLAS dependency and can be used standalone.
 
 ### Design Documents
 
@@ -46,13 +46,13 @@ If `cargo fmt --check` fails, run `cargo fmt` to fix formatting automatically.
 cargo build
 
 # Build a specific crate
-cargo build -p t4a-tensorops
+cargo build -p tenferro-tensorops
 
 # Run all tests
 cargo test
 
 # Run tests for a specific crate
-cargo test -p t4a-einsum
+cargo test -p tenferro-einsum
 
 # Run a single test
 cargo test test_name
@@ -64,7 +64,7 @@ cargo fmt --check
 cargo bench
 
 # Run a specific benchmark
-cargo bench -p t4a-tensorops -- contraction
+cargo bench -p tenferro-tensorops -- contraction
 
 # Run benchmarks with native CPU features
 RUSTFLAGS="-C target-cpu=native" cargo bench
@@ -75,12 +75,12 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 ### Layered Design
 
 ```
-Layer 4: t4a-einsum      — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, backward
-Layer 3: t4a-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops
-Layer 2: t4a-tensorops    — "Tensor BLAS": cuTENSOR-compatible TensorOps trait, plan-based execution
-Shared:  t4a-device       — Device enum, BackendRegistry, GPU vtable (dlopen)
-Layer 1: CPU backends     — strided-kernel + GEMM (faer/cblas)
-         GPU backends     — cuTENSOR / hipTensor via t4a-device vtable
+Layer 4: tenferro-einsum      — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, backward
+Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops
+Layer 2: tenferro-tensorops    — "Tensor BLAS": cuTENSOR-compatible TensorOps trait, plan-based execution
+Shared:  tenferro-device       — Device enum, BackendRegistry, GPU vtable (dlopen)
+Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas)
+         GPU backends          — cuTENSOR / hipTensor via tenferro-device vtable
 
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
 ```
