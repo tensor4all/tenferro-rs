@@ -70,7 +70,7 @@
 //! let view_mut = b_mut.view_mut();
 //! ```
 
-use strided_traits::ScalarBase;
+use strided_traits::{ElementOpApply, ScalarBase};
 use strided_view::{StridedArray, StridedView, StridedViewMut};
 use tenferro_device::{Device, Result};
 
@@ -119,12 +119,35 @@ pub enum DataBuffer<T> {
 /// Use [`view`](Tensor::view) and [`view_mut`](Tensor::view_mut) to obtain
 /// [`StridedView`] / [`StridedViewMut`] references for passing to
 /// low-level operations.
+///
+/// ## GPU async support
+///
+/// The `event` field tracks pending GPU computation. When a GPU operation
+/// produces a tensor, `event` is set to `Some(CompletionEvent)`. Passing this
+/// tensor to another GPU operation chains via stream dependencies without
+/// CPU synchronization. Methods that access data from CPU (e.g.,
+/// [`view`](Tensor::view), [`conj`](Tensor::conj)) call
+/// [`wait`](Tensor::wait) internally. For CPU tensors, `event` is always
+/// `None` with zero overhead.
 pub struct Tensor<T: ScalarBase> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
     device: Device,
+    /// Pending GPU computation event. `None` for CPU tensors or
+    /// when GPU computation has completed.
+    event: Option<CompletionEvent>,
+}
+
+/// Placeholder for an accelerator synchronization event.
+///
+/// Tracks completion of asynchronous operations on accelerator devices
+/// (GPU, FPGA, etc.), enabling operation chaining without CPU
+/// synchronization. Will be replaced with an actual implementation
+/// (e.g., CUDA/HIP event handle) when accelerator backends are added.
+pub struct CompletionEvent {
+    _private: (),
 }
 
 impl<T: ScalarBase> Tensor<T> {
@@ -345,7 +368,66 @@ impl<T: ScalarBase> Tensor<T> {
     /// let a_conj = a.conj();
     /// // a_conj contains [1.0 - 2.0i, 3.0 + 4.0i]
     /// ```
-    pub fn conj(&self) -> Tensor<T> {
-        todo!()
+    pub fn conj(&self) -> Tensor<T>
+    where
+        T: ElementOpApply,
+    {
+        match &self.buffer {
+            DataBuffer::Cpu(array) => {
+                // Conjugation is element-wise and position-independent,
+                // so we conjugate the raw buffer directly and preserve layout.
+                let conj_data: Vec<T> = array.data().iter().copied().map(T::conj).collect();
+                let src_offset = array.view().offset();
+                let new_array =
+                    StridedArray::from_parts(conj_data, array.dims(), array.strides(), src_offset)
+                        .expect("internal: conjugated buffer has identical layout");
+
+                Tensor {
+                    buffer: DataBuffer::Cpu(new_array),
+                    dims: self.dims.clone(),
+                    strides: self.strides.clone(),
+                    offset: self.offset,
+                    device: self.device,
+                    event: None,
+                }
+            }
+        }
+    }
+
+    // ========================================================================
+    // GPU async support
+    // ========================================================================
+
+    /// Wait for any pending GPU computation to complete.
+    ///
+    /// No-op for CPU tensors or when GPU computation has already completed.
+    /// Methods that access tensor data from CPU ([`view`](Tensor::view),
+    /// [`conj`](Tensor::conj), [`contiguous`](Tensor::contiguous)) call
+    /// this internally, so explicit calls are only needed when the caller
+    /// wants to ensure completion at a specific point.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // GPU einsum returns immediately with pending event
+    /// let c = einsum("ij,jk->ik", &[&a_gpu, &b_gpu]).unwrap();
+    /// assert!(!c.is_ready());
+    ///
+    /// // Explicit wait
+    /// c.wait();
+    /// assert!(c.is_ready());
+    /// ```
+    pub fn wait(&self) {
+        // Currently a no-op: only CPU tensors exist (event is always None).
+        // Will synchronize on CompletionEvent when GPU backends are implemented.
+    }
+
+    /// Check if tensor data is ready without blocking.
+    ///
+    /// Returns `true` for CPU tensors (always ready) and for GPU tensors
+    /// whose computation has completed. Returns `false` if a GPU operation
+    /// is still in progress.
+    pub fn is_ready(&self) -> bool {
+        self.event.is_none()
     }
 }
