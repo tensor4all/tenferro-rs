@@ -76,6 +76,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tenferro-algebra"
+version = "0.1.0"
+dependencies = [
+ "num-complex",
+ "strided-traits",
+]
+
+[[package]]
 name = "tenferro-device"
 version = "0.1.0"
 dependencies = [
