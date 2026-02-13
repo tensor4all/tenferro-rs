@@ -20,12 +20,20 @@
 //!
 //! # Examples
 //!
+//! All operations follow the BLAS/cuTENSOR `C = α * op(inputs) + β * C` pattern.
+//!
 //! ## Plan-based contraction (matrix multiplication)
 //!
 //! ```ignore
 //! use tenferro_tensorops::{ContractionDescriptor, CpuBackend, TensorOps};
+//! use strided_view::StridedArray;
 //!
-//! // C_{m,n} = 1.0 * A_{m,k} * B_{k,n} + 0.0 * C_{m,n}
+//! // Create tensors: A (3×4), B (4×5), C (3×5)
+//! let a = StridedArray::<f64>::col_major(&[3, 4]);
+//! let b = StridedArray::<f64>::col_major(&[4, 5]);
+//! let mut c = StridedArray::<f64>::col_major(&[3, 5]);
+//!
+//! // Describe the contraction: C_{m,n} = A_{m,k} * B_{k,n}
 //! let desc = ContractionDescriptor {
 //!     modes_a: vec![0, 1],  // m=0, k=1
 //!     modes_b: vec![1, 2],  // k=1, n=2
@@ -34,19 +42,61 @@
 //!
 //! // Step 1: Create plan (selects kernel, allocates workspace)
 //! let plan = CpuBackend::plan_contraction::<f64>(
-//!     &desc,
-//!     &[3, 4],  // A is 3×4
-//!     &[4, 5],  // B is 4×5
-//!     &[3, 5],  // C is 3×5
+//!     &desc, &[3, 4], &[4, 5], &[3, 5],
 //! ).unwrap();
 //!
-//! // Step 2: Execute (can be called repeatedly with different data)
-//! CpuBackend::contract(&plan, 1.0, &a_view, &b_view, 0.0, &mut c_view).unwrap();
+//! // Step 2: Execute — C = 1.0 * A*B + 0.0 * C (overwrite)
+//! CpuBackend::contract(
+//!     &plan, 1.0, &a.view(), &b.view(), 0.0, &mut c.view_mut(),
+//! ).unwrap();
 //!
-//! // The α/β pattern: C = α*contract(A,B) + β*C
-//! // - α=1, β=0: overwrite C
-//! // - α=1, β=1: accumulate into C
-//! // - α=2, β=0: scale result by 2
+//! // Accumulate: C = 1.0 * A*B + 1.0 * C (add to existing C)
+//! CpuBackend::contract(
+//!     &plan, 1.0, &a.view(), &b.view(), 1.0, &mut c.view_mut(),
+//! ).unwrap();
+//! ```
+//!
+//! ## Element-wise binary (add with broadcasting)
+//!
+//! ```ignore
+//! // Add a bias vector to each column of a matrix:
+//! // C_{i,j} = 1.0 * bias_{i} + 1.0 * C_{i,j}
+//! let bias = StridedArray::<f64>::col_major(&[3]);
+//! let mut c = StridedArray::<f64>::col_major(&[3, 5]);
+//!
+//! CpuBackend::elementwise_binary(
+//!     1.0, &bias.view(), &[0],       // bias has mode 0 (rows)
+//!     1.0, &mut c.view_mut(), &[0, 1], // C has modes 0,1 (rows, cols)
+//! ).unwrap();
+//! ```
+//!
+//! ## Reduction (sum over an axis)
+//!
+//! ```ignore
+//! use tenferro_tensorops::ReduceOp;
+//!
+//! // Sum over columns: c_i = Σ_j A_{i,j}
+//! let a = StridedArray::<f64>::col_major(&[3, 4]);
+//! let mut c = StridedArray::<f64>::col_major(&[3]);
+//!
+//! CpuBackend::reduce(
+//!     1.0, &a.view(), &[0, 1],       // A has modes i=0, j=1
+//!     0.0, &mut c.view_mut(), &[0],  // C has mode i=0 (j is summed out)
+//!     ReduceOp::Sum,
+//! ).unwrap();
+//! ```
+//!
+//! ## Permutation (transpose)
+//!
+//! ```ignore
+//! // Transpose: B_{j,i} = A_{i,j}
+//! let a = StridedArray::<f64>::col_major(&[3, 4]);
+//! let mut b = StridedArray::<f64>::col_major(&[4, 3]);
+//!
+//! CpuBackend::permute(
+//!     1.0, &a.view(), &[0, 1],       // A has modes i=0, j=1
+//!     &mut b.view_mut(), &[1, 0],    // B has modes j=1, i=0
+//! ).unwrap();
 //! ```
 
 use std::marker::PhantomData;
