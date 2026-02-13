@@ -7,7 +7,7 @@ A general-purpose tensor computation library in Rust with CPU/GPU support.
 `tenferro-rs` is a Rust workspace providing:
 
 - Dense tensor types with CPU/GPU support
-- cuTENSOR/hipTensor-compatible operation protocol (`TensorOps` trait)
+- cuTENSOR/hipTensor-compatible operation protocol (`TensorPrims<A>` trait)
 - High-level einsum with N-ary contraction tree optimization
 - Automatic differentiation (VJP/JVP)
 - C FFI for Julia/Python integration

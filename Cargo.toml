@@ -1,7 +1,8 @@
 [workspace]
 members = [
     "tenferro-device",
-    "tenferro-tensorops",
+    "tenferro-algebra",
+    "tenferro-prims",
     "tenferro-tensor",
     "tenferro-einsum",
 ]

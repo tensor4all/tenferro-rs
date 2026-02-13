@@ -76,6 +76,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "tenferro-algebra"
+version = "0.1.0"
+dependencies = [
+ "num-complex",
+ "strided-traits",
+]
+
+[[package]]
 name = "tenferro-device"
 version = "0.1.0"
 dependencies = [
@@ -88,9 +96,20 @@ name = "tenferro-einsum"
 version = "0.1.0"
 dependencies = [
  "strided-traits",
+ "tenferro-algebra",
  "tenferro-device",
+ "tenferro-prims",
  "tenferro-tensor",
- "tenferro-tensorops",
+]
+
+[[package]]
+name = "tenferro-prims"
+version = "0.1.0"
+dependencies = [
+ "strided-traits",
+ "strided-view",
+ "tenferro-algebra",
+ "tenferro-device",
 ]
 
 [[package]]
@@ -98,15 +117,6 @@ name = "tenferro-tensor"
 version = "0.1.0"
 dependencies = [
  "num-traits",
- "strided-traits",
- "strided-view",
- "tenferro-device",
-]
-
-[[package]]
-name = "tenferro-tensorops"
-version = "0.1.0"
-dependencies = [
  "strided-traits",
  "strided-view",
  "tenferro-device",

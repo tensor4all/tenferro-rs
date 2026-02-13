@@ -114,6 +114,7 @@
 //! ```
 
 use strided_traits::ScalarBase;
+use tenferro_algebra::HasAlgebra;
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -296,7 +297,10 @@ impl ContractionTree {
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum<T: ScalarBase>(subscripts: &str, operands: &[&Tensor<T>]) -> Result<Tensor<T>> {
+pub fn einsum<T: ScalarBase + HasAlgebra>(
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+) -> Result<Tensor<T>> {
     todo!()
 }
 
@@ -308,7 +312,7 @@ pub fn einsum<T: ScalarBase>(subscripts: &str, operands: &[&Tensor<T>]) -> Resul
 /// # Errors
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
-pub fn einsum_with_subscripts<T: ScalarBase>(
+pub fn einsum_with_subscripts<T: ScalarBase + HasAlgebra>(
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>> {
@@ -325,7 +329,7 @@ pub fn einsum_with_subscripts<T: ScalarBase>(
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
-pub fn einsum_with_plan<T: ScalarBase>(
+pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>> {

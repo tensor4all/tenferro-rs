@@ -1,0 +1,11 @@
+[package]
+name = "tenferro-algebra"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Algebra traits (HasAlgebra, Semiring, Standard) for the tenferro workspace."
+publish = false
+
+[dependencies]
+strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
+num-complex = "0.4"
