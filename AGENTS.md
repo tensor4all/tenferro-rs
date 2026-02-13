@@ -30,22 +30,33 @@ tenferro-rs depends on strided-rs but does not absorb it. strided-rs has no BLAS
 
 See [tensor4all/tensor4all-meta PR #1](https://github.com/tensor4all/tensor4all-meta/pull/1) for the latest architecture and design documents.
 
+## Code Style
+
+- `cargo fmt --all` for formatting (always run before committing)
+- Avoid `unwrap()`/`expect()` in library code
+- Use `thiserror` for public API error types
+
+### Dependencies
+
+Use **workspace dependencies** for libraries shared across multiple crates. Define the dependency once in the workspace `Cargo.toml` under `[workspace.dependencies]`, then reference it with `dep.workspace = true` in each crate's `Cargo.toml`.
+
 ## Pre-Push / PR Checklist
 
 Before pushing or creating a pull request, **all** of the following must pass:
 
 ```bash
-cargo fmt --check   # formatting
-cargo test          # all tests
+cargo fmt --all --check   # formatting
+cargo test --workspace    # all tests
 ```
 
-If `cargo fmt --check` fails, run `cargo fmt` to fix formatting automatically.
+If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting automatically.
 
 ### PR Creation Rules
 
 - PRs to `main` must be created using `gh pr create`
 - AI-generated PRs must include `Generated with [Claude Code](https://claude.com/claude-code)` in the body
 - Do not include AI-generated analysis reports as standalone files in PRs
+- Enable auto-merge after creating a PR: `gh pr merge --auto --squash --delete-branch`
 
 ## Build Commands
 
