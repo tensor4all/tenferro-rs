@@ -45,6 +45,19 @@
 //!
 //! // Matrix-vector product: A @ v
 //! let mv = einsum("ij,j->i", &[&a, &v]).unwrap();
+//!
+//! // Diagonal embedding: vector -> diagonal matrix
+//! // v = [1, 2, 3] -> [[1,0,0],[0,2,0],[0,0,3]]
+//! let diag = einsum("i->ii", &[&v]).unwrap();
+//! assert_eq!(diag.dims(), &[3, 3]);
+//!
+//! // Diagonal extraction: matrix -> diagonal vector
+//! let d = einsum("ii->i", &[&a]).unwrap();
+//!
+//! // Higher-order diagonal: 3D tensor with repeated index
+//! // Creates T_{iii} from v_i
+//! let t = einsum("i->iii", &[&v]).unwrap();
+//! assert_eq!(t.dims(), &[3, 3, 3]);
 //! ```
 //!
 //! ## Batch operations
