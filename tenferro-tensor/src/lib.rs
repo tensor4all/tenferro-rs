@@ -5,7 +5,9 @@
 //!
 //! - **Zero-copy view operations**: [`Tensor::permute`], [`Tensor::broadcast`],
 //!   [`Tensor::diagonal`] modify only metadata (dims/strides)
-//! - **Data operations**: [`Tensor::contiguous`] copies data into a contiguous layout
+//! - **Data operations**: [`Tensor::contiguous`] / [`Tensor::into_contiguous`] copy
+//!   data into a contiguous layout (the consuming variant avoids allocation when
+//!   the tensor is already contiguous)
 //! - **strided-rs interop**: [`Tensor::view`] / [`Tensor::view_mut`] produce
 //!   [`StridedView`](strided_view::StridedView) /
 //!   [`StridedViewMut`](strided_view::StridedViewMut) for use with
@@ -282,6 +284,40 @@ impl<T: ScalarBase> Tensor<T> {
     /// If the tensor is already contiguous in the requested order,
     /// this may avoid copying (implementation-defined).
     pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
+        todo!()
+    }
+
+    /// Consume this tensor and return a contiguous version.
+    ///
+    /// If the tensor is already contiguous in the requested order, returns
+    /// `self` without copying or allocating. Otherwise, copies data into a
+    /// new contiguous buffer.
+    ///
+    /// Prefer this over [`contiguous`](Tensor::contiguous) when you no
+    /// longer need the original tensor, as it avoids unnecessary allocation
+    /// and reference-count overhead.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::Device;
+    ///
+    /// let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+    ///
+    /// // Transpose creates a non-contiguous view
+    /// let at = a.permute(&[1, 0]).unwrap();
+    /// assert!(!at.is_contiguous());
+    ///
+    /// // into_contiguous copies only when necessary
+    /// let at_contig = at.into_contiguous(MemoryOrder::ColumnMajor);
+    /// assert!(at_contig.is_contiguous());
+    ///
+    /// // Already contiguous: zero-cost passthrough
+    /// let b = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::RowMajor);
+    /// let b2 = b.into_contiguous(MemoryOrder::RowMajor); // no copy
+    /// ```
+    pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T> {
         todo!()
     }
 

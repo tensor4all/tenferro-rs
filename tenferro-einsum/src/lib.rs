@@ -9,6 +9,9 @@
 //! - **Integer label notation**: omeinsum-rs compatible, using `u32` labels
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
+//! - **Accumulating variants**: [`einsum_into`], [`einsum_with_subscripts_into`],
+//!   [`einsum_with_plan_into`] write into a pre-allocated output buffer with
+//!   BLAS-style `alpha`/`beta` scaling, avoiding allocation in hot loops
 //!
 //! # Backend dispatch
 //!
@@ -111,6 +114,27 @@
 //!     &[(1, 2), (0, 3)],  // B*C first (avoids large intermediate)
 //! ).unwrap();
 //! let d = einsum_with_plan(&tree, &[&a, &b, &c]).unwrap();
+//! ```
+//!
+//! ## Accumulating into a pre-allocated output
+//!
+//! ```ignore
+//! use tenferro_einsum::{einsum_with_plan_into, ContractionTree, Subscripts};
+//! use tenferro_tensor::{Tensor, MemoryOrder};
+//! use tenferro_device::Device;
+//!
+//! let col = MemoryOrder::ColumnMajor;
+//! let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+//! let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
+//! let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], Device::Cpu, col);
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], Device::Cpu, col);
+//!
+//! // Hot loop: reuse output buffer, zero allocation per iteration
+//! for _ in 0..1000 {
+//!     // C = 1.0 * (A @ B) + 0.0 * C  (overwrite)
+//!     einsum_with_plan_into(&tree, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+//! }
 //! ```
 
 use strided_traits::ScalarBase;
@@ -333,5 +357,128 @@ pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>> {
+    todo!()
+}
+
+// ============================================================================
+// Accumulating variants (write into pre-allocated output buffer)
+// ============================================================================
+
+/// Execute einsum using string notation, accumulating into an existing output.
+///
+/// Computes `output = alpha * einsum(operands) + beta * output`, writing
+/// the result into the provided output tensor. This avoids allocating a new
+/// output buffer on each call, which is critical for hot loops.
+///
+/// # Arguments
+///
+/// * `subscripts` — Einstein summation notation (e.g., `"ij,jk->ik"`)
+/// * `operands` — Input tensors
+/// * `alpha` — Scaling factor for the einsum result
+/// * `beta` — Scaling factor for the existing output contents
+/// * `output` — Pre-allocated output tensor (must have correct shape)
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::einsum_into;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::Device;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+/// let mut c = Tensor::<f64>::zeros(&[2, 2], Device::Cpu, col);
+///
+/// // Overwrite: C = A @ B
+/// einsum_into("ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+///
+/// // Accumulate: C += A @ B
+/// einsum_into("ij,jk->ik", &[&a, &b], 1.0, 1.0, &mut c).unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if the notation is invalid, tensor shapes are
+/// incompatible, or the output shape does not match the expected result.
+pub fn einsum_into<T: ScalarBase + HasAlgebra>(
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()> {
+    todo!()
+}
+
+/// Execute einsum with pre-built [`Subscripts`], accumulating into an existing output.
+///
+/// Computes `output = alpha * einsum(operands) + beta * output`.
+/// Avoids re-parsing the subscript string on each call.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::{einsum_with_subscripts_into, Subscripts};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::Device;
+///
+/// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+/// let mut c = Tensor::<f64>::zeros(&[3, 5], Device::Cpu, MemoryOrder::ColumnMajor);
+///
+/// // C = 1.0 * (A @ B) + 0.0 * C
+/// einsum_with_subscripts_into(&subs, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if tensor shapes are incompatible with the subscripts
+/// or the output shape does not match.
+pub fn einsum_with_subscripts_into<T: ScalarBase + HasAlgebra>(
+    subscripts: &Subscripts,
+    operands: &[&Tensor<T>],
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()> {
+    todo!()
+}
+
+/// Execute einsum with a pre-optimized [`ContractionTree`], accumulating
+/// into an existing output.
+///
+/// Computes `output = alpha * einsum(operands) + beta * output`.
+/// Avoids both subscript parsing and contraction order optimization.
+/// This is the fastest variant for hot loops with pre-allocated buffers.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::{einsum_with_plan_into, ContractionTree, Subscripts};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::Device;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+/// let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
+/// let mut c = Tensor::<f64>::zeros(&[3, 5], Device::Cpu, col);
+///
+/// // Hot loop: reuse output buffer, no allocation per iteration
+/// for _ in 0..1000 {
+///     einsum_with_plan_into(&tree, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if the operand shapes do not match those used to
+/// build the contraction tree, or the output shape is incorrect.
+pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
+    tree: &ContractionTree,
+    operands: &[&Tensor<T>],
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()> {
     todo!()
 }
