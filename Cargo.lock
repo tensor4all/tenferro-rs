@@ -89,8 +89,17 @@ version = "0.1.0"
 dependencies = [
  "strided-traits",
  "tenferro-device",
+ "tenferro-prims",
  "tenferro-tensor",
- "tenferro-tensorops",
+]
+
+[[package]]
+name = "tenferro-prims"
+version = "0.1.0"
+dependencies = [
+ "strided-traits",
+ "strided-view",
+ "tenferro-device",
 ]
 
 [[package]]
@@ -98,15 +107,6 @@ name = "tenferro-tensor"
 version = "0.1.0"
 dependencies = [
  "num-traits",
- "strided-traits",
- "strided-view",
- "tenferro-device",
-]
-
-[[package]]
-name = "tenferro-tensorops"
-version = "0.1.0"
-dependencies = [
  "strided-traits",
  "strided-view",
  "tenferro-device",

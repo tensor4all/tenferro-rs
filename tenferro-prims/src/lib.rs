@@ -25,7 +25,7 @@
 //! ## Plan-based contraction (matrix multiplication)
 //!
 //! ```ignore
-//! use tenferro_tensorops::{ContractionDescriptor, CpuBackend, TensorOps};
+//! use tenferro_prims::{ContractionDescriptor, CpuBackend, TensorOps};
 //! use strided_view::StridedArray;
 //!
 //! // Create tensors: A (3×4), B (4×5), C (3×5)
@@ -73,7 +73,7 @@
 //! ## Reduction (sum over an axis)
 //!
 //! ```ignore
-//! use tenferro_tensorops::ReduceOp;
+//! use tenferro_prims::ReduceOp;
 //!
 //! // Sum over columns: c_i = Σ_j A_{i,j}
 //! let a = StridedArray::<f64>::col_major(&[3, 4]);
@@ -113,7 +113,7 @@ use tenferro_device::Result;
 /// # Examples
 ///
 /// ```
-/// use tenferro_tensorops::ContractionDescriptor;
+/// use tenferro_prims::ContractionDescriptor;
 ///
 /// // Matrix multiplication: C_{m,n} = A_{m,k} * B_{k,n}
 /// let desc = ContractionDescriptor {

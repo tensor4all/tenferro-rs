@@ -9,7 +9,7 @@
 //! - **strided-rs interop**: [`Tensor::view`] / [`Tensor::view_mut`] produce
 //!   [`StridedView`](strided_view::StridedView) /
 //!   [`StridedViewMut`](strided_view::StridedViewMut) for use with
-//!   [`TensorOps`](tenferro_tensorops::TensorOps) backends
+//!   [`TensorOps`](tenferro_prims::TensorOps) backends
 //!
 //! # Memory layout
 //!

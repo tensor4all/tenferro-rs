@@ -1,9 +1,9 @@
 [package]
-name = "tenferro-tensorops"
+name = "tenferro-prims"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "cuTENSOR-compatible tensor operation protocol (TensorOps trait) for the tenferro workspace."
+description = "Tensor primitive operations (TensorPrims trait) for the tenferro workspace."
 publish = false
 
 [dependencies]
