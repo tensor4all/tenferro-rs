@@ -17,6 +17,37 @@
 //! # CPU backend
 //!
 //! [`CpuBackend`] implements [`TensorOps`] using strided-kernel and GEMM.
+//!
+//! # Examples
+//!
+//! ## Plan-based contraction (matrix multiplication)
+//!
+//! ```ignore
+//! use tenferro_tensorops::{ContractionDescriptor, CpuBackend, TensorOps};
+//!
+//! // C_{m,n} = 1.0 * A_{m,k} * B_{k,n} + 0.0 * C_{m,n}
+//! let desc = ContractionDescriptor {
+//!     modes_a: vec![0, 1],  // m=0, k=1
+//!     modes_b: vec![1, 2],  // k=1, n=2
+//!     modes_c: vec![0, 2],  // m=0, n=2
+//! };
+//!
+//! // Step 1: Create plan (selects kernel, allocates workspace)
+//! let plan = CpuBackend::plan_contraction::<f64>(
+//!     &desc,
+//!     &[3, 4],  // A is 3×4
+//!     &[4, 5],  // B is 4×5
+//!     &[3, 5],  // C is 3×5
+//! ).unwrap();
+//!
+//! // Step 2: Execute (can be called repeatedly with different data)
+//! CpuBackend::contract(&plan, 1.0, &a_view, &b_view, 0.0, &mut c_view).unwrap();
+//!
+//! // The α/β pattern: C = α*contract(A,B) + β*C
+//! // - α=1, β=0: overwrite C
+//! // - α=1, β=1: accumulate into C
+//! // - α=2, β=0: scale result by 2
+//! ```
 
 use std::marker::PhantomData;
 

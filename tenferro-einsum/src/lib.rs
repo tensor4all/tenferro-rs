@@ -18,20 +18,73 @@
 //!
 //! # Examples
 //!
+//! ## Common operations
+//!
 //! ```ignore
-//! use tenferro_einsum::{einsum, Subscripts};
+//! use tenferro_einsum::einsum;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::Device;
 //!
-//! let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
-//! let b = Tensor::<f64>::zeros(&[4, 5], Device::Cpu, MemoryOrder::ColumnMajor);
+//! let col = MemoryOrder::ColumnMajor;
 //!
-//! // String notation
+//! let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+//! let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+//! let v = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
+//!
+//! // Matrix multiplication: C = A @ B
 //! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
 //!
-//! // Integer label notation
+//! // Trace: tr(A)
+//! let tr = einsum("ii->", &[&a]).unwrap();
+//!
+//! // Outer product: v_i * v_j -> M_{ij}
+//! let outer = einsum("i,j->ij", &[&v, &v]).unwrap();
+//!
+//! // Dot product: v . v
+//! let dot = einsum("i,i->", &[&v, &v]).unwrap();
+//!
+//! // Matrix-vector product: A @ v
+//! let mv = einsum("ij,j->i", &[&a, &v]).unwrap();
+//! ```
+//!
+//! ## Batch operations
+//!
+//! ```ignore
+//! // Batch of 10 matrices, each 3×4 and 4×5
+//! let a = Tensor::<f64>::zeros(&[10, 3, 4], Device::Cpu, col);
+//! let b = Tensor::<f64>::zeros(&[10, 4, 5], Device::Cpu, col);
+//!
+//! // Batch matrix multiplication
+//! let c = einsum("bij,bjk->bik", &[&a, &b]).unwrap();
+//! ```
+//!
+//! ## Integer label notation
+//!
+//! ```ignore
+//! use tenferro_einsum::{einsum_with_subscripts, Subscripts};
+//!
+//! // Same as "ij,jk->ik" but with integer labels
+//! // Useful when indices exceed 52 (a-z, A-Z) or are computed programmatically
 //! let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 //! let c = einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
+//! ```
+//!
+//! ## Contraction order control
+//!
+//! ```ignore
+//! // Three matrices: D = A @ B @ C
+//! // Parentheses specify: contract B*C first, then A*(BC)
+//! let d = einsum("ij,(jk,kl)->il", &[&a, &b, &c]).unwrap();
+//!
+//! // Or use ContractionTree for programmatic control
+//! use tenferro_einsum::ContractionTree;
+//! let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+//! let tree = ContractionTree::from_pairs(
+//!     &subs,
+//!     &[&[3, 4], &[4, 100], &[100, 5]],
+//!     &[(1, 2), (0, 3)],  // B*C first (avoids large intermediate)
+//! ).unwrap();
+//! let d = einsum_with_plan(&tree, &[&a, &b, &c]).unwrap();
 //! ```
 
 use strided_traits::ScalarBase;

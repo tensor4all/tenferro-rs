@@ -19,13 +19,53 @@
 //!
 //! # Examples
 //!
+//! ## Creating tensors
+//!
 //! ```ignore
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::Device;
 //!
-//! let t = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
-//! assert_eq!(t.dims(), &[3, 4]);
-//! assert_eq!(t.ndim(), 2);
+//! // Zeros / ones
+//! let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+//! let b = Tensor::<f64>::ones(&[3, 4], Device::Cpu, MemoryOrder::RowMajor);
+//!
+//! // From existing data (column-major: Julia convention)
+//! let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+//! let m = Tensor::<f64>::from_slice(&data, &[2, 3], MemoryOrder::ColumnMajor).unwrap();
+//! // Logical layout:
+//! //   [[1, 3, 5],
+//! //    [2, 4, 6]]
+//! ```
+//!
+//! ## Transpose and reshape
+//!
+//! ```ignore
+//! // Transpose a matrix (zero-copy, only strides change)
+//! let mt = m.permute(&[1, 0]).unwrap();
+//! assert_eq!(mt.dims(), &[3, 2]);
+//!
+//! // Reshape (requires contiguous data)
+//! let flat = m.reshape(&[6]).unwrap();
+//! assert_eq!(flat.dims(), &[6]);
+//! ```
+//!
+//! ## Broadcasting
+//!
+//! ```ignore
+//! // Column vector [3,1] broadcast to [3,4] for element-wise ops
+//! let col = Tensor::<f64>::ones(&[3, 1], Device::Cpu, MemoryOrder::ColumnMajor);
+//! let expanded = col.broadcast(&[3, 4]).unwrap();
+//! assert_eq!(expanded.dims(), &[3, 4]);
+//! // No data is copied; stride along axis 1 is set to 0
+//! ```
+//!
+//! ## Interop with strided-rs
+//!
+//! ```ignore
+//! // Get a StridedView for use with TensorOps or strided-kernel
+//! let view = a.view();
+//! let mut b_mut = b;
+//! let view_mut = b_mut.view_mut();
 //! ```
 
 use strided_traits::ScalarBase;
