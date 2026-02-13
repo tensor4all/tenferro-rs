@@ -2,4 +2,12 @@
 name = "tenferro-tensor"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Dense tensor type with CPU/GPU support for the tenferro workspace."
 publish = false
+
+[dependencies]
+tenferro-device = { path = "../tenferro-device" }
+strided-view = { git = "https://github.com/tensor4all/strided-rs" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
+num-traits = "0.2"

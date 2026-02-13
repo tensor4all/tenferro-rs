@@ -90,6 +90,12 @@ version = "0.1.0"
 [[package]]
 name = "tenferro-tensor"
 version = "0.1.0"
+dependencies = [
+ "num-traits",
+ "strided-traits",
+ "strided-view",
+ "tenferro-device",
+]
 
 [[package]]
 name = "tenferro-tensorops"
