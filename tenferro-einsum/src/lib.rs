@@ -297,7 +297,10 @@ impl ContractionTree {
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum<T: ScalarBase + HasAlgebra>(subscripts: &str, operands: &[&Tensor<T>]) -> Result<Tensor<T>> {
+pub fn einsum<T: ScalarBase + HasAlgebra>(
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+) -> Result<Tensor<T>> {
     todo!()
 }
 

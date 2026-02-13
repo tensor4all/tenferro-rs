@@ -62,7 +62,7 @@
 //! ## Interop with strided-rs
 //!
 //! ```ignore
-//! // Get a StridedView for use with TensorOps or strided-kernel
+//! // Get a StridedView for use with TensorPrims or strided-kernel
 //! let view = a.view();
 //! let mut b_mut = b;
 //! let view_mut = b_mut.view_mut();
