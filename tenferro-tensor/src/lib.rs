@@ -69,6 +69,30 @@
 //! let mut b_mut = b;
 //! let view_mut = b_mut.view_mut();
 //! ```
+//!
+//! ## Asynchronous execution (deferred evaluation)
+//!
+//! Accelerator operations return immediately with a pending
+//! [`CompletionEvent`]. Passing the result to another operation chains
+//! via stream dependencies — no CPU synchronization is needed until data
+//! is accessed from the host.
+//!
+//! ```ignore
+//! use tenferro_einsum::einsum;
+//!
+//! // GPU operations return immediately; events track completion
+//! let c = einsum("ij,jk->ik", &[&a_gpu, &b_gpu]).unwrap();
+//! //  → GPU submit, c.event = Some(event_1)
+//!
+//! let d = einsum("ij,jk->ik", &[&c, &e_gpu]).unwrap();
+//! //  → detects c.event → sets up stream dependency → no CPU wait
+//! //  → GPU submit, d.event = Some(event_2)
+//!
+//! // CPU data access triggers implicit synchronization
+//! let view = d.view();  // view() calls wait() internally
+//! ```
+//!
+//! For CPU tensors, `event` is always `None` — zero overhead.
 
 use strided_traits::{ElementOpApply, ScalarBase};
 use strided_view::{StridedArray, StridedView, StridedViewMut};
@@ -120,7 +144,7 @@ pub enum DataBuffer<T> {
 /// [`StridedView`] / [`StridedViewMut`] references for passing to
 /// low-level operations.
 ///
-/// ## GPU async support
+/// ## GPU async support (deferred evaluation)
 ///
 /// The `event` field tracks pending GPU computation. When a GPU operation
 /// produces a tensor, `event` is set to `Some(CompletionEvent)`. Passing this
@@ -129,6 +153,15 @@ pub enum DataBuffer<T> {
 /// [`view`](Tensor::view), [`conj`](Tensor::conj)) call
 /// [`wait`](Tensor::wait) internally. For CPU tensors, `event` is always
 /// `None` with zero overhead.
+///
+/// ```ignore
+/// // Operations chain without CPU synchronization
+/// let c = einsum("ij,jk->ik", &[&a_gpu, &b_gpu]).unwrap();
+/// let d = einsum("ij,jk->ik", &[&c, &e_gpu]).unwrap();
+///
+/// // Implicit sync only when host accesses data
+/// let view = d.view();  // calls wait() internally
+/// ```
 pub struct Tensor<T: ScalarBase> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
@@ -416,6 +449,11 @@ impl<T: ScalarBase> Tensor<T> {
     /// // Explicit wait
     /// c.wait();
     /// assert!(c.is_ready());
+    ///
+    /// // Chaining: implicit sync via stream dependencies, no CPU wait
+    /// let d = einsum("ij,jk->ik", &[&c, &e_gpu]).unwrap();
+    /// //  → detects c.event → chains on GPU → returns immediately
+    /// d.view();  // view() calls wait() internally
     /// ```
     pub fn wait(&self) {
         // Currently a no-op: only CPU tensors exist (event is always None).
