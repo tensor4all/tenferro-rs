@@ -96,6 +96,7 @@ name = "tenferro-einsum"
 version = "0.1.0"
 dependencies = [
  "strided-traits",
+ "tenferro-algebra",
  "tenferro-device",
  "tenferro-prims",
  "tenferro-tensor",
