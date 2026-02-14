@@ -145,6 +145,16 @@
 //!
 //! ## GPU async chaining (deferred evaluation)
 //!
+//! GPU einsum operations return immediately. The result tensor carries a
+//! [`CompletionEvent`](tenferro_tensor::CompletionEvent) that tracks the
+//! pending accelerator work. Passing this tensor to another einsum chains
+//! via GPU stream dependencies — no CPU synchronization until data is
+//! accessed from the host.
+//!
+//! - `wait()` — explicitly blocks until computation completes
+//! - `view()`, `dims()`, `strides()` — implicitly call `wait()`
+//! - For CPU tensors, `event` is always `None` (zero overhead)
+//!
 //! ```ignore
 //! use tenferro_einsum::einsum;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
@@ -157,6 +167,8 @@
 //! let a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col);
 //! let b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col);
 //!
+//! // Both einsum calls submit work to the GPU and return immediately.
+//! // The second call detects c's pending event and chains on the stream.
 //! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
 //! let d = einsum("ij,jk->ik", &[&c, &b]).unwrap();
 //!

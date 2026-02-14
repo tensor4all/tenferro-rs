@@ -61,6 +61,39 @@
 //! // No data is copied; stride along axis 1 is set to 0
 //! ```
 //!
+//! ## TensorView — borrowed, zero-copy views
+//!
+//! [`TensorView`] is the borrowed counterpart to [`Tensor`], following the
+//! `String` / `&str` pattern. View operations modify only metadata
+//! (dims, strides, offset) and never copy data.
+//!
+//! ```ignore
+//! // tensor_view() borrows the tensor — no data copy
+//! let tv = m.tensor_view();
+//! assert_eq!(tv.dims(), m.dims());
+//!
+//! // permute: reorder dimensions (zero-copy, strides reordered)
+//! let tv_t = tv.permute(&[1, 0]).unwrap();
+//! assert_eq!(tv_t.dims(), &[3, 2]);
+//!
+//! // broadcast: expand size-1 dims (zero-copy, stride set to 0)
+//! let col = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3, 1],
+//!     MemoryOrder::ColumnMajor).unwrap();
+//! let col_tv = col.tensor_view();
+//! let expanded = col_tv.broadcast(&[3, 4]).unwrap();
+//! assert_eq!(expanded.dims(), &[3, 4]);
+//!
+//! // diagonal: extract diagonal view (zero-copy, strides merged)
+//! let sq = Tensor::<f64>::zeros(&[4, 4],
+//!     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+//! let sq_tv = sq.tensor_view();
+//! let diag = sq_tv.diagonal(&[(0, 1)]).unwrap();
+//! assert_eq!(diag.dims(), &[4]);
+//!
+//! // to_tensor() / contiguous(): materialize a view into owned Tensor
+//! let owned = tv_t.to_tensor(MemoryOrder::ColumnMajor);
+//! ```
+//!
 //! ## Interop with strided-rs
 //!
 //! ```ignore
@@ -69,30 +102,6 @@
 //! let mut b_mut = b;
 //! let view_mut = b_mut.view_mut();
 //! ```
-//!
-//! ## Asynchronous execution (deferred evaluation)
-//!
-//! Accelerator operations return immediately with a pending
-//! [`CompletionEvent`]. Passing the result to another operation chains
-//! via stream dependencies — no CPU synchronization is needed until data
-//! is accessed from the host.
-//!
-//! ```ignore
-//! use tenferro_einsum::einsum;
-//!
-//! // GPU operations return immediately; events track completion
-//! let c = einsum("ij,jk->ik", &[&a_gpu, &b_gpu]).unwrap();
-//! //  → GPU submit, c.event = Some(event_1)
-//!
-//! let d = einsum("ij,jk->ik", &[&c, &e_gpu]).unwrap();
-//! //  → detects c.event → sets up stream dependency → no CPU wait
-//! //  → GPU submit, d.event = Some(event_2)
-//!
-//! // CPU data access triggers implicit synchronization
-//! let view = d.view();  // view() calls wait() internally
-//! ```
-//!
-//! For CPU tensors, `event` is always `None` — zero overhead.
 
 use strided_traits::{ElementOpApply, ScalarBase};
 use strided_view::{StridedArray, StridedView, StridedViewMut};
@@ -144,24 +153,17 @@ pub enum DataBuffer<T> {
 /// [`StridedView`] / [`StridedViewMut`] references for passing to
 /// low-level operations.
 ///
-/// ## GPU async support (deferred evaluation)
+/// ## GPU async support
 ///
-/// The `event` field tracks pending GPU computation. When a GPU operation
-/// produces a tensor, `event` is set to `Some(CompletionEvent)`. Passing this
-/// tensor to another GPU operation chains via stream dependencies without
-/// CPU synchronization. Methods that access data from CPU (e.g.,
-/// [`view`](Tensor::view), [`conj`](Tensor::conj)) call
-/// [`wait`](Tensor::wait) internally. For CPU tensors, `event` is always
-/// `None` with zero overhead.
+/// The `event` field tracks pending GPU computation via
+/// [`CompletionEvent`]. When a GPU operation produces a tensor, `event`
+/// is set to `Some(...)`. Passing this tensor to another GPU operation
+/// chains via stream dependencies without CPU synchronization. Methods
+/// that access data from CPU (e.g., [`view`](Tensor::view),
+/// [`conj`](Tensor::conj)) call [`wait`](Tensor::wait) internally.
+/// For CPU tensors, `event` is always `None` with zero overhead.
 ///
-/// ```ignore
-/// // Operations chain without CPU synchronization
-/// let c = einsum("ij,jk->ik", &[&a_gpu, &b_gpu]).unwrap();
-/// let d = einsum("ij,jk->ik", &[&c, &e_gpu]).unwrap();
-///
-/// // Implicit sync only when host accesses data
-/// let view = d.view();  // calls wait() internally
-/// ```
+/// See [`tenferro_einsum`] crate docs for async chaining examples.
 pub struct Tensor<T: ScalarBase> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
