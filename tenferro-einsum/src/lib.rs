@@ -61,6 +61,12 @@
 //! // Creates T_{iii} from v_i
 //! let t = einsum("i->iii", &[&v]).unwrap();
 //! assert_eq!(t.dims(), &[3, 3, 3]);
+//!
+//! // Consuming variant: operands are moved, buffers may be reused
+//! use tenferro_einsum::einsum_owned;
+//! let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+//! let y = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+//! let z = einsum_owned("ij,jk->ik", vec![x, y]).unwrap(); // x, y consumed
 //! ```
 //!
 //! ## Batch operations
@@ -135,6 +141,59 @@
 //!     // C = 1.0 * (A @ B) + 0.0 * C  (overwrite)
 //!     einsum_with_plan_into(&tree, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
 //! }
+//! ```
+//!
+//! ## GPU async chaining (deferred evaluation)
+//!
+//! ```ignore
+//! use tenferro_einsum::einsum;
+//! use tenferro_tensor::{Tensor, MemoryOrder};
+//! use tenferro_device::LogicalMemorySpace;
+//!
+//! let gpu = LogicalMemorySpace::GpuMemory { space_id: 0 };
+//! let col = MemoryOrder::ColumnMajor;
+//!
+//! let a = Tensor::<f64>::zeros(&[3, 4], gpu, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], gpu, col);
+//!
+//! // GPU einsum returns immediately; result carries a pending event
+//! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+//! assert!(!c.is_ready());  // computation still in flight
+//!
+//! // Chaining: passing c to another einsum chains on the GPU stream
+//! // without waiting on the CPU — the event propagates automatically
+//! let d = einsum("ij,jk->ik", &[&c, &b]).unwrap();
+//!
+//! // Explicit wait: blocks until GPU computation completes
+//! d.wait();
+//! assert!(d.is_ready());
+//!
+//! // Implicit wait: view() / dims() / strides() call wait() internally
+//! let _view = d.view();
+//! ```
+//!
+//! ## Specifying a compute device
+//!
+//! ```ignore
+//! use tenferro_einsum::einsum;
+//! use tenferro_tensor::{Tensor, MemoryOrder};
+//! use tenferro_device::{LogicalMemorySpace, ComputeDevice};
+//!
+//! let col = MemoryOrder::ColumnMajor;
+//! let gpu = LogicalMemorySpace::GpuMemory { space_id: 0 };
+//!
+//! let mut a = Tensor::<f64>::zeros(&[3, 4], gpu, col);
+//! let mut b = Tensor::<f64>::zeros(&[4, 5], gpu, col);
+//!
+//! // Pin tensors to CUDA device 1 (overrides automatic device selection)
+//! a.set_preferred_compute_device(Some(ComputeDevice::Cuda { device_id: 1 }));
+//! b.set_preferred_compute_device(Some(ComputeDevice::Cuda { device_id: 1 }));
+//!
+//! // einsum dispatches to the specified CUDA device
+//! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+//!
+//! // Clear override — revert to automatic selection
+//! // a.set_preferred_compute_device(None);
 //! ```
 
 use strided_traits::ScalarBase;
