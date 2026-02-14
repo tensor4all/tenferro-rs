@@ -173,6 +173,55 @@ pub struct Tensor<T: ScalarBase> {
     event: Option<CompletionEvent>,
 }
 
+/// Borrowed tensor view, lifetime-tied to the source [`Tensor`].
+///
+/// `TensorView` is the borrowed counterpart to [`Tensor`], following the
+/// `String`/`&str` pattern. It references the source tensor's data buffer
+/// without copying.
+///
+/// ## Public vs. internal views
+///
+/// Public API methods ([`Tensor::view`], [`Tensor::permute`], etc.) call
+/// [`Tensor::wait`] before constructing a view, so the returned
+/// `TensorView` always has `event = None` — data is ready to read.
+///
+/// The crate-internal [`Tensor::as_operand_view`] skips the wait and
+/// propagates the pending event, allowing accelerator operations to chain
+/// without CPU synchronization.
+pub struct TensorView<'a, T: ScalarBase> {
+    data: &'a DataBuffer<T>,
+    dims: Vec<usize>,
+    strides: Vec<isize>,
+    offset: isize,
+    device: Device,
+    /// Pending event from the source tensor. Always `None` in public API
+    /// (wait is performed before construction). Used by crate-internal
+    /// `as_operand_view()` to propagate pending events for pipeline chaining.
+    event: Option<&'a CompletionEvent>,
+}
+
+impl<'a, T: ScalarBase> TensorView<'a, T> {
+    /// Returns the shape (size of each dimension).
+    pub fn dims(&self) -> &[usize] {
+        &self.dims
+    }
+
+    /// Returns the strides (in units of `T`).
+    pub fn strides(&self) -> &[isize] {
+        &self.strides
+    }
+
+    /// Returns the number of dimensions (rank).
+    pub fn ndim(&self) -> usize {
+        self.dims.len()
+    }
+
+    /// Returns the device on which the source tensor resides.
+    pub fn device(&self) -> &Device {
+        &self.device
+    }
+}
+
 /// Placeholder for an accelerator synchronization event.
 ///
 /// Tracks completion of asynchronous operations on accelerator devices
@@ -265,22 +314,59 @@ impl<T: ScalarBase> Tensor<T> {
     }
 
     // ========================================================================
-    // View operations (zero-copy)
+    // View operations (zero-copy, public API waits if pending)
     // ========================================================================
 
     /// Returns an immutable strided view of the tensor data.
+    ///
+    /// Waits for any pending accelerator computation before returning.
     pub fn view(&self) -> StridedView<'_, T> {
         todo!()
     }
 
     /// Returns a mutable strided view of the tensor data.
+    ///
+    /// Waits for any pending accelerator computation before returning.
     pub fn view_mut(&mut self) -> StridedViewMut<'_, T> {
         todo!()
+    }
+
+    /// Returns a [`TensorView`] for CPU data inspection.
+    ///
+    /// Waits for any pending accelerator computation before returning.
+    /// The returned view has `event = None` (data is ready to read).
+    pub fn tensor_view(&self) -> TensorView<'_, T> {
+        self.wait();
+        TensorView {
+            data: &self.buffer,
+            dims: self.dims.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
+            device: self.device,
+            event: None,
+        }
+    }
+
+    /// Returns a non-blocking [`TensorView`] that propagates the
+    /// pending event (if any) from the source tensor.
+    ///
+    /// This is an internal API used by `einsum` and other accelerator
+    /// operations to chain computations without CPU synchronization.
+    pub(crate) fn as_operand_view(&self) -> TensorView<'_, T> {
+        TensorView {
+            data: &self.buffer,
+            dims: self.dims.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
+            device: self.device,
+            event: self.event.as_ref(),
+        }
     }
 
     /// Permute (reorder) the dimensions of the tensor.
     ///
     /// This is a zero-copy operation that only modifies dims and strides.
+    /// Waits for any pending accelerator computation before returning.
     ///
     /// # Arguments
     ///
