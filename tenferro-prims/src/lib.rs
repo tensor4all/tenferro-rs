@@ -395,7 +395,7 @@ pub enum CpuPlan<T: ScalarBase> {
 /// CPU backend using strided-kernel and GEMM.
 ///
 /// Dispatched automatically when tensors reside on
-/// [`Device::Cpu`](tenferro_device::Device::Cpu).
+/// [`LogicalMemorySpace::MainMemory`](tenferro_device::LogicalMemorySpace::MainMemory).
 /// Implements [`TensorPrims<Standard>`] for standard arithmetic.
 ///
 /// # Examples

@@ -25,11 +25,11 @@
 //!
 //! ```ignore
 //! use tenferro_tensor::{Tensor, MemoryOrder};
-//! use tenferro_device::Device;
+//! use tenferro_device::LogicalMemorySpace;
 //!
 //! // Zeros / ones
-//! let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
-//! let b = Tensor::<f64>::ones(&[3, 4], Device::Cpu, MemoryOrder::RowMajor);
+//! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+//! let b = Tensor::<f64>::ones(&[3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
 //!
 //! // From existing data (column-major: Julia convention)
 //! let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
@@ -55,7 +55,7 @@
 //!
 //! ```ignore
 //! // Column vector [3,1] broadcast to [3,4] for element-wise ops
-//! let col = Tensor::<f64>::ones(&[3, 1], Device::Cpu, MemoryOrder::ColumnMajor);
+//! let col = Tensor::<f64>::ones(&[3, 1], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 //! let expanded = col.broadcast(&[3, 4]).unwrap();
 //! assert_eq!(expanded.dims(), &[3, 4]);
 //! // No data is copied; stride along axis 1 is set to 0
@@ -96,7 +96,7 @@
 
 use strided_traits::{ElementOpApply, ScalarBase};
 use strided_view::{StridedArray, StridedView, StridedViewMut};
-use tenferro_device::{Device, Result};
+use tenferro_device::{ComputeDevice, LogicalMemorySpace, OpKind, Result};
 
 /// Memory ordering for new allocations.
 ///
@@ -130,7 +130,7 @@ pub enum DataBuffer<T> {
 /// Multi-dimensional dense tensor.
 ///
 /// `Tensor<T>` is the primary data type in tenferro. It owns its data via
-/// [`DataBuffer`] and carries shape, strides, and device information.
+/// [`DataBuffer`] and carries shape, strides, and memory space information.
 ///
 /// ## Zero-copy views
 ///
@@ -167,7 +167,12 @@ pub struct Tensor<T: ScalarBase> {
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
-    device: Device,
+    /// The logical memory space where this tensor's data resides.
+    logical_memory_space: LogicalMemorySpace,
+    /// Optional preferred compute device override. When `None`, the
+    /// device is selected automatically via
+    /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
+    preferred_compute_device: Option<ComputeDevice>,
     /// Pending GPU computation event. `None` for CPU tensors or
     /// when GPU computation has completed.
     event: Option<CompletionEvent>,
@@ -181,7 +186,7 @@ pub struct Tensor<T: ScalarBase> {
 ///
 /// ## Public vs. internal views
 ///
-/// Public API methods ([`Tensor::view`], [`Tensor::permute`], etc.) call
+/// Public API methods ([`Tensor::tensor_view`], etc.) call
 /// [`Tensor::wait`] before constructing a view, so the returned
 /// `TensorView` always has `event = None` — data is ready to read.
 ///
@@ -193,7 +198,10 @@ pub struct TensorView<'a, T: ScalarBase> {
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
-    device: Device,
+    /// The logical memory space where the source tensor's data resides.
+    logical_memory_space: LogicalMemorySpace,
+    /// Optional preferred compute device override from the source tensor.
+    preferred_compute_device: Option<ComputeDevice>,
     /// Pending event from the source tensor. Always `None` in public API
     /// (wait is performed before construction). Used by crate-internal
     /// `as_operand_view()` to propagate pending events for pipeline chaining.
@@ -216,9 +224,75 @@ impl<'a, T: ScalarBase> TensorView<'a, T> {
         self.dims.len()
     }
 
-    /// Returns the device on which the source tensor resides.
-    pub fn device(&self) -> &Device {
-        &self.device
+    /// Returns the logical memory space where the source tensor's data resides.
+    pub fn logical_memory_space(&self) -> LogicalMemorySpace {
+        self.logical_memory_space
+    }
+
+    /// Returns the preferred compute device override, if set.
+    pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
+        self.preferred_compute_device
+    }
+
+    // ========================================================================
+    // View operations (zero-copy)
+    // ========================================================================
+
+    /// Permute (reorder) the dimensions of this view.
+    ///
+    /// Returns a new `TensorView` with reordered dims and strides (zero-copy).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `perm` is not a valid permutation of `0..ndim()`.
+    pub fn permute(&self, _perm: &[usize]) -> Result<TensorView<'a, T>> {
+        todo!()
+    }
+
+    /// Broadcast this view to a larger shape.
+    ///
+    /// Dimensions of size 1 are expanded to the target size (zero-copy
+    /// via stride 0).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `target_dims` is incompatible with the current shape.
+    pub fn broadcast(&self, _target_dims: &[usize]) -> Result<TensorView<'a, T>> {
+        todo!()
+    }
+
+    /// Extract a diagonal view by merging pairs of axes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any axis is out of range or paired dimensions
+    /// have different sizes.
+    pub fn diagonal(&self, _axes: &[(usize, usize)]) -> Result<TensorView<'a, T>> {
+        todo!()
+    }
+
+    // ========================================================================
+    // Materialize (copy data into a new owned Tensor)
+    // ========================================================================
+
+    /// Copy this view into an owned [`Tensor`].
+    pub fn to_tensor(&self, _order: MemoryOrder) -> Tensor<T> {
+        todo!()
+    }
+
+    /// Return a contiguous copy of this view's data.
+    pub fn contiguous(&self, _order: MemoryOrder) -> Tensor<T> {
+        todo!()
+    }
+
+    /// Return a tensor with complex-conjugated elements from this view.
+    ///
+    /// For real types, returns a copy unchanged.
+    pub fn conj(&self) -> Tensor<T>
+    where
+        T: ElementOpApply,
+    {
+        todo!()
     }
 }
 
@@ -242,9 +316,22 @@ impl<T: ScalarBase> Tensor<T> {
     /// # Arguments
     ///
     /// * `dims` — Shape of the tensor (e.g., `&[3, 4]` for a 3×4 matrix)
-    /// * `device` — Device on which to allocate the tensor
+    /// * `memory_space` — Logical memory space for the allocation
     /// * `order` — Memory layout for the new allocation
-    pub fn zeros(dims: &[usize], device: Device, order: MemoryOrder) -> Self {
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// ```
+    pub fn zeros(_dims: &[usize], _memory_space: LogicalMemorySpace, _order: MemoryOrder) -> Self {
         todo!()
     }
 
@@ -253,9 +340,9 @@ impl<T: ScalarBase> Tensor<T> {
     /// # Arguments
     ///
     /// * `dims` — Shape of the tensor
-    /// * `device` — Device on which to allocate the tensor
+    /// * `memory_space` — Logical memory space for the allocation
     /// * `order` — Memory layout for the new allocation
-    pub fn ones(dims: &[usize], device: Device, order: MemoryOrder) -> Self {
+    pub fn ones(_dims: &[usize], _memory_space: LogicalMemorySpace, _order: MemoryOrder) -> Self {
         todo!()
     }
 
@@ -263,19 +350,21 @@ impl<T: ScalarBase> Tensor<T> {
     ///
     /// The slice length must equal the product of `dims`.
     /// Data is copied into owned storage with the specified memory order.
+    /// Memory space is set to [`LogicalMemorySpace::MainMemory`].
     ///
     /// # Errors
     ///
     /// Returns an error if `data.len()` does not match the product of `dims`.
-    pub fn from_slice(data: &[T], dims: &[usize], order: MemoryOrder) -> Result<Self> {
+    pub fn from_slice(_data: &[T], _dims: &[usize], _order: MemoryOrder) -> Result<Self> {
         todo!()
     }
 
     /// Create a tensor from an existing [`StridedArray`].
     ///
     /// Takes ownership of the array. The tensor inherits the array's
-    /// dims, strides, and offset. Device is set to [`Device::Cpu`].
-    pub fn from_strided_array(array: StridedArray<T>) -> Self {
+    /// dims, strides, and offset. Memory space is set to
+    /// [`LogicalMemorySpace::MainMemory`].
+    pub fn from_strided_array(_array: StridedArray<T>) -> Self {
         todo!()
     }
 
@@ -308,8 +397,39 @@ impl<T: ScalarBase> Tensor<T> {
         todo!()
     }
 
-    /// Returns the device on which this tensor resides.
-    pub fn device(&self) -> &Device {
+    /// Returns the logical memory space where this tensor's data resides.
+    pub fn logical_memory_space(&self) -> LogicalMemorySpace {
+        self.logical_memory_space
+    }
+
+    /// Returns the preferred compute device override, if set.
+    pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
+        self.preferred_compute_device
+    }
+
+    /// Set the preferred compute device override.
+    ///
+    /// When set, this device will be used for operations on this tensor
+    /// instead of the default device selected by
+    /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
+    /// Pass `None` to clear the override and revert to automatic selection.
+    pub fn set_preferred_compute_device(&mut self, device: Option<ComputeDevice>) {
+        self.preferred_compute_device = device;
+    }
+
+    /// Return the effective compute devices for a given operation kind.
+    ///
+    /// If a preferred compute device is set, returns a single-element vector
+    /// containing that device. Otherwise, delegates to
+    /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no compatible compute device is found.
+    pub fn effective_compute_devices(
+        &self,
+        _op_kind: OpKind,
+    ) -> tenferro_device::Result<Vec<ComputeDevice>> {
         todo!()
     }
 
@@ -342,7 +462,8 @@ impl<T: ScalarBase> Tensor<T> {
             dims: self.dims.clone(),
             strides: self.strides.clone(),
             offset: self.offset,
-            device: self.device,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
             event: None,
         }
     }
@@ -358,7 +479,8 @@ impl<T: ScalarBase> Tensor<T> {
             dims: self.dims.clone(),
             strides: self.strides.clone(),
             offset: self.offset,
-            device: self.device,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
             event: self.event.as_ref(),
         }
     }
@@ -375,7 +497,7 @@ impl<T: ScalarBase> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if `perm` is not a valid permutation of `0..ndim()`.
-    pub fn permute(&self, perm: &[usize]) -> Result<Tensor<T>> {
+    pub fn permute(&self, _perm: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
 
@@ -387,7 +509,7 @@ impl<T: ScalarBase> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if `target_dims` is incompatible with the current shape.
-    pub fn broadcast(&self, target_dims: &[usize]) -> Result<Tensor<T>> {
+    pub fn broadcast(&self, _target_dims: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
 
@@ -400,7 +522,7 @@ impl<T: ScalarBase> Tensor<T> {
     ///
     /// Returns an error if any axis is out of range or the paired
     /// dimensions have different sizes.
-    pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>> {
+    pub fn diagonal(&self, _axes: &[(usize, usize)]) -> Result<Tensor<T>> {
         todo!()
     }
 
@@ -413,7 +535,7 @@ impl<T: ScalarBase> Tensor<T> {
     ///
     /// Returns an error if the tensor is not contiguous or the new shape
     /// has a different total element count.
-    pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>> {
+    pub fn reshape(&self, _new_dims: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
 
@@ -425,7 +547,7 @@ impl<T: ScalarBase> Tensor<T> {
     ///
     /// If the tensor is already contiguous in the requested order,
     /// this may avoid copying (implementation-defined).
-    pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
+    pub fn contiguous(&self, _order: MemoryOrder) -> Tensor<T> {
         todo!()
     }
 
@@ -443,9 +565,13 @@ impl<T: ScalarBase> Tensor<T> {
     ///
     /// ```ignore
     /// use tenferro_tensor::{Tensor, MemoryOrder};
-    /// use tenferro_device::Device;
+    /// use tenferro_device::LogicalMemorySpace;
     ///
-    /// let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::ColumnMajor);
+    /// let a = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     ///
     /// // Transpose creates a non-contiguous view
     /// let at = a.permute(&[1, 0]).unwrap();
@@ -456,10 +582,14 @@ impl<T: ScalarBase> Tensor<T> {
     /// assert!(at_contig.is_contiguous());
     ///
     /// // Already contiguous: zero-cost passthrough
-    /// let b = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, MemoryOrder::RowMajor);
+    /// let b = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::RowMajor,
+    /// );
     /// let b2 = b.into_contiguous(MemoryOrder::RowMajor); // no copy
     /// ```
-    pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T> {
+    pub fn into_contiguous(self, _order: MemoryOrder) -> Tensor<T> {
         todo!()
     }
 
@@ -506,11 +636,36 @@ impl<T: ScalarBase> Tensor<T> {
                     dims: self.dims.clone(),
                     strides: self.strides.clone(),
                     offset: self.offset,
-                    device: self.device,
+                    logical_memory_space: self.logical_memory_space,
+                    preferred_compute_device: self.preferred_compute_device,
                     event: None,
                 }
             }
         }
+    }
+
+    /// Consume this tensor and return one with complex-conjugated elements.
+    ///
+    /// Like [`conj`](Tensor::conj) but consumes `self`, potentially
+    /// reusing the buffer if no other references exist.
+    pub fn into_conj(self) -> Tensor<T>
+    where
+        T: ElementOpApply,
+    {
+        todo!()
+    }
+
+    /// Asynchronously transfer this tensor to a different memory space.
+    ///
+    /// Returns a new tensor in the target memory space. If the source
+    /// and destination spaces are the same, returns a zero-copy no-op.
+    /// Otherwise, data is copied (potentially asynchronously for GPU).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transfer is not supported.
+    pub fn to_memory_space_async(&self, _target: LogicalMemorySpace) -> Result<Tensor<T>> {
+        todo!()
     }
 
     // ========================================================================

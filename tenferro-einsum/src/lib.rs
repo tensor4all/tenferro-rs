@@ -16,8 +16,8 @@
 //! # Backend dispatch
 //!
 //! The backend is selected automatically from the tensor's
-//! [`Device`](tenferro_device::Device) (PyTorch-style). There is no backend
-//! type parameter in the public API.
+//! [`LogicalMemorySpace`](tenferro_device::LogicalMemorySpace) (PyTorch-style).
+//! There is no backend type parameter in the public API.
 //!
 //! # Examples
 //!
@@ -26,7 +26,7 @@
 //! ```ignore
 //! use tenferro_einsum::einsum;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
-//! use tenferro_device::Device;
+//! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //!
@@ -68,21 +68,21 @@
 //! ```ignore
 //! // Batched GEMM: 10 independent matrix multiplications in one call
 //! // A: (batch=10, m=3, k=4), B: (batch=10, k=4, n=5) -> C: (batch=10, m=3, n=5)
-//! let a = Tensor::<f64>::zeros(&[10, 3, 4], Device::Cpu, col);
-//! let b = Tensor::<f64>::zeros(&[10, 4, 5], Device::Cpu, col);
+//! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
+//! let b = Tensor::<f64>::zeros(&[10, 4, 5], LogicalMemorySpace::MainMemory, col);
 //! let c = einsum("bij,bjk->bik", &[&a, &b]).unwrap();
 //! assert_eq!(c.dims(), &[10, 3, 5]);
 //!
 //! // Multiple batch dimensions: (batch1=2, batch2=3, m, k) x (batch1=2, batch2=3, k, n)
-//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], Device::Cpu, col);
-//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], Device::Cpu, col);
+//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col);
+//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col);
 //! let c = einsum("abij,abjk->abik", &[&a, &b]).unwrap();
 //! assert_eq!(c.dims(), &[2, 3, 4, 6]);
 //!
 //! // Broadcast batch: A has batch dim, B is shared across batch
 //! // A: (batch=10, m=3, k=4), B: (k=4, n=5) -> C: (batch=10, m=3, n=5)
-//! let a = Tensor::<f64>::zeros(&[10, 3, 4], Device::Cpu, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], Device::Cpu, col);
+//! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
 //! let c = einsum("bij,jk->bik", &[&a, &b]).unwrap();
 //! assert_eq!(c.dims(), &[10, 3, 5]);
 //! ```
@@ -121,14 +121,14 @@
 //! ```ignore
 //! use tenferro_einsum::{einsum_with_plan_into, ContractionTree, Subscripts};
 //! use tenferro_tensor::{Tensor, MemoryOrder};
-//! use tenferro_device::Device;
+//! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 //! let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
-//! let a = Tensor::<f64>::zeros(&[3, 4], Device::Cpu, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], Device::Cpu, col);
-//! let mut c = Tensor::<f64>::zeros(&[3, 5], Device::Cpu, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, col);
 //!
 //! // Hot loop: reuse output buffer, zero allocation per iteration
 //! for _ in 0..1000 {
@@ -290,7 +290,7 @@ impl ContractionTree {
 ///
 /// Parses the subscript string, optimizes the contraction order, and
 /// executes the contraction. The backend is selected automatically from
-/// the tensors' device.
+/// the tensors' memory space and compute device.
 ///
 /// Parentheses in the subscript string specify contraction order
 /// explicitly (e.g., `"ij,(jk,kl)->il"` contracts B and C first).
@@ -383,12 +383,12 @@ pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
 /// ```ignore
 /// use tenferro_einsum::einsum_into;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
-/// use tenferro_device::Device;
+/// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 /// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
-/// let mut c = Tensor::<f64>::zeros(&[2, 2], Device::Cpu, col);
+/// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
 ///
 /// // Overwrite: C = A @ B
 /// einsum_into("ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c).unwrap();
@@ -421,10 +421,10 @@ pub fn einsum_into<T: ScalarBase + HasAlgebra>(
 /// ```ignore
 /// use tenferro_einsum::{einsum_with_subscripts_into, Subscripts};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
-/// use tenferro_device::Device;
+/// use tenferro_device::LogicalMemorySpace;
 ///
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-/// let mut c = Tensor::<f64>::zeros(&[3, 5], Device::Cpu, MemoryOrder::ColumnMajor);
+/// let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 ///
 /// // C = 1.0 * (A @ B) + 0.0 * C
 /// einsum_with_subscripts_into(&subs, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
@@ -456,12 +456,12 @@ pub fn einsum_with_subscripts_into<T: ScalarBase + HasAlgebra>(
 /// ```ignore
 /// use tenferro_einsum::{einsum_with_plan_into, ContractionTree, Subscripts};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
-/// use tenferro_device::Device;
+/// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 /// let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
-/// let mut c = Tensor::<f64>::zeros(&[3, 5], Device::Cpu, col);
+/// let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, col);
 ///
 /// // Hot loop: reuse output buffer, no allocation per iteration
 /// for _ in 0..1000 {
