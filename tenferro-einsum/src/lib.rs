@@ -157,20 +157,11 @@
 //! let a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col);
 //! let b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col);
 //!
-//! // GPU einsum returns immediately; result carries a pending event.
-//! // c.is_ready() may be false (still in flight) or true (already done).
 //! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
-//!
-//! // Chaining: passing c to another einsum chains on the GPU stream
-//! // without waiting on the CPU — the event propagates automatically
 //! let d = einsum("ij,jk->ik", &[&c, &b]).unwrap();
 //!
-//! // Explicit wait: blocks until GPU computation completes
+//! // wait() blocks until GPU computation completes
 //! d.wait();
-//! assert!(d.is_ready());
-//!
-//! // Implicit wait: view() / dims() / strides() call wait() internally
-//! let _view = d.view();
 //! ```
 //!
 //! ## Specifying a compute device
