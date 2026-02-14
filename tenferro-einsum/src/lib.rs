@@ -150,11 +150,12 @@
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
-//! let gpu = LogicalMemorySpace::GpuMemory { space_id: 0 };
+//! // In production, obtain memory spaces via BackendRegistry (future API).
+//! let gpu_mem = LogicalMemorySpace::GpuMemory { space_id: 0 };
 //! let col = MemoryOrder::ColumnMajor;
 //!
-//! let a = Tensor::<f64>::zeros(&[3, 4], gpu, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], gpu, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col);
 //!
 //! // GPU einsum returns immediately; result carries a pending event
 //! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
@@ -180,10 +181,11 @@
 //! use tenferro_device::{LogicalMemorySpace, ComputeDevice};
 //!
 //! let col = MemoryOrder::ColumnMajor;
-//! let gpu = LogicalMemorySpace::GpuMemory { space_id: 0 };
+//! // In production, obtain memory spaces via BackendRegistry (future API).
+//! let gpu_mem = LogicalMemorySpace::GpuMemory { space_id: 0 };
 //!
-//! let mut a = Tensor::<f64>::zeros(&[3, 4], gpu, col);
-//! let mut b = Tensor::<f64>::zeros(&[4, 5], gpu, col);
+//! let mut a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col);
+//! let mut b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col);
 //!
 //! // Pin tensors to CUDA device 1 (overrides automatic device selection).
 //! // This works when CUDA device 1 can access GpuMemory { space_id: 0 }
