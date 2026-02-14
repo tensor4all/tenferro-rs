@@ -185,7 +185,12 @@
 //! let mut a = Tensor::<f64>::zeros(&[3, 4], gpu, col);
 //! let mut b = Tensor::<f64>::zeros(&[4, 5], gpu, col);
 //!
-//! // Pin tensors to CUDA device 1 (overrides automatic device selection)
+//! // Pin tensors to CUDA device 1 (overrides automatic device selection).
+//! // This works when CUDA device 1 can access GpuMemory { space_id: 0 }
+//! // (e.g., same physical GPU or NVLink-connected peer).
+//! // If the device cannot access the memory space, einsum returns
+//! // Err(NoCompatibleComputeDevice). In that case, transfer explicitly:
+//! //   let a = a.to_memory_space_async(GpuMemory { space_id: 1 }).unwrap();
 //! a.set_preferred_compute_device(Some(ComputeDevice::Cuda { device_id: 1 }));
 //! b.set_preferred_compute_device(Some(ComputeDevice::Cuda { device_id: 1 }));
 //!
