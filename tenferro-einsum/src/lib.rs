@@ -361,6 +361,74 @@ pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
 }
 
 // ============================================================================
+// Consuming variants (take ownership of input tensors for buffer reuse)
+// ============================================================================
+
+/// Execute einsum using string notation, consuming the input tensors.
+///
+/// Takes ownership of the operands, allowing the implementation to reuse
+/// their buffers for intermediate results or the final output. This avoids
+/// allocation when an operand buffer is already the right shape and layout.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::einsum_owned;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+///
+/// // `a` and `b` are consumed; their buffers may be reused
+/// let c = einsum_owned("ij,jk->ik", vec![a, b]).unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if the notation is invalid or tensor shapes are
+/// incompatible with the subscripts.
+pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
+    _subscripts: &str,
+    _operands: Vec<Tensor<T>>,
+) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Execute einsum with pre-built [`Subscripts`], consuming the input tensors.
+///
+/// Combines the benefits of subscript caching ([`einsum_with_subscripts`])
+/// with buffer reuse from owned operands.
+///
+/// # Errors
+///
+/// Returns an error if tensor shapes are incompatible with the subscripts.
+pub fn einsum_with_subscripts_owned<T: ScalarBase + HasAlgebra>(
+    _subscripts: &Subscripts,
+    _operands: Vec<Tensor<T>>,
+) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Execute einsum with a pre-optimized [`ContractionTree`], consuming the
+/// input tensors.
+///
+/// Combines the benefits of plan caching ([`einsum_with_plan`]) with
+/// buffer reuse from owned operands. Ideal for hot loops where the
+/// caller no longer needs the input tensors after contraction.
+///
+/// # Errors
+///
+/// Returns an error if the operand shapes do not match those used to
+/// build the contraction tree.
+pub fn einsum_with_plan_owned<T: ScalarBase + HasAlgebra>(
+    _tree: &ContractionTree,
+    _operands: Vec<Tensor<T>>,
+) -> Result<Tensor<T>> {
+    todo!()
+}
+
+// ============================================================================
 // Accumulating variants (write into pre-allocated output buffer)
 // ============================================================================
 
