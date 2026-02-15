@@ -49,9 +49,9 @@ Current POC scope (in `chainrules-core`):
 
 Current POC scope (in `chainrules`):
 
-- `TrackedTensor<V>`, `DualTensor<V>`, `pullback`, `Gradients`, `PullbackPlan`
-- Forward-over-reverse HVP: `HvpResult`, `hvp()`,
-  `TrackedTensor::leaf_with_tangent()`
+- `Tape<V>`, `TrackedTensor<V>`, `DualTensor<V>`, `Gradients`, `PullbackPlan`
+- Forward-over-reverse HVP: `HvpResult`, `Tape::hvp()`,
+  `Tape::leaf_with_tangent()`
 
 Current POC scope (in `tenferro-einsum`):
 
@@ -77,11 +77,11 @@ Planned scope (not yet implemented):
 
 2. AD engine (`chainrules`)
 
+- `Tape<V>` — explicit tape (TensorFlow GradientTape style)
 - `TrackedTensor<V>` — reverse-mode wrapper (with optional tangent for HVP)
 - `DualTensor<V>` — forward-mode wrapper
-- `pullback(loss)` — reverse-mode execution
-- `hvp(loss)` — forward-over-reverse HVP execution
-- `clear_tape<V>()` — tape management
+- `Tape::pullback(loss)` — reverse-mode execution
+- `Tape::hvp(loss)` — forward-over-reverse HVP execution
 - `Gradients<V>`, `PullbackPlan<V>`, `HvpResult<V>` — result and plan types
 
 All types are parameterized by `V: Differentiable` (not `T: ScalarBase`),
@@ -131,16 +131,16 @@ runtime implementation is not complete in current POC.
    (`detach(self)`, not `detach(&self)`). Implementations that need
    cheap duplication (e.g., for tape storage) should use internal
    reference counting (`Arc`) rather than relying on `Clone`.
-7. **Tape lifetime: `NodeId` + runtime validation (POC).**
-   `TrackedTensor` references the tape via `NodeId(usize)`, not a
-   lifetime parameter or `Arc<Tape>`. This keeps the API simple.
-   `NodeId` can become invalid after `clear_tape()` — detected at
-   runtime, not compile time. Future migration path: store
-   `Arc<Tape>` inside `TrackedTensor` (grabbed from thread-local at
-   `leaf()` time). This is an internal change that does **not** alter
-   public API signatures, because the tape is accessed through the
-   `TrackedTensor` itself (e.g., `pullback(&loss)` reads `loss`'s
-   internal tape reference).
+7. **Explicit tape (TensorFlow GradientTape style).**
+   The AD engine uses an explicit `Tape<V>` object instead of implicit
+   global/thread-local state. Users create a tape, register leaf values
+   via `tape.leaf()`, and compute gradients via `tape.pullback()`.
+   This eliminates dangling `NodeId` problems: a `TrackedTensor` holds
+   a reference to its tape (internally `Arc`-based), so the tape
+   cannot be dropped while tracked values exist. `NodeId` remains as
+   an index *within* a tape but cannot become invalid because there is
+   no `clear_tape()` function. This also enables multiple independent
+   tapes (e.g., nested differentiation contexts).
 
 ## Out of Scope in This Phase
 

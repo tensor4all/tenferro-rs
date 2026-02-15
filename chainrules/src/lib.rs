@@ -4,9 +4,9 @@
 //! [`chainrules_core`] traits. It is analogous to Zygote.jl in the Julia
 //! ecosystem: a concrete AD engine that uses ChainRulesCore.jl interfaces.
 //!
-//! - Reverse-mode AD via [`TrackedTensor`] and [`pullback`]
+//! - Reverse-mode AD via [`Tape`], [`TrackedTensor`], and [`Tape::pullback`]
 //! - Forward-mode AD via [`DualTensor`]
-//! - Forward-over-reverse HVP via [`hvp`]
+//! - Forward-over-reverse HVP via [`Tape::hvp`]
 //!
 //! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate
 //! that defines the operation. See `tenferro-einsum` for einsum AD functions.
@@ -18,25 +18,25 @@
 //! Reverse-mode usage (with operation-specific AD functions from other crates):
 //!
 //! ```ignore
-//! use chainrules::{TrackedTensor, pullback, clear_tape};
+//! use chainrules::{Tape, TrackedTensor};
 //! use tenferro_einsum::tracked_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
 //!
-//! clear_tape::<Tensor<f64>>();
-//! let a = TrackedTensor::leaf(Tensor::ones(
+//! let tape = Tape::<Tensor<f64>>::new();
+//! let a = tape.leaf(Tensor::ones(
 //!     &[2, 3],
 //!     LogicalMemorySpace::MainMemory,
 //!     MemoryOrder::ColumnMajor,
 //! ));
-//! let b = TrackedTensor::leaf(Tensor::ones(
+//! let b = tape.leaf(Tensor::ones(
 //!     &[3, 4],
 //!     LogicalMemorySpace::MainMemory,
 //!     MemoryOrder::ColumnMajor,
 //! ));
 //! let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
 //! let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
-//! let grads = pullback(&loss).unwrap();
+//! let grads = tape.pullback(&loss).unwrap();
 //! let _ga = grads.get(a.node_id().unwrap()).unwrap();
 //! ```
 //!
@@ -60,18 +60,18 @@
 //! Forward-over-reverse HVP (Hessian-vector product):
 //!
 //! ```ignore
-//! use chainrules::{TrackedTensor, hvp, clear_tape};
+//! use chainrules::Tape;
 //! use tenferro_einsum::tracked_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
 //!
-//! clear_tape::<Tensor<f64>>();
-//! let x = TrackedTensor::leaf_with_tangent(
+//! let tape = Tape::<Tensor<f64>>::new();
+//! let x = tape.leaf_with_tangent(
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),  // direction v
 //! ).unwrap();
 //! let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();  // f(x) = x·x
-//! let result = hvp(&loss).unwrap();
+//! let result = tape.hvp(&loss).unwrap();
 //! let _grad = result.gradients;  // ∇f(x) = 2x
 //! let _hv = result.hvp;          // H·v = 2v
 //! ```
@@ -79,19 +79,197 @@
 // Re-export all core traits so downstream can depend on just `chainrules`.
 pub use chainrules_core::*;
 
-/// Value wrapper for reverse-mode AD.
+use std::marker::PhantomData;
+
+/// Reverse-mode AD tape.
 ///
-/// Wraps any [`Differentiable`] value and connects it to the reverse-mode
-/// tape for gradient computation.
+/// The tape records operations performed on [`TrackedTensor`] values and
+/// enables gradient computation via [`Tape::pullback`] or HVP via
+/// [`Tape::hvp`].
+///
+/// Create leaf values with [`Tape::leaf`], perform operations using
+/// AD-aware functions (e.g., `tracked_einsum`), then call
+/// [`Tape::pullback`] on the scalar loss to compute gradients.
+///
+/// `Tape` is cheaply cloneable (internally reference-counted). Multiple
+/// clones refer to the same underlying tape.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use chainrules::TrackedTensor;
+/// use chainrules::Tape;
+/// use tenferro_einsum::tracked_einsum;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let a = TrackedTensor::leaf(Tensor::<f64>::ones(
+/// let tape = Tape::<Tensor<f64>>::new();
+/// let a = tape.leaf(Tensor::ones(
+///     &[2, 3],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// ));
+/// let b = tape.leaf(Tensor::ones(
+///     &[3, 4],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// ));
+/// let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
+/// let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
+/// let grads = tape.pullback(&loss).unwrap();
+/// let _ga = grads.get(a.node_id().unwrap()).unwrap();
+/// ```
+pub struct Tape<V: Differentiable> {
+    _marker: PhantomData<V>,
+}
+
+impl<V: Differentiable> Tape<V> {
+    /// Creates a new empty tape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use chainrules::Tape;
+    ///
+    /// let tape = Tape::<f64>::new();
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+
+    /// Creates a leaf value requiring gradient on this tape.
+    ///
+    /// The returned [`TrackedTensor`] is connected to this tape and
+    /// will participate in gradient computation via [`Tape::pullback`].
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use chainrules::Tape;
+    ///
+    /// let tape = Tape::<f64>::new();
+    /// let x = tape.leaf(3.14);
+    /// assert!(x.requires_grad());
+    /// ```
+    pub fn leaf(&self, _value: V) -> TrackedTensor<V> {
+        todo!()
+    }
+
+    /// Creates a leaf value with a tangent for HVP computation.
+    ///
+    /// The tangent defines the perturbation direction *v* used in
+    /// forward-over-reverse Hessian-vector product computation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::TangentShapeMismatch`] if shapes differ.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use chainrules::Tape;
+    ///
+    /// let tape = Tape::<f64>::new();
+    /// let x = tape.leaf_with_tangent(3.14, 1.0).unwrap();
+    /// assert!(x.requires_grad());
+    /// assert!(x.has_tangent());
+    /// ```
+    pub fn leaf_with_tangent(&self, _value: V, _tangent: V::Tangent) -> AdResult<TrackedTensor<V>> {
+        todo!()
+    }
+
+    /// Runs reverse-mode pullback from a scalar loss value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::NonScalarLoss`] for non-scalar losses.
+    /// Returns [`AutodiffError::MissingNode`] if the loss is not connected
+    /// to this tape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use chainrules::Tape;
+    ///
+    /// let tape = Tape::<f64>::new();
+    /// let x = tape.leaf(2.0);
+    /// // ... compute loss from x ...
+    /// let grads = tape.pullback(&x).unwrap();
+    /// ```
+    pub fn pullback(&self, _loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
+        todo!()
+    }
+
+    /// Computes gradient and Hessian-vector product via forward-over-reverse.
+    ///
+    /// Leaf values with tangents (created via [`Tape::leaf_with_tangent`])
+    /// define the direction *v*. The function runs pullback through the tape,
+    /// propagating both cotangents and cotangent-tangents at each node.
+    ///
+    /// Returns both the gradient (in [`HvpResult::gradients`]) and H*v (in
+    /// [`HvpResult::hvp`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::NonScalarLoss`] for non-scalar losses.
+    /// Returns [`AutodiffError::HvpNotSupported`] if any ReverseRule on the tape
+    /// does not implement `pullback_with_tangents`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use chainrules::Tape;
+    /// use tenferro_einsum::tracked_einsum;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let tape = Tape::<Tensor<f64>>::new();
+    /// let x = tape.leaf_with_tangent(
+    ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+    ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+    /// ).unwrap();
+    /// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();
+    /// let result = tape.hvp(&loss).unwrap();
+    /// let _grad = result.gradients;
+    /// let _hv = result.hvp;
+    /// ```
+    pub fn hvp(&self, _loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>> {
+        todo!()
+    }
+}
+
+impl<V: Differentiable> Clone for Tape<V> {
+    fn clone(&self) -> Self {
+        Self {
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<V: Differentiable> Default for Tape<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Value wrapper for reverse-mode AD.
+///
+/// Wraps any [`Differentiable`] value and connects it to a [`Tape`]
+/// for gradient computation.
+///
+/// Created via [`Tape::leaf`] for gradient-tracked values, or
+/// [`TrackedTensor::new`] for values that do not require gradients.
+///
+/// # Examples
+///
+/// ```ignore
+/// use chainrules::{Tape, TrackedTensor};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let tape = Tape::<Tensor<f64>>::new();
+/// let a = tape.leaf(Tensor::ones(
 ///     &[2, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
@@ -101,12 +279,13 @@ pub use chainrules_core::*;
 pub struct TrackedTensor<V: Differentiable> {
     value: V,
     node_id: Option<NodeId>,
+    tape: Option<Tape<V>>,
     requires_grad: bool,
     tangent: Option<V::Tangent>,
 }
 
 impl<V: Differentiable> TrackedTensor<V> {
-    /// Creates a tracked value with `requires_grad = false`.
+    /// Creates a tracked value with `requires_grad = false` (no tape).
     ///
     /// # Examples
     ///
@@ -119,34 +298,10 @@ impl<V: Differentiable> TrackedTensor<V> {
         Self {
             value,
             node_id: None,
+            tape: None,
             requires_grad: false,
             tangent: None,
         }
-    }
-
-    /// Creates a leaf value requiring gradient.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use chainrules::TrackedTensor;
-    /// let x = TrackedTensor::leaf(value);
-    /// assert!(x.requires_grad());
-    /// ```
-    pub fn leaf(_value: V) -> Self {
-        todo!()
-    }
-
-    /// Creates a tracked value with an explicit `requires_grad` flag.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use chainrules::TrackedTensor;
-    /// let x = TrackedTensor::with_requires_grad(value, true);
-    /// ```
-    pub fn with_requires_grad(_value: V, _requires_grad: bool) -> Self {
-        todo!()
     }
 
     /// Returns the underlying value.
@@ -182,7 +337,7 @@ impl<V: Differentiable> TrackedTensor<V> {
         self.requires_grad
     }
 
-    /// Returns the graph node ID when this value is connected to the tape.
+    /// Returns the graph node ID when this value is connected to a tape.
     ///
     /// # Examples
     ///
@@ -193,27 +348,6 @@ impl<V: Differentiable> TrackedTensor<V> {
     /// ```
     pub fn node_id(&self) -> Option<NodeId> {
         self.node_id
-    }
-
-    /// Creates a leaf value requiring gradient, with a tangent for HVP.
-    ///
-    /// The tangent defines the perturbation direction *v* used in
-    /// forward-over-reverse Hessian-vector product computation.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AutodiffError::TangentShapeMismatch`] if shapes differ.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use chainrules::TrackedTensor;
-    /// let x = TrackedTensor::leaf_with_tangent(value, tangent).unwrap();
-    /// assert!(x.requires_grad());
-    /// assert!(x.has_tangent());
-    /// ```
-    pub fn leaf_with_tangent(_value: V, _tangent: V::Tangent) -> AdResult<Self> {
-        todo!()
     }
 
     /// Returns the tangent for HVP, or `None` if not set.
@@ -436,7 +570,7 @@ impl<V: Differentiable> Default for Gradients<V> {
 #[derive(Debug, Clone)]
 pub struct PullbackPlan<V: Differentiable> {
     loss: NodeId,
-    _marker: std::marker::PhantomData<V>,
+    _marker: PhantomData<V>,
 }
 
 impl<V: Differentiable> PullbackPlan<V> {
@@ -475,46 +609,27 @@ impl<V: Differentiable> PullbackPlan<V> {
     }
 }
 
-/// Clears the current reverse-mode tape/graph for type `V`.
-///
-/// # Examples
-///
-/// ```ignore
-/// chainrules::clear_tape::<Tensor<f64>>();
-/// ```
-pub fn clear_tape<V: Differentiable>() {
-    let _ = std::marker::PhantomData::<V>;
-    todo!()
-}
-
-/// Runs reverse-mode pullback from a scalar loss value.
-///
-/// # Errors
-///
-/// Returns [`AutodiffError::NonScalarLoss`] for non-scalar losses.
-///
-/// # Examples
-///
-/// ```ignore
-/// let grads = chainrules::pullback(&loss).unwrap();
-/// ```
-pub fn pullback<V: Differentiable>(_loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
-    todo!()
-}
-
 /// Result of a forward-over-reverse HVP computation.
 ///
 /// Contains both the standard gradient and the Hessian-vector
 /// product H*v, where v is the tangent direction set on leaf values
-/// via [`TrackedTensor::leaf_with_tangent`].
+/// via [`Tape::leaf_with_tangent`].
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use chainrules::{TrackedTensor, hvp, HvpResult};
+/// use chainrules::{Tape, HvpResult};
 /// use tenferro_einsum::tracked_einsum;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+/// use tenferro_device::LogicalMemorySpace;
 ///
-/// let result: HvpResult<Tensor<f64>> = hvp(&loss).unwrap();
+/// let tape = Tape::<Tensor<f64>>::new();
+/// let x = tape.leaf_with_tangent(
+///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+/// ).unwrap();
+/// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();
+/// let result: HvpResult<Tensor<f64>> = tape.hvp(&loss).unwrap();
 /// let _grad = result.gradients.get(x.node_id().unwrap());
 /// let _hv = result.hvp.get(x.node_id().unwrap());
 /// ```
@@ -523,41 +638,4 @@ pub struct HvpResult<V: Differentiable> {
     pub gradients: Gradients<V>,
     /// Hessian-vector product: H*v.
     pub hvp: Gradients<V>,
-}
-
-/// Computes gradient and Hessian-vector product via forward-over-reverse.
-///
-/// Leaf values with tangents (created via [`TrackedTensor::leaf_with_tangent`])
-/// define the direction *v*. The function runs pullback through the tape,
-/// propagating both cotangents and cotangent-tangents at each node.
-///
-/// Returns both the gradient (in [`HvpResult::gradients`]) and H*v (in
-/// [`HvpResult::hvp`]).
-///
-/// # Errors
-///
-/// Returns [`AutodiffError::NonScalarLoss`] for non-scalar losses.
-/// Returns [`AutodiffError::HvpNotSupported`] if any ReverseRule on the tape
-/// does not implement `pullback_with_tangents`.
-///
-/// # Examples
-///
-/// ```ignore
-/// use chainrules::{TrackedTensor, hvp, clear_tape};
-/// use tenferro_einsum::tracked_einsum;
-/// use tenferro_tensor::{MemoryOrder, Tensor};
-/// use tenferro_device::LogicalMemorySpace;
-///
-/// clear_tape::<Tensor<f64>>();
-/// let x = TrackedTensor::leaf_with_tangent(
-///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
-///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
-/// ).unwrap();
-/// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();  // f(x) = x*x
-/// let result = hvp(&loss).unwrap();
-/// let _grad = result.gradients;
-/// let _hv = result.hvp;
-/// ```
-pub fn hvp<V: Differentiable>(_loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>> {
-    todo!()
 }
