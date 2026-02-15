@@ -1,7 +1,7 @@
 //! Algebra traits for the tenferro workspace.
 //!
 //! This crate provides the minimal algebra foundation for
-//! [`TensorPrims<A>`](tenferro_prims::TensorPrims):
+//! `TensorPrims<A>`:
 //!
 //! - [`HasAlgebra`]: Maps a scalar type `T` to its default algebra `A`.
 //!   Enables automatic inference: `Tensor<f64>` → `Standard`,

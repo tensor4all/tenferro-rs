@@ -1,0 +1,15 @@
+[package]
+name = "tenferro-autodiff"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Automatic differentiation API skeleton (VJP/JVP) for the tenferro workspace."
+publish = false
+
+[dependencies]
+tenferro-device = { path = "../tenferro-device" }
+tenferro-algebra = { path = "../tenferro-algebra" }
+tenferro-tensor = { path = "../tenferro-tensor" }
+tenferro-einsum = { path = "../tenferro-einsum" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
+thiserror = "2"

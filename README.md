@@ -18,6 +18,20 @@ Built on top of [strided-rs](https://github.com/tensor4all/strided-rs) for cache
 
 See [tensor4all/tensor4all-meta](https://github.com/tensor4all/tensor4all-meta) for architecture and design documents.
 
+## Documentation
+
+Generate a unified local docs site (design docs + Rust API docs):
+
+```bash
+./scripts/build_docs_site.sh
+```
+
+Output:
+
+- `target/docs-site/index.html` (top page)
+- `target/docs-site/design/` (formal design docs)
+- `target/docs-site/api/` (`cargo doc --workspace` output)
+
 ## License
 
 Licensed under either of:
