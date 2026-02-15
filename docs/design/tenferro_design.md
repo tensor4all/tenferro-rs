@@ -22,7 +22,7 @@ Planned-but-not-yet-implemented areas include:
 - `chainrules-core` runtime internals (tape execution, rule wiring)
 - `tenferro-tropical` (tropical algebra types and `TensorPrims<MaxPlus>`)
 - GPU dynamic backends (`BackendRegistry`, runtime library loading)
-- `tenferro-linalg` decomposition crate (SVD/QR/eigen)
+- `tenferro-linalg` tensor-level linear algebra wrapper (SVD/QR/eigen)
 - `tenferro-capi` for Julia/Python integration
 
 Historical implementation notes remain in `docs/plans/`, but design decisions
@@ -1062,10 +1062,14 @@ Both are needed. mdarray is a foundational array library; tenferro builds a
 richer tensor ecosystem with GPU support and automatic differentiation.
 
 tenferro-linalg and mdarray-linalg are **parallel** (both call faer directly),
-not serial:
+not serial. `tenferro-linalg` is a thin wrapper over external matrix
+decomposition libraries (like Julia's MatrixFactorizations.jl). The core
+algorithms (SVD, QR, eigen) live in external crates (faer, cuSOLVER);
+`tenferro-linalg` handles tensor-to-matrix reshaping, index bookkeeping,
+and AD rules (`ReverseRule`/`ForwardRule` via `chainrules`).
 
 ```
-faer (SVD, QR, eigen)
+faer (SVD, QR, eigen)       ← external matrix algorithms
     ^                ^
 tenferro-linalg  mdarray-linalg-faer
 (Tensor<T>       (Array<T, D>

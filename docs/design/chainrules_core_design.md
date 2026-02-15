@@ -98,7 +98,12 @@ Einsum AD rules (in `tenferro-einsum`):
 - `einsum_hvp(subscripts, primals, tangents, cotangent, cotangent_tangent)` — local HVP for FFI/manual AD
 
 Future operations define their own AD rules in their own crates using the
-`ReverseRule` and `ForwardRule` traits.
+`ReverseRule` and `ForwardRule` traits. For example, `tenferro-linalg`
+will provide tensor-level SVD/QR/eigen as thin wrappers over external
+matrix decomposition libraries (faer, cuSOLVER), with AD rules defined
+alongside the operations. The core decomposition algorithms remain in
+external crates — `tenferro-linalg` handles only tensor↔matrix reshaping,
+index bookkeeping, and AD rule registration.
 
 ## Algebra and Tropical Support
 
