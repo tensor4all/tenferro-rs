@@ -6,7 +6,7 @@ Date: 2026-02-15
 
 Define a reviewable public API for automatic differentiation in tenferro-rs without adding implementations.
 
-- Reverse-mode: tape/graph based API (`TrackedTensor`, `backward`)
+- Reverse-mode: tape/graph based API (`TrackedTensor`, `pullback`)
 - Forward-mode: tangent propagation API (`DualTensor`, frule)
 - Rule extension traits (`ReverseRule`, `ForwardRule`) for backend-agnostic AD
 
@@ -32,7 +32,7 @@ The AD framework (`tenferro-autodiff`) is a **pure framework** that does not
 depend on any operation crate. Operation-specific AD rules live with their
 operations:
 
-- `tenferro-autodiff` — framework: `TrackedTensor`, `DualTensor`, `backward()`,
+- `tenferro-autodiff` — framework: `TrackedTensor`, `DualTensor`, `pullback()`,
   `ReverseRule`, `ForwardRule`, tape management
 - `tenferro-einsum` — einsum AD rules: `tracked_einsum`, `dual_einsum`,
   `einsum_rrule`, `einsum_frule`
@@ -61,7 +61,7 @@ Core types:
 - `TrackedTensor<T>` (with optional tangent for HVP)
 - `DualTensor<T>`
 - `Gradients<T>`
-- `BackwardPlan<T>`
+- `PullbackPlan<T>`
 - `HvpResult<T>`
 - `SavePolicy`
 
@@ -74,7 +74,7 @@ Core traits:
 Core functions:
 
 - `clear_tape<T>()`
-- `backward(loss: &TrackedTensor<T>) -> AdResult<Gradients<T>>`
+- `pullback(loss: &TrackedTensor<T>) -> AdResult<Gradients<T>>`
 - `hvp(loss: &TrackedTensor<T>) -> AdResult<HvpResult<T>>`
 
 ### tenferro-einsum (AD additions)

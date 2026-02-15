@@ -628,13 +628,13 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
 /// Tracked einsum (reverse-mode AD).
 ///
 /// This is the AD-aware counterpart of [`einsum`]. It records the operation
-/// on the reverse-mode tape so that [`tenferro_autodiff::backward`] can
+/// on the reverse-mode tape so that [`tenferro_autodiff::pullback`] can
 /// compute gradients through it.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{TrackedTensor, backward, clear_tape};
+/// use tenferro_autodiff::{TrackedTensor, pullback, clear_tape};
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
@@ -652,7 +652,7 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
 /// ));
 /// let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
 /// let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
-/// let grads = backward(&loss).unwrap();
+/// let grads = pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
 pub fn tracked_einsum<T: ScalarBase + HasAlgebra>(
