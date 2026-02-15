@@ -97,14 +97,23 @@ Einsum AD rules (in `tenferro-einsum`):
 - `einsum_frule(subscripts, primals, tangents)` — local pushforward for FFI/manual AD
 - `einsum_hvp(subscripts, primals, tangents, cotangent, cotangent_tangent)` — local HVP for FFI/manual AD
 
+`tenferro-linalg` provides tensor-level SVD/QR/LU/eigen as thin wrappers
+over external matrix decomposition libraries (faer, cuSOLVER). Users
+specify left/right dimensions by numeric indices (e.g.,
+`svd(tensor, &[0, 1], &[2, 3])`); the crate reshapes to a matrix,
+calls the external decomposition, and reshapes back. AD rules
+(`tracked_svd`, `svd_rrule`, etc.) operate at the tensor level —
+gradients flow through the full reshape→decompose→reshape pipeline.
+
+Linalg AD rules (in `tenferro-linalg`):
+
+- `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule` — SVD AD
+- `tracked_qr`, `dual_qr`, `qr_rrule`, `qr_frule` — QR AD
+- `tracked_lu`, `dual_lu`, `lu_rrule`, `lu_frule` — LU AD
+- `tracked_eigen`, `dual_eigen`, `eigen_rrule`, `eigen_frule` — Eigen AD
+
 Future operations define their own AD rules in their own crates using the
-`ReverseRule` and `ForwardRule` traits. For example, `tenferro-linalg`
-will provide tensor-level SVD/QR/eigen as thin wrappers over external
-matrix decomposition libraries (faer, cuSOLVER). Users specify left/right
-dimensions by numeric indices (e.g., `svd(tensor, &[0, 1], &[2, 3])`);
-the crate reshapes to a matrix, calls the external decomposition, and
-reshapes back. AD rules operate at the tensor level — gradients flow
-through the full reshape→decompose→reshape pipeline.
+`ReverseRule` and `ForwardRule` traits.
 
 ## Algebra and Tropical Support
 

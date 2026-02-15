@@ -1,0 +1,13 @@
+[package]
+name = "tenferro-linalg"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Tensor-level linear algebra decompositions (SVD, QR, LU, eigen) for the tenferro workspace."
+publish = false
+
+[dependencies]
+tenferro-device = { path = "../tenferro-device" }
+tenferro-tensor = { path = "../tenferro-tensor" }
+chainrules = { path = "../chainrules" }
+strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
