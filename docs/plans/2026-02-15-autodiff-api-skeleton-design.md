@@ -58,21 +58,24 @@ Core types:
 
 - `AutodiffError`, `AdResult<T>`
 - `NodeId`
-- `TrackedTensor<T>`
+- `TrackedTensor<T>` (with optional tangent for HVP)
 - `DualTensor<T>`
 - `Gradients<T>`
 - `BackwardPlan<T>`
+- `HvpResult<T>`
 - `SavePolicy`
 
 Core traits:
 
-- `VjpRule<T>`: `backward(cotangent) -> [(NodeId, Tensor<T>)]`
+- `VjpRule<T>`: `backward(cotangent) -> [(NodeId, Tensor<T>)]`,
+  `backward_with_tangents(cotangent, cotangent_tangent) -> [(NodeId, Tensor<T>, Tensor<T>)]`
 - `JvpRule<T>`: `forward(input_tangents) -> Tensor<T>`
 
 Core functions:
 
 - `clear_tape<T>()`
 - `backward(loss: &TrackedTensor<T>) -> AdResult<Gradients<T>>`
+- `hvp(loss: &TrackedTensor<T>) -> AdResult<HvpResult<T>>`
 
 ### tenferro-einsum (AD additions)
 
@@ -82,6 +85,7 @@ Einsum AD functions added to `tenferro-einsum`:
 - `dual_einsum(subscripts, operands)` — forward-mode einsum
 - `einsum_vjp(subscripts, operands, cotangent)` — local VJP for FFI/manual AD
 - `einsum_jvp(subscripts, primals, tangents)` — local JVP for FFI/manual AD
+- `einsum_hvp(subscripts, primals, tangents, cotangent, cotangent_tangent)` — local HVP for FFI/manual AD
 
 ## Design Decisions
 
@@ -96,4 +100,4 @@ Einsum AD functions added to `tenferro-einsum`:
 
 - No runtime implementation of tape/graph execution.
 - No decomposition AD rules yet for every `TensorPrims` operation.
-- No HVP/second-order API yet (can be layered on `DualTensor` + `backward` later).
+- No full second-order API beyond HVP (HVP API skeleton is now defined).

@@ -53,6 +53,25 @@
 //! let c_dual = dual_einsum("ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
 //! let _jvp = c_dual.tangent();
 //! ```
+//!
+//! Forward-over-reverse HVP (Hessian-vector product):
+//!
+//! ```ignore
+//! use tenferro_autodiff::{TrackedTensor, hvp, clear_tape};
+//! use tenferro_einsum::tracked_einsum;
+//! use tenferro_tensor::{MemoryOrder, Tensor};
+//! use tenferro_device::LogicalMemorySpace;
+//!
+//! clear_tape::<f64>();
+//! let x = TrackedTensor::leaf_with_tangent(
+//!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+//!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),  // direction v
+//! ).unwrap();
+//! let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();  // f(x) = x·x
+//! let result = hvp(&loss).unwrap();
+//! let _grad = result.gradients;  // ∇f(x) = 2x
+//! let _hv = result.hvp;          // H·v = 2v
+//! ```
 
 use strided_traits::ScalarBase;
 use tenferro_algebra::HasAlgebra;
@@ -88,6 +107,9 @@ pub enum AutodiffError {
         /// Actual shape.
         got: Vec<usize>,
     },
+    /// A VjpRule does not support HVP (backward_with_tangents).
+    #[error("HVP not supported by this VjpRule implementation")]
+    HvpNotSupported,
     /// Generic AD argument error.
     #[error("invalid autodiff argument: {0}")]
     InvalidArgument(String),
@@ -185,6 +207,7 @@ pub struct TrackedTensor<T: ScalarBase> {
     tensor: Tensor<T>,
     node_id: Option<NodeId>,
     requires_grad: bool,
+    tangent: Option<Tensor<T>>,
 }
 
 impl<T: ScalarBase> TrackedTensor<T> {
@@ -202,6 +225,7 @@ impl<T: ScalarBase> TrackedTensor<T> {
             tensor,
             node_id: None,
             requires_grad: false,
+            tangent: None,
         }
     }
 
@@ -274,6 +298,51 @@ impl<T: ScalarBase> TrackedTensor<T> {
     /// ```
     pub fn node_id(&self) -> Option<NodeId> {
         self.node_id
+    }
+
+    /// Creates a leaf tensor requiring gradient, with a tangent for HVP.
+    ///
+    /// The tangent defines the perturbation direction *v* used in
+    /// forward-over-reverse Hessian-vector product computation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::TangentShapeMismatch`] if shapes differ.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_autodiff::TrackedTensor;
+    /// let x = TrackedTensor::leaf_with_tangent(tensor, tangent).unwrap();
+    /// assert!(x.requires_grad());
+    /// assert!(x.has_tangent());
+    /// ```
+    pub fn leaf_with_tangent(_tensor: Tensor<T>, _tangent: Tensor<T>) -> AdResult<Self> {
+        todo!()
+    }
+
+    /// Returns the tangent tensor for HVP, or `None` if not set.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// if let Some(t) = tracked.tangent() {
+    ///     println!("tangent shape: {:?}", t.dims());
+    /// }
+    /// ```
+    pub fn tangent(&self) -> Option<&Tensor<T>> {
+        self.tangent.as_ref()
+    }
+
+    /// Returns whether this tracked tensor has a tangent for HVP.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// assert!(tracked.has_tangent());
+    /// ```
+    pub fn has_tangent(&self) -> bool {
+        self.tangent.is_some()
     }
 
     /// Returns a detached tensor that does not require gradients.
@@ -483,6 +552,33 @@ pub trait VjpRule<T: ScalarBase + HasAlgebra> {
 
     /// Returns input node IDs this rule depends on.
     fn inputs(&self) -> Vec<NodeId>;
+
+    /// Computes backward pass with tangent propagation for HVP.
+    ///
+    /// Given an output cotangent ḡ and its tangent dḡ, returns
+    /// `(node_id, input_cotangent, input_cotangent_tangent)` triples.
+    ///
+    /// The default implementation returns [`AutodiffError::HvpNotSupported`].
+    /// Operations that support forward-over-reverse HVP override this method.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Called internally by hvp(); users rarely call this directly.
+    /// let results = rule.backward_with_tangents(&cotangent, &cotangent_tangent)?;
+    /// for (node_id, grad, grad_tangent) in results {
+    ///     // grad: standard cotangent for this input
+    ///     // grad_tangent: cotangent tangent for HVP
+    /// }
+    /// ```
+    fn backward_with_tangents(
+        &self,
+        cotangent: &Tensor<T>,
+        cotangent_tangent: &Tensor<T>,
+    ) -> AdResult<Vec<(NodeId, Tensor<T>, Tensor<T>)>> {
+        let _ = (cotangent, cotangent_tangent);
+        Err(AutodiffError::HvpNotSupported)
+    }
 }
 
 /// Forward rule interface for JVP propagation.
@@ -576,5 +672,65 @@ pub fn clear_tape<T: ScalarBase>() {
 /// let grads = tenferro_autodiff::backward(&loss).unwrap();
 /// ```
 pub fn backward<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResult<Gradients<T>> {
+    todo!()
+}
+
+/// Result of a forward-over-reverse HVP computation.
+///
+/// Contains both the standard gradient ∇f(x) and the Hessian-vector
+/// product H·v, where v is the tangent direction set on leaf tensors
+/// via [`TrackedTensor::leaf_with_tangent`].
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_autodiff::{TrackedTensor, hvp, HvpResult};
+/// use tenferro_einsum::tracked_einsum;
+///
+/// let result: HvpResult<f64> = hvp(&loss).unwrap();
+/// let _grad = result.gradients.get(x.node_id().unwrap());  // ∇f(x)
+/// let _hv = result.hvp.get(x.node_id().unwrap());          // H·v
+/// ```
+pub struct HvpResult<T: ScalarBase> {
+    /// Gradients: ∇f(x).
+    pub gradients: Gradients<T>,
+    /// Hessian-vector product: H·v.
+    pub hvp: Gradients<T>,
+}
+
+/// Computes gradient and Hessian-vector product via forward-over-reverse.
+///
+/// Leaf tensors with tangents (created via [`TrackedTensor::leaf_with_tangent`])
+/// define the direction *v*. The function runs backward through the tape,
+/// propagating both cotangents (ḡ) and cotangent-tangents (dḡ) at each node.
+///
+/// Returns both ∇f(x) (in [`HvpResult::gradients`]) and H·v (in
+/// [`HvpResult::hvp`]).
+///
+/// # Errors
+///
+/// Returns [`AutodiffError::NonScalarLoss`] for non-scalar losses.
+/// Returns [`AutodiffError::HvpNotSupported`] if any VjpRule on the tape
+/// does not implement `backward_with_tangents`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_autodiff::{TrackedTensor, hvp, clear_tape};
+/// use tenferro_einsum::tracked_einsum;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// clear_tape::<f64>();
+/// let x = TrackedTensor::leaf_with_tangent(
+///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+/// ).unwrap();
+/// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();  // f(x) = x·x
+/// let result = hvp(&loss).unwrap();
+/// let _grad = result.gradients;  // ∇f(x) = 2x
+/// let _hv = result.hvp;          // H·v = 2v
+/// ```
+pub fn hvp<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResult<HvpResult<T>> {
     todo!()
 }
