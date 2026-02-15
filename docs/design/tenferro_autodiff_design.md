@@ -36,29 +36,33 @@ Current POC scope (in `tenferro-autodiff`):
 - Public API skeleton for reverse-mode and forward-mode
 - `TrackedTensor`, `DualTensor`, `backward`, `Gradients`, `BackwardPlan`
 - Trait extension points: `VjpRule`, `JvpRule`
+- Forward-over-reverse HVP: `HvpResult`, `hvp()`,
+  `VjpRule::backward_with_tangents()`, `TrackedTensor::leaf_with_tangent()`
 
 Current POC scope (in `tenferro-einsum`):
 
 - `tracked_einsum`, `dual_einsum` — AD-aware einsum frontends
 - `einsum_vjp`, `einsum_jvp` — local derivative kernels for FFI/manual AD
+- `einsum_hvp` — local HVP kernel for FFI/manual AD
 
 Planned scope (not yet implemented):
 
 - Reverse-mode tape runtime and node execution
 - Rule registry and decomposition rules for all primitives
-- Higher-order APIs (HVP, forward-on-reverse)
 - Device-aware execution paths for GPU backends
 
 ## API Layers
 
 1. AD framework (`tenferro-autodiff`)
 
-- `TrackedTensor<T>` — reverse-mode wrapper
+- `TrackedTensor<T>` — reverse-mode wrapper (with optional tangent for HVP)
 - `DualTensor<T>` — forward-mode wrapper
 - `backward(loss)` — reverse-mode execution
+- `hvp(loss)` — forward-over-reverse HVP execution
 - `clear_tape<T>()` — tape management
-- `Gradients<T>`, `BackwardPlan<T>` — result and plan types
+- `Gradients<T>`, `BackwardPlan<T>`, `HvpResult<T>` — result and plan types
 - `VjpRule<T>`, `JvpRule<T>` — rule extension traits
+  (`VjpRule` includes `backward_with_tangents` for HVP support)
 
 2. Operation-specific AD rules (in each operation's crate)
 
@@ -68,6 +72,7 @@ Einsum AD rules (in `tenferro-einsum`):
 - `dual_einsum(subscripts, operands)` — forward-mode einsum
 - `einsum_vjp(subscripts, operands, cotangent)` — local VJP for FFI/manual AD
 - `einsum_jvp(subscripts, primals, tangents)` — local JVP for FFI/manual AD
+- `einsum_hvp(subscripts, primals, tangents, cotangent, cotangent_tangent)` — local HVP for FFI/manual AD
 
 Future operations define their own AD rules in their own crates using the
 `VjpRule` and `JvpRule` traits.
@@ -101,4 +106,5 @@ runtime implementation is not complete in current POC.
 
 - Full runtime implementation of graph scheduling
 - End-to-end optimized GPU backward kernels
-- Full second-order differentiation API
+- Full second-order differentiation API beyond HVP
+  (HVP API skeleton is defined; full Hessian computation is deferred)
