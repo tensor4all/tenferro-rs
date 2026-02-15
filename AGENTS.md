@@ -95,7 +95,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 
 ```
 Layer 5: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
-Layer 4: tenferro-autodiff     — AD framework: TrackedTensor, DualTensor, VjpRule/JvpRule, backward, tape
+Layer 4: tenferro-autodiff     — AD framework: TrackedTensor, DualTensor, ReverseRule/ForwardRule, backward, tape
 Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops
 Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
 Shared:  tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
@@ -108,7 +108,7 @@ Foundation: strided-rs    — Independent workspace (strided-traits → strided-
 
 Operation-specific AD rules live with their operations, not in the AD framework.
 `tenferro-autodiff` is a pure AD framework; `tenferro-einsum` owns einsum AD functions
-(`tracked_einsum`, `dual_einsum`, `einsum_vjp`, `einsum_jvp`).
+(`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`).
 
 ### Dependency Graph (POC)
 

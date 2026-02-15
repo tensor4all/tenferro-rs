@@ -17,8 +17,8 @@ and rule traits, but does **not** contain operation-specific AD rules.
 - `tenferro-autodiff` depends on `tenferro-tensor`, `tenferro-algebra`,
   `tenferro-device` (no dependency on `tenferro-einsum` or `tenferro-prims`).
 - Operation-specific AD rules live with their operations:
-  - Einsum AD functions (`tracked_einsum`, `dual_einsum`, `einsum_vjp`,
-    `einsum_jvp`) are in `tenferro-einsum`.
+  - Einsum AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`,
+    `einsum_frule`) are in `tenferro-einsum`.
   - Future operations (e.g., block-sparse matmul) define their own AD rules
     in their own crates.
 - `tenferro-einsum` depends on `tenferro-autodiff` to use the AD framework.
@@ -35,14 +35,14 @@ Current POC scope (in `tenferro-autodiff`):
 
 - Public API skeleton for reverse-mode and forward-mode
 - `TrackedTensor`, `DualTensor`, `backward`, `Gradients`, `BackwardPlan`
-- Trait extension points: `VjpRule`, `JvpRule`
+- Trait extension points: `ReverseRule`, `ForwardRule`
 - Forward-over-reverse HVP: `HvpResult`, `hvp()`,
-  `VjpRule::backward_with_tangents()`, `TrackedTensor::leaf_with_tangent()`
+  `ReverseRule::pullback_with_tangents()`, `TrackedTensor::leaf_with_tangent()`
 
 Current POC scope (in `tenferro-einsum`):
 
 - `tracked_einsum`, `dual_einsum` — AD-aware einsum frontends
-- `einsum_vjp`, `einsum_jvp` — local derivative kernels for FFI/manual AD
+- `einsum_rrule`, `einsum_frule` — local derivative kernels for FFI/manual AD
 - `einsum_hvp` — local HVP kernel for FFI/manual AD
 
 Planned scope (not yet implemented):
@@ -61,8 +61,9 @@ Planned scope (not yet implemented):
 - `hvp(loss)` — forward-over-reverse HVP execution
 - `clear_tape<T>()` — tape management
 - `Gradients<T>`, `BackwardPlan<T>`, `HvpResult<T>` — result and plan types
-- `VjpRule<T>`, `JvpRule<T>` — rule extension traits
-  (`VjpRule` includes `backward_with_tangents` for HVP support)
+- `ReverseRule<T>`, `ForwardRule<T>` — rule extension traits
+  (named after Julia's ChainRules.jl: rrule/frule)
+  (`ReverseRule` includes `pullback_with_tangents` for HVP support)
 
 2. Operation-specific AD rules (in each operation's crate)
 
@@ -70,18 +71,18 @@ Einsum AD rules (in `tenferro-einsum`):
 
 - `tracked_einsum(subscripts, operands)` — reverse-mode einsum
 - `dual_einsum(subscripts, operands)` — forward-mode einsum
-- `einsum_vjp(subscripts, operands, cotangent)` — local VJP for FFI/manual AD
-- `einsum_jvp(subscripts, primals, tangents)` — local JVP for FFI/manual AD
+- `einsum_rrule(subscripts, operands, cotangent)` — local pullback for FFI/manual AD
+- `einsum_frule(subscripts, primals, tangents)` — local pushforward for FFI/manual AD
 - `einsum_hvp(subscripts, primals, tangents, cotangent, cotangent_tangent)` — local HVP for FFI/manual AD
 
 Future operations define their own AD rules in their own crates using the
-`VjpRule` and `JvpRule` traits.
+`ReverseRule` and `ForwardRule` traits.
 
 ## Algebra and Tropical Support
 
 Autodiff must remain algebra-aware.
 
-- Standard arithmetic: direct VJP/JVP formulas over `+/*`.
+- Standard arithmetic: direct rrule/frule formulas over `+/*`.
 - Tropical algebra (`tenferro-tropical`): formulas may need algebra-specific
   state (for example, argmax path information for max-plus variants).
 - API design keeps this extensible by relying on `HasAlgebra` and
@@ -93,7 +94,7 @@ runtime implementation is not complete in current POC.
 ## Design Decisions
 
 1. Separate reverse and forward wrappers (`TrackedTensor` vs `DualTensor`).
-2. Keep local VJP/JVP callable without constructing a tape.
+2. Keep local rrule/frule callable without constructing a tape.
 3. Keep public APIs backend-neutral; backend-specific execution stays in
    `tenferro-prims` / device layer.
 4. Use doc examples on all public items to make API review possible before
