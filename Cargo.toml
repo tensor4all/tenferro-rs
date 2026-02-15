@@ -5,6 +5,7 @@ members = [
     "tenferro-prims",
     "tenferro-tensor",
     "tenferro-einsum",
+    "tenferro-linalg",
     "chainrules-core",
     "chainrules",
 ]

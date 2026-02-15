@@ -95,6 +95,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 
 ```
 Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
+         tenferro-linalg       — Tensor-level SVD/QR/LU/eigen (matricize→decompose→unmatricize), linalg AD rules
 Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
                                  impl Differentiable for Tensor<T>
 Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
@@ -112,7 +113,8 @@ Foundation: strided-rs    — Independent workspace (strided-traits → strided-
 of any tensor type. `chainrules` provides the AD engine (Tape, TrackedTensor, DualTensor).
 `Tensor<T>` implements `Differentiable` in `tenferro-tensor`.
 Operation-specific AD rules live with their operations: `tenferro-einsum` owns einsum
-AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`).
+AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`);
+`tenferro-linalg` owns linalg AD functions (`tracked_svd`, `svd_rrule`, etc.).
 
 ### Dependency Graph (POC)
 
@@ -141,6 +143,8 @@ tenferro-prims   tenferro-tensor
     └──────────┬─────────────┘
                ↓
           tenferro-einsum
+              (← strided-traits, ← chainrules)
+          tenferro-linalg
               (← strided-traits, ← chainrules)
 ```
 

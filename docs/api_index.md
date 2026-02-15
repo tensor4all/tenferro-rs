@@ -17,6 +17,7 @@ in tensor4all-meta for high-level architecture and future phase plans.
 ```
 Layer 4: tenferro-einsum     High-level einsum on Tensor<T>, N-ary contraction
                              tree, algebra dispatch, einsum AD rules
+         tenferro-linalg     Tensor-level SVD/QR/LU/eigen, linalg AD rules
 Layer 3: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
                              zero-copy view ops, impl Differentiable
 Layer 2: tenferro-prims      "Tensor BLAS": TensorPrims<A> trait
@@ -86,3 +87,19 @@ consuming (`_owned`) variants.
 
 Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`,
 `einsum_frule`, `einsum_hvp`.
+
+### tenferro-linalg
+
+Tensor-level linear algebra decompositions: SVD, QR, LU, eigendecomposition.
+Users specify left/right dimension indices; the crate handles
+matricize -> decompose -> unmatricize internally via external backends
+(faer for CPU, cuSOLVER for GPU).
+
+Primary functions: `svd`, `qr`, `lu`, `eigen`.
+Result types: `SvdResult`, `QrResult`, `LuResult`, `EigenResult`.
+SVD truncation: `SvdOptions` (max_rank, cutoff).
+
+Linalg AD rules: `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule`,
+`tracked_qr`, `dual_qr`, `qr_rrule`, `qr_frule`,
+`tracked_lu`, `dual_lu`, `lu_rrule`, `lu_frule`,
+`tracked_eigen`, `dual_eigen`, `eigen_rrule`, `eigen_frule`.
