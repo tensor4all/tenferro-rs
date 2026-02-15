@@ -11,5 +11,5 @@ tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-chainrules-core = { path = "../chainrules-core" }
+chainrules = { path = "../chainrules" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs" }

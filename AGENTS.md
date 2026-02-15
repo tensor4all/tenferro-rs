@@ -98,8 +98,8 @@ Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, a
 Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
                                  impl Differentiable for Tensor<T>
 Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
-Shared:  chainrules-core     — Generic AD framework: Differentiable trait, TrackedTensor<V>, DualTensor<V>,
-                                 ReverseRule<V>/ForwardRule<V>, pullback, tape (no tensor deps)
+Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
+         chainrules           — AD engine: TrackedTensor<V>, DualTensor<V>, pullback, hvp (← chainrules-core)
          tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
          tenferro-device       — Device enum, Error/Result types
 Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
@@ -108,17 +108,21 @@ Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
 ```
 
-`chainrules-core` is a **generic AD framework** (like Julia's ChainRulesCore.jl) that
-does not depend on any tensor type. The `Differentiable` trait defines the tangent space;
-`Tensor<T>` implements it in `tenferro-tensor`. Operation-specific AD rules live with
-their operations: `tenferro-einsum` owns einsum AD functions
-(`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`).
+`chainrules-core` defines core AD traits (like Julia's ChainRulesCore.jl), independent
+of any tensor type. `chainrules` provides the AD engine (TrackedTensor, DualTensor,
+pullback, hvp). `Tensor<T>` implements `Differentiable` in `tenferro-tensor`.
+Operation-specific AD rules live with their operations: `tenferro-einsum` owns einsum
+AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`).
 
 ### Dependency Graph (POC)
 
 ```
 chainrules-core (← thiserror only, no tensor deps)
-    │  Differentiable trait, TrackedTensor<V>, DualTensor<V>
+    │  Differentiable trait, ReverseRule<V>, ForwardRule<V>
+    │
+    ↓
+chainrules (← chainrules-core)
+    │  TrackedTensor<V>, DualTensor<V>, pullback, hvp
     │
 tenferro-device (← strided-view for StridedError, ← thiserror)
     │
@@ -137,6 +141,6 @@ tenferro-prims   tenferro-tensor
     └──────────┬─────────────┘
                ↓
           tenferro-einsum
-              (← strided-traits, ← chainrules-core)
+              (← strided-traits, ← chainrules)
 ```
 

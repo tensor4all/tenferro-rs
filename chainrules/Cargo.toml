@@ -1,0 +1,10 @@
+[package]
+name = "chainrules"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "AD engine: TrackedTensor, DualTensor, pullback, hvp."
+publish = false
+
+[dependencies]
+chainrules-core = { path = "../chainrules-core" }

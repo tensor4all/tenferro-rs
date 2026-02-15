@@ -10,38 +10,48 @@ work that is not yet complete in POC.
 
 ## Position in Workspace Architecture
 
-`chainrules-core` is a **generic AD framework** (like Julia's ChainRulesCore.jl)
-that does not depend on any tensor type. It defines the `Differentiable` trait
-for tangent space operations, and generic wrapper types (`TrackedTensor<V>`,
-`DualTensor<V>`) parameterized by any `V: Differentiable`.
+The AD system is split into two crates following Rust convention
+(`foo-core` = traits, `foo` = full library):
 
-- `chainrules-core` depends only on `thiserror` (no tenferro crate deps).
+- **`chainrules-core`** — Pure trait definitions (like Julia's ChainRulesCore.jl).
+  Defines `Differentiable`, `ReverseRule<V>`, `ForwardRule<V>`, error types,
+  `NodeId`, `SavePolicy`. Depends only on `thiserror`.
+- **`chainrules`** — AD engine (like Zygote.jl). Provides `TrackedTensor<V>`,
+  `DualTensor<V>`, `pullback()`, `hvp()`, `Gradients<V>`, `PullbackPlan<V>`.
+  Depends only on `chainrules-core`. Re-exports all of `chainrules-core`.
+
+Neither crate depends on any tensor or tenferro crate.
+
 - `tenferro-tensor` depends on `chainrules-core` and implements
   `Differentiable for Tensor<T>`.
 - Operation-specific AD rules live with their operations:
   - Einsum AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`,
     `einsum_frule`) are in `tenferro-einsum`.
-  - Future operations (e.g., block-sparse matmul) define their own AD rules
-    in their own crates.
-- `tenferro-einsum` depends on `chainrules-core` to use the AD framework.
+  - Future operations define their own AD rules in their own crates.
+- `tenferro-einsum` depends on `chainrules` (which re-exports core).
 
 ```
-chainrules-core          ← Generic AD framework (Differentiable, no tensor deps)
+chainrules-core          ← Core AD traits (Differentiable, no tensor deps)
     ↑
-tenferro-tensor            ← impl Differentiable for Tensor<T>
+chainrules               ← AD engine (TrackedTensor, pullback, hvp)
     ↑
-tenferro-einsum            ← Einsum + einsum AD rules
+tenferro-tensor            ← impl Differentiable for Tensor<T> (depends on chainrules-core)
+    ↑
+tenferro-einsum            ← Einsum + einsum AD rules (depends on chainrules)
 ```
 
 ## Scope
 
 Current POC scope (in `chainrules-core`):
 
-- Public API skeleton for reverse-mode and forward-mode
-- `TrackedTensor`, `DualTensor`, `pullback`, `Gradients`, `PullbackPlan`
-- Trait extension points: `ReverseRule`, `ForwardRule`
+- `Differentiable` trait, `ReverseRule<V>`, `ForwardRule<V>` traits
+- Error types (`AutodiffError`, `AdResult`), `NodeId`, `SavePolicy`
+
+Current POC scope (in `chainrules`):
+
+- `TrackedTensor<V>`, `DualTensor<V>`, `pullback`, `Gradients`, `PullbackPlan`
 - Forward-over-reverse HVP: `HvpResult`, `hvp()`,
-  `ReverseRule::pullback_with_tangents()`, `TrackedTensor::leaf_with_tangent()`
+  `TrackedTensor::leaf_with_tangent()`
 
 Current POC scope (in `tenferro-einsum`):
 
@@ -57,23 +67,27 @@ Planned scope (not yet implemented):
 
 ## API Layers
 
-1. AD framework (`chainrules-core`)
+1. Core AD traits (`chainrules-core`)
 
 - `Differentiable` — trait defining tangent space (zero_tangent, accumulate_tangent)
+- `ReverseRule<V>`, `ForwardRule<V>` — rule extension traits
+  (named after Julia's ChainRules.jl: rrule/frule)
+  (`ReverseRule` includes `pullback_with_tangents` for HVP support)
+- `AutodiffError`, `AdResult`, `NodeId`, `SavePolicy`
+
+2. AD engine (`chainrules`)
+
 - `TrackedTensor<V>` — reverse-mode wrapper (with optional tangent for HVP)
 - `DualTensor<V>` — forward-mode wrapper
 - `pullback(loss)` — reverse-mode execution
 - `hvp(loss)` — forward-over-reverse HVP execution
 - `clear_tape<V>()` — tape management
 - `Gradients<V>`, `PullbackPlan<V>`, `HvpResult<V>` — result and plan types
-- `ReverseRule<V>`, `ForwardRule<V>` — rule extension traits
-  (named after Julia's ChainRules.jl: rrule/frule)
-  (`ReverseRule` includes `pullback_with_tangents` for HVP support)
 
 All types are parameterized by `V: Differentiable` (not `T: ScalarBase`),
 making the framework independent of any specific tensor or array type.
 
-2. Operation-specific AD rules (in each operation's crate)
+3. Operation-specific AD rules (in each operation's crate)
 
 Einsum AD rules (in `tenferro-einsum`):
 

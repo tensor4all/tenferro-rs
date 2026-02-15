@@ -21,8 +21,10 @@ Layer 3: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
                              zero-copy view ops, impl Differentiable
 Layer 2: tenferro-prims      "Tensor BLAS": TensorPrims<A> trait
                              (algebra-parameterized), plan-based execution
-Shared:  chainrules-core   Generic AD framework: Differentiable trait,
-                             TrackedTensor<V>, DualTensor<V>, rules (no tensor deps)
+Shared:  chainrules-core   Core AD traits: Differentiable, ReverseRule<V>,
+                             ForwardRule<V> (no tensor deps)
+         chainrules          AD engine: TrackedTensor<V>, DualTensor<V>,
+                             pullback, hvp (← chainrules-core)
          tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type
          tenferro-device     Device enum, Error/Result types
 
@@ -59,13 +61,17 @@ and zero-copy view operations (`permute`, `broadcast`, `diagonal`, `reshape`).
 
 ### chainrules-core
 
-Generic AD framework (like Julia's ChainRulesCore.jl), independent of any
+Core AD trait definitions (like Julia's ChainRulesCore.jl), independent of any
 tensor type. `Differentiable` trait defines the tangent space; concrete types
-(e.g., `Tensor<T>`) implement it in their own crates.
+(e.g., `Tensor<T>`) implement it in their own crates. Rule extension traits
+(`ReverseRule<V>`, `ForwardRule<V>`) for per-operation AD rules.
 
-Provides `TrackedTensor<V>` (reverse-mode), `DualTensor<V>` (forward-mode),
-`pullback()`, `hvp()`, and rule extension traits (`ReverseRule<V>`,
-`ForwardRule<V>` -- named after Julia's ChainRules.jl).
+### chainrules
+
+AD engine (like Zygote.jl in Julia's ecosystem). Provides `TrackedTensor<V>`
+(reverse-mode), `DualTensor<V>` (forward-mode), `pullback()`, `hvp()`.
+Depends only on `chainrules-core`. Re-exports all of `chainrules-core`
+so downstream crates can depend on just `chainrules` for both traits and engine.
 
 Operation-specific AD rules live with their operations, not here.
 
