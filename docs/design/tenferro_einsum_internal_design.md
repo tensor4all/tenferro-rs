@@ -47,9 +47,9 @@ Foundation: strided-rs (independent workspace, not absorbed)
 
 ### Design Rationale
 
-GiggleLiu proposed that strided-rs should serve as a "tensor-level BLAS" --
-the CPU counterpart to cuTENSOR -- with standardized interfaces applicable to
-CPU, GPU, and tropical tensors. Specifically, he proposed a **universal set**
+strided-rs serves as a "tensor-level BLAS" -- the CPU counterpart to
+cuTENSOR -- with standardized interfaces applicable to CPU, GPU, and tropical
+tensors. This design uses a **universal set**
 of primitive operations (`batched_gemm`, `trace`, `diag`, `permute`, `repeat`,
 `anti_diag`, `anti_trace`) that any backend must implement, plus an **extended
 set** of optimized composites (`contract`, `elementwise_mul`) that backends
@@ -1029,7 +1029,7 @@ tenferro-device              tenferro-algebra
 Future crates (not in POC):
 - `tenferro-tropical` -- Tropical algebra types, TensorPrims<MaxPlus> for CpuBackend
 - `tenferro-linalg` -- SVD, QR, eigen (CPU: faer, GPU: cuSOLVER)
-- `tenferro-autograd` -- TrackedTensor, DualTensor, VJP/JVP
+- `tenferro-autodiff` -- TrackedTensor, DualTensor, VJP/JVP
 - `tenferro-capi` -- C FFI for Julia/Python integration
 
 ---

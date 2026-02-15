@@ -16,25 +16,28 @@ concurrency:
 
 jobs:
   build:
+    name: Build docs-site artifact
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build documentation
-        run: cargo doc --no-deps --workspace
-        env:
-          RUSTDOCFLAGS: "-Z unstable-options --enable-index-page"
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build unified docs site
+        run: ./scripts/build_docs_site.sh
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: target/doc
+          path: target/docs-site
 
   deploy:
+    name: Deploy to GitHub Pages
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

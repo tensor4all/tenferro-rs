@@ -5,9 +5,28 @@
 > **Companion documents** (in this repo):
 > - [Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-prims and tenferro-einsum
 > - [Einsum Algorithm Comparison](./einsum_algorithm_comparison.md) — strided-rs vs omeinsum-rs optimization comparison
-> - [Async/Ownership Integration Design](../plans/2026-02-14-tensor-async-ownership-integration-design.md) — validated design decisions for CompletionEvent + TensorView
+> - [Autodiff Design](./tenferro_autodiff_design.md) — reverse/forward AD architecture and API plan
+> - [Documentation Integration](./documentation_integration.md) — unified HTML publishing for design + rustdoc
 
 ---
+
+## Scope of This Document
+
+This is a **formal design document** for both:
+
+- Current POC API skeleton (public signatures and documentation)
+- Planned components not yet implemented in POC
+
+Planned-but-not-yet-implemented areas include:
+
+- `tenferro-autodiff` runtime internals (tape execution, rule wiring)
+- `tenferro-tropical` (tropical algebra types and `TensorPrims<MaxPlus>`)
+- GPU dynamic backends (`BackendRegistry`, runtime library loading)
+- `tenferro-linalg` decomposition crate (SVD/QR/eigen)
+- `tenferro-capi` for Julia/Python integration
+
+Historical implementation notes remain in `docs/plans/`, but design decisions
+to be reviewed are consolidated under `docs/design/`.
 
 ## Phase 1: Dense Array Foundation (POC)
 
@@ -133,7 +152,7 @@ with a cuTENSOR-compatible describe → plan → execute pattern.
 
 #### Design Overview
 
-GiggleLiu proposed a **universal set** of primitive operations plus an
+The protocol uses a **universal set** of primitive operations plus an
 **extended set** of optimized composites. The trait is parameterized by
 algebra `A` so different scalar types can plug in their own implementations.
 
@@ -1005,10 +1024,9 @@ The Arc approach remains viable if lifetime ergonomics prove too burdensome
 in practice. Switching from TensorView to Arc is backward-compatible for
 callers (TensorView disappears, all methods return Tensor).
 
-**Current status**: POC uses `Tensor<T>` only (no TensorView yet).
-View operations (`permute`, `broadcast`, `diagonal`) return `Tensor<T>`
-with `todo!()` bodies. The TensorView split will be implemented when
-view operations are filled in.
+**Current status**: POC exposes both `Tensor<T>` and `TensorView<'a, T>` API
+skeletons. Public signatures and docs are in place; many function bodies
+remain `todo!()`.
 
 ### einsum variants (implemented in POC)
 
@@ -1037,7 +1055,7 @@ The POC includes three variant families alongside the allocating versions:
 | Role | **numpy equivalent** -- general-purpose multidimensional array | **PyTorch equivalent** -- high-performance tensor library |
 | Memory | Owned `Array<T, D>` | `DataBuffer<T>` (CPU/GPU) |
 | GPU | No | cuTENSOR, hipTensor (no Metal) |
-| Autodiff | No | tenferro-autograd (VJP/JVP) [future] |
+| Autodiff | No | tenferro-autodiff (VJP/JVP; API skeleton in POC) |
 | Dispatch | Direct function calls | `TensorPrims` trait (backend selection) |
 
 Both are needed. mdarray is a foundational array library; tenferro builds a

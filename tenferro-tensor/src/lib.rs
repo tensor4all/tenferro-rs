@@ -9,9 +9,7 @@
 //!   data into a contiguous layout (the consuming variant avoids allocation when
 //!   the tensor is already contiguous)
 //! - **strided-rs interop**: [`Tensor::view`] / [`Tensor::view_mut`] produce
-//!   [`StridedView`](strided_view::StridedView) /
-//!   [`StridedViewMut`](strided_view::StridedViewMut) for use with
-//!   [`TensorPrims`](tenferro_prims::TensorPrims) backends
+//!   [`StridedView`] / [`StridedViewMut`] for use with `TensorPrims` backends
 //!
 //! # Memory layout
 //!
@@ -163,7 +161,7 @@ pub enum DataBuffer<T> {
 /// [`conj`](Tensor::conj)) call [`wait`](Tensor::wait) internally.
 /// For CPU tensors, `event` is always `None` with zero overhead.
 ///
-/// See [`tenferro_einsum`] crate docs for async chaining examples.
+/// See `tenferro-einsum` crate docs for async chaining examples.
 pub struct Tensor<T: ScalarBase> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
@@ -192,7 +190,7 @@ pub struct Tensor<T: ScalarBase> {
 /// [`Tensor::wait`] before constructing a view, so the returned
 /// `TensorView` always has `event = None` — data is ready to read.
 ///
-/// The crate-internal [`Tensor::as_operand_view`] skips the wait and
+/// The crate-internal `as_operand_view()` skips the wait and
 /// propagates the pending event, allowing accelerator operations to chain
 /// without CPU synchronization.
 pub struct TensorView<'a, T: ScalarBase> {

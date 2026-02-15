@@ -1,6 +1,6 @@
 //! High-level einsum with N-ary contraction tree optimization.
 //!
-//! This crate provides Einstein summation notation for [`Tensor`](tenferro_tensor::Tensor)
+//! This crate provides Einstein summation notation for [`Tensor`]
 //! values. It supports:
 //!
 //! - **String notation**: `"ij,jk->ik"` (NumPy/PyTorch compatible)

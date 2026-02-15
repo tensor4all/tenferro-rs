@@ -247,7 +247,7 @@ plan caching) and **tenferro-prims** (`TensorPrims` GPU impl):
 
 ### TensorPrims<A> Architecture
 
-GiggleLiu proposed a **universal set** of primitive operations for
+The design uses a **universal set** of primitive operations for
 `tenferro-prims` that synthesizes the best of both codebases.
 The converged design uses a single `TensorPrims<A>` trait parameterized
 by algebra `A`, with a cuTENSOR-compatible plan-based execution model
@@ -338,7 +338,7 @@ Leibniz rule.
 3. **`tenferro-tropical` as separate crate** — proves extensibility of
    algebra-parameterized design. (→ tenferro-tropical)
 4. **Adjoint pair documentation** — clean VJP/JVP rules for each primitive.
-   (→ tenferro-autograd)
+   (→ tenferro-autodiff)
 5. **Global + per-call override** — `einsum()` uses global default,
    `einsum_with()` accepts explicit config. (→ tenferro-einsum)
 6. **Custom scalar extensibility tests** — `ModInt<P>` test type to verify

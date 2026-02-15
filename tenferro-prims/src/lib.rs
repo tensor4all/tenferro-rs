@@ -25,7 +25,7 @@
 //! # Algebra parameterization
 //!
 //! [`TensorPrims<A>`] is parameterized by algebra `A` (e.g.,
-//! [`Standard`](tenferro_algebra::Standard), `MaxPlus`).
+//! [`Standard`], `MaxPlus`).
 //! External crates implement `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule
 //! compatible). The [`HasAlgebra`](tenferro_algebra::HasAlgebra) trait on scalar types
 //! enables automatic inference: `Tensor<f64>` → `Standard`.
