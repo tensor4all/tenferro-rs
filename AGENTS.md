@@ -94,11 +94,13 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 ### Layered Design
 
 ```
-Layer 5: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
-Layer 4: tenferro-autodiff     — AD framework: TrackedTensor, DualTensor, ReverseRule/ForwardRule, pullback, tape
-Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops
+Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
+Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
+                                 impl Differentiable for Tensor<T>
 Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
-Shared:  tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
+Shared:  tenferro-autodiff     — Generic AD framework: Differentiable trait, TrackedTensor<V>, DualTensor<V>,
+                                 ReverseRule<V>/ForwardRule<V>, pullback, tape (no tensor deps)
+         tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
          tenferro-device       — Device enum, Error/Result types
 Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
          GPU backends          — cuTENSOR / hipTensor via tenferro-device vtable [future]
@@ -106,28 +108,35 @@ Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
 ```
 
-Operation-specific AD rules live with their operations, not in the AD framework.
-`tenferro-autodiff` is a pure AD framework; `tenferro-einsum` owns einsum AD functions
+`tenferro-autodiff` is a **generic AD framework** (like Julia's ChainRulesCore.jl) that
+does not depend on any tensor type. The `Differentiable` trait defines the tangent space;
+`Tensor<T>` implements it in `tenferro-tensor`. Operation-specific AD rules live with
+their operations: `tenferro-einsum` owns einsum AD functions
 (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`).
 
 ### Dependency Graph (POC)
 
 ```
+tenferro-autodiff (← thiserror only, no tensor deps)
+    │  Differentiable trait, TrackedTensor<V>, DualTensor<V>
+    │
 tenferro-device (← strided-view for StridedError, ← thiserror)
     │
     ↓
 tenferro-algebra (← strided-traits)
     │  HasAlgebra trait, Semiring trait, Standard type
     │
-    ├────────────────────┬──────────────────────┐
-    ↓                    ↓                      ↓
-tenferro-prims   tenferro-tensor        tenferro-autodiff
-    │  (← strided-view,     │  (← strided-view,    │  (← strided-traits,
-    │   ← strided-traits)   │   ← strided-traits,  │   ← thiserror)
-    │                        │   ← num-traits)      │
-    └──────────┬─────────────┴──────────────────────┘
+    ├────────────────────┐
+    ↓                    ↓
+tenferro-prims   tenferro-tensor
+    │  (← strided-view,     │  (← strided-view,
+    │   ← strided-traits)   │   ← strided-traits,
+    │                        │   ← num-traits,
+    │                        │   ← tenferro-autodiff)
+    │                        │   impl Differentiable for Tensor<T>
+    └──────────┬─────────────┘
                ↓
           tenferro-einsum
-              (← strided-traits)
+              (← strided-traits, ← tenferro-autodiff)
 ```
 

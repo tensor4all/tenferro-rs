@@ -208,7 +208,7 @@
 
 use strided_traits::ScalarBase;
 use tenferro_algebra::HasAlgebra;
-use tenferro_autodiff::{AdResult, DualTensor, TrackedTensor};
+use tenferro_autodiff::{AdResult, Differentiable, DualTensor, TrackedTensor};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -639,7 +639,7 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// clear_tape::<f64>();
+/// clear_tape::<Tensor<f64>>();
 /// let a = TrackedTensor::leaf(Tensor::ones(
 ///     &[2, 3],
 ///     LogicalMemorySpace::MainMemory,
@@ -657,8 +657,11 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
 /// ```
 pub fn tracked_einsum<T: ScalarBase + HasAlgebra>(
     _subscripts: &str,
-    _operands: &[&TrackedTensor<T>],
-) -> AdResult<TrackedTensor<T>> {
+    _operands: &[&TrackedTensor<Tensor<T>>],
+) -> AdResult<TrackedTensor<Tensor<T>>>
+where
+    Tensor<T>: Differentiable,
+{
     todo!()
 }
 
@@ -688,8 +691,11 @@ pub fn tracked_einsum<T: ScalarBase + HasAlgebra>(
 /// ```
 pub fn dual_einsum<T: ScalarBase + HasAlgebra>(
     _subscripts: &str,
-    _operands: &[&DualTensor<T>],
-) -> AdResult<DualTensor<T>> {
+    _operands: &[&DualTensor<Tensor<T>>],
+) -> AdResult<DualTensor<Tensor<T>>>
+where
+    Tensor<T>: Differentiable,
+{
     todo!()
 }
 

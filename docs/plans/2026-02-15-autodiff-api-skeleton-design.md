@@ -48,34 +48,37 @@ without modifying the AD framework.
 
 Dependencies:
 
-- `tenferro-tensor`, `tenferro-algebra`, `tenferro-device`
-- `strided-traits`
-- `thiserror` for public error type
+- `thiserror` (only dependency — no tensor or algebra deps)
 
 Public API:
+
+Core trait:
+
+- `Differentiable` — tangent space definition (`Tangent` type, `zero_tangent`,
+  `accumulate_tangent`). Like Julia's ChainRulesCore.jl.
 
 Core types:
 
 - `AutodiffError`, `AdResult<T>`
 - `NodeId`
-- `TrackedTensor<T>` (with optional tangent for HVP)
-- `DualTensor<T>`
-- `Gradients<T>`
-- `PullbackPlan<T>`
-- `HvpResult<T>`
+- `TrackedTensor<V: Differentiable>` (with optional tangent for HVP)
+- `DualTensor<V: Differentiable>`
+- `Gradients<V: Differentiable>`
+- `PullbackPlan<V: Differentiable>`
+- `HvpResult<V: Differentiable>`
 - `SavePolicy`
 
-Core traits:
+Rule traits:
 
-- `ReverseRule<T>`: `pullback(cotangent) -> [(NodeId, Tensor<T>)]`,
-  `pullback_with_tangents(cotangent, cotangent_tangent) -> [(NodeId, Tensor<T>, Tensor<T>)]`
-- `ForwardRule<T>`: `pushforward(input_tangents) -> Tensor<T>`
+- `ReverseRule<V>`: `pullback(cotangent) -> [(NodeId, V::Tangent)]`,
+  `pullback_with_tangents(cotangent, cotangent_tangent) -> [(NodeId, V::Tangent, V::Tangent)]`
+- `ForwardRule<V>`: `pushforward(input_tangents) -> V::Tangent`
 
 Core functions:
 
-- `clear_tape<T>()`
-- `pullback(loss: &TrackedTensor<T>) -> AdResult<Gradients<T>>`
-- `hvp(loss: &TrackedTensor<T>) -> AdResult<HvpResult<T>>`
+- `clear_tape<V>()`
+- `pullback(loss: &TrackedTensor<V>) -> AdResult<Gradients<V>>`
+- `hvp(loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>>`
 
 ### tenferro-einsum (AD additions)
 
