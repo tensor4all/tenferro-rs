@@ -1063,10 +1063,11 @@ richer tensor ecosystem with GPU support and automatic differentiation.
 
 tenferro-linalg and mdarray-linalg are **parallel** (both call faer directly),
 not serial. `tenferro-linalg` is a thin wrapper over external matrix
-decomposition libraries (like Julia's MatrixFactorizations.jl). The core
-algorithms (SVD, QR, eigen) live in external crates (faer, cuSOLVER);
-`tenferro-linalg` handles tensor-to-matrix reshaping, index bookkeeping,
-and AD rules (`ReverseRule`/`ForwardRule` via `chainrules`).
+decomposition libraries. The core algorithms (SVD, QR, eigen) live in
+external crates (faer, cuSOLVER); `tenferro-linalg` provides tensor-level
+APIs where users specify left/right dimensions by numeric indices
+(e.g., `svd(tensor, &[0, 1], &[2, 3])`), handles tensor↔matrix reshaping,
+and defines tensor-level AD rules (`ReverseRule`/`ForwardRule` via `chainrules`).
 
 ```
 faer (SVD, QR, eigen)       ← external matrix algorithms

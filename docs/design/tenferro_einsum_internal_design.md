@@ -1030,8 +1030,9 @@ Future crates (not in POC):
 - `tenferro-tropical` -- Tropical algebra types, TensorPrims<MaxPlus> for CpuBackend
 - `tenferro-linalg` -- Tensor-level linalg wrapper (SVD, QR, eigen).
   Core algorithms live in external crates (CPU: faer, GPU: cuSOLVER);
-  this crate handles tensor↔matrix reshaping, index bookkeeping, and
-  AD rules via `chainrules`
+  this crate provides tensor-level APIs with numeric dimension indices,
+  handles tensor↔matrix reshaping, and defines tensor-level AD rules
+  via `chainrules`
 - `chainrules-core` -- TrackedTensor, DualTensor, VJP/JVP
 - `tenferro-capi` -- C FFI for Julia/Python integration
 

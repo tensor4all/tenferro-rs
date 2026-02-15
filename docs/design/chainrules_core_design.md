@@ -100,10 +100,11 @@ Einsum AD rules (in `tenferro-einsum`):
 Future operations define their own AD rules in their own crates using the
 `ReverseRule` and `ForwardRule` traits. For example, `tenferro-linalg`
 will provide tensor-level SVD/QR/eigen as thin wrappers over external
-matrix decomposition libraries (faer, cuSOLVER), with AD rules defined
-alongside the operations. The core decomposition algorithms remain in
-external crates — `tenferro-linalg` handles only tensor↔matrix reshaping,
-index bookkeeping, and AD rule registration.
+matrix decomposition libraries (faer, cuSOLVER). Users specify left/right
+dimensions by numeric indices (e.g., `svd(tensor, &[0, 1], &[2, 3])`);
+the crate reshapes to a matrix, calls the external decomposition, and
+reshapes back. AD rules operate at the tensor level — gradients flow
+through the full reshape→decompose→reshape pipeline.
 
 ## Algebra and Tropical Support
 
