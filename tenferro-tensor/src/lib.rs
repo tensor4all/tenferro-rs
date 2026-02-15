@@ -734,7 +734,7 @@ impl<T: ScalarBase> Tensor<T> {
 // Differentiable impl — connects Tensor<T> to the generic AD framework
 // ============================================================================
 
-impl<T: ScalarBase> tenferro_autodiff::Differentiable for Tensor<T> {
+impl<T: ScalarBase> chainrules_core::Differentiable for Tensor<T> {
     type Tangent = Tensor<T>;
 
     fn zero_tangent(&self) -> Tensor<T> {

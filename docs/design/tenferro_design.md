@@ -5,7 +5,7 @@
 > **Companion documents** (in this repo):
 > - [Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-prims and tenferro-einsum
 > - [Einsum Algorithm Comparison](./einsum_algorithm_comparison.md) — strided-rs vs omeinsum-rs optimization comparison
-> - [Autodiff Design](./tenferro_autodiff_design.md) — reverse/forward AD architecture and API plan
+> - [ChainRules Core Design](./chainrules_core_design.md) — reverse/forward AD architecture and API plan
 
 
 ---
@@ -19,7 +19,7 @@ This is a **formal design document** for both:
 
 Planned-but-not-yet-implemented areas include:
 
-- `tenferro-autodiff` runtime internals (tape execution, rule wiring)
+- `chainrules-core` runtime internals (tape execution, rule wiring)
 - `tenferro-tropical` (tropical algebra types and `TensorPrims<MaxPlus>`)
 - GPU dynamic backends (`BackendRegistry`, runtime library loading)
 - `tenferro-linalg` decomposition crate (SVD/QR/eigen)
@@ -1055,7 +1055,7 @@ The POC includes three variant families alongside the allocating versions:
 | Role | **numpy equivalent** -- general-purpose multidimensional array | **PyTorch equivalent** -- high-performance tensor library |
 | Memory | Owned `Array<T, D>` | `DataBuffer<T>` (CPU/GPU) |
 | GPU | No | cuTENSOR, hipTensor (no Metal) |
-| Autodiff | No | tenferro-autodiff (VJP/JVP; API skeleton in POC) |
+| Autodiff | No | chainrules-core (VJP/JVP; API skeleton in POC) |
 | Dispatch | Direct function calls | `TensorPrims` trait (backend selection) |
 
 Both are needed. mdarray is a foundational array library; tenferro builds a

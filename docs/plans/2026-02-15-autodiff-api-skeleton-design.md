@@ -24,27 +24,27 @@ Applied to tenferro as:
 
 - `tracked_einsum` and `dual_einsum` as AD-aware frontends (in `tenferro-einsum`)
 - `einsum_rrule` and `einsum_frule` as local derivative kernels (in `tenferro-einsum`)
-- rule traits (`ReverseRule`, `ForwardRule`) for backend-agnostic extension (in `tenferro-autodiff`)
+- rule traits (`ReverseRule`, `ForwardRule`) for backend-agnostic extension (in `chainrules-core`)
 
 ## Architecture: AD Framework vs Operation AD Rules
 
-The AD framework (`tenferro-autodiff`) is a **pure framework** that does not
+The AD framework (`chainrules-core`) is a **pure framework** that does not
 depend on any operation crate. Operation-specific AD rules live with their
 operations:
 
-- `tenferro-autodiff` — framework: `TrackedTensor`, `DualTensor`, `pullback()`,
+- `chainrules-core` — framework: `TrackedTensor`, `DualTensor`, `pullback()`,
   `ReverseRule`, `ForwardRule`, tape management
 - `tenferro-einsum` — einsum AD rules: `tracked_einsum`, `dual_einsum`,
   `einsum_rrule`, `einsum_frule`
 
-Dependency direction: `tenferro-einsum → tenferro-autodiff` (not the reverse).
+Dependency direction: `tenferro-einsum → chainrules-core` (not the reverse).
 
 This design enables user-defined operations to register their own AD rules
 without modifying the AD framework.
 
 ## Crates
 
-### tenferro-autodiff
+### chainrules-core
 
 Dependencies:
 

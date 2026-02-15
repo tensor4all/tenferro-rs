@@ -98,7 +98,7 @@ Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, a
 Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
                                  impl Differentiable for Tensor<T>
 Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
-Shared:  tenferro-autodiff     — Generic AD framework: Differentiable trait, TrackedTensor<V>, DualTensor<V>,
+Shared:  chainrules-core     — Generic AD framework: Differentiable trait, TrackedTensor<V>, DualTensor<V>,
                                  ReverseRule<V>/ForwardRule<V>, pullback, tape (no tensor deps)
          tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
          tenferro-device       — Device enum, Error/Result types
@@ -108,7 +108,7 @@ Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
 ```
 
-`tenferro-autodiff` is a **generic AD framework** (like Julia's ChainRulesCore.jl) that
+`chainrules-core` is a **generic AD framework** (like Julia's ChainRulesCore.jl) that
 does not depend on any tensor type. The `Differentiable` trait defines the tangent space;
 `Tensor<T>` implements it in `tenferro-tensor`. Operation-specific AD rules live with
 their operations: `tenferro-einsum` owns einsum AD functions
@@ -117,7 +117,7 @@ their operations: `tenferro-einsum` owns einsum AD functions
 ### Dependency Graph (POC)
 
 ```
-tenferro-autodiff (← thiserror only, no tensor deps)
+chainrules-core (← thiserror only, no tensor deps)
     │  Differentiable trait, TrackedTensor<V>, DualTensor<V>
     │
 tenferro-device (← strided-view for StridedError, ← thiserror)
@@ -132,11 +132,11 @@ tenferro-prims   tenferro-tensor
     │  (← strided-view,     │  (← strided-view,
     │   ← strided-traits)   │   ← strided-traits,
     │                        │   ← num-traits,
-    │                        │   ← tenferro-autodiff)
+    │                        │   ← chainrules-core)
     │                        │   impl Differentiable for Tensor<T>
     └──────────┬─────────────┘
                ↓
           tenferro-einsum
-              (← strided-traits, ← tenferro-autodiff)
+              (← strided-traits, ← chainrules-core)
 ```
 

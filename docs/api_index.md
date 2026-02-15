@@ -21,7 +21,7 @@ Layer 3: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
                              zero-copy view ops, impl Differentiable
 Layer 2: tenferro-prims      "Tensor BLAS": TensorPrims<A> trait
                              (algebra-parameterized), plan-based execution
-Shared:  tenferro-autodiff   Generic AD framework: Differentiable trait,
+Shared:  chainrules-core   Generic AD framework: Differentiable trait,
                              TrackedTensor<V>, DualTensor<V>, rules (no tensor deps)
          tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type
          tenferro-device     Device enum, Error/Result types
@@ -57,7 +57,7 @@ Core ops (universal set): `batched_gemm`, `reduce`, `trace`, `permute`,
 and zero-copy view operations (`permute`, `broadcast`, `diagonal`, `reshape`).
 `TensorView<'a, T>` for borrowed views.
 
-### tenferro-autodiff
+### chainrules-core
 
 Generic AD framework (like Julia's ChainRulesCore.jl), independent of any
 tensor type. `Differentiable` trait defines the tangent space; concrete types
