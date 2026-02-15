@@ -28,16 +28,14 @@ Applied to tenferro as:
 
 ## Architecture: AD Framework vs Operation AD Rules
 
-The AD framework (`chainrules-core`) is a **pure framework** that does not
-depend on any operation crate. Operation-specific AD rules live with their
-operations:
+The AD system is split into two crates following Rust convention:
 
-- `chainrules-core` — framework: `TrackedTensor`, `DualTensor`, `pullback()`,
-  `ReverseRule`, `ForwardRule`, tape management
+- `chainrules-core` — traits: `Differentiable`, `ReverseRule`, `ForwardRule`
+- `chainrules` — AD engine: `TrackedTensor`, `DualTensor`, `pullback()`, tape management
 - `tenferro-einsum` — einsum AD rules: `tracked_einsum`, `dual_einsum`,
   `einsum_rrule`, `einsum_frule`
 
-Dependency direction: `tenferro-einsum → chainrules-core` (not the reverse).
+Dependency direction: `tenferro-einsum → chainrules → chainrules-core`.
 
 This design enables user-defined operations to register their own AD rules
 without modifying the AD framework.
@@ -46,36 +44,28 @@ without modifying the AD framework.
 
 ### chainrules-core
 
-Dependencies:
-
-- `thiserror` (only dependency — no tensor or algebra deps)
+Dependencies: `thiserror` (only dependency — no tensor or algebra deps)
 
 Public API:
 
-Core trait:
-
 - `Differentiable` — tangent space definition (`Tangent` type, `zero_tangent`,
   `accumulate_tangent`). Like Julia's ChainRulesCore.jl.
+- `ReverseRule<V>`: `pullback(cotangent) -> [(NodeId, V::Tangent)]`,
+  `pullback_with_tangents(cotangent, cotangent_tangent) -> [(NodeId, V::Tangent, V::Tangent)]`
+- `ForwardRule<V>`: `pushforward(input_tangents) -> V::Tangent`
+- `AutodiffError`, `AdResult<T>`, `NodeId`, `SavePolicy`
 
-Core types:
+### chainrules
 
-- `AutodiffError`, `AdResult<T>`
-- `NodeId`
+Dependencies: `chainrules-core`
+
+Public API (re-exports all of `chainrules-core`):
+
 - `TrackedTensor<V: Differentiable>` (with optional tangent for HVP)
 - `DualTensor<V: Differentiable>`
 - `Gradients<V: Differentiable>`
 - `PullbackPlan<V: Differentiable>`
 - `HvpResult<V: Differentiable>`
-- `SavePolicy`
-
-Rule traits:
-
-- `ReverseRule<V>`: `pullback(cotangent) -> [(NodeId, V::Tangent)]`,
-  `pullback_with_tangents(cotangent, cotangent_tangent) -> [(NodeId, V::Tangent, V::Tangent)]`
-- `ForwardRule<V>`: `pushforward(input_tangents) -> V::Tangent`
-
-Core functions:
-
 - `clear_tape<V>()`
 - `pullback(loss: &TrackedTensor<V>) -> AdResult<Gradients<V>>`
 - `hvp(loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>>`
