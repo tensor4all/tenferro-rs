@@ -1,9 +1,15 @@
-//! Automatic differentiation framework for tenferro.
+//! Generic automatic differentiation framework.
 //!
-//! This crate provides the core AD infrastructure:
-//! - reverse-mode AD (rrule/pullback) via [`TrackedTensor`]
-//! - forward-mode AD (frule/pushforward) via [`DualTensor`]
-//! - rule extension traits ([`ReverseRule`], [`ForwardRule`])
+//! This crate provides type-agnostic AD infrastructure, independent of any
+//! specific tensor or array type. It follows the design of Julia's
+//! ChainRulesCore.jl: the [`Differentiable`] trait defines the tangent space
+//! for any value type, while [`ReverseRule`] and [`ForwardRule`] define
+//! per-operation AD rules.
+//!
+//! - Reverse-mode AD (rrule/pullback) via [`TrackedTensor`]
+//! - Forward-mode AD (frule/pushforward) via [`DualTensor`]
+//! - Rule extension traits ([`ReverseRule`], [`ForwardRule`])
+//! - Forward-over-reverse HVP via [`hvp`]
 //!
 //! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate
 //! that defines the operation. See `tenferro-einsum` for einsum AD functions.
@@ -20,7 +26,7 @@
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
 //!
-//! clear_tape::<f64>();
+//! clear_tape::<Tensor<f64>>();
 //! let a = TrackedTensor::leaf(Tensor::ones(
 //!     &[2, 3],
 //!     LogicalMemorySpace::MainMemory,
@@ -62,7 +68,7 @@
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
 //!
-//! clear_tape::<f64>();
+//! clear_tape::<Tensor<f64>>();
 //! let x = TrackedTensor::leaf_with_tangent(
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),  // direction v
@@ -73,10 +79,40 @@
 //! let _hv = result.hvp;          // H·v = 2v
 //! ```
 
-use strided_traits::ScalarBase;
-use tenferro_algebra::HasAlgebra;
-use tenferro_device::Error as DeviceError;
-use tenferro_tensor::Tensor;
+/// Trait defining the tangent space for a differentiable type.
+///
+/// This is the core abstraction of the AD framework, analogous to Julia's
+/// ChainRulesCore.jl tangent type system. Any type that participates in
+/// automatic differentiation must implement this trait.
+///
+/// The tangent type represents infinitesimal perturbations of the value.
+/// For most tensor types, `Tangent = Self` (e.g., the tangent of a matrix
+/// is another matrix of the same shape).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_autodiff::Differentiable;
+///
+/// // Tensor<f64> implements Differentiable with Tangent = Tensor<f64>
+/// // (defined in tenferro-tensor crate)
+/// fn example<V: Differentiable>(x: &V) {
+///     let zero = x.zero_tangent();
+///     let _acc = V::accumulate_tangent(zero.clone(), &x.zero_tangent());
+/// }
+/// ```
+pub trait Differentiable: Clone {
+    /// The tangent type for this value.
+    ///
+    /// For most types, this is `Self` (e.g., tangent of a tensor is a tensor).
+    type Tangent: Clone;
+
+    /// Returns the zero tangent for this value (additive identity).
+    fn zero_tangent(&self) -> Self::Tangent;
+
+    /// Accumulates (adds) two tangents: `a + b`.
+    fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent;
+}
 
 /// AD-specific error type.
 ///
@@ -90,9 +126,6 @@ use tenferro_tensor::Tensor;
 /// ```
 #[derive(Debug, thiserror::Error)]
 pub enum AutodiffError {
-    /// Wrapped error from tenferro shared device/result layer.
-    #[error(transparent)]
-    Device(#[from] DeviceError),
     /// Loss tensor for pullback must contain exactly one element.
     #[error("pullback() requires scalar loss, got {num_elements} elements")]
     NonScalarLoss { num_elements: usize },
@@ -100,12 +133,12 @@ pub enum AutodiffError {
     #[error("tensor is not connected to AD tape")]
     MissingNode,
     /// Tangent shape must match primal shape.
-    #[error("tangent shape mismatch: expected {expected:?}, got {got:?}")]
+    #[error("tangent shape mismatch: expected {expected}, got {got}")]
     TangentShapeMismatch {
-        /// Expected shape.
-        expected: Vec<usize>,
-        /// Actual shape.
-        got: Vec<usize>,
+        /// Expected shape description.
+        expected: String,
+        /// Actual shape description.
+        got: String,
     },
     /// A ReverseRule does not support HVP (pullback_with_tangents).
     #[error("HVP not supported by this ReverseRule implementation")]
@@ -120,9 +153,9 @@ pub enum AutodiffError {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{AdResult, TrackedTensor};
+/// use tenferro_autodiff::{AdResult, TrackedTensor, Differentiable};
 ///
-/// fn takes_ad_result(_x: AdResult<TrackedTensor<f64>>) {}
+/// fn takes_ad_result<V: Differentiable>(_x: AdResult<TrackedTensor<V>>) {}
 /// ```
 pub type AdResult<T> = std::result::Result<T, AutodiffError>;
 
@@ -187,7 +220,10 @@ pub enum SavePolicy {
     RecomputeOnPullback,
 }
 
-/// Tensor wrapper for reverse-mode AD.
+/// Value wrapper for reverse-mode AD.
+///
+/// Wraps any [`Differentiable`] value and connects it to the reverse-mode
+/// tape for gradient computation.
 ///
 /// # Examples
 ///
@@ -203,80 +239,80 @@ pub enum SavePolicy {
 /// ));
 /// assert!(a.requires_grad());
 /// ```
-pub struct TrackedTensor<T: ScalarBase> {
-    tensor: Tensor<T>,
+pub struct TrackedTensor<V: Differentiable> {
+    value: V,
     node_id: Option<NodeId>,
     requires_grad: bool,
-    tangent: Option<Tensor<T>>,
+    tangent: Option<V::Tangent>,
 }
 
-impl<T: ScalarBase> TrackedTensor<T> {
-    /// Creates a tracked tensor with `requires_grad = false`.
+impl<V: Differentiable> TrackedTensor<V> {
+    /// Creates a tracked value with `requires_grad = false`.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// use tenferro_autodiff::TrackedTensor;
-    /// let x = TrackedTensor::new(tensor);
+    /// let x = TrackedTensor::new(value);
     /// assert!(!x.requires_grad());
     /// ```
-    pub fn new(tensor: Tensor<T>) -> Self {
+    pub fn new(value: V) -> Self {
         Self {
-            tensor,
+            value,
             node_id: None,
             requires_grad: false,
             tangent: None,
         }
     }
 
-    /// Creates a leaf tensor requiring gradient.
+    /// Creates a leaf value requiring gradient.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// use tenferro_autodiff::TrackedTensor;
-    /// let x = TrackedTensor::leaf(tensor);
+    /// let x = TrackedTensor::leaf(value);
     /// assert!(x.requires_grad());
     /// ```
-    pub fn leaf(_tensor: Tensor<T>) -> Self {
+    pub fn leaf(_value: V) -> Self {
         todo!()
     }
 
-    /// Creates a tracked tensor with an explicit `requires_grad` flag.
+    /// Creates a tracked value with an explicit `requires_grad` flag.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// use tenferro_autodiff::TrackedTensor;
-    /// let x = TrackedTensor::with_requires_grad(tensor, true);
+    /// let x = TrackedTensor::with_requires_grad(value, true);
     /// ```
-    pub fn with_requires_grad(_tensor: Tensor<T>, _requires_grad: bool) -> Self {
+    pub fn with_requires_grad(_value: V, _requires_grad: bool) -> Self {
         todo!()
     }
 
-    /// Returns the underlying tensor.
+    /// Returns the underlying value.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let view = tracked.tensor().tensor_view();
+    /// let v = tracked.value();
     /// ```
-    pub fn tensor(&self) -> &Tensor<T> {
-        &self.tensor
+    pub fn value(&self) -> &V {
+        &self.value
     }
 
-    /// Consumes and returns the underlying tensor.
+    /// Consumes and returns the underlying value.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let raw = tracked.into_tensor();
+    /// let raw = tracked.into_value();
     /// ```
-    pub fn into_tensor(self) -> Tensor<T> {
-        self.tensor
+    pub fn into_value(self) -> V {
+        self.value
     }
 
-    /// Returns whether this tensor participates in gradient propagation.
+    /// Returns whether this value participates in gradient propagation.
     ///
     /// # Examples
     ///
@@ -287,7 +323,7 @@ impl<T: ScalarBase> TrackedTensor<T> {
         self.requires_grad
     }
 
-    /// Returns the graph node ID when this tensor is connected to the tape.
+    /// Returns the graph node ID when this value is connected to the tape.
     ///
     /// # Examples
     ///
@@ -300,7 +336,7 @@ impl<T: ScalarBase> TrackedTensor<T> {
         self.node_id
     }
 
-    /// Creates a leaf tensor requiring gradient, with a tangent for HVP.
+    /// Creates a leaf value requiring gradient, with a tangent for HVP.
     ///
     /// The tangent defines the perturbation direction *v* used in
     /// forward-over-reverse Hessian-vector product computation.
@@ -313,28 +349,28 @@ impl<T: ScalarBase> TrackedTensor<T> {
     ///
     /// ```ignore
     /// use tenferro_autodiff::TrackedTensor;
-    /// let x = TrackedTensor::leaf_with_tangent(tensor, tangent).unwrap();
+    /// let x = TrackedTensor::leaf_with_tangent(value, tangent).unwrap();
     /// assert!(x.requires_grad());
     /// assert!(x.has_tangent());
     /// ```
-    pub fn leaf_with_tangent(_tensor: Tensor<T>, _tangent: Tensor<T>) -> AdResult<Self> {
+    pub fn leaf_with_tangent(_value: V, _tangent: V::Tangent) -> AdResult<Self> {
         todo!()
     }
 
-    /// Returns the tangent tensor for HVP, or `None` if not set.
+    /// Returns the tangent for HVP, or `None` if not set.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// if let Some(t) = tracked.tangent() {
-    ///     println!("tangent shape: {:?}", t.dims());
+    ///     // use tangent
     /// }
     /// ```
-    pub fn tangent(&self) -> Option<&Tensor<T>> {
+    pub fn tangent(&self) -> Option<&V::Tangent> {
         self.tangent.as_ref()
     }
 
-    /// Returns whether this tracked tensor has a tangent for HVP.
+    /// Returns whether this tracked value has a tangent for HVP.
     ///
     /// # Examples
     ///
@@ -345,7 +381,7 @@ impl<T: ScalarBase> TrackedTensor<T> {
         self.tangent.is_some()
     }
 
-    /// Returns a detached tensor that does not require gradients.
+    /// Returns a detached value that does not require gradients.
     ///
     /// # Examples
     ///
@@ -358,7 +394,7 @@ impl<T: ScalarBase> TrackedTensor<T> {
     }
 }
 
-/// Tensor wrapper for forward-mode AD.
+/// Value wrapper for forward-mode AD.
 ///
 /// # Examples
 ///
@@ -367,13 +403,13 @@ impl<T: ScalarBase> TrackedTensor<T> {
 /// let dual = DualTensor::new(primal);
 /// assert!(!dual.has_tangent());
 /// ```
-pub struct DualTensor<T: ScalarBase> {
-    primal: Tensor<T>,
-    tangent: Option<Tensor<T>>,
+pub struct DualTensor<V: Differentiable> {
+    primal: V,
+    tangent: Option<V::Tangent>,
 }
 
-impl<T: ScalarBase> DualTensor<T> {
-    /// Creates a dual tensor with zero tangent.
+impl<V: Differentiable> DualTensor<V> {
+    /// Creates a dual value with zero tangent.
     ///
     /// # Examples
     ///
@@ -381,14 +417,14 @@ impl<T: ScalarBase> DualTensor<T> {
     /// use tenferro_autodiff::DualTensor;
     /// let x = DualTensor::new(primal);
     /// ```
-    pub fn new(primal: Tensor<T>) -> Self {
+    pub fn new(primal: V) -> Self {
         Self {
             primal,
             tangent: None,
         }
     }
 
-    /// Creates a dual tensor with explicit tangent.
+    /// Creates a dual value with explicit tangent.
     ///
     /// # Errors
     ///
@@ -400,33 +436,33 @@ impl<T: ScalarBase> DualTensor<T> {
     /// use tenferro_autodiff::DualTensor;
     /// let x = DualTensor::with_tangent(primal, tangent).unwrap();
     /// ```
-    pub fn with_tangent(_primal: Tensor<T>, _tangent: Tensor<T>) -> AdResult<Self> {
+    pub fn with_tangent(_primal: V, _tangent: V::Tangent) -> AdResult<Self> {
         todo!()
     }
 
-    /// Returns the primal value tensor.
+    /// Returns the primal value.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let p = dual.primal();
     /// ```
-    pub fn primal(&self) -> &Tensor<T> {
+    pub fn primal(&self) -> &V {
         &self.primal
     }
 
-    /// Returns the tangent tensor, or `None` for zero tangent.
+    /// Returns the tangent, or `None` for zero tangent.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let maybe_t = dual.tangent();
     /// ```
-    pub fn tangent(&self) -> Option<&Tensor<T>> {
+    pub fn tangent(&self) -> Option<&V::Tangent> {
         self.tangent.as_ref()
     }
 
-    /// Returns whether this dual tensor has a non-zero tangent.
+    /// Returns whether this dual value has a non-zero tangent.
     ///
     /// # Examples
     ///
@@ -444,11 +480,11 @@ impl<T: ScalarBase> DualTensor<T> {
     /// ```ignore
     /// let (p, t) = dual.into_parts();
     /// ```
-    pub fn into_parts(self) -> (Tensor<T>, Option<Tensor<T>>) {
+    pub fn into_parts(self) -> (V, Option<V::Tangent>) {
         (self.primal, self.tangent)
     }
 
-    /// Returns a dual tensor with tangent detached (set to zero).
+    /// Returns a dual value with tangent detached (set to zero).
     ///
     /// # Examples
     ///
@@ -466,47 +502,48 @@ impl<T: ScalarBase> DualTensor<T> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::Gradients;
-/// let mut grads = Gradients::<f64>::new();
+/// use tenferro_autodiff::{Gradients, Differentiable};
+/// // V::Tangent is the gradient type
+/// let mut grads = Gradients::<MyType>::new();
 /// ```
-pub struct Gradients<T: ScalarBase> {
-    entries: Vec<(NodeId, Tensor<T>)>,
+pub struct Gradients<V: Differentiable> {
+    entries: Vec<(NodeId, V::Tangent)>,
 }
 
-impl<T: ScalarBase> Gradients<T> {
+impl<V: Differentiable> Gradients<V> {
     /// Creates an empty gradient container.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// use tenferro_autodiff::Gradients;
-    /// let grads = Gradients::<f64>::new();
+    /// let grads = Gradients::<MyType>::new();
     /// ```
     pub fn new() -> Self {
         Self { entries: vec![] }
     }
 
-    /// Returns the gradient tensor for `node`, if present.
+    /// Returns the gradient for `node`, if present.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// if let Some(g) = grads.get(node) {
-    ///     println!("{:?}", g.dims());
+    ///     // use gradient
     /// }
     /// ```
-    pub fn get(&self, _node: NodeId) -> Option<&Tensor<T>> {
+    pub fn get(&self, _node: NodeId) -> Option<&V::Tangent> {
         todo!()
     }
 
-    /// Inserts or accumulates a gradient tensor for `node`.
+    /// Inserts or accumulates a gradient for `node`.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// grads.accumulate(node, grad);
     /// ```
-    pub fn accumulate(&mut self, _node: NodeId, _grad: Tensor<T>) -> AdResult<()> {
+    pub fn accumulate(&mut self, _node: NodeId, _grad: V::Tangent) -> AdResult<()> {
         todo!()
     }
 
@@ -516,15 +553,15 @@ impl<T: ScalarBase> Gradients<T> {
     ///
     /// ```ignore
     /// for (node, grad) in grads.entries() {
-    ///     println!("{} {:?}", node.index(), grad.dims());
+    ///     println!("{}", node.index());
     /// }
     /// ```
-    pub fn entries(&self) -> &[(NodeId, Tensor<T>)] {
+    pub fn entries(&self) -> &[(NodeId, V::Tangent)] {
         &self.entries
     }
 }
 
-impl<T: ScalarBase> Default for Gradients<T> {
+impl<V: Differentiable> Default for Gradients<V> {
     fn default() -> Self {
         Self::new()
     }
@@ -535,28 +572,32 @@ impl<T: ScalarBase> Default for Gradients<T> {
 /// Implemented by operation-specific nodes (einsum, reduce, permute, ...).
 /// Named after Julia's ChainRules.jl convention: `rrule` returns a pullback.
 ///
+/// The type parameter `V` is the differentiable value type (e.g., `Tensor<f64>`).
+///
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_autodiff::{ReverseRule, Differentiable, AdResult, NodeId};
+///
 /// struct MyRule;
-/// impl tenferro_autodiff::ReverseRule<f64> for MyRule {
-///     fn pullback(&self, cotangent: &tenferro_tensor::Tensor<f64>)
-///         -> tenferro_autodiff::AdResult<Vec<(tenferro_autodiff::NodeId, tenferro_tensor::Tensor<f64>)>> {
+/// impl<V: Differentiable> ReverseRule<V> for MyRule {
+///     fn pullback(&self, cotangent: &V::Tangent)
+///         -> AdResult<Vec<(NodeId, V::Tangent)>> {
 ///         todo!()
 ///     }
-///     fn inputs(&self) -> Vec<tenferro_autodiff::NodeId> { vec![] }
+///     fn inputs(&self) -> Vec<NodeId> { vec![] }
 /// }
 /// ```
-pub trait ReverseRule<T: ScalarBase + HasAlgebra> {
+pub trait ReverseRule<V: Differentiable> {
     /// Computes input cotangents from an output cotangent (pullback).
-    fn pullback(&self, cotangent: &Tensor<T>) -> AdResult<Vec<(NodeId, Tensor<T>)>>;
+    fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<(NodeId, V::Tangent)>>;
 
     /// Returns input node IDs this rule depends on.
     fn inputs(&self) -> Vec<NodeId>;
 
     /// Computes pullback with tangent propagation for HVP.
     ///
-    /// Given an output cotangent ḡ and its tangent dḡ, returns
+    /// Given an output cotangent and its tangent, returns
     /// `(node_id, input_cotangent, input_cotangent_tangent)` triples.
     ///
     /// The default implementation returns [`AutodiffError::HvpNotSupported`].
@@ -574,9 +615,9 @@ pub trait ReverseRule<T: ScalarBase + HasAlgebra> {
     /// ```
     fn pullback_with_tangents(
         &self,
-        cotangent: &Tensor<T>,
-        cotangent_tangent: &Tensor<T>,
-    ) -> AdResult<Vec<(NodeId, Tensor<T>, Tensor<T>)>> {
+        cotangent: &V::Tangent,
+        cotangent_tangent: &V::Tangent,
+    ) -> AdResult<Vec<(NodeId, V::Tangent, V::Tangent)>> {
         let _ = (cotangent, cotangent_tangent);
         Err(AutodiffError::HvpNotSupported)
     }
@@ -586,20 +627,24 @@ pub trait ReverseRule<T: ScalarBase + HasAlgebra> {
 ///
 /// Named after Julia's ChainRules.jl convention: `frule` computes pushforward.
 ///
+/// The type parameter `V` is the differentiable value type (e.g., `Tensor<f64>`).
+///
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_autodiff::{ForwardRule, Differentiable, AdResult};
+///
 /// struct MyFrule;
-/// impl tenferro_autodiff::ForwardRule<f64> for MyFrule {
-///     fn pushforward(&self, tangents: &[Option<&tenferro_tensor::Tensor<f64>>])
-///         -> tenferro_autodiff::AdResult<tenferro_tensor::Tensor<f64>> {
+/// impl<V: Differentiable> ForwardRule<V> for MyFrule {
+///     fn pushforward(&self, tangents: &[Option<&V::Tangent>])
+///         -> AdResult<V::Tangent> {
 ///         todo!()
 ///     }
 /// }
 /// ```
-pub trait ForwardRule<T: ScalarBase + HasAlgebra> {
+pub trait ForwardRule<V: Differentiable> {
     /// Computes output tangent from input tangents (pushforward).
-    fn pushforward(&self, tangents: &[Option<&Tensor<T>>]) -> AdResult<Tensor<T>>;
+    fn pushforward(&self, tangents: &[Option<&V::Tangent>]) -> AdResult<V::Tangent>;
 }
 
 /// Compiled pullback execution plan.
@@ -607,23 +652,23 @@ pub trait ForwardRule<T: ScalarBase + HasAlgebra> {
 /// # Examples
 ///
 /// ```ignore
-/// let plan = tenferro_autodiff::PullbackPlan::<f64>::build(&loss).unwrap();
+/// let plan = tenferro_autodiff::PullbackPlan::<MyType>::build(&loss).unwrap();
 /// ```
 #[derive(Debug, Clone)]
-pub struct PullbackPlan<T: ScalarBase + HasAlgebra> {
+pub struct PullbackPlan<V: Differentiable> {
     loss: NodeId,
-    _marker: std::marker::PhantomData<T>,
+    _marker: std::marker::PhantomData<V>,
 }
 
-impl<T: ScalarBase + HasAlgebra> PullbackPlan<T> {
-    /// Builds a pullback plan from a loss tensor.
+impl<V: Differentiable> PullbackPlan<V> {
+    /// Builds a pullback plan from a loss value.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let plan = tenferro_autodiff::PullbackPlan::<f64>::build(&loss).unwrap();
+    /// let plan = tenferro_autodiff::PullbackPlan::build(&loss).unwrap();
     /// ```
-    pub fn build(_loss: &TrackedTensor<T>) -> AdResult<Self> {
+    pub fn build(_loss: &TrackedTensor<V>) -> AdResult<Self> {
         todo!()
     }
 
@@ -634,7 +679,7 @@ impl<T: ScalarBase + HasAlgebra> PullbackPlan<T> {
     /// ```ignore
     /// let grads = plan.execute(&loss).unwrap();
     /// ```
-    pub fn execute(&self, _loss: &TrackedTensor<T>) -> AdResult<Gradients<T>> {
+    pub fn execute(&self, _loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
         todo!()
     }
 
@@ -651,19 +696,19 @@ impl<T: ScalarBase + HasAlgebra> PullbackPlan<T> {
     }
 }
 
-/// Clears the current reverse-mode tape/graph for type `T`.
+/// Clears the current reverse-mode tape/graph for type `V`.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// tenferro_autodiff::clear_tape::<f64>();
+/// tenferro_autodiff::clear_tape::<Tensor<f64>>();
 /// ```
-pub fn clear_tape<T: ScalarBase>() {
-    let _ = std::marker::PhantomData::<T>;
+pub fn clear_tape<V: Differentiable>() {
+    let _ = std::marker::PhantomData::<V>;
     todo!()
 }
 
-/// Runs reverse-mode pullback from a scalar loss tensor.
+/// Runs reverse-mode pullback from a scalar loss value.
 ///
 /// # Errors
 ///
@@ -674,14 +719,14 @@ pub fn clear_tape<T: ScalarBase>() {
 /// ```ignore
 /// let grads = tenferro_autodiff::pullback(&loss).unwrap();
 /// ```
-pub fn pullback<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResult<Gradients<T>> {
+pub fn pullback<V: Differentiable>(_loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
     todo!()
 }
 
 /// Result of a forward-over-reverse HVP computation.
 ///
-/// Contains both the standard gradient ∇f(x) and the Hessian-vector
-/// product H·v, where v is the tangent direction set on leaf tensors
+/// Contains both the standard gradient and the Hessian-vector
+/// product H*v, where v is the tangent direction set on leaf values
 /// via [`TrackedTensor::leaf_with_tangent`].
 ///
 /// # Examples
@@ -690,24 +735,24 @@ pub fn pullback<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResul
 /// use tenferro_autodiff::{TrackedTensor, hvp, HvpResult};
 /// use tenferro_einsum::tracked_einsum;
 ///
-/// let result: HvpResult<f64> = hvp(&loss).unwrap();
-/// let _grad = result.gradients.get(x.node_id().unwrap());  // ∇f(x)
-/// let _hv = result.hvp.get(x.node_id().unwrap());          // H·v
+/// let result: HvpResult<Tensor<f64>> = hvp(&loss).unwrap();
+/// let _grad = result.gradients.get(x.node_id().unwrap());
+/// let _hv = result.hvp.get(x.node_id().unwrap());
 /// ```
-pub struct HvpResult<T: ScalarBase> {
-    /// Gradients: ∇f(x).
-    pub gradients: Gradients<T>,
-    /// Hessian-vector product: H·v.
-    pub hvp: Gradients<T>,
+pub struct HvpResult<V: Differentiable> {
+    /// Gradients.
+    pub gradients: Gradients<V>,
+    /// Hessian-vector product: H*v.
+    pub hvp: Gradients<V>,
 }
 
 /// Computes gradient and Hessian-vector product via forward-over-reverse.
 ///
-/// Leaf tensors with tangents (created via [`TrackedTensor::leaf_with_tangent`])
+/// Leaf values with tangents (created via [`TrackedTensor::leaf_with_tangent`])
 /// define the direction *v*. The function runs pullback through the tape,
-/// propagating both cotangents (ḡ) and cotangent-tangents (dḡ) at each node.
+/// propagating both cotangents and cotangent-tangents at each node.
 ///
-/// Returns both ∇f(x) (in [`HvpResult::gradients`]) and H·v (in
+/// Returns both the gradient (in [`HvpResult::gradients`]) and H*v (in
 /// [`HvpResult::hvp`]).
 ///
 /// # Errors
@@ -724,16 +769,44 @@ pub struct HvpResult<T: ScalarBase> {
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// clear_tape::<f64>();
+/// clear_tape::<Tensor<f64>>();
 /// let x = TrackedTensor::leaf_with_tangent(
 ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 /// ).unwrap();
-/// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();  // f(x) = x·x
+/// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();  // f(x) = x*x
 /// let result = hvp(&loss).unwrap();
-/// let _grad = result.gradients;  // ∇f(x) = 2x
-/// let _hv = result.hvp;          // H·v = 2v
+/// let _grad = result.gradients;
+/// let _hv = result.hvp;
 /// ```
-pub fn hvp<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResult<HvpResult<T>> {
+pub fn hvp<V: Differentiable>(_loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>> {
     todo!()
+}
+
+// ============================================================================
+// Differentiable impl for f64 (enables PullbackPlan doc test)
+// ============================================================================
+
+impl Differentiable for f64 {
+    type Tangent = f64;
+
+    fn zero_tangent(&self) -> f64 {
+        0.0
+    }
+
+    fn accumulate_tangent(a: f64, b: &f64) -> f64 {
+        a + b
+    }
+}
+
+impl Differentiable for f32 {
+    type Tangent = f32;
+
+    fn zero_tangent(&self) -> f32 {
+        0.0
+    }
+
+    fn accumulate_tangent(a: f32, b: &f32) -> f32 {
+        a + b
+    }
 }

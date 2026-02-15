@@ -15,15 +15,15 @@ in tensor4all-meta for high-level architecture and future phase plans.
 ## Workspace Architecture
 
 ```
-Layer 5: tenferro-einsum     High-level einsum on Tensor<T>, N-ary contraction
+Layer 4: tenferro-einsum     High-level einsum on Tensor<T>, N-ary contraction
                              tree, algebra dispatch, einsum AD rules
-Layer 4: tenferro-autodiff   AD framework: TrackedTensor, DualTensor,
-                             ReverseRule/ForwardRule, pullback, tape
 Layer 3: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
-                             zero-copy view ops
+                             zero-copy view ops, impl Differentiable
 Layer 2: tenferro-prims      "Tensor BLAS": TensorPrims<A> trait
                              (algebra-parameterized), plan-based execution
-Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type
+Shared:  tenferro-autodiff   Generic AD framework: Differentiable trait,
+                             TrackedTensor<V>, DualTensor<V>, rules (no tensor deps)
+         tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type
          tenferro-device     Device enum, Error/Result types
 
 Foundation: strided-rs       Independent workspace
@@ -59,10 +59,13 @@ and zero-copy view operations (`permute`, `broadcast`, `diagonal`, `reshape`).
 
 ### tenferro-autodiff
 
-Pure AD framework (no operation-specific knowledge). Provides
-`TrackedTensor<T>` (reverse-mode), `DualTensor<T>` (forward-mode),
-`pullback()`, `hvp()`, and rule extension traits (`ReverseRule`,
-`ForwardRule` -- named after Julia's ChainRules.jl).
+Generic AD framework (like Julia's ChainRulesCore.jl), independent of any
+tensor type. `Differentiable` trait defines the tangent space; concrete types
+(e.g., `Tensor<T>`) implement it in their own crates.
+
+Provides `TrackedTensor<V>` (reverse-mode), `DualTensor<V>` (forward-mode),
+`pullback()`, `hvp()`, and rule extension traits (`ReverseRule<V>`,
+`ForwardRule<V>` -- named after Julia's ChainRules.jl).
 
 Operation-specific AD rules live with their operations, not here.
 

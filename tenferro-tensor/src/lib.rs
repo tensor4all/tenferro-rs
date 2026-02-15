@@ -128,6 +128,7 @@ pub enum MemoryOrder {
 ///
 /// Wraps the underlying storage for a tensor's data. Currently only CPU
 /// storage is supported via [`StridedArray`].
+#[derive(Clone)]
 pub enum DataBuffer<T> {
     /// CPU-resident data backed by a [`StridedArray`].
     Cpu(StridedArray<T>),
@@ -302,8 +303,26 @@ impl<'a, T: ScalarBase> TensorView<'a, T> {
 /// (GPU, FPGA, etc.), enabling operation chaining without CPU
 /// synchronization. Will be replaced with an actual implementation
 /// (e.g., CUDA/HIP event handle) when accelerator backends are added.
+#[derive(Clone)]
 pub struct CompletionEvent {
     _private: (),
+}
+
+impl<T: ScalarBase> Clone for Tensor<T> {
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(),
+            dims: self.dims.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            // Cloned tensor starts with no pending event — the data in the
+            // cloned buffer is a snapshot taken after any pending computation
+            // completes (clone reads the buffer, which requires completion).
+            event: None,
+        }
+    }
 }
 
 impl<T: ScalarBase> Tensor<T> {
@@ -708,5 +727,21 @@ impl<T: ScalarBase> Tensor<T> {
     /// is still in progress.
     pub fn is_ready(&self) -> bool {
         self.event.is_none()
+    }
+}
+
+// ============================================================================
+// Differentiable impl — connects Tensor<T> to the generic AD framework
+// ============================================================================
+
+impl<T: ScalarBase> tenferro_autodiff::Differentiable for Tensor<T> {
+    type Tangent = Tensor<T>;
+
+    fn zero_tangent(&self) -> Tensor<T> {
+        todo!()
+    }
+
+    fn accumulate_tangent(_a: Tensor<T>, _b: &Tensor<T>) -> Tensor<T> {
+        todo!()
     }
 }

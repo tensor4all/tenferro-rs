@@ -10,12 +10,14 @@ work that is not yet complete in POC.
 
 ## Position in Workspace Architecture
 
-`tenferro-autodiff` is a **pure AD framework** that sits below operation
-crates like `tenferro-einsum`. It provides the tape system, wrapper types,
-and rule traits, but does **not** contain operation-specific AD rules.
+`tenferro-autodiff` is a **generic AD framework** (like Julia's ChainRulesCore.jl)
+that does not depend on any tensor type. It defines the `Differentiable` trait
+for tangent space operations, and generic wrapper types (`TrackedTensor<V>`,
+`DualTensor<V>`) parameterized by any `V: Differentiable`.
 
-- `tenferro-autodiff` depends on `tenferro-tensor`, `tenferro-algebra`,
-  `tenferro-device` (no dependency on `tenferro-einsum` or `tenferro-prims`).
+- `tenferro-autodiff` depends only on `thiserror` (no tenferro crate deps).
+- `tenferro-tensor` depends on `tenferro-autodiff` and implements
+  `Differentiable for Tensor<T>`.
 - Operation-specific AD rules live with their operations:
   - Einsum AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`,
     `einsum_frule`) are in `tenferro-einsum`.
@@ -24,7 +26,9 @@ and rule traits, but does **not** contain operation-specific AD rules.
 - `tenferro-einsum` depends on `tenferro-autodiff` to use the AD framework.
 
 ```
-tenferro-autodiff          ← Pure AD framework (no op-specific knowledge)
+tenferro-autodiff          ← Generic AD framework (Differentiable, no tensor deps)
+    ↑
+tenferro-tensor            ← impl Differentiable for Tensor<T>
     ↑
 tenferro-einsum            ← Einsum + einsum AD rules
 ```
@@ -55,15 +59,19 @@ Planned scope (not yet implemented):
 
 1. AD framework (`tenferro-autodiff`)
 
-- `TrackedTensor<T>` — reverse-mode wrapper (with optional tangent for HVP)
-- `DualTensor<T>` — forward-mode wrapper
+- `Differentiable` — trait defining tangent space (zero_tangent, accumulate_tangent)
+- `TrackedTensor<V>` — reverse-mode wrapper (with optional tangent for HVP)
+- `DualTensor<V>` — forward-mode wrapper
 - `pullback(loss)` — reverse-mode execution
 - `hvp(loss)` — forward-over-reverse HVP execution
-- `clear_tape<T>()` — tape management
-- `Gradients<T>`, `PullbackPlan<T>`, `HvpResult<T>` — result and plan types
-- `ReverseRule<T>`, `ForwardRule<T>` — rule extension traits
+- `clear_tape<V>()` — tape management
+- `Gradients<V>`, `PullbackPlan<V>`, `HvpResult<V>` — result and plan types
+- `ReverseRule<V>`, `ForwardRule<V>` — rule extension traits
   (named after Julia's ChainRules.jl: rrule/frule)
   (`ReverseRule` includes `pullback_with_tangents` for HVP support)
+
+All types are parameterized by `V: Differentiable` (not `T: ScalarBase`),
+making the framework independent of any specific tensor or array type.
 
 2. Operation-specific AD rules (in each operation's crate)
 
