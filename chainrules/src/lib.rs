@@ -240,7 +240,7 @@ impl<V: Differentiable> TrackedTensor<V> {
         self.tangent.is_some()
     }
 
-    /// Returns a detached value that does not require gradients.
+    /// Consumes and returns a detached value that does not require gradients.
     ///
     /// # Examples
     ///
@@ -248,7 +248,7 @@ impl<V: Differentiable> TrackedTensor<V> {
     /// let detached = tracked.detach();
     /// assert!(!detached.requires_grad());
     /// ```
-    pub fn detach(&self) -> Self {
+    pub fn detach(self) -> Self {
         todo!()
     }
 }
@@ -343,7 +343,7 @@ impl<V: Differentiable> DualTensor<V> {
         (self.primal, self.tangent)
     }
 
-    /// Returns a dual value with tangent detached (set to zero).
+    /// Consumes and returns a dual value with tangent removed.
     ///
     /// # Examples
     ///
@@ -351,7 +351,7 @@ impl<V: Differentiable> DualTensor<V> {
     /// let c = dual.detach_tangent();
     /// assert!(!c.has_tangent());
     /// ```
-    pub fn detach_tangent(&self) -> Self {
+    pub fn detach_tangent(self) -> Self {
         todo!()
     }
 }

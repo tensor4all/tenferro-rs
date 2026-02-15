@@ -124,6 +124,23 @@ runtime implementation is not complete in current POC.
 5. **AD framework does not depend on operation crates.** Each operation
    crate owns its AD rules. This avoids circular dependencies and keeps
    the framework extensible to user-defined operations.
+6. **`Differentiable` does not require `Clone` on the primal type.**
+   Only `Tangent: Clone` is required (for gradient accumulation at
+   fan-out nodes). Large values like tensors may be expensive to clone;
+   the AD engine avoids cloning primals by taking ownership
+   (`detach(self)`, not `detach(&self)`). Implementations that need
+   cheap duplication (e.g., for tape storage) should use internal
+   reference counting (`Arc`) rather than relying on `Clone`.
+7. **Tape lifetime: `NodeId` + runtime validation (POC).**
+   `TrackedTensor` references the tape via `NodeId(usize)`, not a
+   lifetime parameter or `Arc<Tape>`. This keeps the API simple.
+   `NodeId` can become invalid after `clear_tape()` — detected at
+   runtime, not compile time. Future migration path: store
+   `Arc<Tape>` inside `TrackedTensor` (grabbed from thread-local at
+   `leaf()` time). This is an internal change that does **not** alter
+   public API signatures, because the tape is accessed through the
+   `TrackedTensor` itself (e.g., `pullback(&loss)` reads `loss`'s
+   internal tape reference).
 
 ## Out of Scope in This Phase
 

@@ -46,6 +46,11 @@
 /// For most tensor types, `Tangent = Self` (e.g., the tangent of a matrix
 /// is another matrix of the same shape).
 ///
+/// Note: This trait intentionally does **not** require `Clone` on the primal
+/// type. `Clone` is only required on `Tangent` (for gradient accumulation).
+/// Large values (e.g., tensors) may be expensive to clone; the AD engine
+/// avoids cloning primals by taking ownership where needed.
+///
 /// # Examples
 ///
 /// ```ignore
@@ -58,7 +63,7 @@
 ///     let _acc = V::accumulate_tangent(zero.clone(), &x.zero_tangent());
 /// }
 /// ```
-pub trait Differentiable: Clone {
+pub trait Differentiable {
     /// The tangent type for this value.
     ///
     /// For most types, this is `Self` (e.g., tangent of a tensor is a tensor).
