@@ -10,6 +10,5 @@ publish = false
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-tenferro-einsum = { path = "../tenferro-einsum" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
 thiserror = "2"

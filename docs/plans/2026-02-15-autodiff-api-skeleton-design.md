@@ -8,7 +8,7 @@ Define a reviewable public API for automatic differentiation in tenferro-rs with
 
 - Reverse-mode: tape/graph based API (`TrackedTensor`, `backward`)
 - Forward-mode: tangent propagation API (`DualTensor`, JVP)
-- Primitive derivative APIs for interop (`einsum_vjp`, `einsum_jvp`)
+- Rule extension traits (`VjpRule`, `JvpRule`) for backend-agnostic AD
 
 All function bodies remain `todo!()` in POC phase.
 
@@ -22,23 +22,37 @@ All function bodies remain `todo!()` in POC phase.
 
 Applied to tenferro as:
 
-- `tracked_einsum` and `dual_einsum` as AD-aware frontends for `tenferro-einsum`
-- `einsum_vjp` and `einsum_jvp` as local derivative kernels usable from FFI/custom AD
-- rule traits (`VjpRule`, `JvpRule`) for backend-agnostic extension
+- `tracked_einsum` and `dual_einsum` as AD-aware frontends (in `tenferro-einsum`)
+- `einsum_vjp` and `einsum_jvp` as local derivative kernels (in `tenferro-einsum`)
+- rule traits (`VjpRule`, `JvpRule`) for backend-agnostic extension (in `tenferro-autodiff`)
 
-## Added Crate
+## Architecture: AD Framework vs Operation AD Rules
 
-New workspace member:
+The AD framework (`tenferro-autodiff`) is a **pure framework** that does not
+depend on any operation crate. Operation-specific AD rules live with their
+operations:
 
-- `tenferro-autodiff`
+- `tenferro-autodiff` — framework: `TrackedTensor`, `DualTensor`, `backward()`,
+  `VjpRule`, `JvpRule`, tape management
+- `tenferro-einsum` — einsum AD rules: `tracked_einsum`, `dual_einsum`,
+  `einsum_vjp`, `einsum_jvp`
+
+Dependency direction: `tenferro-einsum → tenferro-autodiff` (not the reverse).
+
+This design enables user-defined operations to register their own AD rules
+without modifying the AD framework.
+
+## Crates
+
+### tenferro-autodiff
 
 Dependencies:
 
-- `tenferro-tensor`, `tenferro-einsum`, `tenferro-algebra`, `tenferro-device`
+- `tenferro-tensor`, `tenferro-algebra`, `tenferro-device`
 - `strided-traits`
 - `thiserror` for public error type
 
-## Public API Summary
+Public API:
 
 Core types:
 
@@ -59,10 +73,15 @@ Core functions:
 
 - `clear_tape<T>()`
 - `backward(loss: &TrackedTensor<T>) -> AdResult<Gradients<T>>`
-- `tracked_einsum(subscripts, operands)`
-- `dual_einsum(subscripts, operands)`
-- `einsum_vjp(subscripts, operands, cotangent)`
-- `einsum_jvp(subscripts, primals, tangents)`
+
+### tenferro-einsum (AD additions)
+
+Einsum AD functions added to `tenferro-einsum`:
+
+- `tracked_einsum(subscripts, operands)` — reverse-mode einsum
+- `dual_einsum(subscripts, operands)` — forward-mode einsum
+- `einsum_vjp(subscripts, operands, cotangent)` — local VJP for FFI/manual AD
+- `einsum_jvp(subscripts, primals, tangents)` — local JVP for FFI/manual AD
 
 ## Design Decisions
 
@@ -71,6 +90,7 @@ Core functions:
 3. Keep local VJP/JVP callable without tape construction.
 4. Reuse `tenferro_device::Result` for primitive derivative helpers where AD-specific errors are not required.
 5. Require minimal but sufficient doc examples for each public item, matching repository doc policy.
+6. AD framework does not depend on operation crates. Each operation crate owns its AD rules.
 
 ## Non-goals (Current POC)
 

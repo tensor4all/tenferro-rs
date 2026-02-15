@@ -1,16 +1,22 @@
-//! Automatic differentiation API skeleton for tenferro.
+//! Automatic differentiation framework for tenferro.
 //!
-//! This crate defines the public API for:
+//! This crate provides the core AD infrastructure:
 //! - reverse-mode AD (VJP/backward) via [`TrackedTensor`]
 //! - forward-mode AD (JVP) via [`DualTensor`]
-//! - primitive derivative interfaces ([`VjpRule`], [`JvpRule`])
+//! - rule extension traits ([`VjpRule`], [`JvpRule`])
+//!
+//! Operation-specific AD rules (e.g., einsum VJP/JVP) live in the crate
+//! that defines the operation. See `tenferro-einsum` for einsum AD functions.
 //!
 //! Bodies are intentionally `todo!()` in the current POC phase.
 //!
 //! # Examples
 //!
+//! Reverse-mode usage (with operation-specific AD functions from other crates):
+//!
 //! ```ignore
 //! use tenferro_autodiff::{TrackedTensor, backward, clear_tape};
+//! use tenferro_einsum::tracked_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
 //!
@@ -25,14 +31,17 @@
 //!     LogicalMemorySpace::MainMemory,
 //!     MemoryOrder::ColumnMajor,
 //! ));
-//! let c = tenferro_autodiff::tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
-//! let loss = tenferro_autodiff::tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
+//! let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
+//! let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
 //! let grads = backward(&loss).unwrap();
 //! let _ga = grads.get(a.node_id().unwrap()).unwrap();
 //! ```
 //!
+//! Forward-mode usage:
+//!
 //! ```ignore
-//! use tenferro_autodiff::{DualTensor, dual_einsum};
+//! use tenferro_autodiff::DualTensor;
+//! use tenferro_einsum::dual_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
 //! let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
@@ -47,7 +56,7 @@
 
 use strided_traits::ScalarBase;
 use tenferro_algebra::HasAlgebra;
-use tenferro_device::{Error as DeviceError, Result as DeviceResult};
+use tenferro_device::Error as DeviceError;
 use tenferro_tensor::Tensor;
 
 /// AD-specific error type.
@@ -567,74 +576,5 @@ pub fn clear_tape<T: ScalarBase>() {
 /// let grads = tenferro_autodiff::backward(&loss).unwrap();
 /// ```
 pub fn backward<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResult<Gradients<T>> {
-    todo!()
-}
-
-/// Tracked einsum (reverse-mode).
-///
-/// This is the AD-aware counterpart of [`tenferro_einsum::einsum`].
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = tenferro_autodiff::tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
-/// ```
-pub fn tracked_einsum<T: ScalarBase + HasAlgebra>(
-    _subscripts: &str,
-    _operands: &[&TrackedTensor<T>],
-) -> AdResult<TrackedTensor<T>> {
-    todo!()
-}
-
-/// Dual einsum (forward-mode JVP propagation).
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = tenferro_autodiff::dual_einsum("ij,jk->ik", &[&a, &b]).unwrap();
-/// ```
-pub fn dual_einsum<T: ScalarBase + HasAlgebra>(
-    _subscripts: &str,
-    _operands: &[&DualTensor<T>],
-) -> AdResult<DualTensor<T>> {
-    todo!()
-}
-
-/// Local VJP rule for einsum without building a global tape.
-///
-/// This API is intended for language interop (`custom_vjp`) and manual AD.
-///
-/// # Examples
-///
-/// ```ignore
-/// let grads = tenferro_autodiff::einsum_vjp("ij,jk->ik", &[&a, &b], &grad_c).unwrap();
-/// assert_eq!(grads.len(), 2);
-/// ```
-pub fn einsum_vjp<T: ScalarBase + HasAlgebra>(
-    _subscripts: &str,
-    _operands: &[&Tensor<T>],
-    _cotangent: &Tensor<T>,
-) -> DeviceResult<Vec<Tensor<T>>> {
-    todo!()
-}
-
-/// Local JVP rule for einsum without building a global tape.
-///
-/// Inputs without tangent should use `None`.
-///
-/// # Examples
-///
-/// ```ignore
-/// let dc = tenferro_autodiff::einsum_jvp(
-///     "ij,jk->ik",
-///     &[&a, &b],
-///     &[Some(&da), None],
-/// ).unwrap();
-/// ```
-pub fn einsum_jvp<T: ScalarBase + HasAlgebra>(
-    _subscripts: &str,
-    _primals: &[&Tensor<T>],
-    _tangents: &[Option<&Tensor<T>>],
-) -> DeviceResult<Tensor<T>> {
     todo!()
 }
