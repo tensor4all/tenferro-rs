@@ -206,9 +206,9 @@
 //! // a.set_preferred_compute_device(None);
 //! ```
 
+use chainrules_core::{AdResult, Differentiable, DualTensor, TrackedTensor};
 use strided_traits::ScalarBase;
 use tenferro_algebra::HasAlgebra;
-use tenferro_autodiff::{AdResult, Differentiable, DualTensor, TrackedTensor};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -628,13 +628,13 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
 /// Tracked einsum (reverse-mode AD).
 ///
 /// This is the AD-aware counterpart of [`einsum`]. It records the operation
-/// on the reverse-mode tape so that [`tenferro_autodiff::pullback`] can
+/// on the reverse-mode tape so that [`chainrules_core::pullback`] can
 /// compute gradients through it.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{TrackedTensor, pullback, clear_tape};
+/// use chainrules_core::{TrackedTensor, pullback, clear_tape};
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
@@ -673,7 +673,7 @@ where
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::DualTensor;
+/// use chainrules_core::DualTensor;
 /// use tenferro_einsum::dual_einsum;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;

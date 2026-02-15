@@ -1029,7 +1029,7 @@ tenferro-device              tenferro-algebra
 Future crates (not in POC):
 - `tenferro-tropical` -- Tropical algebra types, TensorPrims<MaxPlus> for CpuBackend
 - `tenferro-linalg` -- SVD, QR, eigen (CPU: faer, GPU: cuSOLVER)
-- `tenferro-autodiff` -- TrackedTensor, DualTensor, VJP/JVP
+- `chainrules-core` -- TrackedTensor, DualTensor, VJP/JVP
 - `tenferro-capi` -- C FFI for Julia/Python integration
 
 ---

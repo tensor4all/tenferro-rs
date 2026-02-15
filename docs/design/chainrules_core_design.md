@@ -1,4 +1,4 @@
-# tenferro Autodiff Design
+# chainrules-core Design
 
 Date: 2026-02-15
 
@@ -10,23 +10,23 @@ work that is not yet complete in POC.
 
 ## Position in Workspace Architecture
 
-`tenferro-autodiff` is a **generic AD framework** (like Julia's ChainRulesCore.jl)
+`chainrules-core` is a **generic AD framework** (like Julia's ChainRulesCore.jl)
 that does not depend on any tensor type. It defines the `Differentiable` trait
 for tangent space operations, and generic wrapper types (`TrackedTensor<V>`,
 `DualTensor<V>`) parameterized by any `V: Differentiable`.
 
-- `tenferro-autodiff` depends only on `thiserror` (no tenferro crate deps).
-- `tenferro-tensor` depends on `tenferro-autodiff` and implements
+- `chainrules-core` depends only on `thiserror` (no tenferro crate deps).
+- `tenferro-tensor` depends on `chainrules-core` and implements
   `Differentiable for Tensor<T>`.
 - Operation-specific AD rules live with their operations:
   - Einsum AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`,
     `einsum_frule`) are in `tenferro-einsum`.
   - Future operations (e.g., block-sparse matmul) define their own AD rules
     in their own crates.
-- `tenferro-einsum` depends on `tenferro-autodiff` to use the AD framework.
+- `tenferro-einsum` depends on `chainrules-core` to use the AD framework.
 
 ```
-tenferro-autodiff          ← Generic AD framework (Differentiable, no tensor deps)
+chainrules-core          ← Generic AD framework (Differentiable, no tensor deps)
     ↑
 tenferro-tensor            ← impl Differentiable for Tensor<T>
     ↑
@@ -35,7 +35,7 @@ tenferro-einsum            ← Einsum + einsum AD rules
 
 ## Scope
 
-Current POC scope (in `tenferro-autodiff`):
+Current POC scope (in `chainrules-core`):
 
 - Public API skeleton for reverse-mode and forward-mode
 - `TrackedTensor`, `DualTensor`, `pullback`, `Gradients`, `PullbackPlan`
@@ -57,7 +57,7 @@ Planned scope (not yet implemented):
 
 ## API Layers
 
-1. AD framework (`tenferro-autodiff`)
+1. AD framework (`chainrules-core`)
 
 - `Differentiable` — trait defining tangent space (zero_tangent, accumulate_tangent)
 - `TrackedTensor<V>` — reverse-mode wrapper (with optional tangent for HVP)

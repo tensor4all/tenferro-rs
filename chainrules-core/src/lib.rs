@@ -21,7 +21,7 @@
 //! Reverse-mode usage (with operation-specific AD functions from other crates):
 //!
 //! ```ignore
-//! use tenferro_autodiff::{TrackedTensor, pullback, clear_tape};
+//! use chainrules_core::{TrackedTensor, pullback, clear_tape};
 //! use tenferro_einsum::tracked_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
@@ -46,7 +46,7 @@
 //! Forward-mode usage:
 //!
 //! ```ignore
-//! use tenferro_autodiff::DualTensor;
+//! use chainrules_core::DualTensor;
 //! use tenferro_einsum::dual_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
@@ -63,7 +63,7 @@
 //! Forward-over-reverse HVP (Hessian-vector product):
 //!
 //! ```ignore
-//! use tenferro_autodiff::{TrackedTensor, hvp, clear_tape};
+//! use chainrules_core::{TrackedTensor, hvp, clear_tape};
 //! use tenferro_einsum::tracked_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
@@ -92,7 +92,7 @@
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::Differentiable;
+/// use chainrules_core::Differentiable;
 ///
 /// // Tensor<f64> implements Differentiable with Tangent = Tensor<f64>
 /// // (defined in tenferro-tensor crate)
@@ -119,7 +119,7 @@ pub trait Differentiable: Clone {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::AutodiffError;
+/// use chainrules_core::AutodiffError;
 ///
 /// let err = AutodiffError::NonScalarLoss { num_elements: 8 };
 /// assert!(format!("{err}").contains("scalar"));
@@ -153,7 +153,7 @@ pub enum AutodiffError {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{AdResult, TrackedTensor, Differentiable};
+/// use chainrules_core::{AdResult, TrackedTensor, Differentiable};
 ///
 /// fn takes_ad_result<V: Differentiable>(_x: AdResult<TrackedTensor<V>>) {}
 /// ```
@@ -164,7 +164,7 @@ pub type AdResult<T> = std::result::Result<T, AutodiffError>;
 /// # Examples
 ///
 /// ```
-/// use tenferro_autodiff::NodeId;
+/// use chainrules_core::NodeId;
 ///
 /// let id = NodeId::new(7);
 /// assert_eq!(id.index(), 7);
@@ -178,7 +178,7 @@ impl NodeId {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_autodiff::NodeId;
+    /// use chainrules_core::NodeId;
     ///
     /// let id = NodeId::new(42);
     /// assert_eq!(id.index(), 42);
@@ -192,7 +192,7 @@ impl NodeId {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_autodiff::NodeId;
+    /// use chainrules_core::NodeId;
     ///
     /// let id = NodeId::new(3);
     /// assert_eq!(id.index(), 3);
@@ -207,7 +207,7 @@ impl NodeId {
 /// # Examples
 ///
 /// ```
-/// use tenferro_autodiff::SavePolicy;
+/// use chainrules_core::SavePolicy;
 ///
 /// let p = SavePolicy::SaveForPullback;
 /// assert_eq!(p, SavePolicy::SaveForPullback);
@@ -228,7 +228,7 @@ pub enum SavePolicy {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::TrackedTensor;
+/// use chainrules_core::TrackedTensor;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
@@ -252,7 +252,7 @@ impl<V: Differentiable> TrackedTensor<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_autodiff::TrackedTensor;
+    /// use chainrules_core::TrackedTensor;
     /// let x = TrackedTensor::new(value);
     /// assert!(!x.requires_grad());
     /// ```
@@ -270,7 +270,7 @@ impl<V: Differentiable> TrackedTensor<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_autodiff::TrackedTensor;
+    /// use chainrules_core::TrackedTensor;
     /// let x = TrackedTensor::leaf(value);
     /// assert!(x.requires_grad());
     /// ```
@@ -283,7 +283,7 @@ impl<V: Differentiable> TrackedTensor<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_autodiff::TrackedTensor;
+    /// use chainrules_core::TrackedTensor;
     /// let x = TrackedTensor::with_requires_grad(value, true);
     /// ```
     pub fn with_requires_grad(_value: V, _requires_grad: bool) -> Self {
@@ -348,7 +348,7 @@ impl<V: Differentiable> TrackedTensor<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_autodiff::TrackedTensor;
+    /// use chainrules_core::TrackedTensor;
     /// let x = TrackedTensor::leaf_with_tangent(value, tangent).unwrap();
     /// assert!(x.requires_grad());
     /// assert!(x.has_tangent());
@@ -399,7 +399,7 @@ impl<V: Differentiable> TrackedTensor<V> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::DualTensor;
+/// use chainrules_core::DualTensor;
 /// let dual = DualTensor::new(primal);
 /// assert!(!dual.has_tangent());
 /// ```
@@ -414,7 +414,7 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_autodiff::DualTensor;
+    /// use chainrules_core::DualTensor;
     /// let x = DualTensor::new(primal);
     /// ```
     pub fn new(primal: V) -> Self {
@@ -433,7 +433,7 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_autodiff::DualTensor;
+    /// use chainrules_core::DualTensor;
     /// let x = DualTensor::with_tangent(primal, tangent).unwrap();
     /// ```
     pub fn with_tangent(_primal: V, _tangent: V::Tangent) -> AdResult<Self> {
@@ -502,7 +502,7 @@ impl<V: Differentiable> DualTensor<V> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{Gradients, Differentiable};
+/// use chainrules_core::{Gradients, Differentiable};
 /// // V::Tangent is the gradient type
 /// let mut grads = Gradients::<MyType>::new();
 /// ```
@@ -516,7 +516,7 @@ impl<V: Differentiable> Gradients<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_autodiff::Gradients;
+    /// use chainrules_core::Gradients;
     /// let grads = Gradients::<MyType>::new();
     /// ```
     pub fn new() -> Self {
@@ -577,7 +577,7 @@ impl<V: Differentiable> Default for Gradients<V> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{ReverseRule, Differentiable, AdResult, NodeId};
+/// use chainrules_core::{ReverseRule, Differentiable, AdResult, NodeId};
 ///
 /// struct MyRule;
 /// impl<V: Differentiable> ReverseRule<V> for MyRule {
@@ -632,7 +632,7 @@ pub trait ReverseRule<V: Differentiable> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{ForwardRule, Differentiable, AdResult};
+/// use chainrules_core::{ForwardRule, Differentiable, AdResult};
 ///
 /// struct MyFrule;
 /// impl<V: Differentiable> ForwardRule<V> for MyFrule {
@@ -652,7 +652,7 @@ pub trait ForwardRule<V: Differentiable> {
 /// # Examples
 ///
 /// ```ignore
-/// let plan = tenferro_autodiff::PullbackPlan::<MyType>::build(&loss).unwrap();
+/// let plan = chainrules_core::PullbackPlan::<MyType>::build(&loss).unwrap();
 /// ```
 #[derive(Debug, Clone)]
 pub struct PullbackPlan<V: Differentiable> {
@@ -666,7 +666,7 @@ impl<V: Differentiable> PullbackPlan<V> {
     /// # Examples
     ///
     /// ```ignore
-    /// let plan = tenferro_autodiff::PullbackPlan::build(&loss).unwrap();
+    /// let plan = chainrules_core::PullbackPlan::build(&loss).unwrap();
     /// ```
     pub fn build(_loss: &TrackedTensor<V>) -> AdResult<Self> {
         todo!()
@@ -688,7 +688,7 @@ impl<V: Differentiable> PullbackPlan<V> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_autodiff::{PullbackPlan, NodeId};
+    /// use chainrules_core::{PullbackPlan, NodeId};
     /// let _id_fn: fn(&PullbackPlan<f64>) -> NodeId = PullbackPlan::loss_node;
     /// ```
     pub fn loss_node(&self) -> NodeId {
@@ -701,7 +701,7 @@ impl<V: Differentiable> PullbackPlan<V> {
 /// # Examples
 ///
 /// ```ignore
-/// tenferro_autodiff::clear_tape::<Tensor<f64>>();
+/// chainrules_core::clear_tape::<Tensor<f64>>();
 /// ```
 pub fn clear_tape<V: Differentiable>() {
     let _ = std::marker::PhantomData::<V>;
@@ -717,7 +717,7 @@ pub fn clear_tape<V: Differentiable>() {
 /// # Examples
 ///
 /// ```ignore
-/// let grads = tenferro_autodiff::pullback(&loss).unwrap();
+/// let grads = chainrules_core::pullback(&loss).unwrap();
 /// ```
 pub fn pullback<V: Differentiable>(_loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
     todo!()
@@ -732,7 +732,7 @@ pub fn pullback<V: Differentiable>(_loss: &TrackedTensor<V>) -> AdResult<Gradien
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{TrackedTensor, hvp, HvpResult};
+/// use chainrules_core::{TrackedTensor, hvp, HvpResult};
 /// use tenferro_einsum::tracked_einsum;
 ///
 /// let result: HvpResult<Tensor<f64>> = hvp(&loss).unwrap();
@@ -764,7 +764,7 @@ pub struct HvpResult<V: Differentiable> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_autodiff::{TrackedTensor, hvp, clear_tape};
+/// use chainrules_core::{TrackedTensor, hvp, clear_tape};
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;

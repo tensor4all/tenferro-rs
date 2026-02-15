@@ -5,6 +5,6 @@ members = [
     "tenferro-prims",
     "tenferro-tensor",
     "tenferro-einsum",
-    "tenferro-autodiff",
+    "chainrules-core",
 ]
 resolver = "2"
