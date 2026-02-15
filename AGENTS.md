@@ -94,7 +94,8 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 ### Layered Design
 
 ```
-Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch
+Layer 5: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
+Layer 4: tenferro-autodiff     — AD framework: TrackedTensor, DualTensor, VjpRule/JvpRule, backward, tape
 Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops
 Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
 Shared:  tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
@@ -105,6 +106,10 @@ Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
 Foundation: strided-rs    — Independent workspace (strided-traits → strided-view → strided-kernel)
 ```
 
+Operation-specific AD rules live with their operations, not in the AD framework.
+`tenferro-autodiff` is a pure AD framework; `tenferro-einsum` owns einsum AD functions
+(`tracked_einsum`, `dual_einsum`, `einsum_vjp`, `einsum_jvp`).
+
 ### Dependency Graph (POC)
 
 ```
@@ -114,14 +119,13 @@ tenferro-device (← strided-view for StridedError, ← thiserror)
 tenferro-algebra (← strided-traits)
     │  HasAlgebra trait, Semiring trait, Standard type
     │
-    ├────────────────────┐
-    ↓                    ↓
-tenferro-prims   tenferro-tensor
-    │  (← strided-view,     │  (← strided-view,
-    │   ← strided-traits)   │   ← strided-traits,
-    │                        │   ← num-traits)
-    │                        │
-    └──────────┬─────────────┘
+    ├────────────────────┬──────────────────────┐
+    ↓                    ↓                      ↓
+tenferro-prims   tenferro-tensor        tenferro-autodiff
+    │  (← strided-view,     │  (← strided-view,    │  (← strided-traits,
+    │   ← strided-traits)   │   ← strided-traits,  │   ← thiserror)
+    │                        │   ← num-traits)      │
+    └──────────┬─────────────┴──────────────────────┘
                ↓
           tenferro-einsum
               (← strided-traits)

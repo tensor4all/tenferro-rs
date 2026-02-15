@@ -208,6 +208,7 @@
 
 use strided_traits::ScalarBase;
 use tenferro_algebra::HasAlgebra;
+use tenferro_autodiff::{AdResult, DualTensor, TrackedTensor};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -617,5 +618,138 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
     beta: T,
     output: &mut Tensor<T>,
 ) -> Result<()> {
+    todo!()
+}
+
+// ============================================================================
+// Automatic differentiation support
+// ============================================================================
+
+/// Tracked einsum (reverse-mode AD).
+///
+/// This is the AD-aware counterpart of [`einsum`]. It records the operation
+/// on the reverse-mode tape so that [`tenferro_autodiff::backward`] can
+/// compute gradients through it.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_autodiff::{TrackedTensor, backward, clear_tape};
+/// use tenferro_einsum::tracked_einsum;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// clear_tape::<f64>();
+/// let a = TrackedTensor::leaf(Tensor::ones(
+///     &[2, 3],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// ));
+/// let b = TrackedTensor::leaf(Tensor::ones(
+///     &[3, 4],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// ));
+/// let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
+/// let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
+/// let grads = backward(&loss).unwrap();
+/// let _ga = grads.get(a.node_id().unwrap()).unwrap();
+/// ```
+pub fn tracked_einsum<T: ScalarBase + HasAlgebra>(
+    _subscripts: &str,
+    _operands: &[&TrackedTensor<T>],
+) -> AdResult<TrackedTensor<T>> {
+    todo!()
+}
+
+/// Dual einsum (forward-mode JVP propagation).
+///
+/// This is the AD-aware counterpart of [`einsum`] for forward-mode.
+/// It propagates tangent vectors through the einsum operation.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_autodiff::DualTensor;
+/// use tenferro_einsum::dual_einsum;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::ones(&[2, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[2, 3], mem, col);
+/// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
+///
+/// let a_dual = DualTensor::with_tangent(a, da).unwrap();
+/// let b_dual = DualTensor::new(b);
+/// let c_dual = dual_einsum("ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
+/// let _tangent = c_dual.tangent();
+/// ```
+pub fn dual_einsum<T: ScalarBase + HasAlgebra>(
+    _subscripts: &str,
+    _operands: &[&DualTensor<T>],
+) -> AdResult<DualTensor<T>> {
+    todo!()
+}
+
+/// Local VJP rule for einsum without building a global tape.
+///
+/// Computes the vector-Jacobian product for an einsum operation.
+/// Returns one gradient tensor per input operand.
+///
+/// This API is intended for language interop (`custom_vjp`) and manual AD.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::einsum_vjp;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::ones(&[2, 3], mem, col);
+/// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let grad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
+///
+/// let grads = einsum_vjp("ij,jk->ik", &[&a, &b], &grad_c).unwrap();
+/// assert_eq!(grads.len(), 2);
+/// ```
+pub fn einsum_vjp<T: ScalarBase + HasAlgebra>(
+    _subscripts: &str,
+    _operands: &[&Tensor<T>],
+    _cotangent: &Tensor<T>,
+) -> Result<Vec<Tensor<T>>> {
+    todo!()
+}
+
+/// Local JVP rule for einsum without building a global tape.
+///
+/// Computes the Jacobian-vector product for an einsum operation.
+/// Inputs without tangent should use `None`.
+///
+/// This API is intended for language interop (`custom_jvp`) and manual AD.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::einsum_jvp;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::ones(&[2, 3], mem, col);
+/// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let da = Tensor::<f64>::ones(&[2, 3], mem, col);
+///
+/// let dc = einsum_jvp("ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
+/// ```
+pub fn einsum_jvp<T: ScalarBase + HasAlgebra>(
+    _subscripts: &str,
+    _primals: &[&Tensor<T>],
+    _tangents: &[Option<&Tensor<T>>],
+) -> Result<Tensor<T>> {
     todo!()
 }

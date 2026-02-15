@@ -10,19 +10,37 @@ work that is not yet complete in POC.
 
 ## Position in Workspace Architecture
 
-`tenferro-autodiff` sits above `tenferro-einsum` and `tenferro-prims`.
+`tenferro-autodiff` is a **pure AD framework** that sits below operation
+crates like `tenferro-einsum`. It provides the tape system, wrapper types,
+and rule traits, but does **not** contain operation-specific AD rules.
 
-- Forward computation uses `tenferro-einsum` / `TensorPrims<A>`.
-- Derivatives use VJP/JVP rules expressed in terms of primitive ops.
-- Algebra-specific behavior is dispatched via `HasAlgebra` and `TensorPrims<A>`.
+- `tenferro-autodiff` depends on `tenferro-tensor`, `tenferro-algebra`,
+  `tenferro-device` (no dependency on `tenferro-einsum` or `tenferro-prims`).
+- Operation-specific AD rules live with their operations:
+  - Einsum AD functions (`tracked_einsum`, `dual_einsum`, `einsum_vjp`,
+    `einsum_jvp`) are in `tenferro-einsum`.
+  - Future operations (e.g., block-sparse matmul) define their own AD rules
+    in their own crates.
+- `tenferro-einsum` depends on `tenferro-autodiff` to use the AD framework.
+
+```
+tenferro-autodiff          ← Pure AD framework (no op-specific knowledge)
+    ↑
+tenferro-einsum            ← Einsum + einsum AD rules
+```
 
 ## Scope
 
-Current POC scope:
+Current POC scope (in `tenferro-autodiff`):
 
 - Public API skeleton for reverse-mode and forward-mode
-- `TrackedTensor`, `DualTensor`, `backward`, `einsum_vjp`, `einsum_jvp`
+- `TrackedTensor`, `DualTensor`, `backward`, `Gradients`, `BackwardPlan`
 - Trait extension points: `VjpRule`, `JvpRule`
+
+Current POC scope (in `tenferro-einsum`):
+
+- `tracked_einsum`, `dual_einsum` — AD-aware einsum frontends
+- `einsum_vjp`, `einsum_jvp` — local derivative kernels for FFI/manual AD
 
 Planned scope (not yet implemented):
 
@@ -33,31 +51,26 @@ Planned scope (not yet implemented):
 
 ## API Layers
 
-1. Local derivative kernels
+1. AD framework (`tenferro-autodiff`)
 
-- `einsum_vjp(subscripts, operands, cotangent) -> Vec<Tensor<T>>`
-- `einsum_jvp(subscripts, primals, tangents) -> Tensor<T>`
+- `TrackedTensor<T>` — reverse-mode wrapper
+- `DualTensor<T>` — forward-mode wrapper
+- `backward(loss)` — reverse-mode execution
+- `clear_tape<T>()` — tape management
+- `Gradients<T>`, `BackwardPlan<T>` — result and plan types
+- `VjpRule<T>`, `JvpRule<T>` — rule extension traits
 
-These are useful for:
+2. Operation-specific AD rules (in each operation's crate)
 
-- FFI integrations (`custom_vjp` / `custom_jvp`)
-- explicit gradient code without global tape
+Einsum AD rules (in `tenferro-einsum`):
 
-2. Reverse-mode user API
+- `tracked_einsum(subscripts, operands)` — reverse-mode einsum
+- `dual_einsum(subscripts, operands)` — forward-mode einsum
+- `einsum_vjp(subscripts, operands, cotangent)` — local VJP for FFI/manual AD
+- `einsum_jvp(subscripts, primals, tangents)` — local JVP for FFI/manual AD
 
-- `TrackedTensor<T>`
-- `tracked_einsum(...)`
-- `backward(loss)`
-
-3. Forward-mode user API
-
-- `DualTensor<T>`
-- `dual_einsum(...)`
-
-4. Rule extension API
-
-- `VjpRule<T>`
-- `JvpRule<T>`
+Future operations define their own AD rules in their own crates using the
+`VjpRule` and `JvpRule` traits.
 
 ## Algebra and Tropical Support
 
@@ -80,6 +93,9 @@ runtime implementation is not complete in current POC.
    `tenferro-prims` / device layer.
 4. Use doc examples on all public items to make API review possible before
    implementation.
+5. **AD framework does not depend on operation crates.** Each operation
+   crate owns its AD rules. This avoids circular dependencies and keeps
+   the framework extensible to user-defined operations.
 
 ## Out of Scope in This Phase
 
