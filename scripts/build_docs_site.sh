@@ -23,6 +23,10 @@ for md in "$ROOT_DIR"/docs/design/*.md; do
   if command -v pandoc >/dev/null 2>&1; then
     pandoc "$md" -f gfm -t html5 -o "$html" --standalone
   else
+    if [ "${CI:-}" = "true" ]; then
+      echo "pandoc is required in CI to render docs/design/*.md as HTML."
+      exit 1
+    fi
     {
       printf '<!doctype html><html><head><meta charset="utf-8"><title>%s</title></head><body><pre>\n' "$base"
       sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$md"
