@@ -628,31 +628,31 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
 /// Tracked einsum (reverse-mode AD).
 ///
 /// This is the AD-aware counterpart of [`einsum`]. It records the operation
-/// on the reverse-mode tape so that [`chainrules::pullback`] can
+/// on the reverse-mode tape so that [`chainrules::Tape::pullback`] can
 /// compute gradients through it.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use chainrules::{TrackedTensor, pullback, clear_tape};
+/// use chainrules::Tape;
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// clear_tape::<Tensor<f64>>();
-/// let a = TrackedTensor::leaf(Tensor::ones(
+/// let tape = Tape::<Tensor<f64>>::new();
+/// let a = tape.leaf(Tensor::ones(
 ///     &[2, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
 /// ));
-/// let b = TrackedTensor::leaf(Tensor::ones(
+/// let b = tape.leaf(Tensor::ones(
 ///     &[3, 4],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
 /// ));
 /// let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
 /// let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
-/// let grads = pullback(&loss).unwrap();
+/// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
 pub fn tracked_einsum<T: ScalarBase + HasAlgebra>(

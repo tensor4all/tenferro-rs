@@ -23,8 +23,8 @@ Layer 2: tenferro-prims      "Tensor BLAS": TensorPrims<A> trait
                              (algebra-parameterized), plan-based execution
 Shared:  chainrules-core   Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
-         chainrules          AD engine: TrackedTensor<V>, DualTensor<V>,
-                             pullback, hvp (← chainrules-core)
+         chainrules          AD engine: Tape<V>, TrackedTensor<V>,
+                             DualTensor<V> (← chainrules-core)
          tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type
          tenferro-device     Device enum, Error/Result types
 
@@ -68,8 +68,10 @@ tensor type. `Differentiable` trait defines the tangent space; concrete types
 
 ### chainrules
 
-AD engine (like Zygote.jl in Julia's ecosystem). Provides `TrackedTensor<V>`
-(reverse-mode), `DualTensor<V>` (forward-mode), `pullback()`, `hvp()`.
+AD engine (like Zygote.jl in Julia's ecosystem). Provides `Tape<V>`
+(explicit tape, TensorFlow GradientTape style), `TrackedTensor<V>`
+(reverse-mode wrapper), `DualTensor<V>` (forward-mode wrapper).
+Gradient computation via `tape.pullback()`, HVP via `tape.hvp()`.
 Depends only on `chainrules-core`. Re-exports all of `chainrules-core`
 so downstream crates can depend on just `chainrules` for both traits and engine.
 
