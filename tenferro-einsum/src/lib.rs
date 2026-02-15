@@ -693,17 +693,18 @@ pub fn dual_einsum<T: ScalarBase + HasAlgebra>(
     todo!()
 }
 
-/// Local VJP rule for einsum without building a global tape.
+/// Reverse-mode rule (rrule) for einsum without building a global tape.
 ///
-/// Computes the vector-Jacobian product for an einsum operation.
+/// Computes the pullback (vector-Jacobian product) for an einsum operation.
 /// Returns one gradient tensor per input operand.
 ///
-/// This API is intended for language interop (`custom_vjp`) and manual AD.
+/// Named after Julia's ChainRules.jl convention.
+/// This API is intended for language interop and manual AD.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_einsum::einsum_vjp;
+/// use tenferro_einsum::einsum_rrule;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
@@ -713,10 +714,10 @@ pub fn dual_einsum<T: ScalarBase + HasAlgebra>(
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let grad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
 ///
-/// let grads = einsum_vjp("ij,jk->ik", &[&a, &b], &grad_c).unwrap();
+/// let grads = einsum_rrule("ij,jk->ik", &[&a, &b], &grad_c).unwrap();
 /// assert_eq!(grads.len(), 2);
 /// ```
-pub fn einsum_vjp<T: ScalarBase + HasAlgebra>(
+pub fn einsum_rrule<T: ScalarBase + HasAlgebra>(
     _subscripts: &str,
     _operands: &[&Tensor<T>],
     _cotangent: &Tensor<T>,
@@ -724,17 +725,18 @@ pub fn einsum_vjp<T: ScalarBase + HasAlgebra>(
     todo!()
 }
 
-/// Local JVP rule for einsum without building a global tape.
+/// Forward-mode rule (frule) for einsum without building a global tape.
 ///
-/// Computes the Jacobian-vector product for an einsum operation.
+/// Computes the pushforward (Jacobian-vector product) for an einsum operation.
 /// Inputs without tangent should use `None`.
 ///
-/// This API is intended for language interop (`custom_jvp`) and manual AD.
+/// Named after Julia's ChainRules.jl convention.
+/// This API is intended for language interop and manual AD.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_einsum::einsum_jvp;
+/// use tenferro_einsum::einsum_frule;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
@@ -744,9 +746,9 @@ pub fn einsum_vjp<T: ScalarBase + HasAlgebra>(
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[2, 3], mem, col);
 ///
-/// let dc = einsum_jvp("ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
+/// let dc = einsum_frule("ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
-pub fn einsum_jvp<T: ScalarBase + HasAlgebra>(
+pub fn einsum_frule<T: ScalarBase + HasAlgebra>(
     _subscripts: &str,
     _primals: &[&Tensor<T>],
     _tangents: &[Option<&Tensor<T>>],
@@ -762,11 +764,10 @@ pub fn einsum_jvp<T: ScalarBase + HasAlgebra>(
 /// for each input operand.
 ///
 /// For C = einsum(subscripts, [A, B]):
-/// - gradient: standard VJP (e.g., ḡ_A = einsum(ḡ_C, B))
-/// - hvp: tangent of VJP (e.g., dḡ_A = einsum(dḡ_C, B) + einsum(ḡ_C, dB))
+/// - gradient: standard pullback (e.g., ḡ_A = einsum(ḡ_C, B))
+/// - hvp: tangent of pullback (e.g., dḡ_A = einsum(dḡ_C, B) + einsum(ḡ_C, dB))
 ///
-/// This API is intended for language interop (`custom_vjp` with HVP)
-/// and manual AD.
+/// This API is intended for language interop and manual AD.
 ///
 /// # Examples
 ///

@@ -1,11 +1,11 @@
 //! Automatic differentiation framework for tenferro.
 //!
 //! This crate provides the core AD infrastructure:
-//! - reverse-mode AD (VJP/backward) via [`TrackedTensor`]
-//! - forward-mode AD (JVP) via [`DualTensor`]
-//! - rule extension traits ([`VjpRule`], [`JvpRule`])
+//! - reverse-mode AD (rrule/pullback) via [`TrackedTensor`]
+//! - forward-mode AD (frule/pushforward) via [`DualTensor`]
+//! - rule extension traits ([`ReverseRule`], [`ForwardRule`])
 //!
-//! Operation-specific AD rules (e.g., einsum VJP/JVP) live in the crate
+//! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate
 //! that defines the operation. See `tenferro-einsum` for einsum AD functions.
 //!
 //! Bodies are intentionally `todo!()` in the current POC phase.
@@ -107,8 +107,8 @@ pub enum AutodiffError {
         /// Actual shape.
         got: Vec<usize>,
     },
-    /// A VjpRule does not support HVP (backward_with_tangents).
-    #[error("HVP not supported by this VjpRule implementation")]
+    /// A ReverseRule does not support HVP (pullback_with_tangents).
+    #[error("HVP not supported by this ReverseRule implementation")]
     HvpNotSupported,
     /// Generic AD argument error.
     #[error("invalid autodiff argument: {0}")]
@@ -530,30 +530,31 @@ impl<T: ScalarBase> Default for Gradients<T> {
     }
 }
 
-/// Backward rule interface for reverse-mode AD.
+/// Reverse-mode AD rule interface (rrule).
 ///
 /// Implemented by operation-specific nodes (einsum, reduce, permute, ...).
+/// Named after Julia's ChainRules.jl convention: `rrule` returns a pullback.
 ///
 /// # Examples
 ///
 /// ```ignore
 /// struct MyRule;
-/// impl tenferro_autodiff::VjpRule<f64> for MyRule {
-///     fn backward(&self, cotangent: &tenferro_tensor::Tensor<f64>)
+/// impl tenferro_autodiff::ReverseRule<f64> for MyRule {
+///     fn pullback(&self, cotangent: &tenferro_tensor::Tensor<f64>)
 ///         -> tenferro_autodiff::AdResult<Vec<(tenferro_autodiff::NodeId, tenferro_tensor::Tensor<f64>)>> {
 ///         todo!()
 ///     }
 ///     fn inputs(&self) -> Vec<tenferro_autodiff::NodeId> { vec![] }
 /// }
 /// ```
-pub trait VjpRule<T: ScalarBase + HasAlgebra> {
-    /// Computes input cotangents from an output cotangent.
-    fn backward(&self, cotangent: &Tensor<T>) -> AdResult<Vec<(NodeId, Tensor<T>)>>;
+pub trait ReverseRule<T: ScalarBase + HasAlgebra> {
+    /// Computes input cotangents from an output cotangent (pullback).
+    fn pullback(&self, cotangent: &Tensor<T>) -> AdResult<Vec<(NodeId, Tensor<T>)>>;
 
     /// Returns input node IDs this rule depends on.
     fn inputs(&self) -> Vec<NodeId>;
 
-    /// Computes backward pass with tangent propagation for HVP.
+    /// Computes pullback with tangent propagation for HVP.
     ///
     /// Given an output cotangent ḡ and its tangent dḡ, returns
     /// `(node_id, input_cotangent, input_cotangent_tangent)` triples.
@@ -565,13 +566,13 @@ pub trait VjpRule<T: ScalarBase + HasAlgebra> {
     ///
     /// ```ignore
     /// // Called internally by hvp(); users rarely call this directly.
-    /// let results = rule.backward_with_tangents(&cotangent, &cotangent_tangent)?;
+    /// let results = rule.pullback_with_tangents(&cotangent, &cotangent_tangent)?;
     /// for (node_id, grad, grad_tangent) in results {
     ///     // grad: standard cotangent for this input
     ///     // grad_tangent: cotangent tangent for HVP
     /// }
     /// ```
-    fn backward_with_tangents(
+    fn pullback_with_tangents(
         &self,
         cotangent: &Tensor<T>,
         cotangent_tangent: &Tensor<T>,
@@ -581,22 +582,24 @@ pub trait VjpRule<T: ScalarBase + HasAlgebra> {
     }
 }
 
-/// Forward rule interface for JVP propagation.
+/// Forward-mode AD rule interface (frule).
+///
+/// Named after Julia's ChainRules.jl convention: `frule` computes pushforward.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// struct MyJvp;
-/// impl tenferro_autodiff::JvpRule<f64> for MyJvp {
-///     fn forward(&self, tangents: &[Option<&tenferro_tensor::Tensor<f64>>])
+/// struct MyFrule;
+/// impl tenferro_autodiff::ForwardRule<f64> for MyFrule {
+///     fn pushforward(&self, tangents: &[Option<&tenferro_tensor::Tensor<f64>>])
 ///         -> tenferro_autodiff::AdResult<tenferro_tensor::Tensor<f64>> {
 ///         todo!()
 ///     }
 /// }
 /// ```
-pub trait JvpRule<T: ScalarBase + HasAlgebra> {
-    /// Computes output tangent from input tangents.
-    fn forward(&self, tangents: &[Option<&Tensor<T>>]) -> AdResult<Tensor<T>>;
+pub trait ForwardRule<T: ScalarBase + HasAlgebra> {
+    /// Computes output tangent from input tangents (pushforward).
+    fn pushforward(&self, tangents: &[Option<&Tensor<T>>]) -> AdResult<Tensor<T>>;
 }
 
 /// Compiled backward execution plan.
@@ -710,8 +713,8 @@ pub struct HvpResult<T: ScalarBase> {
 /// # Errors
 ///
 /// Returns [`AutodiffError::NonScalarLoss`] for non-scalar losses.
-/// Returns [`AutodiffError::HvpNotSupported`] if any VjpRule on the tape
-/// does not implement `backward_with_tangents`.
+/// Returns [`AutodiffError::HvpNotSupported`] if any ReverseRule on the tape
+/// does not implement `pullback_with_tangents`.
 ///
 /// # Examples
 ///
