@@ -15,7 +15,7 @@
 //! Reverse-mode usage (with operation-specific AD functions from other crates):
 //!
 //! ```ignore
-//! use tenferro_autodiff::{TrackedTensor, backward, clear_tape};
+//! use tenferro_autodiff::{TrackedTensor, pullback, clear_tape};
 //! use tenferro_einsum::tracked_einsum;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
@@ -33,7 +33,7 @@
 //! ));
 //! let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
 //! let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
-//! let grads = backward(&loss).unwrap();
+//! let grads = pullback(&loss).unwrap();
 //! let _ga = grads.get(a.node_id().unwrap()).unwrap();
 //! ```
 //!
@@ -93,10 +93,10 @@ pub enum AutodiffError {
     /// Wrapped error from tenferro shared device/result layer.
     #[error(transparent)]
     Device(#[from] DeviceError),
-    /// Loss tensor for backward pass must contain exactly one element.
-    #[error("backward() requires scalar loss, got {num_elements} elements")]
+    /// Loss tensor for pullback must contain exactly one element.
+    #[error("pullback() requires scalar loss, got {num_elements} elements")]
     NonScalarLoss { num_elements: usize },
-    /// Attempted backward on a tensor not connected to AD tape.
+    /// Attempted pullback on a tensor not connected to AD tape.
     #[error("tensor is not connected to AD tape")]
     MissingNode,
     /// Tangent shape must match primal shape.
@@ -176,15 +176,15 @@ impl NodeId {
 /// ```
 /// use tenferro_autodiff::SavePolicy;
 ///
-/// let p = SavePolicy::SaveForBackward;
-/// assert_eq!(p, SavePolicy::SaveForBackward);
+/// let p = SavePolicy::SaveForPullback;
+/// assert_eq!(p, SavePolicy::SaveForPullback);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SavePolicy {
-    /// Keep forward tensors for exact backward formulas.
-    SaveForBackward,
+    /// Keep forward tensors for exact pullback formulas.
+    SaveForPullback,
     /// Discard forward tensors and require recomputation/checkpointing later.
-    RecomputeOnBackward,
+    RecomputeOnPullback,
 }
 
 /// Tensor wrapper for reverse-mode AD.
@@ -602,32 +602,32 @@ pub trait ForwardRule<T: ScalarBase + HasAlgebra> {
     fn pushforward(&self, tangents: &[Option<&Tensor<T>>]) -> AdResult<Tensor<T>>;
 }
 
-/// Compiled backward execution plan.
+/// Compiled pullback execution plan.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let plan = tenferro_autodiff::BackwardPlan::<f64>::build(&loss).unwrap();
+/// let plan = tenferro_autodiff::PullbackPlan::<f64>::build(&loss).unwrap();
 /// ```
 #[derive(Debug, Clone)]
-pub struct BackwardPlan<T: ScalarBase + HasAlgebra> {
+pub struct PullbackPlan<T: ScalarBase + HasAlgebra> {
     loss: NodeId,
     _marker: std::marker::PhantomData<T>,
 }
 
-impl<T: ScalarBase + HasAlgebra> BackwardPlan<T> {
-    /// Builds a backward plan from a loss tensor.
+impl<T: ScalarBase + HasAlgebra> PullbackPlan<T> {
+    /// Builds a pullback plan from a loss tensor.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let plan = tenferro_autodiff::BackwardPlan::<f64>::build(&loss).unwrap();
+    /// let plan = tenferro_autodiff::PullbackPlan::<f64>::build(&loss).unwrap();
     /// ```
     pub fn build(_loss: &TrackedTensor<T>) -> AdResult<Self> {
         todo!()
     }
 
-    /// Executes the pre-built backward plan.
+    /// Executes the pre-built pullback plan.
     ///
     /// # Examples
     ///
@@ -643,8 +643,8 @@ impl<T: ScalarBase + HasAlgebra> BackwardPlan<T> {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_autodiff::{BackwardPlan, NodeId};
-    /// let _id_fn: fn(&BackwardPlan<f64>) -> NodeId = BackwardPlan::loss_node;
+    /// use tenferro_autodiff::{PullbackPlan, NodeId};
+    /// let _id_fn: fn(&PullbackPlan<f64>) -> NodeId = PullbackPlan::loss_node;
     /// ```
     pub fn loss_node(&self) -> NodeId {
         self.loss
@@ -663,7 +663,7 @@ pub fn clear_tape<T: ScalarBase>() {
     todo!()
 }
 
-/// Runs reverse-mode backward from a scalar loss tensor.
+/// Runs reverse-mode pullback from a scalar loss tensor.
 ///
 /// # Errors
 ///
@@ -672,9 +672,9 @@ pub fn clear_tape<T: ScalarBase>() {
 /// # Examples
 ///
 /// ```ignore
-/// let grads = tenferro_autodiff::backward(&loss).unwrap();
+/// let grads = tenferro_autodiff::pullback(&loss).unwrap();
 /// ```
-pub fn backward<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResult<Gradients<T>> {
+pub fn pullback<T: ScalarBase + HasAlgebra>(_loss: &TrackedTensor<T>) -> AdResult<Gradients<T>> {
     todo!()
 }
 
@@ -704,7 +704,7 @@ pub struct HvpResult<T: ScalarBase> {
 /// Computes gradient and Hessian-vector product via forward-over-reverse.
 ///
 /// Leaf tensors with tangents (created via [`TrackedTensor::leaf_with_tangent`])
-/// define the direction *v*. The function runs backward through the tape,
+/// define the direction *v*. The function runs pullback through the tape,
 /// propagating both cotangents (ḡ) and cotangent-tangents (dḡ) at each node.
 ///
 /// Returns both ∇f(x) (in [`HvpResult::gradients`]) and H·v (in

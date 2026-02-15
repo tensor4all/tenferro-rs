@@ -34,7 +34,7 @@ tenferro-einsum            ← Einsum + einsum AD rules
 Current POC scope (in `tenferro-autodiff`):
 
 - Public API skeleton for reverse-mode and forward-mode
-- `TrackedTensor`, `DualTensor`, `backward`, `Gradients`, `BackwardPlan`
+- `TrackedTensor`, `DualTensor`, `pullback`, `Gradients`, `PullbackPlan`
 - Trait extension points: `ReverseRule`, `ForwardRule`
 - Forward-over-reverse HVP: `HvpResult`, `hvp()`,
   `ReverseRule::pullback_with_tangents()`, `TrackedTensor::leaf_with_tangent()`
@@ -57,10 +57,10 @@ Planned scope (not yet implemented):
 
 - `TrackedTensor<T>` — reverse-mode wrapper (with optional tangent for HVP)
 - `DualTensor<T>` — forward-mode wrapper
-- `backward(loss)` — reverse-mode execution
+- `pullback(loss)` — reverse-mode execution
 - `hvp(loss)` — forward-over-reverse HVP execution
 - `clear_tape<T>()` — tape management
-- `Gradients<T>`, `BackwardPlan<T>`, `HvpResult<T>` — result and plan types
+- `Gradients<T>`, `PullbackPlan<T>`, `HvpResult<T>` — result and plan types
 - `ReverseRule<T>`, `ForwardRule<T>` — rule extension traits
   (named after Julia's ChainRules.jl: rrule/frule)
   (`ReverseRule` includes `pullback_with_tangents` for HVP support)
@@ -106,6 +106,6 @@ runtime implementation is not complete in current POC.
 ## Out of Scope in This Phase
 
 - Full runtime implementation of graph scheduling
-- End-to-end optimized GPU backward kernels
+- End-to-end optimized GPU pullback kernels
 - Full second-order differentiation API beyond HVP
   (HVP API skeleton is defined; full Hessian computation is deferred)
