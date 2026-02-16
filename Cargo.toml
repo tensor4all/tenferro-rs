@@ -12,8 +12,10 @@ members = [
     "extension/tenferro-tropical",
     "extension/tenferro-tropical-capi",
     # extern (general-purpose, non-tenferro)
+    "extern/dlpack-core",
     "extern/chainrules-core",
     "extern/chainrules",
+    "extern/chainrules-linalg",
 ]
 resolver = "2"
 
