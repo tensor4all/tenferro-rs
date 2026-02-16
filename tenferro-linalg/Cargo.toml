@@ -3,12 +3,11 @@ name = "tenferro-linalg"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "Tensor-level linear algebra decompositions (SVD, QR, LU, eigen) for the tenferro workspace."
+description = "Batched matrix linear algebra decompositions (SVD, QR, LU, eigen) with AD rules for the tenferro workspace."
 publish = false
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-chainrules = { path = "../extern/chainrules" }
-chainrules-linalg = { path = "../extern/chainrules-linalg" }
+chainrules-core = { path = "../extern/chainrules-core" }

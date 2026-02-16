@@ -1,7 +1,0 @@
-[package]
-name = "dlpack-core"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-description = "Lightweight DLPack-compatible tensor and matrix containers with device abstraction."
-publish = false
