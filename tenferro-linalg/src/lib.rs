@@ -114,6 +114,7 @@
 use chainrules_core::AdResult;
 use tenferro_algebra::Scalar;
 use tenferro_device::Result;
+use tenferro_prims::UnaryOp;
 use tenferro_tensor::Tensor;
 
 // ============================================================================
@@ -490,7 +491,45 @@ pub fn svd_rrule<T: Scalar>(
     _cotangent: &SvdCotangent<T>,
     _options: Option<&SvdOptions>,
 ) -> AdResult<Tensor<T>> {
-    todo!()
+    // SVD reverse-mode AD (Mathieu 2019).
+    //
+    // Given: A = U · diag(S) · Vt, with cotangents dU, dS, dVt.
+    //
+    // Algorithm (all operations batched over `*` dims):
+    //
+    // 1. Forward pass: (U, S, Vt) = svd(A)
+    //    → Already computed by the caller; recompute or cache as needed.
+    //
+    // 2. Build F-matrix: F_ij = 1/(σ_j² - σ_i²) for i≠j, 0 for i=j.
+    //    Ops: ElementwiseMul(S, S) → S², broadcast, subtract, Reciprocal,
+    //         zero diagonal.
+    //    Prims used: ElementwiseMul, ElementwiseUnary(Reciprocal).
+    //
+    // 3. Compute Ut·dU (k×k batched):
+    //    Ops: BatchedGemm(Ut, dU)
+    //    Prims used: BatchedGemm.
+    //
+    // 4. Symmetrize: M = Ut·dU - (Ut·dU)^T via permute.
+    //    Ops: permute (zero-copy), alpha/beta subtraction.
+    //    Prims used: Permute (metadata only), BatchedGemm with beta=-1.
+    //
+    // 5. Hadamard product: F ⊙ M
+    //    Prims used: ElementwiseMul.
+    //
+    // 6. Add diagonal dS: F⊙M + diag(dS)
+    //    Prims used: AntiTrace (embed 1D → diagonal of 2D).
+    //
+    // 7. Assemble: dA = U · (F⊙M + diag(dS)) · Vt
+    //    Prims used: BatchedGemm (two multiplications).
+    //
+    // 8. (Full-rank case, m > n) Add projector term:
+    //    dA += (I - U·Ut) · dU · diag(1/S) · Vt
+    //    Prims used: eye, BatchedGemm, ElementwiseUnary(Reciprocal).
+
+    // Suppress unused import warning in skeleton.
+    let _ = UnaryOp::Reciprocal;
+
+    todo!("SVD rrule: implement steps 1-8 using tenferro-prims operations")
 }
 
 /// Reverse-mode AD rule for QR (VJP / pullback).
