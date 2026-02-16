@@ -1,6 +1,9 @@
 # tenferro Design: Detailed Crate API Designs
 
-> **Ecosystem overview**: See the [tenferro Unified Tensor Backend Design](./tenferro_unified_tensor_backend.md) for high-level architecture, crate structure, and future phase plans.
+> **Canonical design document**: This file is the single source of truth for
+> architecture + per-crate API design + future considerations.
+> The [unified overview](./tenferro_unified_tensor_backend.md) is a short index
+> kept for readability and backward-compatible links.
 >
 > **Companion documents** (in this repo):
 > - [Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-prims and tenferro-einsum
@@ -109,7 +112,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 **Dependencies**: `strided-view` (for `StridedError`), `thiserror`.
 
-**Note**: `BackendRegistry`, `GpuBackend`, and `TensorLibVtable` are **not** in the POC. They are planned for future GPU support (see [GPU Strategy](./tenferro_unified_tensor_backend.md#gpu-strategy) in the ecosystem doc).
+**Note**: `BackendRegistry`, `GpuBackend`, and `TensorLibVtable` are **not** in the POC. They are planned for future GPU support (see [Future Considerations](#future-considerations)).
 
 ### tenferro-algebra
 
