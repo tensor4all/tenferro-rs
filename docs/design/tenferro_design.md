@@ -9,6 +9,7 @@
 > - [Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-prims and tenferro-einsum
 > - [Einsum Algorithm Comparison](./einsum_algorithm_comparison.md) — strided-rs vs omeinsum-rs optimization comparison
 > - [ChainRules Core Design](./chainrules_core_design.md) — reverse/forward AD architecture and API plan
+> - [Burn Integration](./burn_integration.md) — Burn framework interop for hybrid NN + Tensor Network models
 
 
 ---
