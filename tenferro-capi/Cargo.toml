@@ -1,0 +1,16 @@
+[package]
+name = "tenferro-capi"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "C-API (FFI) for tenferro: exposes einsum and SVD (with AD rules) to Julia, Python, and other languages."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+tenferro-device = { path = "../tenferro-device" }
+tenferro-tensor = { path = "../tenferro-tensor" }
+tenferro-einsum = { path = "../tenferro-einsum" }
+tenferro-linalg = { path = "../tenferro-linalg" }

@@ -17,7 +17,7 @@ Every public type, trait, and function **must** include minimal but sufficient u
 - cuTENSOR/hipTensor-compatible operation protocol (`TensorPrims<A>` trait, parameterized by algebra)
 - High-level einsum with N-ary contraction tree optimization
 - Automatic differentiation (VJP/JVP) [future]
-- C FFI for Julia/Python integration [future]
+- C FFI for Julia/Python integration (`tenferro-capi`)
 
 **strided-rs** (separate workspace) is an external foundation dependency providing:
 - `strided-traits`: `ScalarBase`, `ElementOp` traits
@@ -94,6 +94,7 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 ### Layered Design
 
 ```
+Layer 5: tenferro-capi         — C-API (FFI) for Julia/Python: exposes einsum + SVD with AD rules (f64, stateless rrule/frule)
 Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
          tenferro-linalg       — Tensor-level SVD/QR/LU/eigen (matricize→decompose→unmatricize), linalg AD rules
 Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
@@ -146,5 +147,8 @@ tenferro-prims   tenferro-tensor
               (← strided-traits, ← chainrules)
           tenferro-linalg
               (← strided-traits, ← chainrules)
+               ↓
+          tenferro-capi
+              (← tenferro-tensor, ← tenferro-einsum, ← tenferro-linalg, ← tenferro-device)
 ```
 
