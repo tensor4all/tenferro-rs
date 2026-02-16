@@ -437,6 +437,59 @@ impl<'a, T: Scalar> TensorView<'a, T> {
         todo!()
     }
 
+    /// Select a single index along a dimension, removing that dimension.
+    ///
+    /// Returns a view with `ndim() - 1` dimensions. Zero-copy: adjusts
+    /// offset and removes the selected dimension from dims/strides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `dim >= ndim()` or `index >= dims()[dim]`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::zeros(&[3, 4, 10],
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let tv = a.tensor_view();
+    /// // Select batch index 5 → view of shape [3, 4]
+    /// let mat = tv.select(2, 5).unwrap();
+    /// assert_eq!(mat.dims(), &[3, 4]);
+    /// ```
+    pub fn select(&self, _dim: usize, _index: usize) -> Result<TensorView<'a, T>> {
+        todo!()
+    }
+
+    /// Narrow (slice) a dimension to a sub-range.
+    ///
+    /// Returns a view with the same number of dimensions, but
+    /// `dims()[dim]` reduced to `length`. Zero-copy: only offset and
+    /// dim size change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `dim >= ndim()` or `start + length > dims()[dim]`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::zeros(&[3, 10],
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let tv = a.tensor_view();
+    /// // Take columns 2..5 → view of shape [3, 3]
+    /// let sub = tv.narrow(1, 2, 3).unwrap();
+    /// assert_eq!(sub.dims(), &[3, 3]);
+    /// ```
+    pub fn narrow(&self, _dim: usize, _start: usize, _length: usize) -> Result<TensorView<'a, T>> {
+        todo!()
+    }
+
     // ========================================================================
     // Materialize (copy data into a new owned Tensor)
     // ========================================================================
@@ -739,6 +792,58 @@ impl<T: Scalar> Tensor<T> {
     /// Returns an error if the tensor is not contiguous or the new shape
     /// has a different total element count.
     pub fn reshape(&self, _new_dims: &[usize]) -> Result<Tensor<T>> {
+        todo!()
+    }
+
+    /// Select a single index along a dimension, removing that dimension.
+    ///
+    /// Returns a tensor with `ndim() - 1` dimensions. This is a zero-copy
+    /// operation that adjusts the offset and removes the selected dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `dim >= ndim()` or `index >= dims()[dim]`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// // Batched matrices [m, n, batch] = [3, 4, 10]
+    /// let a = Tensor::<f64>::zeros(&[3, 4, 10],
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// // Select batch index 5 → [3, 4]
+    /// let mat = a.select(2, 5).unwrap();
+    /// assert_eq!(mat.dims(), &[3, 4]);
+    /// ```
+    pub fn select(&self, _dim: usize, _index: usize) -> Result<Tensor<T>> {
+        todo!()
+    }
+
+    /// Narrow (slice) a dimension to a sub-range.
+    ///
+    /// Returns a tensor with the same number of dimensions, but
+    /// `dims()[dim]` reduced to `length`. Zero-copy: only offset and
+    /// dim size change.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `dim >= ndim()` or `start + length > dims()[dim]`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::zeros(&[3, 10],
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// // Take columns 2..5 → [3, 3]
+    /// let sub = a.narrow(1, 2, 3).unwrap();
+    /// assert_eq!(sub.dims(), &[3, 3]);
+    /// ```
+    pub fn narrow(&self, _dim: usize, _start: usize, _length: usize) -> Result<Tensor<T>> {
         todo!()
     }
 
