@@ -27,11 +27,20 @@ else
   fi
 fi
 
-# Render api_index.md as escaped preformatted text (pandoc-independent)
+# Convert api_index.md to HTML fragment
 OVERVIEW_HTML=""
 API_INDEX_MD="$ROOT_DIR/docs/api_index.md"
 if [ -f "$API_INDEX_MD" ]; then
-  OVERVIEW_HTML="<pre>$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$API_INDEX_MD")</pre>"
+  if command -v pandoc >/dev/null 2>&1; then
+    OVERVIEW_HTML=$(pandoc "$API_INDEX_MD" -f gfm -t html5)
+  else
+    if [ "${CI:-}" = "true" ]; then
+      echo "pandoc is required in CI to render docs/api_index.md."
+      exit 1
+    fi
+    echo "  Warning: pandoc not found; overview section will be plain text."
+    OVERVIEW_HTML="<pre>$(sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$API_INDEX_MD")</pre>"
+  fi
 fi
 
 {

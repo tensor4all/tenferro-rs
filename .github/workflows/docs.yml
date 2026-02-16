@@ -25,8 +25,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install graphviz
-        run: sudo apt-get update && sudo apt-get install -y graphviz
+      - name: Install pandoc and graphviz
+        run: sudo apt-get update && sudo apt-get install -y pandoc graphviz
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
