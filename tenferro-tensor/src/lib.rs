@@ -4,10 +4,13 @@
 //! shape, strides, and a device-aware [`DataBuffer`]. It supports:
 //!
 //! - **Zero-copy view operations**: [`Tensor::permute`], [`Tensor::broadcast`],
-//!   [`Tensor::diagonal`] modify only metadata (dims/strides)
+//!   [`Tensor::diagonal`], [`Tensor::select`], [`Tensor::narrow`] modify only
+//!   metadata (dims/strides)
 //! - **Data operations**: [`Tensor::contiguous`] / [`Tensor::into_contiguous`] copy
 //!   data into a contiguous layout (the consuming variant avoids allocation when
-//!   the tensor is already contiguous)
+//!   the tensor is already contiguous); [`Tensor::tril`] / [`Tensor::triu`] extract
+//!   triangular parts
+//! - **Factory functions**: [`Tensor::zeros`], [`Tensor::ones`], [`Tensor::eye`]
 //! - **DLPack interop**: [`DataBuffer`] supports both Rust-owned (`Vec<T>`) and
 //!   externally-owned memory (e.g., imported via DLPack) with automatic cleanup.
 //!
@@ -623,6 +626,25 @@ impl<T: Scalar> Tensor<T> {
         todo!()
     }
 
+    /// Create an identity matrix.
+    ///
+    /// Returns a 2D tensor of shape `[n, n]` with ones on the diagonal
+    /// and zeros elsewhere.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let id = Tensor::<f64>::eye(3,
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// assert_eq!(id.dims(), &[3, 3]);
+    /// ```
+    pub fn eye(_n: usize, _memory_space: LogicalMemorySpace, _order: MemoryOrder) -> Self {
+        todo!()
+    }
+
     // ========================================================================
     // Metadata
     // ========================================================================
@@ -957,6 +979,60 @@ impl<T: Scalar> Tensor<T> {
     where
         T: Conjugate,
     {
+        todo!()
+    }
+
+    /// Extract the lower triangular part of a matrix.
+    ///
+    /// Returns a new tensor with elements above the `diagonal`-th diagonal
+    /// set to zero. For batched tensors `(m, n, *)`, applies independently
+    /// to each batch element.
+    ///
+    /// - `diagonal = 0`: main diagonal (default)
+    /// - `diagonal > 0`: above main diagonal
+    /// - `diagonal < 0`: below main diagonal
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::ones(&[3, 3],
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let lower = a.tril(0);
+    /// // [[1, 0, 0],
+    /// //  [1, 1, 0],
+    /// //  [1, 1, 1]]
+    /// ```
+    pub fn tril(&self, _diagonal: isize) -> Tensor<T> {
+        todo!()
+    }
+
+    /// Extract the upper triangular part of a matrix.
+    ///
+    /// Returns a new tensor with elements below the `diagonal`-th diagonal
+    /// set to zero. For batched tensors `(m, n, *)`, applies independently
+    /// to each batch element.
+    ///
+    /// - `diagonal = 0`: main diagonal (default)
+    /// - `diagonal > 0`: above main diagonal
+    /// - `diagonal < 0`: below main diagonal
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::ones(&[3, 3],
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let upper = a.triu(0);
+    /// // [[1, 1, 1],
+    /// //  [0, 1, 1],
+    /// //  [0, 0, 1]]
+    /// ```
+    pub fn triu(&self, _diagonal: isize) -> Tensor<T> {
         todo!()
     }
 
