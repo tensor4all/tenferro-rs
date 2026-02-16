@@ -37,6 +37,12 @@ Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
 ```
 
+### Dependency Graph
+
+Click a node to open the crate documentation.
+
+<div class="dep-graph"><img src="dep_graph.svg" alt="Dependency graph" /></div>
+
 ## Crates
 
 ### [tenferro-capi](tenferro_capi/index.html) <small>(Layer 5)</small>

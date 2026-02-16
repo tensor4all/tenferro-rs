@@ -16,11 +16,9 @@ echo "[2/4] Copying rustdoc output"
 cp -a "$ROOT_DIR/target/doc/." "$API_DIR/"
 
 echo "[3/4] Generating dependency graph and API index"
-DEP_SVG=""
 if command -v dot >/dev/null 2>&1; then
   python3 "$ROOT_DIR/scripts/gen_dep_graph.py" --root-dir "$ROOT_DIR" \
     | dot -Tsvg > "$API_DIR/dep_graph.svg"
-  DEP_SVG=$(cat "$API_DIR/dep_graph.svg")
 else
   echo "  Warning: graphviz (dot) not found; dependency graph SVG skipped."
   if [ "${CI:-}" = "true" ]; then
@@ -65,7 +63,7 @@ fi
       code { font-family: "IBM Plex Mono", "SFMono-Regular", monospace; }
       pre { background: #f4f7f5; padding: 1rem; border-radius: 6px; overflow-x: auto; }
       .dep-graph { margin: 1.5rem 0; text-align: center; }
-      .dep-graph svg { max-width: 100%; height: auto; }
+      .dep-graph img { max-width: 100%; height: auto; }
     </style>
   </head>
   <body>
@@ -74,16 +72,6 @@ HEADER
   # Insert overview from Markdown
   if [ -n "$OVERVIEW_HTML" ]; then
     echo "$OVERVIEW_HTML"
-  fi
-
-  if [ -n "$DEP_SVG" ]; then
-    cat <<'GRAPH_HEADER'
-    <h2>Dependency graph</h2>
-    <p>Click a node to open the crate documentation.</p>
-    <div class="dep-graph">
-GRAPH_HEADER
-    echo "$DEP_SVG"
-    echo '    </div>'
   fi
 
   cat <<'FOOTER'
