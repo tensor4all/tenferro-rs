@@ -63,7 +63,7 @@ fi
       code { font-family: "IBM Plex Mono", "SFMono-Regular", monospace; }
       pre { background: #f4f7f5; padding: 1rem; border-radius: 6px; overflow-x: auto; }
       .dep-graph { margin: 1.5rem 0; text-align: center; }
-      .dep-graph img { max-width: 100%; height: auto; }
+      .dep-graph object { max-width: 100%; height: auto; }
     </style>
   </head>
   <body>

@@ -25,13 +25,14 @@ Layer 3: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
                              zero-copy view ops, impl Differentiable
 Layer 2: tenferro-prims      "Tensor BLAS": TensorPrims<A> trait
                              (algebra-parameterized), plan-based execution
-Shared:  chainrules-core   Core AD traits: Differentiable, ReverseRule<V>,
+Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
+                             Scalar trait, Conjugate trait
+         tenferro-device     Device enum, Error/Result types
+
+Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
          chainrules          AD engine: Tape<V>, TrackedTensor<V>,
                              DualTensor<V> (← chainrules-core)
-         tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
-                             Scalar trait, Conjugate trait
-         tenferro-device     Device enum, Error/Result types
 
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
@@ -41,7 +42,7 @@ Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
 
 Click a node to open the crate documentation.
 
-<div class="dep-graph"><img src="dep_graph.svg" alt="Dependency graph" /></div>
+<div class="dep-graph"><object data="dep_graph.svg" type="image/svg+xml">Dependency graph</object></div>
 
 ## Crates
 
@@ -101,24 +102,6 @@ Core ops (universal set): `batched_gemm`, `reduce`, `trace`, `permute`,
 `anti_trace`, `anti_diag`, `elementwise_unary`. Extended ops (dynamically queried):
 `contract`, `elementwise_mul`.
 
-### [chainrules-core](chainrules_core/index.html) <small>(Shared)</small>
-
-Core AD trait definitions (like Julia's ChainRulesCore.jl), independent of any
-tensor type. `Differentiable` trait defines the tangent space; concrete types
-(e.g., `Tensor<T>`) implement it in their own crates. Rule extension traits
-(`ReverseRule<V>`, `ForwardRule<V>`) for per-operation AD rules.
-
-### [chainrules](chainrules/index.html) <small>(Shared)</small>
-
-AD engine (like Zygote.jl in Julia's ecosystem). Provides `Tape<V>`
-(explicit tape, TensorFlow GradientTape style), `TrackedTensor<V>`
-(reverse-mode wrapper), `DualTensor<V>` (forward-mode wrapper).
-Gradient computation via `tape.pullback()`, HVP via `tape.hvp()`.
-Depends only on `chainrules-core`. Re-exports all of `chainrules-core`
-so downstream crates can depend on just `chainrules` for both traits and engine.
-
-Operation-specific AD rules live with their operations, not here.
-
 ### [tenferro-algebra](tenferro_algebra/index.html) <small>(Shared)</small>
 
 Minimal algebra foundation. `HasAlgebra` trait maps scalar types to their
@@ -132,3 +115,23 @@ minimum element type requirements. `Conjugate` trait for complex conjugation
 
 Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
 `ComputeDevice` (Cpu, Cuda, Hip), workspace-wide `Error`/`Result` types.
+
+## External Crates (extern/)
+
+### [chainrules-core](chainrules_core/index.html) <small>(Extern)</small>
+
+Core AD trait definitions (like Julia's ChainRulesCore.jl), independent of any
+tensor type. `Differentiable` trait defines the tangent space; concrete types
+(e.g., `Tensor<T>`) implement it in their own crates. Rule extension traits
+(`ReverseRule<V>`, `ForwardRule<V>`) for per-operation AD rules.
+
+### [chainrules](chainrules/index.html) <small>(Extern)</small>
+
+AD engine (like Zygote.jl in Julia's ecosystem). Provides `Tape<V>`
+(explicit tape, TensorFlow GradientTape style), `TrackedTensor<V>`
+(reverse-mode wrapper), `DualTensor<V>` (forward-mode wrapper).
+Gradient computation via `tape.pullback()`, HVP via `tape.hvp()`.
+Depends only on `chainrules-core`. Re-exports all of `chainrules-core`
+so downstream crates can depend on just `chainrules` for both traits and engine.
+
+Operation-specific AD rules live with their operations, not here.
