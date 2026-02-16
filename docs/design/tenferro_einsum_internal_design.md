@@ -300,8 +300,12 @@ The POC `tenferro-device` crate provides a memory/compute separation abstraction
 pub enum LogicalMemorySpace {
     /// Always-available host memory.
     MainMemory,
-    /// GPU-accessible memory space.
-    GpuMemory { space_id: usize },
+    /// Host memory pinned for fast GPU transfer (cudaMallocHost / hipMallocHost).
+    PinnedMemory,
+    /// GPU-resident device memory.
+    GpuMemory { device_id: usize },
+    /// CUDA managed/unified memory (cudaMallocManaged). Accessible from CPU and all GPUs.
+    ManagedMemory,
 }
 
 /// Compute device where kernels execute.
