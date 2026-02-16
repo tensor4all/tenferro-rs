@@ -9,5 +9,6 @@ publish = false
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
+tenferro-prims = { path = "../tenferro-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
 chainrules-core = { path = "../extern/chainrules-core" }
