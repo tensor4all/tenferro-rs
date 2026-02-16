@@ -11,6 +11,7 @@ members = [
     # extension
     "extension/tenferro-tropical",
     "extension/tenferro-tropical-capi",
+    "extension/tenferro-burn",
     # extern (general-purpose, non-tenferro)
     "extern/chainrules-core",
     "extern/chainrules",

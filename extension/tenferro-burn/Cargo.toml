@@ -1,0 +1,15 @@
+[package]
+name = "tenferro-burn"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Bridge between Burn deep learning framework and tenferro tensor network operations."
+publish = false
+
+[dependencies]
+tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+
+burn = { version = "0.21.0-pre.1", default-features = false, features = ["ndarray", "autodiff"] }
