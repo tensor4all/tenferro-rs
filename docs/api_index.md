@@ -36,16 +36,21 @@ Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
 
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
+
+Extension:  tenferro-tropical       Tropical semiring operations (MaxPlus, MinPlus, MaxMul)
+            tenferro-tropical-capi  C-API for tropical einsum
+            tenferro-burn           Burn deep learning framework bridge
 ```
 
 ### Dependency Graph
 
-Click a node to open the crate documentation.
+Click a node to jump to its description below.
 
 <div class="dep-graph"><object data="dep_graph.svg" type="image/svg+xml">Dependency graph</object></div>
 
 ## Crates
 
+<a id="tenferro-capi"></a>
 ### [tenferro-capi](tenferro_capi/index.html) <small>(Layer 5)</small>
 
 C-API (FFI) for Julia, Python (JAX, PyTorch), and other languages.
@@ -59,6 +64,7 @@ tensor exchange across language boundaries (NumPy, PyTorch, JAX, DLPack.jl).
 AD approach: stateless `rrule`/`frule` only — host languages manage
 their own AD tapes (ChainRules.jl, PyTorch autograd, JAX custom_vjp).
 
+<a id="tenferro-einsum"></a>
 ### [tenferro-einsum](tenferro_einsum/index.html) <small>(Layer 4)</small>
 
 High-level einsum API with three levels: string notation (`einsum`),
@@ -69,6 +75,7 @@ consuming (`_owned`) variants.
 Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`,
 `einsum_frule`, `einsum_hvp`.
 
+<a id="tenferro-linalg"></a>
 ### [tenferro-linalg](tenferro_linalg/index.html) <small>(Layer 4)</small>
 
 Tensor-level linear algebra decompositions: SVD, QR, LU, eigendecomposition.
@@ -84,6 +91,7 @@ Linalg AD rules: `svd_rrule`, `svd_frule`,
 `qr_rrule`, `qr_frule`, `lu_rrule`, `lu_frule`,
 `eigen_rrule`, `eigen_frule`.
 
+<a id="tenferro-tensor"></a>
 ### [tenferro-tensor](tenferro_tensor/index.html) <small>(Layer 3)</small>
 
 `Tensor<T>` type with `DataBuffer` (Rust-owned or externally-owned via DLPack),
@@ -92,6 +100,7 @@ shape/strides metadata, and zero-copy view operations (`permute`, `broadcast`,
 views. Factory functions: `zeros`, `ones`, `eye`. Triangular extraction:
 `tril`, `triu`.
 
+<a id="tenferro-prims"></a>
 ### [tenferro-prims](tenferro_prims/index.html) <small>(Layer 2)</small>
 
 Low-level "Tensor BLAS" protocol. `TensorPrims<A>` trait parameterized by
@@ -102,6 +111,7 @@ Core ops (universal set): `batched_gemm`, `reduce`, `trace`, `permute`,
 `anti_trace`, `anti_diag`, `elementwise_unary`. Extended ops (dynamically queried):
 `contract`, `elementwise_mul`.
 
+<a id="tenferro-algebra"></a>
 ### [tenferro-algebra](tenferro_algebra/index.html) <small>(Shared)</small>
 
 Minimal algebra foundation. `HasAlgebra` trait maps scalar types to their
@@ -111,6 +121,7 @@ for `Copy + Send + Sync + Add + Mul + Zero + One + PartialEq`) defines
 minimum element type requirements. `Conjugate` trait for complex conjugation
 (identity for real types).
 
+<a id="tenferro-device"></a>
 ### [tenferro-device](tenferro_device/index.html) <small>(Shared)</small>
 
 Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
@@ -118,6 +129,7 @@ Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
 
 ## External Crates (extern/)
 
+<a id="chainrules-core"></a>
 ### [chainrules-core](chainrules_core/index.html) <small>(Extern)</small>
 
 Core AD trait definitions (like Julia's ChainRulesCore.jl), independent of any
@@ -125,6 +137,7 @@ tensor type. `Differentiable` trait defines the tangent space; concrete types
 (e.g., `Tensor<T>`) implement it in their own crates. Rule extension traits
 (`ReverseRule<V>`, `ForwardRule<V>`) for per-operation AD rules.
 
+<a id="chainrules"></a>
 ### [chainrules](chainrules/index.html) <small>(Extern)</small>
 
 AD engine (like Zygote.jl in Julia's ecosystem). Provides `Tape<V>`
@@ -135,3 +148,33 @@ Depends only on `chainrules-core`. Re-exports all of `chainrules-core`
 so downstream crates can depend on just `chainrules` for both traits and engine.
 
 Operation-specific AD rules live with their operations, not here.
+
+## Extension Crates (extension/)
+
+<a id="tenferro-tropical"></a>
+### [tenferro-tropical](tenferro_tropical/index.html) <small>(Extension)</small>
+
+Tropical semiring tensor operations. Extends the tenferro algebra-parameterized
+architecture with three tropical semirings: MaxPlus (⊕=max, ⊗=+),
+MinPlus (⊕=min, ⊗=+), and MaxMul (⊕=max, ⊗=×).
+
+Provides scalar wrappers (`MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`), algebra
+markers (`MaxPlusAlgebra`, etc.), `TensorPrims` implementations for each algebra,
+and `ArgmaxTracker` for recording winner indices during tropical forward passes.
+
+<a id="tenferro-tropical-capi"></a>
+### [tenferro-tropical-capi](tenferro_tropical_capi/index.html) <small>(Extension)</small>
+
+C-API (FFI) for tropical semiring tensor operations. Extends `tenferro-capi`
+with tropical einsum functions (`tfe_tropical_einsum_<algebra>_f64`) and
+their AD rules (rrule/frule) for MaxPlus, MinPlus, and MaxMul semirings.
+Reuses `TfeTensorF64` handles from `tenferro-capi`.
+
+<a id="tenferro-burn"></a>
+### [tenferro-burn](tenferro_burn/index.html) <small>(Extension)</small>
+
+Bridge between the [Burn](https://burn.dev) deep learning framework and tenferro
+tensor network operations. Defines `TensorNetworkOps` backend extension trait
+with `tn_einsum`, implements forward pass for `NdArray<f64>` and backward pass
+for `Autodiff<B, C>`, and provides Burn tensor / tenferro tensor conversion
+utilities.
