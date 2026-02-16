@@ -11,4 +11,4 @@ tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-chainrules = { path = "../chainrules" }
+chainrules = { path = "../extern/chainrules" }

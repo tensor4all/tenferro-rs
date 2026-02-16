@@ -7,9 +7,9 @@ description = "Tropical semiring tensor operations (MaxPlus, MinPlus, MaxMul) fo
 publish = false
 
 [dependencies]
-tenferro-device = { path = "../tenferro-device" }
-tenferro-algebra = { path = "../tenferro-algebra" }
-tenferro-prims = { path = "../tenferro-prims" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+tenferro-prims = { path = "../../tenferro-prims" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
 num-traits = { workspace = true }

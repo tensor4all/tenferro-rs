@@ -10,4 +10,4 @@ publish = false
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-chainrules = { path = "../chainrules" }
+chainrules = { path = "../extern/chainrules" }

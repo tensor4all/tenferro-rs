@@ -84,7 +84,6 @@ Thumbs.db
 .worktrees/
 
 # External / vendored source
-extern/
 external/
 
 # Plan files

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    # core
     "tenferro-device",
     "tenferro-algebra",
     "tenferro-prims",
@@ -7,10 +8,12 @@ members = [
     "tenferro-einsum",
     "tenferro-linalg",
     "tenferro-capi",
-    "tenferro-tropical",
-    "tenferro-tropical-capi",
-    "chainrules-core",
-    "chainrules",
+    # extension
+    "extension/tenferro-tropical",
+    "extension/tenferro-tropical-capi",
+    # extern (general-purpose, non-tenferro)
+    "extern/chainrules-core",
+    "extern/chainrules",
 ]
 resolver = "2"
 
