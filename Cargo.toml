@@ -11,3 +11,8 @@ members = [
     "chainrules",
 ]
 resolver = "2"
+
+[workspace.dependencies]
+num-complex = "0.4"
+num-traits = "0.2"
+thiserror = "2"

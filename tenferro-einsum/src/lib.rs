@@ -207,8 +207,7 @@
 //! ```
 
 use chainrules::{AdResult, Differentiable, DualTensor, TrackedTensor};
-use strided_traits::ScalarBase;
-use tenferro_algebra::HasAlgebra;
+use tenferro_algebra::{HasAlgebra, Scalar};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -391,7 +390,7 @@ impl ContractionTree {
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum<T: ScalarBase + HasAlgebra>(
+pub fn einsum<T: Scalar + HasAlgebra>(
     subscripts: &str,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>> {
@@ -406,7 +405,7 @@ pub fn einsum<T: ScalarBase + HasAlgebra>(
 /// # Errors
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
-pub fn einsum_with_subscripts<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_subscripts<T: Scalar + HasAlgebra>(
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>> {
@@ -423,7 +422,7 @@ pub fn einsum_with_subscripts<T: ScalarBase + HasAlgebra>(
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
-pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_plan<T: Scalar + HasAlgebra>(
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
 ) -> Result<Tensor<T>> {
@@ -458,7 +457,7 @@ pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
+pub fn einsum_owned<T: Scalar + HasAlgebra>(
     _subscripts: &str,
     _operands: Vec<Tensor<T>>,
 ) -> Result<Tensor<T>> {
@@ -473,7 +472,7 @@ pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
 /// # Errors
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
-pub fn einsum_with_subscripts_owned<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_subscripts_owned<T: Scalar + HasAlgebra>(
     _subscripts: &Subscripts,
     _operands: Vec<Tensor<T>>,
 ) -> Result<Tensor<T>> {
@@ -491,7 +490,7 @@ pub fn einsum_with_subscripts_owned<T: ScalarBase + HasAlgebra>(
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
-pub fn einsum_with_plan_owned<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_plan_owned<T: Scalar + HasAlgebra>(
     _tree: &ContractionTree,
     _operands: Vec<Tensor<T>>,
 ) -> Result<Tensor<T>> {
@@ -539,7 +538,7 @@ pub fn einsum_with_plan_owned<T: ScalarBase + HasAlgebra>(
 ///
 /// Returns an error if the notation is invalid, tensor shapes are
 /// incompatible, or the output shape does not match the expected result.
-pub fn einsum_into<T: ScalarBase + HasAlgebra>(
+pub fn einsum_into<T: Scalar + HasAlgebra>(
     subscripts: &str,
     operands: &[&Tensor<T>],
     alpha: T,
@@ -572,7 +571,7 @@ pub fn einsum_into<T: ScalarBase + HasAlgebra>(
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts
 /// or the output shape does not match.
-pub fn einsum_with_subscripts_into<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_subscripts_into<T: Scalar + HasAlgebra>(
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
     alpha: T,
@@ -611,7 +610,7 @@ pub fn einsum_with_subscripts_into<T: ScalarBase + HasAlgebra>(
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree, or the output shape is incorrect.
-pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_plan_into<T: Scalar + HasAlgebra>(
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
     alpha: T,
@@ -655,7 +654,7 @@ pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
 /// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
-pub fn tracked_einsum<T: ScalarBase + HasAlgebra>(
+pub fn tracked_einsum<T: Scalar + HasAlgebra>(
     _subscripts: &str,
     _operands: &[&TrackedTensor<Tensor<T>>],
 ) -> AdResult<TrackedTensor<Tensor<T>>>
@@ -689,7 +688,7 @@ where
 /// let c_dual = dual_einsum("ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
 /// let _tangent = c_dual.tangent();
 /// ```
-pub fn dual_einsum<T: ScalarBase + HasAlgebra>(
+pub fn dual_einsum<T: Scalar + HasAlgebra>(
     _subscripts: &str,
     _operands: &[&DualTensor<Tensor<T>>],
 ) -> AdResult<DualTensor<Tensor<T>>>
@@ -723,7 +722,7 @@ where
 /// let grads = einsum_rrule("ij,jk->ik", &[&a, &b], &grad_c).unwrap();
 /// assert_eq!(grads.len(), 2);
 /// ```
-pub fn einsum_rrule<T: ScalarBase + HasAlgebra>(
+pub fn einsum_rrule<T: Scalar + HasAlgebra>(
     _subscripts: &str,
     _operands: &[&Tensor<T>],
     _cotangent: &Tensor<T>,
@@ -754,7 +753,7 @@ pub fn einsum_rrule<T: ScalarBase + HasAlgebra>(
 ///
 /// let dc = einsum_frule("ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
-pub fn einsum_frule<T: ScalarBase + HasAlgebra>(
+pub fn einsum_frule<T: Scalar + HasAlgebra>(
     _subscripts: &str,
     _primals: &[&Tensor<T>],
     _tangents: &[Option<&Tensor<T>>],
@@ -802,7 +801,7 @@ pub fn einsum_frule<T: ScalarBase + HasAlgebra>(
 /// let (_grad_a, _hvp_a) = &results[0];
 /// let (_grad_b, _hvp_b) = &results[1];
 /// ```
-pub fn einsum_hvp<T: ScalarBase + HasAlgebra>(
+pub fn einsum_hvp<T: Scalar + HasAlgebra>(
     _subscripts: &str,
     _primals: &[&Tensor<T>],
     _tangents: &[Option<&Tensor<T>>],

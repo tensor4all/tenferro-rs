@@ -7,4 +7,4 @@ description = "Generic automatic differentiation framework (ChainRulesCore.jl-st
 publish = false
 
 [dependencies]
-thiserror = "2"
+thiserror.workspace = true

@@ -7,5 +7,5 @@ description = "Algebra traits (HasAlgebra, Semiring, Standard) for the tenferro 
 publish = false
 
 [dependencies]
-strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
-num-complex = "0.4"
+num-complex.workspace = true
+num-traits.workspace = true

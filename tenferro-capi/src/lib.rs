@@ -1,7 +1,7 @@
 //! C-API (FFI) for tenferro.
 //!
-//! Exposes tensor lifecycle, einsum, and SVD (including AD rules) to
-//! host languages such as Julia, Python (JAX, PyTorch), and C/C++.
+//! Exposes tensor lifecycle, einsum, SVD (including AD rules), and DLPack
+//! interop to host languages such as Julia, Python (JAX, PyTorch), and C/C++.
 //!
 //! # Design principles
 //!
@@ -15,19 +15,25 @@
 //!   and **not** exposed via FFI. Host languages manage their own AD tapes
 //!   (ChainRules.jl, PyTorch autograd, JAX custom_vjp).
 //! - **f64 only** in this POC phase. All functions carry the `_f64` suffix.
-//! - **Column-major order** (Julia/BLAS convention) for data layout.
-//! - **Copy semantics** at FFI boundary: `tfe_tensor_f64_from_data` copies
-//!   the caller's data into a Rust-owned buffer.
+//! - **DLPack interop**: Zero-copy tensor exchange with Julia, Python, and
+//!   other frameworks via [`DLManagedTensorVersioned`]. Supports CPU and
+//!   GPU memory. Use [`tfe_tensor_f64_to_dlpack`] (export) and
+//!   [`tfe_tensor_f64_from_dlpack`] (import).
+//! - **Copy semantics** for convenience functions: `tfe_tensor_f64_from_data`
+//!   copies the caller's data into a Rust-owned buffer. For zero-copy, use
+//!   DLPack.
 //!
 //! # Memory ownership
 //!
 //! | Allocation | Freed by |
 //! |-----------|----------|
 //! | Tensor from `_from_data` / `_zeros` / `_clone` | `tfe_tensor_f64_release` |
+//! | Tensor from `_from_dlpack` | `tfe_tensor_f64_release` (calls DLPack deleter) |
 //! | Output tensor (via `**_out`) | `tfe_tensor_f64_release` |
 //! | Gradient tensor (rrule output) | `tfe_tensor_f64_release` |
 //! | `grads_out` array (einsum rrule) | Caller provides buffer |
 //! | Input `data` pointer | Caller (data is copied) |
+//! | `DLManagedTensorVersioned` from `_to_dlpack` | Consumer calls `deleter` |
 //!
 //! # Example (C pseudocode)
 //!
@@ -49,7 +55,7 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(non_camel_case_types)]
 
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 
 // ============================================================================
 // Status codes
@@ -69,6 +75,101 @@ pub const TFE_SHAPE_MISMATCH: tfe_status_t = -2;
 
 /// Internal error (Rust panic or unexpected failure).
 pub const TFE_INTERNAL_ERROR: tfe_status_t = -3;
+
+// ============================================================================
+// DLPack v1.0 C ABI types
+// ============================================================================
+
+/// DLPack version information.
+#[repr(C)]
+pub struct DLPackVersion {
+    /// Major version (1 for DLPack v1.0).
+    pub major: u32,
+    /// Minor version.
+    pub minor: u32,
+}
+
+/// DLPack device descriptor.
+#[repr(C)]
+pub struct DLDevice {
+    /// Device type (see `kDLCPU`, `kDLCUDA`, `kDLROCM`).
+    pub device_type: i32,
+    /// Device ID (0 for default).
+    pub device_id: i32,
+}
+
+/// DLPack data type descriptor.
+#[repr(C)]
+pub struct DLDataType {
+    /// Type code (see `kDLFloat`, `kDLInt`, `kDLComplex`).
+    pub code: u8,
+    /// Number of bits per element (e.g., 64 for f64).
+    pub bits: u8,
+    /// Number of lanes (1 for scalar, >1 for SIMD vector types).
+    pub lanes: u16,
+}
+
+/// DLPack tensor descriptor (unmanaged).
+///
+/// Describes the memory layout of a tensor without ownership information.
+/// Used as a field within [`DLManagedTensorVersioned`].
+#[repr(C)]
+pub struct DLTensor {
+    /// Pointer to the data. For GPU tensors, this is a device pointer.
+    pub data: *mut c_void,
+    /// Device where the data resides.
+    pub device: DLDevice,
+    /// Number of dimensions.
+    pub ndim: i32,
+    /// Data type.
+    pub dtype: DLDataType,
+    /// Shape array (length = ndim). Owned by the manager.
+    pub shape: *mut i64,
+    /// Strides array in **element units** (not bytes). NULL = row-major contiguous.
+    pub strides: *mut i64,
+    /// Byte offset from `data` pointer to the first element.
+    pub byte_offset: u64,
+}
+
+/// DLPack managed tensor with version and ownership (DLPack v1.0+).
+///
+/// This is the primary type for DLPack tensor exchange. The `deleter`
+/// callback must be called by the consumer when the data is no longer needed.
+#[repr(C)]
+pub struct DLManagedTensorVersioned {
+    /// DLPack version.
+    pub version: DLPackVersion,
+    /// Opaque pointer for the producer's use (e.g., Box<Tensor>).
+    pub manager_ctx: *mut c_void,
+    /// Callback to free resources. Must be called exactly once by the consumer.
+    pub deleter: Option<unsafe extern "C" fn(*mut DLManagedTensorVersioned)>,
+    /// Bitmask flags (see `DLPACK_FLAG_*` constants).
+    pub flags: u64,
+    /// The tensor descriptor.
+    pub dl_tensor: DLTensor,
+}
+
+// DLDeviceType constants
+/// CPU device.
+pub const KDLCPU: i32 = 1;
+/// NVIDIA CUDA device.
+pub const KDLCUDA: i32 = 2;
+/// AMD ROCm device.
+pub const KDLROCM: i32 = 10;
+
+// DLDataTypeCode constants
+/// Integer type code.
+pub const KDLINT: u8 = 0;
+/// Floating-point type code.
+pub const KDLFLOAT: u8 = 2;
+/// Complex type code.
+pub const KDLCOMPLEX: u8 = 5;
+
+// DLPack flags
+/// Data is read-only (consumer must not write).
+pub const DLPACK_FLAG_BITMASK_READ_ONLY: u64 = 1 << 0;
+/// Data was copied (not zero-copy).
+pub const DLPACK_FLAG_BITMASK_IS_COPIED: u64 = 1 << 1;
 
 // ============================================================================
 // Opaque tensor handle
@@ -99,10 +200,14 @@ pub struct TfeTensorF64 {
 // Tensor lifecycle
 // ============================================================================
 
-/// Create a tensor from caller-provided data (column-major order).
+/// Create a tensor from caller-provided data (copy semantics).
 ///
 /// The data is **copied** into Rust-owned storage. The caller retains
 /// ownership of the `data` pointer and may free it after this call.
+/// The internal memory layout (strides) is implementation-defined.
+///
+/// For zero-copy tensor exchange with specific memory layouts, use
+/// [`tfe_tensor_f64_from_dlpack`] instead.
 ///
 /// # Safety
 ///
@@ -132,6 +237,8 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_data(
 }
 
 /// Create a tensor filled with zeros.
+///
+/// The internal memory layout is implementation-defined.
 ///
 /// # Safety
 ///
@@ -181,6 +288,9 @@ pub unsafe extern "C" fn tfe_tensor_f64_clone(
 ///
 /// After this call, `tensor` is invalid and must not be used.
 /// Passing a null pointer is a no-op.
+///
+/// For tensors imported via DLPack, this calls the DLPack deleter
+/// to notify the external owner that the data is no longer needed.
 ///
 /// # Safety
 ///
@@ -238,7 +348,7 @@ pub unsafe extern "C" fn tfe_tensor_f64_len(_tensor: *const TfeTensorF64) -> usi
     todo!()
 }
 
-/// Return a pointer to the tensor's raw data (column-major order).
+/// Return a pointer to the tensor's raw data buffer.
 ///
 /// The pointer is valid until `tfe_tensor_f64_release` is called on
 /// the tensor.
@@ -259,6 +369,87 @@ pub unsafe extern "C" fn tfe_tensor_f64_len(_tensor: *const TfeTensorF64) -> usi
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_data(_tensor: *const TfeTensorF64) -> *const f64 {
+    todo!()
+}
+
+// ============================================================================
+// DLPack interop
+// ============================================================================
+
+/// Export a tensor as a DLPack managed tensor (zero-copy).
+///
+/// The tensor handle is **consumed** by this call and must not be
+/// used afterwards (do not call `tfe_tensor_f64_release` on it).
+///
+/// The returned `DLManagedTensorVersioned` must be consumed by the
+/// caller (e.g., passed to Julia `DLPack.from_dlpack()` or Python
+/// `numpy.from_dlpack()`). The consumer must call the `deleter`
+/// callback when done with the data.
+///
+/// If the tensor is NULL, returns NULL and sets status to `TFE_INVALID_ARGUMENT`.
+///
+/// # Safety
+///
+/// - `tensor` must be a valid tensor pointer or NULL.
+/// - `status` must be a valid, non-null pointer.
+///
+/// # Examples (C)
+///
+/// ```c
+/// tfe_status_t status;
+/// tfe_tensor_f64 *t = tfe_tensor_f64_zeros(shape, 2, &status);
+///
+/// // Export to DLPack (tensor handle is consumed)
+/// DLManagedTensorVersioned *dl = tfe_tensor_f64_to_dlpack(t, &status);
+/// // t is now invalid — do NOT call tfe_tensor_f64_release(t)
+///
+/// // Pass dl to Julia/Python, which calls dl->deleter(dl) when done
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn tfe_tensor_f64_to_dlpack(
+    _tensor: *mut TfeTensorF64,
+    _status: *mut tfe_status_t,
+) -> *mut DLManagedTensorVersioned {
+    todo!()
+}
+
+/// Import a DLPack managed tensor as a tenferro tensor (zero-copy).
+///
+/// Takes ownership of the `DLManagedTensorVersioned`. The deleter
+/// callback will be called when the returned tensor is released
+/// via `tfe_tensor_f64_release`.
+///
+/// The tensor data is NOT copied. The returned tensor references
+/// the same memory as the DLPack tensor.
+///
+/// Currently only `kDLCPU` device and float64 dtype are accepted
+/// (POC phase). Returns NULL with `TFE_INVALID_ARGUMENT` for other
+/// device types or dtypes.
+///
+/// # Safety
+///
+/// - `managed` must be a valid pointer to a `DLManagedTensorVersioned`.
+/// - The DLPack tensor's data must remain valid until the deleter is called.
+/// - `status` must be a valid, non-null pointer.
+///
+/// # Examples (C)
+///
+/// ```c
+/// // Obtain DLManagedTensorVersioned* from Julia/Python
+/// DLManagedTensorVersioned *dl = /* ... */;
+///
+/// tfe_status_t status;
+/// tfe_tensor_f64 *t = tfe_tensor_f64_from_dlpack(dl, &status);
+/// // dl is now owned by t — do NOT call dl->deleter(dl)
+///
+/// // Use t in einsum, SVD, etc.
+/// tfe_tensor_f64_release(t); // calls DLPack deleter internally
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
+    _managed: *mut DLManagedTensorVersioned,
+    _status: *mut tfe_status_t,
+) -> *mut TfeTensorF64 {
     todo!()
 }
 

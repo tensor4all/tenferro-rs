@@ -16,7 +16,8 @@ in tensor4all-meta for high-level architecture and future phase plans.
 
 ```
 Layer 5: tenferro-capi       C-API (FFI) for Julia/Python: exposes einsum + SVD
-                             with stateless rrule/frule (f64 only)
+                             with stateless rrule/frule (f64 only),
+                             DLPack v1.0 zero-copy tensor exchange
 Layer 4: tenferro-einsum     High-level einsum on Tensor<T>, N-ary contraction
                              tree, algebra dispatch, einsum AD rules
          tenferro-linalg     Tensor-level SVD/QR/LU/eigen, linalg AD rules
@@ -28,10 +29,11 @@ Shared:  chainrules-core   Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
          chainrules          AD engine: Tape<V>, TrackedTensor<V>,
                              DualTensor<V> (← chainrules-core)
-         tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type
+         tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
+                             Scalar trait, Conjugate trait
          tenferro-device     Device enum, Error/Result types
 
-Foundation: strided-rs       Independent workspace
+Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
 ```
 
@@ -44,7 +46,10 @@ Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
 
 Minimal algebra foundation. `HasAlgebra` trait maps scalar types to their
 algebra (e.g., `f64 -> Standard`), enabling automatic backend inference.
-`Semiring` trait for algebra-generic operations.
+`Semiring` trait for algebra-generic operations. `Scalar` trait (blanket impl
+for `Copy + Send + Sync + Add + Mul + Zero + One + PartialEq`) defines
+minimum element type requirements. `Conjugate` trait for complex conjugation
+(identity for real types).
 
 ### tenferro-prims
 
@@ -58,9 +63,10 @@ Core ops (universal set): `batched_gemm`, `reduce`, `trace`, `permute`,
 
 ### tenferro-tensor
 
-`Tensor<T>` type with `DataBuffer` (CPU/GPU), shape/strides metadata,
-and zero-copy view operations (`permute`, `broadcast`, `diagonal`, `reshape`).
-`TensorView<'a, T>` for borrowed views.
+`Tensor<T>` type with `DataBuffer` (Rust-owned or externally-owned via DLPack),
+shape/strides metadata, and zero-copy view operations (`permute`, `broadcast`,
+`diagonal`, `reshape`). `TensorView<'a, T>` for borrowed views. `DataBuffer<T>`
+is an opaque struct abstracting over ownership (no strided-rs dependency).
 
 ### chainrules-core
 
@@ -113,8 +119,8 @@ Exposes tensor lifecycle, einsum, and SVD (including AD rules) via
 opaque pointers and status codes. f64 only in this POC phase.
 
 Design principles: opaque `TfeTensorF64` handles, `tfe_status_t`
-error codes, `catch_unwind` for panic safety, column-major data layout,
-copy semantics at FFI boundary.
+error codes, `catch_unwind` for panic safety, DLPack v1.0 for zero-copy
+tensor exchange across language boundaries (NumPy, PyTorch, JAX, DLPack.jl).
 
 AD approach: stateless `rrule`/`frule` only — host languages manage
 their own AD tapes (ChainRules.jl, PyTorch autograd, JAX custom_vjp).
@@ -123,6 +129,11 @@ Tape/TrackedTensor/DualTensor are NOT exposed.
 Tensor lifecycle: `tfe_tensor_f64_from_data`, `tfe_tensor_f64_zeros`,
 `tfe_tensor_f64_clone`, `tfe_tensor_f64_release`, `tfe_tensor_f64_ndim`,
 `tfe_tensor_f64_shape`, `tfe_tensor_f64_len`, `tfe_tensor_f64_data`.
+
+DLPack interop: `tfe_tensor_f64_to_dlpack` (consuming zero-copy export),
+`tfe_tensor_f64_from_dlpack` (zero-copy import). Supports CPU, CUDA, ROCm
+devices. DLPack v1.0 C ABI types (`DLManagedTensorVersioned`, `DLTensor`,
+`DLDevice`, `DLDataType`) are defined directly in the crate.
 
 Einsum: `tfe_einsum_f64`, `tfe_einsum_rrule_f64`, `tfe_einsum_frule_f64`.
 
