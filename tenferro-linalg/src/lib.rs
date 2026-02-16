@@ -101,14 +101,22 @@
 //! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 //! let result = svd(&a, None).unwrap();
 //!
-//! // Gradient only through singular values
+//! // Full cotangent: gradient through U, S, and Vt
 //! let cotangent = SvdCotangent {
+//!     u: Some(Tensor::ones(&[3, 3], mem, col)),
+//!     s: Some(Tensor::ones(&[3], mem, col)),
+//!     vt: Some(Tensor::ones(&[3, 4], mem, col)),
+//! };
+//! let grad_a = svd_rrule(&a, &cotangent, None).unwrap();
+//! // grad_a has same shape as a: [3, 4]
+//!
+//! // Partial cotangent: gradient only through singular values (always stable)
+//! let cotangent_s_only = SvdCotangent {
 //!     u: None,
 //!     s: Some(Tensor::ones(&[3], mem, col)),
 //!     vt: None,
 //! };
-//! let grad_a = svd_rrule(&a, &cotangent, None).unwrap();
-//! // grad_a has same shape as a: [3, 4]
+//! let grad_a2 = svd_rrule(&a, &cotangent_s_only, None).unwrap();
 //! ```
 
 use chainrules_core::AdResult;
