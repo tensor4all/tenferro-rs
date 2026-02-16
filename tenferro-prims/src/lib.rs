@@ -17,6 +17,7 @@
 //! - [`Permute`](PrimDescriptor::Permute): Mode reordering
 //! - [`AntiTrace`](PrimDescriptor::AntiTrace): Scatter-add to diagonal (AD backward of trace)
 //! - [`AntiDiag`](PrimDescriptor::AntiDiag): Write to diagonal positions (AD backward of diag)
+//! - [`ElementwiseUnary`](PrimDescriptor::ElementwiseUnary): Point-wise unary transform (negate, reciprocal, abs, sqrt)
 //!
 //! **Extended operations** (dynamically queried via [`TensorPrims::has_extension_for`]):
 //! - [`Contract`](PrimDescriptor::Contract): Fused permute + GEMM contraction
@@ -104,6 +105,35 @@ pub enum ReduceOp {
     Max,
     /// Minimum value reduction.
     Min,
+}
+
+/// Element-wise unary operation kind.
+///
+/// Used with [`PrimDescriptor::ElementwiseUnary`] for point-wise
+/// transformations. Maps to `cutensorElementwiseTrinary` (unary case)
+/// on GPU.
+///
+/// Note: square (`x²`) is omitted — expressible as
+/// `ElementwiseMul(x, x)` without an extra copy.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_prims::UnaryOp;
+///
+/// let op = UnaryOp::Reciprocal;
+/// assert_eq!(op, UnaryOp::Reciprocal);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    /// Negate: `-x`.
+    Negate,
+    /// Reciprocal: `1 / x`.
+    Reciprocal,
+    /// Absolute value: `|x|`.
+    Abs,
+    /// Square root: `√x`.
+    Sqrt,
 }
 
 /// Extended operation identifiers for dynamic capability query.
@@ -219,6 +249,25 @@ pub enum PrimDescriptor {
         modes_c: Vec<u32>,
         /// Pairs of modes for diagonal write.
         paired: Vec<(u32, u32)>,
+    },
+
+    /// Element-wise unary operation.
+    ///
+    /// `C[modes] = alpha * op(A[modes]) + beta * C[modes]`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_prims::{PrimDescriptor, UnaryOp};
+    ///
+    /// // Reciprocal: C = 1/A
+    /// let desc = PrimDescriptor::ElementwiseUnary {
+    ///     op: UnaryOp::Reciprocal,
+    /// };
+    /// ```
+    ElementwiseUnary {
+        /// Unary operation to apply.
+        op: UnaryOp,
     },
 
     // ====================================================================
@@ -384,6 +433,12 @@ pub enum CpuPlan<T: ScalarBase> {
     AntiDiag {
         /// Paired modes.
         paired: Vec<(u32, u32)>,
+        _marker: PhantomData<T>,
+    },
+    /// Plan for element-wise unary operation.
+    ElementwiseUnary {
+        /// Unary operation.
+        op: UnaryOp,
         _marker: PhantomData<T>,
     },
     /// Plan for fused contraction (extended op).
