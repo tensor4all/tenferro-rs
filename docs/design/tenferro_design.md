@@ -22,7 +22,7 @@ Planned-but-not-yet-implemented areas include:
 - `chainrules-core` runtime internals (tape execution, rule wiring)
 - `tenferro-tropical` (tropical algebra types and `TensorPrims<MaxPlus>`)
 - GPU dynamic backends (`BackendRegistry`, runtime library loading)
-- `tenferro-linalg` tensor-level linear algebra wrapper (SVD/QR/LU/eigen) — **POC API skeleton exists**
+- `tenferro-linalg` internal AD rule implementations (bodies are `todo!()`, algorithm structure documented)
 - `tenferro-capi` C-API for Julia/Python integration — **POC API skeleton exists** (einsum + SVD, f64 only, stateless rrule/frule)
 
 Historical implementation notes remain in `docs/plans/`, but design decisions
@@ -691,6 +691,85 @@ let z = einsum_owned("ij,jk->ik", vec![x, y]).unwrap();
 - Nine API functions: three allocating (`einsum`, `einsum_with_subscripts`, `einsum_with_plan`), three accumulating (`einsum_into`, `einsum_with_subscripts_into`, `einsum_with_plan_into`) with BLAS-style `alpha`/`beta` scaling, and three consuming (`einsum_owned`, `einsum_with_subscripts_owned`, `einsum_with_plan_owned`) for buffer reuse
 - `Tensor::into_contiguous(self)` and `Tensor::into_conj(self)` consuming variants avoid allocation when possible
 - No mixed-type inputs: all inputs and output must be the same type `T`
+
+### tenferro-linalg
+
+Batched matrix decompositions (SVD, QR, LU, eigen) with stateless AD rules.
+Input convention: `(m, n, *)` where the first two dimensions are the matrix
+and the rest are independent batch dimensions (column-major contiguous).
+
+> **libtorch reference**: The design was informed by analysis of
+> [libtorch_reference.md](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/libtorch_reference.md),
+> which catalogues PyTorch's `torch.linalg` operations and their AD formulas.
+
+#### Minimal feature extensions for linalg AD
+
+Implementing linalg AD rules (Mathieu 2019 et al.) requires operations
+beyond what `tenferro-prims` and `tenferro-tensor` originally provided.
+We conducted a gap analysis against libtorch's AD formulas and adopted a
+**minimal design** — adding only what is strictly necessary and cannot be
+expressed through existing primitives.
+
+**Added to tenferro-prims:**
+
+| Addition | Rationale |
+|----------|-----------|
+| `UnaryOp` enum (`Negate`, `Reciprocal`, `Abs`, `Sqrt`) | SVD/eigen rrule requires F-matrix construction: `F_ij = 1/(σ_j² − σ_i²)`, which needs `Reciprocal`. `Sqrt` is needed for matrix square root in Lyapunov-based AD formulas. These are not expressible through existing `ElementwiseMul` or `alpha`/`beta` scaling. |
+| `PrimDescriptor::ElementwiseUnary { op }` | Pairs with `UnaryOp`. Maps to `cutensorElementwiseTrinary` (unary case) on GPU, so it stays within the cuTENSOR-compatible protocol. |
+
+`Square` (x²) was deliberately **omitted** — it is expressible as
+`ElementwiseMul(x, x)` with no loss of efficiency.
+
+**Added to tenferro-tensor:**
+
+| Addition | Rationale |
+|----------|-----------|
+| `Tensor::select(dim, index)` / `TensorView::select(dim, index)` | Zero-copy view ops needed for batch-dimension manipulation in AD rules (e.g., extracting a single batch element). Cannot be expressed through `permute`/`reshape`/`broadcast`. |
+| `Tensor::narrow(dim, start, length)` / `TensorView::narrow(dim, start, length)` | Zero-copy slicing along a dimension. Required for extracting sub-ranges of batch dims or matrix blocks. Not reducible to existing view ops. |
+| `Tensor::eye(n, memory_space, order)` | Identity matrix factory. Required by SVD/eigen rrule projector term: `(I − U·Uᵀ)`. Not composable from `zeros`/`ones` without element-wise indexing. |
+| `Tensor::tril(diagonal)` / `Tensor::triu(diagonal)` | Triangular extraction. Required by QR rrule (R is upper triangular, tril extracts the strict lower part) and LU rrule (L is unit lower triangular). Not expressible through existing ops. |
+
+**Explicitly excluded (with rationale):**
+
+| Candidate | Why excluded |
+|-----------|--------------|
+| Separate `tenferro-ops` crate | Redundant — `tenferro-prims` already provides `BatchedGemm`, `ElementwiseMul`, `alpha`/`beta` scaling (implicit add/subtract). Adding `tenferro-prims` as a dependency of `tenferro-linalg` is sufficient. |
+| `transpose` / `squeeze` / `unsqueeze` / `movedim` / `expand` | Convenience wrappers — all are trivially derivable from existing `permute`, `reshape`, and `broadcast`. Adding them would bloat the API without enabling new capabilities. |
+| `full` / `empty` / `arange` / `linspace` / `rand` / `randn` | Composable from `from_vec` — the user constructs the data in Rust and passes it to `Tensor::from_vec` or `Tensor::from_slice`. Factory proliferation adds maintenance cost without enabling new use cases in the AD context. |
+| `clone()` method | Already `impl Clone for Tensor<T>`. |
+| `detach()` method | Meaningless in tenferro's external AD design — the tape is in `chainrules`, not embedded in `Tensor`. |
+| DLPack as separate crate | `DataBuffer` already supports external memory via `from_external` with release callback. A separate DLPack crate would add dependency complexity for the same functionality. |
+| Separate reduction API | Subset of `PrimDescriptor::Reduce` already in prims. |
+| `solve_triangular` | Deferred to P1 — not required for POC-phase AD rule skeletons. Will be needed when AD rules are fully implemented. |
+
+#### SVD rrule algorithm structure
+
+The `svd_rrule` function body documents the Mathieu 2019 algorithm as
+structured comments showing how each step maps to `tenferro-prims` operations:
+
+```
+Step 1: Forward pass (U, S, Vt) = svd(A)         — cached by caller
+Step 2: Build F-matrix (F_ij = 1/(σ_j²−σ_i²))   — ElementwiseMul, ElementwiseUnary(Reciprocal)
+Step 3: Compute Uᵀ·dU                             — BatchedGemm
+Step 4: Symmetrize: M = Uᵀ·dU − (Uᵀ·dU)ᵀ        — Permute (zero-copy), alpha/beta
+Step 5: Hadamard product: F ⊙ M                   — ElementwiseMul
+Step 6: Add diagonal dS: F⊙M + diag(dS)          — AntiTrace
+Step 7: Assemble: dA = U·(F⊙M + diag(dS))·Vt    — BatchedGemm (×2)
+Step 8: Projector term (m > n):
+        dA += (I − U·Uᵀ)·dU·diag(1/S)·Vt        — eye, BatchedGemm, ElementwiseUnary(Reciprocal)
+```
+
+This demonstrates that all linalg AD rules can be expressed entirely through
+the `tenferro-prims` protocol plus the minimal tensor-level additions above,
+without requiring a separate operations layer.
+
+#### Dependency change
+
+`tenferro-linalg` now depends on `tenferro-prims` in addition to
+`tenferro-tensor`, `tenferro-algebra`, `tenferro-device`, and `chainrules-core`.
+This allows AD rule implementations to directly compose prims operations
+(BatchedGemm, ElementwiseMul, ElementwiseUnary, etc.) rather than
+duplicating computation logic.
 
 ---
 
