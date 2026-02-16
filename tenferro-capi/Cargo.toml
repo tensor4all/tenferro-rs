@@ -7,7 +7,7 @@ description = "C-API (FFI) for tenferro: exposes einsum and SVD (with AD rules) 
 publish = false
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }

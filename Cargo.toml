@@ -8,6 +8,7 @@ members = [
     "tenferro-linalg",
     "tenferro-capi",
     "tenferro-tropical",
+    "tenferro-tropical-capi",
     "chainrules-core",
     "chainrules",
 ]
