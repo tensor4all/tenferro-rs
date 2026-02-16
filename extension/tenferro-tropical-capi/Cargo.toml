@@ -10,6 +10,6 @@ publish = false
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-tenferro-device = { path = "../tenferro-device" }
-tenferro-capi = { path = "../tenferro-capi" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-capi = { path = "../../tenferro-capi" }
 tenferro-tropical = { path = "../tenferro-tropical" }
