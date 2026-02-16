@@ -15,6 +15,8 @@ in tensor4all-meta for high-level architecture and future phase plans.
 ## Workspace Architecture
 
 ```
+Layer 5: tenferro-capi       C-API (FFI) for Julia/Python: exposes einsum + SVD
+                             with stateless rrule/frule (f64 only)
 Layer 4: tenferro-einsum     High-level einsum on Tensor<T>, N-ary contraction
                              tree, algebra dispatch, einsum AD rules
          tenferro-linalg     Tensor-level SVD/QR/LU/eigen, linalg AD rules
@@ -103,3 +105,25 @@ Linalg AD rules: `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule`,
 `tracked_qr`, `dual_qr`, `qr_rrule`, `qr_frule`,
 `tracked_lu`, `dual_lu`, `lu_rrule`, `lu_frule`,
 `tracked_eigen`, `dual_eigen`, `eigen_rrule`, `eigen_frule`.
+
+### tenferro-capi
+
+C-API (FFI) for Julia, Python (JAX, PyTorch), and other languages.
+Exposes tensor lifecycle, einsum, and SVD (including AD rules) via
+opaque pointers and status codes. f64 only in this POC phase.
+
+Design principles: opaque `TfeTensorF64` handles, `tfe_status_t`
+error codes, `catch_unwind` for panic safety, column-major data layout,
+copy semantics at FFI boundary.
+
+AD approach: stateless `rrule`/`frule` only — host languages manage
+their own AD tapes (ChainRules.jl, PyTorch autograd, JAX custom_vjp).
+Tape/TrackedTensor/DualTensor are NOT exposed.
+
+Tensor lifecycle: `tfe_tensor_f64_from_data`, `tfe_tensor_f64_zeros`,
+`tfe_tensor_f64_clone`, `tfe_tensor_f64_release`, `tfe_tensor_f64_ndim`,
+`tfe_tensor_f64_shape`, `tfe_tensor_f64_len`, `tfe_tensor_f64_data`.
+
+Einsum: `tfe_einsum_f64`, `tfe_einsum_rrule_f64`, `tfe_einsum_frule_f64`.
+
+SVD: `tfe_svd_f64`, `tfe_svd_rrule_f64`, `tfe_svd_frule_f64`.

@@ -23,7 +23,7 @@ Planned-but-not-yet-implemented areas include:
 - `tenferro-tropical` (tropical algebra types and `TensorPrims<MaxPlus>`)
 - GPU dynamic backends (`BackendRegistry`, runtime library loading)
 - `tenferro-linalg` tensor-level linear algebra wrapper (SVD/QR/LU/eigen) — **POC API skeleton exists**
-- `tenferro-capi` for Julia/Python integration
+- `tenferro-capi` C-API for Julia/Python integration — **POC API skeleton exists** (einsum + SVD, f64 only, stateless rrule/frule)
 
 Historical implementation notes remain in `docs/plans/`, but design decisions
 to be reviewed are consolidated under `docs/design/`.
