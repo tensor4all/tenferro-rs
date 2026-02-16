@@ -1,0 +1,11 @@
+[package]
+name = "chainrules-linalg"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "Matrix-level linear algebra decompositions with AD rules (rrule/frule)."
+publish = false
+
+[dependencies]
+chainrules-core = { path = "../chainrules-core" }
+dlpack-core = { path = "../dlpack-core" }
