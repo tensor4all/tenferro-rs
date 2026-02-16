@@ -1,11 +1,17 @@
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
 //! This crate provides SVD, QR, LU, and eigendecomposition for tensors
-//! with shape `(*, m, n)`, following the PyTorch `torch.linalg` convention:
+//! with shape `(m, n, *)`, adapted from PyTorch's `torch.linalg` for
+//! column-major layout:
 //!
-//! - **Last 2 dimensions** are the matrix (`m × n`).
-//! - **All preceding dimensions** (`*`) are independent batch dimensions.
+//! - **First 2 dimensions** are the matrix (`m × n`).
+//! - **All following dimensions** (`*`) are independent batch dimensions.
 //! - Input must be **column-major contiguous** (LAPACK/cuSOLVER native).
+//!
+//! This convention mirrors PyTorch's `(*, m, n)` but is flipped for
+//! col-major: in col-major the first dimensions are contiguous, so
+//! placing the matrix there ensures LAPACK can operate directly without
+//! transposition.
 //!
 //! This module is **context-agnostic**: it does not know about tensor
 //! networks, MPS, or any specific application. If you need to decompose
@@ -53,12 +59,12 @@
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
 //!
-//! // Batched: shape [batch, m, n] = [10, 3, 4]
-//! let a = Tensor::<f64>::zeros(&[10, 3, 4], mem, col);
+//! // Batched: shape [m, n, batch] = [3, 4, 10]
+//! let a = Tensor::<f64>::zeros(&[3, 4, 10], mem, col);
 //! let result = svd(&a, None).unwrap();
-//! // result.u:  shape [10, 3, 3]
-//! // result.s:  shape [10, 3]
-//! // result.vt: shape [10, 3, 4]
+//! // result.u:  shape [3, 3, 10]
+//! // result.s:  shape [3, 10]
+//! // result.vt: shape [3, 4, 10]
 //! ```
 //!
 //! ## Decomposing a 4D tensor along specific legs
@@ -116,11 +122,11 @@ use tenferro_tensor::Tensor;
 
 /// SVD result: `A = U * diag(S) * Vt`.
 ///
-/// For an input of shape `(*, m, n)` with `k = min(m, n)`:
+/// For an input of shape `(m, n, *)` with `k = min(m, n)`:
 ///
-/// - `u`: shape `(*, m, k)`
-/// - `s`: shape `(*, k)` (singular values, descending order)
-/// - `vt`: shape `(*, k, n)`
+/// - `u`: shape `(m, k, *)`
+/// - `s`: shape `(k, *)` (singular values, descending order)
+/// - `vt`: shape `(k, n, *)`
 ///
 /// # Examples
 ///
@@ -135,11 +141,11 @@ use tenferro_tensor::Tensor;
 /// assert_eq!(result.s.ndim(), 1);
 /// ```
 pub struct SvdResult<T: Scalar> {
-    /// Left singular vectors. Shape: `(*, m, k)`.
+    /// Left singular vectors. Shape: `(m, k, *)`.
     pub u: Tensor<T>,
-    /// Singular values (descending order). Shape: `(*, k)`.
+    /// Singular values (descending order). Shape: `(k, *)`.
     pub s: Tensor<T>,
-    /// Right singular vectors (conjugate-transposed). Shape: `(*, k, n)`.
+    /// Right singular vectors (conjugate-transposed). Shape: `(k, n, *)`.
     pub vt: Tensor<T>,
 }
 
@@ -178,10 +184,10 @@ impl Default for SvdOptions {
 
 /// QR decomposition result: `A = Q * R`.
 ///
-/// For an input of shape `(*, m, n)` with `k = min(m, n)`:
+/// For an input of shape `(m, n, *)` with `k = min(m, n)`:
 ///
-/// - `q`: shape `(*, m, k)` (orthonormal columns)
-/// - `r`: shape `(*, k, n)` (upper triangular)
+/// - `q`: shape `(m, k, *)` (orthonormal columns)
+/// - `r`: shape `(k, n, *)` (upper triangular)
 ///
 /// # Examples
 ///
@@ -197,19 +203,19 @@ impl Default for SvdOptions {
 /// assert_eq!(result.r.dims(), &[3, 3]);
 /// ```
 pub struct QrResult<T: Scalar> {
-    /// Orthonormal factor. Shape: `(*, m, k)`.
+    /// Orthonormal factor. Shape: `(m, k, *)`.
     pub q: Tensor<T>,
-    /// Upper triangular factor. Shape: `(*, k, n)`.
+    /// Upper triangular factor. Shape: `(k, n, *)`.
     pub r: Tensor<T>,
 }
 
 /// LU decomposition result: `A = P * L * U` (partial pivoting).
 ///
-/// For an input of shape `(*, m, n)` with `k = min(m, n)`:
+/// For an input of shape `(m, n, *)` with `k = min(m, n)`:
 ///
-/// - `p`: permutation indices, shape `(*, m)`
-/// - `l`: shape `(*, m, k)` (unit lower triangular)
-/// - `u`: shape `(*, k, n)` (upper triangular)
+/// - `p`: permutation indices, shape `(m, *)`
+/// - `l`: shape `(m, k, *)` (unit lower triangular)
+/// - `u`: shape `(k, n, *)` (upper triangular)
 ///
 /// # Examples
 ///
@@ -223,11 +229,11 @@ pub struct QrResult<T: Scalar> {
 /// let result = lu(&a).unwrap();
 /// ```
 pub struct LuResult<T: Scalar> {
-    /// Row permutation indices (partial pivoting). Shape: `(*, m)`.
+    /// Row permutation indices (partial pivoting). Shape: `(m, *)`.
     pub p: Vec<usize>,
-    /// Unit lower triangular factor. Shape: `(*, m, k)`.
+    /// Unit lower triangular factor. Shape: `(m, k, *)`.
     pub l: Tensor<T>,
-    /// Upper triangular factor. Shape: `(*, k, n)`.
+    /// Upper triangular factor. Shape: `(k, n, *)`.
     pub u: Tensor<T>,
 }
 
@@ -235,8 +241,8 @@ pub struct LuResult<T: Scalar> {
 ///
 /// Only valid for square matrices (`m == n`).
 ///
-/// - `values`: shape `(*, n)` (eigenvalues)
-/// - `vectors`: shape `(*, n, n)` (right eigenvectors as columns)
+/// - `values`: shape `(n, *)` (eigenvalues)
+/// - `vectors`: shape `(n, n, *)` (right eigenvectors as columns)
 ///
 /// # Examples
 ///
@@ -252,9 +258,9 @@ pub struct LuResult<T: Scalar> {
 /// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
 pub struct EigenResult<T: Scalar> {
-    /// Eigenvalues. Shape: `(*, n)`.
+    /// Eigenvalues. Shape: `(n, *)`.
     pub values: Tensor<T>,
-    /// Right eigenvectors (columns). Shape: `(*, n, n)`.
+    /// Right eigenvectors (columns). Shape: `(n, n, *)`.
     pub vectors: Tensor<T>,
 }
 
@@ -264,11 +270,11 @@ pub struct EigenResult<T: Scalar> {
 
 /// Compute the SVD of a batched matrix.
 ///
-/// Input shape: `(*, m, n)`. Must be column-major contiguous.
+/// Input shape: `(m, n, *)`. Must be column-major contiguous.
 ///
 /// # Arguments
 ///
-/// * `tensor` — Input tensor of shape `(*, m, n)`
+/// * `tensor` — Input tensor of shape `(m, n, *)`
 /// * `options` — Optional truncation parameters
 ///
 /// # Examples
@@ -299,7 +305,7 @@ pub fn svd<T: Scalar>(_tensor: &Tensor<T>, _options: Option<&SvdOptions>) -> Res
 
 /// Compute the QR decomposition of a batched matrix.
 ///
-/// Input shape: `(*, m, n)`. Must be column-major contiguous.
+/// Input shape: `(m, n, *)`. Must be column-major contiguous.
 ///
 /// # Examples
 ///
@@ -322,7 +328,7 @@ pub fn qr<T: Scalar>(_tensor: &Tensor<T>) -> Result<QrResult<T>> {
 
 /// Compute the LU decomposition of a batched matrix (partial pivoting).
 ///
-/// Input shape: `(*, m, n)`. Must be column-major contiguous.
+/// Input shape: `(m, n, *)`. Must be column-major contiguous.
 ///
 /// # Examples
 ///
@@ -345,7 +351,7 @@ pub fn lu<T: Scalar>(_tensor: &Tensor<T>) -> Result<LuResult<T>> {
 
 /// Compute the eigendecomposition of a batched square matrix.
 ///
-/// Input shape: `(*, n, n)`. Must be column-major contiguous.
+/// Input shape: `(n, n, *)`. Must be column-major contiguous.
 ///
 /// # Examples
 ///
@@ -362,7 +368,7 @@ pub fn lu<T: Scalar>(_tensor: &Tensor<T>) -> Result<LuResult<T>> {
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions or
-/// the last two dimensions are not equal.
+/// the first two dimensions are not equal.
 pub fn eigen<T: Scalar>(_tensor: &Tensor<T>) -> Result<EigenResult<T>> {
     todo!()
 }
