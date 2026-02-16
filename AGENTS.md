@@ -28,7 +28,7 @@ tenferro-rs depends on strided-rs but does not absorb it. strided-rs has no BLAS
 
 ### Design Documents
 
-See [tensor4all/tensor4all-meta PR #1](https://github.com/tensor4all/tensor4all-meta/pull/1) for the latest architecture and design documents.
+See [`docs/design/`](docs/design/) for architecture and design documents.
 
 ## Code Style
 

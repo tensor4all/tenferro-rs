@@ -16,7 +16,11 @@ Built on top of [strided-rs](https://github.com/tensor4all/strided-rs) for cache
 
 ## Design
 
-See [tensor4all/tensor4all-meta](https://github.com/tensor4all/tensor4all-meta) for architecture and design documents.
+See [`docs/design/`](docs/design/) for architecture and design documents, including:
+
+- [Unified Tensor Backend Design](docs/design/tenferro_unified_tensor_backend.md) — high-level architecture, crate structure, roadmap
+- [tenferro Design](docs/design/tenferro_design.md) — detailed per-crate API designs
+- [libtorch Reference](docs/design/libtorch_reference.md) — PyTorch feature survey for design reference
 
 ## Documentation
 

@@ -6,8 +6,8 @@
 > and GPU.
 >
 > This is a companion to the [tenferro design document](./tenferro_design.md),
-> the [ecosystem overview](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/tenferro_unified_tensor_backend.md)
-> in tensor4all-meta, and the [algorithm comparison](./einsum_algorithm_comparison.md).
+> the [ecosystem overview](./tenferro_unified_tensor_backend.md),
+> and the [algorithm comparison](./einsum_algorithm_comparison.md).
 >
 > **POC repository**: <https://github.com/tensor4all/tenferro-rs/>
 
@@ -1052,4 +1052,4 @@ Future crates (not in POC):
 - [tenferro-rs POC](https://github.com/tensor4all/tenferro-rs/)
 - [Einsum Algorithm Comparison](./einsum_algorithm_comparison.md)
 - [tenferro Design](./tenferro_design.md)
-- [tenferro Unified Tensor Backend Design (ecosystem)](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/tenferro_unified_tensor_backend.md)
+- [tenferro Unified Tensor Backend Design (ecosystem)](./tenferro_unified_tensor_backend.md)

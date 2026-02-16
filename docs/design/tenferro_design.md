@@ -1,6 +1,6 @@
 # tenferro Design: Detailed Crate API Designs
 
-> **Ecosystem overview**: See the [tenferro Unified Tensor Backend Design](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/tenferro_unified_tensor_backend.md) in tensor4all-meta for high-level architecture, crate structure, and future phase plans.
+> **Ecosystem overview**: See the [tenferro Unified Tensor Backend Design](./tenferro_unified_tensor_backend.md) for high-level architecture, crate structure, and future phase plans.
 >
 > **Companion documents** (in this repo):
 > - [Einsum Internal Design](./tenferro_einsum_internal_design.md) — detailed internal design of tenferro-prims and tenferro-einsum
@@ -109,7 +109,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 **Dependencies**: `strided-view` (for `StridedError`), `thiserror`.
 
-**Note**: `BackendRegistry`, `GpuBackend`, and `TensorLibVtable` are **not** in the POC. They are planned for future GPU support (see [GPU Strategy](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/tenferro_unified_tensor_backend.md#gpu-strategy) in the ecosystem doc).
+**Note**: `BackendRegistry`, `GpuBackend`, and `TensorLibVtable` are **not** in the POC. They are planned for future GPU support (see [GPU Strategy](./tenferro_unified_tensor_backend.md#gpu-strategy) in the ecosystem doc).
 
 ### tenferro-algebra
 
@@ -699,7 +699,7 @@ Input convention: `(m, n, *)` where the first two dimensions are the matrix
 and the rest are independent batch dimensions (column-major contiguous).
 
 > **libtorch reference**: The design was informed by analysis of
-> [libtorch_reference.md](https://github.com/tensor4all/tensor4all-meta/blob/main/docs/design/libtorch_reference.md),
+> [libtorch_reference.md](./libtorch_reference.md),
 > which catalogues PyTorch's `torch.linalg` operations and their AD formulas.
 
 #### Minimal feature extensions for linalg AD
