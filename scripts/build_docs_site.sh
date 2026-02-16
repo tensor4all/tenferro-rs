@@ -86,17 +86,7 @@ GRAPH_HEADER
     echo '    </div>'
   fi
 
-  cat <<'CRATE_HEADER'
-    <h2>Crates</h2>
-    <ul>
-CRATE_HEADER
-  while IFS= read -r crate_dir; do
-    if [ -f "$API_DIR/$crate_dir/index.html" ]; then
-      printf '      <li><a href="./%s/index.html">%s</a></li>\n' "$crate_dir" "$crate_dir"
-    fi
-  done < <(find "$API_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
   cat <<'FOOTER'
-    </ul>
   </body>
 </html>
 FOOTER
