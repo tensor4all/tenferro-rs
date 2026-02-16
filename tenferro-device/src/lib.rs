@@ -26,15 +26,40 @@ use std::fmt;
 /// can be processed by any CPU, while a tensor on
 /// [`GpuMemory`](LogicalMemorySpace::GpuMemory) can be processed by any
 /// compute device with access to that GPU memory space.
+///
+/// The variants align with DLPack `DLDeviceType` constants:
+///
+/// | Variant | DLPack `device_type` |
+/// |---------|---------------------|
+/// | `MainMemory` | `kDLCPU` (1) |
+/// | `PinnedMemory` | `kDLCUDAHost` (3) / `kDLROCMHost` (11) |
+/// | `GpuMemory` | `kDLCUDA` (2) / `kDLROCM` (10) |
+/// | `ManagedMemory` | `kDLCUDAManaged` (13) |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LogicalMemorySpace {
     /// System main memory (CPU-accessible RAM).
+    ///
+    /// Corresponds to DLPack `kDLCPU` (`device_id = 0`).
     MainMemory,
-    /// GPU-resident memory identified by a space ID.
+    /// Host memory pinned for fast GPU transfer (`cudaMallocHost` / `hipMallocHost`).
+    ///
+    /// Accessible from the CPU but optimized for DMA transfer to/from
+    /// a specific GPU. Corresponds to DLPack `kDLCUDAHost` or `kDLROCMHost`
+    /// (`device_id = 0`).
+    PinnedMemory,
+    /// GPU-resident memory identified by a device ID.
+    ///
+    /// Corresponds to DLPack `kDLCUDA` or `kDLROCM` with the given `device_id`.
     GpuMemory {
-        /// Logical GPU memory space identifier.
-        space_id: usize,
+        /// Zero-based GPU device index (matches DLPack `device_id`).
+        device_id: usize,
     },
+    /// CUDA Unified/Managed memory (`cudaMallocManaged`).
+    ///
+    /// Accessible from both CPU and all GPUs. The CUDA runtime handles
+    /// page migration automatically. Corresponds to DLPack `kDLCUDAManaged`
+    /// (`device_id = 0`).
+    ManagedMemory,
 }
 
 /// Compute device that can execute tensor operations.

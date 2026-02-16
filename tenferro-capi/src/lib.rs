@@ -92,9 +92,11 @@ pub struct DLPackVersion {
 /// DLPack device descriptor.
 #[repr(C)]
 pub struct DLDevice {
-    /// Device type (see `kDLCPU`, `kDLCUDA`, `kDLROCM`).
+    /// Device type (see `KDLCPU`, `KDLCUDA`, `KDLCUDA_HOST`, `KDLCUDA_MANAGED`,
+    /// `KDLROCM`, `KDLROCM_HOST`).
     pub device_type: i32,
-    /// Device ID (0 for default).
+    /// Device ID. 0 for CPU, pinned, and managed memory; GPU ordinal for
+    /// device-local memory.
     pub device_id: i32,
 }
 
@@ -152,10 +154,16 @@ pub struct DLManagedTensorVersioned {
 // DLDeviceType constants
 /// CPU device.
 pub const KDLCPU: i32 = 1;
-/// NVIDIA CUDA device.
+/// NVIDIA CUDA GPU device memory.
 pub const KDLCUDA: i32 = 2;
-/// AMD ROCm device.
+/// Pinned CUDA CPU memory (`cudaMallocHost`).
+pub const KDLCUDA_HOST: i32 = 3;
+/// AMD ROCm GPU device memory.
 pub const KDLROCM: i32 = 10;
+/// Pinned ROCm CPU memory (`hipMallocHost`).
+pub const KDLROCM_HOST: i32 = 11;
+/// CUDA managed/unified memory (`cudaMallocManaged`).
+pub const KDLCUDA_MANAGED: i32 = 13;
 
 // DLDataTypeCode constants
 /// Integer type code.
