@@ -9,7 +9,7 @@ and automatic differentiation.
 in place; most function bodies use `todo!()`. The purpose of this phase is to
 validate the API design before writing implementations.
 
-See the [ecosystem overview](design/tenferro_unified_tensor_backend.md)
+See the [ecosystem overview](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_unified_tensor_backend.md)
 for high-level architecture and future phase plans.
 
 ## Crates
