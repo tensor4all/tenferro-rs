@@ -153,9 +153,9 @@ pub enum Error {
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
 
-    /// An error propagated from strided-view operations.
-    #[error(transparent)]
-    Strided(#[from] strided_view::StridedError),
+    /// An error related to strided memory layout (invalid strides, out-of-bounds offset, etc.).
+    #[error("stride error: {0}")]
+    StrideError(String),
 }
 
 /// Result type alias using [`Error`].

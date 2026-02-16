@@ -8,14 +8,22 @@
 //! - **Data operations**: [`Tensor::contiguous`] / [`Tensor::into_contiguous`] copy
 //!   data into a contiguous layout (the consuming variant avoids allocation when
 //!   the tensor is already contiguous)
-//! - **strided-rs interop**: [`Tensor::view`] / [`Tensor::view_mut`] produce
-//!   [`StridedView`] / [`StridedViewMut`] for use with `TensorPrims` backends
+//! - **DLPack interop**: [`DataBuffer`] supports both Rust-owned (`Vec<T>`) and
+//!   externally-owned memory (e.g., imported via DLPack) with automatic cleanup.
 //!
 //! # Memory layout
 //!
 //! [`Tensor`] stores explicit strides and is not tied to any particular memory
 //! order. [`MemoryOrder`] is only used as a parameter when allocating new memory
 //! (e.g., [`Tensor::zeros`], [`Tensor::contiguous`]).
+//!
+//! # No strided-rs dependency
+//!
+//! This crate does **not** depend on `strided-rs`. The strided-rs types
+//! (`StridedView`, `StridedViewMut`) are backend implementation details
+//! used only in `tenferro-prims`. To pass tensor data to prims backends,
+//! use [`DataBuffer::as_slice`] combined with [`Tensor::dims`],
+//! [`Tensor::strides`], and [`Tensor::offset`].
 //!
 //! # Examples
 //!
@@ -91,18 +99,8 @@
 //! // to_tensor() / contiguous(): materialize a view into owned Tensor
 //! let owned = tv_t.to_tensor(MemoryOrder::ColumnMajor);
 //! ```
-//!
-//! ## Interop with strided-rs
-//!
-//! ```ignore
-//! // Get a StridedView for use with TensorPrims or strided-kernel
-//! let view = a.view();
-//! let mut b_mut = b;
-//! let view_mut = b_mut.view_mut();
-//! ```
 
-use strided_traits::{ElementOpApply, ScalarBase};
-use strided_view::{StridedArray, StridedView, StridedViewMut};
+use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_device::{ComputeDevice, LogicalMemorySpace, OpKind, Result};
 
 /// Memory ordering for new allocations.
@@ -124,16 +122,178 @@ pub enum MemoryOrder {
     RowMajor,
 }
 
-/// Owned data buffer, device-aware.
+// ============================================================================
+// DataBuffer — unified owned/external storage
+// ============================================================================
+
+/// Data storage for tensor elements.
 ///
-/// Wraps the underlying storage for a tensor's data. Currently only CPU
-/// storage is supported via [`StridedArray`].
-#[derive(Clone)]
-pub enum DataBuffer<T> {
-    /// CPU-resident data backed by a [`StridedArray`].
-    Cpu(StridedArray<T>),
-    // Future: Cuda(CudaBuffer<T>), Hip(HipBuffer<T>)
+/// Abstracts over ownership: data may be Rust-owned ([`Vec<T>`]) or
+/// externally-owned (e.g., imported via DLPack with a release callback).
+/// Shape and stride metadata are NOT stored here — they live on
+/// [`Tensor<T>`].
+///
+/// # Clone behavior
+///
+/// Cloning an externally-owned buffer performs a **deep copy** into a new
+/// Rust-owned `Vec<T>`. The release callback cannot be cloned; the clone
+/// is always Rust-owned.
+pub struct DataBuffer<T> {
+    inner: BufferInner<T>,
 }
+
+/// Private ownership representation.
+enum BufferInner<T> {
+    /// Rust-owned contiguous data.
+    Owned(Vec<T>),
+    /// Externally-owned data with release callback.
+    External {
+        ptr: *const T,
+        len: usize,
+        /// Called on drop to notify the external owner.
+        release: Option<Box<dyn FnOnce() + Send>>,
+    },
+}
+
+// Safety: External buffer pointers are treated as Send/Sync since
+// the external framework guarantees the data is valid for the lifetime
+// of the DataBuffer. The release callback is Send.
+unsafe impl<T: Send> Send for DataBuffer<T> {}
+unsafe impl<T: Sync> Sync for DataBuffer<T> {}
+
+impl<T: Copy> Clone for DataBuffer<T> {
+    fn clone(&self) -> Self {
+        match &self.inner {
+            BufferInner::Owned(v) => DataBuffer {
+                inner: BufferInner::Owned(v.clone()),
+            },
+            // Deep copy: can't clone the release callback.
+            BufferInner::External { ptr, len, .. } => {
+                let slice = unsafe { std::slice::from_raw_parts(*ptr, *len) };
+                DataBuffer {
+                    inner: BufferInner::Owned(slice.to_vec()),
+                }
+            }
+        }
+    }
+}
+
+impl<T> Drop for DataBuffer<T> {
+    fn drop(&mut self) {
+        if let BufferInner::External { release, .. } = &mut self.inner {
+            if let Some(f) = release.take() {
+                f();
+            }
+        }
+    }
+}
+
+impl<T> DataBuffer<T> {
+    /// Create a buffer from an owned `Vec<T>`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0, 2.0, 3.0]);
+    /// assert_eq!(buf.len(), 3);
+    /// assert!(buf.is_owned());
+    /// ```
+    pub fn from_vec(v: Vec<T>) -> Self {
+        DataBuffer {
+            inner: BufferInner::Owned(v),
+        }
+    }
+
+    /// Create a buffer from externally-owned data with a release callback.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must point to a valid, properly aligned allocation of at
+    ///   least `len` elements of type `T`.
+    /// - The allocation must remain valid until the release callback is invoked
+    ///   (which happens when this `DataBuffer` is dropped).
+    /// - The release callback must correctly notify the external owner.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let data = vec![1.0, 2.0, 3.0];
+    /// let ptr = data.as_ptr();
+    /// let len = data.len();
+    /// let buf = unsafe {
+    ///     DataBuffer::from_external(ptr, len, move || drop(data))
+    /// };
+    /// assert!(!buf.is_owned());
+    /// ```
+    pub unsafe fn from_external(
+        ptr: *const T,
+        len: usize,
+        release: impl FnOnce() + Send + 'static,
+    ) -> Self {
+        DataBuffer {
+            inner: BufferInner::External {
+                ptr,
+                len,
+                release: Some(Box::new(release)),
+            },
+        }
+    }
+
+    /// Returns the raw data as a slice.
+    pub fn as_slice(&self) -> &[T] {
+        match &self.inner {
+            BufferInner::Owned(v) => v.as_slice(),
+            BufferInner::External { ptr, len, .. } => unsafe {
+                std::slice::from_raw_parts(*ptr, *len)
+            },
+        }
+    }
+
+    /// Returns the raw data as a mutable slice, if Rust-owned.
+    ///
+    /// Returns `None` for externally-owned buffers (they are read-only
+    /// through tenferro).
+    pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
+        match &mut self.inner {
+            BufferInner::Owned(v) => Some(v.as_mut_slice()),
+            BufferInner::External { .. } => None,
+        }
+    }
+
+    /// Returns the number of elements in the buffer.
+    pub fn len(&self) -> usize {
+        match &self.inner {
+            BufferInner::Owned(v) => v.len(),
+            BufferInner::External { len, .. } => *len,
+        }
+    }
+
+    /// Returns `true` if the buffer has no elements.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns `true` if the buffer is Rust-owned (backed by `Vec<T>`).
+    pub fn is_owned(&self) -> bool {
+        matches!(self.inner, BufferInner::Owned(_))
+    }
+
+    /// Returns a raw pointer to the data.
+    pub fn as_ptr(&self) -> *const T {
+        match &self.inner {
+            BufferInner::Owned(v) => v.as_ptr(),
+            BufferInner::External { ptr, .. } => *ptr,
+        }
+    }
+}
+
+// ============================================================================
+// Tensor<T>
+// ============================================================================
 
 /// Multi-dimensional dense tensor.
 ///
@@ -146,11 +306,12 @@ pub enum DataBuffer<T> {
 /// and [`diagonal`](Tensor::diagonal) return new `Tensor` values that share the
 /// same underlying data buffer, modifying only the dims/strides/offset metadata.
 ///
-/// ## strided-rs interop
+/// ## Accessing raw data
 ///
-/// Use [`view`](Tensor::view) and [`view_mut`](Tensor::view_mut) to obtain
-/// [`StridedView`] / [`StridedViewMut`] references for passing to
-/// low-level operations.
+/// Use [`DataBuffer::as_slice`] via [`Tensor::buffer`] combined with
+/// [`dims`](Tensor::dims), [`strides`](Tensor::strides), and
+/// [`offset`](Tensor::offset) to construct backend-specific views
+/// (e.g., `StridedView` in `tenferro-prims`).
 ///
 /// ## GPU async support
 ///
@@ -158,24 +319,20 @@ pub enum DataBuffer<T> {
 /// [`CompletionEvent`]. When a GPU operation produces a tensor, `event`
 /// is set to `Some(...)`. Passing this tensor to another GPU operation
 /// chains via stream dependencies without CPU synchronization. Methods
-/// that access data from CPU (e.g., [`view`](Tensor::view),
-/// [`conj`](Tensor::conj)) call [`wait`](Tensor::wait) internally.
+/// that access data from CPU call [`wait`](Tensor::wait) internally.
 /// For CPU tensors, `event` is always `None` with zero overhead.
 ///
 /// See `tenferro-einsum` crate docs for async chaining examples.
-pub struct Tensor<T: ScalarBase> {
+pub struct Tensor<T: Scalar> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
     /// The logical memory space where this tensor's data resides.
     logical_memory_space: LogicalMemorySpace,
-    /// Optional preferred compute device override. When `None`, the
-    /// device is selected automatically via
-    /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
+    /// Optional preferred compute device override.
     preferred_compute_device: Option<ComputeDevice>,
-    /// Pending GPU computation event. `None` for CPU tensors or
-    /// when GPU computation has completed.
+    /// Pending GPU computation event.
     event: Option<CompletionEvent>,
 }
 
@@ -194,7 +351,7 @@ pub struct Tensor<T: ScalarBase> {
 /// The crate-internal `as_operand_view()` skips the wait and
 /// propagates the pending event, allowing accelerator operations to chain
 /// without CPU synchronization.
-pub struct TensorView<'a, T: ScalarBase> {
+pub struct TensorView<'a, T: Scalar> {
     data: &'a DataBuffer<T>,
     dims: Vec<usize>,
     strides: Vec<isize>,
@@ -203,13 +360,11 @@ pub struct TensorView<'a, T: ScalarBase> {
     logical_memory_space: LogicalMemorySpace,
     /// Optional preferred compute device override from the source tensor.
     preferred_compute_device: Option<ComputeDevice>,
-    /// Pending event from the source tensor. Always `None` in public API
-    /// (wait is performed before construction). Used by crate-internal
-    /// `as_operand_view()` to propagate pending events for pipeline chaining.
+    /// Pending event from the source tensor. Always `None` in public API.
     event: Option<&'a CompletionEvent>,
 }
 
-impl<'a, T: ScalarBase> TensorView<'a, T> {
+impl<'a, T: Scalar> TensorView<'a, T> {
     /// Returns the shape (size of each dimension).
     pub fn dims(&self) -> &[usize] {
         &self.dims
@@ -233,6 +388,16 @@ impl<'a, T: ScalarBase> TensorView<'a, T> {
     /// Returns the preferred compute device override, if set.
     pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
         self.preferred_compute_device
+    }
+
+    /// Returns a reference to the underlying data buffer.
+    pub fn buffer(&self) -> &DataBuffer<T> {
+        self.data
+    }
+
+    /// Returns the element offset into the data buffer.
+    pub fn offset(&self) -> isize {
+        self.offset
     }
 
     // ========================================================================
@@ -291,7 +456,7 @@ impl<'a, T: ScalarBase> TensorView<'a, T> {
     /// For real types, returns a copy unchanged.
     pub fn conj(&self) -> Tensor<T>
     where
-        T: ElementOpApply,
+        T: Conjugate,
     {
         todo!()
     }
@@ -308,7 +473,7 @@ pub struct CompletionEvent {
     _private: (),
 }
 
-impl<T: ScalarBase> Clone for Tensor<T> {
+impl<T: Scalar> Clone for Tensor<T> {
     fn clone(&self) -> Self {
         Self {
             buffer: self.buffer.clone(),
@@ -325,7 +490,7 @@ impl<T: ScalarBase> Clone for Tensor<T> {
     }
 }
 
-impl<T: ScalarBase> Tensor<T> {
+impl<T: Scalar> Tensor<T> {
     // ========================================================================
     // Constructors
     // ========================================================================
@@ -378,12 +543,30 @@ impl<T: ScalarBase> Tensor<T> {
         todo!()
     }
 
-    /// Create a tensor from an existing [`StridedArray`].
+    /// Create a tensor from an owned `Vec<T>` with explicit layout.
     ///
-    /// Takes ownership of the array. The tensor inherits the array's
-    /// dims, strides, and offset. Memory space is set to
-    /// [`LogicalMemorySpace::MainMemory`].
-    pub fn from_strided_array(_array: StridedArray<T>) -> Self {
+    /// Takes ownership of the data. The caller specifies the dims, strides,
+    /// and offset that describe how the data is laid out.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the layout is inconsistent with the data length.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// // 2×3 column-major: strides [1, 2], offset 0
+    /// let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    /// let t = Tensor::<f64>::from_vec(data, &[2, 3], &[1, 2], 0).unwrap();
+    /// ```
+    pub fn from_vec(
+        _data: Vec<T>,
+        _dims: &[usize],
+        _strides: &[isize],
+        _offset: isize,
+    ) -> Result<Self> {
         todo!()
     }
 
@@ -393,17 +576,32 @@ impl<T: ScalarBase> Tensor<T> {
 
     /// Returns the shape (size of each dimension).
     pub fn dims(&self) -> &[usize] {
-        todo!()
+        &self.dims
     }
 
     /// Returns the strides (in units of `T`).
     pub fn strides(&self) -> &[isize] {
-        todo!()
+        &self.strides
+    }
+
+    /// Returns the element offset into the data buffer.
+    pub fn offset(&self) -> isize {
+        self.offset
+    }
+
+    /// Returns a reference to the underlying data buffer.
+    pub fn buffer(&self) -> &DataBuffer<T> {
+        &self.buffer
+    }
+
+    /// Returns a mutable reference to the underlying data buffer.
+    pub fn buffer_mut(&mut self) -> &mut DataBuffer<T> {
+        &mut self.buffer
     }
 
     /// Returns the number of dimensions (rank).
     pub fn ndim(&self) -> usize {
-        todo!()
+        self.dims.len()
     }
 
     /// Returns the total number of elements.
@@ -456,21 +654,7 @@ impl<T: ScalarBase> Tensor<T> {
     // View operations (zero-copy, public API waits if pending)
     // ========================================================================
 
-    /// Returns an immutable strided view of the tensor data.
-    ///
-    /// Waits for any pending accelerator computation before returning.
-    pub fn view(&self) -> StridedView<'_, T> {
-        todo!()
-    }
-
-    /// Returns a mutable strided view of the tensor data.
-    ///
-    /// Waits for any pending accelerator computation before returning.
-    pub fn view_mut(&mut self) -> StridedViewMut<'_, T> {
-        todo!()
-    }
-
-    /// Returns a [`TensorView`] for CPU data inspection.
+    /// Returns a [`TensorView`] for data inspection.
     ///
     /// Waits for any pending accelerator computation before returning.
     /// The returned view has `event = None` (data is ready to read).
@@ -638,28 +822,25 @@ impl<T: ScalarBase> Tensor<T> {
     /// ```
     pub fn conj(&self) -> Tensor<T>
     where
-        T: ElementOpApply,
+        T: Conjugate,
     {
-        match &self.buffer {
-            DataBuffer::Cpu(array) => {
-                // Conjugation is element-wise and position-independent,
-                // so we conjugate the raw buffer directly and preserve layout.
-                let conj_data: Vec<T> = array.data().iter().copied().map(T::conj).collect();
-                let src_offset = array.view().offset();
-                let new_array =
-                    StridedArray::from_parts(conj_data, array.dims(), array.strides(), src_offset)
-                        .expect("internal: conjugated buffer has identical layout");
-
-                Tensor {
-                    buffer: DataBuffer::Cpu(new_array),
-                    dims: self.dims.clone(),
-                    strides: self.strides.clone(),
-                    offset: self.offset,
-                    logical_memory_space: self.logical_memory_space,
-                    preferred_compute_device: self.preferred_compute_device,
-                    event: None,
-                }
-            }
+        // Conjugation is element-wise and position-independent,
+        // so we conjugate the raw buffer directly and preserve layout.
+        let conj_data: Vec<T> = self
+            .buffer
+            .as_slice()
+            .iter()
+            .copied()
+            .map(T::conj)
+            .collect();
+        Tensor {
+            buffer: DataBuffer::from_vec(conj_data),
+            dims: self.dims.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
         }
     }
 
@@ -669,7 +850,7 @@ impl<T: ScalarBase> Tensor<T> {
     /// reusing the buffer if no other references exist.
     pub fn into_conj(self) -> Tensor<T>
     where
-        T: ElementOpApply,
+        T: Conjugate,
     {
         todo!()
     }
@@ -694,10 +875,9 @@ impl<T: ScalarBase> Tensor<T> {
     /// Wait for any pending GPU computation to complete.
     ///
     /// No-op for CPU tensors or when GPU computation has already completed.
-    /// Methods that access tensor data from CPU ([`view`](Tensor::view),
-    /// [`conj`](Tensor::conj), [`contiguous`](Tensor::contiguous)) call
-    /// this internally, so explicit calls are only needed when the caller
-    /// wants to ensure completion at a specific point.
+    /// Methods that access tensor data from CPU call this internally, so
+    /// explicit calls are only needed when the caller wants to ensure
+    /// completion at a specific point.
     ///
     /// # Examples
     ///
@@ -713,7 +893,6 @@ impl<T: ScalarBase> Tensor<T> {
     /// // Chaining: implicit sync via stream dependencies, no CPU wait
     /// let d = einsum("ij,jk->ik", &[&c, &e_gpu]).unwrap();
     /// //  → detects c.event → chains on GPU → returns immediately
-    /// d.view();  // view() calls wait() internally
     /// ```
     pub fn wait(&self) {
         // Currently a no-op: only CPU tensors exist (event is always None).
@@ -734,7 +913,7 @@ impl<T: ScalarBase> Tensor<T> {
 // Differentiable impl — connects Tensor<T> to the generic AD framework
 // ============================================================================
 
-impl<T: ScalarBase> chainrules_core::Differentiable for Tensor<T> {
+impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     type Tangent = Tensor<T>;
 
     fn zero_tangent(&self) -> Tensor<T> {
@@ -745,3 +924,10 @@ impl<T: ScalarBase> chainrules_core::Differentiable for Tensor<T> {
         todo!()
     }
 }
+
+// ============================================================================
+// PhantomData usage for unused type parameter warning suppression
+// ============================================================================
+
+// DataBuffer<T> uses T directly in Vec<T> and *const T, so no PhantomData needed.
+// This module-level comment documents the design decision.

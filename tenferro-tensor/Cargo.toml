@@ -8,7 +8,5 @@ publish = false
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
+tenferro-algebra = { path = "../tenferro-algebra" }
 chainrules-core = { path = "../chainrules-core" }
-strided-view = { git = "https://github.com/tensor4all/strided-rs" }
-strided-traits = { git = "https://github.com/tensor4all/strided-rs" }
-num-traits = "0.2"

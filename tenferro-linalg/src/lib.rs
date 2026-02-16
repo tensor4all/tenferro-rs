@@ -81,7 +81,7 @@
 //! ```
 
 use chainrules::{AdResult, Differentiable, DualTensor, TrackedTensor};
-use strided_traits::ScalarBase;
+use tenferro_algebra::Scalar;
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -110,7 +110,7 @@ use tenferro_tensor::Tensor;
 /// let result = svd(&a, &[0], &[1], None).unwrap();
 /// assert_eq!(result.s.ndim(), 1);
 /// ```
-pub struct SvdResult<T: ScalarBase> {
+pub struct SvdResult<T: Scalar> {
     /// Left singular vectors. Shape: `left_dims... × k`.
     pub u: Tensor<T>,
     /// Singular values (descending order). Shape: `[k]`.
@@ -174,7 +174,7 @@ impl Default for SvdOptions {
 /// assert_eq!(result.q.dims(), &[4, 3]);
 /// assert_eq!(result.r.dims(), &[3, 3]);
 /// ```
-pub struct QrResult<T: ScalarBase> {
+pub struct QrResult<T: Scalar> {
     /// Orthonormal factor. Shape: `left_dims... × k`.
     pub q: Tensor<T>,
     /// Upper triangular factor. Shape: `k × right_dims...`.
@@ -202,7 +202,7 @@ pub struct QrResult<T: ScalarBase> {
 /// let result = lu(&a, &[0], &[1]).unwrap();
 /// assert_eq!(result.p.len(), 3);
 /// ```
-pub struct LuResult<T: ScalarBase> {
+pub struct LuResult<T: Scalar> {
     /// Row permutation vector (partial pivoting). Length: `m`.
     pub p: Vec<usize>,
     /// Unit lower triangular factor. Shape: `left_dims... × k`.
@@ -231,7 +231,7 @@ pub struct LuResult<T: ScalarBase> {
 /// assert_eq!(result.values.dims(), &[3]);
 /// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
-pub struct EigenResult<T: ScalarBase> {
+pub struct EigenResult<T: Scalar> {
     /// Eigenvalues. Shape: `[n]`.
     pub values: Tensor<T>,
     /// Right eigenvectors (columns). Shape: `left_dims... × n`.
@@ -278,7 +278,7 @@ pub struct EigenResult<T: ScalarBase> {
 ///
 /// Returns an error if `left` and `right` do not form a valid partition
 /// of `0..tensor.ndim()`.
-pub fn svd<T: ScalarBase>(
+pub fn svd<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -315,7 +315,7 @@ pub fn svd<T: ScalarBase>(
 ///
 /// Returns an error if `left` and `right` do not form a valid partition
 /// of `0..tensor.ndim()`.
-pub fn qr<T: ScalarBase>(
+pub fn qr<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -351,7 +351,7 @@ pub fn qr<T: ScalarBase>(
 ///
 /// Returns an error if `left` and `right` do not form a valid partition
 /// of `0..tensor.ndim()`.
-pub fn lu<T: ScalarBase>(
+pub fn lu<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -387,7 +387,7 @@ pub fn lu<T: ScalarBase>(
 ///
 /// Returns an error if `left` and `right` do not form a valid partition
 /// of `0..tensor.ndim()`, or if the resulting matrix is not square.
-pub fn eigen<T: ScalarBase>(
+pub fn eigen<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -421,7 +421,7 @@ pub fn eigen<T: ScalarBase>(
 ///     vt: None,
 /// };
 /// ```
-pub struct SvdCotangent<T: ScalarBase> {
+pub struct SvdCotangent<T: Scalar> {
     /// Cotangent for U. Shape must match `SvdResult::u`.
     pub u: Option<Tensor<T>>,
     /// Cotangent for S. Shape must match `SvdResult::s`.
@@ -439,7 +439,7 @@ pub struct SvdCotangent<T: ScalarBase> {
 ///
 /// let cotangent = QrCotangent::<f64> { q: None, r: None };
 /// ```
-pub struct QrCotangent<T: ScalarBase> {
+pub struct QrCotangent<T: Scalar> {
     /// Cotangent for Q. Shape must match `QrResult::q`.
     pub q: Option<Tensor<T>>,
     /// Cotangent for R. Shape must match `QrResult::r`.
@@ -457,7 +457,7 @@ pub struct QrCotangent<T: ScalarBase> {
 ///
 /// let cotangent = LuCotangent::<f64> { l: None, u: None };
 /// ```
-pub struct LuCotangent<T: ScalarBase> {
+pub struct LuCotangent<T: Scalar> {
     /// Cotangent for L. Shape must match `LuResult::l`.
     pub l: Option<Tensor<T>>,
     /// Cotangent for U. Shape must match `LuResult::u`.
@@ -473,7 +473,7 @@ pub struct LuCotangent<T: ScalarBase> {
 ///
 /// let cotangent = EigenCotangent::<f64> { values: None, vectors: None };
 /// ```
-pub struct EigenCotangent<T: ScalarBase> {
+pub struct EigenCotangent<T: Scalar> {
     /// Cotangent for eigenvalues. Shape must match `EigenResult::values`.
     pub values: Option<Tensor<T>>,
     /// Cotangent for eigenvectors. Shape must match `EigenResult::vectors`.
@@ -503,7 +503,7 @@ pub struct EigenCotangent<T: ScalarBase> {
 /// let result = tracked_svd(&a, &[0], &[1], None).unwrap();
 /// // result.u, result.s, result.vt are TrackedTensor values
 /// ```
-pub struct TrackedSvdResult<T: ScalarBase>
+pub struct TrackedSvdResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -530,7 +530,7 @@ where
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
 /// let result = tracked_qr(&a, &[0], &[1]).unwrap();
 /// ```
-pub struct TrackedQrResult<T: ScalarBase>
+pub struct TrackedQrResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -557,7 +557,7 @@ where
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
 /// let result = tracked_lu(&a, &[0], &[1]).unwrap();
 /// ```
-pub struct TrackedLuResult<T: ScalarBase>
+pub struct TrackedLuResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -584,7 +584,7 @@ where
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
 /// let result = tracked_eigen(&a, &[0], &[1]).unwrap();
 /// ```
-pub struct TrackedEigenResult<T: ScalarBase>
+pub struct TrackedEigenResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -615,7 +615,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_svd(&a_dual, &[0], &[1], None).unwrap();
 /// ```
-pub struct DualSvdResult<T: ScalarBase>
+pub struct DualSvdResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -644,7 +644,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_qr(&a_dual, &[0], &[1]).unwrap();
 /// ```
-pub struct DualQrResult<T: ScalarBase>
+pub struct DualQrResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -671,7 +671,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_lu(&a_dual, &[0], &[1]).unwrap();
 /// ```
-pub struct DualLuResult<T: ScalarBase>
+pub struct DualLuResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -700,7 +700,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_eigen(&a_dual, &[0], &[1]).unwrap();
 /// ```
-pub struct DualEigenResult<T: ScalarBase>
+pub struct DualEigenResult<T: Scalar>
 where
     Tensor<T>: Differentiable,
 {
@@ -733,7 +733,7 @@ where
 /// let a = tape.leaf(Tensor::zeros(&[3, 4], mem, col));
 /// let result = tracked_svd(&a, &[0], &[1], None).unwrap();
 /// ```
-pub fn tracked_svd<T: ScalarBase>(
+pub fn tracked_svd<T: Scalar>(
     _tensor: &TrackedTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -760,7 +760,7 @@ where
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
 /// let result = tracked_qr(&a, &[0], &[1]).unwrap();
 /// ```
-pub fn tracked_qr<T: ScalarBase>(
+pub fn tracked_qr<T: Scalar>(
     _tensor: &TrackedTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -786,7 +786,7 @@ where
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
 /// let result = tracked_lu(&a, &[0], &[1]).unwrap();
 /// ```
-pub fn tracked_lu<T: ScalarBase>(
+pub fn tracked_lu<T: Scalar>(
     _tensor: &TrackedTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -812,7 +812,7 @@ where
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
 /// let result = tracked_eigen(&a, &[0], &[1]).unwrap();
 /// ```
-pub fn tracked_eigen<T: ScalarBase>(
+pub fn tracked_eigen<T: Scalar>(
     _tensor: &TrackedTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -844,7 +844,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_svd(&a_dual, &[0], &[1], None).unwrap();
 /// ```
-pub fn dual_svd<T: ScalarBase>(
+pub fn dual_svd<T: Scalar>(
     _tensor: &DualTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -873,7 +873,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_qr(&a_dual, &[0], &[1]).unwrap();
 /// ```
-pub fn dual_qr<T: ScalarBase>(
+pub fn dual_qr<T: Scalar>(
     _tensor: &DualTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -901,7 +901,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_lu(&a_dual, &[0], &[1]).unwrap();
 /// ```
-pub fn dual_lu<T: ScalarBase>(
+pub fn dual_lu<T: Scalar>(
     _tensor: &DualTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -929,7 +929,7 @@ where
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let result = dual_eigen(&a_dual, &[0], &[1]).unwrap();
 /// ```
-pub fn dual_eigen<T: ScalarBase>(
+pub fn dual_eigen<T: Scalar>(
     _tensor: &DualTensor<Tensor<T>>,
     _left: &[usize],
     _right: &[usize],
@@ -968,7 +968,7 @@ where
 /// };
 /// let grad_a = svd_rrule(&a, &[0], &[1], None, &cotangent).unwrap();
 /// ```
-pub fn svd_rrule<T: ScalarBase>(
+pub fn svd_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -996,7 +996,7 @@ pub fn svd_rrule<T: ScalarBase>(
 /// };
 /// let grad_a = qr_rrule(&a, &[0], &[1], &cotangent).unwrap();
 /// ```
-pub fn qr_rrule<T: ScalarBase>(
+pub fn qr_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -1023,7 +1023,7 @@ pub fn qr_rrule<T: ScalarBase>(
 /// };
 /// let grad_a = lu_rrule(&a, &[0], &[1], &cotangent).unwrap();
 /// ```
-pub fn lu_rrule<T: ScalarBase>(
+pub fn lu_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -1050,7 +1050,7 @@ pub fn lu_rrule<T: ScalarBase>(
 /// };
 /// let grad_a = eigen_rrule(&a, &[0], &[1], &cotangent).unwrap();
 /// ```
-pub fn eigen_rrule<T: ScalarBase>(
+pub fn eigen_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -1080,7 +1080,7 @@ pub fn eigen_rrule<T: ScalarBase>(
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let result = svd_frule(&a, &[0], &[1], None, Some(&da)).unwrap();
 /// ```
-pub fn svd_frule<T: ScalarBase>(
+pub fn svd_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -1105,7 +1105,7 @@ pub fn svd_frule<T: ScalarBase>(
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let result = qr_frule(&a, &[0], &[1], Some(&da)).unwrap();
 /// ```
-pub fn qr_frule<T: ScalarBase>(
+pub fn qr_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -1129,7 +1129,7 @@ pub fn qr_frule<T: ScalarBase>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let result = lu_frule(&a, &[0], &[1], Some(&da)).unwrap();
 /// ```
-pub fn lu_frule<T: ScalarBase>(
+pub fn lu_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
@@ -1153,7 +1153,7 @@ pub fn lu_frule<T: ScalarBase>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let result = eigen_frule(&a, &[0], &[1], Some(&da)).unwrap();
 /// ```
-pub fn eigen_frule<T: ScalarBase>(
+pub fn eigen_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _left: &[usize],
     _right: &[usize],
