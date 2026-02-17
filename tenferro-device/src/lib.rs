@@ -122,6 +122,22 @@ pub enum OpKind {
 ///
 /// Returns [`Error::NoCompatibleComputeDevice`] if no compute device can
 /// execute the given operation on the specified memory space.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::{
+///     preferred_compute_devices, ComputeDevice, LogicalMemorySpace, OpKind,
+/// };
+///
+/// let devices = preferred_compute_devices(
+///     LogicalMemorySpace::MainMemory,
+///     OpKind::BatchedGemm,
+/// ).unwrap();
+///
+/// // Typically includes CPU for main memory workloads.
+/// assert!(devices.contains(&ComputeDevice::Cpu { device_id: 0 }));
+/// ```
 pub fn preferred_compute_devices(
     _space: LogicalMemorySpace,
     _op_kind: OpKind,
