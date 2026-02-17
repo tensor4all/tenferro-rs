@@ -1,0 +1,14 @@
+[package]
+name = "tenferro-mdarray"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+description = "Bridge between mdarray multidimensional arrays and tenferro tensors."
+publish = false
+
+[dependencies]
+tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+tenferro-device = { path = "../../tenferro-device" }
+mdarray = "0.8"
