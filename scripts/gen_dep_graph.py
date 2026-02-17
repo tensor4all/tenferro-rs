@@ -11,13 +11,14 @@ Members are classified into three groups based on their directory prefix:
 - **(root)**     — core tenferro crates
 
 Each group is rendered as a DOT subgraph cluster with a distinct color.
+Node links point to ``index.html#<crate-name>`` anchors so that clicking
+a node in the embedded SVG scrolls the parent page to the crate description.
 
 Usage:
-    python3 scripts/gen_dep_graph.py [--root-dir DIR] [--api-prefix PREFIX]
+    python3 scripts/gen_dep_graph.py [--root-dir DIR]
 
 Options:
     --root-dir DIR        Workspace root (default: script's parent directory)
-    --api-prefix PREFIX   URL prefix for crate doc links (default: ".")
 """
 
 import argparse
@@ -91,14 +92,8 @@ def parse_crate_deps(
     return crate_name, internal
 
 
-def crate_to_doc_dir(crate_name: str) -> str:
-    """Convert crate name to rustdoc directory name (hyphens -> underscores)."""
-    return crate_name.replace("-", "_")
-
-
 def generate_dot(
     root: Path,
-    api_prefix: str = ".",
 ) -> str:
     """Generate DOT source for the workspace dependency graph."""
     members = parse_workspace_members(root)
@@ -158,8 +153,7 @@ def generate_dot(
         lines.append(f"        fontsize=14;")
         lines.append("")
         for name in crates:
-            doc_dir = crate_to_doc_dir(name)
-            url = f"{api_prefix}/{doc_dir}/index.html"
+            url = f"index.html#{name}"
             fillcolor = style["fillcolor"]
             lines.append(
                 f'        "{name}" [label="{name}", fillcolor="{fillcolor}", '
@@ -184,14 +178,9 @@ def main() -> None:
         default=Path(__file__).resolve().parent.parent,
         help="Workspace root directory",
     )
-    parser.add_argument(
-        "--api-prefix",
-        default=".",
-        help="URL prefix for crate doc links",
-    )
     args = parser.parse_args()
 
-    dot_source = generate_dot(args.root_dir, args.api_prefix)
+    dot_source = generate_dot(args.root_dir)
     sys.stdout.write(dot_source)
     sys.stdout.write("\n")
 
