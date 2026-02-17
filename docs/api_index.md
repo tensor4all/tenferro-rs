@@ -40,6 +40,7 @@ Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
 Extension:  tenferro-tropical       Tropical semiring operations (MaxPlus, MinPlus, MaxMul)
             tenferro-tropical-capi  C-API for tropical einsum
             tenferro-burn           Burn deep learning framework bridge
+            tenferro-mdarray        mdarray multidimensional array bridge
 ```
 
 ### Dependency Graph
@@ -178,3 +179,11 @@ tensor network operations. Defines `TensorNetworkOps` backend extension trait
 with `tn_einsum`, implements forward pass for `NdArray<f64>` and backward pass
 for `Autodiff<B, C>`, and provides Burn tensor / tenferro tensor conversion
 utilities.
+
+<a id="tenferro-mdarray"></a>
+### [tenferro-mdarray](tenferro_mdarray/index.html) <small>(Extension)</small>
+
+Bridge between [mdarray](https://crates.io/crates/mdarray) multidimensional
+arrays and tenferro tensors. Provides `mdarray_to_tensor` and `tensor_to_mdarray`
+conversion functions for bidirectional data exchange between
+`Array<T, DynRank>` and `Tensor<T>`.
