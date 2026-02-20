@@ -11,7 +11,6 @@
 //! # Operation categories
 //!
 //! **Core operations** (every backend must implement):
-//! - [`Contract`](PrimDescriptor::Contract): Fused permute + GEMM contraction (see design rationale below)
 //! - [`BatchedGemm`](PrimDescriptor::BatchedGemm): Batched matrix multiplication
 //! - [`Reduce`](PrimDescriptor::Reduce): Sum/max/min reduction over modes
 //! - [`Trace`](PrimDescriptor::Trace): Trace (contraction of paired diagonal modes)
@@ -21,28 +20,8 @@
 //! - [`ElementwiseUnary`](PrimDescriptor::ElementwiseUnary): Point-wise unary transform (negate, reciprocal, abs, sqrt)
 //!
 //! **Extended operations** (dynamically queried via [`TensorPrims::has_extension_for`]):
+//! - [`Contract`](PrimDescriptor::Contract): Fused permute + GEMM contraction (maps to `cutensorContract`)
 //! - [`ElementwiseMul`](PrimDescriptor::ElementwiseMul): Element-wise multiplication
-//!
-//! ## Why `Contract` is a core operation
-//!
-//! `Contract` fuses permutation and GEMM into a single primitive, matching
-//! cuTENSOR's `cutensorContract`. This is critical for performance because:
-//!
-//! 1. **Backend-internal data movement optimization**: The backend can choose
-//!    the optimal copy strategy (e.g., source-stride-order iteration for cold
-//!    cache, HPTT for warm cache, or skipping the copy entirely when strides
-//!    are already GEMM-compatible). These are decisions that require backend
-//!    knowledge and cannot be made by the einsum layer.
-//!
-//! 2. **Eliminates separate Permute + BatchedGemm overhead**: Benchmarks on
-//!    strided-rs show that eager permutation (always materializing via HPTT
-//!    before GEMM) causes 17–31% regression on MERA networks compared to
-//!    letting the contraction backend handle data movement internally. See
-//!    `strided-rs/docs/eager-hptt-experiment.md` for details.
-//!
-//! 3. **GPU compatibility**: cuTENSOR's `cutensorContract` is the primary
-//!    contraction API. Making `Contract` core ensures the einsum layer always
-//!    emits `Contract` calls, enabling uniform CPU/GPU code paths.
 //!
 //! # Algebra parameterization
 //!
@@ -85,19 +64,21 @@
 //! CpuBackend::execute(&plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
 //! ```
 //!
-//! ## Contraction (core operation)
+//! ## Contraction (extended operation)
 //!
 //! ```ignore
-//! use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor};
+//! use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor, Extension};
 //!
-//! // Contract is a core operation — no extension check needed
-//! let desc = PrimDescriptor::Contract {
-//!     modes_a: vec![0, 1], modes_b: vec![1, 2], modes_c: vec![0, 2],
-//! };
-//! let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-//! CpuBackend::execute(
-//!     &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut(),
-//! ).unwrap();
+//! // Contract is an extended operation — check availability first
+//! if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
+//!     let desc = PrimDescriptor::Contract {
+//!         modes_a: vec![0, 1], modes_b: vec![1, 2], modes_c: vec![0, 2],
+//!     };
+//!     let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
+//!     CpuBackend::execute(
+//!         &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut(),
+//!     ).unwrap();
+//! }
 //! ```
 
 use std::marker::PhantomData;
@@ -171,6 +152,8 @@ pub enum UnaryOp {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extension {
+    /// Fused contraction (permute + GEMM). Maps to `cutensorContract` on GPU.
+    Contract,
     /// Element-wise multiplication. Maps to `cutensorElementwiseBinary` on GPU.
     ElementwiseMul,
 }
@@ -190,35 +173,15 @@ pub enum Extension {
 /// ```
 /// use tenferro_prims::PrimDescriptor;
 ///
-/// // Matrix multiplication: C_{m,n} = A_{m,k} * B_{k,n}
-/// let desc = PrimDescriptor::Contract {
-///     modes_a: vec![0, 1],  // m=0, k=1
-///     modes_b: vec![1, 2],  // k=1, n=2
-///     modes_c: vec![0, 2],  // m=0, n=2
+/// // Batched matrix multiplication: C = A * B
+/// let desc = PrimDescriptor::BatchedGemm {
+///     batch_dims: vec![], m: 3, n: 5, k: 4,
 /// };
 /// ```
 pub enum PrimDescriptor {
     // ====================================================================
     // Core operations (every backend must implement)
     // ====================================================================
-    /// Fused contraction: permute + GEMM in one operation.
-    ///
-    /// `C[modes_c] = alpha * contract(A[modes_a], B[modes_b]) + beta * C`
-    ///
-    /// This is a **core operation** because the backend must control internal
-    /// data movement (permutation strategy, copy elision) for optimal
-    /// performance. See crate-level docs for the design rationale.
-    ///
-    /// Maps to `cutensorContract` on GPU.
-    Contract {
-        /// Mode labels for input tensor A.
-        modes_a: Vec<u32>,
-        /// Mode labels for input tensor B.
-        modes_b: Vec<u32>,
-        /// Mode labels for output tensor C.
-        modes_c: Vec<u32>,
-    },
-
     /// Batched matrix multiplication.
     ///
     /// `C[batch, m, n] = alpha * A[batch, m, k] * B[batch, k, n] + beta * C`
@@ -309,6 +272,23 @@ pub enum PrimDescriptor {
     // ====================================================================
     // Extended operations (dynamically queried)
     // ====================================================================
+    /// Fused contraction: permute + GEMM in one operation.
+    ///
+    /// `C[modes_c] = alpha * contract(A[modes_a], B[modes_b]) + beta * C`
+    ///
+    /// The backend controls internal data movement (copy elision, copy
+    /// strategy). Maps to `cutensorContract` on GPU.
+    ///
+    /// Available when `has_extension_for::<T>(Extension::Contract)` returns true.
+    Contract {
+        /// Mode labels for input tensor A.
+        modes_a: Vec<u32>,
+        /// Mode labels for input tensor B.
+        modes_b: Vec<u32>,
+        /// Mode labels for output tensor C.
+        modes_c: Vec<u32>,
+    },
+
     /// Element-wise multiplication of two tensors.
     ///
     /// Available when `has_extension_for::<T>(Extension::ElementwiseMul)` returns true.
@@ -318,9 +298,9 @@ pub enum PrimDescriptor {
 /// Backend trait for tensor primitive operations, parameterized by algebra `A`.
 ///
 /// Provides a cuTENSOR-compatible plan-based execution model for all
-/// operations. Core ops (contract, batched_gemm, reduce, trace, permute,
+/// operations. Core ops (batched_gemm, reduce, trace, permute,
 /// anti_trace, anti_diag, elementwise_unary) must be implemented.
-/// Extended ops (elementwise_mul) are dynamically queried via
+/// Extended ops (contract, elementwise_mul) are dynamically queried via
 /// [`has_extension_for`](TensorPrims::has_extension_for).
 ///
 /// # Algebra parameterization

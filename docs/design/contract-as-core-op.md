@@ -1,11 +1,14 @@
-# Why `Contract` Is a Core Operation
+# `Contract` as an Extended Operation
 
 ## Context
 
 `PrimDescriptor::Contract` fuses permutation and GEMM into a single primitive,
-matching cuTENSOR's `cutensorContract`. It was initially an extended operation
-(dynamically queried) but was promoted to core (every backend must implement)
-based on performance findings from strided-rs benchmarks.
+matching cuTENSOR's `cutensorContract`. It is an **extended operation**
+(dynamically queried via `has_extension_for`) because not all backends need to
+implement it — the einsum layer can fall back to `Permute` + `BatchedGemm`.
+
+Backends that do implement `Contract` gain performance through internal data
+movement optimization (copy elision, adaptive copy strategy).
 
 ## The Problem: Permute + BatchedGemm Is Suboptimal
 
@@ -86,18 +89,19 @@ See `strided-rs/docs/eager-hptt-experiment.md` for full results.
 
 ## Design Decision
 
-Making `Contract` a **core operation** means:
+`Contract` is an **extended operation** (dynamically queried):
 
-1. **The einsum layer always emits `Contract`** — no fallback to
-   `Permute` + `BatchedGemm` needed.
+1. **The einsum layer queries `has_extension_for(Extension::Contract)`** —
+   if available, emits `Contract`; otherwise falls back to
+   `Permute` + `BatchedGemm`.
 
-2. **Each backend controls internal data movement** — CPU backend can use
-   source-stride-order copy, try_fuse_group elision, buffer pooling, etc.
-   GPU backend delegates to `cutensorContract`.
+2. **Backends that implement `Contract` control internal data movement** —
+   CPU backend can use HPTT copy, try_fuse_group elision, buffer pooling,
+   etc. GPU backend delegates to `cutensorContract`.
 
-3. **No hints needed on `Permute`** — `Permute` remains a simple standalone
-   operation (for final output permutation, etc.) without cache-state hints.
-   The performance-critical path goes through `Contract`.
+3. **Minimal backend implementation burden** — simple backends only need
+   `Permute` + `BatchedGemm`. Performance-critical backends opt in to
+   `Contract` for the copy elision advantage.
 
 ## CPU Backend Implementation Strategy
 
