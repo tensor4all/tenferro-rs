@@ -39,32 +39,25 @@ orders (source and destination). The question is which order to follow:
 | Reads | Sequential (hardware prefetcher effective) | Scattered |
 | Writes | Scattered (absorbed by write-combining buffers) | Sequential + cache-blocked |
 
-**Why source-stride-order wins for cold-cache sources**: Between contraction
-steps, the source tensor's cache lines have been evicted by the subsequent
-GEMM's working set. With cold source data, read bandwidth dominates
-performance. Source-stride-order iteration follows ascending source strides,
-giving sequential memory access that the hardware prefetcher can stream
-efficiently. The scattered destination writes are absorbed by write-combining
-buffers in the CPU's store pipeline.
+**Source-stride-order** iterates in ascending source stride, giving
+sequential reads exploited by the hardware prefetcher. Scattered
+destination writes are absorbed by write-combining buffers.
 
-HPTT iterates in destination-stride-order, which gives sequential writes but
-scattered reads. For cold source data, these scattered reads cause frequent
-cache misses that the prefetcher cannot predict. Additionally, when many small
-dimensions are involved (e.g., 24 binary dims of size 2 in tensor networks),
-HPTT's bilateral dimension fusion produces many fused dimensions with small
-inner tiles, leading to high per-element recursion overhead.
+**HPTT (destination-stride-order)** gives sequential writes with
+cache-blocked reads, which is better when source data is warm in cache.
 
-**When HPTT wins**: When source data is warm in cache (e.g., just computed),
-scattered reads are cheap and HPTT's cache-blocked writes give better
-destination locality. This is the case for standalone `Permute` operations
-on freshly computed tensors.
+In theory, the choice depends on whether the source data is cache-hot
+(just computed) or cache-cold (evicted by intervening work). In a
+depth-first contraction tree, the right operand is typically warm (used
+immediately after computation), while the left operand may or may not
+be cold depending on the right subtree's size.
 
-The contraction backend knows the cache context (the source is a previous
-step's output, likely cold) and can choose the right strategy. A standalone
-`Permute` cannot.
+**In practice**, the flatten-HPTT experiment (`perf/flatten-hptt-recursion`)
+showed no measurable difference between source-order and HPTT-order
+iteration when both use the same flat odometer structure (±5% noise).
+The copy strategy is not the bottleneck — **copy elision is**.
 
-See `strided-rs/docs/permutation-optimization.md` for detailed bandwidth
-measurements and analysis.
+See `strided-rs/docs/permutation-optimization.md` for detailed analysis.
 
 ## Benchmark Evidence
 
@@ -114,9 +107,11 @@ should follow this priority order:
 2. **Source-stride-order copy**: When materialization is needed, iterate
    in ascending source stride order. This gives sequential reads that
    exploit the hardware prefetcher. The destination writes are scattered
-   but absorbed by write-combining buffers. This is the safe default for
-   `Contract` because inputs are typically cold in cache (output of a
-   previous contraction step, evicted by subsequent GEMM work).
+   but absorbed by write-combining buffers. Note: whether this actually
+   outperforms HPTT (destination-stride-order) depends on cache state —
+   in the flatten-HPTT experiment, the two strategies showed no
+   measurable difference. Source-stride-order is kept as the default
+   for simplicity, not for a proven performance advantage.
 
 3. **GEMM**: Call `BatchedGemm` on the prepared contiguous operands.
 
