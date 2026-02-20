@@ -240,14 +240,19 @@ pub trait TensorPrims<A> {
     /// Backend-specific plan type (no type erasure).
     type Plan<T: ScalarBase>;
 
+    /// Execution context (CPU: thread pool; GPU: CUDA stream).
+    type Context;
+
     /// Create an execution plan (cuTENSOR: describe → plan).
     fn plan<T: ScalarBase>(
+        ctx: &Self::Context,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
     ) -> Result<Self::Plan<T>>;
 
     /// Execute a plan (cuTENSOR: plan → execute).
     fn execute<T: ScalarBase>(
+        ctx: &Self::Context,
         plan: &Self::Plan<T>,
         alpha: T,
         inputs: &[&StridedView<T>],
@@ -267,14 +272,21 @@ pub trait TensorPrims<A> {
 ```rust
 pub struct CpuBackend;
 
+/// CPU execution context — wraps a rayon thread pool.
+/// Analogous to cuTENSOR's cutensorHandle_t.
+pub struct CpuContext {
+    pool: rayon::ThreadPool,
+}
+
 /// Standard arithmetic on CPU (faer GEMM for f64/f32, naive for others).
 impl TensorPrims<Standard> for CpuBackend {
     type Plan<T: ScalarBase> = CpuPlan<T>;
+    type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(desc: &PrimDescriptor, shapes: &[&[usize]])
+    fn plan<T: ScalarBase>(ctx: &CpuContext, desc: &PrimDescriptor, shapes: &[&[usize]])
         -> Result<CpuPlan<T>> { ... }
 
-    fn execute<T: ScalarBase>(plan: &CpuPlan<T>, ...) -> Result<()> { ... }
+    fn execute<T: ScalarBase>(ctx: &CpuContext, plan: &CpuPlan<T>, ...) -> Result<()> { ... }
 
     fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
         // CPU supports Contract and ElementwiseMul for all standard types
@@ -305,6 +317,7 @@ impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus; }
 /// Tropical GEMM on CPU (SIMD-optimized tropical-gemm kernel).
 impl TensorPrims<MaxPlus> for CpuBackend {
     type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Context = CpuContext;
 
     fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
         false  // tropical uses core ops decomposition, no fused contract
@@ -325,6 +338,7 @@ impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }
 
 impl TensorPrims<MyAlgebra> for CpuBackend {
     type Plan<T: ScalarBase> = MyPlan<T>;
+    type Context = CpuContext;
     ...
 }
 
@@ -346,24 +360,26 @@ einsum("ij,jk->ik", &[&a, &b])?;  // MyAlgebra auto-inferred
 **Usage examples**:
 
 ```rust
-use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor, ReduceOp, Standard};
+use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor, ReduceOp, Standard};
 use strided_view::StridedArray;
+
+let ctx = CpuContext::new(4);  // 4-thread pool
 
 // Plan + execute: GEMM
 let desc = PrimDescriptor::BatchedGemm { batch_dims: vec![], m: 3, n: 5, k: 4 };
-let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
+CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
 
 // Plan + execute: Reduction
 let desc = PrimDescriptor::Reduce { modes_a: vec![0, 1], modes_c: vec![0], op: ReduceOp::Sum };
-let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[3]]).unwrap();
-CpuBackend::execute(&plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[3]]).unwrap();
+CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
 
 // Dynamic extension check
 if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
     let desc = PrimDescriptor::Contract { modes_a: vec![0,1], modes_b: vec![1,2], modes_c: vec![0,2] };
-    let plan = CpuBackend::plan::<f64>(&desc, &shapes).unwrap();
-    CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+    let plan = CpuBackend::plan::<f64>(&ctx, &desc, &shapes).unwrap();
+    CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
 }
 ```
 

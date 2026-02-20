@@ -201,14 +201,19 @@ pub trait TensorPrims<A> {
     /// Backend-specific plan type (no type erasure).
     type Plan<T: ScalarBase>;
 
+    /// Execution context (CPU: thread pool; GPU: CUDA stream).
+    type Context;
+
     /// Create an execution plan (cuTENSOR: describe → plan).
     fn plan<T: ScalarBase>(
+        ctx: &Self::Context,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
     ) -> Result<Self::Plan<T>>;
 
     /// Execute a plan (cuTENSOR: plan → execute).
     fn execute<T: ScalarBase>(
+        ctx: &Self::Context,
         plan: &Self::Plan<T>,
         alpha: T,
         inputs: &[&StridedView<T>],
@@ -231,8 +236,8 @@ backend supports them is queried dynamically:
 // Check if backend supports fused contraction for this scalar type
 if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
     let desc = PrimDescriptor::Contract { modes_a, modes_b, modes_c };
-    let plan = CpuBackend::plan::<f64>(&desc, &shapes)?;
-    CpuBackend::execute(&plan, alpha, &inputs, beta, &mut output)?;
+    let plan = CpuBackend::plan::<f64>(&ctx, &desc, &shapes)?;
+    CpuBackend::execute(&ctx, &plan, alpha, &inputs, beta, &mut output)?;
 } else {
     // Decompose into core ops: diag → trace → permute → batched_gemm
 }
@@ -241,7 +246,9 @@ if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
 Key design decisions:
 
 1. **Associated functions, not methods** — No `&self` receiver. Call as
-   `CpuBackend::plan::<f64>(...)` instead of `backend.plan(...)`.
+   `CpuBackend::plan::<f64>(&ctx, ...)` instead of `backend.plan(...)`.
+   Execution resources (thread pool, CUDA stream) are passed via the
+   `type Context` associated type rather than through `&self`.
 2. **StridedView/StridedViewMut directly** — Not `Storage<T>` + `TensorMeta`.
 3. **Modes are `u32`** — Matching cuTENSOR's unsigned mode labels.
 4. **Single trait with dynamic extension query** — `TensorPrims<A>` with
@@ -266,13 +273,13 @@ via `Tensor::view()`:
 
 ```rust
 // TensorPrims<A>: works on CPU and GPU (plan-based)
-let plan = CpuBackend::plan::<f64>(&desc, &shapes)?;
-CpuBackend::execute(&plan, alpha, &inputs, beta, &mut output)?;
+let plan = CpuBackend::plan::<f64>(&ctx, &desc, &shapes)?;
+CpuBackend::execute(&ctx, &plan, alpha, &inputs, beta, &mut output)?;
 
 // Extended contraction (if backend supports it)
 if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
-    let plan = CpuBackend::plan::<f64>(&contract_desc, &shapes)?;
-    CpuBackend::execute(&plan, alpha, &[&a, &b], beta, &mut c)?;
+    let plan = CpuBackend::plan::<f64>(&ctx, &contract_desc, &shapes)?;
+    CpuBackend::execute(&ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
 }
 
 // Custom closures: use strided-kernel directly (CPU only)
@@ -838,8 +845,8 @@ For each binary contraction, the engine chooses between:
 **Path A — Extended Contract available** (`has_extension_for::<T>(Contract)`):
 ```
   let desc = PrimDescriptor::Contract { modes_a, modes_b, modes_c };
-  let plan = Backend::plan::<T>(&desc, &shapes)?;
-  Backend::execute(&plan, alpha, &[&a, &b], beta, &mut c)?;
+  let plan = Backend::plan::<T>(&ctx, &desc, &shapes)?;
+  Backend::execute(&ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
   → backend handles diag, trace, permute, GEMM internally
 ```
 

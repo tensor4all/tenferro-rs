@@ -105,8 +105,9 @@ See `strided-rs/docs/eager-hptt-experiment.md` for full results.
 
 ## CPU Backend Implementation Strategy
 
-`Contract::execute` receives `&[&StridedView<T>]` inputs — these may have
-arbitrary strides from lazy permutation in the einsum layer. The CPU backend
+`Contract::execute` receives `&Self::Context` and `&[&StridedView<T>]`
+inputs — these may have arbitrary strides from lazy permutation in the
+einsum layer. On CPU, the context provides the rayon thread pool. The CPU backend
 should follow this priority order:
 
 1. **Skip the copy** (`try_fuse_group`): Check if each input's dimension

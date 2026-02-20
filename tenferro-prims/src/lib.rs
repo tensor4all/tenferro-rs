@@ -36,10 +36,10 @@
 //! ## Plan-based GEMM
 //!
 //! ```ignore
-//! use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor};
-//! use tenferro_algebra::Standard;
+//! use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor};
 //! use strided_view::StridedArray;
 //!
+//! let ctx = CpuContext::new(4);
 //! let a = StridedArray::<f64>::col_major(&[3, 4]);
 //! let b = StridedArray::<f64>::col_major(&[4, 5]);
 //! let mut c = StridedArray::<f64>::col_major(&[3, 5]);
@@ -47,36 +47,38 @@
 //! let desc = PrimDescriptor::BatchedGemm {
 //!     batch_dims: vec![], m: 3, n: 5, k: 4,
 //! };
-//! let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-//! CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+//! let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
+//! CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
 //! ```
 //!
 //! ## Reduction (sum over an axis)
 //!
 //! ```ignore
-//! use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor, ReduceOp};
+//! use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor, ReduceOp};
 //!
+//! let ctx = CpuContext::new(4);
 //! // Sum over columns: c_i = Σ_j A_{i,j}
 //! let desc = PrimDescriptor::Reduce {
 //!     modes_a: vec![0, 1], modes_c: vec![0], op: ReduceOp::Sum,
 //! };
-//! let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[3]]).unwrap();
-//! CpuBackend::execute(&plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+//! let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[3]]).unwrap();
+//! CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
 //! ```
 //!
 //! ## Contraction (extended operation)
 //!
 //! ```ignore
-//! use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor, Extension};
+//! use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor, Extension};
 //!
+//! let ctx = CpuContext::new(4);
 //! // Contract is an extended operation — check availability first
 //! if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
 //!     let desc = PrimDescriptor::Contract {
 //!         modes_a: vec![0, 1], modes_b: vec![1, 2], modes_c: vec![0, 2],
 //!     };
-//!     let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
+//!     let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
 //!     CpuBackend::execute(
-//!         &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut(),
+//!         &ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut(),
 //!     ).unwrap();
 //! }
 //! ```
@@ -308,62 +310,54 @@ pub enum PrimDescriptor {
 /// The algebra parameter `A` enables extensibility: external crates can
 /// implement `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule compatible).
 ///
-/// # Associated functions (not methods)
+/// # Execution context
 ///
-/// All functions are associated functions (no `&self` receiver). Call as
-/// `CpuBackend::plan::<f64>(...)` instead of `backend.plan(...)`.
+/// All operations receive a `&Self::Context` that encapsulates the backend's
+/// execution resources. This follows the cuTENSOR `cutensorHandle_t` pattern:
+///
+/// - **CPU**: thread pool, buffer pool
+/// - **GPU**: CUDA stream, device handle, workspace
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor};
+/// use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor};
 ///
-/// // Plan a batched GEMM
+/// let ctx = CpuContext::new(4); // 4 threads
+///
 /// let desc = PrimDescriptor::BatchedGemm {
 ///     batch_dims: vec![], m: 3, n: 5, k: 4,
 /// };
-/// let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-///
-/// // Execute: C = 1.0 * A*B + 0.0 * C
-/// CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+/// let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
+/// CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
 /// ```
 pub trait TensorPrims<A> {
     /// Backend-specific plan type (no type erasure).
     type Plan<T: ScalarBase>;
+
+    /// Backend-specific execution context.
+    ///
+    /// Encapsulates execution resources (thread pool for CPU, CUDA stream
+    /// for GPU). Analogous to cuTENSOR's `cutensorHandle_t`.
+    type Context;
 
     /// Create an execution plan from an operation descriptor.
     ///
     /// The plan pre-computes kernel selection and workspace sizes.
     /// `shapes` contains the shape of each tensor involved in the operation
     /// (inputs first, then output).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor, ReduceOp};
-    ///
-    /// let desc = PrimDescriptor::Reduce {
-    ///     modes_a: vec![0, 1], modes_c: vec![0], op: ReduceOp::Sum,
-    /// };
-    /// let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[3]]).unwrap();
-    /// ```
-    fn plan<T: ScalarBase>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Result<Self::Plan<T>>;
+    fn plan<T: ScalarBase>(
+        ctx: &Self::Context,
+        desc: &PrimDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<Self::Plan<T>>;
 
     /// Execute a plan with the given scaling factors and tensor views.
     ///
     /// Follows the BLAS/cuTENSOR pattern:
     /// `output = alpha * op(inputs) + beta * output`
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Execute: output = 1.0 * gemm(a, b) + 0.0 * output  (overwrite)
-    /// CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
-    ///
-    /// // Accumulate: output = 1.0 * gemm(a, b) + 1.0 * output  (add)
-    /// CpuBackend::execute(&plan, 1.0, &[&a.view(), &b.view()], 1.0, &mut c.view_mut()).unwrap();
-    /// ```
     fn execute<T: ScalarBase>(
+        ctx: &Self::Context,
         plan: &Self::Plan<T>,
         alpha: T,
         inputs: &[&StridedView<T>],
@@ -375,16 +369,6 @@ pub trait TensorPrims<A> {
     ///
     /// Returns `true` if the backend supports the given extended operation
     /// for the specified scalar type.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_prims::{CpuBackend, TensorPrims, Extension};
-    ///
-    /// if CpuBackend::has_extension_for::<f64>(Extension::ElementwiseMul) {
-    ///     // Use fused element-wise multiplication
-    /// }
-    /// ```
     fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool;
 }
 
@@ -447,6 +431,45 @@ pub enum CpuPlan<T: ScalarBase> {
     ElementwiseMul { _marker: PhantomData<T> },
 }
 
+/// CPU execution context.
+///
+/// Encapsulates CPU-side execution resources, analogous to cuTENSOR's
+/// `cutensorHandle_t`. Holds a rayon thread pool so that operations do
+/// not depend on the global thread pool.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_prims::CpuContext;
+///
+/// let ctx = CpuContext::new(4); // 4-thread pool
+/// assert_eq!(ctx.num_threads(), 4);
+/// ```
+pub struct CpuContext {
+    pool: rayon::ThreadPool,
+}
+
+impl CpuContext {
+    /// Create a new CPU context with the given number of threads.
+    pub fn new(num_threads: usize) -> Self {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .expect("failed to build rayon thread pool");
+        Self { pool }
+    }
+
+    /// Returns the number of threads in the pool.
+    pub fn num_threads(&self) -> usize {
+        self.pool.current_num_threads()
+    }
+
+    /// Returns a reference to the underlying rayon thread pool.
+    pub fn thread_pool(&self) -> &rayon::ThreadPool {
+        &self.pool
+    }
+}
+
 /// CPU backend using strided-kernel and GEMM.
 ///
 /// Dispatched automatically when tensors reside on
@@ -456,29 +479,35 @@ pub enum CpuPlan<T: ScalarBase> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor};
+/// use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor};
 /// use strided_view::StridedArray;
 ///
-/// // Transpose a matrix
+/// let ctx = CpuContext::new(4);
 /// let desc = PrimDescriptor::Permute {
 ///     modes_a: vec![0, 1],
 ///     modes_b: vec![1, 0],
 /// };
-/// let plan = CpuBackend::plan::<f64>(&desc, &[&[3, 4], &[4, 3]]).unwrap();
+/// let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[4, 3]]).unwrap();
 /// let a = StridedArray::<f64>::col_major(&[3, 4]);
 /// let mut b = StridedArray::<f64>::col_major(&[4, 3]);
-/// CpuBackend::execute(&plan, 1.0, &[&a.view()], 0.0, &mut b.view_mut()).unwrap();
+/// CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view()], 0.0, &mut b.view_mut()).unwrap();
 /// ```
 pub struct CpuBackend;
 
 impl TensorPrims<Standard> for CpuBackend {
     type Plan<T: ScalarBase> = CpuPlan<T>;
+    type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(_desc: &PrimDescriptor, _shapes: &[&[usize]]) -> Result<CpuPlan<T>> {
+    fn plan<T: ScalarBase>(
+        _ctx: &CpuContext,
+        _desc: &PrimDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<CpuPlan<T>> {
         todo!()
     }
 
     fn execute<T: ScalarBase>(
+        _ctx: &CpuContext,
         _plan: &CpuPlan<T>,
         _alpha: T,
         _inputs: &[&StridedView<T>],

@@ -11,7 +11,7 @@ use std::marker::PhantomData;
 use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_device::Result;
-use tenferro_prims::{CpuBackend, Extension, PrimDescriptor, ReduceOp, TensorPrims};
+use tenferro_prims::{CpuBackend, CpuContext, Extension, PrimDescriptor, ReduceOp, TensorPrims};
 
 use crate::algebra::{MaxMulAlgebra, MaxPlusAlgebra, MinPlusAlgebra};
 
@@ -84,8 +84,10 @@ pub enum TropicalPlan<T: ScalarBase> {
 
 impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
     type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Context = CpuContext;
 
     fn plan<T: ScalarBase>(
+        _ctx: &CpuContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
@@ -93,6 +95,7 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
     }
 
     fn execute<T: ScalarBase>(
+        _ctx: &CpuContext,
         _plan: &TropicalPlan<T>,
         _alpha: T,
         _inputs: &[&StridedView<T>],
@@ -114,8 +117,10 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
 
 impl TensorPrims<MinPlusAlgebra> for CpuBackend {
     type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Context = CpuContext;
 
     fn plan<T: ScalarBase>(
+        _ctx: &CpuContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
@@ -123,6 +128,7 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
     }
 
     fn execute<T: ScalarBase>(
+        _ctx: &CpuContext,
         _plan: &TropicalPlan<T>,
         _alpha: T,
         _inputs: &[&StridedView<T>],
@@ -144,8 +150,10 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
 
 impl TensorPrims<MaxMulAlgebra> for CpuBackend {
     type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Context = CpuContext;
 
     fn plan<T: ScalarBase>(
+        _ctx: &CpuContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
@@ -153,6 +161,7 @@ impl TensorPrims<MaxMulAlgebra> for CpuBackend {
     }
 
     fn execute<T: ScalarBase>(
+        _ctx: &CpuContext,
         _plan: &TropicalPlan<T>,
         _alpha: T,
         _inputs: &[&StridedView<T>],

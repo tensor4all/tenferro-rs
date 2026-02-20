@@ -11,3 +11,4 @@ tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 strided-view.workspace = true
 strided-traits.workspace = true
+rayon = "1.10"
