@@ -100,6 +100,39 @@ Making `Contract` a **core operation** means:
    operation (for final output permutation, etc.) without cache-state hints.
    The performance-critical path goes through `Contract`.
 
+## CPU Backend Implementation Strategy
+
+`Contract::execute` receives `&[&StridedView<T>]` inputs — these may have
+arbitrary strides from lazy permutation in the einsum layer. The CPU backend
+should follow this priority order:
+
+1. **Skip the copy** (`try_fuse_group`): Check if each input's dimension
+   groups are already contiguous enough for GEMM. If so, pass the raw
+   pointers and strides directly — zero-cost. This is the most impactful
+   optimization (responsible for the mera_open 26–31% gap).
+
+2. **Source-stride-order copy**: When materialization is needed, iterate
+   in ascending source stride order. This gives sequential reads that
+   exploit the hardware prefetcher. The destination writes are scattered
+   but absorbed by write-combining buffers. This is the safe default for
+   `Contract` because inputs are typically cold in cache (output of a
+   previous contraction step, evicted by subsequent GEMM work).
+
+3. **GEMM**: Call `BatchedGemm` on the prepared contiguous operands.
+
+### Why not improve HPTT instead?
+
+An experiment (branch `perf/flatten-hptt-recursion`) replaced HPTT's
+recursive ComputeNode traversal with a flat iterative odometer loop,
+eliminating all function-call overhead. Results showed **no improvement**
+(±3% noise), confirming that:
+
+- The recursion overhead is not the bottleneck
+- The performance difference is fundamentally about **copy elision**
+  (`try_fuse_group`), not copy strategy
+- Source-stride-order is a reasonable default when copies cannot be skipped,
+  but the primary win comes from not copying at all
+
 ## Relationship to `BatchedGemm`
 
 `BatchedGemm` remains a separate core operation for cases where the data is
