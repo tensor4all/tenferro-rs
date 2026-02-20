@@ -52,12 +52,18 @@ depth-first contraction tree, the right operand is typically warm (used
 immediately after computation), while the left operand may or may not
 be cold depending on the right subtree's size.
 
-**In practice**, the flatten-HPTT experiment (`perf/flatten-hptt-recursion`)
-showed no measurable difference between source-order and HPTT-order
-iteration when both use the same flat odometer structure (±5% noise).
-The copy strategy is not the bottleneck — **copy elision is**.
+**In practice**, a direct comparison (branch `perf/src-vs-dst-order`) with
+copy elision disabled (`force-copy` feature) showed that **HPTT is faster
+on most workloads** (16–43% faster on lm_*, str_*, mera_closed), while
+**source-stride-order is faster only for degenerate cases with many small
+binary dimensions** (tn_focus/tn_light: 27–30% faster). On `mera_open`,
+the two strategies perform identically (±2%), confirming that the 26–31%
+regression in the eager-HPTT experiment was entirely due to copy elision loss.
 
-See `strided-rs/docs/permutation-optimization.md` for detailed analysis.
+The dominant optimization is copy elision. When copies cannot be avoided,
+HPTT is the better default thanks to cache-blocked tiling.
+
+See `strided-rs/docs/src-vs-dst-order-experiment.md` for full results.
 
 ## Benchmark Evidence
 
@@ -104,29 +110,35 @@ should follow this priority order:
    pointers and strides directly — zero-cost. This is the most impactful
    optimization (responsible for the mera_open 26–31% gap).
 
-2. **Source-stride-order copy**: When materialization is needed, iterate
-   in ascending source stride order. This gives sequential reads that
-   exploit the hardware prefetcher. The destination writes are scattered
-   but absorbed by write-combining buffers. Note: whether this actually
-   outperforms HPTT (destination-stride-order) depends on cache state —
-   in the flatten-HPTT experiment, the two strategies showed no
-   measurable difference. Source-stride-order is kept as the default
-   for simplicity, not for a proven performance advantage.
+2. **HPTT (destination-stride-order) copy**: When materialization is
+   needed, use HPTT's cache-blocked tiling. The `perf/src-vs-dst-order`
+   experiment showed HPTT outperforms source-stride-order on most
+   workloads (16–43% faster). Exception: for tensors with many small
+   dimensions (e.g., 24 binary dims of size 2), source-stride-order
+   is 27–30% faster due to HPTT's recursion degenerating.
 
 3. **GEMM**: Call `BatchedGemm` on the prepared contiguous operands.
 
-### Why not improve HPTT instead?
+### Copy strategy experiments summary
 
-An experiment (branch `perf/flatten-hptt-recursion`) replaced HPTT's
-recursive ComputeNode traversal with a flat iterative odometer loop,
-eliminating all function-call overhead. Results showed **no improvement**
-(±3% noise), confirming that:
+Three experiments characterize the copy strategy landscape:
 
-- The recursion overhead is not the bottleneck
-- The performance difference is fundamentally about **copy elision**
-  (`try_fuse_group`), not copy strategy
-- Source-stride-order is a reasonable default when copies cannot be skipped,
-  but the primary win comes from not copying at all
+1. **Flatten HPTT recursion** (`perf/flatten-hptt-recursion`): Replaced
+   recursive ComputeNode traversal with flat odometer — **no improvement**
+   (±3% noise). Recursion overhead is not a bottleneck.
+
+2. **Source-order vs HPTT** (`perf/src-vs-dst-order`): With copy elision
+   disabled, HPTT is 16–43% faster on most workloads. Source-order is
+   27–30% faster only for many-small-dims cases (tn_focus/tn_light).
+
+3. **Eager HPTT** (`perf/eager-hptt-permute`): Eagerly materializing all
+   permutations via HPTT causes 26–31% regression on `mera_open` — entirely
+   due to copy elision loss, not copy strategy.
+
+**Conclusion**: Copy elision is the dominant optimization. When copies are
+unavoidable, HPTT is the better default. An adaptive strategy switching to
+source-order for degenerate many-small-dims cases could provide the best of
+both worlds.
 
 ## Relationship to `BatchedGemm`
 
