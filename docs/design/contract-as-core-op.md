@@ -24,12 +24,47 @@ is suboptimal because:
   entirely when strides are already compatible (`try_fuse_group` in strided-rs).
   A separate `Permute` cannot know this.
 
-- **Wrong copy strategy**: The optimal copy strategy depends on cache state.
-  Between contraction steps, source data is typically cold in cache (evicted by
-  the previous GEMM). Source-stride-order iteration (sequential reads,
-  scattered writes) outperforms HPTT (destination-stride-order with cache
-  blocking) for cold-cache sources. But a standalone `Permute` cannot know the
-  cache state — only the contraction backend has this context.
+- **Wrong copy strategy**: When a copy is needed, there are two iteration
+  orders — source-stride-order and destination-stride-order (HPTT). The
+  optimal choice depends on cache state, which a standalone `Permute` cannot
+  know.
+
+### Source-stride-order vs HPTT (destination-stride-order)
+
+A permutation copy must traverse the same elements in two different stride
+orders (source and destination). The question is which order to follow:
+
+| | Source-stride-order | HPTT (dst-stride-order) |
+|---|---|---|
+| Reads | Sequential (hardware prefetcher effective) | Scattered |
+| Writes | Scattered (absorbed by write-combining buffers) | Sequential + cache-blocked |
+
+**Why source-stride-order wins for cold-cache sources**: Between contraction
+steps, the source tensor's cache lines have been evicted by the subsequent
+GEMM's working set. With cold source data, read bandwidth dominates
+performance. Source-stride-order iteration follows ascending source strides,
+giving sequential memory access that the hardware prefetcher can stream
+efficiently. The scattered destination writes are absorbed by write-combining
+buffers in the CPU's store pipeline.
+
+HPTT iterates in destination-stride-order, which gives sequential writes but
+scattered reads. For cold source data, these scattered reads cause frequent
+cache misses that the prefetcher cannot predict. Additionally, when many small
+dimensions are involved (e.g., 24 binary dims of size 2 in tensor networks),
+HPTT's bilateral dimension fusion produces many fused dimensions with small
+inner tiles, leading to high per-element recursion overhead.
+
+**When HPTT wins**: When source data is warm in cache (e.g., just computed),
+scattered reads are cheap and HPTT's cache-blocked writes give better
+destination locality. This is the case for standalone `Permute` operations
+on freshly computed tensors.
+
+The contraction backend knows the cache context (the source is a previous
+step's output, likely cold) and can choose the right strategy. A standalone
+`Permute` cannot.
+
+See `strided-rs/docs/permutation-optimization.md` for detailed bandwidth
+measurements and analysis.
 
 ## Benchmark Evidence
 
