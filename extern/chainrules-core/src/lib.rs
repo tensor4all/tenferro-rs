@@ -33,6 +33,12 @@
 //!     fn accumulate_tangent(a: MyVec, b: &MyVec) -> MyVec {
 //!         MyVec(a.0.iter().zip(&b.0).map(|(x, y)| x + y).collect())
 //!     }
+//!     fn num_elements(&self) -> usize {
+//!         self.0.len()
+//!     }
+//!     fn seed_cotangent(&self) -> MyVec {
+//!         MyVec(vec![1.0; self.0.len()])
+//!     }
 //! }
 //! ```
 
@@ -74,6 +80,20 @@ pub trait Differentiable {
 
     /// Accumulates (adds) two tangents: `a + b`.
     fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent;
+
+    /// Returns the number of scalar elements in this value.
+    ///
+    /// For scalar types (f64, f32), this is always 1.
+    /// For tensor types, this is the total number of elements.
+    fn num_elements(&self) -> usize;
+
+    /// Returns the seed cotangent for reverse-mode pullback.
+    ///
+    /// For a scalar loss, this returns the "one" tangent (1.0 for scalars,
+    /// ones-like for single-element tensors). Used internally by
+    /// [`Tape::pullback`](https://docs.rs/chainrules) to initialize the
+    /// backward pass.
+    fn seed_cotangent(&self) -> Self::Tangent;
 }
 
 /// AD-specific error type.
@@ -298,6 +318,14 @@ impl Differentiable for f64 {
     fn accumulate_tangent(a: f64, b: &f64) -> f64 {
         a + b
     }
+
+    fn num_elements(&self) -> usize {
+        1
+    }
+
+    fn seed_cotangent(&self) -> f64 {
+        1.0
+    }
 }
 
 impl Differentiable for f32 {
@@ -309,5 +337,13 @@ impl Differentiable for f32 {
 
     fn accumulate_tangent(a: f32, b: &f32) -> f32 {
         a + b
+    }
+
+    fn num_elements(&self) -> usize {
+        1
+    }
+
+    fn seed_cotangent(&self) -> f32 {
+        1.0
     }
 }
