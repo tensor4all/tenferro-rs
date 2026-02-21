@@ -138,6 +138,17 @@ pub trait HasAlgebra {
 ///
 /// This is the default algebra for built-in numeric types (`f32`, `f64`,
 /// `Complex32`, `Complex64`).
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_algebra::{HasAlgebra, Standard};
+///
+/// // f64 maps to Standard algebra automatically
+/// fn check_algebra<T: HasAlgebra<Algebra = Standard>>() {}
+/// check_algebra::<f64>();
+/// check_algebra::<f32>();
+/// ```
 pub struct Standard;
 
 impl HasAlgebra for f32 {

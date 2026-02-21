@@ -331,6 +331,22 @@ pub struct SlogdetResult<T: Scalar> {
 }
 
 /// Gradient result for `solve_rrule`: cotangents for both `A` and `b`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::solve_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
+/// let grad = solve_rrule(&a, &b, &cotangent).unwrap();
+/// // grad.a: shape [3, 3], grad.b: shape [3]
+/// ```
 pub struct SolveGrad<T: Scalar> {
     /// Cotangent for A. Same shape as `A`.
     pub a: Tensor<T>,
@@ -339,6 +355,15 @@ pub struct SolveGrad<T: Scalar> {
 }
 
 /// Norm kind for [`norm`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::NormKind;
+///
+/// let kind = NormKind::Fro;
+/// let lp = NormKind::Lp(3.0);
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub enum NormKind {
     /// Frobenius norm (matrix) or L2 norm (vector).
@@ -855,6 +880,20 @@ pub struct EigenCotangent<T: Scalar> {
 ///
 /// Note: `sign` is piecewise constant and not differentiable.
 /// Gradient flows only through `logabsdet`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::SlogdetCotangent;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let cotangent = SlogdetCotangent {
+///     logabsdet: Some(Tensor::<f64>::ones(&[], mem, col)),
+/// };
+/// ```
 pub struct SlogdetCotangent<T: Scalar> {
     /// Cotangent for logabsdet. Shape must match `SlogdetResult::logabsdet`.
     pub logabsdet: Option<Tensor<T>>,
@@ -1041,6 +1080,20 @@ pub fn lstsq_rrule<T: Scalar>(
 /// Reverse-mode AD rule for Cholesky (VJP / pullback).
 ///
 /// Given `A = L L†` and cotangent `L̄`, computes `Ā`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::cholesky_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let grad_a = cholesky_rrule(&a, &cotangent).unwrap();
+/// ```
 pub fn cholesky_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _cotangent: &Tensor<T>,
@@ -1051,6 +1104,21 @@ pub fn cholesky_rrule<T: Scalar>(
 /// Reverse-mode AD rule for linear solve (VJP / pullback).
 ///
 /// Given `Ax = b` and cotangent `x̄`, computes `(Ā, b̄)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::solve_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
+/// let grad = solve_rrule(&a, &b, &cotangent).unwrap();
+/// ```
 pub fn solve_rrule<T: Scalar>(
     _a: &Tensor<T>,
     _b: &Tensor<T>,
@@ -1062,6 +1130,20 @@ pub fn solve_rrule<T: Scalar>(
 /// Reverse-mode AD rule for matrix inverse (VJP / pullback).
 ///
 /// `Ā = -A⁻ᴴ · cotangent · A⁻ᴴ`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::inv_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let grad_a = inv_rrule(&a, &cotangent).unwrap();
+/// ```
 pub fn inv_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdResult<Tensor<T>> {
     todo!()
 }
@@ -1069,6 +1151,20 @@ pub fn inv_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdRe
 /// Reverse-mode AD rule for determinant (VJP / pullback).
 ///
 /// `Ā = det(A) · cotangent · A⁻ᵀ`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::det_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[], mem, col);
+/// let grad_a = det_rrule(&a, &cotangent).unwrap();
+/// ```
 pub fn det_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdResult<Tensor<T>> {
     todo!()
 }
@@ -1076,6 +1172,22 @@ pub fn det_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdRe
 /// Reverse-mode AD rule for slogdet (VJP / pullback).
 ///
 /// `Ā = cotangent_logabsdet · A⁻ᵀ`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::{slogdet_rrule, SlogdetCotangent};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let cotangent = SlogdetCotangent {
+///     logabsdet: Some(Tensor::ones(&[], mem, col)),
+/// };
+/// let grad_a = slogdet_rrule(&a, &cotangent).unwrap();
+/// ```
 pub fn slogdet_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _cotangent: &SlogdetCotangent<T>,
@@ -1084,6 +1196,23 @@ pub fn slogdet_rrule<T: Scalar>(
 }
 
 /// Reverse-mode AD rule for general eigendecomposition (VJP / pullback).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::{eig_rrule, EigenCotangent};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let cotangent = EigenCotangent {
+///     values: Some(Tensor::ones(&[3], mem, col)),
+///     vectors: None,
+/// };
+/// let grad_a = eig_rrule(&a, &cotangent).unwrap();
+/// ```
 pub fn eig_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _cotangent: &EigenCotangent<T>,
@@ -1092,6 +1221,20 @@ pub fn eig_rrule<T: Scalar>(
 }
 
 /// Reverse-mode AD rule for pseudoinverse (VJP / pullback).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::pinv_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col);
+/// let grad_a = pinv_rrule(&a, &cotangent, None).unwrap();
+/// ```
 pub fn pinv_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _cotangent: &Tensor<T>,
@@ -1101,6 +1244,20 @@ pub fn pinv_rrule<T: Scalar>(
 }
 
 /// Reverse-mode AD rule for matrix exponential (VJP / pullback).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::matrix_exp_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let grad_a = matrix_exp_rrule(&a, &cotangent).unwrap();
+/// ```
 pub fn matrix_exp_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _cotangent: &Tensor<T>,
@@ -1109,6 +1266,20 @@ pub fn matrix_exp_rrule<T: Scalar>(
 }
 
 /// Reverse-mode AD rule for norm (VJP / pullback).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::{norm_rrule, NormKind};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let cotangent = Tensor::<f64>::ones(&[], mem, col);
+/// let grad_a = norm_rrule(&a, &cotangent, NormKind::Fro).unwrap();
+/// ```
 pub fn norm_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _cotangent: &Tensor<T>,
@@ -1243,6 +1414,20 @@ pub fn lstsq_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for Cholesky (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::cholesky_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let (l, dl) = cholesky_frule(&a, &da).unwrap();
+/// ```
 pub fn cholesky_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -1251,6 +1436,22 @@ pub fn cholesky_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for linear solve (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::solve_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let db = Tensor::<f64>::ones(&[3], mem, col);
+/// let (x, dx) = solve_frule(&a, &b, &da, &db).unwrap();
+/// ```
 pub fn solve_frule<T: Scalar>(
     _a: &Tensor<T>,
     _b: &Tensor<T>,
@@ -1261,6 +1462,20 @@ pub fn solve_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for matrix inverse (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::inv_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let (a_inv, da_inv) = inv_frule(&a, &da).unwrap();
+/// ```
 pub fn inv_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -1269,6 +1484,20 @@ pub fn inv_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for determinant (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::det_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let (d, dd) = det_frule(&a, &da).unwrap();
+/// ```
 pub fn det_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -1277,6 +1506,20 @@ pub fn det_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for slogdet (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::slogdet_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let (result, dresult) = slogdet_frule(&a, &da).unwrap();
+/// ```
 pub fn slogdet_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -1285,6 +1528,20 @@ pub fn slogdet_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for general eigendecomposition (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::eig_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let (result, dresult) = eig_frule(&a, &da).unwrap();
+/// ```
 pub fn eig_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -1293,6 +1550,20 @@ pub fn eig_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for pseudoinverse (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::pinv_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let (pinv_a, dpinv_a) = pinv_frule(&a, &da, None).unwrap();
+/// ```
 pub fn pinv_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -1302,6 +1573,20 @@ pub fn pinv_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for matrix exponential (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::matrix_exp_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let (exp_a, dexp_a) = matrix_exp_frule(&a, &da).unwrap();
+/// ```
 pub fn matrix_exp_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -1310,6 +1595,20 @@ pub fn matrix_exp_frule<T: Scalar>(
 }
 
 /// Forward-mode AD rule for norm (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::{norm_frule, NormKind};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let (n, dn) = norm_frule(&a, &da, NormKind::Fro).unwrap();
+/// ```
 pub fn norm_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
