@@ -246,3 +246,53 @@ worth the implementation cost.
 
 See [reference/itensor-ecosystem.md](./reference/itensor-ecosystem.md) for
 the full ecosystem analysis.
+
+## Gap Analysis: DFT Application (OpenMX) as a Target Use Case
+
+We analysed [OpenMX 3.9.9 GPU](https://www.openmx-square.org/) — a
+production DFT code using MPI + OpenACC + cuBLAS/cuSOLVER — to evaluate
+whether tenferro-rs could serve as a pure-Rust computation foundation for
+similar electronic-structure applications.
+
+### What tenferro-rs already covers
+
+| OpenMX need | tenferro equivalent | Status |
+|-------------|---------------------|--------|
+| Dense GEMM (`dgemm`/`zgemm`, `cublasDgemm`) | `TensorPrims::BatchedGemm`, einsum | API defined |
+| Standard eigenvalue (`dsyev`/`zheev`) | `tenferro-linalg::eigen()` | API defined |
+| SVD, QR, LU | `tenferro-linalg` | API defined |
+| Complex128 support | `num-complex::Complex64` | Supported |
+| GPU memory model | `LogicalMemorySpace::GpuMemory` | Designed |
+| Async GPU execution | `CompletionEvent` | Designed |
+| C FFI + DLPack | `tenferro-capi` | API defined |
+
+### Gaps identified and decisions
+
+**Add to `tenferro-linalg` (POC phase):**
+
+| Operation | Rationale | Backend mapping |
+|-----------|-----------|-----------------|
+| `cholesky()` | Overlap matrix S factorisation (`dpotrf`) | faer (CPU), cuSOLVER (GPU) |
+| `solve()` | General linear solve A·x = b (Green's functions, NEGF) | faer (CPU), cuSOLVER (GPU) |
+| `inv()` | Explicit matrix inversion (LU-based) | Composed from `lu()` + `solve()` |
+
+**Deferred — introduce when application development requires them:**
+
+| Feature | Why deferred | Where it would live |
+|---------|-------------|---------------------|
+| Generalised eigenvalue (`geig`: A·x = λ·B·x) | Core of SCF loop but requires application-level validation first | `tenferro-linalg` |
+| FFT (3D forward/inverse) | Poisson solver; orthogonal to tensor contraction — better served by external `rustfft` + `cuFFT` via `Tensor::view()` | Application layer or thin wrapper crate |
+| Sparse / block-sparse matrices | Hamiltonian construction; application manages sparsity, passes dense blocks to tenferro | Application layer + external crates (`sprs`) |
+| MPI / distributed parallel | Node-level distribution; tenferro stays single-node (CPU/GPU) | Application layer |
+| ScaLAPACK-equivalent distributed solvers | Distributed eigenvalue (`pdsyev`/`pzheev`) | External crate (ELPA Rust binding) |
+| Extended `UnaryOp` (`Exp`, `Log`, `Pow`) | XC functionals on grids; handled by `strided-kernel::zip_map` | `TensorPrims` if needed |
+
+### Architectural assessment
+
+The current layered structure (device → algebra → prims → tensor →
+einsum/linalg → capi) is **natural and sufficient** for this use case.
+No structural changes are needed — adding `cholesky`/`solve`/`inv` to
+`tenferro-linalg` is a straightforward extension within the existing
+design. Application-specific concerns (sparsity, MPI, FFT) belong in the
+application layer, keeping tenferro-rs slim as a general-purpose tensor
+library.
