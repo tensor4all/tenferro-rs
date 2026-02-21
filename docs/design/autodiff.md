@@ -175,6 +175,11 @@ AD must remain algebra-aware:
   tropical sum. These indices are not computable from the output alone and must
   be saved during the forward pass.
 
+  **Argmax tie-break rule**: When multiple elements share the maximum (or minimum)
+  value, the element with the **smallest linear index** (row-major traversal order)
+  wins. This rule is deterministic and must be consistent across CPU, GPU, and C-API
+  backends.
+
   **GPU tropical AD note:** On GPU, tropical backward requires argmax-capable
   custom kernels that are distinct from cuTENSOR/hipTensor primitives. cuTENSOR
   operates on ring algebras (multiply-add); it has no native support for
@@ -194,6 +199,34 @@ AD must remain algebra-aware:
   algebra.
 
 See [algebra.md](./algebra.md) for the algebra system design.
+
+---
+
+## Error Contract for Unsupported AD Modes
+
+When an operation does not support a particular AD mode, it returns
+`AutodiffError::ModeNotSupported` rather than a generic error string.
+This allows callers — including C-API / FFI layers — to branch on the
+error variant without parsing error messages.
+
+```rust
+use chainrules_core::AutodiffError;
+
+let err = AutodiffError::ModeNotSupported {
+    mode: "frule".into(),
+    reason: "tropical einsum supports rrule only (max is not smooth)".into(),
+};
+```
+
+**Operations that return `ModeNotSupported`:**
+
+| Operation | Unsupported modes | Reason |
+|-----------|-------------------|--------|
+| Tropical einsum (`MaxPlus`, `MinPlus`, `MaxMul`) | `frule` (JVP) | `max`/`min` is not smooth; JVP is undefined |
+| Tropical einsum (`MaxPlus`, `MinPlus`, `MaxMul`) | `hvp` | Requires a smooth frule; not available |
+
+For standard arithmetic algebra, all three modes (`rrule`, `frule`, `hvp`)
+are supported where implemented.
 
 ---
 

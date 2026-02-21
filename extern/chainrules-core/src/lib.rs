@@ -105,6 +105,28 @@ pub enum AutodiffError {
     /// A ReverseRule does not support HVP (pullback_with_tangents).
     #[error("HVP not supported by this ReverseRule implementation")]
     HvpNotSupported,
+    /// The requested AD mode is not supported for the given algebra or operation.
+    ///
+    /// For example, tropical einsum does not support frule (JVP) or hvp —
+    /// only rrule (VJP) via the argmax route is available.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use chainrules_core::AutodiffError;
+    ///
+    /// let err = AutodiffError::ModeNotSupported {
+    ///     mode: "frule".into(),
+    ///     reason: "tropical einsum supports rrule only (max is not smooth)".into(),
+    /// };
+    /// ```
+    #[error("AD mode not supported: {mode} — {reason}")]
+    ModeNotSupported {
+        /// The unsupported mode (e.g., "frule", "hvp").
+        mode: String,
+        /// Explanation of why this mode is not supported.
+        reason: String,
+    },
     /// Generic AD argument error.
     #[error("invalid autodiff argument: {0}")]
     InvalidArgument(String),
