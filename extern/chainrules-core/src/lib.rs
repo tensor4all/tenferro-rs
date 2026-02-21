@@ -80,7 +80,7 @@ pub trait Differentiable {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use chainrules_core::AutodiffError;
 ///
 /// let err = AutodiffError::NonScalarLoss { num_elements: 8 };
@@ -112,7 +112,7 @@ pub enum AutodiffError {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use chainrules_core::AutodiffError;
     ///
     /// let err = AutodiffError::ModeNotSupported {
@@ -136,7 +136,7 @@ pub enum AutodiffError {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use chainrules_core::AdResult;
 ///
 /// fn returns_ad_result() -> AdResult<()> { Ok(()) }
