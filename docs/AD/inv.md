@@ -30,8 +30,8 @@ $$
 
 $$
 \delta\ell = \langle \bar{B},\,\dot{B}\rangle
-= \operatorname{tr}(\bar{B}^{\mathsf{H}}(-B\,\dot{A}\,B))
-= -\operatorname{tr}(B\,\bar{B}^{\mathsf{H}}\,B\,\dot{A})
+= \mathrm{tr}(\bar{B}^{\mathsf{H}}(-B\,\dot{A}\,B))
+= -\mathrm{tr}(B\,\bar{B}^{\mathsf{H}}\,B\,\dot{A})
 = \langle -B^{\mathsf{H}}\bar{B}\,B^{\mathsf{H}},\,\dot{A}\rangle
 $$
 

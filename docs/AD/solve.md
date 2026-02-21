@@ -40,8 +40,8 @@ $$
 $$
 
 **Derivation.** The second term:
-$\langle G,\, \dot{A}\,X\rangle = \operatorname{tr}(G^{\mathsf{H}}\,\dot{A}\,X)
-= \operatorname{tr}(X\,G^{\mathsf{H}}\,\dot{A})
+$\langle G,\, \dot{A}\,X\rangle = \mathrm{tr}(G^{\mathsf{H}}\,\dot{A}\,X)
+= \mathrm{tr}(X\,G^{\mathsf{H}}\,\dot{A})
 = \langle G\,X^{\mathsf{H}},\, \dot{A}\rangle$,
 so $\bar{A} = -G\,X^{\mathsf{H}}$.
 
@@ -52,11 +52,11 @@ triangular solves instead of general LU solves. Additionally, the
 cotangent $\bar{A}$ must be projected onto the triangular structure:
 
 $$
-\bar{A} = \operatorname{tril}(-G\,X^{\mathsf{H}}) \quad \text{(lower triangular case)}
+\bar{A} = \mathrm{tril}(-G\,X^{\mathsf{H}}) \quad \text{(lower triangular case)}
 $$
 
 $$
-\bar{A} = \operatorname{triu}(-G\,X^{\mathsf{H}}) \quad \text{(upper triangular case)}
+\bar{A} = \mathrm{triu}(-G\,X^{\mathsf{H}}) \quad \text{(upper triangular case)}
 $$
 
 For unit-triangular matrices, the diagonal of $\bar{A}$ is additionally

@@ -12,8 +12,8 @@ $$
 
 ## Notation
 
-- $\operatorname{tril}_-(X)$: **strictly** lower triangular part of $X$ (zero diagonal)
-- $\operatorname{triu}(X)$: upper triangular part of $X$ (including diagonal)
+- $\mathrm{tril}_-(X)$: **strictly** lower triangular part of $X$ (zero diagonal)
+- $\mathrm{triu}(X)$: upper triangular part of $X$ (including diagonal)
 
 Since $L$ is *unit* lower triangular, $dL$ has zero diagonal, so:
 - $\dot{L}$ (tangent) is strictly lower triangular
@@ -38,8 +38,8 @@ This intermediate separates uniquely into strictly-lower and upper-triangular pa
 Therefore:
 
 $$
-\dot{L} = L \operatorname{tril}_-(\dot{F}), \qquad
-\dot{U} = \operatorname{triu}(\dot{F}) \, U
+\dot{L} = L \mathrm{tril}_-(\dot{F}), \qquad
+\dot{U} = \mathrm{triu}(\dot{F}) \, U
 $$
 
 **Derivation:** From $PA = LU$, differentiating ($P$ constant):
@@ -68,16 +68,16 @@ $$
 $$
 
 $$
-\dot{L} = L \operatorname{tril}_-(\dot{F}), \qquad
-\dot{U}_1 = \operatorname{triu}(\dot{F}) \, U_1
+\dot{L} = L \mathrm{tril}_-(\dot{F}), \qquad
+\dot{U}_1 = \mathrm{triu}(\dot{F}) \, U_1
 $$
 
 $$
-\dot{U}_2 = L^{-1} P \dot{A}_2 - \operatorname{tril}_-(\dot{F}) \, U_2
+\dot{U}_2 = L^{-1} P \dot{A}_2 - \mathrm{tril}_-(\dot{F}) \, U_2
 $$
 
 The last equation follows from differentiating $U_2 = L^{-1} P A_2$:
-$\dot{U}_2 = L^{-1}(P \dot{A}_2 - \dot{L} U_2) = L^{-1} P \dot{A}_2 - \operatorname{tril}_-(\dot{F}) U_2$.
+$\dot{U}_2 = L^{-1}(P \dot{A}_2 - \dot{L} U_2) = L^{-1} P \dot{A}_2 - \mathrm{tril}_-(\dot{F}) U_2$.
 
 ### Tall case ($M > N$)
 
@@ -90,12 +90,12 @@ $$
 $$
 
 $$
-\dot{L}_1 = L_1 \operatorname{tril}_-(\dot{F}), \qquad
-\dot{U} = \operatorname{triu}(\dot{F}) \, U
+\dot{L}_1 = L_1 \mathrm{tril}_-(\dot{F}), \qquad
+\dot{U} = \mathrm{triu}(\dot{F}) \, U
 $$
 
 $$
-\dot{L}_2 = P_2 \dot{A} \, U^{-1} - L_2 \operatorname{triu}(\dot{F})
+\dot{L}_2 = P_2 \dot{A} \, U^{-1} - L_2 \mathrm{triu}(\dot{F})
 $$
 
 ## Pullback (rrule)
@@ -107,7 +107,7 @@ $$
 Define:
 
 $$
-\bar{F} = \operatorname{tril}_-(L^\dagger \bar{L}) + \operatorname{triu}(\bar{U} U^\dagger)
+\bar{F} = \mathrm{tril}_-(L^\dagger \bar{L}) + \mathrm{triu}(\bar{U} U^\dagger)
 $$
 
 Then:
@@ -118,26 +118,26 @@ $$
 
 **Derivation:** From the pushforward, $\delta\ell = \langle \bar{L}, \dot{L} \rangle + \langle \bar{U}, \dot{U} \rangle$ (Frobenius inner product).
 
-Substituting $\dot{L} = L \operatorname{tril}_-(\dot{F})$ and $\dot{U} = \operatorname{triu}(\dot{F}) U$:
+Substituting $\dot{L} = L \mathrm{tril}_-(\dot{F})$ and $\dot{U} = \mathrm{triu}(\dot{F}) U$:
 
 $$
-\delta\ell = \operatorname{Re}\operatorname{tr}\!\left(
-  \operatorname{tril}_-(L^\dagger \bar{L})^\dagger \dot{F}
-  + \operatorname{triu}(\bar{U} U^\dagger)^\dagger \dot{F}
+\delta\ell = \mathrm{Re}\mathrm{tr}\!\left(
+  \mathrm{tril}_-(L^\dagger \bar{L})^\dagger \dot{F}
+  + \mathrm{triu}(\bar{U} U^\dagger)^\dagger \dot{F}
 \right)
-= \operatorname{Re}\operatorname{tr}(\bar{F}^\dagger \dot{F})
+= \mathrm{Re}\mathrm{tr}(\bar{F}^\dagger \dot{F})
 $$
 
 where we used the identities:
-- $\langle X, \operatorname{tril}_-(Y) \rangle = \langle \operatorname{tril}_-(X), Y \rangle$
+- $\langle X, \mathrm{tril}_-(Y) \rangle = \langle \mathrm{tril}_-(X), Y \rangle$
   (strictly-lower projection is self-adjoint)
-- $\langle X, \operatorname{triu}(Y) \rangle = \langle \operatorname{triu}(X), Y \rangle$
+- $\langle X, \mathrm{triu}(Y) \rangle = \langle \mathrm{triu}(X), Y \rangle$
   (upper-triangular projection is self-adjoint)
 
 Substituting $\dot{F} = L^{-1} P \dot{A} U^{-1}$:
 
 $$
-\delta\ell = \operatorname{Re}\operatorname{tr}\!\left(
+\delta\ell = \mathrm{Re}\mathrm{tr}\!\left(
   (P^T L^{-\dagger} \bar{F} U^{-\dagger})^\dagger \dot{A}
 \right)
 $$
@@ -152,8 +152,8 @@ Define:
 
 $$
 \bar{H}_1 = \left(
-  \operatorname{tril}_-(L^\dagger \bar{L} - \bar{U}_2 U_2^\dagger)
-  + \operatorname{triu}(\bar{U}_1 U_1^\dagger)
+  \mathrm{tril}_-(L^\dagger \bar{L} - \bar{U}_2 U_2^\dagger)
+  + \mathrm{triu}(\bar{U}_1 U_1^\dagger)
 \right) U_1^{-\dagger}
 $$
 
@@ -169,7 +169,7 @@ $$
 
 **Derivation:** From $U_2 = L^{-1} P A_2$, the cotangent of $A_2$ through $U_2$ is
 $\bar{A}_2 = P^T L^{-\dagger} \bar{U}_2$. The cotangent of $Q$ (here $L$) receives an additional
-contribution $-\bar{U}_2 U_2^\dagger$ from $\dot{U}_2$'s dependence on $\operatorname{tril}_-(\dot{F})$.
+contribution $-\bar{U}_2 U_2^\dagger$ from $\dot{U}_2$'s dependence on $\mathrm{tril}_-(\dot{F})$.
 
 ### Tall case ($M > N$)
 
@@ -179,8 +179,8 @@ Define:
 
 $$
 \bar{H}_1 = L_1^{-\dagger} \left(
-  \operatorname{tril}_-(L_1^\dagger \bar{L}_1)
-  + \operatorname{triu}(\bar{U} U^\dagger - L_2^\dagger \bar{L}_2)
+  \mathrm{tril}_-(L_1^\dagger \bar{L}_1)
+  + \mathrm{triu}(\bar{U} U^\dagger - L_2^\dagger \bar{L}_2)
 \right)
 $$
 
@@ -196,7 +196,7 @@ $$
 
 **Derivation:** From $L_2 = P_2 A U^{-1}$, the cotangent of $A$ through $L_2$ is
 $\bar{A} \mathrel{+}= P_2^T \bar{L}_2 U^{-\dagger}$. The $\bar{U}$ term receives an additional
-contribution $-L_2^\dagger \bar{L}_2$ from $\dot{L}_2$'s dependence on $\operatorname{triu}(\dot{F})$.
+contribution $-L_2^\dagger \bar{L}_2$ from $\dot{L}_2$'s dependence on $\mathrm{triu}(\dot{F})$.
 
 ## Implementation notes
 
@@ -217,11 +217,11 @@ $L$ is unit lower triangular, $U$ is upper triangular.
 
 Scalar test functions (see [`docs/design/testing.md`](../design/testing.md)):
 
-- **dL only:** $f(A) = \operatorname{Re}(v^\dagger \operatorname{op} \, v)$, $v = L_{:,1}$
-- **dU only:** $f(A) = \operatorname{Re}(v^\dagger \operatorname{op} \, v)$, $v = U_{1,:}$
-- **joint dL+dU:** $f(A) = \operatorname{Re}(L_{1,1}^* \, U_{1,1})$
+- **dL only:** $f(A) = \mathrm{Re}(v^\dagger \mathrm{op} \, v)$, $v = L_{:,1}$
+- **dU only:** $f(A) = \mathrm{Re}(v^\dagger \mathrm{op} \, v)$, $v = U_{1,:}$
+- **joint dL+dU:** $f(A) = \mathrm{Re}(L_{1,1}^* \, U_{1,1})$
 
-where $\operatorname{op}$ is a random Hermitian matrix independent of $A$.
+where $\mathrm{op}$ is a random Hermitian matrix independent of $A$.
 
 ## References
 

@@ -3,7 +3,7 @@
 ## Forward
 
 $$
-A V = V \operatorname{diag}(\lambda), \quad A \in \mathbb{C}^{N \times N}
+A V = V \mathrm{diag}(\lambda), \quad A \in \mathbb{C}^{N \times N}
 $$
 
 where $V$ is the matrix of right eigenvectors (columns) and $\lambda$ the
@@ -23,12 +23,12 @@ $$
 
 ## Forward rule (JVP)
 
-Differentiating $AV = V\operatorname{diag}(\lambda)$ and left-multiplying by $V^{-1}$:
+Differentiating $AV = V\mathrm{diag}(\lambda)$ and left-multiplying by $V^{-1}$:
 
 $$
-V^{-1}\dot{A}\,V = V^{-1}\dot{V}\,\operatorname{diag}(\lambda)
-- \operatorname{diag}(\lambda)\,V^{-1}\dot{V}
-+ \operatorname{diag}(\dot{\lambda})
+V^{-1}\dot{A}\,V = V^{-1}\dot{V}\,\mathrm{diag}(\lambda)
+- \mathrm{diag}(\lambda)\,V^{-1}\dot{V}
++ \mathrm{diag}(\dot{\lambda})
 $$
 
 Define $\Delta P = V^{-1}\dot{A}\,V$.
@@ -52,7 +52,7 @@ $$
 **Normalization correction** (for $\|v_i\| = 1$ convention):
 
 $$
-\dot{V} = \dot{V}_{\mathrm{raw}} - V\,\operatorname{diag}\!\bigl(\operatorname{Re}(V^{\mathsf{H}}\dot{V}_{\mathrm{raw}})\bigr)
+\dot{V} = \dot{V}_{\mathrm{raw}} - V\,\mathrm{diag}\!\bigl(\mathrm{Re}(V^{\mathsf{H}}\dot{V}_{\mathrm{raw}})\bigr)
 $$
 
 This projects out the component that would change the eigenvector norms.
@@ -64,7 +64,7 @@ Given cotangents $\bar{\lambda}$ (eigenvalue) and $\bar{V}$ (eigenvector):
 **Step 1: Normalization adjoint**
 
 $$
-\bar{V}_{\mathrm{adj}} = \bar{V} - V\,\operatorname{diag}\!\bigl(\operatorname{Re}(V^{\mathsf{H}}\bar{V})\bigr)
+\bar{V}_{\mathrm{adj}} = \bar{V} - V\,\mathrm{diag}\!\bigl(\mathrm{Re}(V^{\mathsf{H}}\bar{V})\bigr)
 $$
 
 **Step 2: Inner gradient matrix**
@@ -84,12 +84,12 @@ $$
 \bar{A} = V^{-\mathsf{H}}\,G\,V^{\mathsf{H}}
 $$
 
-For real $A$: $\bar{A} = \operatorname{Re}(\bar{A})$.
+For real $A$: $\bar{A} = \mathrm{Re}(\bar{A})$.
 
 ### Gauge invariance check
 
 Eigenvectors are defined up to a complex phase $e^{i\phi}$. The loss function
-must be gauge-invariant, verified by $\operatorname{Im}(\operatorname{diag}(V^{\mathsf{H}}\bar{V})) \approx 0$.
+must be gauge-invariant, verified by $\mathrm{Im}(\mathrm{diag}(V^{\mathsf{H}}\bar{V})) \approx 0$.
 
 ## Relationship to symmetric case
 

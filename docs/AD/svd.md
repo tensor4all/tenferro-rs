@@ -7,7 +7,7 @@ A = U \Sigma V^\dagger, \quad A \in \mathbb{C}^{M \times N}, \quad K = \min(M, N
 $$
 
 - $U \in \mathbb{C}^{M \times K}$, $U^\dagger U = I_K$
-- $\Sigma = \operatorname{diag}(\sigma_1, \ldots, \sigma_K)$, $\sigma_i > 0$, descending
+- $\Sigma = \mathrm{diag}(\sigma_1, \ldots, \sigma_K)$, $\sigma_i > 0$, descending
 - $V \in \mathbb{C}^{N \times K}$, $V^\dagger V = I_K$
 
 ## Reverse rule
@@ -43,7 +43,7 @@ $$
 
 $$
 \Gamma_{\bar{U}} = (J + J^\dagger) \Sigma
-  + \operatorname{diag}(i \cdot \operatorname{Im}(\operatorname{diag}(U^\dagger \bar{U})) \cdot S_\text{inv})
+  + \mathrm{diag}(i \cdot \mathrm{Im}(\mathrm{diag}(U^\dagger \bar{U})) \cdot S_\text{inv})
 $$
 
 **Derivation:**
@@ -51,7 +51,7 @@ Differentiating $U^\dagger U = I$ gives $U^\dagger dU$ skew-Hermitian.
 The off-diagonal part of $U^\dagger dU$ is determined by $F$ and the SVD
 differential equation. The diagonal of $U^\dagger dU$ is purely imaginary
 (gauge freedom in the complex case), requiring the second term.
-For real SVD, the diagonal term vanishes since $\operatorname{Im}(\operatorname{diag}(U^T \bar{U})) = 0$.
+For real SVD, the diagonal term vanishes since $\mathrm{Im}(\mathrm{diag}(U^T \bar{U})) = 0$.
 
 #### From $\bar{V}$ (dV path)
 
@@ -70,7 +70,7 @@ is already absorbed by the $\bar{U}$ term.
 #### From $\bar{S}$ (dS path)
 
 $$
-\Gamma_{\bar{S}} = \operatorname{diag}(\bar{S})
+\Gamma_{\bar{S}} = \mathrm{diag}(\bar{S})
 $$
 
 This is the simplest cotangent path: $\sigma_i$ are independent real parameters.
@@ -90,7 +90,7 @@ Perturbations in the orthogonal complement require additional terms.
 **When $M > K$ (tall $A$, thin $U$):**
 
 $$
-\bar{A} \mathrel{+}= (\bar{U} - U U^\dagger \bar{U}) \operatorname{diag}(S_\text{inv}) V^\dagger
+\bar{A} \mathrel{+}= (\bar{U} - U U^\dagger \bar{U}) \mathrm{diag}(S_\text{inv}) V^\dagger
 $$
 
 The projector $(I_M - U U^\dagger)$ extracts the component of $\bar{U}$ in the
@@ -99,7 +99,7 @@ orthogonal complement of the column space of $U$.
 **When $N > K$ (wide $A$, thin $V$):**
 
 $$
-\bar{A} \mathrel{+}= U \operatorname{diag}(S_\text{inv}) (\bar{V}^\dagger - \bar{V}^\dagger V V^\dagger)
+\bar{A} \mathrel{+}= U \mathrm{diag}(S_\text{inv}) (\bar{V}^\dagger - \bar{V}^\dagger V V^\dagger)
 $$
 
 Analogous correction for the orthogonal complement of $V$.
@@ -110,8 +110,8 @@ For general $M \times N$ with $K = \min(M, N)$:
 
 $$
 \bar{A} = U \Gamma V^\dagger
-  + \mathbf{1}_{M > K} (I_M - U U^\dagger) \bar{U} \operatorname{diag}(S_\text{inv}) V^\dagger
-  + \mathbf{1}_{N > K} U \operatorname{diag}(S_\text{inv}) (I_N - V V^\dagger) \bar{V}^\dagger
+  + \mathbf{1}_{M > K} (I_M - U U^\dagger) \bar{U} \mathrm{diag}(S_\text{inv}) V^\dagger
+  + \mathbf{1}_{N > K} U \mathrm{diag}(S_\text{inv}) (I_N - V V^\dagger) \bar{V}^\dagger
 $$
 
 where $\mathbf{1}$ denotes the indicator function and $\Gamma$ is defined in Step 2.
@@ -121,7 +121,7 @@ where $\mathbf{1}$ denotes the indicator function and $\Gamma$ is defined in Ste
 ### Reconstruction check (forward)
 
 $$
-\|A - U \operatorname{diag}(S) V^\dagger\|_F < \varepsilon
+\|A - U \mathrm{diag}(S) V^\dagger\|_F < \varepsilon
 $$
 
 $U^\dagger U \approx I$, $V^\dagger V \approx I$, $S \geq 0$ descending.
@@ -131,10 +131,10 @@ $U^\dagger U \approx I$, $V^\dagger V \approx I$, $S \geq 0$ descending.
 Finite-difference gradient check with scalar test functions
 (see [`docs/design/testing.md`](../design/testing.md) for details):
 
-- **dU only:** $f(A) = \operatorname{Re}(\psi^\dagger H \psi)$, $\psi = U_{:,1}$
-- **dV only:** $f(A) = \operatorname{Re}(\psi^\dagger H \psi)$, $\psi = V_{:,1}$
+- **dU only:** $f(A) = \mathrm{Re}(\psi^\dagger H \psi)$, $\psi = U_{:,1}$
+- **dV only:** $f(A) = \mathrm{Re}(\psi^\dagger H \psi)$, $\psi = V_{:,1}$
 - **dS only:** $f(A) = \sum_i \sigma_i$
-- **joint dU+dV:** $f(A) = \operatorname{Re}(U_{1,1}^* V_{1,1})$
+- **joint dU+dV:** $f(A) = \mathrm{Re}(U_{1,1}^* V_{1,1})$
 
 where $H$ is a random Hermitian matrix independent of $A$.
 

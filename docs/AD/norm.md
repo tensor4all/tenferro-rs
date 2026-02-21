@@ -9,7 +9,7 @@ $$
 ### Forward rule (JVP)
 
 $$
-\dot{n} = \frac{\sum_i |x_i|^{p-2}\,\operatorname{Re}(\bar{x}_i\,\dot{x}_i)}{\|x\|_p^{p-1}}
+\dot{n} = \frac{\sum_i |x_i|^{p-2}\,\mathrm{Re}(\bar{x}_i\,\dot{x}_i)}{\|x\|_p^{p-1}}
 $$
 
 ### Reverse rule (VJP)
@@ -23,16 +23,16 @@ $$
 | $p$ | $\bar{x}$ (VJP) | Notes |
 |-----|-----------------|-------|
 | $0$ | $0$ | $\ell^0$ "norm" is piecewise constant |
-| $1$ | $\bar{n}\,\operatorname{sgn}(x)$ | Subgradient at $x_i = 0$ |
+| $1$ | $\bar{n}\,\mathrm{sgn}(x)$ | Subgradient at $x_i = 0$ |
 | $2$ | $\bar{n}\,x / \|x\|_2$ | Masked at $\|x\| = 0$ |
-| $\infty$ | $\bar{n}\,\operatorname{sgn}(x) \cdot \mathbb{1}_{|x| = \|x\|_\infty} / k$ | $k$ = multiplicity of max |
+| $\infty$ | $\bar{n}\,\mathrm{sgn}(x) \cdot \mathbb{1}_{|x| = \|x\|_\infty} / k$ | $k$ = multiplicity of max |
 
 ---
 
 ## 2. Frobenius norm
 
 $$
-\|A\|_F = \sqrt{\operatorname{tr}(A^{\mathsf{H}}A)}
+\|A\|_F = \sqrt{\mathrm{tr}(A^{\mathsf{H}}A)}
 $$
 
 Equivalent to the vector 2-norm of the flattened matrix.
@@ -40,7 +40,7 @@ Equivalent to the vector 2-norm of the flattened matrix.
 ### Forward rule (JVP)
 
 $$
-\dot{n} = \frac{\operatorname{Re}\!\operatorname{tr}(A^{\mathsf{H}}\dot{A})}{\|A\|_F}
+\dot{n} = \frac{\mathrm{Re}\!\mathrm{tr}(A^{\mathsf{H}}\dot{A})}{\|A\|_F}
 $$
 
 ### Reverse rule (VJP)
@@ -54,7 +54,7 @@ $$
 ## 3. Nuclear norm (trace norm)
 
 $$
-\|A\|_* = \sum_i \sigma_i(A) = \operatorname{tr}(S)
+\|A\|_* = \sum_i \sigma_i(A) = \mathrm{tr}(S)
 $$
 
 where $A = U S V^{\mathsf{H}}$ is the SVD.
@@ -62,7 +62,7 @@ where $A = U S V^{\mathsf{H}}$ is the SVD.
 ### Forward rule (JVP)
 
 $$
-\dot{n} = \operatorname{Re}\!\operatorname{tr}(U^{\mathsf{H}}\,\dot{A}\,V)
+\dot{n} = \mathrm{Re}\!\mathrm{tr}(U^{\mathsf{H}}\,\dot{A}\,V)
 $$
 
 ### Reverse rule (VJP)
@@ -72,8 +72,8 @@ $$
 $$
 
 **Derivation.** Since $\|A\|_* = \sum_i \sigma_i$ and
-$\dot{\sigma}_i = \operatorname{Re}(u_i^{\mathsf{H}}\,\dot{A}\,v_i)$,
-summing gives $\dot{n} = \operatorname{Re}\!\operatorname{tr}(U^{\mathsf{H}}\dot{A}\,V)$.
+$\dot{\sigma}_i = \mathrm{Re}(u_i^{\mathsf{H}}\,\dot{A}\,v_i)$,
+summing gives $\dot{n} = \mathrm{Re}\!\mathrm{tr}(U^{\mathsf{H}}\dot{A}\,V)$.
 The adjoint is $\bar{A} = \bar{n}\,U V^{\mathsf{H}}$.
 
 **Non-smooth case** ($A$ rank-deficient): the subdifferential is
@@ -93,7 +93,7 @@ $$
 For simple $\sigma_{\max}$ (multiplicity 1):
 
 $$
-\dot{n} = \operatorname{Re}(u_1^{\mathsf{H}}\,\dot{A}\,v_1)
+\dot{n} = \mathrm{Re}(u_1^{\mathsf{H}}\,\dot{A}\,v_1)
 $$
 
 where $u_1, v_1$ are the leading singular vectors.

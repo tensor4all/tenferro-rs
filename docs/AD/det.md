@@ -13,7 +13,7 @@ $$
 By Jacobi's formula (1841):
 
 $$
-\dot{d} = \det(A) \cdot \operatorname{tr}(A^{-1} \dot{A})
+\dot{d} = \det(A) \cdot \mathrm{tr}(A^{-1} \dot{A})
 $$
 
 ### Reverse mode (VJP)
@@ -24,15 +24,15 @@ $$
 \bar{A} = \bar{d} \cdot \det(A) \cdot A^{-\mathsf{T}}
 $$
 
-Equivalently, $\bar{A} = \bar{d} \cdot \operatorname{adj}(A)^{\mathsf{T}}$, where
-$\operatorname{adj}(A) = \det(A) \cdot A^{-1}$ is the classical adjugate.
+Equivalently, $\bar{A} = \bar{d} \cdot \mathrm{adj}(A)^{\mathsf{T}}$, where
+$\mathrm{adj}(A) = \det(A) \cdot A^{-1}$ is the classical adjugate.
 
 **Derivation.** From the JVP:
 
 $$
 \delta\ell = \langle \bar{d},\, \dot{d} \rangle
-= \bar{d} \cdot \det(A) \cdot \operatorname{tr}(A^{-1} \dot{A})
-= \operatorname{tr}\!\bigl((\bar{d} \cdot \det(A) \cdot A^{-\mathsf{T}})^{\mathsf{T}} \dot{A}\bigr)
+= \bar{d} \cdot \det(A) \cdot \mathrm{tr}(A^{-1} \dot{A})
+= \mathrm{tr}\!\bigl((\bar{d} \cdot \det(A) \cdot A^{-\mathsf{T}})^{\mathsf{T}} \dot{A}\bigr)
 $$
 
 Reading off: $\bar{A} = \bar{d} \cdot \det(A) \cdot A^{-\mathsf{T}}$.
@@ -40,13 +40,13 @@ Reading off: $\bar{A} = \bar{d} \cdot \det(A) \cdot A^{-\mathsf{T}}$.
 ### Singular matrix handling
 
 When $A$ is singular, $A^{-1}$ does not exist, but
-$\operatorname{adj}(A)^{\mathsf{T}}$ is well-defined:
+$\mathrm{adj}(A)^{\mathsf{T}}$ is well-defined:
 
-- $\operatorname{rank}(A) = N-1$: $\operatorname{adj}(A)$ is rank 1,
+- $\mathrm{rank}(A) = N-1$: $\mathrm{adj}(A)$ is rank 1,
   computable via SVD: $A = U \Sigma V^{\mathsf{H}}$ gives
-  $\operatorname{adj}(A) = V \operatorname{diag}(d) U^{\mathsf{H}}$
+  $\mathrm{adj}(A) = V \mathrm{diag}(d) U^{\mathsf{H}}$
   where $d_k = \prod_{i \neq k} \sigma_i$.
-- $\operatorname{rank}(A) \leq N-2$: $\operatorname{adj}(A) = 0$.
+- $\mathrm{rank}(A) \leq N-2$: $\mathrm{adj}(A) = 0$.
 
 PyTorch uses `prod_safe_zeros_backward` (leave-one-out product via
 exclusive cumulative product) for the SVD-based adjugate.
@@ -58,51 +58,51 @@ exclusive cumulative product) for the SVD-based adjugate.
 ### Forward
 
 $$
-(\operatorname{sign}, \operatorname{logabsdet}) = \operatorname{slogdet}(A)
+(\mathrm{sign}, \mathrm{logabsdet}) = \mathrm{slogdet}(A)
 $$
 
-where $\det(A) = \operatorname{sign} \cdot \exp(\operatorname{logabsdet})$.
+where $\det(A) = \mathrm{sign} \cdot \exp(\mathrm{logabsdet})$.
 
-- Real: $\operatorname{sign} \in \{-1, 0, +1\}$,
-  $\operatorname{logabsdet} = \log|\det(A)|$.
-- Complex: $\operatorname{sign} = \det(A)/|\det(A)|$ (unit complex),
-  $\operatorname{logabsdet} = \log|\det(A)|$.
+- Real: $\mathrm{sign} \in \{-1, 0, +1\}$,
+  $\mathrm{logabsdet} = \log|\det(A)|$.
+- Complex: $\mathrm{sign} = \det(A)/|\det(A)|$ (unit complex),
+  $\mathrm{logabsdet} = \log|\det(A)|$.
 
 ### Forward mode (JVP)
 
-Let $w = \operatorname{tr}(A^{-1} \dot{A})$.
+Let $w = \mathrm{tr}(A^{-1} \dot{A})$.
 
 **Real case:**
 
 $$
-\dot{\operatorname{logabsdet}} = w, \qquad
-\dot{\operatorname{sign}} = 0
+\dot{\mathrm{logabsdet}} = w, \qquad
+\dot{\mathrm{sign}} = 0
 $$
 
-($\operatorname{sign}$ is piecewise constant.)
+($\mathrm{sign}$ is piecewise constant.)
 
 **Complex case:**
 
 $$
-\dot{\operatorname{logabsdet}} = \operatorname{Re}(w), \qquad
-\dot{\operatorname{sign}} = i \cdot \operatorname{Im}(w) \cdot \operatorname{sign}
+\dot{\mathrm{logabsdet}} = \mathrm{Re}(w), \qquad
+\dot{\mathrm{sign}} = i \cdot \mathrm{Im}(w) \cdot \mathrm{sign}
 $$
 
-**Derivation.** From $\log\det(A) = \operatorname{logabsdet} + i\arg(\det(A))$
-and Jacobi's formula $d(\log\det(A)) = \operatorname{tr}(A^{-1} dA)$,
+**Derivation.** From $\log\det(A) = \mathrm{logabsdet} + i\arg(\det(A))$
+and Jacobi's formula $d(\log\det(A)) = \mathrm{tr}(A^{-1} dA)$,
 the real part gives the log-magnitude derivative and the imaginary part
 gives the argument (phase) derivative. Since
-$\operatorname{sign} = e^{i\arg(\det(A))}$, we get
-$d(\operatorname{sign}) = i \cdot d(\arg) \cdot \operatorname{sign}$.
+$\mathrm{sign} = e^{i\arg(\det(A))}$, we get
+$d(\mathrm{sign}) = i \cdot d(\arg) \cdot \mathrm{sign}$.
 
 ### Reverse mode (VJP)
 
-Given cotangents $(\overline{\operatorname{sign}},\, \overline{\operatorname{logabsdet}})$:
+Given cotangents $(\overline{\mathrm{sign}},\, \overline{\mathrm{logabsdet}})$:
 
-**Real case** ($\overline{\operatorname{sign}}$ has no contribution):
+**Real case** ($\overline{\mathrm{sign}}$ has no contribution):
 
 $$
-\bar{A} = \overline{\operatorname{logabsdet}} \cdot A^{-\mathsf{T}}
+\bar{A} = \overline{\mathrm{logabsdet}} \cdot A^{-\mathsf{T}}
 $$
 
 **Complex case:**
@@ -114,26 +114,26 @@ $$
 where
 
 $$
-g = \overline{\operatorname{logabsdet}}
-  - i \cdot \operatorname{Im}(\overline{\operatorname{sign}}^* \cdot \operatorname{sign})
+g = \overline{\mathrm{logabsdet}}
+  - i \cdot \mathrm{Im}(\overline{\mathrm{sign}}^* \cdot \mathrm{sign})
 $$
 
 **Derivation.** Taking the adjoint of the JVP for each output:
 
-- logabsdet cotangent: $\langle \bar{g}_{\mathrm{abs}},\, \operatorname{Re}(w) \rangle
-  = \operatorname{Re}(\bar{g}_{\mathrm{abs}} \cdot w)
+- logabsdet cotangent: $\langle \bar{g}_{\mathrm{abs}},\, \mathrm{Re}(w) \rangle
+  = \mathrm{Re}(\bar{g}_{\mathrm{abs}} \cdot w)
   = \langle \bar{g}_{\mathrm{abs}} \cdot A^{-\mathsf{H}},\, \dot{A} \rangle$.
 
-- sign cotangent: Using $\operatorname{Re}(z \cdot \operatorname{Im}(w))
-  = \operatorname{Re}(-\operatorname{Re}(z) \cdot i \cdot w)$, we get
-  contribution $-i \cdot \operatorname{Im}(\bar{g}_{\mathrm{sign}}^* \cdot \operatorname{sign}) \cdot A^{-\mathsf{H}}$.
+- sign cotangent: Using $\mathrm{Re}(z \cdot \mathrm{Im}(w))
+  = \mathrm{Re}(-\mathrm{Re}(z) \cdot i \cdot w)$, we get
+  contribution $-i \cdot \mathrm{Im}(\bar{g}_{\mathrm{sign}}^* \cdot \mathrm{sign}) \cdot A^{-\mathsf{H}}$.
 
 Combining yields the formula above.
 
 ### Note on singularity
 
 `slogdet` is **not differentiable** at singular matrices
-($\operatorname{logabsdet} = -\infty$), unlike `det`.
+($\mathrm{logabsdet} = -\infty$), unlike `det`.
 
 ## Implementation notes
 

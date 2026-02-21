@@ -54,8 +54,8 @@ $$
 
 $$
 \langle \bar{B},\, L(A, E) \rangle
-= \int_0^1 \operatorname{tr}\!\bigl(\bar{B}^{\mathsf{H}}\,\exp(sA)\,E\,\exp((1{-}s)A)\bigr)\,ds
-= \operatorname{tr}\!\Bigl(\bigl[\int_0^1 \exp(sA^{\mathsf{H}})\,\bar{B}\,\exp((1{-}s)A^{\mathsf{H}})\,ds\bigr]^{\mathsf{H}} E\Bigr)
+= \int_0^1 \mathrm{tr}\!\bigl(\bar{B}^{\mathsf{H}}\,\exp(sA)\,E\,\exp((1{-}s)A)\bigr)\,ds
+= \mathrm{tr}\!\Bigl(\bigl[\int_0^1 \exp(sA^{\mathsf{H}})\,\bar{B}\,\exp((1{-}s)A^{\mathsf{H}})\,ds\bigr]^{\mathsf{H}} E\Bigr)
 = \langle L(A^{\mathsf{H}}, \bar{B}),\, E \rangle
 $$
 

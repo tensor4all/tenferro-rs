@@ -12,15 +12,15 @@ $$
 ## Helper: `copyltu` (Hermitianize from lower triangle)
 
 $$
-\operatorname{copyltu}(M)_{ij} = \begin{cases}
+\mathrm{copyltu}(M)_{ij} = \begin{cases}
   M_{ij} & \text{if } i > j \\
-  \operatorname{Re}(M_{ii}) & \text{if } i = j \\
+  \mathrm{Re}(M_{ii}) & \text{if } i = j \\
   \overline{M_{ji}} & \text{if } i < j
 \end{cases}
 $$
 
 This constructs a Hermitian matrix from the lower triangular part of $M$.
-For real matrices: $\operatorname{tril}(M) + \operatorname{tril}(M)^T - \operatorname{diag}(\operatorname{diag}(M))$.
+For real matrices: $\mathrm{tril}(M) + \mathrm{tril}(M)^T - \mathrm{diag}(\mathrm{diag}(M))$.
 
 ## QR Case 1: Full-rank ($M \geq N$, square $R$)
 
@@ -39,7 +39,7 @@ Both terms are $N \times N$.
 ### Step 2: Hermitianize
 
 $$
-H = \operatorname{copyltu}(W)
+H = \mathrm{copyltu}(W)
 $$
 
 **Why:** The constraint $Q^\dagger Q = I$ means $Q^\dagger dQ$ is skew-Hermitian.
@@ -66,7 +66,7 @@ where $R^{-\dagger} = (R^\dagger)^{-1} = (R^{-1})^\dagger$.
 ### Complete formula (full-rank)
 
 $$
-\bar{A} = \left[\bar{Q} + Q \cdot \operatorname{copyltu}(R \bar{R}^\dagger - \bar{Q}^\dagger Q)\right] R^{-\dagger}
+\bar{A} = \left[\bar{Q} + Q \cdot \mathrm{copyltu}(R \bar{R}^\dagger - \bar{Q}^\dagger Q)\right] R^{-\dagger}
 $$
 
 ### Derivation
@@ -113,7 +113,7 @@ Partition $\bar{R} = [\bar{U} \mid \bar{D}]$.
 Apply the full-rank QR backward with the augmented cotangent:
 
 $$
-\bar{A}_1 = \operatorname{qr\_back\_fullrank}(Q, U, \bar{Q} + A_2 \bar{D}^\dagger, \bar{U})
+\bar{A}_1 = \mathrm{qr\_back\_fullrank}(Q, U, \bar{Q} + A_2 \bar{D}^\dagger, \bar{U})
 $$
 
 **Combine:**
@@ -147,7 +147,7 @@ W = L^\dagger \bar{L} - \bar{Q} Q^\dagger
 $$
 
 $$
-H = \operatorname{copyltu}(W)
+H = \mathrm{copyltu}(W)
 $$
 
 $$
@@ -163,7 +163,7 @@ $$
 ### Complete formula (full-rank)
 
 $$
-\bar{A} = L^{-\dagger} \left[\operatorname{copyltu}(L^\dagger \bar{L} - \bar{Q} Q^\dagger) Q + \bar{Q}\right]
+\bar{A} = L^{-\dagger} \left[\mathrm{copyltu}(L^\dagger \bar{L} - \bar{Q} Q^\dagger) Q + \bar{Q}\right]
 $$
 
 ## LQ Case 2: Tall $L$ ($M > N$, $K = N$)
@@ -183,7 +183,7 @@ and $A = \begin{pmatrix} U \\ D \end{pmatrix} Q$, so $A_1 = UQ$ and $A_2 = DQ$.
 Partition $\bar{L} = \begin{pmatrix} \bar{U} \\ \bar{D} \end{pmatrix}$.
 
 $$
-\bar{A}_1 = \operatorname{lq\_back\_fullrank}(U, Q, \bar{U}, \bar{Q} + \bar{D}^\dagger A_2)
+\bar{A}_1 = \mathrm{lq\_back\_fullrank}(U, Q, \bar{U}, \bar{Q} + \bar{D}^\dagger A_2)
 $$
 
 $$
@@ -207,10 +207,10 @@ $$
 Scalar test function (exercises both $\bar{Q}$ and $\bar{R}$ jointly):
 
 $$
-f(A) = \operatorname{Re}(v^\dagger \operatorname{op} \, v + v_2^\dagger \operatorname{op}_2 \, v_2), \quad v = Q_{:,1}, \quad v_2 = R_{2,:}
+f(A) = \mathrm{Re}(v^\dagger \mathrm{op} \, v + v_2^\dagger \mathrm{op}_2 \, v_2), \quad v = Q_{:,1}, \quad v_2 = R_{2,:}
 $$
 
-where $\operatorname{op}, \operatorname{op}_2$ are random Hermitian matrices independent of $A$.
+where $\mathrm{op}, \mathrm{op}_2$ are random Hermitian matrices independent of $A$.
 
 ## References
 
