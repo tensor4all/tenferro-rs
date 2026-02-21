@@ -233,10 +233,14 @@ Here `H` and `op` are random Hermitian (or symmetric) matrices, generated indepe
 - DualTensor: tangent propagation
 - Gradients: accumulate / get
 
-## Benchmark / Integration Tests (`tensor4all/benchmark_einsum`)
+## Benchmark Tests (`tensor4all/benchmark_einsum`)
 
-- Use the [einsum_benchmark](https://benchmark.einsum.org/) dataset (pkl format, 168 problems) as-is
-- Additional test cases can be added in the same pkl format
-- tenferro-rs computation routines are placed in this repository
-- Verification: compare `sum()` of computed result against `instance.result_sum`
-- Also usable for performance regression testing (leveraging `../strided-rs-benchmark-suite` JSON metadata)
+Performance benchmarks for einsum, using instances selected from
+[einsum_benchmark](https://benchmark.einsum.org/) (same selection as
+[strided-rs-benchmark-suite](https://github.com/tensor4all/strided-rs-benchmark-suite)).
+
+**Data stored**: metadata only (shapes, format strings, contraction paths) in JSON.
+No tensor data — tensors are generated at benchmark time (zero-filled or random).
+Correctness is verified by unit tests (see tenferro-einsum section above), not here.
+
+The repository contains tenferro-rs benchmark runner code for performance regression testing.
