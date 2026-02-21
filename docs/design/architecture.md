@@ -31,7 +31,7 @@ Layer 2: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zer
                                  impl Differentiable for Tensor<T>
 Shared:  chainrules-core       — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V>
          chainrules            — AD engine: Tape<V>, TrackedTensor<V>, DualTensor<V>
-         tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
+         tenferro-algebra      — HasAlgebra trait (UX sugar for algebra inference), Semiring trait, Standard<T> typed algebra
          tenferro-device       — Device enum, Error/Result types
 Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas)
          GPU backends          — cuTENSOR / hipTensor via tenferro-device vtable [future]
@@ -142,9 +142,9 @@ strided-traits -> strided-view -> strided-kernel
 tenferro-rs (workspace, depends on strided-rs):
 
 tenferro-device              tenferro-algebra
-  (LogicalMemorySpace +        (HasAlgebra trait,
+  (LogicalMemorySpace +        (HasAlgebra trait (UX sugar),
    ComputeDevice, Error,       Semiring trait,
-   Result)                     Standard type)
+   Result)                     Standard<T> typed algebra)
   (depends on: strided-view
    for StridedError,
    thiserror)

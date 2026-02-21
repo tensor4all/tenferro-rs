@@ -19,7 +19,7 @@ Define the types, modules, and API mapping needed for GPU support.
 3. **Layer 1 core infrastructure** — GPU backends are not extensions
    (unlike `tenferro-tropical`). They live in `tenferro-prims` alongside
    `CpuBackend`.
-4. **TensorPrims\<Standard\>** — each GPU backend implements the same
+4. **TensorPrims\<Standard\<S\>\>** — each GPU backend implements the same
    trait as `CpuBackend`. `einsum` code is backend-agnostic via the `B`
    type parameter.
 5. **Prims basic + Contract first** — the minimum set for einsum to work.
@@ -77,7 +77,7 @@ pub enum CudaPlan<T: ScalarBase> {
     MakeContiguous { _marker: PhantomData<T> },  // n/a on GPU (native stride support)
 }
 
-impl TensorPrims<Standard> for CudaBackend {
+impl<S: ScalarBase> TensorPrims<Standard<S>> for CudaBackend {
     type Plan<T: ScalarBase> = CudaPlan<T>;
     type Context = CudaContext;
     // ...

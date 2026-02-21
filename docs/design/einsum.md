@@ -334,14 +334,19 @@ the `permute_view + MakeContiguous + BatchedGemm` pipeline.
 
 ## Algebra Dispatch
 
+`Standard` is a typed algebra `Standard<T>(PhantomData<T>)` where `A::Scalar`
+carries the scalar type. `HasAlgebra` is UX sugar for default algebra inference
+— it lets the compiler infer `A = Standard<T>` from `T: HasAlgebra<Algebra = A>`
+without spelling out the algebra explicitly at call sites.
+
 Backend selection is determined by `T: HasAlgebra → infers algebra A`:
 
 ```rust
-// impl TensorPrims<Standard> for CpuBackend  → faer/cblas GEMM
-// impl TensorPrims<MaxPlus> for CpuBackend   → tropical-gemm (tenferro-tropical)
-// impl TensorPrims<Standard> for CudaBackend → cuTENSOR [future]
-// impl TensorPrims<Standard> for RocmBackend → hipTensor [future]
-// impl TensorPrims<MyAlgebra> for CpuBackend → user-provided kernels
+// impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend  → faer/cblas GEMM
+// impl TensorPrims<MaxPlus> for CpuBackend                 → tropical-gemm (tenferro-tropical)
+// impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend → cuTENSOR [future]
+// impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend → hipTensor [future]
+// impl TensorPrims<MyAlgebra> for CpuBackend               → user-provided kernels
 ```
 
 See [algebra.md](./algebra.md) for `HasAlgebra` and `Semiring` details.

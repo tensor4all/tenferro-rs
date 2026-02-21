@@ -12,7 +12,7 @@ Tests are split into two layers:
 ### tenferro-algebra
 
 - Semiring axioms (associativity, distributivity, zero element, identity element)
-- `Standard` algebra with f64 / Complex64
+- `Standard<f64>` and `Standard<Complex64>` algebra
 
 ### tenferro-device
 
