@@ -33,5 +33,11 @@
   "eigen": [
     {"shape": [4, 4], "dtype": "f64", "symm": true},
     {"shape": [4, 4], "dtype": "c64", "symm": true}
+  ],
+  "lstsq": [
+    {"shape_a": [10, 5], "shape_b": [10], "dtype": "f64"},
+    {"shape_a": [10, 5], "shape_b": [10], "dtype": "c64"},
+    {"shape_a": [6, 3], "shape_b": [6], "dtype": "f64"},
+    {"shape_a": [6, 3], "shape_b": [6], "dtype": "c64"}
   ]
 }

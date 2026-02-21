@@ -79,18 +79,19 @@ Einsum AD rules: `tracked_einsum`, `dual_einsum`, `einsum_rrule`,
 <a id="tenferro-linalg"></a>
 ### [tenferro-linalg](tenferro_linalg/index.html) <small>(Layer 4)</small>
 
-Tensor-level linear algebra decompositions: SVD, QR, LU, eigendecomposition.
+Tensor-level linear algebra decompositions and solvers: SVD, QR, LU,
+eigendecomposition, least squares.
 Users specify left/right dimension indices; the crate handles
 matricize -> decompose -> unmatricize internally via external backends
 (faer for CPU, cuSOLVER for GPU).
 
-Primary functions: `svd`, `qr`, `lu`, `eigen`.
-Result types: `SvdResult`, `QrResult`, `LuResult`, `EigenResult`.
+Primary functions: `svd`, `qr`, `lu`, `eigen`, `lstsq`.
+Result types: `SvdResult`, `QrResult`, `LuResult`, `EigenResult`, `LstsqResult`.
 SVD truncation: `SvdOptions` (max_rank, cutoff).
 
 Linalg AD rules: `svd_rrule`, `svd_frule`,
 `qr_rrule`, `qr_frule`, `lu_rrule`, `lu_frule`,
-`eigen_rrule`, `eigen_frule`.
+`eigen_rrule`, `eigen_frule`, `lstsq_rrule`, `lstsq_frule`.
 
 <a id="tenferro-tensor"></a>
 ### [tenferro-tensor](tenferro_tensor/index.html) <small>(Layer 3)</small>

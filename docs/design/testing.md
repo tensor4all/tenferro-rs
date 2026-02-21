@@ -149,6 +149,9 @@ Test input matrices are randomly generated for each case.
   ],
   "eigen": [
     {"shape": [4, 4], "dtype": "f64", "symm": true}
+  ],
+  "lstsq": [
+    {"shape_a": [10, 5], "shape_b": [10], "dtype": "f64"}
   ]
 }
 ```
@@ -166,6 +169,7 @@ BLAS/LAPACK do not specify sign/phase conventions, so reference data cannot be u
 | QR | `‖A − Q·R‖ < ε` | `Q'Q ≈ I`, R is upper triangular |
 | LU | `‖P·A − L·U‖ < ε` | L is unit lower triangular, U is upper triangular |
 | Eigen (symmetric) | `‖A − U·diag(E)·U'‖ < ε` | `U'U ≈ I` |
+| Lstsq | `A'(Ax − b) ≈ 0` | `‖Ax − b‖` is minimized |
 
 All tests run automatically for each (shape, dtype) case in the JSON file.
 
@@ -203,6 +207,7 @@ For each (shape, dtype) case in the JSON, all cotangent patterns are tested auto
 - QR: joint dQ+dR
 - LU: dL only, dU only, joint dL+dU
 - Eigen: dE only, dU only
+- Lstsq: dA only (fix b), db only (fix A)
 
 **Scalar test functions per cotangent pattern (ported from BackwardsLinalg.jl):**
 
@@ -221,6 +226,8 @@ Reference: [GiggleLiu/BackwardsLinalg.jl](https://github.com/GiggleLiu/Backwards
 | | joint dL+dU | `real(conj(L[1,1])·U[1,1])` | Both L and U contribute |
 | Eigen | dE only | `sum(E)` | Depends only on eigenvalues |
 | | dU only | `real(v'·op·v)`, v=U[:,1] | Depends only on eigenvectors |
+| Lstsq | dA only | `x'·op·x`, x=A\b, fix b | Isolates A cotangent |
+| | db only | `x'·op·x`, x=A\b, fix A | Isolates b cotangent |
 
 Here `H` and `op` are random Hermitian (or symmetric) matrices, generated independently of the test input `A`.
 

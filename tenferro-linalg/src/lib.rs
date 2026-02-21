@@ -1,6 +1,6 @@
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
-//! This crate provides SVD, QR, LU, and eigendecomposition for tensors
+//! This crate provides SVD, QR, LU, eigendecomposition, and least squares for tensors
 //! with shape `(m, n, *)`, adapted from PyTorch's `torch.linalg` for
 //! column-major layout:
 //!
@@ -382,6 +382,87 @@ pub fn eigen<T: Scalar>(_tensor: &Tensor<T>) -> Result<EigenResult<T>> {
     todo!()
 }
 
+/// Solve the least squares problem: `x = argmin ||Ax - b||²`.
+///
+/// Input shapes: `A` is `(m, n, *)`, `b` is `(m, *)`, with `m >= n`.
+/// Both must be column-major contiguous.
+///
+/// Internally computes `x = R⁻¹ Q† b` via thin QR decomposition of `A`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::lstsq;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
+/// let b = Tensor::<f64>::zeros(&[10], mem, col);
+/// let result = lstsq(&a, &b).unwrap();
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if `A` has fewer than 2 dimensions, `b` has fewer
+/// than 1 dimension, or `m < n`.
+pub fn lstsq<T: Scalar>(_a: &Tensor<T>, _b: &Tensor<T>) -> Result<LstsqResult<T>> {
+    todo!()
+}
+
+/// Least squares result: `x = argmin ||Ax - b||²`.
+///
+/// For an input `A` of shape `(m, n, *)` and `b` of shape `(m, *)` with `m >= n`:
+///
+/// - `x`: shape `(n, *)` (least-squares solution)
+/// - `residual`: shape `(m, *)` (residual `b - Ax`)
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::lstsq;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
+/// let b = Tensor::<f64>::zeros(&[10], mem, col);
+/// let result = lstsq(&a, &b).unwrap();
+/// assert_eq!(result.x.dims(), &[5]);
+/// ```
+pub struct LstsqResult<T: Scalar> {
+    /// Least-squares solution. Shape: `(n, *)`.
+    pub x: Tensor<T>,
+    /// Residual `b - Ax`. Shape: `(m, *)`.
+    pub residual: Tensor<T>,
+}
+
+/// Gradient result for `lstsq_rrule`: cotangents for both `A` and `b`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::{lstsq, lstsq_rrule};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
+/// let b = Tensor::<f64>::zeros(&[10], mem, col);
+/// let dx = Tensor::<f64>::ones(&[5], mem, col);
+/// let grad = lstsq_rrule(&a, &b, &dx).unwrap();
+/// // grad.a: shape [10, 5], grad.b: shape [10]
+/// ```
+pub struct LstsqGrad<T: Scalar> {
+    /// Cotangent for A. Same shape as `A`.
+    pub a: Tensor<T>,
+    /// Cotangent for b. Same shape as `b`.
+    pub b: Tensor<T>,
+}
+
 // ============================================================================
 // AD cotangent types
 // ============================================================================
@@ -615,6 +696,33 @@ pub fn eigen_rrule<T: Scalar>(
     todo!()
 }
 
+/// Reverse-mode AD rule for least squares (VJP / pullback).
+///
+/// Returns cotangents for both `A` and `b`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::lstsq_rrule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
+/// let b = Tensor::<f64>::zeros(&[10], mem, col);
+/// let dx = Tensor::<f64>::ones(&[5], mem, col);
+/// let grad = lstsq_rrule(&a, &b, &dx).unwrap();
+/// // grad.a: cotangent for A, grad.b: cotangent for b
+/// ```
+pub fn lstsq_rrule<T: Scalar>(
+    _a: &Tensor<T>,
+    _b: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+) -> AdResult<LstsqGrad<T>> {
+    todo!()
+}
+
 // ============================================================================
 // AD functions: frule (forward-mode, stateless)
 // ============================================================================
@@ -708,5 +816,31 @@ pub fn eigen_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
 ) -> AdResult<(EigenResult<T>, EigenResult<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for least squares (JVP / pushforward).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::lstsq_frule;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
+/// let b = Tensor::<f64>::zeros(&[10], mem, col);
+/// let da = Tensor::<f64>::ones(&[10, 5], mem, col);
+/// let db = Tensor::<f64>::ones(&[10], mem, col);
+/// let (result, dresult) = lstsq_frule(&a, &b, &da, &db).unwrap();
+/// ```
+pub fn lstsq_frule<T: Scalar>(
+    _a: &Tensor<T>,
+    _b: &Tensor<T>,
+    _tangent_a: &Tensor<T>,
+    _tangent_b: &Tensor<T>,
+) -> AdResult<(LstsqResult<T>, LstsqResult<T>)> {
     todo!()
 }
