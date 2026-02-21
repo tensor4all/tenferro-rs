@@ -18,8 +18,7 @@
 //! The backend is passed explicitly as a type parameter `B: TensorPrims<A>`
 //! with a mutable context `&mut B::Context`.  This follows Rust idiom of
 //! explicit ownership and mutability (no global/thread-local state).
-//! The context provides access to the thread pool, buffer pool, and plan
-//! cache.
+//! The context provides access to the thread pool and plan cache.
 //!
 //! # Examples
 //!
@@ -29,46 +28,48 @@
 //! use tenferro_einsum::einsum;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
+//! use tenferro_prims::{CpuBackend, CpuContext};
 //!
 //! let col = MemoryOrder::ColumnMajor;
+//! let mut ctx = CpuContext::new(4);
 //!
 //! let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 //! let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
 //! let v = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
 //!
 //! // Matrix multiplication: C = A @ B
-//! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+//! let c = einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 //!
 //! // Trace: tr(A)
-//! let tr = einsum("ii->", &[&a]).unwrap();
+//! let tr = einsum::<_, _, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
 //!
 //! // Outer product: v_i * v_j -> M_{ij}
-//! let outer = einsum("i,j->ij", &[&v, &v]).unwrap();
+//! let outer = einsum::<_, _, CpuBackend>(&mut ctx, "i,j->ij", &[&v, &v], None).unwrap();
 //!
 //! // Dot product: v . v
-//! let dot = einsum("i,i->", &[&v, &v]).unwrap();
+//! let dot = einsum::<_, _, CpuBackend>(&mut ctx, "i,i->", &[&v, &v], None).unwrap();
 //!
 //! // Matrix-vector product: A @ v
-//! let mv = einsum("ij,j->i", &[&a, &v]).unwrap();
+//! let mv = einsum::<_, _, CpuBackend>(&mut ctx, "ij,j->i", &[&a, &v], None).unwrap();
 //!
 //! // Diagonal embedding: vector -> diagonal matrix
 //! // v = [1, 2, 3] -> [[1,0,0],[0,2,0],[0,0,3]]
-//! let diag = einsum("i->ii", &[&v]).unwrap();
+//! let diag = einsum::<_, _, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
 //! assert_eq!(diag.dims(), &[3, 3]);
 //!
 //! // Diagonal extraction: matrix -> diagonal vector
-//! let d = einsum("ii->i", &[&a]).unwrap();
+//! let d = einsum::<_, _, CpuBackend>(&mut ctx, "ii->i", &[&a], None).unwrap();
 //!
 //! // Higher-order diagonal: 3D tensor with repeated index
 //! // Creates T_{iii} from v_i
-//! let t = einsum("i->iii", &[&v]).unwrap();
+//! let t = einsum::<_, _, CpuBackend>(&mut ctx, "i->iii", &[&v], None).unwrap();
 //! assert_eq!(t.dims(), &[3, 3, 3]);
 //!
 //! // Consuming variant: operands are moved, buffers may be reused
 //! use tenferro_einsum::einsum_owned;
 //! let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 //! let y = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
-//! let z = einsum_owned("ij,jk->ik", vec![x, y]).unwrap(); // x, y consumed
+//! let z = einsum_owned::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", vec![x, y], None).unwrap();
 //! ```
 //!
 //! ## Batch operations
@@ -78,20 +79,20 @@
 //! // A: (batch=10, m=3, k=4), B: (batch=10, k=4, n=5) -> C: (batch=10, m=3, n=5)
 //! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
 //! let b = Tensor::<f64>::zeros(&[10, 4, 5], LogicalMemorySpace::MainMemory, col);
-//! let c = einsum("bij,bjk->bik", &[&a, &b]).unwrap();
+//! let c = einsum::<_, _, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
 //! assert_eq!(c.dims(), &[10, 3, 5]);
 //!
 //! // Multiple batch dimensions: (batch1=2, batch2=3, m, k) x (batch1=2, batch2=3, k, n)
 //! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col);
 //! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col);
-//! let c = einsum("abij,abjk->abik", &[&a, &b]).unwrap();
+//! let c = einsum::<_, _, CpuBackend>(&mut ctx, "abij,abjk->abik", &[&a, &b], None).unwrap();
 //! assert_eq!(c.dims(), &[2, 3, 4, 6]);
 //!
 //! // Broadcast batch: A has batch dim, B is shared across batch
 //! // A: (batch=10, m=3, k=4), B: (k=4, n=5) -> C: (batch=10, m=3, n=5)
 //! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
 //! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
-//! let c = einsum("bij,jk->bik", &[&a, &b]).unwrap();
+//! let c = einsum::<_, _, CpuBackend>(&mut ctx, "bij,jk->bik", &[&a, &b], None).unwrap();
 //! assert_eq!(c.dims(), &[10, 3, 5]);
 //! ```
 //!
@@ -103,7 +104,7 @@
 //! // Same as "ij,jk->ik" but with integer labels
 //! // Useful when indices exceed 52 (a-z, A-Z) or are computed programmatically
 //! let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-//! let c = einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
+//! let c = einsum_with_subscripts::<_, _, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
 //! ```
 //!
 //! ## Contraction order control
@@ -111,7 +112,7 @@
 //! ```ignore
 //! // Three matrices: D = A @ B @ C
 //! // Parentheses specify: contract B*C first, then A*(BC)
-//! let d = einsum("ij,(jk,kl)->il", &[&a, &b, &c]).unwrap();
+//! let d = einsum::<_, _, CpuBackend>(&mut ctx, "ij,(jk,kl)->il", &[&a, &b, &c], None).unwrap();
 //!
 //! // Or use ContractionTree for programmatic control
 //! use tenferro_einsum::ContractionTree;
@@ -121,7 +122,7 @@
 //!     &[&[3, 4], &[4, 100], &[100, 5]],
 //!     &[(1, 2), (0, 3)],  // B*C first (avoids large intermediate)
 //! ).unwrap();
-//! let d = einsum_with_plan(&tree, &[&a, &b, &c]).unwrap();
+//! let d = einsum_with_plan::<_, _, CpuBackend>(&mut ctx, &tree, &[&a, &b, &c], None).unwrap();
 //! ```
 //!
 //! ## Accumulating into a pre-allocated output
@@ -130,8 +131,10 @@
 //! use tenferro_einsum::{einsum_with_plan_into, ContractionTree, Subscripts};
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
+//! use tenferro_prims::{CpuBackend, CpuContext};
 //!
 //! let col = MemoryOrder::ColumnMajor;
+//! let mut ctx = CpuContext::new(4);
 //! let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 //! let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
 //! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
@@ -141,7 +144,9 @@
 //! // Hot loop: reuse output buffer, zero allocation per iteration
 //! for _ in 0..1000 {
 //!     // C = 1.0 * (A @ B) + 0.0 * C  (overwrite)
-//!     einsum_with_plan_into(&tree, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+//!     einsum_with_plan_into::<_, _, CpuBackend>(
+//!         &mut ctx, &tree, &[&a, &b], 1.0, 0.0, &mut c, None,
+//!     ).unwrap();
 //! }
 //! ```
 //!
@@ -154,25 +159,27 @@
 //! accessed from the host.
 //!
 //! - `wait()` — explicitly blocks until computation completes
-//! - `view()`, `dims()`, `strides()` — implicitly call `wait()`
+//! - `tensor_view()`, `dims()`, `strides()` — implicitly call `wait()`
 //! - For CPU tensors, `event` is always `None` (zero overhead)
 //!
 //! ```ignore
 //! use tenferro_einsum::einsum;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
+//! use tenferro_prims::CudaBackend; // future
 //!
 //! // In production, obtain memory spaces via BackendRegistry (future API).
 //! let gpu_mem = LogicalMemorySpace::GpuMemory { device_id: 0 };
 //! let col = MemoryOrder::ColumnMajor;
+//! let mut gpu_ctx = /* CudaContext from BackendRegistry */;
 //!
 //! let a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col);
 //! let b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col);
 //!
 //! // Both einsum calls submit work to the GPU and return immediately.
 //! // The second call detects c's pending event and chains on the stream.
-//! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
-//! let d = einsum("ij,jk->ik", &[&c, &b]).unwrap();
+//! let c = einsum::<_, _, CudaBackend>(&mut gpu_ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+//! let d = einsum::<_, _, CudaBackend>(&mut gpu_ctx, "ij,jk->ik", &[&c, &b], None).unwrap();
 //!
 //! // wait() blocks until GPU computation completes
 //! d.wait();
@@ -202,9 +209,9 @@
 //! b.set_preferred_compute_device(Some(ComputeDevice::Cuda { device_id: 1 }));
 //!
 //! // einsum dispatches to the specified CUDA device
-//! let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+//! let c = einsum::<_, _, CudaBackend>(&mut gpu_ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 //!
-//! // Clear override — revert to automatic selection
+//! // Clear override — revert to automatic device selection
 //! // a.set_preferred_compute_device(None);
 //! ```
 
@@ -363,8 +370,8 @@ impl ContractionTree {
 /// Execute einsum using string notation.
 ///
 /// Parses the subscript string, optimizes the contraction order, and
-/// executes the contraction. The backend is selected automatically from
-/// the tensors' memory space and compute device.
+/// executes the contraction. The backend `B` and its context `ctx`
+/// are passed explicitly.
 ///
 /// Parentheses in the subscript string specify contraction order
 /// explicitly (e.g., `"ij,(jk,kl)->il"` contracts B and C first).
@@ -372,23 +379,28 @@ impl ContractionTree {
 ///
 /// # Arguments
 ///
+/// * `ctx` — Mutable backend context (thread pool, plan cache)
 /// * `subscripts` — Einstein summation notation (e.g., `"ij,jk->ik"`)
 /// * `operands` — Input tensors
+/// * `size_dict` — Optional dimension sizes for output labels not in inputs
 ///
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_prims::{CpuBackend, CpuContext};
+/// let mut ctx = CpuContext::new(4);
+///
 /// // Matrix multiplication
-/// let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+/// let c = einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 ///
 /// // Trace
-/// let tr = einsum("ii->", &[&a]).unwrap();
+/// let tr = einsum::<_, _, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
 ///
 /// // Batch matrix multiplication
-/// let c = einsum("bij,bjk->bik", &[&a, &b]).unwrap();
+/// let c = einsum::<_, _, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
 ///
 /// // Explicit contraction order: contract B*C first, then A
-/// let d = einsum("ij,(jk,kl)->il", &[&a, &b, &c]).unwrap();
+/// let d = einsum::<_, _, CpuBackend>(&mut ctx, "ij,(jk,kl)->il", &[&a, &b, &c], None).unwrap();
 /// ```
 ///
 /// # Errors
@@ -467,13 +479,15 @@ where
 /// ```ignore
 /// use tenferro_einsum::einsum_owned;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let col = MemoryOrder::ColumnMajor;
+/// let mut ctx = CpuContext::new(4);
 /// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 /// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
 ///
 /// // `a` and `b` are consumed; their buffers may be reused
-/// let c = einsum_owned("ij,jk->ik", vec![a, b]).unwrap();
+/// let c = einsum_owned::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", vec![a, b], None).unwrap();
 /// ```
 ///
 /// # Errors
@@ -550,11 +564,13 @@ where
 ///
 /// # Arguments
 ///
+/// * `ctx` — Mutable backend context (thread pool, plan cache)
 /// * `subscripts` — Einstein summation notation (e.g., `"ij,jk->ik"`)
 /// * `operands` — Input tensors
 /// * `alpha` — Scaling factor for the einsum result
 /// * `beta` — Scaling factor for the existing output contents
 /// * `output` — Pre-allocated output tensor (must have correct shape)
+/// * `size_dict` — Optional dimension sizes for output labels not in inputs
 ///
 /// # Examples
 ///
@@ -562,17 +578,19 @@ where
 /// use tenferro_einsum::einsum_into;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let col = MemoryOrder::ColumnMajor;
+/// let mut ctx = CpuContext::new(4);
 /// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 /// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
 /// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
 ///
 /// // Overwrite: C = A @ B
-/// einsum_into("ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+/// einsum_into::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c, None).unwrap();
 ///
 /// // Accumulate: C += A @ B
-/// einsum_into("ij,jk->ik", &[&a, &b], 1.0, 1.0, &mut c).unwrap();
+/// einsum_into::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 1.0, &mut c, None).unwrap();
 /// ```
 ///
 /// # Errors
@@ -606,12 +624,16 @@ where
 /// use tenferro_einsum::{einsum_with_subscripts_into, Subscripts};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 ///
+/// let mut ctx = CpuContext::new(4);
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 /// let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 ///
 /// // C = 1.0 * (A @ B) + 0.0 * C
-/// einsum_with_subscripts_into(&subs, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+/// einsum_with_subscripts_into::<_, _, CpuBackend>(
+///     &mut ctx, &subs, &[&a, &b], 1.0, 0.0, &mut c, None,
+/// ).unwrap();
 /// ```
 ///
 /// # Errors
@@ -647,15 +669,19 @@ where
 /// use tenferro_einsum::{einsum_with_plan_into, ContractionTree, Subscripts};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let col = MemoryOrder::ColumnMajor;
+/// let mut ctx = CpuContext::new(4);
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 /// let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
 /// let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, col);
 ///
 /// // Hot loop: reuse output buffer, no allocation per iteration
 /// for _ in 0..1000 {
-///     einsum_with_plan_into(&tree, &[&a, &b], 1.0, 0.0, &mut c).unwrap();
+///     einsum_with_plan_into::<_, _, CpuBackend>(
+///         &mut ctx, &tree, &[&a, &b], 1.0, 0.0, &mut c, None,
+///     ).unwrap();
 /// }
 /// ```
 ///
@@ -708,8 +734,8 @@ where
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
 /// ));
-/// let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
-/// let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
+/// let c = tracked_einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b]).unwrap();
+/// let loss = tracked_einsum::<_, _, CpuBackend>(&mut ctx, "ij,ij->", &[&c, &c]).unwrap();
 /// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
@@ -747,7 +773,7 @@ where
 ///
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let b_dual = DualTensor::new(b);
-/// let c_dual = dual_einsum("ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
+/// let c_dual = dual_einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
 /// let _tangent = c_dual.tangent();
 /// ```
 pub fn dual_einsum<T, A, B>(
@@ -784,7 +810,7 @@ where
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let grad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
 ///
-/// let grads = einsum_rrule("ij,jk->ik", &[&a, &b], &grad_c).unwrap();
+/// let grads = einsum_rrule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c).unwrap();
 /// assert_eq!(grads.len(), 2);
 /// ```
 pub fn einsum_rrule<T, A, B>(
@@ -821,7 +847,7 @@ where
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[2, 3], mem, col);
 ///
-/// let dc = einsum_frule("ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
+/// let dc = einsum_frule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
 pub fn einsum_frule<T, A, B>(
     _ctx: &mut B::Context,
@@ -865,7 +891,8 @@ where
 /// let grad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
 /// let dgrad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
 ///
-/// let results = einsum_hvp(
+/// let results = einsum_hvp::<_, _, CpuBackend>(
+///     &mut ctx,
 ///     "ij,jk->ik",
 ///     &[&a, &b],
 ///     &[Some(&da), None],
