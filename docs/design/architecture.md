@@ -16,6 +16,7 @@ Per-crate API details are in companion documents:
 [algebra](./algebra.md),
 [autodiff](./autodiff.md),
 [linalg](./linalg.md),
+[capi](./capi.md),
 [contraction-pipeline](./contraction-pipeline.md).
 
 ## Layered Architecture
