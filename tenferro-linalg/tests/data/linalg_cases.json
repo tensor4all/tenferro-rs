@@ -1,0 +1,29 @@
+{
+  "_comment": "Extracted from BackwardsLinalg.jl test suite. See docs/design/testing.md for details.",
+  "_random": "Uniform [-1, 1] for real/imag parts. symm=true: A + A'.",
+  "svd": [
+    {"shape": [3, 2], "dtype": "c64"},
+    {"shape": [3, 6], "dtype": "c64"},
+    {"shape": [3, 3], "dtype": "c64"},
+    {"shape": [6, 3], "dtype": "c64"},
+    {"shape": [2, 3], "dtype": "c64"},
+    {"shape": [2, 2], "dtype": "c64"}
+  ],
+  "qr": [
+    {"shape": [2, 6], "dtype": "c64"},
+    {"shape": [4, 4], "dtype": "c64"},
+    {"shape": [6, 2], "dtype": "c64"},
+    {"shape": [20, 60], "dtype": "f64"},
+    {"shape": [40, 40], "dtype": "f64"},
+    {"shape": [60, 20], "dtype": "f64"}
+  ],
+  "lq": [
+    {"shape": [2, 6], "dtype": "c64"},
+    {"shape": [4, 4], "dtype": "c64"},
+    {"shape": [6, 2], "dtype": "c64"}
+  ],
+  "eigen": [
+    {"shape": [4, 4], "dtype": "f64", "symm": true},
+    {"shape": [4, 4], "dtype": "c64", "symm": true}
+  ]
+}
