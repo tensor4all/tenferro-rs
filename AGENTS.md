@@ -36,6 +36,13 @@ See [`docs/design/`](docs/design/) for architecture and design documents.
 - Avoid `unwrap()`/`expect()` in library code
 - Use `thiserror` for public API error types
 
+### ASCII Diagrams
+
+When writing ASCII flow diagrams or box diagrams in documentation or design docs:
+- Use **uniform inner width** for all boxes in the same diagram to prevent misaligned borders
+- **Avoid nested boxes** inside other boxes — they are fragile and prone to alignment errors
+- Verify character counts between `│` delimiters match the dash count in `┌───┐` / `└───┘` borders
+
 ### Dependencies
 
 Use **workspace dependencies** for libraries shared across multiple crates. Define the dependency once in the workspace `Cargo.toml` under `[workspace.dependencies]`, then reference it with `dep.workspace = true` in each crate's `Cargo.toml`.
