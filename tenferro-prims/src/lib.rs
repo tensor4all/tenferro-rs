@@ -85,11 +85,12 @@
 
 use std::any::Any;
 use std::collections::HashMap;
+use std::ffi::c_void;
 use std::marker::PhantomData;
 
 use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
-use tenferro_algebra::Standard;
+use tenferro_algebra::{Scalar, Standard};
 use tenferro_device::Result;
 
 /// Reduction operation kind.
@@ -139,6 +140,12 @@ pub enum UnaryOp {
     Abs,
     /// Square root: `√x`.
     Sqrt,
+    /// Complex conjugate: `conj(x)`.
+    ///
+    /// Used by `resolve_conj()` to materialize a lazily-conjugated tensor.
+    /// For real types, this is a no-op (identity).
+    /// Maps to `CUTENSOR_OP_CONJ` on GPU.
+    Conj,
 }
 
 /// Extended operation identifiers for dynamic capability query.
@@ -629,6 +636,33 @@ impl CpuContext {
 /// ```
 pub struct CpuBackend;
 
+impl CpuBackend {
+    /// Materialize a lazily-conjugated tensor.
+    ///
+    /// If `src.is_conjugated()` is `false`, returns a shallow clone.
+    /// If `true`, applies element-wise conjugation via
+    /// `ElementwiseUnary(Conj)` and returns a new tensor with
+    /// `conjugated = false`.
+    ///
+    /// This is the equivalent of PyTorch's `torch.resolve_conj()`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_prims::{CpuBackend, CpuContext};
+    ///
+    /// let a_conj = a.into_conj(); // lazy
+    /// let a_resolved = CpuBackend::resolve_conj(&mut ctx, &a_conj);
+    /// assert!(!a_resolved.is_conjugated());
+    /// ```
+    pub fn resolve_conj<T: Scalar>(
+        _ctx: &mut CpuContext,
+        _src: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_tensor::Tensor<T> {
+        todo!()
+    }
+}
+
 impl TensorPrims<Standard> for CpuBackend {
     type Plan<T: ScalarBase> = CpuPlan<T>;
     type Context = CpuContext;
@@ -654,5 +688,268 @@ impl TensorPrims<Standard> for CpuBackend {
 
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
         todo!()
+    }
+}
+
+// ===========================================================================
+// GPU Backends (future — runtime dlopen via libloading)
+// ===========================================================================
+
+/// CUDA execution context.
+///
+/// Encapsulates CUDA-side execution resources: a CUDA stream, GPU workspace
+/// buffer, and plan cache. Analogous to cuTENSOR's `cutensorHandle_t`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_prims::CudaContext;
+///
+/// // Created internally by CudaBackend::load_cutensor()
+/// ```
+pub struct CudaContext {
+    _stream: *mut c_void,
+    _workspace: Vec<u8>,
+    _plan_cache: PlanCache,
+}
+
+/// CUDA plan — wraps a cuTENSOR plan handle.
+///
+/// Created by [`CudaBackend::plan`](TensorPrims::plan) and consumed by
+/// [`CudaBackend::execute`](TensorPrims::execute).
+pub struct CudaPlan<T: ScalarBase> {
+    _handle: *mut c_void,
+    _workspace_size: usize,
+    _marker: PhantomData<T>,
+}
+
+/// CUDA backend using cuTENSOR via runtime dlopen.
+///
+/// Loaded at runtime from a user-provided `.so` path. No compile-time
+/// CUDA SDK dependency. Implements [`TensorPrims<Standard>`] for standard
+/// arithmetic on NVIDIA GPUs.
+///
+/// cuTENSOR natively supports `Contract`, `Permute`, `Reduce`, and
+/// `ElementwiseMul`. `AntiTrace`/`AntiDiag` are composed via
+/// `Contract(eye, ∂C)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_prims::{CudaBackend, BackendRegistry};
+///
+/// let mut registry = BackendRegistry::new();
+/// registry.load_cutensor("/usr/lib/libcutensor.so").unwrap();
+/// ```
+pub struct CudaBackend {
+    _handle: *mut c_void,
+    _lib: libloading::Library,
+}
+
+impl CudaBackend {
+    /// Materialize a lazily-conjugated tensor on GPU.
+    ///
+    /// Uses `ElementwiseUnary(Conj)` via cuTENSOR to produce a new
+    /// tensor with `conjugated = false`.
+    pub fn resolve_conj<T: Scalar>(
+        _ctx: &mut CudaContext,
+        _src: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_tensor::Tensor<T> {
+        todo!()
+    }
+}
+
+impl TensorPrims<Standard> for CudaBackend {
+    type Plan<T: ScalarBase> = CudaPlan<T>;
+    type Context = CudaContext;
+
+    fn plan<T: ScalarBase>(
+        _ctx: &mut CudaContext,
+        _desc: &PrimDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<CudaPlan<T>> {
+        todo!()
+    }
+
+    fn execute<T: ScalarBase>(
+        _ctx: &mut CudaContext,
+        _plan: &CudaPlan<T>,
+        _alpha: T,
+        _inputs: &[&StridedView<T>],
+        _beta: T,
+        _output: &mut StridedViewMut<T>,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
+        // cuTENSOR supports Contract and ElementwiseMul for f32/f64/Complex
+        todo!()
+    }
+}
+
+/// ROCm execution context.
+///
+/// Encapsulates ROCm-side execution resources: a HIP stream, GPU workspace
+/// buffer, and plan cache. Analogous to hipTENSOR's handle.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_prims::RocmContext;
+///
+/// // Created internally by RocmBackend::load_hiptensor()
+/// ```
+pub struct RocmContext {
+    _stream: *mut c_void,
+    _workspace: Vec<u8>,
+    _plan_cache: PlanCache,
+}
+
+/// ROCm plan — wraps a hipTENSOR plan handle.
+///
+/// Created by [`RocmBackend::plan`](TensorPrims::plan) and consumed by
+/// [`RocmBackend::execute`](TensorPrims::execute).
+pub struct RocmPlan<T: ScalarBase> {
+    _handle: *mut c_void,
+    _workspace_size: usize,
+    _marker: PhantomData<T>,
+}
+
+/// ROCm backend using hipTENSOR via runtime dlopen.
+///
+/// Loaded at runtime from a user-provided `.so` path. No compile-time
+/// ROCm SDK dependency. Implements [`TensorPrims<Standard>`] for standard
+/// arithmetic on AMD GPUs.
+///
+/// hipTENSOR natively supports `Contract`, `Permute`, `Reduce`, and
+/// `ElementwiseMul`. `AntiTrace`/`AntiDiag` are composed via
+/// `Contract(eye, ∂C)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_prims::{RocmBackend, BackendRegistry};
+///
+/// let mut registry = BackendRegistry::new();
+/// registry.load_hiptensor("/usr/lib/libhiptensor.so").unwrap();
+/// ```
+pub struct RocmBackend {
+    _handle: *mut c_void,
+    _lib: libloading::Library,
+}
+
+impl RocmBackend {
+    /// Materialize a lazily-conjugated tensor on GPU.
+    ///
+    /// Uses `ElementwiseUnary(Conj)` via hipTENSOR to produce a new
+    /// tensor with `conjugated = false`.
+    pub fn resolve_conj<T: Scalar>(
+        _ctx: &mut RocmContext,
+        _src: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_tensor::Tensor<T> {
+        todo!()
+    }
+}
+
+impl TensorPrims<Standard> for RocmBackend {
+    type Plan<T: ScalarBase> = RocmPlan<T>;
+    type Context = RocmContext;
+
+    fn plan<T: ScalarBase>(
+        _ctx: &mut RocmContext,
+        _desc: &PrimDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<RocmPlan<T>> {
+        todo!()
+    }
+
+    fn execute<T: ScalarBase>(
+        _ctx: &mut RocmContext,
+        _plan: &RocmPlan<T>,
+        _alpha: T,
+        _inputs: &[&StridedView<T>],
+        _beta: T,
+        _output: &mut StridedViewMut<T>,
+    ) -> Result<()> {
+        todo!()
+    }
+
+    fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
+        // hipTENSOR supports Contract and ElementwiseMul for f32/f64/Complex
+        todo!()
+    }
+}
+
+// ===========================================================================
+// Backend Registry
+// ===========================================================================
+
+/// Registry of available compute backends.
+///
+/// Holds the CPU backend (always available) and optional GPU backends
+/// loaded at runtime via [`load_cutensor`](BackendRegistry::load_cutensor)
+/// or [`load_hiptensor`](BackendRegistry::load_hiptensor).
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_prims::BackendRegistry;
+///
+/// let mut registry = BackendRegistry::new(); // CPU only
+/// registry.load_cutensor("/usr/lib/libcutensor.so").unwrap();
+/// assert!(registry.cuda().is_some());
+/// ```
+pub struct BackendRegistry {
+    cpu: CpuBackend,
+    cuda: Option<CudaBackend>,
+    rocm: Option<RocmBackend>,
+}
+
+impl BackendRegistry {
+    /// Create a registry with CPU backend only.
+    pub fn new() -> Self {
+        Self {
+            cpu: CpuBackend,
+            cuda: None,
+            rocm: None,
+        }
+    }
+
+    /// Load the cuTENSOR library from the given path.
+    ///
+    /// The caller (Julia, Python, or standalone Rust) provides the path
+    /// to the shared library. No auto-search.
+    pub fn load_cutensor(&mut self, _path: &str) -> Result<()> {
+        todo!()
+    }
+
+    /// Load the hipTENSOR library from the given path.
+    ///
+    /// The caller (Julia, Python, or standalone Rust) provides the path
+    /// to the shared library. No auto-search.
+    pub fn load_hiptensor(&mut self, _path: &str) -> Result<()> {
+        todo!()
+    }
+
+    /// Returns a reference to the CPU backend.
+    pub fn cpu(&self) -> &CpuBackend {
+        &self.cpu
+    }
+
+    /// Returns a reference to the CUDA backend, if loaded.
+    pub fn cuda(&self) -> Option<&CudaBackend> {
+        self.cuda.as_ref()
+    }
+
+    /// Returns a reference to the ROCm backend, if loaded.
+    pub fn rocm(&self) -> Option<&RocmBackend> {
+        self.rocm.as_ref()
+    }
+}
+
+impl Default for BackendRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }

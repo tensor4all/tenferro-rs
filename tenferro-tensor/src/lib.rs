@@ -103,6 +103,8 @@
 //! let owned = tv_t.to_tensor(MemoryOrder::ColumnMajor);
 //! ```
 
+use std::sync::Arc;
+
 use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_device::{ComputeDevice, LogicalMemorySpace, OpKind, Result};
 
@@ -132,17 +134,20 @@ pub enum MemoryOrder {
 /// Data storage for tensor elements.
 ///
 /// Abstracts over ownership: data may be Rust-owned ([`Vec<T>`]) or
-/// externally-owned (e.g., imported via DLPack with a release callback).
-/// Shape and stride metadata are NOT stored here — they live on
-/// [`Tensor<T>`].
+/// externally-owned (e.g., imported via DLPack with a release callback),
+/// or GPU device memory. Shape and stride metadata are NOT stored here
+/// — they live on [`Tensor<T>`].
 ///
-/// # Clone behavior
+/// # Shared ownership (Arc)
 ///
-/// Cloning an externally-owned buffer performs a **deep copy** into a new
-/// Rust-owned `Vec<T>`. The release callback cannot be cloned; the clone
-/// is always Rust-owned.
+/// `DataBuffer` wraps the internal storage in `Arc`, enabling shallow
+/// clone (reference count increment). This follows PyTorch's pattern:
+/// - `clone()` on `Tensor` is shallow (shared buffer, O(1))
+/// - `conj()` is lazy (shared buffer + flag flip, O(1))
+/// - Deep copy (actual data duplication) uses prims `Permute(identity)`
+///   or dedicated operations
 pub struct DataBuffer<T> {
-    inner: BufferInner<T>,
+    inner: Arc<BufferInner<T>>,
 }
 
 /// Private ownership representation.
@@ -156,6 +161,22 @@ enum BufferInner<T> {
         /// Called on drop to notify the external owner.
         release: Option<Box<dyn FnOnce() + Send>>,
     },
+    /// GPU device memory (CUDA or ROCm).
+    ///
+    /// The pointer is a device pointer — it MUST NOT be dereferenced from
+    /// the CPU. It is only valid as an argument to GPU API calls (cuTENSOR,
+    /// hipTENSOR, cudaMemcpy, etc.).
+    ///
+    Gpu {
+        /// Device pointer (NOT dereferenceable from CPU).
+        device_ptr: *mut T,
+        /// Number of elements.
+        len: usize,
+        /// Memory space identifying which GPU device owns this buffer.
+        space: LogicalMemorySpace,
+        /// Called on drop to free GPU memory (e.g., cudaFree / hipFree).
+        release: Option<Box<dyn FnOnce() + Send>>,
+    },
 }
 
 // Safety: External buffer pointers are treated as Send/Sync since
@@ -164,29 +185,28 @@ enum BufferInner<T> {
 unsafe impl<T: Send> Send for DataBuffer<T> {}
 unsafe impl<T: Sync> Sync for DataBuffer<T> {}
 
-impl<T: Copy> Clone for DataBuffer<T> {
+impl<T> Clone for DataBuffer<T> {
+    /// Shallow clone: increments the `Arc` reference count.
+    ///
+    /// No data is copied. Multiple `Tensor` values can share the same
+    /// underlying buffer. This matches PyTorch's semantics where
+    /// `tensor.clone()` is a metadata-level operation.
     fn clone(&self) -> Self {
-        match &self.inner {
-            BufferInner::Owned(v) => DataBuffer {
-                inner: BufferInner::Owned(v.clone()),
-            },
-            // Deep copy: can't clone the release callback.
-            BufferInner::External { ptr, len, .. } => {
-                let slice = unsafe { std::slice::from_raw_parts(*ptr, *len) };
-                DataBuffer {
-                    inner: BufferInner::Owned(slice.to_vec()),
-                }
-            }
+        DataBuffer {
+            inner: Arc::clone(&self.inner),
         }
     }
 }
 
-impl<T> Drop for DataBuffer<T> {
+impl<T> Drop for BufferInner<T> {
     fn drop(&mut self) {
-        if let BufferInner::External { release, .. } = &mut self.inner {
-            if let Some(f) = release.take() {
-                f();
+        match self {
+            BufferInner::External { release, .. } | BufferInner::Gpu { release, .. } => {
+                if let Some(f) = release.take() {
+                    f();
+                }
             }
+            BufferInner::Owned(_) => {}
         }
     }
 }
@@ -205,7 +225,7 @@ impl<T> DataBuffer<T> {
     /// ```
     pub fn from_vec(v: Vec<T>) -> Self {
         DataBuffer {
-            inner: BufferInner::Owned(v),
+            inner: Arc::new(BufferInner::Owned(v)),
         }
     }
 
@@ -238,40 +258,45 @@ impl<T> DataBuffer<T> {
         release: impl FnOnce() + Send + 'static,
     ) -> Self {
         DataBuffer {
-            inner: BufferInner::External {
+            inner: Arc::new(BufferInner::External {
                 ptr,
                 len,
                 release: Some(Box::new(release)),
-            },
+            }),
         }
     }
 
-    /// Returns the raw data as a slice.
-    pub fn as_slice(&self) -> &[T] {
-        match &self.inner {
-            BufferInner::Owned(v) => v.as_slice(),
-            BufferInner::External { ptr, len, .. } => unsafe {
-                std::slice::from_raw_parts(*ptr, *len)
-            },
-        }
-    }
-
-    /// Returns the raw data as a mutable slice, if Rust-owned.
+    /// Returns the raw data as a slice (CPU buffers only).
     ///
-    /// Returns `None` for externally-owned buffers (they are read-only
-    /// through tenferro).
+    /// Returns `None` for GPU buffers — device pointers are not
+    /// dereferenceable from the CPU. Use [`as_device_ptr`](DataBuffer::as_device_ptr)
+    /// to obtain a GPU device pointer.
+    pub fn as_slice(&self) -> Option<&[T]> {
+        match &*self.inner {
+            BufferInner::Owned(v) => Some(v.as_slice()),
+            BufferInner::External { ptr, len, .. } => {
+                Some(unsafe { std::slice::from_raw_parts(*ptr, *len) })
+            }
+            BufferInner::Gpu { .. } => None,
+        }
+    }
+
+    /// Returns the raw data as a mutable slice, if Rust-owned and uniquely held.
+    ///
+    /// Returns `None` if the buffer is shared (Arc refcount > 1),
+    /// externally-owned, or GPU.
     pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
-        match &mut self.inner {
+        match Arc::get_mut(&mut self.inner)? {
             BufferInner::Owned(v) => Some(v.as_mut_slice()),
-            BufferInner::External { .. } => None,
+            BufferInner::External { .. } | BufferInner::Gpu { .. } => None,
         }
     }
 
     /// Returns the number of elements in the buffer.
     pub fn len(&self) -> usize {
-        match &self.inner {
+        match &*self.inner {
             BufferInner::Owned(v) => v.len(),
-            BufferInner::External { len, .. } => *len,
+            BufferInner::External { len, .. } | BufferInner::Gpu { len, .. } => *len,
         }
     }
 
@@ -282,14 +307,45 @@ impl<T> DataBuffer<T> {
 
     /// Returns `true` if the buffer is Rust-owned (backed by `Vec<T>`).
     pub fn is_owned(&self) -> bool {
-        matches!(self.inner, BufferInner::Owned(_))
+        matches!(&*self.inner, BufferInner::Owned(_))
     }
 
-    /// Returns a raw pointer to the data.
-    pub fn as_ptr(&self) -> *const T {
-        match &self.inner {
-            BufferInner::Owned(v) => v.as_ptr(),
-            BufferInner::External { ptr, .. } => *ptr,
+    /// Returns `true` if the buffer resides on GPU device memory.
+    pub fn is_gpu(&self) -> bool {
+        matches!(&*self.inner, BufferInner::Gpu { .. })
+    }
+
+    /// Returns `true` if this is the only reference to the underlying buffer.
+    pub fn is_unique(&self) -> bool {
+        Arc::strong_count(&self.inner) == 1
+    }
+
+    /// Returns a raw CPU pointer to the data, or `None` for GPU buffers.
+    pub fn as_ptr(&self) -> Option<*const T> {
+        match &*self.inner {
+            BufferInner::Owned(v) => Some(v.as_ptr()),
+            BufferInner::External { ptr, .. } => Some(*ptr),
+            BufferInner::Gpu { .. } => None,
+        }
+    }
+
+    /// Returns the GPU device pointer, or `None` for CPU buffers.
+    ///
+    /// The returned pointer is a GPU device pointer — it MUST NOT be
+    /// dereferenced from the CPU. It is only valid as an argument to
+    /// GPU API calls (cuTENSOR, hipTENSOR, cudaMemcpy, etc.).
+    pub fn as_device_ptr(&self) -> Option<*const T> {
+        match &*self.inner {
+            BufferInner::Gpu { device_ptr, .. } => Some(*device_ptr as *const T),
+            _ => None,
+        }
+    }
+
+    /// Returns the logical memory space of a GPU buffer, or `None` for CPU buffers.
+    pub fn gpu_memory_space(&self) -> Option<LogicalMemorySpace> {
+        match &*self.inner {
+            BufferInner::Gpu { space, .. } => Some(*space),
+            _ => None,
         }
     }
 }
@@ -337,6 +393,13 @@ pub struct Tensor<T: Scalar> {
     preferred_compute_device: Option<ComputeDevice>,
     /// Pending GPU computation event.
     event: Option<CompletionEvent>,
+    /// Lazy conjugation flag.
+    ///
+    /// When `true`, the tensor's elements are logically conjugated without
+    /// materializing a copy. GPU backends (cuTENSOR/hipTENSOR) support this
+    /// natively via `CUTENSOR_OP_CONJ` / `HIPTENSOR_OP_CONJ` in tensor
+    /// descriptors. CPU backends apply conjugation during execution.
+    conjugated: bool,
 }
 
 /// Borrowed tensor view, lifetime-tied to the source [`Tensor`].
@@ -365,6 +428,8 @@ pub struct TensorView<'a, T: Scalar> {
     preferred_compute_device: Option<ComputeDevice>,
     /// Pending event from the source tensor. Always `None` in public API.
     event: Option<&'a CompletionEvent>,
+    /// Lazy conjugation flag from the source tensor.
+    conjugated: bool,
 }
 
 impl<'a, T: Scalar> TensorView<'a, T> {
@@ -401,6 +466,11 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// Returns the element offset into the data buffer.
     pub fn offset(&self) -> isize {
         self.offset
+    }
+
+    /// Returns `true` if the source tensor is logically conjugated (lazy).
+    pub fn is_conjugated(&self) -> bool {
+        self.conjugated
     }
 
     // ========================================================================
@@ -507,41 +577,82 @@ impl<'a, T: Scalar> TensorView<'a, T> {
         todo!()
     }
 
-    /// Return a tensor with complex-conjugated elements from this view.
+    /// Return a view with the conjugated flag toggled (lazy, zero-cost).
     ///
-    /// For real types, returns a copy unchanged.
-    pub fn conj(&self) -> Tensor<T>
-    where
-        T: Conjugate,
-    {
-        todo!()
-    }
-}
-
-/// Placeholder for an accelerator synchronization event.
-///
-/// Tracks completion of asynchronous operations on accelerator devices
-/// (GPU, FPGA, etc.), enabling operation chaining without CPU
-/// synchronization. Will be replaced with an actual implementation
-/// (e.g., CUDA/HIP event handle) when accelerator backends are added.
-#[derive(Clone)]
-pub struct CompletionEvent {
-    _private: (),
-}
-
-impl<T: Scalar> Clone for Tensor<T> {
-    fn clone(&self) -> Self {
-        Self {
-            buffer: self.buffer.clone(),
+    /// Does not copy data. The conjugation is applied by backends
+    /// when this view is used in operations.
+    pub fn conj(&self) -> TensorView<'a, T> {
+        TensorView {
+            data: self.data,
             dims: self.dims.clone(),
             strides: self.strides.clone(),
             offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
-            // Cloned tensor starts with no pending event — the data in the
-            // cloned buffer is a snapshot taken after any pending computation
-            // completes (clone reads the buffer, which requires completion).
-            event: None,
+            event: self.event,
+            conjugated: !self.conjugated,
+        }
+    }
+}
+
+/// Synchronization event for asynchronous accelerator operations.
+///
+/// Tracks completion of asynchronous operations on accelerator devices,
+/// enabling operation chaining without CPU synchronization.
+///
+/// - `Noop`: no pending operation (used by CPU tensors).
+/// - `Cuda`: wraps a CUDA event handle from `cudaEventCreate`.
+/// - `Rocm`: wraps a HIP event handle from `hipEventCreate`.
+///
+/// GPU event handles are opaque pointers — the actual synchronization
+/// (cudaEventSynchronize / hipEventSynchronize) will be implemented
+/// when GPU backends are added.
+#[derive(Clone)]
+pub struct CompletionEvent {
+    inner: CompletionEventInner,
+}
+
+#[derive(Clone)]
+enum CompletionEventInner {
+    /// No pending operation.
+    Noop,
+    /// CUDA event handle (cudaEvent_t).
+    Cuda {
+        /// Opaque CUDA event handle.
+        _event: *mut std::ffi::c_void,
+    },
+    /// ROCm/HIP event handle (hipEvent_t).
+    Rocm {
+        /// Opaque HIP event handle.
+        _event: *mut std::ffi::c_void,
+    },
+}
+
+// Safety: Event handles are only used by GPU API calls and do not
+// dereference the pointer from the CPU. The GPU runtime guarantees
+// thread safety of event queries.
+unsafe impl Send for CompletionEvent {}
+unsafe impl Sync for CompletionEvent {}
+
+impl<T: Scalar> Clone for Tensor<T> {
+    /// Shallow clone: shares the underlying data buffer (Arc refcount++).
+    ///
+    /// No data is copied. The cloned tensor references the same buffer
+    /// with the same metadata. This matches PyTorch's `Tensor` clone
+    /// semantics.
+    ///
+    /// For a deep copy (actual data duplication), use prims operations
+    /// such as `Permute(identity)` or `MakeContiguous`.
+    fn clone(&self) -> Self {
+        Self {
+            buffer: self.buffer.clone(), // Arc refcount++, O(1)
+            dims: self.dims.clone(),
+            strides: self.strides.clone(),
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event.clone(),
+            conjugated: self.conjugated,
         }
     }
 }
@@ -709,6 +820,14 @@ impl<T: Scalar> Tensor<T> {
         self.preferred_compute_device = device;
     }
 
+    /// Returns `true` if this tensor is logically conjugated (lazy).
+    ///
+    /// GPU backends (cuTENSOR/hipTENSOR) read this flag when building
+    /// tensor descriptors to set `CUTENSOR_OP_CONJ` / `HIPTENSOR_OP_CONJ`.
+    pub fn is_conjugated(&self) -> bool {
+        self.conjugated
+    }
+
     /// Return the effective compute devices for a given operation kind.
     ///
     /// If a preferred compute device is set, returns a single-element vector
@@ -743,6 +862,7 @@ impl<T: Scalar> Tensor<T> {
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
             event: None,
+            conjugated: self.conjugated,
         }
     }
 
@@ -760,6 +880,7 @@ impl<T: Scalar> Tensor<T> {
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
             event: self.event.as_ref(),
+            conjugated: self.conjugated,
         }
     }
 
@@ -931,10 +1052,18 @@ impl<T: Scalar> Tensor<T> {
         todo!()
     }
 
-    /// Return a tensor with complex-conjugated elements.
+    /// Return a lazily-conjugated tensor (shared buffer, flag flip).
     ///
-    /// For real types (`f32`, `f64`), returns a copy unchanged.
-    /// For complex types (`Complex32`, `Complex64`), negates the imaginary part.
+    /// No data is copied. The returned tensor shares the same underlying
+    /// buffer (via Arc) with the `conjugated` flag toggled. This matches
+    /// PyTorch's `torch.conj()` semantics: always lazy, both CPU and GPU.
+    ///
+    /// Backends apply conjugation implicitly:
+    /// - **GPU**: `CUTENSOR_OP_CONJ` / `HIPTENSOR_OP_CONJ` in tensor descriptors
+    /// - **CPU**: conjugation applied during computation kernels
+    ///
+    /// To materialize the conjugation into a new buffer, use
+    /// `Backend::resolve_conj()` from `tenferro-prims`.
     ///
     /// # Examples
     ///
@@ -945,41 +1074,45 @@ impl<T: Scalar> Tensor<T> {
     /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
     /// let a = Tensor::from_slice(&data, &[2], MemoryOrder::ColumnMajor).unwrap();
     /// let a_conj = a.conj();
-    /// // a_conj contains [1.0 - 2.0i, 3.0 + 4.0i]
+    /// assert!(a_conj.is_conjugated());
+    /// // Data is NOT copied — shared buffer with flipped flag
+    /// let a_conj2 = a_conj.conj();
+    /// assert!(!a_conj2.is_conjugated()); // double conj cancels out
     /// ```
     pub fn conj(&self) -> Tensor<T>
     where
         T: Conjugate,
     {
-        // Conjugation is element-wise and position-independent,
-        // so we conjugate the raw buffer directly and preserve layout.
-        let conj_data: Vec<T> = self
-            .buffer
-            .as_slice()
-            .iter()
-            .copied()
-            .map(T::conj)
-            .collect();
         Tensor {
-            buffer: DataBuffer::from_vec(conj_data),
+            buffer: self.buffer.clone(), // Arc refcount++, O(1)
             dims: self.dims.clone(),
             strides: self.strides.clone(),
             offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
-            event: None,
+            event: self.event.clone(),
+            conjugated: !self.conjugated,
         }
     }
 
-    /// Consume this tensor and return one with complex-conjugated elements.
+    /// Consume this tensor and return a lazily-conjugated version.
     ///
-    /// Like [`conj`](Tensor::conj) but consumes `self`, potentially
-    /// reusing the buffer if no other references exist.
+    /// Like [`conj`](Tensor::conj) but consumes `self`, avoiding the
+    /// Arc refcount increment when the original is no longer needed.
     pub fn into_conj(self) -> Tensor<T>
     where
         T: Conjugate,
     {
-        todo!()
+        Tensor {
+            buffer: self.buffer,
+            dims: self.dims,
+            strides: self.strides,
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event,
+            conjugated: !self.conjugated,
+        }
     }
 
     /// Extract the lower triangular part of a matrix.
