@@ -106,7 +106,150 @@
 use std::sync::Arc;
 
 use tenferro_algebra::{Conjugate, Scalar};
-use tenferro_device::{ComputeDevice, LogicalMemorySpace, OpKind, Result};
+use tenferro_device::{
+    preferred_compute_devices, ComputeDevice, Error, LogicalMemorySpace, OpKind, Result,
+};
+
+// ============================================================================
+// Private helpers
+// ============================================================================
+
+/// Compute contiguous strides for given dimensions and memory order.
+fn compute_contiguous_strides(dims: &[usize], order: MemoryOrder) -> Vec<isize> {
+    let ndim = dims.len();
+    if ndim == 0 {
+        return vec![];
+    }
+    let mut strides = vec![0isize; ndim];
+    match order {
+        MemoryOrder::ColumnMajor => {
+            strides[0] = 1;
+            for i in 1..ndim {
+                strides[i] = strides[i - 1] * dims[i - 1] as isize;
+            }
+        }
+        MemoryOrder::RowMajor => {
+            strides[ndim - 1] = 1;
+            for i in (0..ndim - 1).rev() {
+                strides[i] = strides[i + 1] * dims[i + 1] as isize;
+            }
+        }
+    }
+    strides
+}
+
+/// Check if strides match a contiguous layout for a specific memory order.
+fn is_contiguous_in_order(dims: &[usize], strides: &[isize], order: MemoryOrder) -> bool {
+    let ndim = dims.len();
+    if ndim == 0 {
+        return true;
+    }
+    if dims.iter().any(|&d| d == 0) {
+        return true;
+    }
+    let expected = compute_contiguous_strides(dims, order);
+    for i in 0..ndim {
+        if dims[i] > 1 && strides[i] != expected[i] {
+            return false;
+        }
+    }
+    true
+}
+
+/// Copy elements from strided source to a destination with different strides.
+fn copy_strided<T: Copy>(
+    src: &[T],
+    dims: &[usize],
+    src_strides: &[isize],
+    src_offset: isize,
+    dst: &mut [T],
+    dst_strides: &[isize],
+) {
+    let ndim = dims.len();
+    let n_elements: usize = dims.iter().product();
+    if n_elements == 0 {
+        return;
+    }
+    if ndim == 0 {
+        dst[0] = src[src_offset as usize];
+        return;
+    }
+    let mut index = vec![0usize; ndim];
+    for _ in 0..n_elements {
+        let src_pos = src_offset
+            + index
+                .iter()
+                .zip(src_strides)
+                .map(|(&i, &s)| i as isize * s)
+                .sum::<isize>();
+        let dst_pos: isize = index
+            .iter()
+            .zip(dst_strides)
+            .map(|(&i, &s)| i as isize * s)
+            .sum::<isize>();
+        dst[dst_pos as usize] = src[src_pos as usize];
+
+        for d in 0..ndim {
+            index[d] += 1;
+            if index[d] < dims[d] {
+                break;
+            }
+            index[d] = 0;
+        }
+    }
+}
+
+/// Element-wise addition of two strided tensors into a contiguous destination.
+fn add_strided<T: Copy + std::ops::Add<Output = T>>(
+    a: &[T],
+    dims: &[usize],
+    a_strides: &[isize],
+    a_offset: isize,
+    b: &[T],
+    b_strides: &[isize],
+    b_offset: isize,
+    dst: &mut [T],
+    dst_strides: &[isize],
+) {
+    let ndim = dims.len();
+    let n_elements: usize = dims.iter().product();
+    if n_elements == 0 {
+        return;
+    }
+    if ndim == 0 {
+        dst[0] = a[a_offset as usize] + b[b_offset as usize];
+        return;
+    }
+    let mut index = vec![0usize; ndim];
+    for _ in 0..n_elements {
+        let a_pos = a_offset
+            + index
+                .iter()
+                .zip(a_strides.iter())
+                .map(|(&i, &s)| i as isize * s)
+                .sum::<isize>();
+        let b_pos = b_offset
+            + index
+                .iter()
+                .zip(b_strides.iter())
+                .map(|(&i, &s)| i as isize * s)
+                .sum::<isize>();
+        let dst_pos: isize = index
+            .iter()
+            .zip(dst_strides.iter())
+            .map(|(&i, &s)| i as isize * s)
+            .sum::<isize>();
+        dst[dst_pos as usize] = a[a_pos as usize] + b[b_pos as usize];
+
+        for d in 0..ndim {
+            index[d] += 1;
+            if index[d] < dims[d] {
+                break;
+            }
+            index[d] = 0;
+        }
+    }
+}
 
 /// Memory ordering for new allocations.
 ///
@@ -685,8 +828,41 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// let view = tensor.tensor_view(); // shape [3, 4]
     /// let transposed = view.permute(&[1, 0]).unwrap(); // shape [4, 3]
     /// ```
-    pub fn permute(&self, _perm: &[usize]) -> Result<TensorView<'a, T>> {
-        todo!()
+    pub fn permute(&self, perm: &[usize]) -> Result<TensorView<'a, T>> {
+        let ndim = self.ndim();
+        if perm.len() != ndim {
+            return Err(Error::InvalidArgument(format!(
+                "permutation length {} doesn't match ndim {}",
+                perm.len(),
+                ndim
+            )));
+        }
+        let mut seen = vec![false; ndim];
+        for &p in perm {
+            if p >= ndim {
+                return Err(Error::InvalidArgument(format!(
+                    "permutation index {p} out of range for ndim {ndim}"
+                )));
+            }
+            if seen[p] {
+                return Err(Error::InvalidArgument(format!(
+                    "duplicate index {p} in permutation"
+                )));
+            }
+            seen[p] = true;
+        }
+        let new_dims: Vec<usize> = perm.iter().map(|&p| self.dims[p]).collect();
+        let new_strides: Vec<isize> = perm.iter().map(|&p| self.strides[p]).collect();
+        Ok(TensorView {
+            data: self.data,
+            dims: new_dims,
+            strides: new_strides,
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Broadcast this view to a larger shape.
@@ -704,8 +880,38 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// let view = tensor.tensor_view(); // shape [1, 4]
     /// let expanded = view.broadcast(&[3, 4]).unwrap(); // shape [3, 4]
     /// ```
-    pub fn broadcast(&self, _target_dims: &[usize]) -> Result<TensorView<'a, T>> {
-        todo!()
+    pub fn broadcast(&self, target_dims: &[usize]) -> Result<TensorView<'a, T>> {
+        let ndim = self.ndim();
+        if target_dims.len() != ndim {
+            return Err(Error::InvalidArgument(format!(
+                "target dims length {} doesn't match ndim {}",
+                target_dims.len(),
+                ndim
+            )));
+        }
+        let mut new_strides = self.strides.clone();
+        for i in 0..ndim {
+            if self.dims[i] == target_dims[i] {
+                // keep stride
+            } else if self.dims[i] == 1 {
+                new_strides[i] = 0;
+            } else {
+                return Err(Error::ShapeMismatch {
+                    expected: self.dims.to_vec(),
+                    got: target_dims.to_vec(),
+                });
+            }
+        }
+        Ok(TensorView {
+            data: self.data,
+            dims: target_dims.to_vec(),
+            strides: new_strides,
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Extract a diagonal view by merging pairs of axes.
@@ -721,8 +927,61 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// let view = tensor.tensor_view(); // shape [3, 3]
     /// let diag = view.diagonal(&[(0, 1)]).unwrap(); // shape [3]
     /// ```
-    pub fn diagonal(&self, _axes: &[(usize, usize)]) -> Result<TensorView<'a, T>> {
-        todo!()
+    pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'a, T>> {
+        let ndim = self.ndim();
+        let mut used = vec![false; ndim];
+        let mut diag_dims = Vec::new();
+        let mut diag_strides = Vec::new();
+
+        for &(i, j) in axes {
+            if i >= ndim || j >= ndim {
+                return Err(Error::InvalidArgument(format!(
+                    "axis out of range: ({i}, {j}) for tensor with {ndim} dimensions"
+                )));
+            }
+            if i == j {
+                return Err(Error::InvalidArgument(format!(
+                    "diagonal axes must be distinct, got ({i}, {j})"
+                )));
+            }
+            if used[i] || used[j] {
+                return Err(Error::InvalidArgument(format!(
+                    "axis {i} or {j} used in multiple diagonal pairs"
+                )));
+            }
+            if self.dims[i] != self.dims[j] {
+                return Err(Error::ShapeMismatch {
+                    expected: vec![self.dims[i]],
+                    got: vec![self.dims[j]],
+                });
+            }
+            used[i] = true;
+            used[j] = true;
+            diag_dims.push(self.dims[i]);
+            diag_strides.push(self.strides[i] + self.strides[j]);
+        }
+
+        let mut new_dims = Vec::new();
+        let mut new_strides = Vec::new();
+        for k in 0..ndim {
+            if !used[k] {
+                new_dims.push(self.dims[k]);
+                new_strides.push(self.strides[k]);
+            }
+        }
+        new_dims.extend_from_slice(&diag_dims);
+        new_strides.extend_from_slice(&diag_strides);
+
+        Ok(TensorView {
+            data: self.data,
+            dims: new_dims,
+            strides: new_strides,
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Select a single index along a dimension, removing that dimension.
@@ -747,8 +1006,34 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// let mat = tv.select(2, 5).unwrap();
     /// assert_eq!(mat.dims(), &[3, 4]);
     /// ```
-    pub fn select(&self, _dim: usize, _index: usize) -> Result<TensorView<'a, T>> {
-        todo!()
+    pub fn select(&self, dim: usize, index: usize) -> Result<TensorView<'a, T>> {
+        let ndim = self.ndim();
+        if dim >= ndim {
+            return Err(Error::InvalidArgument(format!(
+                "dim {dim} out of range for tensor with {ndim} dimensions"
+            )));
+        }
+        if index >= self.dims[dim] {
+            return Err(Error::InvalidArgument(format!(
+                "index {index} out of range for dimension {dim} with size {}",
+                self.dims[dim]
+            )));
+        }
+        let new_offset = self.offset + index as isize * self.strides[dim];
+        let mut new_dims = self.dims.clone();
+        let mut new_strides = self.strides.clone();
+        new_dims.remove(dim);
+        new_strides.remove(dim);
+        Ok(TensorView {
+            data: self.data,
+            dims: new_dims,
+            strides: new_strides,
+            offset: new_offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Narrow (slice) a dimension to a sub-range.
@@ -774,8 +1059,34 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// let sub = tv.narrow(1, 2, 3).unwrap();
     /// assert_eq!(sub.dims(), &[3, 3]);
     /// ```
-    pub fn narrow(&self, _dim: usize, _start: usize, _length: usize) -> Result<TensorView<'a, T>> {
-        todo!()
+    pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<TensorView<'a, T>> {
+        let ndim = self.ndim();
+        if dim >= ndim {
+            return Err(Error::InvalidArgument(format!(
+                "dim {dim} out of range for tensor with {ndim} dimensions"
+            )));
+        }
+        if start + length > self.dims[dim] {
+            return Err(Error::InvalidArgument(format!(
+                "narrow range {}..{} out of bounds for dimension {dim} with size {}",
+                start,
+                start + length,
+                self.dims[dim]
+            )));
+        }
+        let new_offset = self.offset + start as isize * self.strides[dim];
+        let mut new_dims = self.dims.clone();
+        new_dims[dim] = length;
+        Ok(TensorView {
+            data: self.data,
+            dims: new_dims,
+            strides: self.strides.clone(),
+            offset: new_offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: self.event,
+            conjugated: self.conjugated,
+        })
     }
 
     // ========================================================================
@@ -790,8 +1101,8 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// let view = tensor.tensor_view();
     /// let owned = view.to_tensor(MemoryOrder::ColumnMajor);
     /// ```
-    pub fn to_tensor(&self, _order: MemoryOrder) -> Tensor<T> {
-        todo!()
+    pub fn to_tensor(&self, order: MemoryOrder) -> Tensor<T> {
+        self.contiguous(order)
     }
 
     /// Return a contiguous copy of this view's data.
@@ -802,8 +1113,34 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// let view = tensor.tensor_view();
     /// let contig = view.contiguous(MemoryOrder::ColumnMajor);
     /// ```
-    pub fn contiguous(&self, _order: MemoryOrder) -> Tensor<T> {
-        todo!()
+    pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
+        let n_elements: usize = self.dims.iter().product();
+        let dst_strides = compute_contiguous_strides(&self.dims, order);
+        let mut data = vec![T::zero(); n_elements];
+        if n_elements > 0 {
+            let src = self
+                .data
+                .as_slice()
+                .expect("CPU-only: TensorView::contiguous");
+            copy_strided(
+                src,
+                &self.dims,
+                &self.strides,
+                self.offset,
+                &mut data,
+                &dst_strides,
+            );
+        }
+        Tensor {
+            buffer: DataBuffer::from_vec(data),
+            dims: self.dims.clone(),
+            strides: dst_strides,
+            offset: 0,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        }
     }
 
     /// Return a view with the conjugated flag toggled (lazy, zero-cost).
@@ -928,8 +1265,23 @@ impl<T: Scalar> Tensor<T> {
     ///     MemoryOrder::ColumnMajor,
     /// );
     /// ```
-    pub fn zeros(_dims: &[usize], _memory_space: LogicalMemorySpace, _order: MemoryOrder) -> Self {
-        todo!()
+    pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
+        assert!(
+            memory_space == LogicalMemorySpace::MainMemory,
+            "GPU memory allocation not yet implemented"
+        );
+        let n_elements: usize = dims.iter().product();
+        let strides = compute_contiguous_strides(dims, order);
+        Tensor {
+            buffer: DataBuffer::from_vec(vec![T::zero(); n_elements]),
+            dims: dims.to_vec(),
+            strides,
+            offset: 0,
+            logical_memory_space: memory_space,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+        }
     }
 
     /// Create a tensor filled with ones.
@@ -949,8 +1301,23 @@ impl<T: Scalar> Tensor<T> {
     /// let a = Tensor::<f64>::ones(&[2, 3],
     ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
     /// ```
-    pub fn ones(_dims: &[usize], _memory_space: LogicalMemorySpace, _order: MemoryOrder) -> Self {
-        todo!()
+    pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
+        assert!(
+            memory_space == LogicalMemorySpace::MainMemory,
+            "GPU memory allocation not yet implemented"
+        );
+        let n_elements: usize = dims.iter().product();
+        let strides = compute_contiguous_strides(dims, order);
+        Tensor {
+            buffer: DataBuffer::from_vec(vec![T::one(); n_elements]),
+            dims: dims.to_vec(),
+            strides,
+            offset: 0,
+            logical_memory_space: memory_space,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+        }
     }
 
     /// Create a tensor from a data slice.
@@ -971,8 +1338,26 @@ impl<T: Scalar> Tensor<T> {
     /// let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     /// let t = Tensor::<f64>::from_slice(&data, &[2, 3], MemoryOrder::ColumnMajor).unwrap();
     /// ```
-    pub fn from_slice(_data: &[T], _dims: &[usize], _order: MemoryOrder) -> Result<Self> {
-        todo!()
+    pub fn from_slice(data: &[T], dims: &[usize], order: MemoryOrder) -> Result<Self> {
+        let n_elements: usize = dims.iter().product();
+        if data.len() != n_elements {
+            return Err(Error::InvalidArgument(format!(
+                "data length {} doesn't match dims product {}",
+                data.len(),
+                n_elements
+            )));
+        }
+        let strides = compute_contiguous_strides(dims, order);
+        Ok(Tensor {
+            buffer: DataBuffer::from_vec(data.to_vec()),
+            dims: dims.to_vec(),
+            strides,
+            offset: 0,
+            logical_memory_space: LogicalMemorySpace::MainMemory,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+        })
     }
 
     /// Create a tensor from an owned `Vec<T>` with explicit layout.
@@ -994,12 +1379,53 @@ impl<T: Scalar> Tensor<T> {
     /// let t = Tensor::<f64>::from_vec(data, &[2, 3], &[1, 2], 0).unwrap();
     /// ```
     pub fn from_vec(
-        _data: Vec<T>,
-        _dims: &[usize],
-        _strides: &[isize],
-        _offset: isize,
+        data: Vec<T>,
+        dims: &[usize],
+        strides: &[isize],
+        offset: isize,
     ) -> Result<Self> {
-        todo!()
+        let ndim = dims.len();
+        if strides.len() != ndim {
+            return Err(Error::InvalidArgument(format!(
+                "strides length {} doesn't match dims length {}",
+                strides.len(),
+                ndim
+            )));
+        }
+        let n_elements: usize = dims.iter().product();
+        if n_elements > 0 {
+            let mut min_pos = offset;
+            let mut max_pos = offset;
+            for k in 0..ndim {
+                if dims[k] == 0 {
+                    continue;
+                }
+                let extent = (dims[k] - 1) as isize * strides[k];
+                if extent >= 0 {
+                    max_pos += extent;
+                } else {
+                    min_pos += extent;
+                }
+            }
+            if min_pos < 0 || max_pos >= data.len() as isize {
+                return Err(Error::StrideError(format!(
+                    "layout accesses buffer positions {}..={} but buffer length is {}",
+                    min_pos,
+                    max_pos,
+                    data.len()
+                )));
+            }
+        }
+        Ok(Tensor {
+            buffer: DataBuffer::from_vec(data),
+            dims: dims.to_vec(),
+            strides: strides.to_vec(),
+            offset,
+            logical_memory_space: LogicalMemorySpace::MainMemory,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+        })
     }
 
     /// Create an identity matrix.
@@ -1017,8 +1443,29 @@ impl<T: Scalar> Tensor<T> {
     ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
     /// assert_eq!(id.dims(), &[3, 3]);
     /// ```
-    pub fn eye(_n: usize, _memory_space: LogicalMemorySpace, _order: MemoryOrder) -> Self {
-        todo!()
+    pub fn eye(n: usize, memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
+        assert!(
+            memory_space == LogicalMemorySpace::MainMemory,
+            "GPU memory allocation not yet implemented"
+        );
+        let dims = [n, n];
+        let strides = compute_contiguous_strides(&dims, order);
+        let n_elements = n * n;
+        let mut data = vec![T::zero(); n_elements];
+        for i in 0..n {
+            let pos = (i as isize * strides[0] + i as isize * strides[1]) as usize;
+            data[pos] = T::one();
+        }
+        Tensor {
+            buffer: DataBuffer::from_vec(data),
+            dims: dims.to_vec(),
+            strides: strides.to_vec(),
+            offset: 0,
+            logical_memory_space: memory_space,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+        }
     }
 
     // ========================================================================
@@ -1106,7 +1553,7 @@ impl<T: Scalar> Tensor<T> {
     /// assert_eq!(t.len(), 12);
     /// ```
     pub fn len(&self) -> usize {
-        todo!()
+        self.dims.iter().product()
     }
 
     /// Returns `true` if the tensor has zero elements.
@@ -1118,7 +1565,7 @@ impl<T: Scalar> Tensor<T> {
     /// assert!(t.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.len() == 0
     }
 
     /// Returns the logical memory space where this tensor's data resides.
@@ -1201,9 +1648,13 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn effective_compute_devices(
         &self,
-        _op_kind: OpKind,
+        op_kind: OpKind,
     ) -> tenferro_device::Result<Vec<ComputeDevice>> {
-        todo!()
+        if let Some(device) = self.preferred_compute_device {
+            Ok(vec![device])
+        } else {
+            preferred_compute_devices(self.logical_memory_space, op_kind)
+        }
     }
 
     // ========================================================================
@@ -1276,8 +1727,20 @@ impl<T: Scalar> Tensor<T> {
     /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col); // [3, 4]
     /// let transposed = t.permute(&[1, 0]).unwrap();    // [4, 3]
     /// ```
-    pub fn permute(&self, _perm: &[usize]) -> Result<Tensor<T>> {
-        todo!()
+    pub fn permute(&self, perm: &[usize]) -> Result<Tensor<T>> {
+        self.wait();
+        let view = self.tensor_view();
+        let pv = view.permute(perm)?;
+        Ok(Tensor {
+            buffer: self.buffer.clone(),
+            dims: pv.dims,
+            strides: pv.strides,
+            offset: pv.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Broadcast the tensor to a larger shape.
@@ -1299,8 +1762,20 @@ impl<T: Scalar> Tensor<T> {
     /// let b = t.broadcast(&[4, 3]).unwrap();
     /// assert_eq!(b.dims(), &[4, 3]);
     /// ```
-    pub fn broadcast(&self, _target_dims: &[usize]) -> Result<Tensor<T>> {
-        todo!()
+    pub fn broadcast(&self, target_dims: &[usize]) -> Result<Tensor<T>> {
+        self.wait();
+        let view = self.tensor_view();
+        let bv = view.broadcast(target_dims)?;
+        Ok(Tensor {
+            buffer: self.buffer.clone(),
+            dims: bv.dims,
+            strides: bv.strides,
+            offset: bv.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Extract a diagonal view by merging pairs of axes.
@@ -1324,8 +1799,20 @@ impl<T: Scalar> Tensor<T> {
     /// let d = t.diagonal(&[(0, 1)]).unwrap();
     /// assert_eq!(d.dims(), &[3]);
     /// ```
-    pub fn diagonal(&self, _axes: &[(usize, usize)]) -> Result<Tensor<T>> {
-        todo!()
+    pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>> {
+        self.wait();
+        let view = self.tensor_view();
+        let dv = view.diagonal(axes)?;
+        Ok(Tensor {
+            buffer: self.buffer.clone(),
+            dims: dv.dims,
+            strides: dv.strides,
+            offset: dv.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Reshape the tensor to a new shape.
@@ -1348,8 +1835,37 @@ impl<T: Scalar> Tensor<T> {
     /// let r = t.reshape(&[6]).unwrap();
     /// assert_eq!(r.dims(), &[6]);
     /// ```
-    pub fn reshape(&self, _new_dims: &[usize]) -> Result<Tensor<T>> {
-        todo!()
+    pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>> {
+        self.wait();
+        let old_len = self.len();
+        let new_len: usize = new_dims.iter().product();
+        if old_len != new_len {
+            return Err(Error::ShapeMismatch {
+                expected: self.dims.clone(),
+                got: new_dims.to_vec(),
+            });
+        }
+        if !self.is_contiguous() {
+            return Err(Error::StrideError(
+                "reshape requires contiguous data".into(),
+            ));
+        }
+        let order = if is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor) {
+            MemoryOrder::ColumnMajor
+        } else {
+            MemoryOrder::RowMajor
+        };
+        let new_strides = compute_contiguous_strides(new_dims, order);
+        Ok(Tensor {
+            buffer: self.buffer.clone(),
+            dims: new_dims.to_vec(),
+            strides: new_strides,
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Select a single index along a dimension, removing that dimension.
@@ -1374,8 +1890,20 @@ impl<T: Scalar> Tensor<T> {
     /// let mat = a.select(2, 5).unwrap();
     /// assert_eq!(mat.dims(), &[3, 4]);
     /// ```
-    pub fn select(&self, _dim: usize, _index: usize) -> Result<Tensor<T>> {
-        todo!()
+    pub fn select(&self, dim: usize, index: usize) -> Result<Tensor<T>> {
+        self.wait();
+        let view = self.tensor_view();
+        let sv = view.select(dim, index)?;
+        Ok(Tensor {
+            buffer: self.buffer.clone(),
+            dims: sv.dims,
+            strides: sv.strides,
+            offset: sv.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        })
     }
 
     /// Narrow (slice) a dimension to a sub-range.
@@ -1400,8 +1928,20 @@ impl<T: Scalar> Tensor<T> {
     /// let sub = a.narrow(1, 2, 3).unwrap();
     /// assert_eq!(sub.dims(), &[3, 3]);
     /// ```
-    pub fn narrow(&self, _dim: usize, _start: usize, _length: usize) -> Result<Tensor<T>> {
-        todo!()
+    pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Tensor<T>> {
+        self.wait();
+        let view = self.tensor_view();
+        let nv = view.narrow(dim, start, length)?;
+        Ok(Tensor {
+            buffer: self.buffer.clone(),
+            dims: nv.dims,
+            strides: nv.strides,
+            offset: nv.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        })
     }
 
     // ========================================================================
@@ -1423,8 +1963,13 @@ impl<T: Scalar> Tensor<T> {
     /// let c = t.contiguous(MemoryOrder::RowMajor);
     /// assert!(c.is_contiguous());
     /// ```
-    pub fn contiguous(&self, _order: MemoryOrder) -> Tensor<T> {
-        todo!()
+    pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
+        self.wait();
+        if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
+            return self.clone();
+        }
+        let view = self.tensor_view();
+        view.contiguous(order)
     }
 
     /// Consume this tensor and return a contiguous version.
@@ -1465,8 +2010,11 @@ impl<T: Scalar> Tensor<T> {
     /// );
     /// let b2 = b.into_contiguous(MemoryOrder::RowMajor); // no copy
     /// ```
-    pub fn into_contiguous(self, _order: MemoryOrder) -> Tensor<T> {
-        todo!()
+    pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T> {
+        if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
+            return self;
+        }
+        self.contiguous(order)
     }
 
     /// Returns `true` if the tensor data is contiguous in memory.
@@ -1483,7 +2031,8 @@ impl<T: Scalar> Tensor<T> {
     /// assert!(t.is_contiguous());
     /// ```
     pub fn is_contiguous(&self) -> bool {
-        todo!()
+        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
+            || is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
     }
 
     /// Return a lazily-conjugated tensor (shared buffer, flag flip).
@@ -1582,8 +2131,66 @@ impl<T: Scalar> Tensor<T> {
     /// //  [1, 1, 0],
     /// //  [1, 1, 1]]
     /// ```
-    pub fn tril(&self, _diagonal: isize) -> Tensor<T> {
-        todo!()
+    pub fn tril(&self, diagonal: isize) -> Tensor<T> {
+        self.wait();
+        let ndim = self.ndim();
+        assert!(ndim >= 2, "tril requires at least 2 dimensions");
+        let m = self.dims[0];
+        let n = self.dims[1];
+        let order = MemoryOrder::ColumnMajor;
+        let out_strides = compute_contiguous_strides(&self.dims, order);
+        let total = self.len();
+        let mut data = vec![T::zero(); total];
+        let src = self.buffer.as_slice().expect("CPU-only: tril");
+        let batch_dims = &self.dims[2..];
+        let n_batch: usize = batch_dims.iter().product();
+        let n_batch = if n_batch == 0 { 1 } else { n_batch };
+        let mut batch_index = vec![0usize; batch_dims.len()];
+        for _ in 0..n_batch {
+            let src_batch_off: isize = batch_index
+                .iter()
+                .enumerate()
+                .map(|(k, &idx)| idx as isize * self.strides[k + 2])
+                .sum();
+            let dst_batch_off: isize = batch_index
+                .iter()
+                .enumerate()
+                .map(|(k, &idx)| idx as isize * out_strides[k + 2])
+                .sum();
+            for j in 0..n {
+                for i in 0..m {
+                    if (j as isize - i as isize) <= diagonal {
+                        let src_pos = (self.offset
+                            + src_batch_off
+                            + i as isize * self.strides[0]
+                            + j as isize * self.strides[1])
+                            as usize;
+                        let dst_pos = (dst_batch_off
+                            + i as isize * out_strides[0]
+                            + j as isize * out_strides[1])
+                            as usize;
+                        data[dst_pos] = src[src_pos];
+                    }
+                }
+            }
+            for d in 0..batch_dims.len() {
+                batch_index[d] += 1;
+                if batch_index[d] < batch_dims[d] {
+                    break;
+                }
+                batch_index[d] = 0;
+            }
+        }
+        Tensor {
+            buffer: DataBuffer::from_vec(data),
+            dims: self.dims.clone(),
+            strides: out_strides,
+            offset: 0,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        }
     }
 
     /// Extract the upper triangular part of a matrix.
@@ -1609,8 +2216,66 @@ impl<T: Scalar> Tensor<T> {
     /// //  [0, 1, 1],
     /// //  [0, 0, 1]]
     /// ```
-    pub fn triu(&self, _diagonal: isize) -> Tensor<T> {
-        todo!()
+    pub fn triu(&self, diagonal: isize) -> Tensor<T> {
+        self.wait();
+        let ndim = self.ndim();
+        assert!(ndim >= 2, "triu requires at least 2 dimensions");
+        let m = self.dims[0];
+        let n = self.dims[1];
+        let order = MemoryOrder::ColumnMajor;
+        let out_strides = compute_contiguous_strides(&self.dims, order);
+        let total = self.len();
+        let mut data = vec![T::zero(); total];
+        let src = self.buffer.as_slice().expect("CPU-only: triu");
+        let batch_dims = &self.dims[2..];
+        let n_batch: usize = batch_dims.iter().product();
+        let n_batch = if n_batch == 0 { 1 } else { n_batch };
+        let mut batch_index = vec![0usize; batch_dims.len()];
+        for _ in 0..n_batch {
+            let src_batch_off: isize = batch_index
+                .iter()
+                .enumerate()
+                .map(|(k, &idx)| idx as isize * self.strides[k + 2])
+                .sum();
+            let dst_batch_off: isize = batch_index
+                .iter()
+                .enumerate()
+                .map(|(k, &idx)| idx as isize * out_strides[k + 2])
+                .sum();
+            for j in 0..n {
+                for i in 0..m {
+                    if (j as isize - i as isize) >= diagonal {
+                        let src_pos = (self.offset
+                            + src_batch_off
+                            + i as isize * self.strides[0]
+                            + j as isize * self.strides[1])
+                            as usize;
+                        let dst_pos = (dst_batch_off
+                            + i as isize * out_strides[0]
+                            + j as isize * out_strides[1])
+                            as usize;
+                        data[dst_pos] = src[src_pos];
+                    }
+                }
+            }
+            for d in 0..batch_dims.len() {
+                batch_index[d] += 1;
+                if batch_index[d] < batch_dims[d] {
+                    break;
+                }
+                batch_index[d] = 0;
+            }
+        }
+        Tensor {
+            buffer: DataBuffer::from_vec(data),
+            dims: self.dims.clone(),
+            strides: out_strides,
+            offset: 0,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        }
     }
 
     /// Asynchronously transfer this tensor to a different memory space.
@@ -1632,8 +2297,13 @@ impl<T: Scalar> Tensor<T> {
     /// let t = Tensor::<f64>::zeros(&[2, 3]);
     /// let t2 = t.to_memory_space_async(LogicalMemorySpace::MainMemory).unwrap();
     /// ```
-    pub fn to_memory_space_async(&self, _target: LogicalMemorySpace) -> Result<Tensor<T>> {
-        todo!()
+    pub fn to_memory_space_async(&self, target: LogicalMemorySpace) -> Result<Tensor<T>> {
+        if target == self.logical_memory_space {
+            return Ok(self.clone());
+        }
+        Err(Error::DeviceError(
+            "GPU memory transfer not yet implemented".into(),
+        ))
     }
 
     // ========================================================================
@@ -1706,7 +2376,11 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     /// let zt = t.zero_tangent();
     /// ```
     fn zero_tangent(&self) -> Tensor<T> {
-        todo!()
+        Tensor::zeros(
+            &self.dims,
+            self.logical_memory_space,
+            MemoryOrder::ColumnMajor,
+        )
     }
 
     /// Accumulates a tangent into this tensor (in-place addition).
@@ -1721,8 +2395,40 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     /// let tangent = Tensor::<f64>::zeros(&[2, 3]);
     /// t.accumulate_tangent(&tangent);
     /// ```
-    fn accumulate_tangent(_a: Tensor<T>, _b: &Tensor<T>) -> Tensor<T> {
-        todo!()
+    fn accumulate_tangent(a: Tensor<T>, b: &Tensor<T>) -> Tensor<T> {
+        assert_eq!(
+            a.dims, b.dims,
+            "tangent shape mismatch in accumulate_tangent"
+        );
+        let n_elements = a.len();
+        let order = MemoryOrder::ColumnMajor;
+        let dst_strides = compute_contiguous_strides(&a.dims, order);
+        let mut data = vec![T::zero(); n_elements];
+        if n_elements > 0 {
+            let a_src = a.buffer.as_slice().expect("CPU-only: accumulate_tangent");
+            let b_src = b.buffer.as_slice().expect("CPU-only: accumulate_tangent");
+            add_strided(
+                a_src,
+                &a.dims,
+                &a.strides,
+                a.offset,
+                b_src,
+                &b.strides,
+                b.offset,
+                &mut data,
+                &dst_strides,
+            );
+        }
+        Tensor {
+            buffer: DataBuffer::from_vec(data),
+            dims: a.dims.clone(),
+            strides: dst_strides,
+            offset: 0,
+            logical_memory_space: a.logical_memory_space,
+            preferred_compute_device: a.preferred_compute_device,
+            event: None,
+            conjugated: false,
+        }
     }
 }
 

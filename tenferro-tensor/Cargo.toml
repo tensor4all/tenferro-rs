@@ -10,3 +10,4 @@ publish = false
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 chainrules-core = { path = "../extern/chainrules-core" }
+num-traits.workspace = true
