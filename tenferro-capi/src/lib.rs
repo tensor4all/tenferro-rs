@@ -272,6 +272,11 @@ pub unsafe extern "C" fn tfe_tensor_f64_zeros(
 
 /// Deep-copy a tensor.
 ///
+/// `Tensor::clone()` is a shallow copy (Arc refcount increment).
+/// This C API function performs a deep copy using prims operations
+/// (e.g., `Permute(identity)` or `MakeContiguous`) to produce a
+/// tensor with its own independent data buffer.
+///
 /// # Safety
 ///
 /// - `tensor` must be a valid pointer returned by a `tfe_tensor_f64_*`

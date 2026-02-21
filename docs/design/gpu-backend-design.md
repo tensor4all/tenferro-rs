@@ -1,0 +1,331 @@
+# GPU Backend Design
+
+This document details the GPU backend design for tenferro-rs, covering
+both CUDA (cuTENSOR) and ROCm (hipTENSOR) backends.
+
+**Purpose**: Detect potential problems before implementation begins.
+Define the types, modules, and API mapping needed for GPU support.
+
+---
+
+## Design Principles
+
+1. **Two separate backends** — `CudaBackend` and `RocmBackend` as distinct
+   types in `tenferro-prims`. Subtle API differences and future custom
+   kernel needs justify separate implementations over a unified vtable.
+2. **Runtime dlopen** — `libloading` loads cuTENSOR/hipTENSOR shared
+   libraries at runtime. No compile-time GPU SDK dependency. Caller
+   (Julia/Python) provides the `.so` path.
+3. **Layer 1 core infrastructure** — GPU backends are not extensions
+   (unlike `tenferro-tropical`). They live in `tenferro-prims` alongside
+   `CpuBackend`.
+4. **TensorPrims\<Standard\>** — each GPU backend implements the same
+   trait as `CpuBackend`. `einsum` code is backend-agnostic via the `B`
+   type parameter.
+5. **Prims basic + Contract first** — the minimum set for einsum to work.
+6. **cuTENSOR v2 API** — describe → plan → execute pattern, matching
+   tenferro's existing `PrimDescriptor → plan → execute`.
+7. **Naming convention** — platform names (`Cuda`, `Rocm`), not API
+   names (`Hip`). `ComputeDevice::Hip` renamed to `ComputeDevice::Rocm`.
+
+---
+
+## Module Structure
+
+```
+tenferro-prims/src/
+    lib.rs          — TensorPrims<A> trait, PrimDescriptor, shared types
+    cpu.rs          — CpuBackend, CpuContext, CpuPlan
+    cuda.rs         — CudaBackend, CudaContext, CudaPlan, CutensorVtable
+    rocm.rs         — RocmBackend, RocmContext, RocmPlan, RocmTensorVtable
+    registry.rs     — BackendRegistry
+```
+
+Note: CPU backend code (currently inline in `lib.rs`) moves to `cpu.rs`
+as part of this restructuring.
+
+---
+
+## Key Types
+
+### CudaBackend / RocmBackend
+
+```rust
+// cuda.rs
+pub struct CudaBackend {
+    vtable: CutensorVtable,
+    handle: *mut c_void,    // cutensorHandle_t
+    _lib: libloading::Library,
+}
+
+pub struct CudaContext {
+    stream: *mut c_void,    // cudaStream_t
+    workspace: Vec<u8>,     // GPU workspace (resizable)
+    plan_cache: PlanCache,
+}
+
+pub enum CudaPlan<T: ScalarBase> {
+    Contract { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
+    Permute { plan_handle: *mut c_void, _marker: PhantomData<T> },
+    Reduce { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
+    Trace { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
+    AntiTrace { _marker: PhantomData<T> },  // Composed via Contract(eye, ∂C)
+    AntiDiag { _marker: PhantomData<T> },   // Composed via Contract(eye, ∂C)
+    ElementwiseUnary { _marker: PhantomData<T> },
+    ElementwiseMul { _marker: PhantomData<T> },
+    BatchedGemm { _marker: PhantomData<T> },  // Via Contract subset
+    MakeContiguous { _marker: PhantomData<T> },  // n/a on GPU (native stride support)
+}
+
+impl TensorPrims<Standard> for CudaBackend {
+    type Plan<T: ScalarBase> = CudaPlan<T>;
+    type Context = CudaContext;
+    // ...
+}
+```
+
+`RocmBackend` follows the same structure with `RocmTensorVtable`,
+`RocmContext`, `RocmPlan`.
+
+### BackendRegistry
+
+```rust
+// registry.rs
+pub struct BackendRegistry {
+    pub cpu: CpuBackend,
+    pub cuda: Option<CudaBackend>,
+    pub rocm: Option<RocmBackend>,
+}
+
+impl BackendRegistry {
+    pub fn new() -> Self { /* CPU only */ }
+    pub fn load_cutensor(&mut self, path: &str) -> Result<()> { ... }
+    pub fn load_hiptensor(&mut self, path: &str) -> Result<()> { ... }
+}
+```
+
+---
+
+## cuTENSOR / hipTENSOR API Mapping
+
+### PrimDescriptor → GPU API
+
+| PrimDescriptor | cuTENSOR v2 API | hipTENSOR API | Notes |
+|---|---|---|---|
+| Contract | `cutensorContract` | `hiptensorContraction` | 最優先。einsum動作に必須 |
+| Permute | `cutensorPermute` | `hiptensorPermutation` | |
+| Reduce | `cutensorReduce` | `hiptensorReduction` | |
+| Trace | `cutensorReduce` on diagonal | `hiptensorReduction` on diagonal | stride trick + reduce |
+| BatchedGemm | Contract subset (mode制限) | 同左 | Contract経由 |
+| MakeContiguous | 不要 | 不要 | GPU はstrideをネイティブに受け付け |
+| AntiTrace | Contract(eye, ∂C) | 同左 | コアprimだがContract合成で実装 |
+| AntiDiag | Contract(eye, ∂C) | 同左 | 同上 |
+| ElementwiseUnary | `cutensorElementwiseTrinary` | 同等API | |
+| ElementwiseMul | `cutensorElementwiseBinary` | `hiptensorElementwiseBinary` | |
+
+### AntiTrace / AntiDiag の GPU 実装
+
+AntiTrace と AntiDiag はコアプリミティブ（全バックエンド実装必須）だが、
+GPU ではカスタムカーネルを書かずに Contract で合成できる。
+
+```
+anti_trace: ∂C[j,k] → ∂A[i,j,i',k] = eye[i,i'] × ∂C[j,k]
+anti_diag:  ∂C[i,j] → ∂A[i,i',j]   = eye[i,i'] × ∂C[i,j]
+```
+
+どちらも `Contract(eye(I), ∂C)` で表現可能。cuTENSOR/hipTENSOR が
+ネイティブに処理する。CPU 側は単純ループで実装し、strided-einsum2 に
+依存しない。
+
+### Vtable 設計
+
+```rust
+// CutensorVtable — cuTENSOR v2 function pointers
+struct CutensorVtable {
+    // Handle lifecycle
+    create: Symbol<unsafe extern "C" fn(*mut cutensorHandle_t) -> cutensorStatus_t>,
+    destroy: Symbol<unsafe extern "C" fn(cutensorHandle_t) -> cutensorStatus_t>,
+
+    // Tensor descriptor
+    create_tensor_descriptor: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+    destroy_tensor_descriptor: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+
+    // Contraction (highest priority)
+    create_contraction_descriptor: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+    create_contraction_plan: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+    contract: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+
+    // Permutation
+    create_permutation: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+    permute: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+
+    // Reduction
+    create_reduction: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+    reduce: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+
+    // Element-wise
+    elementwise_binary: Symbol<unsafe extern "C" fn(...) -> cutensorStatus_t>,
+}
+```
+
+`RocmTensorVtable` も同構造。関数名プレフィックスが `hiptensor` に変わる。
+
+---
+
+## Tensor Clone / Conj Strategy
+
+### 方針: Arc 共有 + PyTorch パターン
+
+`DataBuffer<T>` は `Arc<BufferInner<T>>` で内部ストレージを共有する。
+PyTorch と同じセマンティクス:
+
+| 操作 | PyTorch | tenferro | コスト |
+|------|---------|----------|--------|
+| 浅いコピー | `tensor.clone()` (view) | `tensor.clone()` | O(1), Arc refcount++ |
+| 深いコピー | `tensor.detach().clone()` | prims `Permute(identity)` / `MakeContiguous` | O(n) |
+| 共役 | `tensor.conj()` (lazy) | `tensor.conj()` / `tensor.into_conj()` | O(1), flag flip |
+| 共役実体化 | `torch.resolve_conj()` | `Backend::resolve_conj()` | O(n) |
+| 共役チェック | `tensor.is_conj()` | `tensor.is_conjugated()` | O(1) |
+
+### 設計
+
+```rust
+// tenferro-tensor: DataBuffer は Arc で共有
+pub struct DataBuffer<T> {
+    inner: Arc<BufferInner<T>>,
+}
+
+// clone() = Arc refcount++（浅いコピー）
+// conj() = Arc refcount++ + conjugated flag flip（lazy）
+// as_mut_slice() は Arc::get_mut で排他性チェック
+```
+
+### 利点
+
+- `Differentiable::Tangent: Clone` が自然に満たされる
+- `conj()` が CPU/GPU 統一的に lazy（PyTorch 準拠）
+- `clone_tensor()` が不要（浅い clone は Tensor で完結）
+- 深いコピーは既存の prims 操作で表現可能
+- tenferro-prims → tenferro-tensor 依存は `resolve_conj()` のみ
+
+### 依存関係への影響
+
+`resolve_conj()` が `Tensor<T>` を引数に取るため、`tenferro-prims` →
+`tenferro-tensor` の依存が追加される。
+
+```
+tenferro-algebra
+    ├────────────────────┐
+    ↓                    ↓
+tenferro-prims ──→ tenferro-tensor   (prims depends on tensor)
+    │                    │
+    └──────────┬─────────┘
+               ↓
+          tenferro-einsum
+```
+
+---
+
+## GPU Memory and DataBuffer
+
+### DataBuffer GPU variant
+
+```rust
+// tenferro-tensor/src/lib.rs
+enum BufferInner<T> {
+    Owned(Vec<T>),                    // CPU, Rust-owned
+    External { ptr, len, release },   // CPU, externally-owned (DLPack)
+    Gpu {                             // GPU device memory
+        device_ptr: *mut T,
+        len: usize,
+        space: LogicalMemorySpace,    // GpuMemory { device_id }
+        release: Option<Box<dyn FnOnce() + Send>>,
+    },
+}
+```
+
+- `as_slice()` — CPU バッファ用。GPU variant ではエラーを返す。
+  この関数はそもそも CPU バッファのデータアクセスが目的。
+- `as_device_ptr()` — GPU バッファ用。デバイスポインタを返す。
+  cuTENSOR/hipTENSOR FFI に渡す。
+- GPU メモリの alloc/free は vtable 経由（`cudaMalloc`/`cudaFree` 等）。
+  release callback に GPU free 関数を設定。
+
+### CompletionEvent
+
+```rust
+// tenferro-tensor/src/lib.rs
+pub struct CompletionEvent {
+    inner: CompletionEventInner,
+}
+
+enum CompletionEventInner {
+    Noop,                           // CPU (既存)
+    Cuda { event: *mut c_void },    // cudaEvent_t
+    Rocm { event: *mut c_void },    // hipEvent_t
+}
+```
+
+- `record(stream)`: イベントを stream に記録
+- `wait()`: CPU 側で完了を待機
+- `is_complete()`: 非ブロッキング完了チェック
+- stream/event の create/destroy も vtable 経由
+
+---
+
+## Conjugation on GPU
+
+`Tensor::conj()` の現在の実装は `buffer.as_slice()` を直接イテレート
+するため GPU メモリでは動作しない。
+
+### 対応方針
+
+cuTENSOR は tensor descriptor に `CUTENSOR_OP_CONJ` を指定でき、
+lazy conjugation をネイティブにサポートする。
+
+1. **Tensor に conjugated フラグを追加** — メタデータのみ（zero-cost）
+2. **plan() 時に descriptor に CONJ op を設定** — cuTENSOR が内部処理
+3. **materialize が必要な場合** — ElementwiseUnary 経由 or CPU 転送
+
+standalone `conj()` で実データをコピーする場合は CPU 転送が必要。
+ただし einsum 内部での conjugation は lazy flag で十分。
+
+---
+
+## POC Skeleton Changes
+
+| 変更 | ファイル | 内容 |
+|------|---------|------|
+| `ComputeDevice::Hip` → `Rocm` | tenferro-device/src/lib.rs | enum variant 名変更、doc 更新 |
+| CudaBackend stub | tenferro-prims/src/lib.rs | 型定義 + `todo!()` |
+| RocmBackend stub | tenferro-prims/src/lib.rs | 型定義 + `todo!()` |
+| BackendRegistry stub | tenferro-prims/src/lib.rs | 型定義 |
+| CpuBackend 分離 | tenferro-prims/src/cpu.rs | 既存コードをモジュール分離 |
+| DataBuffer Gpu variant | tenferro-tensor/src/lib.rs | BufferInner に Gpu 追加 |
+| CompletionEvent 拡張 | tenferro-tensor/src/lib.rs | Cuda/Rocm variant 追加 |
+| libloading 依存追加 | workspace Cargo.toml | workspace dependency |
+| Tensor conjugated flag | tenferro-tensor/src/lib.rs | lazy conjugation 用 |
+| Arc\<BufferInner\> | tenferro-tensor/src/lib.rs | DataBuffer を Arc 共有に変更。clone() は浅い、conj() は lazy |
+| resolve_conj stubs | tenferro-prims/src/lib.rs | 各バックエンドに resolve_conj() 追加 |
+| UnaryOp::Conj | tenferro-prims/src/lib.rs | resolve_conj 用の新 UnaryOp variant |
+| prims → tensor dep | tenferro-prims/Cargo.toml | resolve_conj が Tensor<T> を扱うため |
+
+---
+
+## Problem Catalog
+
+| ID | Problem | Severity | Resolution |
+|---|---|---|---|
+| G1 | GPU メモリ管理 | Medium | DataBuffer に Gpu variant 追加。`as_slice()` は CPU 用（GPU ではエラー）。`as_device_ptr()` を追加。alloc/free は vtable 経由 |
+| G2 | Workspace 管理 | Medium | GpuContext 内に可変長 workspace。`plan()` が必要サイズ報告、`execute()` が自動拡張 |
+| G3 | Stream/Event 同期 | Medium | CompletionEvent に Cuda/Rocm variant。vtable 経由で record/wait |
+| G4 | Plan cache key に stride 含む | Low | cuTENSOR plan は stride 依存。PlanCacheKey に shapes + strides 含める |
+| G5 | FFI エラー処理 | Medium | vtable 呼び出しの status code を `Error::DeviceError` に map |
+| G6 | cuTENSOR v1→v2 API 差異 | Low | v2 ベース（describe → plan → execute）で統一 |
+| G7 | hipTENSOR 成熟度 | Medium | JIT 未対応、block-sparse 未対応。制限事項として記録 |
+| G8 | カスタムカーネル (将来) | Low | AntiTrace/AntiDiag は Contract 合成で対応。将来カーネルが必要になれば別クレート |
+| G9 | Multi-GPU | Low | GpuContext = per-device。複数 GPU = 複数 Context |
+| G10 | `ComputeDevice::Hip` → `Rocm` rename | Low | POC 修正で対応 |
+| G11 | Conjugation on GPU | Medium | cuTENSOR は `CUTENSOR_OP_CONJ` でlazy conjugation をサポート。Tensor に conjugated フラグ追加。standalone `conj()` は CPU 転送が必要 |
+| G12 | strided-einsum2 / omeinsum-rs 廃止 | — | 両方廃止予定。アルゴリズムは参考元として参照するが依存しない。tenferro-prims / tenferro-einsum に自前実装 |
+| G13 | Tensor Clone / Conj | Medium | DataBuffer を `Arc<BufferInner>` で共有。clone() は浅い（refcount++）。conj() は lazy（flag flip + refcount++）。深いコピーは prims `Permute(identity)` 経由。resolve_conj() を各バックエンドに提供。PyTorch 準拠 |

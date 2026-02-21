@@ -33,7 +33,7 @@ use std::fmt;
 /// |---------|---------------------|
 /// | `MainMemory` | `kDLCPU` (1) |
 /// | `PinnedMemory` | `kDLCUDAHost` (3) / `kDLROCMHost` (11) |
-/// | `GpuMemory` | `kDLCUDA` (2) / `kDLROCM` (10) |
+/// | `GpuMemory` | `kDLCUDA` (2) / `kDLROCM` (10) — vendor determined by context |
 /// | `ManagedMemory` | `kDLCUDAManaged` (13) |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LogicalMemorySpace {
@@ -79,9 +79,9 @@ pub enum ComputeDevice {
         /// Zero-based CUDA device index.
         device_id: usize,
     },
-    /// AMD HIP compute device.
-    Hip {
-        /// Zero-based HIP device index.
+    /// AMD ROCm compute device.
+    Rocm {
+        /// Zero-based ROCm device index.
         device_id: usize,
     },
 }
@@ -91,7 +91,7 @@ impl fmt::Display for ComputeDevice {
         match self {
             ComputeDevice::Cpu { device_id } => write!(f, "cpu:{device_id}"),
             ComputeDevice::Cuda { device_id } => write!(f, "cuda:{device_id}"),
-            ComputeDevice::Hip { device_id } => write!(f, "hip:{device_id}"),
+            ComputeDevice::Rocm { device_id } => write!(f, "rocm:{device_id}"),
         }
     }
 }

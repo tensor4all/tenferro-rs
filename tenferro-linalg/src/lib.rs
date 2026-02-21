@@ -220,28 +220,58 @@ pub struct QrResult<T: Scalar> {
     pub r: Tensor<T>,
 }
 
-/// LU decomposition result: `A = P * L * U` (partial pivoting).
+/// Pivoting strategy for LU decomposition.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::LuPivot;
+///
+/// let pivot = LuPivot::Partial; // default, uses LAPACK dgetrf
+/// let no_pivot = LuPivot::NoPivot; // no pivoting, numerically unstable
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LuPivot {
+    /// Partial (row) pivoting (default). Uses LAPACK `?getrf` / cuSOLVER `Xgetrf`.
+    /// Numerically stable for general matrices.
+    #[default]
+    Partial,
+    /// No pivoting. Faster but numerically unstable unless the matrix is
+    /// known to be well-conditioned (e.g., diagonally dominant). The
+    /// permutation field `p` in [`LuResult`] will be `None`.
+    NoPivot,
+}
+
+/// LU decomposition result: `A = P * L * U`.
 ///
 /// For an input of shape `(m, n, *)` with `k = min(m, n)`:
 ///
-/// - `p`: permutation indices, shape `(m, *)`
+/// - `p`: permutation indices, shape `(m, *)` — `None` when [`LuPivot::NoPivot`]
 /// - `l`: shape `(m, k, *)` (unit lower triangular)
 /// - `u`: shape `(k, n, *)` (upper triangular)
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_linalg::lu;
+/// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = lu(&a).unwrap();
+///
+/// // With partial pivoting (default)
+/// let result = lu(&a, LuPivot::Partial).unwrap();
+/// assert!(result.p.is_some());
+///
+/// // Without pivoting
+/// let result = lu(&a, LuPivot::NoPivot).unwrap();
+/// assert!(result.p.is_none());
 /// ```
 pub struct LuResult<T: Scalar> {
-    /// Row permutation indices (partial pivoting). Shape: `(m, *)`.
-    pub p: Vec<usize>,
+    /// Row permutation indices. `Some` for [`LuPivot::Partial`], `None` for
+    /// [`LuPivot::NoPivot`]. Shape: `(m, *)`.
+    pub p: Option<Vec<usize>>,
     /// Unit lower triangular factor. Shape: `(m, k, *)`.
     pub l: Tensor<T>,
     /// Upper triangular factor. Shape: `(k, n, *)`.
@@ -387,26 +417,37 @@ pub fn qr<T: Scalar>(_tensor: &Tensor<T>) -> Result<QrResult<T>> {
     todo!()
 }
 
-/// Compute the LU decomposition of a batched matrix (partial pivoting).
+/// Compute the LU decomposition of a batched matrix.
 ///
 /// Input shape: `(m, n, *)`. Must be column-major contiguous.
+///
+/// # Arguments
+///
+/// * `tensor` — Input tensor of shape `(m, n, *)`
+/// * `pivot` — Pivoting strategy: [`LuPivot::Partial`] (default, stable)
+///   or [`LuPivot::NoPivot`] (faster, unstable)
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_linalg::lu;
+/// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = lu(&a).unwrap();
+///
+/// // Partial pivoting (default)
+/// let result = lu(&a, LuPivot::Partial).unwrap();
+///
+/// // No pivoting
+/// let result = lu(&a, LuPivot::NoPivot).unwrap();
 /// ```
 ///
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn lu<T: Scalar>(_tensor: &Tensor<T>) -> Result<LuResult<T>> {
+pub fn lu<T: Scalar>(_tensor: &Tensor<T>, _pivot: LuPivot) -> Result<LuResult<T>> {
     todo!()
 }
 
@@ -919,10 +960,12 @@ pub fn qr_rrule<T: Scalar>(
 
 /// Reverse-mode AD rule for LU (VJP / pullback).
 ///
+/// The `pivot` argument must match the pivoting strategy used in the forward pass.
+///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_linalg::{lu_rrule, LuCotangent};
+/// use tenferro_linalg::{lu_rrule, LuCotangent, LuPivot};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
@@ -933,11 +976,12 @@ pub fn qr_rrule<T: Scalar>(
 ///     l: Some(Tensor::ones(&[3, 3], mem, col)),
 ///     u: None,
 /// };
-/// let grad_a = lu_rrule(&a, &cotangent).unwrap();
+/// let grad_a = lu_rrule(&a, &cotangent, LuPivot::Partial).unwrap();
 /// ```
 pub fn lu_rrule<T: Scalar>(
     _tensor: &Tensor<T>,
     _cotangent: &LuCotangent<T>,
+    _pivot: LuPivot,
 ) -> AdResult<Tensor<T>> {
     todo!()
 }
@@ -1018,20 +1062,14 @@ pub fn solve_rrule<T: Scalar>(
 /// Reverse-mode AD rule for matrix inverse (VJP / pullback).
 ///
 /// `Ā = -A⁻ᴴ · cotangent · A⁻ᴴ`.
-pub fn inv_rrule<T: Scalar>(
-    _tensor: &Tensor<T>,
-    _cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+pub fn inv_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdResult<Tensor<T>> {
     todo!()
 }
 
 /// Reverse-mode AD rule for determinant (VJP / pullback).
 ///
 /// `Ā = det(A) · cotangent · A⁻ᵀ`.
-pub fn det_rrule<T: Scalar>(
-    _tensor: &Tensor<T>,
-    _cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+pub fn det_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdResult<Tensor<T>> {
     todo!()
 }
 
@@ -1133,10 +1171,12 @@ pub fn qr_frule<T: Scalar>(
 
 /// Forward-mode AD rule for LU (JVP / pushforward).
 ///
+/// The `pivot` argument must match the pivoting strategy used in the forward pass.
+///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_linalg::lu_frule;
+/// use tenferro_linalg::{lu_frule, LuPivot};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
@@ -1144,11 +1184,12 @@ pub fn qr_frule<T: Scalar>(
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (result, dresult) = lu_frule(&a, &da).unwrap();
+/// let (result, dresult) = lu_frule(&a, &da, LuPivot::Partial).unwrap();
 /// ```
 pub fn lu_frule<T: Scalar>(
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
+    _pivot: LuPivot,
 ) -> AdResult<(LuResult<T>, LuResult<T>)> {
     todo!()
 }

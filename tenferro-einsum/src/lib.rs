@@ -15,9 +15,11 @@
 //!
 //! # Backend dispatch
 //!
-//! The backend is selected automatically from the tensor's
-//! [`LogicalMemorySpace`](tenferro_device::LogicalMemorySpace) (PyTorch-style).
-//! There is no backend type parameter in the public API.
+//! The backend is passed explicitly as a type parameter `B: TensorPrims<A>`
+//! with a mutable context `&mut B::Context`.  This follows Rust idiom of
+//! explicit ownership and mutability (no global/thread-local state).
+//! The context provides access to the thread pool, buffer pool, and plan
+//! cache.
 //!
 //! # Examples
 //!
@@ -206,9 +208,12 @@
 //! // a.set_preferred_compute_device(None);
 //! ```
 
+use std::collections::HashMap;
+
 use chainrules::{AdResult, Differentiable, DualTensor, TrackedTensor};
 use tenferro_algebra::{HasAlgebra, Scalar};
 use tenferro_device::Result;
+use tenferro_prims::TensorPrims;
 use tenferro_tensor::Tensor;
 
 /// Einsum subscripts using integer labels (omeinsum-rs compatible).
@@ -390,10 +395,16 @@ impl ContractionTree {
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum<T: Scalar + HasAlgebra>(
+pub fn einsum<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
-) -> Result<Tensor<T>> {
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -405,10 +416,16 @@ pub fn einsum<T: Scalar + HasAlgebra>(
 /// # Errors
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
-pub fn einsum_with_subscripts<T: Scalar + HasAlgebra>(
+pub fn einsum_with_subscripts<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
-) -> Result<Tensor<T>> {
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -422,10 +439,16 @@ pub fn einsum_with_subscripts<T: Scalar + HasAlgebra>(
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
-pub fn einsum_with_plan<T: Scalar + HasAlgebra>(
+pub fn einsum_with_plan<T, A, B>(
+    ctx: &mut B::Context,
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
-) -> Result<Tensor<T>> {
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -457,10 +480,16 @@ pub fn einsum_with_plan<T: Scalar + HasAlgebra>(
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum_owned<T: Scalar + HasAlgebra>(
+pub fn einsum_owned<T, A, B>(
+    _ctx: &mut B::Context,
     _subscripts: &str,
     _operands: Vec<Tensor<T>>,
-) -> Result<Tensor<T>> {
+    _size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -472,10 +501,16 @@ pub fn einsum_owned<T: Scalar + HasAlgebra>(
 /// # Errors
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
-pub fn einsum_with_subscripts_owned<T: Scalar + HasAlgebra>(
+pub fn einsum_with_subscripts_owned<T, A, B>(
+    _ctx: &mut B::Context,
     _subscripts: &Subscripts,
     _operands: Vec<Tensor<T>>,
-) -> Result<Tensor<T>> {
+    _size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -490,10 +525,16 @@ pub fn einsum_with_subscripts_owned<T: Scalar + HasAlgebra>(
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
-pub fn einsum_with_plan_owned<T: Scalar + HasAlgebra>(
+pub fn einsum_with_plan_owned<T, A, B>(
+    _ctx: &mut B::Context,
     _tree: &ContractionTree,
     _operands: Vec<Tensor<T>>,
-) -> Result<Tensor<T>> {
+    _size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -538,13 +579,19 @@ pub fn einsum_with_plan_owned<T: Scalar + HasAlgebra>(
 ///
 /// Returns an error if the notation is invalid, tensor shapes are
 /// incompatible, or the output shape does not match the expected result.
-pub fn einsum_into<T: Scalar + HasAlgebra>(
+pub fn einsum_into<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
     alpha: T,
     beta: T,
     output: &mut Tensor<T>,
-) -> Result<()> {
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<()>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -571,13 +618,19 @@ pub fn einsum_into<T: Scalar + HasAlgebra>(
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts
 /// or the output shape does not match.
-pub fn einsum_with_subscripts_into<T: Scalar + HasAlgebra>(
+pub fn einsum_with_subscripts_into<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
     alpha: T,
     beta: T,
     output: &mut Tensor<T>,
-) -> Result<()> {
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<()>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -610,13 +663,19 @@ pub fn einsum_with_subscripts_into<T: Scalar + HasAlgebra>(
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree, or the output shape is incorrect.
-pub fn einsum_with_plan_into<T: Scalar + HasAlgebra>(
+pub fn einsum_with_plan_into<T, A, B>(
+    ctx: &mut B::Context,
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
     alpha: T,
     beta: T,
     output: &mut Tensor<T>,
-) -> Result<()> {
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<()>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -654,11 +713,14 @@ pub fn einsum_with_plan_into<T: Scalar + HasAlgebra>(
 /// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
-pub fn tracked_einsum<T: Scalar + HasAlgebra>(
+pub fn tracked_einsum<T, A, B>(
+    _ctx: &mut B::Context,
     _subscripts: &str,
     _operands: &[&TrackedTensor<Tensor<T>>],
 ) -> AdResult<TrackedTensor<Tensor<T>>>
 where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
     Tensor<T>: Differentiable,
 {
     todo!()
@@ -688,11 +750,14 @@ where
 /// let c_dual = dual_einsum("ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
 /// let _tangent = c_dual.tangent();
 /// ```
-pub fn dual_einsum<T: Scalar + HasAlgebra>(
+pub fn dual_einsum<T, A, B>(
+    _ctx: &mut B::Context,
     _subscripts: &str,
     _operands: &[&DualTensor<Tensor<T>>],
 ) -> AdResult<DualTensor<Tensor<T>>>
 where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
     Tensor<T>: Differentiable,
 {
     todo!()
@@ -722,11 +787,16 @@ where
 /// let grads = einsum_rrule("ij,jk->ik", &[&a, &b], &grad_c).unwrap();
 /// assert_eq!(grads.len(), 2);
 /// ```
-pub fn einsum_rrule<T: Scalar + HasAlgebra>(
+pub fn einsum_rrule<T, A, B>(
+    _ctx: &mut B::Context,
     _subscripts: &str,
     _operands: &[&Tensor<T>],
     _cotangent: &Tensor<T>,
-) -> Result<Vec<Tensor<T>>> {
+) -> Result<Vec<Tensor<T>>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -753,11 +823,16 @@ pub fn einsum_rrule<T: Scalar + HasAlgebra>(
 ///
 /// let dc = einsum_frule("ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
-pub fn einsum_frule<T: Scalar + HasAlgebra>(
+pub fn einsum_frule<T, A, B>(
+    _ctx: &mut B::Context,
     _subscripts: &str,
     _primals: &[&Tensor<T>],
     _tangents: &[Option<&Tensor<T>>],
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
 
@@ -801,12 +876,17 @@ pub fn einsum_frule<T: Scalar + HasAlgebra>(
 /// let (_grad_a, _hvp_a) = &results[0];
 /// let (_grad_b, _hvp_b) = &results[1];
 /// ```
-pub fn einsum_hvp<T: Scalar + HasAlgebra>(
+pub fn einsum_hvp<T, A, B>(
+    _ctx: &mut B::Context,
     _subscripts: &str,
     _primals: &[&Tensor<T>],
     _tangents: &[Option<&Tensor<T>>],
     _cotangent: &Tensor<T>,
     _cotangent_tangent: &Tensor<T>,
-) -> Result<Vec<(Tensor<T>, Tensor<T>)>> {
+) -> Result<Vec<(Tensor<T>, Tensor<T>)>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
     todo!()
 }
