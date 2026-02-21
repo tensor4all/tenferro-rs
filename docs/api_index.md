@@ -123,7 +123,7 @@ minimum element type requirements. `Conjugate` trait for complex conjugation
 ### [tenferro-device](tenferro_device/index.html) <small>(Shared)</small>
 
 Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
-`ComputeDevice` (Cpu, Cuda, Hip), workspace-wide `Error`/`Result` types.
+`ComputeDevice` (Cpu, Cuda, Rocm), workspace-wide `Error`/`Result` types.
 
 ## External Crates (extern/)
 

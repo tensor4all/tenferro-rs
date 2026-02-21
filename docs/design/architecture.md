@@ -77,7 +77,7 @@ pub enum LogicalMemorySpace {
 pub enum ComputeDevice {
     Cpu { device_id: usize },
     Cuda { device_id: usize },
-    Hip { device_id: usize },
+    Rocm { device_id: usize },
 }
 
 /// Operation kind used for capability filtering.
