@@ -92,7 +92,7 @@ use std::marker::PhantomData;
 use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::{Scalar, Standard};
-use tenferro_device::Result;
+use tenferro_device::{Error, Result};
 
 /// Reduction operation kind.
 ///
@@ -399,6 +399,8 @@ pub trait TensorPrims<A> {
 pub enum CpuPlan<T: ScalarBase> {
     /// Plan for batched GEMM.
     BatchedGemm {
+        /// Batch dimension sizes.
+        batch_dims: Vec<usize>,
         /// Number of rows.
         m: usize,
         /// Number of columns.
@@ -409,34 +411,40 @@ pub enum CpuPlan<T: ScalarBase> {
     },
     /// Plan for reduction.
     Reduce {
-        /// Axis to reduce over.
-        axis: usize,
+        /// Axes to reduce over (positions in input tensor).
+        reduced_axes: Vec<usize>,
         /// Reduction operation.
         op: ReduceOp,
         _marker: PhantomData<T>,
     },
     /// Plan for trace.
     Trace {
-        /// Paired modes.
-        paired: Vec<(u32, u32)>,
+        /// Paired axis positions in input tensor.
+        paired_axes: Vec<(usize, usize)>,
+        /// Output axis positions mapping.
+        free_axes: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for permutation.
     Permute {
-        /// Permutation mapping.
+        /// Permutation mapping (perm[out_axis] = in_axis).
         perm: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for anti-trace (AD backward).
     AntiTrace {
-        /// Paired modes.
-        paired: Vec<(u32, u32)>,
+        /// Paired axis positions in output tensor.
+        paired_axes: Vec<(usize, usize)>,
+        /// Input axis positions mapping.
+        free_axes: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for anti-diag (AD backward).
     AntiDiag {
-        /// Paired modes.
-        paired: Vec<(u32, u32)>,
+        /// Paired axis positions in output tensor.
+        paired_axes: Vec<(usize, usize)>,
+        /// Input axis positions mapping.
+        free_axes: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for element-wise unary operation.
@@ -445,8 +453,16 @@ pub enum CpuPlan<T: ScalarBase> {
         op: UnaryOp,
         _marker: PhantomData<T>,
     },
-    /// Plan for fused contraction (core op).
-    Contract { _marker: PhantomData<T> },
+    /// Plan for fused contraction.
+    Contract {
+        /// Mode labels for input A.
+        modes_a: Vec<u32>,
+        /// Mode labels for input B.
+        modes_b: Vec<u32>,
+        /// Mode labels for output C.
+        modes_c: Vec<u32>,
+        _marker: PhantomData<T>,
+    },
     /// Plan for element-wise multiplication (extended op).
     ElementwiseMul { _marker: PhantomData<T> },
     /// Plan for making a tensor contiguous.
@@ -580,11 +596,433 @@ impl CpuBackend {
     /// ```
     pub fn resolve_conj<T: Scalar>(
         _ctx: &mut CpuContext,
-        _src: &tenferro_tensor::Tensor<T>,
+        src: &tenferro_tensor::Tensor<T>,
     ) -> tenferro_tensor::Tensor<T> {
-        todo!()
+        if !src.is_conjugated() {
+            return src.clone();
+        }
+        // Create a fresh non-conjugated copy of the data.
+        // For real types (f64, f32), conjugation is identity, so raw data copy is correct.
+        // Complex types would additionally need element-wise conjugation (requires
+        // Conjugate trait bound, not available via Scalar).
+        let contiguous = src.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+        let data = contiguous
+            .buffer()
+            .as_slice()
+            .expect("CPU tensor must have CPU-accessible data");
+        tenferro_tensor::Tensor::from_slice(
+            data,
+            src.dims(),
+            tenferro_tensor::MemoryOrder::ColumnMajor,
+        )
+        .expect("from_slice should succeed with valid data and dims")
     }
 }
+
+// ===========================================================================
+// Helpers for multi-index iteration
+// ===========================================================================
+
+/// Iterate over all index combinations for the given dimensions (column-major order).
+fn for_each_index(dims: &[usize], mut f: impl FnMut(&[usize])) {
+    let ndim = dims.len();
+    if ndim == 0 {
+        f(&[]);
+        return;
+    }
+    let total: usize = dims.iter().product();
+    if total == 0 {
+        return;
+    }
+    let mut index = vec![0usize; ndim];
+    for _ in 0..total {
+        f(&index);
+        // Increment column-major
+        for d in 0..ndim {
+            index[d] += 1;
+            if index[d] < dims[d] {
+                break;
+            }
+            index[d] = 0;
+        }
+    }
+}
+
+/// Unflatten a linear index to multi-dimensional indices (column-major).
+fn unflatten_index(flat: usize, dims: &[usize]) -> Vec<usize> {
+    let mut indices = vec![0; dims.len()];
+    let mut remainder = flat;
+    for d in 0..dims.len() {
+        indices[d] = remainder % dims[d];
+        remainder /= dims[d];
+    }
+    indices
+}
+
+/// Find the position of a mode label in a mode list, returning an error if not found.
+fn mode_position(modes: &[u32], label: u32) -> Result<usize> {
+    modes
+        .iter()
+        .position(|&m| m == label)
+        .ok_or_else(|| Error::InvalidArgument(format!("mode label {label} not found")))
+}
+
+/// Scale all elements of the output by `beta`, or zero them if `beta == 0`.
+fn scale_output<T: ScalarBase>(output: &mut StridedViewMut<T>, beta: T) {
+    let dims = output.dims().to_vec();
+    if beta == T::zero() {
+        for_each_index(&dims, |idx| {
+            output.set(idx, T::zero());
+        });
+    } else if beta != T::one() {
+        for_each_index(&dims, |idx| {
+            let old = output.get(idx);
+            output.set(idx, beta * old);
+        });
+    }
+    // If beta == 1, output is unchanged (identity scaling).
+}
+
+// ===========================================================================
+// CPU execute helpers for each operation
+// ===========================================================================
+
+fn execute_permute<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    perm: &[usize],
+) -> Result<()> {
+    let permuted = input
+        .permute(perm)
+        .map_err(|e| Error::StrideError(e.to_string()))?;
+
+    if alpha == T::one() && beta == T::zero() {
+        // Fast path: use strided-perm HPTT-based copy
+        strided_perm::copy_into(output, &permuted)
+            .map_err(|e| Error::StrideError(e.to_string()))?;
+    } else {
+        let dims = output.dims().to_vec();
+        for_each_index(&dims, |idx| {
+            let val = alpha * permuted.get(idx);
+            if beta == T::zero() {
+                output.set(idx, val);
+            } else {
+                output.set(idx, val + beta * output.get(idx));
+            }
+        });
+    }
+    Ok(())
+}
+
+fn execute_make_contiguous<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+) -> Result<()> {
+    if alpha == T::one() && beta == T::zero() {
+        strided_perm::copy_into(output, input).map_err(|e| Error::StrideError(e.to_string()))?;
+    } else {
+        let dims = output.dims().to_vec();
+        for_each_index(&dims, |idx| {
+            let val = alpha * input.get(idx);
+            if beta == T::zero() {
+                output.set(idx, val);
+            } else {
+                output.set(idx, val + beta * output.get(idx));
+            }
+        });
+    }
+    Ok(())
+}
+
+fn execute_batched_gemm<T: ScalarBase>(
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    batch_dims: &[usize],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let a = inputs[0];
+    let b = inputs[1];
+    let batch_size: usize = if batch_dims.is_empty() {
+        1
+    } else {
+        batch_dims.iter().product()
+    };
+
+    for batch_flat in 0..batch_size {
+        let batch_idx = unflatten_index(batch_flat, batch_dims);
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = T::zero();
+                for kk in 0..k {
+                    let mut a_idx = batch_idx.clone();
+                    a_idx.push(i);
+                    a_idx.push(kk);
+                    let mut b_idx = batch_idx.clone();
+                    b_idx.push(kk);
+                    b_idx.push(j);
+                    sum = sum + a.get(&a_idx) * b.get(&b_idx);
+                }
+                let mut c_idx = batch_idx.clone();
+                c_idx.push(i);
+                c_idx.push(j);
+                let old = if beta == T::zero() {
+                    T::zero()
+                } else {
+                    beta * output.get(&c_idx)
+                };
+                output.set(&c_idx, alpha * sum + old);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn execute_reduce_sum<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    reduced_axes: &[usize],
+) -> Result<()> {
+    let in_dims = input.dims().to_vec();
+    let out_dims = output.dims().to_vec();
+    let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
+    let reduced_total: usize = reduced_dims.iter().product();
+
+    for_each_index(&out_dims, |out_idx| {
+        let mut sum = T::zero();
+        for red_flat in 0..reduced_total {
+            let red_idx = unflatten_index(red_flat, &reduced_dims);
+            // Build full input index by interleaving free and reduced
+            let mut in_idx = Vec::with_capacity(in_dims.len());
+            let mut out_pos = 0;
+            let mut red_pos = 0;
+            for ax in 0..in_dims.len() {
+                if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
+                    in_idx.push(red_idx[red_pos]);
+                    red_pos += 1;
+                } else {
+                    in_idx.push(out_idx[out_pos]);
+                    out_pos += 1;
+                }
+            }
+            sum = sum + input.get(&in_idx);
+        }
+        let old = if beta == T::zero() {
+            T::zero()
+        } else {
+            beta * output.get(out_idx)
+        };
+        output.set(out_idx, alpha * sum + old);
+    });
+    Ok(())
+}
+
+fn execute_trace<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    paired_axes: &[(usize, usize)],
+    free_axes: &[usize],
+) -> Result<()> {
+    let in_dims = input.dims().to_vec();
+    let out_dims = output.dims().to_vec();
+    // All paired axes must have the same dimension
+    let diag_dim = in_dims[paired_axes[0].0];
+
+    for_each_index(&out_dims, |out_idx| {
+        let mut sum = T::zero();
+        for d in 0..diag_dim {
+            let mut in_idx = vec![0; in_dims.len()];
+            for (out_pos, &in_ax) in free_axes.iter().enumerate() {
+                in_idx[in_ax] = out_idx[out_pos];
+            }
+            for &(ax1, ax2) in paired_axes {
+                in_idx[ax1] = d;
+                in_idx[ax2] = d;
+            }
+            sum = sum + input.get(&in_idx);
+        }
+        let old = if beta == T::zero() {
+            T::zero()
+        } else {
+            beta * output.get(out_idx)
+        };
+        output.set(out_idx, alpha * sum + old);
+    });
+    Ok(())
+}
+
+fn execute_anti_trace<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    paired_axes: &[(usize, usize)],
+    free_axes: &[usize],
+) -> Result<()> {
+    // AntiTrace: C = alpha * antitrace(A) + beta * C
+    // First scale output by beta (since diagonal positions may be written multiple times)
+    scale_output(output, beta);
+
+    let in_dims = input.dims().to_vec();
+    let out_dims = output.dims().to_vec();
+    let diag_dim = out_dims[paired_axes[0].0];
+
+    // For each input element, scatter to all diagonal positions in output
+    for_each_index(&in_dims, |in_idx| {
+        let val = alpha * input.get(in_idx);
+        for d in 0..diag_dim {
+            let mut out_idx = vec![0; out_dims.len()];
+            for (in_pos, &out_ax) in free_axes.iter().enumerate() {
+                out_idx[out_ax] = in_idx[in_pos];
+            }
+            for &(ax1, ax2) in paired_axes {
+                out_idx[ax1] = d;
+                out_idx[ax2] = d;
+            }
+            let old = output.get(&out_idx);
+            output.set(&out_idx, old + val);
+        }
+    });
+    Ok(())
+}
+
+fn execute_anti_diag<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    paired_axes: &[(usize, usize)],
+    free_axes: &[usize],
+) -> Result<()> {
+    // AntiDiag: write input values to diagonal positions in output
+    scale_output(output, beta);
+
+    let in_dims = input.dims().to_vec();
+    let out_dims = output.dims().to_vec();
+    let diag_dim = out_dims[paired_axes[0].0];
+
+    for_each_index(&in_dims, |in_idx| {
+        let val = alpha * input.get(in_idx);
+        for d in 0..diag_dim {
+            let mut out_idx = vec![0; out_dims.len()];
+            for (in_pos, &out_ax) in free_axes.iter().enumerate() {
+                out_idx[out_ax] = in_idx[in_pos];
+            }
+            for &(ax1, ax2) in paired_axes {
+                out_idx[ax1] = d;
+                out_idx[ax2] = d;
+            }
+            let old = output.get(&out_idx);
+            output.set(&out_idx, old + val);
+        }
+    });
+    Ok(())
+}
+
+fn execute_elementwise_mul<T: ScalarBase>(
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+) -> Result<()> {
+    let a = inputs[0];
+    let b = inputs[1];
+    let dims = output.dims().to_vec();
+    for_each_index(&dims, |idx| {
+        let val = alpha * (a.get(idx) * b.get(idx));
+        if beta == T::zero() {
+            output.set(idx, val);
+        } else {
+            output.set(idx, val + beta * output.get(idx));
+        }
+    });
+    Ok(())
+}
+
+fn execute_contract<T: ScalarBase>(
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    modes_a: &[u32],
+    modes_b: &[u32],
+    modes_c: &[u32],
+) -> Result<()> {
+    let a = inputs[0];
+    let b = inputs[1];
+
+    // Determine contracted modes: in both A and B but not in C
+    let contracted_modes: Vec<u32> = modes_a
+        .iter()
+        .filter(|m| modes_b.contains(m) && !modes_c.contains(m))
+        .copied()
+        .collect();
+    let contracted_dims: Vec<usize> = contracted_modes
+        .iter()
+        .map(|&m| {
+            let a_pos = modes_a.iter().position(|&mm| mm == m).unwrap();
+            a.dims()[a_pos]
+        })
+        .collect();
+    let contracted_total: usize = if contracted_dims.is_empty() {
+        1
+    } else {
+        contracted_dims.iter().product()
+    };
+
+    let out_dims = output.dims().to_vec();
+
+    for_each_index(&out_dims, |c_idx| {
+        let mut sum = T::zero();
+        for k_flat in 0..contracted_total {
+            let k_idx = unflatten_index(k_flat, &contracted_dims);
+
+            // Build A indices
+            let mut a_idx = vec![0; modes_a.len()];
+            for (ax, &mode) in modes_a.iter().enumerate() {
+                if let Some(c_pos) = modes_c.iter().position(|&m| m == mode) {
+                    a_idx[ax] = c_idx[c_pos];
+                } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
+                    a_idx[ax] = k_idx[k_pos];
+                }
+            }
+
+            // Build B indices
+            let mut b_idx = vec![0; modes_b.len()];
+            for (ax, &mode) in modes_b.iter().enumerate() {
+                if let Some(c_pos) = modes_c.iter().position(|&m| m == mode) {
+                    b_idx[ax] = c_idx[c_pos];
+                } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
+                    b_idx[ax] = k_idx[k_pos];
+                }
+            }
+
+            sum = sum + a.get(&a_idx) * b.get(&b_idx);
+        }
+        let old = if beta == T::zero() {
+            T::zero()
+        } else {
+            beta * output.get(c_idx)
+        };
+        output.set(c_idx, alpha * sum + old);
+    });
+    Ok(())
+}
+
+// ===========================================================================
+// CPU backend TensorPrims implementation
+// ===========================================================================
 
 impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     type Plan<T: ScalarBase> = CpuPlan<T>;
@@ -592,25 +1030,222 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
 
     fn plan<T: ScalarBase>(
         _ctx: &mut CpuContext,
-        _desc: &PrimDescriptor,
+        desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<CpuPlan<T>> {
-        todo!()
+        match desc {
+            PrimDescriptor::BatchedGemm {
+                batch_dims,
+                m,
+                n,
+                k,
+            } => Ok(CpuPlan::BatchedGemm {
+                batch_dims: batch_dims.clone(),
+                m: *m,
+                n: *n,
+                k: *k,
+                _marker: PhantomData,
+            }),
+
+            PrimDescriptor::Reduce {
+                modes_a,
+                modes_c,
+                op,
+            } => {
+                // reduced_axes = positions in modes_a not present in modes_c
+                let reduced_axes: Vec<usize> = modes_a
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| !modes_c.contains(m))
+                    .map(|(i, _)| i)
+                    .collect();
+                Ok(CpuPlan::Reduce {
+                    reduced_axes,
+                    op: *op,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Trace {
+                modes_a,
+                modes_c,
+                paired,
+            } => {
+                let paired_axes: Vec<(usize, usize)> = paired
+                    .iter()
+                    .map(|(m1, m2)| {
+                        Ok((mode_position(modes_a, *m1)?, mode_position(modes_a, *m2)?))
+                    })
+                    .collect::<Result<_>>()?;
+                let free_axes: Vec<usize> = modes_c
+                    .iter()
+                    .map(|m| mode_position(modes_a, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::Trace {
+                    paired_axes,
+                    free_axes,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Permute { modes_a, modes_b } => {
+                // perm[out_axis] = in_axis
+                let perm: Vec<usize> = modes_b
+                    .iter()
+                    .map(|m| mode_position(modes_a, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::Permute {
+                    perm,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::AntiTrace {
+                modes_a,
+                modes_c,
+                paired,
+            } => {
+                let paired_axes: Vec<(usize, usize)> = paired
+                    .iter()
+                    .map(|(m1, m2)| {
+                        Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
+                    })
+                    .collect::<Result<_>>()?;
+                let free_axes: Vec<usize> = modes_a
+                    .iter()
+                    .map(|m| mode_position(modes_c, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::AntiTrace {
+                    paired_axes,
+                    free_axes,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::AntiDiag {
+                modes_a,
+                modes_c,
+                paired,
+            } => {
+                let paired_axes: Vec<(usize, usize)> = paired
+                    .iter()
+                    .map(|(m1, m2)| {
+                        Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
+                    })
+                    .collect::<Result<_>>()?;
+                let free_axes: Vec<usize> = modes_a
+                    .iter()
+                    .map(|m| mode_position(modes_c, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::AntiDiag {
+                    paired_axes,
+                    free_axes,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::ElementwiseUnary { op } => Ok(CpuPlan::ElementwiseUnary {
+                op: *op,
+                _marker: PhantomData,
+            }),
+
+            PrimDescriptor::Contract {
+                modes_a,
+                modes_b,
+                modes_c,
+            } => Ok(CpuPlan::Contract {
+                modes_a: modes_a.clone(),
+                modes_b: modes_b.clone(),
+                modes_c: modes_c.clone(),
+                _marker: PhantomData,
+            }),
+
+            PrimDescriptor::ElementwiseMul => Ok(CpuPlan::ElementwiseMul {
+                _marker: PhantomData,
+            }),
+
+            PrimDescriptor::MakeContiguous => Ok(CpuPlan::MakeContiguous {
+                _marker: PhantomData,
+            }),
+        }
     }
 
     fn execute<T: ScalarBase>(
         _ctx: &mut CpuContext,
-        _plan: &CpuPlan<T>,
-        _alpha: T,
-        _inputs: &[&StridedView<T>],
-        _beta: T,
-        _output: &mut StridedViewMut<T>,
+        plan: &CpuPlan<T>,
+        alpha: T,
+        inputs: &[&StridedView<T>],
+        beta: T,
+        output: &mut StridedViewMut<T>,
     ) -> Result<()> {
-        todo!()
+        match plan {
+            CpuPlan::Permute { perm, .. } => execute_permute(alpha, inputs[0], beta, output, perm),
+
+            CpuPlan::MakeContiguous { .. } => {
+                execute_make_contiguous(alpha, inputs[0], beta, output)
+            }
+
+            CpuPlan::BatchedGemm {
+                batch_dims,
+                m,
+                n,
+                k,
+                ..
+            } => execute_batched_gemm(alpha, inputs, beta, output, batch_dims, *m, *n, *k),
+
+            CpuPlan::Reduce {
+                reduced_axes, op, ..
+            } => match op {
+                ReduceOp::Sum => execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes),
+                ReduceOp::Max | ReduceOp::Min => Err(Error::InvalidArgument(
+                    "Max/Min reduction requires PartialOrd, not available via ScalarBase".into(),
+                )),
+            },
+
+            CpuPlan::Trace {
+                paired_axes,
+                free_axes,
+                ..
+            } => execute_trace(alpha, inputs[0], beta, output, paired_axes, free_axes),
+
+            CpuPlan::AntiTrace {
+                paired_axes,
+                free_axes,
+                ..
+            } => execute_anti_trace(alpha, inputs[0], beta, output, paired_axes, free_axes),
+
+            CpuPlan::AntiDiag {
+                paired_axes,
+                free_axes,
+                ..
+            } => execute_anti_diag(alpha, inputs[0], beta, output, paired_axes, free_axes),
+
+            CpuPlan::ElementwiseUnary { op, .. } => {
+                // Conj is identity for real types (ScalarBase)
+                match op {
+                    UnaryOp::Conj => {
+                        execute_make_contiguous(alpha, inputs[0], beta, output)
+                    }
+                    _ => Err(Error::InvalidArgument(format!(
+                        "unary op {op:?} requires additional trait bounds not available via ScalarBase"
+                    ))),
+                }
+            }
+
+            CpuPlan::ElementwiseMul { .. } => execute_elementwise_mul(alpha, inputs, beta, output),
+
+            CpuPlan::Contract {
+                modes_a,
+                modes_b,
+                modes_c,
+                ..
+            } => execute_contract(alpha, inputs, beta, output, modes_a, modes_b, modes_c),
+        }
     }
 
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
-        todo!()
+        // CPU backend supports both Contract and ElementwiseMul
+        true
     }
 }
 
@@ -678,7 +1313,7 @@ impl CudaBackend {
         _ctx: &mut CudaContext,
         _src: &tenferro_tensor::Tensor<T>,
     ) -> tenferro_tensor::Tensor<T> {
-        todo!()
+        unimplemented!("CUDA backend not available: load cuTENSOR library first")
     }
 }
 
@@ -691,7 +1326,9 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<CudaPlan<T>> {
-        todo!()
+        Err(Error::DeviceError(
+            "CUDA backend not available: load cuTENSOR library first".into(),
+        ))
     }
 
     fn execute<T: ScalarBase>(
@@ -702,12 +1339,14 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         _beta: T,
         _output: &mut StridedViewMut<T>,
     ) -> Result<()> {
-        todo!()
+        Err(Error::DeviceError(
+            "CUDA backend not available: load cuTENSOR library first".into(),
+        ))
     }
 
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
         // cuTENSOR supports Contract and ElementwiseMul for f32/f64/Complex
-        todo!()
+        false
     }
 }
 
@@ -771,7 +1410,7 @@ impl RocmBackend {
         _ctx: &mut RocmContext,
         _src: &tenferro_tensor::Tensor<T>,
     ) -> tenferro_tensor::Tensor<T> {
-        todo!()
+        unimplemented!("ROCm backend not available: load hipTENSOR library first")
     }
 }
 
@@ -784,7 +1423,9 @@ impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<RocmPlan<T>> {
-        todo!()
+        Err(Error::DeviceError(
+            "ROCm backend not available: load hipTENSOR library first".into(),
+        ))
     }
 
     fn execute<T: ScalarBase>(
@@ -795,12 +1436,14 @@ impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
         _beta: T,
         _output: &mut StridedViewMut<T>,
     ) -> Result<()> {
-        todo!()
+        Err(Error::DeviceError(
+            "ROCm backend not available: load hipTENSOR library first".into(),
+        ))
     }
 
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
         // hipTENSOR supports Contract and ElementwiseMul for f32/f64/Complex
-        todo!()
+        false
     }
 }
 
@@ -844,7 +1487,9 @@ impl BackendRegistry {
     /// The caller (Julia, Python, or standalone Rust) provides the path
     /// to the shared library. No auto-search.
     pub fn load_cutensor(&mut self, _path: &str) -> Result<()> {
-        todo!()
+        Err(Error::DeviceError(
+            "cuTENSOR runtime loading not yet implemented".into(),
+        ))
     }
 
     /// Load the hipTENSOR library from the given path.
@@ -852,7 +1497,9 @@ impl BackendRegistry {
     /// The caller (Julia, Python, or standalone Rust) provides the path
     /// to the shared library. No auto-search.
     pub fn load_hiptensor(&mut self, _path: &str) -> Result<()> {
-        todo!()
+        Err(Error::DeviceError(
+            "hipTENSOR runtime loading not yet implemented".into(),
+        ))
     }
 
     /// Returns a reference to the CPU backend.
