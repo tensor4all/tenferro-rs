@@ -17,7 +17,8 @@ algebra `A` so different scalar types can plug in their own implementations.
 ```
 tenferro-einsum (engine)
     │
-    │  T: HasAlgebra → infers A automatically
+    │  T: HasAlgebra (UX sugar) → infers A = T::Algebra automatically
+    │  A: Semiring → A::Scalar is the canonical scalar type
     │
     ├── [has_extension_for::<T>(Contract)?]
     │   YES → execute Contract plan (fused permute+GEMM)
@@ -196,7 +197,8 @@ impl CpuContext {
 }
 
 /// Standard arithmetic on CPU (faer GEMM for f64/f32, naive for others).
-impl TensorPrims<Standard> for CpuBackend {
+/// Implemented generically for all scalar types S that implement Scalar.
+impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     type Plan<T: ScalarBase> = CpuPlan<T>;
     type Context = CpuContext;
 
@@ -299,7 +301,7 @@ pub struct CudaContext {
     _plan_cache: PlanCache,
 }
 
-impl TensorPrims<Standard> for CudaBackend {
+impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
     type Plan<T: ScalarBase> = CudaPlan<T>;
     type Context = CudaContext;
     // ...
@@ -308,7 +310,7 @@ impl TensorPrims<Standard> for CudaBackend {
 // RocmBackend follows the same pattern
 pub struct RocmBackend { ... }
 pub struct RocmContext { ... }
-impl TensorPrims<Standard> for RocmBackend { ... }
+impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend { ... }
 ```
 
 ### Backend Registry
@@ -355,11 +357,11 @@ This is why `plan()` and `execute()` take `&mut Context`.
 
 | Backend | Algebra | Extended ops | Notes |
 |---------|---------|-------------|-------|
-| CpuBackend | Standard | Contract, ElementwiseMul | faer/cblas GEMM |
-| CpuBackend | MaxPlus | None (decompose to core) | tropical-gemm SIMD |
+| CpuBackend | Standard\<S\> (any S: Scalar) | Contract, ElementwiseMul | faer/cblas GEMM |
+| CpuBackend | MaxPlus\<f64\> | None (decompose to core) | tropical-gemm SIMD |
 | CpuBackend | MyAlgebra | User choice | User-provided kernels |
-| CudaBackend [future] | Standard | Contract, ElementwiseMul | cuTENSOR |
-| RocmBackend [future] | Standard | Contract, ElementwiseMul | hipTENSOR |
+| CudaBackend [future] | Standard\<S\> (any S: Scalar) | Contract, ElementwiseMul | cuTENSOR |
+| RocmBackend [future] | Standard\<S\> (any S: Scalar) | Contract, ElementwiseMul | hipTENSOR |
 
 ---
 
@@ -368,11 +370,12 @@ This is why `plan()` and `execute()` take `&mut Context`.
 **Tropical backend** (in separate `tenferro-tropical` crate):
 
 ```rust
-pub struct MaxPlus;
+pub struct MaxPlus<T>(PhantomData<T>);
 
-impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus; }
+// HasAlgebra is UX sugar: wires MaxPlus<f64> scalar to MaxPlus<f64> algebra
+impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus<f64>; }
 
-impl TensorPrims<MaxPlus> for CpuBackend {
+impl TensorPrims<MaxPlus<f64>> for CpuBackend {
     type Plan<T: ScalarBase> = TropicalPlan<T>;
     type Context = CpuContext;
 
@@ -390,6 +393,7 @@ struct MyScalar(f64);
 struct MyAlgebra;
 
 impl ScalarBase for MyScalar { ... }
+// HasAlgebra is UX sugar: wires MyScalar to MyAlgebra for automatic inference
 impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }
 
 impl TensorPrims<MyAlgebra> for CpuBackend {
@@ -400,7 +404,7 @@ impl TensorPrims<MyAlgebra> for CpuBackend {
 
 // Just works:
 let a = Tensor::<MyScalar>::zeros(&[3, 4], ...);
-einsum("ij,jk->ik", &[&a, &b])?;  // MyAlgebra auto-inferred
+einsum("ij,jk->ik", &[&a, &b])?;  // MyAlgebra auto-inferred via HasAlgebra
 ```
 
 ---

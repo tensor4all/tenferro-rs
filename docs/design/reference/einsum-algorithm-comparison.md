@@ -236,7 +236,7 @@ plan caching) and **tenferro-prims** (`TensorPrims` GPU impl):
 
 **Converged design**: The algebra trait is split across two crates:
 - `tenferro-algebra` (POC): `HasAlgebra` trait (T → A mapping), `Semiring` trait,
-  `Standard` type. Minimal foundation.
+  `Standard<T>` type. Minimal foundation.
 - `tenferro-tropical` (separate crate): `MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`,
   `impl TensorPrims<MaxPlus> for CpuBackend`. Being external proves the
   extensibility pattern (orphan rule: MaxPlus is local to tenferro-tropical).
@@ -319,7 +319,7 @@ Leibniz rule.
 ### From omeinsum-rs (adopt)
 
 1. **Algebra trait** — semiring-generic `zero()`, `add()`, `mul()` interface.
-   (→ tenferro-algebra: HasAlgebra, Semiring, Standard)
+   (→ tenferro-algebra: HasAlgebra, Semiring, Standard<T>)
 2. **Tropical-gemm dispatch** — `TypeId`-based runtime specialization for SIMD
    tropical kernels. (→ tenferro-tropical: `TensorPrims<MaxPlus> for CpuBackend`)
 3. **Argmax tracking** — tropical backward pass support. (→ tenferro-tropical)

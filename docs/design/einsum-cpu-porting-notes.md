@@ -123,8 +123,8 @@ lazy conjugation. Standalone `Tensor::conj()` requires CPU transfer for
 GPU tensors. See `gpu-backend-design.md` G11.
 
 **Algebra parameterization**: strided-einsum2 has no algebra concept.
-`TensorPrims<A>` is parameterized by algebra `A`.  For `Standard` algebra,
-use faer/blas.  For non-`Standard` algebras (tropical, etc.), fall back to
+`TensorPrims<A>` is parameterized by algebra `A`.  For `Standard<S>` algebra,
+use faer/blas.  For non-`Standard<S>` algebras (tropical, etc.), fall back to
 the naive path (see P5).
 
 ---
@@ -226,7 +226,7 @@ trait).
 | P2 | Unsafe code (bgemm_naive, contiguous) | Medium | Confine to CpuBackend internals.  Review during copy |
 | P3 | Conjugation dispatch change | Medium | CPU: use strided-view's `Conj` op internally when building StridedView. GPU: lazy conjugation via cuTENSOR `CUTENSOR_OP_CONJ`. Standalone `conj()` requires CPU transfer for GPU tensors |
 | ~~P4~~ | ~~Thread-local buffer pool~~ | — | ~~Merged into P6~~ → Removed (global allocator) |
-| P5 | Algebra-specific dispatch (tropical, etc.) | Medium | `Standard` → faer/blas.  Non-Standard → naive fallback.  Dispatch on `A: Semiring` bounds |
+| P5 | Algebra-specific dispatch (tropical, etc.) | Medium | `Standard<S>` → faer/blas.  Non-`Standard<S>` → naive fallback.  Dispatch on `A: Semiring` bounds |
 | ~~P6~~ | ~~Unified BufferPool~~ | — | **Removed**: Global allocator (mimalloc/jemalloc) handles intermediate buffer reuse. No custom pool needed for CPU. GPU device-memory pool is separate |
 | **P7** | **single_tensor_einsum via prims** | **Medium** | Route all steps (diag, trace, permute, broadcast, anti-diag) through `TensorPrims`.  Cache plans in `CpuContext.PlanCache` keyed by `(PrimDescriptor, shapes)` to avoid repeated plan generation |
 | **P8** | **Parenthesized tree notation** | **Medium** | Support parenthesized contraction order in parser.  Parser returns `Subscripts` + `Option<ContractionTree>`.  POC skeleton needs update |
