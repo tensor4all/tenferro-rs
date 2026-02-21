@@ -3,7 +3,7 @@
 ## Forward
 
 $$
-A^+ = \operatorname{pinv}(A), \quad A \in \mathbb{C}^{M \times N}
+A^+ = \mathrm{pinv}(A), \quad A \in \mathbb{C}^{M \times N}
 $$
 
 where $A^+$ is the Moore-Penrose pseudoinverse satisfying $A A^+ A = A$,
@@ -14,8 +14,8 @@ evaluation point. The pseudoinverse is not continuous at rank-changing points.
 
 ## Notation
 
-- $P_{\mathrm{col}} = A A^+$: orthogonal projector onto $\operatorname{col}(A)$
-- $P_{\mathrm{row}} = A^+ A$: orthogonal projector onto $\operatorname{row}(A)$
+- $P_{\mathrm{col}} = A A^+$: orthogonal projector onto $\mathrm{col}(A)$
+- $P_{\mathrm{row}} = A^+ A$: orthogonal projector onto $\mathrm{row}(A)$
 
 ## Forward rule (JVP)
 

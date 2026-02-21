@@ -112,10 +112,10 @@ $$
 Scalar test function (from BackwardsLinalg.jl):
 
 $$
-f(A, b) = x^\dagger \operatorname{op} \, x, \quad x = A \backslash b
+f(A, b) = x^\dagger \mathrm{op} \, x, \quad x = A \backslash b
 $$
 
-where $\operatorname{op}$ is a random Hermitian matrix independent of $A$ and $b$.
+where $\mathrm{op}$ is a random Hermitian matrix independent of $A$ and $b$.
 
 Two separate gradient checks:
 - **$\bar{A}$:** fix $b$, perturb $A$

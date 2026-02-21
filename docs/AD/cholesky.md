@@ -8,11 +8,11 @@ $$
 
 ## Auxiliary operator
 
-Define $\varphi(X) = \operatorname{tril}(X) - \tfrac{1}{2}\operatorname{diag}(X)$
+Define $\varphi(X) = \mathrm{tril}(X) - \tfrac{1}{2}\mathrm{diag}(X)$
 (extract lower triangle, halve the diagonal).
 
 Its adjoint is
-$\varphi^*(X) = \tfrac{1}{2}(X + X^{\mathsf{H}} - \operatorname{diag}(X))$.
+$\varphi^*(X) = \tfrac{1}{2}(X + X^{\mathsf{H}} - \mathrm{diag}(X))$.
 
 ## Forward rule (JVP)
 
@@ -41,7 +41,7 @@ $L^{-1}\dot{L} = \varphi(L^{-1}\dot{A}\,L^{-\mathsf{H}})$, hence $\dot{L} = L\,\
 
 1. Solve $T \leftarrow L^{-1}\,\dot{A}$ (triangular solve, left)
 2. Solve $T \leftarrow T\,L^{-\mathsf{H}}$ (triangular solve, right)
-3. $T \leftarrow \operatorname{tril}(T) - \tfrac{1}{2}\operatorname{diag}(T)$
+3. $T \leftarrow \mathrm{tril}(T) - \tfrac{1}{2}\mathrm{diag}(T)$
 4. $\dot{L} \leftarrow L\,T$
 
 ## Reverse rule (VJP)
@@ -49,14 +49,14 @@ $L^{-1}\dot{L} = \varphi(L^{-1}\dot{A}\,L^{-\mathsf{H}})$, hence $\dot{L} = L\,\
 Given cotangent $\bar{L}$:
 
 $$
-\bar{A} = L^{-\mathsf{H}}\,\varphi^*\!\bigl(\operatorname{tril}(L^{\mathsf{H}}\bar{L})\bigr)\,L^{-1}
+\bar{A} = L^{-\mathsf{H}}\,\varphi^*\!\bigl(\mathrm{tril}(L^{\mathsf{H}}\bar{L})\bigr)\,L^{-1}
 $$
 
 **Derivation.** Taking the adjoint of the JVP linear map $\dot{A} \mapsto \dot{L}$:
 
 $$
 \delta\ell = \langle \bar{L},\,\dot{L}\rangle
-= \operatorname{tr}\!\bigl(\bar{L}^{\mathsf{H}}\,L\,\varphi(L^{-1}\dot{A}\,L^{-\mathsf{H}})\bigr)
+= \mathrm{tr}\!\bigl(\bar{L}^{\mathsf{H}}\,L\,\varphi(L^{-1}\dot{A}\,L^{-\mathsf{H}})\bigr)
 $$
 
 Working through the adjoint chain:
@@ -65,15 +65,15 @@ Working through the adjoint chain:
 2. Adjoint of left-multiply by $L$: left-multiply by $L^{\mathsf{H}}$, then project to lower triangle
 3. Adjoint of $L^{-1}(\cdot)L^{-\mathsf{H}}$: $L^{-\mathsf{H}}(\cdot)L^{-1}$
 
-This yields $\bar{A} = L^{-\mathsf{H}}\,\varphi^*(\operatorname{tril}(L^{\mathsf{H}}\bar{L}))\,L^{-1}$.
+This yields $\bar{A} = L^{-\mathsf{H}}\,\varphi^*(\mathrm{tril}(L^{\mathsf{H}}\bar{L}))\,L^{-1}$.
 
 The output $\bar{A}$ is symmetric (Hermitian), consistent with the constraint on $A$.
 
 **Algorithm:**
 
-1. $S \leftarrow \operatorname{tril}(L^{\mathsf{H}}\bar{L})$
-2. $S \leftarrow \tfrac{1}{2}(S + S^{\mathsf{H}} - \operatorname{diag}(S))$
-   (equivalently: $S \leftarrow \tfrac{1}{2}(S + \operatorname{tril}(S,-1)^{\mathsf{H}})$)
+1. $S \leftarrow \mathrm{tril}(L^{\mathsf{H}}\bar{L})$
+2. $S \leftarrow \tfrac{1}{2}(S + S^{\mathsf{H}} - \mathrm{diag}(S))$
+   (equivalently: $S \leftarrow \tfrac{1}{2}(S + \mathrm{tril}(S,-1)^{\mathsf{H}})$)
 3. Solve $\bar{A} \leftarrow L^{-\mathsf{H}}\,S$ (triangular solve, left)
 4. Solve $\bar{A} \leftarrow \bar{A}\,L^{-1}$ (triangular solve, right)
 
