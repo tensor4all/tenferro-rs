@@ -17,39 +17,50 @@ pub enum MemoryOrder {
 }
 
 /// Owned data buffer, device-aware.
-pub enum DataBuffer<T> {
-    Cpu(StridedArray<T>),
-    // Future: Cuda(CudaBuffer<T>), Hip(HipBuffer<T>)
+/// Internally wraps Arc<BufferInner<T>> for shared ownership.
+pub struct DataBuffer<T> {
+    inner: Arc<BufferInner<T>>,
+}
+
+enum BufferInner<T> {
+    Owned(Vec<T>),
+    External { ptr: *const T, len: usize, release: Option<Box<dyn FnOnce() + Send>> },
+    Gpu { device_ptr: *mut T, len: usize, space: LogicalMemorySpace, release: ... },
 }
 
 /// Multi-dimensional dense tensor.
-pub struct Tensor<T: ScalarBase> {
+pub struct Tensor<T: Scalar> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
     strides: Vec<isize>,
     offset: isize,
     logical_memory_space: LogicalMemorySpace,
     preferred_compute_device: Option<ComputeDevice>,
-    event: Option<CompletionEvent>,  // None = ready, Some = pending accelerator work
+    event: Option<CompletionEvent>,
+    conjugated: bool,     // lazy conjugation flag
 }
 ```
 
 Key design points:
-- `DataBuffer<T>` is an enum in `tenferro-tensor` (not a separate crate, no `Arc` wrapping)
+- `DataBuffer<T>` uses `Arc<BufferInner<T>>` for shared ownership (PyTorch pattern)
+- `clone()` is shallow (Arc refcount++, O(1))
+- `conj()` is lazy (Arc clone + conjugated flag flip, O(1))
+- Deep copy uses prims operations (`Permute(identity)` or `MakeContiguous`)
 - Fields: `dims` (`Vec<usize>`), `strides` (`Vec<isize>`), `offset` (`isize`) — no `SmallVec`
 - `MemoryOrder` is only used at allocation time, **not stored** on the tensor
-- Bridge to strided-rs via `view()` / `view_mut()`
+- No direct dependency on strided-rs — prims backends build `StridedView` from
+  `buffer.as_slice()` + `dims()` + `strides()` + `offset()`
 
 ---
 
 ## Constructors
 
 ```rust
-impl<T: ScalarBase> Tensor<T> {
+impl<T: Scalar> Tensor<T> {
     pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
     pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
     pub fn from_slice(data: &[T], dims: &[usize], order: MemoryOrder) -> Result<Self>;
-    pub fn from_strided_array(array: StridedArray<T>) -> Self;
+    pub fn from_vec(data: Vec<T>, dims: &[usize], strides: &[isize], offset: isize) -> Result<Self>;
     pub fn eye(n: usize, memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
 }
 ```
@@ -57,43 +68,49 @@ impl<T: ScalarBase> Tensor<T> {
 ## Metadata
 
 ```rust
-impl<T: ScalarBase> Tensor<T> {
+impl<T: Scalar> Tensor<T> {
     pub fn dims(&self) -> &[usize];
     pub fn strides(&self) -> &[isize];
     pub fn ndim(&self) -> usize;
     pub fn len(&self) -> usize;
     pub fn is_empty(&self) -> bool;
+    pub fn offset(&self) -> isize;
+    pub fn buffer(&self) -> &DataBuffer<T>;
     pub fn logical_memory_space(&self) -> LogicalMemorySpace;
     pub fn preferred_compute_device(&self) -> Option<ComputeDevice>;
     pub fn set_preferred_compute_device(&mut self, d: Option<ComputeDevice>);
     pub fn effective_compute_devices(&self, op: OpKind) -> Result<Vec<ComputeDevice>>;
+    pub fn is_conjugated(&self) -> bool;
 }
 ```
 
 ## View Operations (zero-copy)
 
+All view operations return `Tensor<T>` (not `TensorView`). They are
+zero-copy because `DataBuffer` uses `Arc` — the returned tensor shares
+the same underlying buffer with only metadata (dims, strides, offset)
+changed.
+
 ```rust
-impl<T: ScalarBase> Tensor<T> {
-    pub fn view(&self) -> StridedView<'_, T>;
-    pub fn view_mut(&mut self) -> StridedViewMut<'_, T>;
+impl<T: Scalar> Tensor<T> {
     pub fn permute(&self, perm: &[usize]) -> Result<Tensor<T>>;
     pub fn broadcast(&self, target_dims: &[usize]) -> Result<Tensor<T>>;
     pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>>;
     pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>>;
-    pub fn select(dim: usize, index: usize) -> Result<Tensor<T>>;
-    pub fn narrow(dim: usize, start: usize, length: usize) -> Result<Tensor<T>>;
+    pub fn select(&self, dim: usize, index: usize) -> Result<Tensor<T>>;
+    pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Tensor<T>>;
 }
 ```
 
 ## Data Operations
 
 ```rust
-impl<T: ScalarBase> Tensor<T> {
+impl<T: Scalar> Tensor<T> {
     pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
     pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
     pub fn is_contiguous(&self) -> bool;
-    pub fn conj(&self) -> Tensor<T>;
-    pub fn into_conj(self) -> Tensor<T>;
+    pub fn conj(&self) -> Tensor<T>;       // lazy: Arc clone + flag flip
+    pub fn into_conj(self) -> Tensor<T>;   // lazy: flag flip only (no refcount)
     pub fn tril(&self, diagonal: isize) -> Tensor<T>;
     pub fn triu(&self, diagonal: isize) -> Tensor<T>;
     pub fn wait(&self);
@@ -104,7 +121,7 @@ impl<T: ScalarBase> Tensor<T> {
 ## Explicit Memory Movement
 
 ```rust
-impl<T: ScalarBase> Tensor<T> {
+impl<T: Scalar> Tensor<T> {
     /// Asynchronous explicit move between logical memory spaces.
     /// Same source/destination space: zero-copy no-op.
     /// Different spaces: explicit transfer (never implicit in ops).
@@ -114,125 +131,161 @@ impl<T: ScalarBase> Tensor<T> {
 
 ---
 
-## Tensor / TensorView Ownership Split
+## DataBuffer Shared Ownership (Arc)
 
 ### Motivation
 
-`permute(&self) -> Tensor<T>` is "zero-copy," but `Tensor<T>` owns its
-`DataBuffer<T>`. For true zero-copy view operations, the new tensor must
-share the original's data buffer. The chosen approach uses
-`Tensor` (owned) + `TensorView` (borrowed):
+`Tensor<T>` needs cheap zero-copy operations (permute, broadcast, etc.)
+AND must satisfy `Differentiable::Tangent: Clone` from chainrules-core.
+Arc-based shared ownership achieves both:
+
+| Operation | Cost | Mechanism |
+|-----------|------|-----------|
+| `clone()` | O(1) | Arc refcount++ |
+| `conj()` | O(1) | Arc clone + flag flip |
+| `permute()` | O(1) | Arc clone + metadata change |
+| Deep copy | O(n) | Prims `Permute(identity)` or `MakeContiguous` |
+| `as_mut_slice()` | — | `Arc::get_mut()` — `Some` only if refcount == 1 |
+
+### DataBuffer API
 
 ```rust
-/// Owned tensor. Holds exclusive ownership of the data buffer.
-pub struct Tensor<T: ScalarBase> {
-    buffer: DataBuffer<T>,
-    dims: Vec<usize>,
-    strides: Vec<isize>,
-    offset: isize,
-    logical_memory_space: LogicalMemorySpace,
-    preferred_compute_device: Option<ComputeDevice>,
-    event: Option<CompletionEvent>,
-}
-
-/// Borrowed tensor view. References a Tensor's data buffer.
-/// Zero-copy, lifetime-tied to the source Tensor.
-pub struct TensorView<'a, T: ScalarBase> {
-    data: &'a DataBuffer<T>,
-    dims: Vec<usize>,
-    strides: Vec<isize>,
-    offset: isize,
-    logical_memory_space: LogicalMemorySpace,
-    preferred_compute_device: Option<ComputeDevice>,
-    event: Option<&'a CompletionEvent>,
+impl<T> DataBuffer<T> {
+    pub fn from_vec(v: Vec<T>) -> Self;
+    pub unsafe fn from_external(ptr, len, release) -> Self;
+    pub fn as_slice(&self) -> Option<&[T]>;        // None for GPU
+    pub fn as_mut_slice(&mut self) -> Option<&mut [T]>; // None if shared or GPU
+    pub fn as_ptr(&self) -> Option<*const T>;       // None for GPU
+    pub fn as_device_ptr(&self) -> Option<*const T>; // None for CPU
+    pub fn len(&self) -> usize;
+    pub fn is_empty(&self) -> bool;
+    pub fn is_owned(&self) -> bool;
+    pub fn is_gpu(&self) -> bool;
+    pub fn is_unique(&self) -> bool;  // Arc::strong_count == 1
+    pub fn gpu_memory_space(&self) -> Option<LogicalMemorySpace>;
 }
 ```
+
+### Mutable Access Pattern
+
+`as_mut_slice()` uses `Arc::get_mut()` — returns `Some` only when
+the Arc reference count is 1 (exclusive ownership). If shared:
+
+```rust
+// Shared: as_mut_slice() returns None
+let a = tensor.clone(); // Arc refcount = 2
+assert!(tensor.buffer_mut().as_mut_slice().is_none());
+
+// Deep copy first to get exclusive ownership
+let mut deep = /* prims MakeContiguous */ ;
+assert!(deep.buffer_mut().as_mut_slice().is_some());
+```
+
+Prims backends bypass this via raw pointers (unsafe), guaranteeing
+non-overlapping input/output buffers.
+
+---
+
+## Tensor / TensorView Split
+
+### Motivation
+
+Even with Arc-based `Tensor<T>`, a borrowed `TensorView<'a, T>` is
+useful for:
+- **CPU data inspection** — `tensor_view()` waits for pending GPU events,
+  then returns a read-safe view
+- **Prims internal operand passing** — `as_operand_view()` propagates
+  events for GPU chaining without CPU sync
+- **Lifetime safety** — borrows the source tensor's buffer without
+  touching the Arc refcount
 
 ### API Design
 
 **Tensor (owned) methods:**
 
 ```rust
-impl<T: ScalarBase> Tensor<T> {
-    // Public: Borrow → TensorView (zero-copy, waits if pending)
-    fn view(&self) -> TensorView<'_, T>;
-    fn permute(&self, perm: &[usize]) -> Result<TensorView<'_, T>>;
-    fn broadcast(&self, dims: &[usize]) -> Result<TensorView<'_, T>>;
-    fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'_, T>>;
+impl<T: Scalar> Tensor<T> {
+    // Public: Borrow → TensorView (waits if pending)
+    fn tensor_view(&self) -> TensorView<'_, T>;
 
     // Internal: Non-blocking operand view (event propagated)
     pub(crate) fn as_operand_view(&self) -> TensorView<'_, T>;
 
-    // Consume self → Tensor (buffer reuse, guaranteed)
+    // Zero-copy metadata operations → return Tensor (Arc shared)
+    fn permute(&self, perm: &[usize]) -> Result<Tensor<T>>;
+    fn broadcast(&self, dims: &[usize]) -> Result<Tensor<T>>;
+    fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>>;
+
+    // Consume self → Tensor (may reuse buffer if unique)
     fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
     fn into_conj(self) -> Tensor<T>;
 
-    // Borrow → new Tensor (new allocation, waits if pending)
+    // Borrow → new Tensor (Arc shared or new allocation)
     fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
-    fn conj(&self) -> Tensor<T>;
+    fn conj(&self) -> Tensor<T>;  // lazy: Arc clone + flag flip
 }
 ```
 
 **TensorView methods:**
 
 ```rust
-impl<'a, T: ScalarBase> TensorView<'a, T> {
+impl<'a, T: Scalar> TensorView<'a, T> {
     fn permute(&self, perm: &[usize]) -> Result<TensorView<'a, T>>;
     fn broadcast(&self, dims: &[usize]) -> Result<TensorView<'a, T>>;
     fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'a, T>>;
-    fn to_tensor(&self) -> Tensor<T>;
+    fn select(&self, dim: usize, index: usize) -> Result<TensorView<'a, T>>;
+    fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<TensorView<'a, T>>;
+    fn to_tensor(&self, order: MemoryOrder) -> Tensor<T>;
     fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
-    fn conj(&self) -> Tensor<T>;
+    fn conj(&self) -> TensorView<'a, T>;  // lazy: flag flip, zero-cost
 }
 ```
 
 **einsum takes &Tensor references (not TensorView):**
 
 ```rust
-pub fn einsum<T: ScalarBase + HasAlgebra>(
+pub fn einsum<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
-) -> Result<Tensor<T>>;
-
-pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
-    subscripts: &str,
-    operands: Vec<Tensor<T>>,
-) -> Result<Tensor<T>>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    A: Semiring,
+    B: TensorPrims<A>;
 ```
 
 ### Ownership Safety Examples
 
 ```rust
 let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, ColumnMajor);
-let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, ColumnMajor);
 
-// einsum takes &Tensor — notation handles permutation/broadcast
-let c = einsum("ij,jk->ik", &[&a, &b])?;
-let c_t = einsum("ji,jk->ik", &[&a, &b])?;  // transposed a via notation
-
-// View operations for CPU data inspection (waits if pending)
-let at = a.permute(&[1, 0])?;           // TensorView borrowing a
+// permute returns Tensor (Arc shared, zero-copy)
+let at = a.permute(&[1, 0]).unwrap();
 assert_eq!(at.dims(), &[4, 3]);
+// a and at share the same buffer — both usable simultaneously
 
-// Compile-time safety: can't consume while borrowed
-let at = a.permute(&[1, 0])?;
-let d = einsum_owned("...", vec![a]);    // ERROR: at borrows a
-drop(at);
-let d = einsum_owned("...", vec![a])?;   // OK: borrow released
+// clone is cheap (Arc refcount++)
+let a2 = a.clone();
+
+// TensorView for CPU data inspection
+let tv = a.tensor_view();  // waits if pending GPU work
+assert_eq!(tv.dims(), a.dims());
 ```
 
-### Comparison with Arc-based Approach
+### Design Choice: Arc + TensorView Hybrid
 
-| Aspect | TensorView (chosen) | Arc-based |
-|--------|---------------------|-----------|
-| Buffer uniqueness | Compile-time guarantee | Runtime `Arc::strong_count` check |
-| `into_` buffer reuse | Always succeeds | May fail if views exist |
-| API types | `Tensor` + `TensorView` | `Tensor` only |
-| Lifetime complexity | Yes (`'a` propagates) | None |
-| Runtime overhead | Zero | Atomic refcount on clone/drop |
-| Rust idiom | `String`/`&str`, `Vec`/`&[T]` | `Arc<T>` |
+Arc was chosen over pure TensorView because:
+1. `Differentiable::Tangent: Clone` in chainrules-core requires Clone on Tensor
+2. GPU buffer clone needs device operations — Arc avoids this for shallow clone
+3. `conj()` needs buffer sharing for lazy semantics (both CPU and GPU)
+4. View operations return owned `Tensor<T>` — simpler API, no lifetime propagation
 
-The Arc approach remains viable if lifetime ergonomics prove too burdensome.
+TensorView remains useful for:
+1. CPU data inspection (with wait semantics)
+2. Prims internal operand passing (event propagation)
+3. Avoiding unnecessary Arc refcount for read-only access
 
 ---
 
@@ -253,16 +306,30 @@ let d = einsum("ij,jk->ik", &[&c, &e_gpu])?;
 //  → detects c.event → sets up stream dependency → no CPU wait
 
 // CPU data access triggers implicit synchronization
-println!("{:?}", d.view());  // view() calls wait() internally
+let tv = d.tensor_view();  // tensor_view() calls wait() internally
 ```
 
 For CPU tensors, `event` is always `None` with zero overhead.
+
+### CompletionEvent Variants
+
+```rust
+pub struct CompletionEvent {
+    inner: CompletionEventInner,
+}
+
+enum CompletionEventInner {
+    Noop,
+    Cuda { _event: *mut c_void },   // cudaEvent_t
+    Rocm { _event: *mut c_void },   // hipEvent_t
+}
+```
 
 ### Two-Tier API Contract
 
 | Tier | Methods | Event handling | User visibility |
 |------|---------|---------------|-----------------|
-| **Public (CPU-read)** | `view()`, `permute()`, `broadcast()`, `diagonal()`, `view_mut()`, `to_tensor()`, `contiguous()`, `conj()` | **Wait** if pending, return ready data | Yes |
+| **Public (CPU-read)** | `tensor_view()`, `permute()`, `broadcast()`, `diagonal()`, etc. | **Wait** if pending, return ready data | Yes |
 | **Internal (pipeline)** | `pub(crate) as_operand_view()` | **Propagate** event | No (crate-internal) |
 | **Accelerator ops** | `einsum` (takes `&[&Tensor]`) | Calls `as_operand_view()` internally, **detects** events → stream dependency | Yes (transparent) |
 
@@ -274,32 +341,41 @@ For CPU tensors, `event` is always `None` with zero overhead.
   different threads, each result carries a `CompletionEvent`.
 - **User-level parallelism**: Independent `einsum` calls on separate threads
   with automatic event-based chaining.
-- **NUMA-aware execution**: `ComputeDevice::Cpu { device_id }` maps to
-  `ThreadPool` instances bound to specific core sets via `core_affinity`.
 
 **Implementation note**: `wait(&self)` requires interior mutability
 (e.g., `Cell<Option<CompletionEvent>>`) to clear the event field through
 a shared reference.
-
-### Alternatives Considered
-
-1. **Separate `einsum_async`**: Rejected — splits the API unnecessarily.
-2. **Trait-based (`TensorArg`)**: More extensible but adds API complexity.
-   Can be introduced later backward-compatibly.
-3. **Tree-level pipelining only**: Doesn't help for user-chained einsum calls.
 
 **Current status**: POC `event` field is `Option<CompletionEvent>` (placeholder).
 Actual async execution will be implemented with accelerator backends.
 
 ---
 
+## Lazy Conjugation
+
+`Tensor::conj()` is always lazy (both CPU and GPU), matching PyTorch's
+`torch.conj()` semantics:
+
+| Operation | Cost | Mechanism |
+|-----------|------|-----------|
+| `tensor.conj()` | O(1) | Arc clone + `conjugated` flag flip |
+| `tensor.into_conj()` | O(1) | Flag flip only (no Arc clone) |
+| `view.conj()` | O(1) | Flag flip (zero-cost, no refcount) |
+| Materialize | O(n) | `Backend::resolve_conj()` via `ElementwiseUnary(Conj)` |
+
+Backends read `is_conjugated()` when building operation descriptors:
+- **GPU**: `CUTENSOR_OP_CONJ` / `HIPTENSOR_OP_CONJ` in tensor descriptors
+- **CPU**: conjugation applied during computation kernels
+
+---
+
 ## Custom Element-Wise Operations
 
 For arbitrary user functions not in `TensorPrims`, use strided-kernel
-directly via `view()`:
+directly via `buffer().as_slice()`:
 
 ```rust
-let a_view = tensor_a.view();
-let b_view = tensor_b.view();
-strided_kernel::zip_map2_into(&mut out.view_mut(), &a_view, &b_view, |a, b| a * b + 1.0);
+let a_slice = tensor_a.buffer().as_slice().unwrap();
+let b_slice = tensor_b.buffer().as_slice().unwrap();
+// Build StridedView from dims/strides/offset and use strided_kernel
 ```

@@ -54,22 +54,37 @@ impl ContractionTree {
 
 ```rust
 /// Level 1: String notation — parse + optimize + execute.
-pub fn einsum<T: ScalarBase + HasAlgebra>(
+pub fn einsum<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
-) -> Result<Tensor<T>>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 
 /// Level 2: Pre-built subscripts — optimize + execute.
-pub fn einsum_with_subscripts<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_subscripts<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
-) -> Result<Tensor<T>>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 
 /// Level 3: Pre-optimized tree — execute only.
-pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_plan<T, A, B>(
+    ctx: &mut B::Context,
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
-) -> Result<Tensor<T>>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 ```
 
 | Level | Parsing | Optimization | Execution | Use case |
@@ -78,35 +93,54 @@ pub fn einsum_with_plan<T: ScalarBase + HasAlgebra>(
 | `einsum_with_subscripts` | Cached | Yes | Yes | Same pattern, varying shapes |
 | `einsum_with_plan` | Cached | Cached | Yes | Hot loops, same shapes |
 
+All functions take `ctx: &mut B::Context` for explicit backend context
+passing (thread pool, plan cache). `size_dict` provides dimension sizes
+for output labels not present in any input (generative einsum).
+
 ### Accumulating Variants
 
 Each allocating function has an `_into` counterpart with BLAS-style scaling:
 
 ```rust
 /// output = alpha * einsum(operands) + beta * output
-pub fn einsum_into<T: ScalarBase + HasAlgebra>(
+pub fn einsum_into<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
     alpha: T,
     beta: T,
     output: &mut Tensor<T>,
-) -> Result<()>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<()>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 
-pub fn einsum_with_subscripts_into<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_subscripts_into<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
     alpha: T,
     beta: T,
     output: &mut Tensor<T>,
-) -> Result<()>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<()>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 
-pub fn einsum_with_plan_into<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_plan_into<T, A, B>(
+    ctx: &mut B::Context,
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
     alpha: T,
     beta: T,
     output: &mut Tensor<T>,
-) -> Result<()>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<()>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 ```
 
 The `_into` variants eliminate output allocation per call and enable
@@ -116,22 +150,37 @@ accumulation semantics that map directly to `TensorPrims::execute` alpha/beta.
 
 ```rust
 /// Level 1: Consuming — input buffers may be reused.
-pub fn einsum_owned<T: ScalarBase + HasAlgebra>(
+pub fn einsum_owned<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &str,
     operands: Vec<Tensor<T>>,
-) -> Result<Tensor<T>>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 
 /// Level 2: Consuming — optimize + execute.
-pub fn einsum_with_subscripts_owned<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_subscripts_owned<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &Subscripts,
     operands: Vec<Tensor<T>>,
-) -> Result<Tensor<T>>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 
 /// Level 3: Consuming — execute only.
-pub fn einsum_with_plan_owned<T: ScalarBase + HasAlgebra>(
+pub fn einsum_with_plan_owned<T, A, B>(
+    ctx: &mut B::Context,
     tree: &ContractionTree,
     operands: Vec<Tensor<T>>,
-) -> Result<Tensor<T>>;
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
 ```
 
 Input tensors are moved. The implementation may reuse their buffers for
@@ -146,47 +195,55 @@ reuse is deterministic — Rust ownership guarantees no other references.
 | Pre-built subscripts | `einsum_with_subscripts` | `einsum_with_subscripts_into` | `einsum_with_subscripts_owned` |
 | Pre-optimized tree | `einsum_with_plan` | `einsum_with_plan_into` | `einsum_with_plan_owned` |
 
+All 9 functions share the same generic signature pattern `<T, A, B>` with
+`ctx: &mut B::Context` and `size_dict: Option<&HashMap<u32, usize>>`.
+
 ---
 
 ## User Examples
 
 ```rust
-use tenferro_einsum::einsum;
+use tenferro_einsum::{einsum, einsum_owned, Subscripts, ContractionTree};
 use tenferro_tensor::{Tensor, MemoryOrder};
 use tenferro_device::LogicalMemorySpace;
+use tenferro_prims::{CpuBackend, CpuContext};
 
 let col = MemoryOrder::ColumnMajor;
+let mut ctx = CpuContext::new(4);
+
 let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
 
 // Matrix multiplication
-let c = einsum("ij,jk->ik", &[&a, &b]).unwrap();
+let c = einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 
 // Trace
-let tr = einsum("ii->", &[&a]).unwrap();
+let tr = einsum::<_, _, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
 
 // Batch matrix multiplication
 let ba = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
 let bb = Tensor::<f64>::zeros(&[10, 4, 5], LogicalMemorySpace::MainMemory, col);
-let bc = einsum("bij,bjk->bik", &[&ba, &bb]).unwrap();
+let bc = einsum::<_, _, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&ba, &bb], None).unwrap();
 
 // Explicit contraction order via parentheses
-let d = einsum("ij,(jk,kl)->il", &[&a, &b, &c]).unwrap();
+let d = einsum::<_, _, CpuBackend>(
+    &mut ctx, "ij,(jk,kl)->il", &[&a, &b, &c], None,
+).unwrap();
 
 // Integer label notation (for programmatic use)
 let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-let c = einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
+let c = einsum_with_subscripts::<_, _, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
 
 // Pre-optimized tree (hot loops)
 let tree = ContractionTree::optimize(&subs, &[&[2, 2], &[2, 2]]).unwrap();
 for _ in 0..n_steps {
-    let c = einsum_with_plan(&tree, &[&a, &b]).unwrap();
+    let c = einsum_with_plan::<_, _, CpuBackend>(&mut ctx, &tree, &[&a, &b], None).unwrap();
 }
 
 // Consuming variant: operands moved, buffers reused
 let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 let y = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
-let z = einsum_owned("ij,jk->ik", vec![x, y]).unwrap();
+let z = einsum_owned::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", vec![x, y], None).unwrap();
 ```
 
 ---
@@ -199,20 +256,23 @@ to find the optimal pairwise contraction order.
 ### Dispatch Strategy
 
 ```rust
-fn einsum_impl<T: ScalarBase + HasAlgebra>(
+fn einsum_impl<T, A, B>(
+    ctx: &mut B::Context,
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
+    size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<T>>
 where
-    CpuBackend: TensorPrims<T::Algebra>,
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
 {
     match operands.len() {
         0 => Err(Error::InvalidArgument("no inputs".into())),
-        1 => single_tensor_op::<T>(operands[0], &subscripts),
-        2 => binary_contraction::<T>(operands[0], operands[1], &subscripts),
+        1 => single_tensor_op::<T, A, B>(ctx, operands[0], &subscripts),
+        2 => binary_contraction::<T, A, B>(ctx, operands[0], operands[1], &subscripts),
         _ => {
             let tree = ContractionTree::optimize(&subscripts, ...)?;
-            execute_tree(&tree, operands)
+            execute_tree::<T, A, B>(ctx, &tree, operands)
         }
     }
 }
@@ -225,8 +285,8 @@ For each binary contraction, the engine chooses between:
 **Path A — Extended Contract available** (`has_extension_for::<T>(Contract)`):
 ```
 let desc = PrimDescriptor::Contract { modes_a, modes_b, modes_c };
-let plan = Backend::plan::<T>(&ctx, &desc, &shapes)?;
-Backend::execute(&ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
+let plan = B::plan::<T>(&mut ctx, &desc, &shapes)?;
+B::execute(&mut ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
 → backend handles diag, trace, permute, GEMM internally
 ```
 
@@ -277,9 +337,10 @@ the `permute_view + MakeContiguous + BatchedGemm` pipeline.
 Backend selection is determined by `T: HasAlgebra → infers algebra A`:
 
 ```rust
-// impl TensorPrims<Standard> for CpuBackend → faer/cblas GEMM
-// impl TensorPrims<MaxPlus> for CpuBackend  → tropical-gemm (tenferro-tropical)
-// impl TensorPrims<Standard> for GpuBackend → cuTENSOR/hipTensor [future]
+// impl TensorPrims<Standard> for CpuBackend  → faer/cblas GEMM
+// impl TensorPrims<MaxPlus> for CpuBackend   → tropical-gemm (tenferro-tropical)
+// impl TensorPrims<Standard> for CudaBackend → cuTENSOR [future]
+// impl TensorPrims<Standard> for RocmBackend → hipTensor [future]
 // impl TensorPrims<MyAlgebra> for CpuBackend → user-provided kernels
 ```
 
@@ -287,7 +348,78 @@ See [algebra.md](./algebra.md) for `HasAlgebra` and `Semiring` details.
 
 ---
 
-## Backward Pass (VJP/JVP, Future)
+## Automatic Differentiation
+
+### Five AD Functions
+
+The einsum AD API provides five functions for different AD modes:
+
+```rust
+/// Tracked einsum (reverse-mode AD via tape).
+pub fn tracked_einsum<T, A, B>(
+    ctx: &mut B::Context,
+    subscripts: &str,
+    operands: &[&TrackedTensor<Tensor<T>>],
+) -> AdResult<TrackedTensor<Tensor<T>>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+    Tensor<T>: Differentiable;
+
+/// Dual einsum (forward-mode JVP propagation).
+pub fn dual_einsum<T, A, B>(
+    ctx: &mut B::Context,
+    subscripts: &str,
+    operands: &[&DualTensor<Tensor<T>>],
+) -> AdResult<DualTensor<Tensor<T>>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+    Tensor<T>: Differentiable;
+
+/// Reverse-mode rule (rrule) for einsum without building a global tape.
+/// Returns one gradient tensor per input operand.
+pub fn einsum_rrule<T, A, B>(
+    ctx: &mut B::Context,
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+    cotangent: &Tensor<T>,
+) -> Result<Vec<Tensor<T>>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
+
+/// Forward-mode rule (frule) for einsum without building a global tape.
+/// Inputs without tangent should use `None`.
+pub fn einsum_frule<T, A, B>(
+    ctx: &mut B::Context,
+    subscripts: &str,
+    primals: &[&Tensor<T>],
+    tangents: &[Option<&Tensor<T>>],
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
+
+/// Local HVP rule for einsum (forward-over-reverse).
+/// Returns (gradient, hvp) pairs for each input operand.
+pub fn einsum_hvp<T, A, B>(
+    ctx: &mut B::Context,
+    subscripts: &str,
+    primals: &[&Tensor<T>],
+    tangents: &[Option<&Tensor<T>>],
+    cotangent: &Tensor<T>,
+    cotangent_tangent: &Tensor<T>,
+) -> Result<Vec<(Tensor<T>, Tensor<T>)>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>;
+```
+
+All AD functions take `ctx: &mut B::Context` and `B: TensorPrims<A>`,
+matching the non-AD einsum functions.
+
+### Adjoint Rules
 
 Each forward operation has a clean adjoint:
 
@@ -304,14 +436,6 @@ Forward:  y[j] = einsum("iij->j", A)
 Backward: ∂A = anti_diag(repeat(∂y, i_dim), [(0,1)])
 ```
 
-```rust
-/// VJP: grad_A = batched_gemm(grad_C, B^T), grad_B = batched_gemm(A^T, grad_C)
-pub fn contract_vjp<T: ScalarBase>(...) -> Result<(Tensor<T>, Tensor<T>)>;
-
-/// JVP: dC = batched_gemm(dA, B) + batched_gemm(A, dB)  (Leibniz rule)
-pub fn contract_jvp<T: ScalarBase>(...) -> Result<Tensor<T>>;
-```
-
 Both VJP and JVP go through `TensorPrims` primitives, working on CPU and
 GPU uniformly.
 
@@ -320,7 +444,5 @@ GPU uniformly.
 - **Borrowed-view passthrough**: Leaf nodes return borrows, not clones.
 - **Permutation-only detection**: Metadata-only transformation for
   nodes that only permute axes (no contraction).
-- **Buffer pool** (opt-in): Reuse intermediate buffers across pairwise
-  contractions.
 - **Direct root write**: Final contraction writes into user's output
   buffer (no extra allocation).

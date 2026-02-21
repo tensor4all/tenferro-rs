@@ -48,8 +48,8 @@ stride tricks** handled at the `Tensor<T>` level, not in `TensorPrims`.
 | **Core** | `trace` | `cutensorReduce` on diagonal | `hiptensorReduce` on diagonal | `reduce_trace_axes` (strided-einsum2) |
 | **Core** | `permute` | `cutensorPermute` | `hiptensorPermute` | `StridedView::permute` + copy |
 | **Core** | `make_contiguous` | n/a (strides accepted natively) | n/a | full-tensor contiguity check + copy |
-| **Core** | `anti_trace` | custom kernel | custom kernel | scatter-add loop |
-| **Core** | `anti_diag` | custom kernel | custom kernel | write-to-diagonal loop |
+| **Core** | `anti_trace` | Contract(eye, ∂C) | Contract(eye, ∂C) | scatter-add loop |
+| **Core** | `anti_diag` | Contract(eye, ∂C) | Contract(eye, ∂C) | write-to-diagonal loop |
 | **Extended** | `contract` | `cutensorContract` (full) | `hiptensorContract` (full) | strided-einsum2 pipeline |
 | **Extended** | `elementwise_mul` | `cutensorElementwiseBinary` | `hiptensorElementwiseBinary` | `zip_map2_into` |
 
@@ -89,7 +89,7 @@ pub enum PrimDescriptor {
     // Extended (dynamically queried)
     Contract { modes_a: Vec<u32>, modes_b: Vec<u32>, modes_c: Vec<u32> },
     ElementwiseMul,
-    // Unary element-wise (for linalg AD)
+    // Unary element-wise (for linalg AD and resolve_conj)
     ElementwiseUnary { op: UnaryOp },
 }
 
@@ -99,7 +99,7 @@ pub enum ReduceOp { Sum, Max, Min }
 
 /// Unary element-wise operation kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UnaryOp { Negate, Reciprocal, Abs, Sqrt }
+pub enum UnaryOp { Negate, Reciprocal, Abs, Sqrt, Conj }
 
 /// Extended operation identifiers for dynamic capability query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,19 +124,25 @@ pub trait TensorPrims<A> {
     /// Backend-specific plan type (no type erasure).
     type Plan<T: ScalarBase>;
 
-    /// Execution context (CPU: thread pool; GPU: CUDA stream).
+    /// Execution context (CPU: thread pool + plan cache; GPU: CUDA stream).
     type Context;
 
     /// Create an execution plan (cuTENSOR: describe → plan).
+    ///
+    /// Takes `&mut Self::Context` because plan creation may update the
+    /// plan cache (PlanCache) stored in the context.
     fn plan<T: ScalarBase>(
-        ctx: &Self::Context,
+        ctx: &mut Self::Context,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
     ) -> Result<Self::Plan<T>>;
 
     /// Execute a plan (cuTENSOR: plan → execute).
+    ///
+    /// Takes `&mut Self::Context` for consistency and to allow future
+    /// context state updates (e.g., workspace resizing on GPU).
     fn execute<T: ScalarBase>(
-        ctx: &Self::Context,
+        ctx: &mut Self::Context,
         plan: &Self::Plan<T>,
         alpha: T,
         inputs: &[&StridedView<T>],
@@ -152,16 +158,18 @@ pub trait TensorPrims<A> {
 Key design decisions:
 
 1. **Associated functions, not methods** — No `&self` receiver. Call as
-   `CpuBackend::plan::<f64>(&ctx, ...)`. Execution resources (thread pool,
-   CUDA stream) are passed via `type Context`.
-2. **StridedView/StridedViewMut directly** — Not `Storage<T>` + `TensorMeta`.
-3. **Modes are `u32`** — Matching cuTENSOR's unsigned mode labels.
-4. **Single trait with dynamic extension query** — `has_extension_for::<T>(ext)`
+   `CpuBackend::plan::<f64>(&mut ctx, ...)`. Execution resources (thread pool,
+   CUDA stream, plan cache) are passed via `type Context`.
+2. **`&mut Context`** — Both `plan()` and `execute()` take mutable context.
+   `plan()` updates the PlanCache. `execute()` may resize GPU workspace.
+3. **StridedView/StridedViewMut directly** — Not `Storage<T>` + `TensorMeta`.
+4. **Modes are `u32`** — Matching cuTENSOR's unsigned mode labels.
+5. **Single trait with dynamic extension query** — `has_extension_for::<T>(ext)`
    for runtime capability detection. Supports GPU backends loaded via dlopen.
-5. **Plan-based execution for all ops** — cuTENSOR pattern: `PrimDescriptor`
+6. **Plan-based execution for all ops** — cuTENSOR pattern: `PrimDescriptor`
    → `plan` → `execute`. Plans cache expensive analysis for reuse.
-6. **Algebra parameterization** — Enables orphan-rule-compatible extension.
-7. **diag/repeat on Tensor, not TensorPrims** — Zero-copy stride tricks that
+7. **Algebra parameterization** — Enables orphan-rule-compatible extension.
+8. **diag/repeat on Tensor, not TensorPrims** — Zero-copy stride tricks that
    don't need backend dispatch.
 
 ---
@@ -171,9 +179,20 @@ Key design decisions:
 ```rust
 pub struct CpuBackend;
 
-/// CPU execution context — wraps a rayon thread pool.
+/// CPU execution context — wraps a rayon thread pool and plan cache.
+///
+/// Intermediate buffer allocation relies on the global allocator
+/// (e.g., mimalloc/jemalloc) rather than a custom buffer pool.
 pub struct CpuContext {
     pool: rayon::ThreadPool,
+    plan_cache: PlanCache,
+}
+
+impl CpuContext {
+    pub fn new(num_threads: usize) -> Self;
+    pub fn num_threads(&self) -> usize;
+    pub fn thread_pool(&self) -> &rayon::ThreadPool;
+    pub fn plan_cache_mut(&mut self) -> &mut PlanCache;
 }
 
 /// Standard arithmetic on CPU (faer GEMM for f64/f32, naive for others).
@@ -181,10 +200,10 @@ impl TensorPrims<Standard> for CpuBackend {
     type Plan<T: ScalarBase> = CpuPlan<T>;
     type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(ctx: &CpuContext, desc: &PrimDescriptor, shapes: &[&[usize]])
+    fn plan<T: ScalarBase>(ctx: &mut CpuContext, desc: &PrimDescriptor, shapes: &[&[usize]])
         -> Result<CpuPlan<T>> { ... }
 
-    fn execute<T: ScalarBase>(ctx: &CpuContext, plan: &CpuPlan<T>, ...) -> Result<()> { ... }
+    fn execute<T: ScalarBase>(ctx: &mut CpuContext, plan: &CpuPlan<T>, ...) -> Result<()> { ... }
 
     fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
         // CPU supports Contract and ElementwiseMul for all standard types
@@ -201,11 +220,26 @@ enum CpuPlan<T: ScalarBase> {
     MakeContiguous { /* contiguity analysis result */ },
     Contract { /* strided-einsum2 cached analysis */ },
     ElementwiseMul,
+    ElementwiseUnary { op: UnaryOp },
     ...
 }
 ```
 
-**Core ops implementation**:
+### resolve_conj
+
+Each backend provides `resolve_conj()` to materialize lazy conjugation:
+
+```rust
+impl CpuBackend {
+    pub fn resolve_conj<T: Scalar>(ctx: &mut CpuContext, src: &Tensor<T>) -> Tensor<T>;
+}
+```
+
+If `src.is_conjugated()` is false, returns a shallow clone. Otherwise,
+applies `ElementwiseUnary(Conj)` and returns a new tensor with
+`conjugated = false`. Equivalent to PyTorch's `torch.resolve_conj()`.
+
+### Core ops implementation
 
 | Core Op | CPU Implementation |
 |---------|-------------------|
@@ -217,7 +251,7 @@ enum CpuPlan<T: ScalarBase> {
 | `anti_trace` | Scatter-add loop (for AD backward) |
 | `anti_diag` | Write-to-diagonal loop (for AD backward) |
 
-**Extended ops implementation**:
+### Extended ops implementation
 
 | Extended Op | CPU Implementation |
 |------------|-------------------|
@@ -245,6 +279,78 @@ downstream user (`cblas-src` for OpenBLAS/MKL, `cblas-inject` for Julia's
 
 ---
 
+## GPU Backends
+
+Two separate backends — `CudaBackend` and `RocmBackend` — as distinct
+types in `tenferro-prims`. Subtle API differences and future custom
+kernel needs justify separate implementations over a unified vtable.
+
+See [gpu-backend-design.md](./gpu-backend-design.md) for full details.
+
+```rust
+pub struct CudaBackend {
+    _handle: *mut c_void,
+    _lib: libloading::Library,
+}
+
+pub struct CudaContext {
+    _stream: *mut c_void,
+    _workspace: Vec<u8>,
+    _plan_cache: PlanCache,
+}
+
+impl TensorPrims<Standard> for CudaBackend {
+    type Plan<T: ScalarBase> = CudaPlan<T>;
+    type Context = CudaContext;
+    // ...
+}
+
+// RocmBackend follows the same pattern
+pub struct RocmBackend { ... }
+pub struct RocmContext { ... }
+impl TensorPrims<Standard> for RocmBackend { ... }
+```
+
+### Backend Registry
+
+```rust
+pub struct BackendRegistry {
+    cpu: CpuBackend,
+    cuda: Option<CudaBackend>,
+    rocm: Option<RocmBackend>,
+}
+
+impl BackendRegistry {
+    pub fn new() -> Self;                            // CPU only
+    pub fn load_cutensor(&mut self, path: &str) -> Result<()>;
+    pub fn load_hiptensor(&mut self, path: &str) -> Result<()>;
+    pub fn cpu(&self) -> &CpuBackend;
+    pub fn cuda(&self) -> Option<&CudaBackend>;
+    pub fn rocm(&self) -> Option<&RocmBackend>;
+}
+```
+
+---
+
+## PlanCache
+
+```rust
+pub struct PlanCache {
+    _entries: HashMap<u64, Box<dyn Any>>,
+}
+```
+
+Plan cache is stored in the Context (CpuContext, CudaContext, RocmContext).
+This is why `plan()` and `execute()` take `&mut Context`.
+
+**Cache key design** (to be finalized):
+- CPU: keyed by `(PrimDescriptor, shapes)` — strides are not part of the
+  key because CPU plans depend on shape, not layout
+- GPU: keyed by `(PrimDescriptor, shapes, strides)` — cuTENSOR plans are
+  stride-dependent (see gpu-backend-design.md G4)
+
+---
+
 ## Backend Implementation Matrix
 
 | Backend | Algebra | Extended ops | Notes |
@@ -252,8 +358,8 @@ downstream user (`cblas-src` for OpenBLAS/MKL, `cblas-inject` for Julia's
 | CpuBackend | Standard | Contract, ElementwiseMul | faer/cblas GEMM |
 | CpuBackend | MaxPlus | None (decompose to core) | tropical-gemm SIMD |
 | CpuBackend | MyAlgebra | User choice | User-provided kernels |
-| GpuBackend [future] | Standard | Contract, ElementwiseMul | cuTENSOR/hipTensor |
-| GpuBackend [future] | MaxPlus | None | No cuTENSOR tropical support |
+| CudaBackend [future] | Standard | Contract, ElementwiseMul | cuTENSOR |
+| RocmBackend [future] | Standard | Contract, ElementwiseMul | hipTENSOR |
 
 ---
 
@@ -303,109 +409,13 @@ einsum("ij,jk->ik", &[&a, &b])?;  // MyAlgebra auto-inferred
 
 The `TensorPrims` trait does not provide a closure-based API, because GPU
 backends cannot execute arbitrary Rust closures. For custom element-wise
-operations, users access strided-kernel directly via `Tensor::view()`:
+operations, users access strided-kernel directly via `buffer().as_slice()`:
 
 ```rust
 // Custom closures: use strided-kernel directly (CPU only)
-let a_view = tensor_a.view();
-let b_view = tensor_b.view();
-strided_kernel::zip_map2_into(&mut out.view_mut(), &a_view, &b_view, |a, b| a * b + 1.0);
+// Build StridedView from buffer + dims + strides + offset
+let a_slice = tensor_a.buffer().as_slice().unwrap();
+// ... construct StridedView and use strided_kernel
 ```
 
 This keeps `tenferro-prims` purely cuTENSOR/hipTensor-compatible.
-
----
-
-## Usage Examples
-
-```rust
-use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor, ReduceOp, Standard};
-
-let ctx = CpuContext::new(4);  // 4-thread pool
-
-// Plan + execute: GEMM
-let desc = PrimDescriptor::BatchedGemm { batch_dims: vec![], m: 3, n: 5, k: 4 };
-let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
-
-// Plan + execute: Reduction
-let desc = PrimDescriptor::Reduce { modes_a: vec![0, 1], modes_c: vec![0], op: ReduceOp::Sum };
-let plan = CpuBackend::plan::<f64>(&ctx, &desc, &[&[3, 4], &[3]]).unwrap();
-CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
-
-// Dynamic extension check
-if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
-    let desc = PrimDescriptor::Contract { modes_a: vec![0,1], modes_b: vec![1,2], modes_c: vec![0,2] };
-    let plan = CpuBackend::plan::<f64>(&ctx, &desc, &shapes).unwrap();
-    CpuBackend::execute(&ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
-}
-```
-
----
-
-## GPU Backend (Future)
-
-GPU support via cuTENSOR/hipTensor is planned but not in the POC.
-
-### GPU Vtable
-
-cuTENSOR and hipTensor have nearly identical C APIs. A single function
-pointer table (`TensorLibVtable`) abstracts over both:
-
-```rust
-struct TensorLibVtable {
-    create_handle: Symbol<unsafe extern "C" fn(*mut *mut c_void) -> i32>,
-    destroy_handle: Symbol<unsafe extern "C" fn(*mut c_void) -> i32>,
-    create_contraction: Symbol<unsafe extern "C" fn(/* ... */) -> i32>,
-    create_plan: Symbol<unsafe extern "C" fn(/* ... */) -> i32>,
-    contract: Symbol<unsafe extern "C" fn(/* ... */) -> i32>,
-    // Permutation, reduction, elementwise (same pattern)
-    ...
-}
-
-impl TensorLibVtable {
-    fn load_cutensor(lib: &Library) -> Result<Self> { ... }
-    fn load_hiptensor(lib: &Library) -> Result<Self> { ... }
-}
-
-pub struct GpuBackend {
-    vtable: TensorLibVtable,
-    handle: *mut c_void,
-    _lib: Library,
-}
-```
-
-### GPU Plan Caching
-
-```rust
-#[derive(Hash, Eq, PartialEq, Clone)]
-pub struct PlanCacheKey {
-    pub shapes: Vec<Vec<usize>>,
-    pub strides: Vec<Vec<usize>>,
-    pub modes: Vec<Vec<u32>>,
-    pub dtype: u32,
-}
-
-pub struct PlanCache {
-    cache: HashMap<PlanCacheKey, GpuPlan>,
-    capacity: usize,
-}
-```
-
-### GPU Backend Discovery
-
-The caller (Julia, Python, or standalone Rust) provides the path to
-the shared library. No auto-search.
-
-```rust
-pub struct BackendRegistry {
-    cpu: CpuBackend,
-    gpu: Option<GpuBackend>,
-}
-
-impl BackendRegistry {
-    pub fn new() -> Self { ... }  // CPU only
-    pub fn load_cutensor(&mut self, path: &str) -> Result<()> { ... }
-    pub fn load_hiptensor(&mut self, path: &str) -> Result<()> { ... }
-}
-```

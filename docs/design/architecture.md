@@ -122,8 +122,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 **Dependencies**: `strided-view` (for `StridedError`), `thiserror`.
 
-**Note**: `BackendRegistry`, `GpuBackend`, and `TensorLibVtable` are **not**
-in the POC. They are planned for future GPU support.
+**Note**: `BackendRegistry`, `CudaBackend`, `RocmBackend`, and
+`TensorLibVtable` are **not** in the POC. They are planned for future
+GPU support.
 
 ---
 
