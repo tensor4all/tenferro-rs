@@ -134,7 +134,7 @@ pub enum OpKind {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_device::{
 ///     preferred_compute_devices, ComputeDevice, LogicalMemorySpace, OpKind,
 /// };
@@ -148,10 +148,17 @@ pub enum OpKind {
 /// assert!(devices.contains(&ComputeDevice::Cpu { device_id: 0 }));
 /// ```
 pub fn preferred_compute_devices(
-    _space: LogicalMemorySpace,
-    _op_kind: OpKind,
+    space: LogicalMemorySpace,
+    op_kind: OpKind,
 ) -> Result<Vec<ComputeDevice>> {
-    todo!()
+    match space {
+        LogicalMemorySpace::MainMemory => Ok(vec![ComputeDevice::Cpu { device_id: 0 }]),
+        LogicalMemorySpace::PinnedMemory
+        | LogicalMemorySpace::GpuMemory { .. }
+        | LogicalMemorySpace::ManagedMemory => {
+            Err(Error::NoCompatibleComputeDevice { space, op: op_kind })
+        }
+    }
 }
 
 /// Error type used across the tenferro workspace.
