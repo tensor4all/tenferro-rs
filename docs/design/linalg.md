@@ -175,6 +175,9 @@ interaction model. For how the algebra type `A` (e.g., `Standard<T>`) affects
 which backend primitives are dispatched during the AD formulas, see
 [algebra.md](./algebra.md).
 
+For the step-by-step mathematical derivations of each rule, see the
+[AD Formula Notes](../AD/README.md).
+
 ### Cotangent Types
 
 Structured cotangent types with `Option` fields allow partial gradient

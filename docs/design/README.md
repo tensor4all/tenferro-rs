@@ -16,6 +16,12 @@
 | [capi.md](./capi.md) | C-API (FFI): opaque handles, DLPack interop, einsum + SVD + AD rules |
 | [testing.md](./testing.md) | Testing strategy, linalg test cases ([JSON](../../tenferro-linalg/tests/data/linalg_cases.json)), gradient check method |
 
+## AD Formula Notes
+
+| Document | Description |
+|----------|-------------|
+| [AD Formula Notes](../AD/README.md) | Mathematical derivations for SVD, QR, LU, and other rrule/frule formulas |
+
 ## Reference
 
 | Document | Description |

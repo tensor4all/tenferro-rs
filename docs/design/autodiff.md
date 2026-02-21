@@ -1,5 +1,7 @@
 # Automatic Differentiation
 
+For detailed mathematical derivations of AD rules, see [AD Formula Notes](../AD/README.md).
+
 ## Position in Workspace Architecture
 
 The AD system is split into two crates following Rust convention
