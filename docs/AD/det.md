@@ -18,7 +18,9 @@ $$
 
 ### Reverse mode (VJP)
 
-Given cotangent $\bar{d} \in \mathbb{C}$:
+Given cotangent $\bar{d} \in \mathbb{C}$ (or $\mathbb{R}$):
+
+**Real case** ($A \in \mathbb{R}^{N \times N}$):
 
 $$
 \bar{A} = \bar{d} \cdot \det(A) \cdot A^{-\mathsf{T}}
@@ -27,7 +29,24 @@ $$
 Equivalently, $\bar{A} = \bar{d} \cdot \mathrm{adj}(A)^{\mathsf{T}}$, where
 $\mathrm{adj}(A) = \det(A) \cdot A^{-1}$ is the classical adjugate.
 
-**Derivation.** From the JVP:
+**Complex case** ($A \in \mathbb{C}^{N \times N}$, Wirtinger convention):
+
+$$
+\bar{A} = \overline{\bar{d} \cdot \det(A)} \cdot A^{-\mathsf{H}}
+$$
+
+Under the Wirtinger (CR-calculus) convention the gradient is with respect to
+$\bar{A}$ (the conjugate variable). The loss is real-valued, so the chain
+rule gives $\partial\ell / \partial \bar{A}_{ij}$. This produces the
+conjugate transpose $A^{-\mathsf{H}}$ (not $A^{-\mathsf{T}}$) and conjugates
+the scalar prefactor.
+
+> **Implementation note (PyTorch convention):** PyTorch computes
+> `grad_A = (grad * det(A)).conj() * A^{-H}` via
+> `torch.linalg.solve(A.mH, rhs)`, which is equivalent to the formula above.
+> See `linalg_det_backward` in `FunctionsManual.cpp` (L4321–4337).
+
+**Derivation (real case).** From the JVP:
 
 $$
 \delta\ell = \langle \bar{d},\, \dot{d} \rangle
@@ -36,6 +55,14 @@ $$
 $$
 
 Reading off: $\bar{A} = \bar{d} \cdot \det(A) \cdot A^{-\mathsf{T}}$.
+
+**Derivation (complex case).** For a real-valued loss $\ell$ with Wirtinger
+derivatives, $d\ell = 2 \operatorname{Re}\!\bigl(\mathrm{tr}(\bar{A}^{\mathsf{H}} dA)\bigr)$.
+The JVP gives $\dot{d} = \det(A) \cdot \mathrm{tr}(A^{-1} \dot{A})$, and the
+chain rule contribution is
+$\operatorname{Re}(\bar{d}^* \dot{d}) = \operatorname{Re}\!\bigl(\overline{\bar{d} \det(A)} \cdot \mathrm{tr}(A^{-1} \dot{A})\bigr)$.
+Matching with the Wirtinger inner product yields
+$\bar{A} = \overline{\bar{d} \cdot \det(A)} \cdot A^{-\mathsf{H}}$.
 
 ### Singular matrix handling
 
@@ -48,8 +75,28 @@ $\mathrm{adj}(A)^{\mathsf{T}}$ is well-defined:
   where $d_k = \prod_{i \neq k} \sigma_i$.
 - $\mathrm{rank}(A) \leq N-2$: $\mathrm{adj}(A) = 0$.
 
-PyTorch uses `prod_safe_zeros_backward` (leave-one-out product via
-exclusive cumulative product) for the SVD-based adjugate.
+**Orientation / phase factor.** The SVD-based adjugate formula above omits
+the orientation factor needed for correct sign/phase. Because
+$\det(A) = \det(U) \cdot \prod_i \sigma_i \cdot \det(V^{\mathsf{H}})$,
+when $\sigma_k = 0$ the adjugate picks up the phase of the non-zero
+singular values times $\det(U) \det(V^{\mathsf{H}})$. In practice the
+implementation must include:
+
+$$
+\alpha = \overline{\bar{d} \cdot \det(U) \cdot \det(V^{\mathsf{H}})}
+$$
+
+and then scale the leave-one-out product vector by $\alpha$:
+
+$$
+\bar{A} = V (\alpha \cdot D) U^{\mathsf{H}}, \qquad
+D = \mathrm{diag}\!\bigl(\textstyle\prod_{i \neq k} \sigma_i\bigr)
+$$
+
+> **PyTorch reference:** `linalg_det_backward` (L4354–4357) computes
+> `alpha = (det(U) * det(Vh)).conj() * grad`, then passes the singular
+> values through `prod_safe_zeros_backward` (leave-one-out product via
+> exclusive cumulative product) and scales by `alpha`.
 
 ---
 

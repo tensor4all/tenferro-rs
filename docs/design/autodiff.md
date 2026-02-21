@@ -2,6 +2,13 @@
 
 For detailed mathematical derivations of AD rules, see [AD Formula Notes](../AD/README.md).
 
+**Complex gradient convention:** All AD formula notes use the Wirtinger
+(CR-calculus) convention for complex-valued tensors. VJP formulas produce
+$\partial\ell / \partial \bar{A}$ (conjugate variable), which yields
+$A^{-\mathsf{H}}$ (not $A^{-\mathsf{T}}$) and conjugated scalar prefactors.
+This matches PyTorch's convention and ensures consistency across all
+linalg rrule implementations.
+
 ## Position in Workspace Architecture
 
 The AD system is split into two crates following Rust convention
