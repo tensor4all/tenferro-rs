@@ -22,7 +22,7 @@ chainrules               ← AD engine (TrackedTensor, pullback, hvp)
 tenferro-tensor          ← impl Differentiable for Tensor<T> (depends on chainrules-core)
     ↑
 tenferro-einsum          ← Einsum + einsum AD rules (depends on chainrules)
-tenferro-linalg          ← Linalg + linalg AD rules (depends on chainrules)
+tenferro-linalg          ← Linalg + linalg AD rules (depends on chainrules-core)
 ```
 
 Operation-specific AD rules live with their operations:
@@ -58,18 +58,25 @@ independent of any specific tensor type.
 
 **Einsum AD (in `tenferro-einsum`):**
 
-- `tracked_einsum(subscripts, operands)` — reverse-mode einsum
-- `dual_einsum(subscripts, operands)` — forward-mode einsum
-- `einsum_rrule(subscripts, operands, cotangent)` — local pullback for FFI/manual AD
-- `einsum_frule(subscripts, primals, tangents)` — local pushforward for FFI/manual AD
-- `einsum_hvp(subscripts, primals, tangents, cotangent, cotangent_tangent)` — local HVP
+All einsum AD functions take `ctx: &mut B::Context` and `B: TensorPrims<A>`,
+matching the non-AD einsum functions.
+
+- `tracked_einsum(ctx, subscripts, operands)` — reverse-mode einsum
+- `dual_einsum(ctx, subscripts, operands)` — forward-mode einsum
+- `einsum_rrule(ctx, subscripts, operands, cotangent)` — local pullback for FFI/manual AD
+- `einsum_frule(ctx, subscripts, primals, tangents)` — local pushforward for FFI/manual AD
+- `einsum_hvp(ctx, subscripts, primals, tangents, cotangent, cotangent_tangent)` — local HVP
 
 **Linalg AD (in `tenferro-linalg`):**
 
-- `tracked_svd`, `dual_svd`, `svd_rrule`, `svd_frule` — SVD AD
-- `tracked_qr`, `dual_qr`, `qr_rrule`, `qr_frule` — QR AD
-- `tracked_lu`, `dual_lu`, `lu_rrule`, `lu_frule` — LU AD
-- `tracked_eigen`, `dual_eigen`, `eigen_rrule`, `eigen_frule` — Eigen AD
+Linalg uses only stateless `_rrule`/`_frule` functions — no `tracked_*` or
+`dual_*` wrappers. The chainrules tape engine composes `permute_backward` +
+`reshape_backward` + `svd_rrule` etc. via the standard chain rule automatically.
+
+- `svd_rrule`, `svd_frule` — SVD AD
+- `qr_rrule`, `qr_frule` — QR AD
+- `lu_rrule`, `lu_frule` — LU AD
+- `eigen_rrule`, `eigen_frule` — Eigen AD
 
 ---
 
@@ -148,8 +155,10 @@ plus the minimal tensor-level additions above.
 ### tenferro-linalg Dependency
 
 `tenferro-linalg` depends on `tenferro-prims` (in addition to
-`tenferro-tensor`, `tenferro-algebra`, `tenferro-device`, `chainrules-core`)
-to directly compose prims operations in AD rule implementations.
+`tenferro-tensor`, `tenferro-algebra`, `tenferro-device`, `chainrules-core`).
+Note: `tenferro-linalg` depends on `chainrules-core` (not full `chainrules`)
+because it only uses the `Differentiable` trait and `AdResult` type — it does
+not create tapes or tracked tensors.
 
 ---
 
