@@ -23,9 +23,10 @@ Per-crate API details are in companion documents:
 Layer 5: tenferro-capi         — C-API (FFI) for Julia/Python: einsum + SVD, f64, stateless rrule/frule
 Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, AD rules
          tenferro-linalg       — Tensor-level SVD/QR/LU/eigen, linalg AD rules
-Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
+Layer 3: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait, plan-based execution
+                                 (depends on tenferro-tensor for resolve_conj)
+Layer 2: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
                                  impl Differentiable for Tensor<T>
-Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait, plan-based execution
 Shared:  chainrules-core       — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V>
          chainrules            — AD engine: Tape<V>, TrackedTensor<V>, DualTensor<V>
          tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
@@ -148,31 +149,33 @@ tenferro-device              tenferro-algebra
         │                              │
         ├──────────────┐       ┌───────┤
         │              ↓       ↓       │
-        │         tenferro-prims       │
-        │           (TensorPrims<A>,   │
-        │            PrimDescriptor,   │
-        │            CpuBackend,       │
-        │            Extension,        │
-        │            ReduceOp)         │
+        │         tenferro-tensor      │
+        │           (Tensor<T> =       │
+        │            DataBuffer        │
+        │            + dims/strides/   │
+        │            offset, view ops) │
         │           (depends on:       │
         │            tenferro-device,  │
         │            tenferro-algebra, │
         │            strided-view,     │
-        │            strided-traits)   │
+        │            strided-traits,   │
+        │            num-traits,       │
+        │            chainrules-core)  │
         │              │               │
-        ↓              │               │
-   tenferro-tensor     │               │
-     (Tensor<T> =      │               │
-      DataBuffer       │               │
-      + dims/strides/  │               │
-      offset, view ops)│               │
-     (depends on:      │               │
-      tenferro-device, │               │
-      strided-view,    │               │
-      strided-traits,  │               │
-      num-traits)      │               │
-        │              │               │
-        └──────┬───────┘       ┌───────┘
+        ↓              ↓               │
+   tenferro-prims                      │
+     (TensorPrims<A>,                  │
+      PrimDescriptor,                  │
+      CpuBackend,                      │
+      Extension,                       │
+      ReduceOp)                        │
+     (depends on:                      │
+      tenferro-device,                 │
+      tenferro-algebra,                │
+      tenferro-tensor,                 │
+      strided-view,                    │
+      strided-traits)                  │
+        │                      ┌───────┘
                ↓               ↓
           tenferro-einsum
             (einsum, einsum_with_subscripts,
