@@ -1,6 +1,8 @@
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
-//! This crate provides SVD, QR, LU, eigendecomposition, and least squares for tensors
+//! This crate provides SVD, QR, LU, eigendecomposition, Cholesky, least squares,
+//! linear solve, matrix inverse, determinant, pseudoinverse, matrix exponential,
+//! triangular solve, and norms for tensors
 //! with shape `(m, n, *)`, adapted from PyTorch's `torch.linalg` for
 //! column-major layout:
 //!
@@ -273,6 +275,56 @@ pub struct EigenResult<T: Scalar> {
     pub vectors: Tensor<T>,
 }
 
+/// Sign-and-log-determinant result: `det(A) = sign * exp(logabsdet)`.
+///
+/// For an input of shape `(n, n, *)`:
+///
+/// - `sign`: shape `(*)` (sign of the determinant, ±1 for real, unit complex for complex)
+/// - `logabsdet`: shape `(*)` (log of absolute value of determinant)
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::slogdet;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let result = slogdet(&a).unwrap();
+/// ```
+pub struct SlogdetResult<T: Scalar> {
+    /// Sign of determinant. Shape: `(*)`.
+    pub sign: Tensor<T>,
+    /// Log of absolute value of determinant. Shape: `(*)`.
+    pub logabsdet: Tensor<T>,
+}
+
+/// Gradient result for `solve_rrule`: cotangents for both `A` and `b`.
+pub struct SolveGrad<T: Scalar> {
+    /// Cotangent for A. Same shape as `A`.
+    pub a: Tensor<T>,
+    /// Cotangent for b. Same shape as `b`.
+    pub b: Tensor<T>,
+}
+
+/// Norm kind for [`norm`].
+#[derive(Debug, Clone, Copy)]
+pub enum NormKind {
+    /// Frobenius norm (matrix) or L2 norm (vector).
+    Fro,
+    /// Nuclear norm (sum of singular values).
+    Nuclear,
+    /// Spectral norm (largest singular value) / operator 2-norm.
+    Spectral,
+    /// L1 norm (max absolute column sum for matrices, sum of abs for vectors).
+    L1,
+    /// L-infinity norm (max absolute row sum for matrices, max abs for vectors).
+    Inf,
+    /// General Lp norm for vectors. `p` must be >= 1.
+    Lp(f64),
+}
+
 // ============================================================================
 // Primary decomposition functions
 // ============================================================================
@@ -411,6 +463,216 @@ pub fn lstsq<T: Scalar>(_a: &Tensor<T>, _b: &Tensor<T>) -> Result<LstsqResult<T>
     todo!()
 }
 
+/// Compute the Cholesky decomposition of a Hermitian positive-definite matrix.
+///
+/// Input shape: `(n, n, *)`. Returns lower triangular `L` such that `A = L L†`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::cholesky;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let l = cholesky(&a).unwrap();
+/// ```
+pub fn cholesky<T: Scalar>(_tensor: &Tensor<T>) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Solve a square linear system `A x = b`.
+///
+/// Input shapes: `A` is `(n, n, *)`, `b` is `(n, *)` or `(n, k, *)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::solve;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let x = solve(&a, &b).unwrap();
+/// ```
+pub fn solve<T: Scalar>(_a: &Tensor<T>, _b: &Tensor<T>) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Compute the inverse of a square matrix.
+///
+/// Input shape: `(n, n, *)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::inv;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let a_inv = inv(&a).unwrap();
+/// ```
+pub fn inv<T: Scalar>(_tensor: &Tensor<T>) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Compute the determinant of a square matrix.
+///
+/// Input shape: `(n, n, *)`. Returns shape `(*)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::det;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let d = det(&a).unwrap();
+/// ```
+pub fn det<T: Scalar>(_tensor: &Tensor<T>) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Compute sign and log-absolute-determinant of a square matrix.
+///
+/// Numerically stable alternative to [`det`]. `det(A) = sign * exp(logabsdet)`.
+///
+/// Input shape: `(n, n, *)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::slogdet;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let result = slogdet(&a).unwrap();
+/// // det(A) ≈ result.sign * exp(result.logabsdet)
+/// ```
+pub fn slogdet<T: Scalar>(_tensor: &Tensor<T>) -> Result<SlogdetResult<T>> {
+    todo!()
+}
+
+/// Compute the eigendecomposition of a general (non-symmetric) square matrix.
+///
+/// Unlike [`eigen`] (which requires Hermitian/symmetric input and returns
+/// real eigenvalues), this function handles general matrices. Eigenvalues
+/// may be complex even for real input.
+///
+/// Input shape: `(n, n, *)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::eig;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let result = eig(&a).unwrap();
+/// ```
+pub fn eig<T: Scalar>(_tensor: &Tensor<T>) -> Result<EigenResult<T>> {
+    todo!()
+}
+
+/// Compute the Moore-Penrose pseudoinverse of a matrix.
+///
+/// Computed via SVD: `pinv(A) = V diag(1/S) U†`, with singular values
+/// below a threshold treated as zero.
+///
+/// Input shape: `(m, n, *)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::pinv;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 4],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let a_pinv = pinv(&a, None).unwrap();
+/// ```
+pub fn pinv<T: Scalar>(_tensor: &Tensor<T>, _rcond: Option<f64>) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Compute the matrix exponential `exp(A)` of a square matrix.
+///
+/// Input shape: `(n, n, *)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::matrix_exp;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let exp_a = matrix_exp(&a).unwrap();
+/// ```
+pub fn matrix_exp<T: Scalar>(_tensor: &Tensor<T>) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Solve a triangular linear system `A x = b`.
+///
+/// `A` must be upper or lower triangular (specified by `upper`).
+///
+/// Input shapes: `A` is `(n, n, *)`, `b` is `(n, *)` or `(n, k, *)`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::solve_triangular;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let x = solve_triangular(&a, &b, true).unwrap(); // upper=true
+/// ```
+pub fn solve_triangular<T: Scalar>(
+    _a: &Tensor<T>,
+    _b: &Tensor<T>,
+    _upper: bool,
+) -> Result<Tensor<T>> {
+    todo!()
+}
+
+/// Compute a matrix or vector norm.
+///
+/// Input shape: `(m, n, *)` for matrix norms, `(n, *)` for vector norms.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::{norm, NormKind};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let a = Tensor::<f64>::zeros(&[3, 4],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let fro = norm(&a, NormKind::Fro).unwrap();
+/// ```
+pub fn norm<T: Scalar>(_tensor: &Tensor<T>, _kind: NormKind) -> Result<Tensor<T>> {
+    todo!()
+}
+
 /// Least squares result: `x = argmin ||Ax - b||²`.
 ///
 /// For an input `A` of shape `(m, n, *)` and `b` of shape `(m, *)` with `m >= n`:
@@ -546,6 +808,15 @@ pub struct EigenCotangent<T: Scalar> {
     pub values: Option<Tensor<T>>,
     /// Cotangent for eigenvectors. Shape must match `EigenResult::vectors`.
     pub vectors: Option<Tensor<T>>,
+}
+
+/// Cotangent (adjoint) for slogdet outputs.
+///
+/// Note: `sign` is piecewise constant and not differentiable.
+/// Gradient flows only through `logabsdet`.
+pub struct SlogdetCotangent<T: Scalar> {
+    /// Cotangent for logabsdet. Shape must match `SlogdetResult::logabsdet`.
+    pub logabsdet: Option<Tensor<T>>,
 }
 
 // ============================================================================
@@ -723,6 +994,91 @@ pub fn lstsq_rrule<T: Scalar>(
     todo!()
 }
 
+/// Reverse-mode AD rule for Cholesky (VJP / pullback).
+///
+/// Given `A = L L†` and cotangent `L̄`, computes `Ā`.
+pub fn cholesky_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for linear solve (VJP / pullback).
+///
+/// Given `Ax = b` and cotangent `x̄`, computes `(Ā, b̄)`.
+pub fn solve_rrule<T: Scalar>(
+    _a: &Tensor<T>,
+    _b: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+) -> AdResult<SolveGrad<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for matrix inverse (VJP / pullback).
+///
+/// `Ā = -A⁻ᴴ · cotangent · A⁻ᴴ`.
+pub fn inv_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for determinant (VJP / pullback).
+///
+/// `Ā = det(A) · cotangent · A⁻ᵀ`.
+pub fn det_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for slogdet (VJP / pullback).
+///
+/// `Ā = cotangent_logabsdet · A⁻ᵀ`.
+pub fn slogdet_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &SlogdetCotangent<T>,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for general eigendecomposition (VJP / pullback).
+pub fn eig_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &EigenCotangent<T>,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for pseudoinverse (VJP / pullback).
+pub fn pinv_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+    _rcond: Option<f64>,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for matrix exponential (VJP / pullback).
+pub fn matrix_exp_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
+/// Reverse-mode AD rule for norm (VJP / pullback).
+pub fn norm_rrule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _cotangent: &Tensor<T>,
+    _kind: NormKind,
+) -> AdResult<Tensor<T>> {
+    todo!()
+}
+
 // ============================================================================
 // AD functions: frule (forward-mode, stateless)
 // ============================================================================
@@ -842,5 +1198,81 @@ pub fn lstsq_frule<T: Scalar>(
     _tangent_a: &Tensor<T>,
     _tangent_b: &Tensor<T>,
 ) -> AdResult<(LstsqResult<T>, LstsqResult<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for Cholesky (JVP / pushforward).
+pub fn cholesky_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+) -> AdResult<(Tensor<T>, Tensor<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for linear solve (JVP / pushforward).
+pub fn solve_frule<T: Scalar>(
+    _a: &Tensor<T>,
+    _b: &Tensor<T>,
+    _tangent_a: &Tensor<T>,
+    _tangent_b: &Tensor<T>,
+) -> AdResult<(Tensor<T>, Tensor<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for matrix inverse (JVP / pushforward).
+pub fn inv_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+) -> AdResult<(Tensor<T>, Tensor<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for determinant (JVP / pushforward).
+pub fn det_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+) -> AdResult<(Tensor<T>, Tensor<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for slogdet (JVP / pushforward).
+pub fn slogdet_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+) -> AdResult<(SlogdetResult<T>, SlogdetResult<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for general eigendecomposition (JVP / pushforward).
+pub fn eig_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+) -> AdResult<(EigenResult<T>, EigenResult<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for pseudoinverse (JVP / pushforward).
+pub fn pinv_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+    _rcond: Option<f64>,
+) -> AdResult<(Tensor<T>, Tensor<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for matrix exponential (JVP / pushforward).
+pub fn matrix_exp_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+) -> AdResult<(Tensor<T>, Tensor<T>)> {
+    todo!()
+}
+
+/// Forward-mode AD rule for norm (JVP / pushforward).
+pub fn norm_frule<T: Scalar>(
+    _tensor: &Tensor<T>,
+    _tangent: &Tensor<T>,
+    _kind: NormKind,
+) -> AdResult<(Tensor<T>, Tensor<T>)> {
     todo!()
 }
