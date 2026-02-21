@@ -15,6 +15,7 @@ Per-crate API details are in companion documents:
 [tensor](./tensor.md),
 [algebra](./algebra.md),
 [autodiff](./autodiff.md),
+[linalg](./linalg.md),
 [contraction-pipeline](./contraction-pipeline.md).
 
 ## Layered Architecture

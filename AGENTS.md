@@ -30,6 +30,8 @@ tenferro-rs depends on strided-rs but does not absorb it. strided-rs has no BLAS
 
 See [`docs/design/`](docs/design/) for architecture and design documents.
 
+**Note**: Files under `docs/plans/` are historical records of past design discussions and decisions. They may contradict the current API or design — do not update them to match the current state.
+
 ## Code Style
 
 - `cargo fmt --all` for formatting (always run before committing)
