@@ -12,5 +12,6 @@ tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-tensor = { path = "../tenferro-tensor" }
 strided-view.workspace = true
 strided-traits.workspace = true
+strided-perm.workspace = true
 rayon = "1.10"
 libloading.workspace = true
