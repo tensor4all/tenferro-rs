@@ -87,7 +87,7 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
     type Context = CpuContext;
 
     fn plan<T: ScalarBase>(
-        _ctx: &CpuContext,
+        _ctx: &mut CpuContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
@@ -95,7 +95,7 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
     }
 
     fn execute<T: ScalarBase>(
-        _ctx: &CpuContext,
+        _ctx: &mut CpuContext,
         _plan: &TropicalPlan<T>,
         _alpha: T,
         _inputs: &[&StridedView<T>],
@@ -120,7 +120,7 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
     type Context = CpuContext;
 
     fn plan<T: ScalarBase>(
-        _ctx: &CpuContext,
+        _ctx: &mut CpuContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
@@ -128,7 +128,7 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
     }
 
     fn execute<T: ScalarBase>(
-        _ctx: &CpuContext,
+        _ctx: &mut CpuContext,
         _plan: &TropicalPlan<T>,
         _alpha: T,
         _inputs: &[&StridedView<T>],
@@ -153,7 +153,7 @@ impl TensorPrims<MaxMulAlgebra> for CpuBackend {
     type Context = CpuContext;
 
     fn plan<T: ScalarBase>(
-        _ctx: &CpuContext,
+        _ctx: &mut CpuContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
@@ -161,7 +161,7 @@ impl TensorPrims<MaxMulAlgebra> for CpuBackend {
     }
 
     fn execute<T: ScalarBase>(
-        _ctx: &CpuContext,
+        _ctx: &mut CpuContext,
         _plan: &TropicalPlan<T>,
         _alpha: T,
         _inputs: &[&StridedView<T>],

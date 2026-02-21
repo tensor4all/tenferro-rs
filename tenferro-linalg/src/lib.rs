@@ -1018,20 +1018,14 @@ pub fn solve_rrule<T: Scalar>(
 /// Reverse-mode AD rule for matrix inverse (VJP / pullback).
 ///
 /// `Ā = -A⁻ᴴ · cotangent · A⁻ᴴ`.
-pub fn inv_rrule<T: Scalar>(
-    _tensor: &Tensor<T>,
-    _cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+pub fn inv_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdResult<Tensor<T>> {
     todo!()
 }
 
 /// Reverse-mode AD rule for determinant (VJP / pullback).
 ///
 /// `Ā = det(A) · cotangent · A⁻ᵀ`.
-pub fn det_rrule<T: Scalar>(
-    _tensor: &Tensor<T>,
-    _cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+pub fn det_rrule<T: Scalar>(_tensor: &Tensor<T>, _cotangent: &Tensor<T>) -> AdResult<Tensor<T>> {
     todo!()
 }
 
