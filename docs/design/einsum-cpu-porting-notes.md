@@ -5,6 +5,13 @@ This document details how the einsum CPU implementation is structured in
 
 **Purpose**: Detect potential problems before implementation begins.
 
+See [tensor-prims.md](./tensor-prims.md) for the canonical `TensorPrims<A>`
+trait definition, `PrimDescriptor` enum, `PlanCache` key policy, and the
+`CpuBackend` / `CpuContext` type definitions referenced throughout this
+document. See [gpu-backend-design.md](./gpu-backend-design.md) for the
+GPU-specific plan lifecycle, stride-sensitive cache key policy, and the
+tropical GPU kernel integration plan.
+
 ## Reference Implementations
 
 The algorithms in `strided-einsum2`, `strided-opteinsum`, and `omeinsum-rs`
@@ -94,7 +101,8 @@ for i in 0..I {
 
 No dependency on strided-einsum2, Contract, or any einsum-level logic.
 GPU backends may compose these via `Contract(eye, ∂C)` using
-cuTENSOR/hipTENSOR — see `gpu-backend-design.md`.
+cuTENSOR/hipTENSOR — see
+[gpu-backend-design.md](./gpu-backend-design.md).
 
 ### Type Adaptation
 
@@ -120,7 +128,7 @@ In CpuBackend, convert to strided-view's `Conj` op when building
 
 On GPU, cuTENSOR supports `CUTENSOR_OP_CONJ` in tensor descriptors for
 lazy conjugation. Standalone `Tensor::conj()` requires CPU transfer for
-GPU tensors. See `gpu-backend-design.md` G11.
+GPU tensors. See [gpu-backend-design.md](./gpu-backend-design.md) G11.
 
 **Algebra parameterization**: strided-einsum2 has no algebra concept.
 `TensorPrims<A>` is parameterized by algebra `A`.  For `Standard<S>` algebra,
@@ -228,13 +236,151 @@ trait).
 | ~~P4~~ | ~~Thread-local buffer pool~~ | — | ~~Merged into P6~~ → Removed (global allocator) |
 | P5 | Algebra-specific dispatch (tropical, etc.) | Medium | `Standard<S>` → faer/blas.  Non-`Standard<S>` → naive fallback.  Dispatch on `A: Semiring` bounds |
 | ~~P6~~ | ~~Unified BufferPool~~ | — | **Removed**: Global allocator (mimalloc/jemalloc) handles intermediate buffer reuse. No custom pool needed for CPU. GPU device-memory pool is separate |
-| **P7** | **single_tensor_einsum via prims** | **Medium** | Route all steps (diag, trace, permute, broadcast, anti-diag) through `TensorPrims`.  Cache plans in `CpuContext.PlanCache` keyed by `(PrimDescriptor, shapes)` to avoid repeated plan generation |
-| **P8** | **Parenthesized tree notation** | **Medium** | Support parenthesized contraction order in parser.  Parser returns `Subscripts` + `Option<ContractionTree>`.  POC skeleton needs update |
-| **P9** | **Generative output (size_dict)** | **Medium** | Support `size_dict` for output labels not present in inputs.  Add parameter to tenferro-einsum public API.  POC skeleton needs update |
-| P10 | omeco dependency | Low | Add to workspace dependencies |
-| **P11** | **Explicit context passing in einsum API** | **High** | All einsum functions gain `ctx: &mut B::Context` and `B: TensorPrims<A>` type parameter.  Follows Rust idiom (explicit `&mut`, no global state).  All 9 einsum functions + AD functions need signature changes.  See revised signatures below |
-| **P12** | **strided-einsum2 / omeinsum-rs deprecation** | — | Both deprecated. Algorithms are reference material, not dependencies. tenferro-prims and tenferro-einsum contain self-contained implementations |
-| P13 | AntiTrace/AntiDiag CPU implementation | Low | Simple loops (scatter-add / write-to-diagonal). No dependency on strided-einsum2 or Contract. GPU uses Contract(eye, ∂C) composition |
+| **P7** | **single_tensor_einsum via prims** | **Medium** | See expanded entry below |
+| **P8** | **Parenthesized tree notation** | **Medium** | See expanded entry below |
+| **P9** | **Generative output (size_dict)** | **Medium** | See expanded entry below |
+| P10 | omeco dependency | Low | See expanded entry below |
+| **P11** | **Explicit context passing in einsum API** | **High** | See expanded entry below |
+| **P12** | **strided-einsum2 / omeinsum-rs deprecation** | — | See expanded entry below |
+| P13 | AntiTrace/AntiDiag CPU implementation | Low | See expanded entry below |
+
+---
+
+### P7: single_tensor_einsum via TensorPrims
+
+**Status**: Decided
+
+**Decision**: Route all steps of `single_tensor_einsum` (diag extraction,
+trace, permute, broadcast, anti-diag) through `TensorPrims::plan()` /
+`TensorPrims::execute()`. Cache plans in `CpuContext.plan_cache` keyed by
+`(PrimDescriptor variant + mode labels, concrete dimension sizes)` to avoid
+repeated plan generation on repeated calls with the same shapes. No direct
+calls to strided-kernel from the einsum layer.
+
+**Next action**: N/A — decision is recorded. Update `tenferro-prims/src/cpu.rs`
+and `tenferro-einsum/src/lib.rs` to implement accordingly when moving out of
+POC phase. Cache key policy details are in
+[tensor-prims.md](./tensor-prims.md) under "PlanCache".
+
+**Success condition**: `single_tensor_einsum` is implemented entirely via
+`TensorPrims` calls; no direct import of `strided-kernel` symbols from
+`tenferro-einsum`.
+
+---
+
+### P8: Parenthesized tree notation
+
+**Status**: Decided
+
+**Decision**: The einsum parser must support a parenthesized contraction-order
+notation (e.g., `"((ij,jk),kl)->il"`) in addition to the flat notation.
+`Subscripts::parse()` returns `Subscripts` + `Option<ContractionTree>`. When
+a parenthesized tree is present, `ContractionTree` is populated directly from
+the notation; otherwise the optimizer (`omeco`) generates the tree.
+
+**Next action**: Update `tenferro-einsum/src/parse.rs` (or equivalent)
+to handle parenthesized input. The POC `Subscripts::parse()` stub signature
+must be updated to return or accept an `Option<ContractionTree>` companion.
+
+**Success condition**: Round-trip test passes: `parse("((ij,jk),kl)->il")`
+produces a `ContractionTree` that encodes the `(ij,jk)` contraction before
+`kl`; flat notation `"ij,jk,kl->il"` falls back to optimizer.
+
+---
+
+### P9: Generative output (size_dict)
+
+**Status**: Decided
+
+**Decision**: Add an optional `size_dict: Option<&HashMap<char, usize>>`
+parameter to `einsum` and related public functions. This allows output index
+labels that do not appear in any input operand (e.g., zero-padding or
+broadcasting output dimensions). The parameter is `None` for the common case.
+
+**Next action**: Update signatures in `tenferro-einsum/src/lib.rs`. The POC
+stub for `einsum` must be updated to include the parameter. See also the
+revised signatures in P11 below.
+
+**Success condition**: `einsum` with a `size_dict` providing a dimension for
+an output-only label produces a correctly-shaped result tensor.
+
+---
+
+### P10: omeco dependency
+
+**Status**: Decided
+
+**Decision**: Add `omeco` to `[workspace.dependencies]` in the root
+`Cargo.toml`, then reference it with `omeco.workspace = true` in
+`tenferro-einsum/Cargo.toml`. `ContractionTree::optimize()` delegates to the
+omeco greedy optimizer.
+
+**Next action**: Add `omeco` entry to workspace `Cargo.toml` and to
+`tenferro-einsum/Cargo.toml`. Verify version compatibility.
+
+**Success condition**: `cargo build -p tenferro-einsum` succeeds with omeco as
+a dependency; `ContractionTree::optimize()` calls the omeco API without
+compilation errors.
+
+---
+
+### P11: Explicit context passing in einsum API
+
+**Status**: Decided
+
+**Decision**: All public einsum functions (9 variants + all AD functions) gain
+`ctx: &mut B::Context` and a `B: TensorPrims<A>` type parameter. This follows
+the Rust idiom of explicit ownership and mutability — no global/thread-local
+state. See "Revised einsum Signatures" subsection below for the exact
+before/after signatures.
+
+**Next action**: Update all 9 einsum function stubs + all AD function stubs in
+`tenferro-einsum/src/lib.rs`. The `TensorPrims<A>` trait is defined in
+[tensor-prims.md](./tensor-prims.md); implementations live in `tenferro-prims`.
+
+**Success condition**: `cargo check -p tenferro-einsum` passes with the new
+signatures; no einsum function remains with the old single-type-parameter form.
+
+---
+
+### P12: strided-einsum2 / omeinsum-rs deprecation
+
+**Status**: Decided
+
+**Decision**: Both crates are deprecated. Their algorithms serve as reference
+material only — tenferro-prims and tenferro-einsum contain self-contained
+re-implementations. No `Cargo.toml` dependency on either crate is added at
+any layer.
+
+**Next action**: N/A — decision is recorded. Ensure neither crate appears as a
+dependency in any `Cargo.toml` in this workspace. If algorithm questions arise
+during implementation, consult source of the reference crates directly.
+
+**Success condition**: `grep -r "strided-einsum2\|omeinsum-rs"
+Cargo.toml` (workspace and all crates) returns no results.
+
+---
+
+### P13: AntiTrace/AntiDiag CPU implementation
+
+**Status**: Decided
+
+**Decision**: Implement as simple loops on CPU (scatter-add for anti_trace,
+write-to-diagonal for anti_diag). No dependency on strided-einsum2 or on the
+`Contract` extended operation. GPU backends compose these via
+`Contract(eye(I), ∂C)` using cuTENSOR/hipTENSOR — see
+[gpu-backend-design.md](./gpu-backend-design.md) under "AntiTrace / AntiDiag
+GPU Implementation".
+
+**Next action**: N/A — decision is recorded. Implement the loop bodies in
+`tenferro-prims/src/cpu.rs` under `CpuBackend::execute()` for the
+`PrimDescriptor::AntiTrace` and `PrimDescriptor::AntiDiag` arms.
+
+**Success condition**: Unit tests for anti_trace and anti_diag pass on CPU;
+gradient correctness verified via finite-difference check for a `trace()`
+operation.
+
+---
 
 ### Revised einsum Signatures (P11)
 

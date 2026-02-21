@@ -167,6 +167,14 @@ wrappers. The chainrules tape engine composes `permute_backward` +
 `reshape_backward` + `svd_rrule` etc. via the standard chain rule
 automatically.
 
+`tenferro-linalg` depends on **`chainrules-core` only** (not the full
+`chainrules` engine). It uses `AdResult` and the `Differentiable` trait from
+`chainrules-core`; it never creates tapes or `TrackedTensor` values. See
+[autodiff.md](./autodiff.md) for the overall AD crate split and the algebra
+interaction model. For how the algebra type `A` (e.g., `Standard<T>`) affects
+which backend primitives are dispatched during the AD formulas, see
+[algebra.md](./algebra.md).
+
 ### Cotangent Types
 
 Structured cotangent types with `Option` fields allow partial gradient

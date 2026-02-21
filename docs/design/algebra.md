@@ -135,3 +135,49 @@ AD must remain algebra-aware:
   `TensorPrims<A>` rather than hard-coding only standard arithmetic.
 
 See [autodiff.md](./autodiff.md) for the full AD architecture.
+
+---
+
+## Migration Checklist
+
+Steps for migrating to the typed algebra model consistently across the workspace.
+Work through these in order; each step unblocks the next.
+
+1. **Each algebra type must carry its scalar via `Semiring::Scalar`.**
+   - `Standard<T>` already does this. Any new algebra must define `type Scalar = …`
+     in its `Semiring` impl — not a free `T` parameter on the impl itself.
+   - Verify: `grep -r "impl Semiring"` — every impl must have an explicit
+     `type Scalar` associated type, not a generic `T` that floats free.
+
+2. **`HasAlgebra` impls map scalar types to their typed algebra.**
+   - Add `impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }` in the
+     crate that owns `MyScalar`. This is the only place `HasAlgebra` belongs;
+     do not add redundant impls elsewhere.
+   - `HasAlgebra` is UX sugar only — the algebra `A` is the source of truth.
+     Code that needs the algebra explicitly should accept `A: Semiring`, not
+     `T: HasAlgebra`.
+
+3. **`TensorPrims<A>` impls must be parameterized by the typed algebra `A`.**
+   - Signature: `impl TensorPrims<MyAlgebra> for CpuBackend { … }`
+   - The scalar type inside the impl is `<MyAlgebra as Semiring>::Scalar`,
+     not a free `T`. Use `A::Scalar` in method bodies instead of bare `T`.
+
+4. **Einsum and linalg functions use `A: Semiring` bounds for algebra-generic code.**
+   - Replace any `T: Scalar + HasAlgebra` bound with `A: Semiring` where the
+     function needs to be algebra-generic.
+   - Keep `T: HasAlgebra<Algebra = A>` on the public-facing thin wrapper so
+     callers do not have to spell out `A`.
+
+5. **Tropical algebras already carry their scalar via `Semiring::Scalar`.**
+   - `MaxPlus<T>`, `MinPlus<T>`, etc. define `type Scalar = T` in their
+     `Semiring` impls. No special case needed.
+   - Confirm tropical `HasAlgebra` impls are in `tenferro-tropical`, not in
+     `tenferro-algebra`. Tropical types must not leak into the algebra core.
+
+6. **Future: tighten `TensorPrims<A>` method signatures to use `A::Scalar`.**
+   - Currently `plan<T: ScalarBase>` and `execute<T: ScalarBase>` use a free
+     `T` unconstrained relative to `A`. A future tightening would add
+     `where T: ScalarBase, A: Semiring<Scalar = T>` (or remove the free `T`
+     and use `A::Scalar` directly).
+   - Do not make this change until all existing impls are migrated to step 3,
+     to avoid a large simultaneous diff.

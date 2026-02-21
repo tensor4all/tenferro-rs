@@ -6,6 +6,10 @@ both CUDA (cuTENSOR) and ROCm (hipTENSOR) backends.
 **Purpose**: Detect potential problems before implementation begins.
 Define the types, modules, and API mapping needed for GPU support.
 
+See [tensor-prims.md](./tensor-prims.md) for the `TensorPrims<A>` trait
+definition, `PrimDescriptor` enum, and the plan-cache key policy that
+applies to both CPU and GPU backends.
+
 ---
 
 ## Design Principles
@@ -309,6 +313,70 @@ standalone `conj()` で実データをコピーする場合は CPU 転送が必�
 | resolve_conj stubs | tenferro-prims/src/lib.rs | 各バックエンドに resolve_conj() 追加 |
 | UnaryOp::Conj | tenferro-prims/src/lib.rs | resolve_conj 用の新 UnaryOp variant |
 | prims → tensor dep | tenferro-prims/Cargo.toml | resolve_conj が Tensor<T> を扱うため |
+
+---
+
+## Tropical GPU Path: Custom Kernels
+
+cuTENSOR and hipTENSOR implement standard arithmetic only (`+`, `*`, `f32`,
+`f64`, complex). They have no mechanism for user-defined semiring operations
+such as `(max, +)` or `(max, ×)`. Tropical algebra GPU support therefore
+requires a **separate custom kernel path**, independent of the cuTENSOR path.
+
+### Boundary between the two paths
+
+| Algebra | GPU path | Library |
+|---------|----------|---------|
+| `Standard<f32/f64/Complex>` | cuTENSOR / hipTENSOR | dlopen at runtime |
+| `MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>` | custom kernels | separate integration target |
+| User-defined algebra | custom kernels (user-provided) | user crate |
+
+The `CudaBackend` / `RocmBackend` types implement `TensorPrims<Standard<S>>`
+only. They do not implement `TensorPrims<MaxPlus<S>>` or any other
+non-standard algebra — that would be a type error at compile time.
+
+### Tropical GPU implementation target
+
+For tropical argmax-capable GPU flows the integration target is a library
+such as `tropical-gemm-cuda` (or an equivalent CUDA/HIP kernel library).
+The expected integration shape is:
+
+```rust
+// tenferro-tropical (future GPU support)
+pub struct TropicalCudaBackend {
+    _lib: libloading::Library,   // tropical-gemm-cuda.so, loaded at runtime
+}
+
+impl TensorPrims<MaxPlus<f64>> for TropicalCudaBackend {
+    // delegates to tropical-gemm-cuda kernels, not cuTENSOR
+    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool { … }
+    …
+}
+```
+
+This backend lives in `tenferro-tropical`, not in `tenferro-prims`, preserving
+the same separation used for the CPU tropical path.
+
+### Argmax state for AD
+
+Tropical argmax-capable variants (e.g. max-plus Viterbi) need to store the
+argmax index tensor alongside the result so that the backward pass can
+reconstruct the gradient path. This is algebra-specific state that cuTENSOR
+cannot carry; it must be allocated and managed by the custom kernel. When
+designing the tropical GPU backend, the plan type must accommodate an optional
+argmax buffer:
+
+```rust
+enum TropicalCudaPlan<T: ScalarBase> {
+    Contract {
+        // argmax buffer allocated on GPU alongside the output
+        argmax_device_ptr: Option<*mut u64>,
+        …
+        _marker: PhantomData<T>,
+    },
+    …
+}
+```
 
 ---
 

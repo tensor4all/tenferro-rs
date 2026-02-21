@@ -166,10 +166,32 @@ not create tapes or tracked tensors.
 
 AD must remain algebra-aware:
 
-- Standard arithmetic: direct rrule/frule formulas over `+/*`.
-- Tropical algebra (`tenferro-tropical`): may need algebra-specific state
-  (e.g., argmax path information for max-plus variants).
-- API design relies on `HasAlgebra` and `TensorPrims<A>` for extensibility.
+- **Standard arithmetic** (`Standard<T>`): direct rrule/frule formulas over
+  `+/*`. The algebra type `A = Standard<T>` determines which primitive
+  operations are available (e.g., cuTENSOR-backed `TensorPrims<Standard<T>>`).
+- **Tropical algebra** (`tenferro-tropical`): requires algebra-specific state
+  during the backward pass. For max-plus/min-plus einsum, the rrule must track
+  argmax indices — the positions of the winning elements that achieved the
+  tropical sum. These indices are not computable from the output alone and must
+  be saved during the forward pass.
+
+  **GPU tropical AD note:** On GPU, tropical backward requires argmax-capable
+  custom kernels that are distinct from cuTENSOR/hipTensor primitives. cuTENSOR
+  operates on ring algebras (multiply-add); it has no native support for
+  max-plus argmax index tracking. A GPU tropical backward pass therefore
+  requires a separately implemented custom kernel (e.g., via CUDA/HIP or a
+  vendor-agnostic compute shader). This is a non-trivial infrastructure
+  requirement and must be planned separately from standard einsum GPU support.
+
+**Role of `HasAlgebra` and `TensorPrims<A>`:**
+
+- `HasAlgebra` (on `Tensor<T>`) is an **inference convenience trait** — it
+  allows the compiler to infer `A` from `T` for the common case, avoiding
+  explicit algebra type annotations at call sites.
+- The AD math and rule contracts (rrule/frule signatures, cotangent types)
+  depend on the algebra type `A` directly. `HasAlgebra` does not affect
+  correctness; it only reduces boilerplate for users who do not need a custom
+  algebra.
 
 See [algebra.md](./algebra.md) for the algebra system design.
 
