@@ -26,10 +26,11 @@
 //! # Algebra parameterization
 //!
 //! [`TensorPrims<A>`] is parameterized by algebra `A` (e.g.,
-//! [`Standard`], `MaxPlus`).
+//! [`Standard<f64>`](Standard), `MaxPlusAlgebra`). The algebra type carries
+//! its scalar type via `A::Scalar` (see [`Semiring`](tenferro_algebra::Semiring)).
 //! External crates implement `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule
 //! compatible). The [`HasAlgebra`](tenferro_algebra::HasAlgebra) trait on scalar types
-//! enables automatic inference: `Tensor<f64>` → `Standard`.
+//! provides UX sugar for automatic inference: `Tensor<f64>` → `Standard<f64>`.
 //!
 //! # Examples
 //!
@@ -538,7 +539,7 @@ impl CpuContext {
 ///
 /// Dispatched automatically when tensors reside on
 /// [`LogicalMemorySpace::MainMemory`](tenferro_device::LogicalMemorySpace::MainMemory).
-/// Implements [`TensorPrims<Standard>`] for standard arithmetic.
+/// Implements [`TensorPrims<Standard<T>>`](TensorPrims) for standard arithmetic.
 ///
 /// # Examples
 ///
@@ -585,7 +586,7 @@ impl CpuBackend {
     }
 }
 
-impl TensorPrims<Standard> for CpuBackend {
+impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     type Plan<T: ScalarBase> = CpuPlan<T>;
     type Context = CpuContext;
 
@@ -648,8 +649,8 @@ pub struct CudaPlan<T: ScalarBase> {
 /// CUDA backend using cuTENSOR via runtime dlopen.
 ///
 /// Loaded at runtime from a user-provided `.so` path. No compile-time
-/// CUDA SDK dependency. Implements [`TensorPrims<Standard>`] for standard
-/// arithmetic on NVIDIA GPUs.
+/// CUDA SDK dependency. Implements [`TensorPrims<Standard<T>>`](TensorPrims)
+/// for standard arithmetic on NVIDIA GPUs.
 ///
 /// cuTENSOR natively supports `Contract`, `Permute`, `Reduce`, and
 /// `ElementwiseMul`. `AntiTrace`/`AntiDiag` are composed via
@@ -681,7 +682,7 @@ impl CudaBackend {
     }
 }
 
-impl TensorPrims<Standard> for CudaBackend {
+impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
     type Plan<T: ScalarBase> = CudaPlan<T>;
     type Context = CudaContext;
 
@@ -741,8 +742,8 @@ pub struct RocmPlan<T: ScalarBase> {
 /// ROCm backend using hipTENSOR via runtime dlopen.
 ///
 /// Loaded at runtime from a user-provided `.so` path. No compile-time
-/// ROCm SDK dependency. Implements [`TensorPrims<Standard>`] for standard
-/// arithmetic on AMD GPUs.
+/// ROCm SDK dependency. Implements [`TensorPrims<Standard<T>>`](TensorPrims)
+/// for standard arithmetic on AMD GPUs.
 ///
 /// hipTENSOR natively supports `Contract`, `Permute`, `Reduce`, and
 /// `ElementwiseMul`. `AntiTrace`/`AntiDiag` are composed via
@@ -774,7 +775,7 @@ impl RocmBackend {
     }
 }
 
-impl TensorPrims<Standard> for RocmBackend {
+impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
     type Plan<T: ScalarBase> = RocmPlan<T>;
     type Context = RocmContext;
 

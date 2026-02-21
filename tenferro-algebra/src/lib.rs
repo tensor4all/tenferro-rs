@@ -6,10 +6,12 @@
 //!   (`Copy + Send + Sync + Add + Mul + Zero + One + PartialEq`).
 //! - [`Conjugate`]: Complex conjugation (identity for real types).
 //! - [`HasAlgebra`]: Maps a scalar type `T` to its default algebra `A`.
-//!   Enables automatic inference: `Tensor<f64>` → `Standard`,
-//!   `Tensor<MaxPlus<f64>>` → `MaxPlus` (in external crate).
+//!   Enables automatic inference: `Tensor<f64>` → `Standard<f64>`,
+//!   `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra` (in external crate).
+//!   This is UX sugar — the core model is `A::Scalar`-centric.
 //! - [`Semiring`]: Defines zero, one, add, mul for algebra-generic operations.
-//! - [`Standard`]: Standard arithmetic algebra (add = `+`, mul = `*`).
+//!   The algebra type `A` carries its scalar type via `A::Scalar`.
+//! - [`Standard<T>`](Standard): Typed standard arithmetic algebra (add = `+`, mul = `*`).
 //!
 //! # Extensibility
 //!
@@ -22,8 +24,8 @@
 //! ```
 //! use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 //!
-//! // f64 maps to Standard algebra automatically
-//! fn check_algebra<T: HasAlgebra<Algebra = Standard>>() {}
+//! // f64 maps to Standard<f64> algebra automatically
+//! fn check_algebra<T: HasAlgebra<Algebra = Standard<T>>>() {}
 //! check_algebra::<f64>();
 //! check_algebra::<f32>();
 //!
@@ -32,6 +34,8 @@
 //! needs_scalar::<f64>();
 //! needs_scalar::<f32>();
 //! ```
+
+use std::marker::PhantomData;
 
 use num_complex::{Complex32, Complex64};
 
@@ -116,8 +120,11 @@ impl Conjugate for Complex64 {
 
 /// Maps a scalar type `T` to its default algebra `A`.
 ///
-/// Enables automatic algebra inference: `Tensor<f64>` → `Standard`,
-/// `Tensor<MaxPlus<f64>>` → `MaxPlus` (in external crate).
+/// Enables automatic algebra inference: `Tensor<f64>` → `Standard<f64>`,
+/// `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra` (in external crate).
+///
+/// This trait is **UX sugar** for default algebra inference. The core
+/// algebra model is `A::Scalar`-centric (see [`Semiring`]).
 ///
 /// # Implementing for custom types
 ///
@@ -134,7 +141,11 @@ pub trait HasAlgebra {
     type Algebra;
 }
 
-/// Standard arithmetic algebra (add = `+`, mul = `*`).
+/// Typed standard arithmetic algebra (add = `+`, mul = `*`).
+///
+/// The type parameter `T` carries the scalar type, making the algebra
+/// `A::Scalar`-centric. This is the canonical core model — `HasAlgebra`
+/// provides UX sugar for automatic inference (e.g., `f64` → `Standard<f64>`).
 ///
 /// This is the default algebra for built-in numeric types (`f32`, `f64`,
 /// `Complex32`, `Complex64`).
@@ -144,30 +155,34 @@ pub trait HasAlgebra {
 /// ```
 /// use tenferro_algebra::{HasAlgebra, Standard};
 ///
-/// // f64 maps to Standard algebra automatically
-/// fn check_algebra<T: HasAlgebra<Algebra = Standard>>() {}
+/// // f64 maps to Standard<f64> algebra automatically
+/// fn check_algebra<T: HasAlgebra<Algebra = Standard<T>>>() {}
 /// check_algebra::<f64>();
 /// check_algebra::<f32>();
 /// ```
-pub struct Standard;
+pub struct Standard<T>(PhantomData<T>);
 
 impl HasAlgebra for f32 {
-    type Algebra = Standard;
+    type Algebra = Standard<f32>;
 }
 
 impl HasAlgebra for f64 {
-    type Algebra = Standard;
+    type Algebra = Standard<f64>;
 }
 
 impl HasAlgebra for Complex32 {
-    type Algebra = Standard;
+    type Algebra = Standard<Complex32>;
 }
 
 impl HasAlgebra for Complex64 {
-    type Algebra = Standard;
+    type Algebra = Standard<Complex64>;
 }
 
 /// Semiring trait for algebra-generic operations.
+///
+/// The algebra type `A` carries its scalar type via `A::Scalar`. This
+/// is the **core algebra model** — `TensorPrims<A>` and einsum/linalg
+/// trait bounds are centered on `A::Scalar`.
 ///
 /// Defines the four fundamental operations needed for tensor contractions
 /// under a given algebra:
@@ -179,7 +194,7 @@ impl HasAlgebra for Complex64 {
 ///
 /// # Examples
 ///
-/// Standard arithmetic:
+/// Standard arithmetic (`Standard<f64>`):
 /// - `zero() = 0`, `one() = 1`, `add = +`, `mul = *`
 ///
 /// Tropical (MaxPlus) semiring (in external crate):
@@ -199,4 +214,34 @@ pub trait Semiring {
 
     /// Semiring multiplication.
     fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar;
+}
+
+/// Standard arithmetic implements `Semiring` with `+` and `*`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_algebra::{Semiring, Standard};
+///
+/// let z = <Standard<f64> as Semiring>::zero();
+/// let o = <Standard<f64> as Semiring>::one();
+/// ```
+impl<T: Scalar> Semiring for Standard<T> {
+    type Scalar = T;
+
+    fn zero() -> T {
+        todo!()
+    }
+
+    fn one() -> T {
+        todo!()
+    }
+
+    fn add(_a: T, _b: T) -> T {
+        todo!()
+    }
+
+    fn mul(_a: T, _b: T) -> T {
+        todo!()
+    }
 }
