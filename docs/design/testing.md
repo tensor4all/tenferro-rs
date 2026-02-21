@@ -33,15 +33,99 @@ Tests are split into two layers:
 
 ### tenferro-einsum
 
-- **Parser**: `"ij,jk->ik"` to `Subscripts` conversion
-- **Basic patterns** (expected values hard-coded):
-  - Matrix multiply: `ij,jk->ik`
-  - Trace: `ii->`
-  - Outer product: `i,j->ij`
-  - Batch matmul: `bij,bjk->bik`
-  - Transpose: `ij->ji`
-  - Contraction: `ijk,ikl->ijl`
-- **AD (rrule/frule)**: finite-difference gradient check
+Test cases are ported from [omeinsum-rs](https://github.com/tensor4all/omeinsum-rs) (`tests/`).
+omeinsum-rs uses integer index labels (`&[0,1], &[1,2] -> &[0,2]`);
+tenferro-einsum uses string subscripts (`"ij,jk->ik"`).
+The translation is mechanical: same tensor data and expected values, different API calls.
+
+#### Parser
+
+`Subscripts::parse("ij,jk->ik")` — string to internal representation.
+No omeinsum-rs equivalent (omeinsum-rs skips parsing, uses integer labels directly).
+Write these tests from scratch.
+
+#### Unary operations
+
+Port from `tests/unary_ops.rs`. All use hand-computed expected values.
+
+| Pattern | omeinsum-rs test | Notes |
+|---------|-----------------|-------|
+| Trace `ii->` | `test_trace_2x2`, `test_trace_3x3`, `test_trace_5x5` | |
+| Diagonal `ii->i` | `test_diag_extract_2x2`, `test_diag_extract_3x3` | |
+| Sum `ij->` | `test_sum_all` | |
+| Sum axis `ij->j` | `test_sum_axis0`, `test_sum_axis1` | |
+| Transpose `ij->ji` | `test_transpose_2x2`, `test_transpose_2x3` | |
+| 3D permutation `ijk->kji` | `test_3d_permutation_full`, `test_3d_permutation_partial` | |
+| Identity `ij->ij` | `test_identity_2d`, `test_identity_3d` | |
+| Embed diagonal `i->ii` | `test_duplicate_vector_to_diagonal` | |
+| Broadcast | `test_repeat_*` (4 tests) | |
+
+#### Binary operations
+
+Port from `tests/binary_rules.rs`. All use hand-computed expected values with explicit `size_dict`.
+
+| Pattern | omeinsum-rs test | Notes |
+|---------|-----------------|-------|
+| Matmul `ij,jk->ik` | `test_matmul` | i=2, j=3, k=4 |
+| Matmul transposed variants | `test_matmul_transposed_output/a/b`, `test_matmul_both_transposed` | All 4 combos |
+| Dot product `i,i->` | `test_dot_product` | |
+| Outer product `i,j->ij` | `test_outer_product` | |
+| Hadamard `ij,ij->ij` | `test_hadamard_product` | |
+| Batched matmul `bij,bjk->bik` | `test_batched_matmul` | b=2 |
+| Vector-matrix `j,jk->k` | `test_vector_matrix` | |
+| Matrix-vector `ij,j->i` | `test_matrix_vector` | |
+| Scalar-tensor `,ij->ij` | `test_scalar_tensor`, `test_tensor_scalar` | |
+| Diagonal contract `ii,ij->j` | `test_diagonal_contract` | |
+| Multi-edge `ijk,jkl->il` | `test_multi_edge_contraction` | |
+| 8D contraction | `test_8d_contraction` | All dims=2 |
+
+#### N-ary operations and optimizer
+
+Port from `tests/einsum_core.rs` and `tests/optimizer.rs`.
+
+| Pattern | omeinsum-rs test | Notes |
+|---------|-----------------|-------|
+| 3-matrix chain `ij,jk,kl->il` | `test_3_matrix_chain` | |
+| Star `ia,ib,ic->abc` | `test_star_contraction` | Hub variable |
+| Cycle `ij,jk,ki->` | `test_tensor_network_cycle` | |
+| 4-tensor cycle `ij,jk,kl,li->` | `test_cyclic_contraction` | |
+| 5-tensor star | `test_5_tensor_star_contraction` | |
+| `ContractionTree::optimize` | `test_greedy_*`, `test_treesa_*` | Greedy and TreeSA |
+| Optimized vs pairwise | `test_optimized_vs_pairwise` | Results must match |
+
+#### AD (einsum_rrule / einsum_frule)
+
+Port from `tests/backward.rs`. Uses hand-computed expected gradients for small cases,
+plus finite-difference verification from `tests/showcase.rs`.
+
+| Pattern | omeinsum-rs test | Notes |
+|---------|-----------------|-------|
+| Matmul grad (all 4 transpose combos) | `test_backward_matmul_*` | f32, f64, Complex64 |
+| Matmul with identity | `test_backward_matmul_identity` | dA = B^T, dB = A^T |
+| Rectangular matmul grad | `test_backward_matmul_rectangular` | 2x3 * 3x2 |
+| Trace grad | `test_backward_complex_trace` | Gradient = identity diagonal |
+| Sum grad | `test_backward_complex_sum` | Gradient = all ones |
+| Transpose grad | `test_backward_complex_transpose` | |
+| 3-tensor chain grad | `test_backward_3tensor_chain` | Full chain rule |
+| Finite-diff verification | `test_einsum_gradient_verification` (showcase.rs) | Central differences |
+
+### tenferro-tropical
+
+Port from `tests/tropical.rs` and tropical-related tests in other files.
+
+| Pattern | omeinsum-rs test | Notes |
+|---------|-----------------|-------|
+| MaxPlus/MinPlus associativity | `test_maxplus_associativity` | Semiring axioms |
+| Distributivity | `test_tropical_distributivity` | |
+| Identity elements | `test_tropical_identity`, `test_tropical_zeros_ones` | |
+| Idempotent addition | `test_tropical_idempotent_addition` | a + a == a |
+| MaxPlus matmul | `test_tropical_matmul_maxplus` (integration.rs) | Hand-computed |
+| MinPlus matmul | `test_tropical_matmul_minplus` (integration.rs) | Hand-computed |
+| MaxPlus chain | `test_tropical_chain` (integration.rs) | |
+| Tropical unary ops | `test_tropical_unary_*` (unary_ops.rs) | trace, sum, row/col max |
+| Tropical backward | `test_backward_tropical_matmul` (backward.rs) | Sparse gradients via argmax |
+| Shortest path (MinPlus) | `test_minplus_shortest_path` | Bellman-Ford step |
+| Viterbi (MaxMul) | `test_viterbi_example` | |
 
 ### tenferro-linalg
 
