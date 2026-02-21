@@ -10,15 +10,21 @@ the CPU backend.
 ## Porting Principles
 
 1. **tenferro public API is preserved** — the existing 9 functions + AD API in
-   `tenferro-einsum` remain unchanged (except where noted: P8, P9).
-2. **strided-view, strided-kernel, strided-traits remain as dependencies** —
+   `tenferro-einsum` remain unchanged (except where noted: P8, P9, P11).
+2. **Explicit context passing** — all einsum functions receive
+   `&mut B::Context` where `B: TensorPrims<A>`.  No global/thread-local
+   state.  Follows Rust idiom of explicit ownership and mutability.
+3. **strided-view, strided-kernel, strided-traits remain as dependencies** —
    tenferro-prims uses them internally.
-3. **strided-einsum2 and strided-opteinsum logic is copied** — not used as
+4. **strided-einsum2 and strided-opteinsum logic is copied** — not used as
    dependencies; algorithms are re-implemented inside tenferro.
-4. **Backend\<T\> is absorbed into TensorPrims\<A\>** — faer/blas/naive selection
+5. **Backend\<T\> is absorbed into TensorPrims\<A\>** — faer/blas/naive selection
    happens inside CpuBackend, not via a separate trait.
-5. **No type erasure (EinsumOperand)** — tenferro uses generic `Tensor<T>`
+6. **No type erasure (EinsumOperand)** — tenferro uses generic `Tensor<T>`
    throughout.
+7. **All computation goes through TensorPrims** — einsum is a composite
+   operation that orchestrates calls to `TensorPrims::plan()`/`execute()`.
+   No direct use of strided-kernel or GEMM from the einsum layer.
 
 ---
 
@@ -85,12 +91,12 @@ The bulk of `strided-opteinsum` maps here.
 |---|---|---|---|
 | `parse_einsum(s) → EinsumCode` | `Subscripts::parse(notation)` + `ContractionTree` | `EinsumCode` split into two types | See P8 |
 | `EinsumNode` (Leaf/Contract) | `ContractionTree` internal representation | Not public | |
-| `einsum(notation, operands, size_dict)` | `einsum(subscripts, operands)` | `EinsumOperand` → `&Tensor<T>`, size_dict → separate param | See P9 |
-| `einsum_with_pool(...)` | `einsum(...)` internals | Pool managed via CpuContext | See P6 |
-| `einsum_into(notation, operands, output, α, β, ...)` | `einsum_into(subscripts, operands, α, β, output)` | Same | |
-| `einsum_into_with_pool(...)` | `einsum_into(...)` internals | Pool managed via CpuContext | |
-| `EinsumCode::evaluate(...)` | `einsum_with_plan(tree, operands)` | Via `ContractionTree` | |
-| `EinsumCode::evaluate_into(...)` | `einsum_with_plan_into(tree, operands, α, β, output)` | Same | |
+| `einsum(notation, operands, size_dict)` | `einsum(ctx, subscripts, operands)` | `EinsumOperand` → `&Tensor<T>`, size_dict → separate param, add `ctx: &mut B::Context` | See P9, P11 |
+| `einsum_with_pool(...)` | `einsum(...)` internals | Pool accessed via `ctx` | See P6 |
+| `einsum_into(notation, operands, output, α, β, ...)` | `einsum_into(ctx, subscripts, operands, α, β, output)` | Add `ctx: &mut B::Context` | See P11 |
+| `einsum_into_with_pool(...)` | `einsum_into(...)` internals | Pool accessed via `ctx` | |
+| `EinsumCode::evaluate(...)` | `einsum_with_plan(ctx, tree, operands)` | Add `ctx: &mut B::Context` | See P11 |
+| `EinsumCode::evaluate_into(...)` | `einsum_with_plan_into(ctx, tree, operands, α, β, output)` | Add `ctx: &mut B::Context` | See P11 |
 | `BufferPool` (expr.rs) | Unified pool in `CpuContext` | Type-erased, generic | See P6 |
 | `EinsumOperand` (F64/C64 enum) | Removed | — | Generic `Tensor<T>` replaces this |
 | `EinsumScalar` trait | Removed | — | `Scalar + HasAlgebra` replaces this |
@@ -208,6 +214,39 @@ trait).
 | **P8** | **Parenthesized tree notation** | **Medium** | Support parenthesized contraction order in parser.  Parser returns `Subscripts` + `Option<ContractionTree>`.  POC skeleton needs update |
 | **P9** | **Generative output (size_dict)** | **Medium** | Support `size_dict` for output labels not present in inputs.  Add parameter to tenferro-einsum public API.  POC skeleton needs update |
 | P10 | omeco dependency | Low | Add to workspace dependencies |
+| **P11** | **Explicit context passing in einsum API** | **High** | All einsum functions gain `ctx: &mut B::Context` and `B: TensorPrims<A>` type parameter.  Follows Rust idiom (explicit `&mut`, no global state).  All 9 einsum functions + AD functions (`tracked_einsum`, `einsum_rrule`, `einsum_frule`, `einsum_hvp`) need signature changes.  See revised signatures below |
+
+### Revised einsum Signatures (P11)
+
+All einsum public functions change from:
+
+```rust
+pub fn einsum<T: Scalar + HasAlgebra>(
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+) -> Result<Tensor<T>>
+```
+
+to:
+
+```rust
+pub fn einsum<T, A, B>(
+    ctx: &mut B::Context,
+    subscripts: &str,
+    operands: &[&Tensor<T>],
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = A>,
+    A: Semiring,
+    B: TensorPrims<A>,
+```
+
+This applies to all 9 variants (einsum, einsum_with_subscripts,
+einsum_with_plan, einsum_into, einsum_owned, etc.) and all AD functions
+(tracked_einsum, dual_einsum, einsum_rrule, einsum_frule, einsum_hvp).
+
+`ctx` provides access to `BufferPool` and `PlanCache` (P6, P7).
+`B` enables compile-time backend selection without global state.
 
 ### POC Skeleton Changes Required
 
@@ -220,3 +259,6 @@ implementation:
    parenthesized tree extraction (P8).
 4. **einsum public functions** — add optional `size_dict` parameter for
    generative output dimensions (P9).
+5. **einsum public functions** — add `ctx: &mut B::Context` parameter and
+   `B: TensorPrims<A>` type parameter to all 9 einsum functions + all AD
+   functions (P11).
