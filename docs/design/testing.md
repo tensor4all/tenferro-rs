@@ -201,6 +201,7 @@ to ensure individual branches are correct before testing their combination.
 For each (shape, dtype) case in the JSON, all cotangent patterns are tested automatically:
 - SVD: dU only, dV only, dS only, joint dU+dV
 - QR: joint dQ+dR
+- LU: dL only, dU only, joint dL+dU
 - Eigen: dE only, dU only
 
 **Scalar test functions per cotangent pattern (ported from BackwardsLinalg.jl):**
@@ -215,6 +216,9 @@ Reference: [GiggleLiu/BackwardsLinalg.jl](https://github.com/GiggleLiu/Backwards
 | | joint dU+dV | `real(conj(U[1,1])·V[1,1])` | Depends on U and V → tests joint path |
 | QR | joint dQ+dR | `real(v'·op·v + v2'·op2·v2)`, v=Q[:,1], v2=R[2,:] | Both Q and R contribute |
 | LQ | joint dL+dQ | same structure as QR | Both L and Q contribute |
+| LU | dL only | `real(v'·op·v)`, v=L[:,1] | Depends only on L → isolates dL |
+| | dU only | `real(v'·op·v)`, v=U[1,:] | Depends only on U → isolates dU |
+| | joint dL+dU | `real(conj(L[1,1])·U[1,1])` | Both L and U contribute |
 | Eigen | dE only | `sum(E)` | Depends only on eigenvalues |
 | | dU only | `real(v'·op·v)`, v=U[:,1] | Depends only on eigenvectors |
 
@@ -223,7 +227,6 @@ Here `H` and `op` are random Hermitian (or symmetric) matrices, generated indepe
 **Known gaps** (to be addressed in tenferro-rs):
 
 - Degenerate singular/eigenvalues (stress test for `η` regularization)
-- LU rrule (not in BackwardsLinalg.jl)
 - frule (JVP) — BackwardsLinalg.jl only covers rrule
 
 ### chainrules-core / chainrules

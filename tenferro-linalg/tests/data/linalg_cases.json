@@ -22,6 +22,14 @@
     {"shape": [4, 4], "dtype": "c64"},
     {"shape": [6, 2], "dtype": "c64"}
   ],
+  "lu": [
+    {"shape": [3, 3], "dtype": "f64"},
+    {"shape": [3, 3], "dtype": "c64"},
+    {"shape": [4, 4], "dtype": "f64"},
+    {"shape": [4, 4], "dtype": "c64"},
+    {"shape": [3, 6], "dtype": "f64"},
+    {"shape": [6, 3], "dtype": "c64"}
+  ],
   "eigen": [
     {"shape": [4, 4], "dtype": "f64", "symm": true},
     {"shape": [4, 4], "dtype": "c64", "symm": true}
