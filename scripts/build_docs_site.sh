@@ -167,7 +167,7 @@ cat <<'TOPPAGE' >"$OUT_DIR/index.html"
         <section class="card">
           <h2>Detailed Design (MD)</h2>
           <p>Canonical design document on GitHub.</p>
-          <a href="https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/tenferro_design.md">Open tenferro_design.md</a>
+          <a href="https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/README.md">Open design documents</a>
         </section>
       </div>
     </main>
