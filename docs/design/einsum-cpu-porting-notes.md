@@ -140,10 +140,10 @@ Reference sources: `strided-opteinsum` and `omeinsum-rs::einsum`.
 | `parse_einsum(s)` / omeinsum `Einsum::new()` | `Subscripts::parse(notation)` + `ContractionTree` | `EinsumCode` split into two types | See P8 |
 | `EinsumNode` / omeinsum `NestedEinsum` | `ContractionTree` internal representation | Not public | |
 | `einsum(notation, operands, size_dict)` / omeinsum `Einsum::execute()` | `einsum(ctx, subscripts, operands)` | Add `ctx: &mut B::Context` | See P9, P11 |
-| `einsum_with_pool(...)` | `einsum(...)` internals | Pool accessed via `ctx` | See P6 |
+| `einsum_with_pool(...)` | `einsum(...)` internals | Pool removed; global allocator handles reuse | — |
 | `einsum_into(...)` | `einsum_into(ctx, subscripts, operands, α, β, output)` | Add `ctx: &mut B::Context` | See P11 |
 | `EinsumCode::evaluate(...)` / omeinsum tree evaluation | `einsum_with_plan(ctx, tree, operands)` | Add `ctx: &mut B::Context` | See P11 |
-| `BufferPool` (expr.rs) | Unified pool in `CpuContext` | Type-erased, generic | See P6 |
+| `BufferPool` (expr.rs) | Removed | — | Global allocator (mimalloc/jemalloc) handles reuse |
 | `EinsumOperand` (F64/C64 enum) | Removed | — | Generic `Tensor<T>` replaces this |
 | `single_tensor_einsum(...)` / omeinsum `execute_unary_naive()` | Internal function in tenferro-einsum | Via TensorPrims | See P7 |
 | parse.rs | `Subscripts::parse()` + tree extraction | Parenthesized notation | See P8 |
@@ -153,8 +153,7 @@ Reference sources: `strided-opteinsum` and `omeinsum-rs::einsum`.
 
 **EinsumOperand → Tensor\<T\>**: strided-opteinsum dispatches at runtime via
 `EinsumOperand` (F64/C64 enum).  tenferro resolves at compile time via
-generic `Tensor<T>`.  The `BufferPool` becomes generic too (type-erased
-internally via `TypeId`).
+generic `Tensor<T>`.
 
 **EinsumCode → Subscripts + ContractionTree**: strided-opteinsum's
 `EinsumCode { root: EinsumNode, output_ids }` stores tree structure and
@@ -169,39 +168,21 @@ tenferro-einsum's `Cargo.toml`.  See P10.
 
 ## Cross-Cutting Concerns
 
-### Buffer Pool (Unified Design)
+### Allocation Strategy
 
-**Placement**: Unified `BufferPool` in `CpuContext` (alongside `PlanCache`).
+No custom `BufferPool`. Intermediate buffer allocation (GEMM contiguous
+buffers, N-ary einsum intermediates) uses standard `Vec<T>` with the
+global allocator. A performant global allocator (mimalloc, jemalloc) provides
+thread-local free lists and size-class caching, achieving similar reuse
+without manual pool management.
 
 ```
 CpuContext
-  ├── BufferPool          (type-erased, runtime on/off)
   └── PlanCache           (keyed by PrimDescriptor + shapes)
 ```
 
-**Design sketch**:
-
-```rust
-pub struct BufferPool {
-    pools: HashMap<TypeId, Box<dyn Any>>,  // TypeId → Vec<Vec<T>>
-    enabled: bool,
-    max_per_type: usize,    // e.g., 16
-    max_bytes: usize,       // e.g., 64 MB
-}
-
-impl BufferPool {
-    pub fn acquire<T: 'static>(&mut self, len: usize) -> Vec<T> { ... }
-    pub fn recycle<T: 'static>(&mut self, vec: Vec<T>) { ... }
-    pub fn set_enabled(&mut self, enabled: bool) { ... }
-}
-```
-
-**Usage sites**:
-
-| Purpose | Reference origin | tenferro target |
-|---|---|---|
-| GEMM contiguous buffers | `contiguous.rs` thread-local pool | `CpuBackend::execute()` via `CpuContext.pool` |
-| N-ary intermediate tensors | `BufferPool` (expr.rs) | `einsum_with_plan()` via `CpuContext.pool` |
+GPU backends may need a device-memory pool (cudaMalloc is expensive),
+but that is separate from CPU allocation.
 
 ### Unsafe Code Inventory
 
@@ -210,7 +191,7 @@ All unsafe code is confined to `CpuBackend` internals.  No unsafe in public API.
 | Origin file | Content | Target | Risk |
 |---|---|---|---|
 | `bgemm_naive.rs` | Pointer offset read/write (innermost loop) | `CpuBackend` internal | Low: well-tested in strided-rs |
-| `contiguous.rs` | `Vec::set_len()` (uninit buffer) | `BufferPool::acquire()` | Medium: caller must write all elements |
+| `contiguous.rs` | `Vec::set_len()` (uninit buffer) | `CpuBackend` internal | Medium: caller must write all elements |
 | `contiguous.rs` | `StridedArray::col_major_from_buffer_uninit()` | `CpuBackend` internal | Low: strided-view API |
 | `bgemm_blas.rs` | FFI calls (`cblas_sys::dgemm` etc.) | `CpuBackend` (blas feature) | Low: standard FFI |
 | `bgemm_blas.rs` | `extern "C" fn` fallback registration | `CpuBackend` (blas-inject feature) | Low |
@@ -244,9 +225,9 @@ trait).
 | ~~P1~~ | ~~MakeContiguous placement~~ | — | **Resolved**: Add `PrimDescriptor::MakeContiguous` |
 | P2 | Unsafe code (bgemm_naive, contiguous) | Medium | Confine to CpuBackend internals.  Review during copy |
 | P3 | Conjugation dispatch change | Medium | CPU: use strided-view's `Conj` op internally when building StridedView. GPU: lazy conjugation via cuTENSOR `CUTENSOR_OP_CONJ`. Standalone `conj()` requires CPU transfer for GPU tensors |
-| ~~P4~~ | ~~Thread-local buffer pool~~ | — | Merged into P6 |
+| ~~P4~~ | ~~Thread-local buffer pool~~ | — | ~~Merged into P6~~ → Removed (global allocator) |
 | P5 | Algebra-specific dispatch (tropical, etc.) | Medium | `Standard` → faer/blas.  Non-Standard → naive fallback.  Dispatch on `A: Semiring` bounds |
-| **P6** | **Unified BufferPool** | **High** | Type-erased unified pool in `CpuContext`.  Runtime on/off toggle.  Serves both contiguous buffers and N-ary intermediates |
+| ~~P6~~ | ~~Unified BufferPool~~ | — | **Removed**: Global allocator (mimalloc/jemalloc) handles intermediate buffer reuse. No custom pool needed for CPU. GPU device-memory pool is separate |
 | **P7** | **single_tensor_einsum via prims** | **Medium** | Route all steps (diag, trace, permute, broadcast, anti-diag) through `TensorPrims`.  Cache plans in `CpuContext.PlanCache` keyed by `(PrimDescriptor, shapes)` to avoid repeated plan generation |
 | **P8** | **Parenthesized tree notation** | **Medium** | Support parenthesized contraction order in parser.  Parser returns `Subscripts` + `Option<ContractionTree>`.  POC skeleton needs update |
 | **P9** | **Generative output (size_dict)** | **Medium** | Support `size_dict` for output labels not present in inputs.  Add parameter to tenferro-einsum public API.  POC skeleton needs update |
@@ -284,7 +265,7 @@ This applies to all 9 variants (einsum, einsum_with_subscripts,
 einsum_with_plan, einsum_into, einsum_owned, etc.) and all AD functions
 (tracked_einsum, dual_einsum, einsum_rrule, einsum_frule, einsum_hvp).
 
-`ctx` provides access to `BufferPool` and `PlanCache` (P6, P7).
+`ctx` provides access to `PlanCache` (P7).
 `B` enables compile-time backend selection without global state.
 
 ### POC Skeleton Changes Required
@@ -293,7 +274,7 @@ The following changes to the existing API skeleton are needed before
 implementation:
 
 1. **`PrimDescriptor` enum** — add `MakeContiguous` variant (P1).
-2. **`CpuContext` struct** — add `BufferPool` and `PlanCache` fields (P6, P7).
+2. **`CpuContext` struct** — add `PlanCache` field (P7).
 3. **`Subscripts::parse()`** — return type or companion function for
    parenthesized tree extraction (P8).
 4. **einsum public functions** — add optional `size_dict` parameter for

@@ -49,7 +49,7 @@ The einsum layer queries `has_extension_for(Extension::Contract)`:
 - **Not available**: fall back to core ops decomposition (Approach B).
 
 Backend advantages:
-- CPU: `try_fuse_group` copy elision, HPTT copy, buffer pooling
+- CPU: `try_fuse_group` copy elision, HPTT copy, global allocator reuse
 - GPU: maps directly to `cutensorContract` (single kernel launch)
 
 ### Approach B: `permute_view` + `MakeContiguous` + `BatchedGemm`

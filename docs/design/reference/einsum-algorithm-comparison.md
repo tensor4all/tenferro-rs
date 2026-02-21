@@ -89,7 +89,8 @@ Simpler matricization pipeline:
 
 - **Buffer pool** (`BufferPool`): HashMap-indexed free lists keyed by buffer
   size. Freed buffers are returned to the pool after each pairwise contraction;
-  subsequent intermediates reuse them.
+  subsequent intermediates reuse them. *(Not adopted in tenferro — global
+  allocator (mimalloc/jemalloc) provides equivalent reuse.)*
 
 - **Final contraction writes directly into user's output** via
   `execute_nested_into()` — no extra allocation for the root node.
@@ -114,7 +115,7 @@ Simpler matricization pipeline:
 |--------|-----------|-------------|--------------------------|
 | Borrowed-view passthrough | Yes (Leaf → borrow) | No (Leaf → Arc clone) | **Adopt** borrowed views (→ tenferro-einsum) |
 | Permutation-only detection | Yes (metadata-only) | No | **Adopt** permutation detection (→ tenferro-einsum, uses zero-copy `Tensor::permute`) |
-| Buffer pool | HashMap by size | None | **Adopt** as opt-in option (→ tenferro-einsum) |
+| Buffer pool | HashMap by size | None | **Not adopted** — global allocator (mimalloc/jemalloc) handles reuse |
 | Root writes into user output | Yes (`execute_nested_into`) | No | **Adopt** direct root write (→ tenferro-einsum) |
 | Contraction optimizer | omeco greedy | omeco greedy + TreeSA | **Adopt** both optimizers (→ tenferro-einsum) |
 | Unoptimized fallback | 3+ child → inline optimize | Left-to-right pairwise | Either acceptable |

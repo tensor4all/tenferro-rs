@@ -452,72 +452,6 @@ pub enum CpuPlan<T: ScalarBase> {
     MakeContiguous { _marker: PhantomData<T> },
 }
 
-/// Type-erased buffer pool for reusing allocations across operations.
-///
-/// Stores recycled `Vec<T>` buffers keyed by `TypeId`, avoiding repeated
-/// heap allocation in hot loops (e.g., N-ary contraction intermediates
-/// and GEMM contiguous buffers).
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_prims::BufferPool;
-///
-/// let mut pool = BufferPool::new();
-/// let buf: Vec<f64> = pool.acquire(1024);
-/// // ... use buf ...
-/// pool.recycle(buf);
-/// ```
-pub struct BufferPool {
-    pools: HashMap<std::any::TypeId, Box<dyn Any>>,
-    enabled: bool,
-    max_per_type: usize,
-    max_bytes: usize,
-}
-
-impl BufferPool {
-    /// Create a new buffer pool with default limits.
-    pub fn new() -> Self {
-        Self {
-            pools: HashMap::new(),
-            enabled: true,
-            max_per_type: 16,
-            max_bytes: 64 * 1024 * 1024, // 64 MB
-        }
-    }
-
-    /// Acquire a buffer of at least `len` elements.
-    ///
-    /// If a suitable recycled buffer exists, it is returned.
-    /// Otherwise, a new `Vec<T>` is allocated.
-    pub fn acquire<T: 'static>(&mut self, _len: usize) -> Vec<T> {
-        todo!()
-    }
-
-    /// Return a buffer to the pool for future reuse.
-    pub fn recycle<T: 'static>(&mut self, _buf: Vec<T>) {
-        todo!()
-    }
-
-    /// Enable or disable the pool at runtime.
-    ///
-    /// When disabled, `acquire` always allocates and `recycle` drops.
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-    }
-
-    /// Returns whether the pool is currently enabled.
-    pub fn is_enabled(&self) -> bool {
-        self.enabled
-    }
-}
-
-impl Default for BufferPool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Cache for pre-computed execution plans, keyed by `(PrimDescriptor, shapes)`.
 ///
 /// Avoids repeated plan generation when the same operation is executed
@@ -554,8 +488,9 @@ impl Default for PlanCache {
 /// CPU execution context.
 ///
 /// Encapsulates CPU-side execution resources, analogous to cuTENSOR's
-/// `cutensorHandle_t`. Holds a rayon thread pool, a [`BufferPool`] for
-/// allocation reuse, and a [`PlanCache`] for plan reuse.
+/// `cutensorHandle_t`. Holds a rayon thread pool and a [`PlanCache`]
+/// for plan reuse. Intermediate buffer allocation relies on the global
+/// allocator (e.g., mimalloc/jemalloc) rather than a custom buffer pool.
 ///
 /// # Examples
 ///
@@ -564,11 +499,9 @@ impl Default for PlanCache {
 ///
 /// let mut ctx = CpuContext::new(4); // 4-thread pool
 /// assert_eq!(ctx.num_threads(), 4);
-/// assert!(ctx.buffer_pool().is_enabled());
 /// ```
 pub struct CpuContext {
     pool: rayon::ThreadPool,
-    buffer_pool: BufferPool,
     plan_cache: PlanCache,
 }
 
@@ -581,7 +514,6 @@ impl CpuContext {
             .expect("failed to build rayon thread pool");
         Self {
             pool,
-            buffer_pool: BufferPool::new(),
             plan_cache: PlanCache::new(),
         }
     }
@@ -594,16 +526,6 @@ impl CpuContext {
     /// Returns a reference to the underlying rayon thread pool.
     pub fn thread_pool(&self) -> &rayon::ThreadPool {
         &self.pool
-    }
-
-    /// Returns a reference to the buffer pool.
-    pub fn buffer_pool(&self) -> &BufferPool {
-        &self.buffer_pool
-    }
-
-    /// Returns a mutable reference to the buffer pool.
-    pub fn buffer_pool_mut(&mut self) -> &mut BufferPool {
-        &mut self.buffer_pool
     }
 
     /// Returns a mutable reference to the plan cache.
