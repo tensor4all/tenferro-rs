@@ -119,6 +119,14 @@ use tenferro_device::{ComputeDevice, LogicalMemorySpace, OpKind, Result};
 ///   (Fortran/Julia convention)
 /// - [`RowMajor`](MemoryOrder::RowMajor): Last dimension is contiguous
 ///   (C/NumPy convention)
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::MemoryOrder;
+///
+/// let order = MemoryOrder::RowMajor;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryOrder {
     /// Column-major (Fortran/Julia order). First dimension has stride 1.
@@ -146,6 +154,15 @@ pub enum MemoryOrder {
 /// - `conj()` is lazy (shared buffer + flag flip, O(1))
 /// - Deep copy (actual data duplication) uses prims `Permute(identity)`
 ///   or dedicated operations
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::DataBuffer;
+///
+/// let buf = DataBuffer::<f64>::from_vec(vec![1.0, 2.0, 3.0]);
+/// assert_eq!(buf.len(), 3);
+/// ```
 pub struct DataBuffer<T> {
     inner: Arc<BufferInner<T>>,
 }
@@ -271,6 +288,15 @@ impl<T> DataBuffer<T> {
     /// Returns `None` for GPU buffers — device pointers are not
     /// dereferenceable from the CPU. Use [`as_device_ptr`](DataBuffer::as_device_ptr)
     /// to obtain a GPU device pointer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0, 2.0, 3.0]);
+    /// assert_eq!(buf.as_slice(), Some(&[1.0, 2.0, 3.0][..]));
+    /// ```
     pub fn as_slice(&self) -> Option<&[T]> {
         match &*self.inner {
             BufferInner::Owned(v) => Some(v.as_slice()),
@@ -285,6 +311,18 @@ impl<T> DataBuffer<T> {
     ///
     /// Returns `None` if the buffer is shared (Arc refcount > 1),
     /// externally-owned, or GPU.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let mut buf = DataBuffer::from_vec(vec![1.0, 2.0]);
+    /// if let Some(slice) = buf.as_mut_slice() {
+    ///     slice[0] = 42.0;
+    /// }
+    /// assert_eq!(buf.as_slice().unwrap()[0], 42.0);
+    /// ```
     pub fn as_mut_slice(&mut self) -> Option<&mut [T]> {
         match Arc::get_mut(&mut self.inner)? {
             BufferInner::Owned(v) => Some(v.as_mut_slice()),
@@ -293,6 +331,15 @@ impl<T> DataBuffer<T> {
     }
 
     /// Returns the number of elements in the buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0, 2.0, 3.0]);
+    /// assert_eq!(buf.len(), 3);
+    /// ```
     pub fn len(&self) -> usize {
         match &*self.inner {
             BufferInner::Owned(v) => v.len(),
@@ -301,26 +348,73 @@ impl<T> DataBuffer<T> {
     }
 
     /// Returns `true` if the buffer has no elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::<f64>::from_vec(vec![]);
+    /// assert!(buf.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
     /// Returns `true` if the buffer is Rust-owned (backed by `Vec<T>`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0f64]);
+    /// assert!(buf.is_owned());
+    /// ```
     pub fn is_owned(&self) -> bool {
         matches!(&*self.inner, BufferInner::Owned(_))
     }
 
     /// Returns `true` if the buffer resides on GPU device memory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0f64]);
+    /// assert!(!buf.is_gpu());
+    /// ```
     pub fn is_gpu(&self) -> bool {
         matches!(&*self.inner, BufferInner::Gpu { .. })
     }
 
     /// Returns `true` if this is the only reference to the underlying buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0f64]);
+    /// assert!(buf.is_unique());
+    /// let buf2 = buf.clone(); // Arc clone
+    /// assert!(!buf.is_unique());
+    /// ```
     pub fn is_unique(&self) -> bool {
         Arc::strong_count(&self.inner) == 1
     }
 
     /// Returns a raw CPU pointer to the data, or `None` for GPU buffers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0f64]);
+    /// assert!(buf.as_ptr().is_some());
+    /// ```
     pub fn as_ptr(&self) -> Option<*const T> {
         match &*self.inner {
             BufferInner::Owned(v) => Some(v.as_ptr()),
@@ -334,6 +428,15 @@ impl<T> DataBuffer<T> {
     /// The returned pointer is a GPU device pointer — it MUST NOT be
     /// dereferenced from the CPU. It is only valid as an argument to
     /// GPU API calls (cuTENSOR, hipTENSOR, cudaMemcpy, etc.).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0f64]);
+    /// assert!(buf.as_device_ptr().is_none()); // CPU buffer
+    /// ```
     pub fn as_device_ptr(&self) -> Option<*const T> {
         match &*self.inner {
             BufferInner::Gpu { device_ptr, .. } => Some(*device_ptr as *const T),
@@ -342,6 +445,15 @@ impl<T> DataBuffer<T> {
     }
 
     /// Returns the logical memory space of a GPU buffer, or `None` for CPU buffers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::DataBuffer;
+    ///
+    /// let buf = DataBuffer::from_vec(vec![1.0f64]);
+    /// assert!(buf.gpu_memory_space().is_none()); // CPU buffer
+    /// ```
     pub fn gpu_memory_space(&self) -> Option<LogicalMemorySpace> {
         match &*self.inner {
             BufferInner::Gpu { space, .. } => Some(*space),
@@ -382,6 +494,16 @@ impl<T> DataBuffer<T> {
 /// For CPU tensors, `event` is always `None` with zero overhead.
 ///
 /// See `tenferro-einsum` crate docs for async chaining examples.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::Tensor;
+///
+/// let t = Tensor::<f64>::zeros(&[2, 3]);
+/// assert_eq!(t.dims(), &[2, 3]);
+/// assert_eq!(t.len(), 6);
+/// ```
 pub struct Tensor<T: Scalar> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
@@ -417,6 +539,16 @@ pub struct Tensor<T: Scalar> {
 /// The crate-internal `as_operand_view()` skips the wait and
 /// propagates the pending event, allowing accelerator operations to chain
 /// without CPU synchronization.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::Tensor;
+///
+/// let t = Tensor::<f64>::zeros(&[2, 3]);
+/// let view = t.tensor_view();
+/// assert_eq!(view.ndim(), 2);
+/// ```
 pub struct TensorView<'a, T: Scalar> {
     data: &'a DataBuffer<T>,
     dims: Vec<usize>,
@@ -434,41 +566,103 @@ pub struct TensorView<'a, T: Scalar> {
 
 impl<'a, T: Scalar> TensorView<'a, T> {
     /// Returns the shape (size of each dimension).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let view = t.tensor_view();
+    /// assert_eq!(view.dims(), &[3, 4]);
+    /// ```
     pub fn dims(&self) -> &[usize] {
         &self.dims
     }
 
     /// Returns the strides (in units of `T`).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// let strides = view.strides();
+    /// ```
     pub fn strides(&self) -> &[isize] {
         &self.strides
     }
 
     /// Returns the number of dimensions (rank).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// assert_eq!(view.ndim(), 2);
+    /// ```
     pub fn ndim(&self) -> usize {
         self.dims.len()
     }
 
     /// Returns the logical memory space where the source tensor's data resides.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let view = tensor.tensor_view();
+    /// assert_eq!(view.logical_memory_space(), LogicalMemorySpace::MainMemory);
+    /// ```
     pub fn logical_memory_space(&self) -> LogicalMemorySpace {
         self.logical_memory_space
     }
 
     /// Returns the preferred compute device override, if set.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// assert!(view.preferred_compute_device().is_none());
+    /// ```
     pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
         self.preferred_compute_device
     }
 
     /// Returns a reference to the underlying data buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// let buf = view.buffer();
+    /// ```
     pub fn buffer(&self) -> &DataBuffer<T> {
         self.data
     }
 
     /// Returns the element offset into the data buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// assert_eq!(view.offset(), 0);
+    /// ```
     pub fn offset(&self) -> isize {
         self.offset
     }
 
     /// Returns `true` if the source tensor is logically conjugated (lazy).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// assert!(!view.is_conjugated());
+    /// ```
     pub fn is_conjugated(&self) -> bool {
         self.conjugated
     }
@@ -484,6 +678,13 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// # Errors
     ///
     /// Returns an error if `perm` is not a valid permutation of `0..ndim()`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view(); // shape [3, 4]
+    /// let transposed = view.permute(&[1, 0]).unwrap(); // shape [4, 3]
+    /// ```
     pub fn permute(&self, _perm: &[usize]) -> Result<TensorView<'a, T>> {
         todo!()
     }
@@ -496,6 +697,13 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     /// # Errors
     ///
     /// Returns an error if `target_dims` is incompatible with the current shape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view(); // shape [1, 4]
+    /// let expanded = view.broadcast(&[3, 4]).unwrap(); // shape [3, 4]
+    /// ```
     pub fn broadcast(&self, _target_dims: &[usize]) -> Result<TensorView<'a, T>> {
         todo!()
     }
@@ -506,6 +714,13 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     ///
     /// Returns an error if any axis is out of range or paired dimensions
     /// have different sizes.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view(); // shape [3, 3]
+    /// let diag = view.diagonal(&[(0, 1)]).unwrap(); // shape [3]
+    /// ```
     pub fn diagonal(&self, _axes: &[(usize, usize)]) -> Result<TensorView<'a, T>> {
         todo!()
     }
@@ -568,11 +783,25 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     // ========================================================================
 
     /// Copy this view into an owned [`Tensor`].
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// let owned = view.to_tensor(MemoryOrder::ColumnMajor);
+    /// ```
     pub fn to_tensor(&self, _order: MemoryOrder) -> Tensor<T> {
         todo!()
     }
 
     /// Return a contiguous copy of this view's data.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// let contig = view.contiguous(MemoryOrder::ColumnMajor);
+    /// ```
     pub fn contiguous(&self, _order: MemoryOrder) -> Tensor<T> {
         todo!()
     }
@@ -581,6 +810,14 @@ impl<'a, T: Scalar> TensorView<'a, T> {
     ///
     /// Does not copy data. The conjugation is applied by backends
     /// when this view is used in operations.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let view = tensor.tensor_view();
+    /// let conjugated = view.conj();
+    /// assert!(conjugated.is_conjugated());
+    /// ```
     pub fn conj(&self) -> TensorView<'a, T> {
         TensorView {
             data: self.data,
@@ -607,6 +844,15 @@ impl<'a, T: Scalar> TensorView<'a, T> {
 /// GPU event handles are opaque pointers — the actual synchronization
 /// (cudaEventSynchronize / hipEventSynchronize) will be implemented
 /// when GPU backends are added.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::CompletionEvent;
+///
+/// // CompletionEvent is typically created by GPU backends.
+/// // CPU tensors use event = None (no pending operation).
+/// ```
 #[derive(Clone)]
 pub struct CompletionEvent {
     inner: CompletionEventInner,
@@ -693,6 +939,16 @@ impl<T: Scalar> Tensor<T> {
     /// * `dims` — Shape of the tensor
     /// * `memory_space` — Logical memory space for the allocation
     /// * `order` — Memory layout for the new allocation
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::ones(&[2, 3],
+    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// ```
     pub fn ones(_dims: &[usize], _memory_space: LogicalMemorySpace, _order: MemoryOrder) -> Self {
         todo!()
     }
@@ -706,6 +962,15 @@ impl<T: Scalar> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if `data.len()` does not match the product of `dims`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    ///
+    /// let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    /// let t = Tensor::<f64>::from_slice(&data, &[2, 3], MemoryOrder::ColumnMajor).unwrap();
+    /// ```
     pub fn from_slice(_data: &[T], _dims: &[usize], _order: MemoryOrder) -> Result<Self> {
         todo!()
     }
@@ -761,51 +1026,123 @@ impl<T: Scalar> Tensor<T> {
     // ========================================================================
 
     /// Returns the shape (size of each dimension).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// assert_eq!(t.dims(), &[3, 4]);
+    /// ```
     pub fn dims(&self) -> &[usize] {
         &self.dims
     }
 
     /// Returns the strides (in units of `T`).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// let strides = t.strides();
+    /// ```
     pub fn strides(&self) -> &[isize] {
         &self.strides
     }
 
     /// Returns the element offset into the data buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// assert_eq!(t.offset(), 0);
+    /// ```
     pub fn offset(&self) -> isize {
         self.offset
     }
 
     /// Returns a reference to the underlying data buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// let buf = t.buffer();
+    /// ```
     pub fn buffer(&self) -> &DataBuffer<T> {
         &self.buffer
     }
 
     /// Returns a mutable reference to the underlying data buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let mut t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// let buf = t.buffer_mut();
+    /// ```
     pub fn buffer_mut(&mut self) -> &mut DataBuffer<T> {
         &mut self.buffer
     }
 
     /// Returns the number of dimensions (rank).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// assert_eq!(t.ndim(), 2);
+    /// ```
     pub fn ndim(&self) -> usize {
         self.dims.len()
     }
 
     /// Returns the total number of elements.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// assert_eq!(t.len(), 12);
+    /// ```
     pub fn len(&self) -> usize {
         todo!()
     }
 
     /// Returns `true` if the tensor has zero elements.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[0, 4], mem, col);
+    /// assert!(t.is_empty());
+    /// ```
     pub fn is_empty(&self) -> bool {
         todo!()
     }
 
     /// Returns the logical memory space where this tensor's data resides.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+    /// assert_eq!(t.logical_memory_space(), LogicalMemorySpace::MainMemory);
+    /// ```
     pub fn logical_memory_space(&self) -> LogicalMemorySpace {
         self.logical_memory_space
     }
 
     /// Returns the preferred compute device override, if set.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// assert!(t.preferred_compute_device().is_none());
+    /// ```
     pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
         self.preferred_compute_device
     }
@@ -816,6 +1153,15 @@ impl<T: Scalar> Tensor<T> {
     /// instead of the default device selected by
     /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
     /// Pass `None` to clear the override and revert to automatic selection.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::ComputeDevice;
+    ///
+    /// let mut t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// t.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 0 }));
+    /// ```
     pub fn set_preferred_compute_device(&mut self, device: Option<ComputeDevice>) {
         self.preferred_compute_device = device;
     }
@@ -824,6 +1170,13 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// GPU backends (cuTENSOR/hipTENSOR) read this flag when building
     /// tensor descriptors to set `CUTENSOR_OP_CONJ` / `HIPTENSOR_OP_CONJ`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// assert!(!t.is_conjugated());
+    /// ```
     pub fn is_conjugated(&self) -> bool {
         self.conjugated
     }
@@ -837,6 +1190,15 @@ impl<T: Scalar> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if no compatible compute device is found.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::OpKind;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// let devices = t.effective_compute_devices(OpKind::BatchedGemm).unwrap();
+    /// ```
     pub fn effective_compute_devices(
         &self,
         _op_kind: OpKind,
@@ -852,6 +1214,17 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Waits for any pending accelerator computation before returning.
     /// The returned view has `event = None` (data is ready to read).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let view = t.tensor_view();
+    /// assert_eq!(view.ndim(), 2);
+    /// ```
     pub fn tensor_view(&self) -> TensorView<'_, T> {
         self.wait();
         TensorView {
@@ -896,6 +1269,13 @@ impl<T: Scalar> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if `perm` is not a valid permutation of `0..ndim()`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col); // [3, 4]
+    /// let transposed = t.permute(&[1, 0]).unwrap();    // [4, 3]
+    /// ```
     pub fn permute(&self, _perm: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
@@ -908,6 +1288,17 @@ impl<T: Scalar> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if `target_dims` is incompatible with the current shape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let b = t.broadcast(&[4, 3]).unwrap();
+    /// assert_eq!(b.dims(), &[4, 3]);
+    /// ```
     pub fn broadcast(&self, _target_dims: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
@@ -921,6 +1312,18 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Returns an error if any axis is out of range or the paired
     /// dimensions have different sizes.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// // Extract the main diagonal by merging axes 0 and 1
+    /// let d = t.diagonal(&[(0, 1)]).unwrap();
+    /// assert_eq!(d.dims(), &[3]);
+    /// ```
     pub fn diagonal(&self, _axes: &[(usize, usize)]) -> Result<Tensor<T>> {
         todo!()
     }
@@ -934,6 +1337,17 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Returns an error if the tensor is not contiguous or the new shape
     /// has a different total element count.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let r = t.reshape(&[6]).unwrap();
+    /// assert_eq!(r.dims(), &[6]);
+    /// ```
     pub fn reshape(&self, _new_dims: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
@@ -998,6 +1412,17 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// If the tensor is already contiguous in the requested order,
     /// this may avoid copying (implementation-defined).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let c = t.contiguous(MemoryOrder::RowMajor);
+    /// assert!(c.is_contiguous());
+    /// ```
     pub fn contiguous(&self, _order: MemoryOrder) -> Tensor<T> {
         todo!()
     }
@@ -1048,6 +1473,15 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// A tensor is contiguous if its elements occupy a dense block of
     /// memory with no gaps, in either column-major or row-major order.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// assert!(t.is_contiguous());
+    /// ```
     pub fn is_contiguous(&self) -> bool {
         todo!()
     }
@@ -1099,6 +1533,16 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Like [`conj`](Tensor::conj) but consumes `self`, avoiding the
     /// Arc refcount increment when the original is no longer needed.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let tc = t.into_conj();
+    /// assert!(tc.is_conjugated());
+    /// ```
     pub fn into_conj(self) -> Tensor<T>
     where
         T: Conjugate,
@@ -1178,6 +1622,16 @@ impl<T: Scalar> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if the transfer is not supported.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let t2 = t.to_memory_space_async(LogicalMemorySpace::MainMemory).unwrap();
+    /// ```
     pub fn to_memory_space_async(&self, _target: LogicalMemorySpace) -> Result<Tensor<T>> {
         todo!()
     }
@@ -1218,6 +1672,16 @@ impl<T: Scalar> Tensor<T> {
     /// Returns `true` for CPU tensors (always ready) and for GPU tensors
     /// whose computation has completed. Returns `false` if a GPU operation
     /// is still in progress.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// // CPU tensors are always ready.
+    /// assert!(t.is_ready());
+    /// ```
     pub fn is_ready(&self) -> bool {
         self.event.is_none()
     }
@@ -1230,10 +1694,33 @@ impl<T: Scalar> Tensor<T> {
 impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     type Tangent = Tensor<T>;
 
+    /// Returns a zero tangent tensor with the same shape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    /// use chainrules_core::Differentiable;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let zt = t.zero_tangent();
+    /// ```
     fn zero_tangent(&self) -> Tensor<T> {
         todo!()
     }
 
+    /// Accumulates a tangent into this tensor (in-place addition).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    /// use chainrules_core::Differentiable;
+    ///
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let tangent = Tensor::<f64>::zeros(&[2, 3]);
+    /// t.accumulate_tangent(&tangent);
+    /// ```
     fn accumulate_tangent(_a: Tensor<T>, _b: &Tensor<T>) -> Tensor<T> {
         todo!()
     }

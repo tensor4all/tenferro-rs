@@ -98,6 +98,15 @@ impl fmt::Display for ComputeDevice {
 
 /// Classification of tensor operations, used to query preferred compute
 /// devices for a given operation on a given memory space.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_device::OpKind;
+///
+/// let op = OpKind::BatchedGemm;
+/// assert_eq!(format!("{op:?}"), "BatchedGemm");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum OpKind {
     /// General tensor contraction.
@@ -146,6 +155,15 @@ pub fn preferred_compute_devices(
 }
 
 /// Error type used across the tenferro workspace.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_device::Error;
+///
+/// let err = Error::InvalidArgument("bad index".into());
+/// assert!(err.to_string().contains("bad index"));
+/// ```
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Tensor shapes are incompatible for the requested operation.
@@ -200,4 +218,15 @@ pub enum Error {
 }
 
 /// Result type alias using [`Error`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_device::Result;
+///
+/// fn compute() -> Result<usize> {
+///     Ok(42)
+/// }
+/// assert_eq!(compute().unwrap(), 42);
+/// ```
 pub type Result<T> = std::result::Result<T, Error>;
