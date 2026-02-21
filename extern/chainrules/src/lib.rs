@@ -11,8 +11,6 @@
 //! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate
 //! that defines the operation. See `tenferro-einsum` for einsum AD functions.
 //!
-//! Bodies are intentionally `todo!()` in the current POC phase.
-//!
 //! # Examples
 //!
 //! Reverse-mode usage (with operation-specific AD functions from other crates):
@@ -79,7 +77,35 @@
 // Re-export all core traits so downstream can depend on just `chainrules`.
 pub use chainrules_core::*;
 
+use std::cell::RefCell;
 use std::marker::PhantomData;
+use std::rc::Rc;
+
+// ============================================================================
+// Internal tape storage
+// ============================================================================
+
+/// A single node in the tape graph.
+struct TapeNode<V: Differentiable> {
+    /// None for leaf nodes, Some for operation nodes.
+    rule: Option<Box<dyn ReverseRule<V>>>,
+    /// Tangent for HVP (set on leaves via leaf_with_tangent, or computed
+    /// for operation outputs during record_op). Reserved for future use by
+    /// AD-aware operation functions that need to access saved tangents.
+    #[allow(dead_code)]
+    tangent: Option<V::Tangent>,
+    /// Whether this node is a leaf (created via Tape::leaf).
+    is_leaf: bool,
+}
+
+/// Internal shared tape state.
+struct TapeInner<V: Differentiable> {
+    nodes: Vec<TapeNode<V>>,
+}
+
+// ============================================================================
+// Tape
+// ============================================================================
 
 /// Reverse-mode AD tape.
 ///
@@ -119,7 +145,7 @@ use std::marker::PhantomData;
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
 pub struct Tape<V: Differentiable> {
-    _marker: PhantomData<V>,
+    inner: Rc<RefCell<TapeInner<V>>>,
 }
 
 impl<V: Differentiable> Tape<V> {
@@ -127,14 +153,14 @@ impl<V: Differentiable> Tape<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use chainrules::Tape;
     ///
     /// let tape = Tape::<f64>::new();
     /// ```
     pub fn new() -> Self {
         Self {
-            _marker: PhantomData,
+            inner: Rc::new(RefCell::new(TapeInner { nodes: Vec::new() })),
         }
     }
 
@@ -145,15 +171,28 @@ impl<V: Differentiable> Tape<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use chainrules::Tape;
     ///
     /// let tape = Tape::<f64>::new();
     /// let x = tape.leaf(3.14);
     /// assert!(x.requires_grad());
     /// ```
-    pub fn leaf(&self, _value: V) -> TrackedTensor<V> {
-        todo!()
+    pub fn leaf(&self, value: V) -> TrackedTensor<V> {
+        let mut inner = self.inner.borrow_mut();
+        let node_id = NodeId::new(inner.nodes.len());
+        inner.nodes.push(TapeNode {
+            rule: None,
+            tangent: None,
+            is_leaf: true,
+        });
+        TrackedTensor {
+            value,
+            node_id: Some(node_id),
+            tape: Some(self.clone()),
+            requires_grad: true,
+            tangent: None,
+        }
     }
 
     /// Creates a leaf value with a tangent for HVP computation.
@@ -167,7 +206,7 @@ impl<V: Differentiable> Tape<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use chainrules::Tape;
     ///
     /// let tape = Tape::<f64>::new();
@@ -175,8 +214,53 @@ impl<V: Differentiable> Tape<V> {
     /// assert!(x.requires_grad());
     /// assert!(x.has_tangent());
     /// ```
-    pub fn leaf_with_tangent(&self, _value: V, _tangent: V::Tangent) -> AdResult<TrackedTensor<V>> {
-        todo!()
+    pub fn leaf_with_tangent(&self, value: V, tangent: V::Tangent) -> AdResult<TrackedTensor<V>> {
+        let mut inner = self.inner.borrow_mut();
+        let node_id = NodeId::new(inner.nodes.len());
+        inner.nodes.push(TapeNode {
+            rule: None,
+            tangent: Some(tangent.clone()),
+            is_leaf: true,
+        });
+        Ok(TrackedTensor {
+            value,
+            node_id: Some(node_id),
+            tape: Some(self.clone()),
+            requires_grad: true,
+            tangent: Some(tangent),
+        })
+    }
+
+    /// Records an operation on the tape, returning a tracked output.
+    ///
+    /// Called by AD-aware functions (e.g., `tracked_einsum`) to register
+    /// an operation node with its reverse-mode rule.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let y = tape.record_op(output_value, Box::new(my_rule), None);
+    /// ```
+    pub fn record_op(
+        &self,
+        output_value: V,
+        rule: Box<dyn ReverseRule<V>>,
+        output_tangent: Option<V::Tangent>,
+    ) -> TrackedTensor<V> {
+        let mut inner = self.inner.borrow_mut();
+        let node_id = NodeId::new(inner.nodes.len());
+        inner.nodes.push(TapeNode {
+            rule: Some(rule),
+            tangent: output_tangent.clone(),
+            is_leaf: false,
+        });
+        TrackedTensor {
+            value: output_value,
+            node_id: Some(node_id),
+            tape: Some(self.clone()),
+            requires_grad: true,
+            tangent: output_tangent,
+        }
     }
 
     /// Runs reverse-mode pullback from a scalar loss value.
@@ -189,16 +273,75 @@ impl<V: Differentiable> Tape<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use chainrules::Tape;
+    /// ```
+    /// use chainrules::{Tape, Differentiable};
     ///
     /// let tape = Tape::<f64>::new();
     /// let x = tape.leaf(2.0);
-    /// // ... compute loss from x ...
     /// let grads = tape.pullback(&x).unwrap();
+    /// // d(x)/d(x) = 1.0
+    /// assert_eq!(*grads.get(x.node_id().unwrap()).unwrap(), 1.0);
     /// ```
-    pub fn pullback(&self, _loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
-        todo!()
+    pub fn pullback(&self, loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
+        let loss_node = loss.node_id.ok_or(AutodiffError::MissingNode)?;
+        let n = loss.value.num_elements();
+        if n != 1 {
+            return Err(AutodiffError::NonScalarLoss { num_elements: n });
+        }
+
+        let inner = self.inner.borrow();
+        let num_nodes = inner.nodes.len();
+
+        // Initialize cotangents for all nodes
+        let mut cotangents: Vec<Option<V::Tangent>> = Vec::with_capacity(num_nodes);
+        for _ in 0..num_nodes {
+            cotangents.push(None);
+        }
+
+        // Seed the loss node
+        cotangents[loss_node.index()] = Some(loss.value.seed_cotangent());
+
+        // Traverse nodes in reverse order from loss to first node
+        for i in (0..=loss_node.index()).rev() {
+            // Skip leaf nodes (no rule to propagate through)
+            if inner.nodes[i].rule.is_none() {
+                continue;
+            }
+
+            // Take the accumulated cotangent for this node
+            let cot = match cotangents[i].take() {
+                Some(c) => c,
+                None => continue,
+            };
+
+            // Apply the pullback rule
+            let input_grads = inner.nodes[i].rule.as_ref().unwrap().pullback(&cot)?;
+
+            // Accumulate cotangents at input nodes
+            for (node_id, grad) in input_grads {
+                let idx = node_id.index();
+                match cotangents[idx].take() {
+                    Some(existing) => {
+                        cotangents[idx] = Some(V::accumulate_tangent(existing, &grad));
+                    }
+                    None => {
+                        cotangents[idx] = Some(grad);
+                    }
+                }
+            }
+        }
+
+        // Collect gradients for leaf nodes
+        let mut result = Gradients::new();
+        for (i, cot) in cotangents.into_iter().enumerate() {
+            if let Some(c) = cot {
+                if inner.nodes[i].is_leaf {
+                    result.entries.push((NodeId::new(i), c));
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     /// Computes gradient and Hessian-vector product via forward-over-reverse.
@@ -234,15 +377,101 @@ impl<V: Differentiable> Tape<V> {
     /// let _grad = result.gradients;
     /// let _hv = result.hvp;
     /// ```
-    pub fn hvp(&self, _loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>> {
-        todo!()
+    pub fn hvp(&self, loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>> {
+        let loss_node = loss.node_id.ok_or(AutodiffError::MissingNode)?;
+        let n = loss.value.num_elements();
+        if n != 1 {
+            return Err(AutodiffError::NonScalarLoss { num_elements: n });
+        }
+
+        let inner = self.inner.borrow();
+        let num_nodes = inner.nodes.len();
+
+        // Initialize cotangents and cotangent-tangents
+        let mut cotangents: Vec<Option<V::Tangent>> = Vec::with_capacity(num_nodes);
+        let mut cot_tangents: Vec<Option<V::Tangent>> = Vec::with_capacity(num_nodes);
+        for _ in 0..num_nodes {
+            cotangents.push(None);
+            cot_tangents.push(None);
+        }
+
+        // Seed: cotangent = 1 (seed), cotangent_tangent = 0 (seed is constant)
+        cotangents[loss_node.index()] = Some(loss.value.seed_cotangent());
+        cot_tangents[loss_node.index()] = Some(loss.value.zero_tangent());
+
+        // Traverse in reverse
+        for i in (0..=loss_node.index()).rev() {
+            if inner.nodes[i].rule.is_none() {
+                continue;
+            }
+
+            let cot = match cotangents[i].take() {
+                Some(c) => c,
+                None => continue,
+            };
+            let cot_tan = cot_tangents[i].take().unwrap_or_else(|| {
+                // If no cotangent-tangent accumulated, use zero
+                // (We need a zero tangent but don't have the value; use the cotangent's zero)
+                // Since V::Tangent == V for most types, zero_tangent works on cot
+                loss.value.zero_tangent()
+            });
+
+            let results = inner.nodes[i]
+                .rule
+                .as_ref()
+                .unwrap()
+                .pullback_with_tangents(&cot, &cot_tan)?;
+
+            for (node_id, grad, grad_tan) in results {
+                let idx = node_id.index();
+
+                // Accumulate cotangent
+                match cotangents[idx].take() {
+                    Some(existing) => {
+                        cotangents[idx] = Some(V::accumulate_tangent(existing, &grad));
+                    }
+                    None => {
+                        cotangents[idx] = Some(grad);
+                    }
+                }
+
+                // Accumulate cotangent-tangent
+                match cot_tangents[idx].take() {
+                    Some(existing) => {
+                        cot_tangents[idx] = Some(V::accumulate_tangent(existing, &grad_tan));
+                    }
+                    None => {
+                        cot_tangents[idx] = Some(grad_tan);
+                    }
+                }
+            }
+        }
+
+        // Collect gradients and HVP for leaf nodes
+        let mut gradients = Gradients::new();
+        let mut hvp_grads = Gradients::new();
+        for i in 0..num_nodes {
+            if inner.nodes[i].is_leaf {
+                if let Some(c) = cotangents[i].take() {
+                    gradients.entries.push((NodeId::new(i), c));
+                }
+                if let Some(ct) = cot_tangents[i].take() {
+                    hvp_grads.entries.push((NodeId::new(i), ct));
+                }
+            }
+        }
+
+        Ok(HvpResult {
+            gradients,
+            hvp: hvp_grads,
+        })
     }
 }
 
 impl<V: Differentiable> Clone for Tape<V> {
     fn clone(&self) -> Self {
         Self {
-            _marker: PhantomData,
+            inner: self.inner.clone(),
         }
     }
 }
@@ -252,6 +481,10 @@ impl<V: Differentiable> Default for Tape<V> {
         Self::new()
     }
 }
+
+// ============================================================================
+// TrackedTensor
+// ============================================================================
 
 /// Value wrapper for reverse-mode AD.
 ///
@@ -289,9 +522,9 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use chainrules::TrackedTensor;
-    /// let x = TrackedTensor::new(value);
+    /// let x = TrackedTensor::new(42.0_f64);
     /// assert!(!x.requires_grad());
     /// ```
     pub fn new(value: V) -> Self {
@@ -308,8 +541,10 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let v = tracked.value();
+    /// ```
+    /// use chainrules::TrackedTensor;
+    /// let x = TrackedTensor::new(42.0_f64);
+    /// assert_eq!(*x.value(), 42.0);
     /// ```
     pub fn value(&self) -> &V {
         &self.value
@@ -319,8 +554,10 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let raw = tracked.into_value();
+    /// ```
+    /// use chainrules::TrackedTensor;
+    /// let x = TrackedTensor::new(42.0_f64);
+    /// assert_eq!(x.into_value(), 42.0);
     /// ```
     pub fn into_value(self) -> V {
         self.value
@@ -330,8 +567,10 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// assert!(tracked.requires_grad());
+    /// ```
+    /// use chainrules::TrackedTensor;
+    /// let x = TrackedTensor::new(42.0_f64);
+    /// assert!(!x.requires_grad());
     /// ```
     pub fn requires_grad(&self) -> bool {
         self.requires_grad
@@ -341,10 +580,10 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// if let Some(id) = tracked.node_id() {
-    ///     println!("node = {}", id.index());
-    /// }
+    /// ```
+    /// use chainrules::TrackedTensor;
+    /// let x = TrackedTensor::new(42.0_f64);
+    /// assert!(x.node_id().is_none());
     /// ```
     pub fn node_id(&self) -> Option<NodeId> {
         self.node_id
@@ -354,10 +593,10 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// if let Some(t) = tracked.tangent() {
-    ///     // use tangent
-    /// }
+    /// ```
+    /// use chainrules::TrackedTensor;
+    /// let x = TrackedTensor::new(42.0_f64);
+    /// assert!(x.tangent().is_none());
     /// ```
     pub fn tangent(&self) -> Option<&V::Tangent> {
         self.tangent.as_ref()
@@ -367,8 +606,10 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// assert!(tracked.has_tangent());
+    /// ```
+    /// use chainrules::TrackedTensor;
+    /// let x = TrackedTensor::new(42.0_f64);
+    /// assert!(!x.has_tangent());
     /// ```
     pub fn has_tangent(&self) -> bool {
         self.tangent.is_some()
@@ -378,22 +619,36 @@ impl<V: Differentiable> TrackedTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let detached = tracked.detach();
+    /// ```
+    /// use chainrules::Tape;
+    /// let tape = Tape::<f64>::new();
+    /// let x = tape.leaf(3.14);
+    /// assert!(x.requires_grad());
+    /// let detached = x.detach();
     /// assert!(!detached.requires_grad());
     /// ```
     pub fn detach(self) -> Self {
-        todo!()
+        Self {
+            value: self.value,
+            node_id: None,
+            tape: None,
+            requires_grad: false,
+            tangent: None,
+        }
     }
 }
+
+// ============================================================================
+// DualTensor
+// ============================================================================
 
 /// Value wrapper for forward-mode AD.
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use chainrules::DualTensor;
-/// let dual = DualTensor::new(primal);
+/// let dual = DualTensor::new(3.14_f64);
 /// assert!(!dual.has_tangent());
 /// ```
 pub struct DualTensor<V: Differentiable> {
@@ -406,9 +661,10 @@ impl<V: Differentiable> DualTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use chainrules::DualTensor;
-    /// let x = DualTensor::new(primal);
+    /// let x = DualTensor::new(3.14_f64);
+    /// assert!(!x.has_tangent());
     /// ```
     pub fn new(primal: V) -> Self {
         Self {
@@ -425,20 +681,30 @@ impl<V: Differentiable> DualTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::with_tangent(primal, tangent).unwrap();
     /// ```
-    pub fn with_tangent(_primal: V, _tangent: V::Tangent) -> AdResult<Self> {
-        todo!()
+    /// use chainrules::DualTensor;
+    /// let x = DualTensor::with_tangent(3.14_f64, 1.0_f64).unwrap();
+    /// assert!(x.has_tangent());
+    /// assert_eq!(*x.tangent().unwrap(), 1.0);
+    /// ```
+    pub fn with_tangent(primal: V, tangent: V::Tangent) -> AdResult<Self> {
+        // Shape validation is type-specific; for scalars (f64, f32) there is
+        // nothing to validate. For tensors, the caller (e.g., dual_einsum)
+        // should validate shapes before calling this.
+        Ok(Self {
+            primal,
+            tangent: Some(tangent),
+        })
     }
 
     /// Returns the primal value.
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let p = dual.primal();
+    /// ```
+    /// use chainrules::DualTensor;
+    /// let x = DualTensor::new(3.14_f64);
+    /// assert_eq!(*x.primal(), 3.14);
     /// ```
     pub fn primal(&self) -> &V {
         &self.primal
@@ -448,8 +714,10 @@ impl<V: Differentiable> DualTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let maybe_t = dual.tangent();
+    /// ```
+    /// use chainrules::DualTensor;
+    /// let x = DualTensor::new(3.14_f64);
+    /// assert!(x.tangent().is_none());
     /// ```
     pub fn tangent(&self) -> Option<&V::Tangent> {
         self.tangent.as_ref()
@@ -459,8 +727,10 @@ impl<V: Differentiable> DualTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// assert!(dual.has_tangent());
+    /// ```
+    /// use chainrules::DualTensor;
+    /// let x = DualTensor::new(3.14_f64);
+    /// assert!(!x.has_tangent());
     /// ```
     pub fn has_tangent(&self) -> bool {
         self.tangent.is_some()
@@ -470,8 +740,12 @@ impl<V: Differentiable> DualTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let (p, t) = dual.into_parts();
+    /// ```
+    /// use chainrules::DualTensor;
+    /// let x = DualTensor::with_tangent(3.14_f64, 1.0).unwrap();
+    /// let (p, t) = x.into_parts();
+    /// assert_eq!(p, 3.14);
+    /// assert_eq!(t, Some(1.0));
     /// ```
     pub fn into_parts(self) -> (V, Option<V::Tangent>) {
         (self.primal, self.tangent)
@@ -481,23 +755,35 @@ impl<V: Differentiable> DualTensor<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let c = dual.detach_tangent();
+    /// ```
+    /// use chainrules::DualTensor;
+    /// let x = DualTensor::with_tangent(3.14_f64, 1.0).unwrap();
+    /// let c = x.detach_tangent();
     /// assert!(!c.has_tangent());
+    /// assert_eq!(*c.primal(), 3.14);
     /// ```
     pub fn detach_tangent(self) -> Self {
-        todo!()
+        Self {
+            primal: self.primal,
+            tangent: None,
+        }
     }
 }
+
+// ============================================================================
+// Gradients
+// ============================================================================
 
 /// Accumulated gradients indexed by [`NodeId`].
 ///
 /// # Examples
 ///
-/// ```ignore
-/// use chainrules::{Gradients, Differentiable};
-/// // V::Tangent is the gradient type
-/// let mut grads = Gradients::<MyType>::new();
+/// ```
+/// use chainrules::{Gradients, NodeId};
+///
+/// let mut grads = Gradients::<f64>::new();
+/// grads.accumulate(NodeId::new(0), 3.0).unwrap();
+/// assert_eq!(*grads.get(NodeId::new(0)).unwrap(), 3.0);
 /// ```
 pub struct Gradients<V: Differentiable> {
     entries: Vec<(NodeId, V::Tangent)>,
@@ -508,9 +794,10 @@ impl<V: Differentiable> Gradients<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use chainrules::Gradients;
-    /// let grads = Gradients::<MyType>::new();
+    /// let grads = Gradients::<f64>::new();
+    /// assert!(grads.entries().is_empty());
     /// ```
     pub fn new() -> Self {
         Self { entries: vec![] }
@@ -520,34 +807,53 @@ impl<V: Differentiable> Gradients<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// if let Some(g) = grads.get(node) {
-    ///     // use gradient
-    /// }
     /// ```
-    pub fn get(&self, _node: NodeId) -> Option<&V::Tangent> {
-        todo!()
+    /// use chainrules::{Gradients, NodeId};
+    ///
+    /// let mut grads = Gradients::<f64>::new();
+    /// grads.accumulate(NodeId::new(0), 5.0).unwrap();
+    /// assert_eq!(*grads.get(NodeId::new(0)).unwrap(), 5.0);
+    /// assert!(grads.get(NodeId::new(1)).is_none());
+    /// ```
+    pub fn get(&self, node: NodeId) -> Option<&V::Tangent> {
+        self.entries
+            .iter()
+            .find(|(id, _)| *id == node)
+            .map(|(_, grad)| grad)
     }
 
     /// Inserts or accumulates a gradient for `node`.
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// grads.accumulate(node, grad);
     /// ```
-    pub fn accumulate(&mut self, _node: NodeId, _grad: V::Tangent) -> AdResult<()> {
-        todo!()
+    /// use chainrules::{Gradients, NodeId};
+    ///
+    /// let mut grads = Gradients::<f64>::new();
+    /// grads.accumulate(NodeId::new(0), 2.0).unwrap();
+    /// grads.accumulate(NodeId::new(0), 3.0).unwrap();
+    /// assert_eq!(*grads.get(NodeId::new(0)).unwrap(), 5.0);
+    /// ```
+    pub fn accumulate(&mut self, node: NodeId, grad: V::Tangent) -> AdResult<()> {
+        if let Some(entry) = self.entries.iter_mut().find(|(id, _)| *id == node) {
+            let existing = entry.1.clone();
+            entry.1 = V::accumulate_tangent(existing, &grad);
+        } else {
+            self.entries.push((node, grad));
+        }
+        Ok(())
     }
 
     /// Returns all `(node, grad)` entries.
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// for (node, grad) in grads.entries() {
-    ///     println!("{}", node.index());
-    /// }
+    /// ```
+    /// use chainrules::{Gradients, NodeId};
+    ///
+    /// let mut grads = Gradients::<f64>::new();
+    /// grads.accumulate(NodeId::new(0), 1.0).unwrap();
+    /// assert_eq!(grads.entries().len(), 1);
     /// ```
     pub fn entries(&self) -> &[(NodeId, V::Tangent)] {
         &self.entries
@@ -559,6 +865,10 @@ impl<V: Differentiable> Default for Gradients<V> {
         Self::new()
     }
 }
+
+// ============================================================================
+// PullbackPlan
+// ============================================================================
 
 /// Compiled pullback execution plan.
 ///
@@ -578,22 +888,38 @@ impl<V: Differentiable> PullbackPlan<V> {
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let plan = chainrules::PullbackPlan::build(&loss).unwrap();
     /// ```
-    pub fn build(_loss: &TrackedTensor<V>) -> AdResult<Self> {
-        todo!()
+    /// use chainrules::{Tape, PullbackPlan};
+    ///
+    /// let tape = Tape::<f64>::new();
+    /// let x = tape.leaf(2.0);
+    /// let plan = PullbackPlan::build(&x).unwrap();
+    /// assert_eq!(plan.loss_node().index(), 0);
+    /// ```
+    pub fn build(loss: &TrackedTensor<V>) -> AdResult<Self> {
+        let node_id = loss.node_id.ok_or(AutodiffError::MissingNode)?;
+        Ok(Self {
+            loss: node_id,
+            _marker: PhantomData,
+        })
     }
 
     /// Executes the pre-built pullback plan.
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// let grads = plan.execute(&loss).unwrap();
     /// ```
-    pub fn execute(&self, _loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
-        todo!()
+    /// use chainrules::{Tape, PullbackPlan};
+    ///
+    /// let tape = Tape::<f64>::new();
+    /// let x = tape.leaf(2.0);
+    /// let plan = PullbackPlan::build(&x).unwrap();
+    /// let grads = plan.execute(&x).unwrap();
+    /// assert_eq!(*grads.get(x.node_id().unwrap()).unwrap(), 1.0);
+    /// ```
+    pub fn execute(&self, loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
+        let tape = loss.tape.as_ref().ok_or(AutodiffError::MissingNode)?;
+        tape.pullback(loss)
     }
 
     /// Returns loss node ID for this plan.
@@ -608,6 +934,10 @@ impl<V: Differentiable> PullbackPlan<V> {
         self.loss
     }
 }
+
+// ============================================================================
+// HvpResult
+// ============================================================================
 
 /// Result of a forward-over-reverse HVP computation.
 ///

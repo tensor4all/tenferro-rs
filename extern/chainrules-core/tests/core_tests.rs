@@ -26,6 +26,20 @@ fn f64_accumulate_with_zero() {
 }
 
 // ============================================================================
+// Differentiable for f64 (num_elements, seed_cotangent)
+// ============================================================================
+
+#[test]
+fn f64_num_elements() {
+    assert_eq!(42.0_f64.num_elements(), 1);
+}
+
+#[test]
+fn f64_seed_cotangent() {
+    assert_eq!(42.0_f64.seed_cotangent(), 1.0_f64);
+}
+
+// ============================================================================
 // Differentiable for f32
 // ============================================================================
 
@@ -37,6 +51,16 @@ fn f32_zero_tangent() {
 #[test]
 fn f32_accumulate_tangent() {
     assert_eq!(f32::accumulate_tangent(1.5, &2.5), 4.0);
+}
+
+#[test]
+fn f32_num_elements() {
+    assert_eq!(42.0_f32.num_elements(), 1);
+}
+
+#[test]
+fn f32_seed_cotangent() {
+    assert_eq!(42.0_f32.seed_cotangent(), 1.0_f32);
 }
 
 // ============================================================================

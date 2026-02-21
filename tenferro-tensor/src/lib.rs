@@ -2395,6 +2395,18 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     /// let tangent = Tensor::<f64>::zeros(&[2, 3]);
     /// t.accumulate_tangent(&tangent);
     /// ```
+    fn num_elements(&self) -> usize {
+        self.len()
+    }
+
+    fn seed_cotangent(&self) -> Tensor<T> {
+        Tensor::ones(
+            &self.dims,
+            self.logical_memory_space,
+            MemoryOrder::ColumnMajor,
+        )
+    }
+
     fn accumulate_tangent(a: Tensor<T>, b: &Tensor<T>) -> Tensor<T> {
         assert_eq!(
             a.dims, b.dims,
