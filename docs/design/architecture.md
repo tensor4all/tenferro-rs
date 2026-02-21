@@ -52,9 +52,11 @@ The core operations form **adjoint pairs** for clean AD support:
 `permute ↔ inverse permute`, `batched_gemm` uses the Leibniz rule.
 
 **POC status**: The [tenferro-rs POC](https://github.com/tensor4all/tenferro-rs/)
-implements the five-crate structure with stub implementations. `CpuBackend` is
-the only backend; GPU backends, `BackendRegistry`, and `TensorLibVtable` are
-future work.
+implements the full workspace structure with API skeletons (`todo!()` bodies).
+All crates exist including `tenferro-linalg`, `tenferro-capi`,
+`chainrules-core`, and `chainrules`. GPU backend types (`CudaBackend`,
+`RocmBackend`) are defined as stubs in `tenferro-prims`; actual GPU
+implementation, `BackendRegistry`, and `TensorLibVtable` are future work.
 
 ---
 
@@ -188,11 +190,13 @@ tenferro-device              tenferro-algebra
              strided-traits)
 ```
 
-Future crates (not in POC):
-- `tenferro-tropical` — Tropical algebra types, `TensorPrims<MaxPlus>` for CpuBackend
+POC skeleton crates (API defined, `todo!()` bodies):
 - `tenferro-linalg` — Tensor-level linalg wrapper (SVD, QR, eigen) with AD rules
 - `chainrules-core` / `chainrules` — AD traits and engine
 - `tenferro-capi` — C FFI for Julia/Python integration
+
+Extension crates (separate workspace, POC stubs):
+- `tenferro-tropical` — Tropical algebra types, `TensorPrims<MaxPlus>` for CpuBackend
 
 ---
 
