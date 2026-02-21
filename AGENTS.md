@@ -104,9 +104,10 @@ RUSTFLAGS="-C target-cpu=native" cargo bench
 Layer 5: tenferro-capi         — C-API (FFI) for Julia/Python: exposes einsum + SVD with AD rules (f64, stateless rrule/frule)
 Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
          tenferro-linalg       — Tensor-level SVD/QR/LU/eigen (matricize→decompose→unmatricize), linalg AD rules
-Layer 3: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
+Layer 3: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
+                                 (depends on tenferro-tensor for resolve_conj)
+Layer 2: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
                                  impl Differentiable for Tensor<T>
-Layer 2: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
          chainrules           — AD engine: Tape<V>, TrackedTensor<V>, DualTensor<V> (← chainrules-core)
          tenferro-algebra      — HasAlgebra trait, Semiring trait, Standard type
@@ -122,7 +123,7 @@ of any tensor type. `chainrules` provides the AD engine (Tape, TrackedTensor, Du
 `Tensor<T>` implements `Differentiable` in `tenferro-tensor`.
 Operation-specific AD rules live with their operations: `tenferro-einsum` owns einsum
 AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`);
-`tenferro-linalg` owns linalg AD functions (`tracked_svd`, `svd_rrule`, etc.).
+`tenferro-linalg` owns linalg AD functions (`svd_rrule`, `svd_frule`, etc.).
 
 ### Dependency Graph (POC)
 
@@ -142,18 +143,25 @@ tenferro-algebra (← strided-traits)
     │
     ├────────────────────┐
     ↓                    ↓
-tenferro-prims   tenferro-tensor
-    │  (← strided-view,     │  (← strided-view,
-    │   ← strided-traits)   │   ← strided-traits,
-    │                        │   ← num-traits,
-    │                        │   ← chainrules-core)
-    │                        │   impl Differentiable for Tensor<T>
-    └──────────┬─────────────┘
-               ↓
-          tenferro-einsum
-              (← strided-traits, ← chainrules)
-          tenferro-linalg
-              (← strided-traits, ← chainrules)
+tenferro-device  tenferro-tensor
+    │              (← strided-view,
+    │               ← strided-traits,
+    │               ← num-traits,
+    │               ← chainrules-core)
+    │               impl Differentiable for Tensor<T>
+    │                    │
+    └────────┬───────────┘
+             ↓
+        tenferro-prims
+          (← strided-view,
+           ← strided-traits,
+           ← tenferro-tensor)
+             │
+             ↓
+        tenferro-einsum
+          (← strided-traits, ← chainrules)
+        tenferro-linalg
+          (← strided-traits, ← chainrules-core)
                ↓
           tenferro-capi
               (← tenferro-tensor, ← tenferro-einsum, ← tenferro-linalg, ← tenferro-device)
