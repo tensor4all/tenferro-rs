@@ -220,28 +220,30 @@ pub trait Semiring {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_algebra::{Semiring, Standard};
 ///
 /// let z = <Standard<f64> as Semiring>::zero();
 /// let o = <Standard<f64> as Semiring>::one();
+/// assert_eq!(z, 0.0);
+/// assert_eq!(o, 1.0);
 /// ```
 impl<T: Scalar> Semiring for Standard<T> {
     type Scalar = T;
 
     fn zero() -> T {
-        todo!()
+        T::zero()
     }
 
     fn one() -> T {
-        todo!()
+        T::one()
     }
 
-    fn add(_a: T, _b: T) -> T {
-        todo!()
+    fn add(a: T, b: T) -> T {
+        a + b
     }
 
-    fn mul(_a: T, _b: T) -> T {
-        todo!()
+    fn mul(a: T, b: T) -> T {
+        a * b
     }
 }
