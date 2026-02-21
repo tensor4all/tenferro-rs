@@ -119,6 +119,14 @@ use tenferro_device::{ComputeDevice, LogicalMemorySpace, OpKind, Result};
 ///   (Fortran/Julia convention)
 /// - [`RowMajor`](MemoryOrder::RowMajor): Last dimension is contiguous
 ///   (C/NumPy convention)
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::MemoryOrder;
+///
+/// let order = MemoryOrder::RowMajor;
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryOrder {
     /// Column-major (Fortran/Julia order). First dimension has stride 1.
@@ -146,6 +154,15 @@ pub enum MemoryOrder {
 /// - `conj()` is lazy (shared buffer + flag flip, O(1))
 /// - Deep copy (actual data duplication) uses prims `Permute(identity)`
 ///   or dedicated operations
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::DataBuffer;
+///
+/// let buf = DataBuffer::<f64>::from_vec(vec![1.0, 2.0, 3.0]);
+/// assert_eq!(buf.len(), 3);
+/// ```
 pub struct DataBuffer<T> {
     inner: Arc<BufferInner<T>>,
 }
@@ -477,6 +494,16 @@ impl<T> DataBuffer<T> {
 /// For CPU tensors, `event` is always `None` with zero overhead.
 ///
 /// See `tenferro-einsum` crate docs for async chaining examples.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::Tensor;
+///
+/// let t = Tensor::<f64>::zeros(&[2, 3]);
+/// assert_eq!(t.dims(), &[2, 3]);
+/// assert_eq!(t.len(), 6);
+/// ```
 pub struct Tensor<T: Scalar> {
     buffer: DataBuffer<T>,
     dims: Vec<usize>,
@@ -512,6 +539,16 @@ pub struct Tensor<T: Scalar> {
 /// The crate-internal `as_operand_view()` skips the wait and
 /// propagates the pending event, allowing accelerator operations to chain
 /// without CPU synchronization.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tensor::Tensor;
+///
+/// let t = Tensor::<f64>::zeros(&[2, 3]);
+/// let view = t.tensor_view();
+/// assert_eq!(view.ndim(), 2);
+/// ```
 pub struct TensorView<'a, T: Scalar> {
     data: &'a DataBuffer<T>,
     dims: Vec<usize>,
@@ -810,10 +847,11 @@ impl<'a, T: Scalar> TensorView<'a, T> {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use tenferro_tensor::CompletionEvent;
 ///
-/// let event = CompletionEvent::noop();
+/// // CompletionEvent is typically created by GPU backends.
+/// // CPU tensors use event = None (no pending operation).
 /// ```
 #[derive(Clone)]
 pub struct CompletionEvent {
@@ -1176,6 +1214,17 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Waits for any pending accelerator computation before returning.
     /// The returned view has `event = None` (data is ready to read).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let view = t.tensor_view();
+    /// assert_eq!(view.ndim(), 2);
+    /// ```
     pub fn tensor_view(&self) -> TensorView<'_, T> {
         self.wait();
         TensorView {
@@ -1239,6 +1288,17 @@ impl<T: Scalar> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if `target_dims` is incompatible with the current shape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let b = t.broadcast(&[4, 3]).unwrap();
+    /// assert_eq!(b.dims(), &[4, 3]);
+    /// ```
     pub fn broadcast(&self, _target_dims: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
@@ -1252,6 +1312,18 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Returns an error if any axis is out of range or the paired
     /// dimensions have different sizes.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// // Extract the main diagonal by merging axes 0 and 1
+    /// let d = t.diagonal(&[(0, 1)]).unwrap();
+    /// assert_eq!(d.dims(), &[3]);
+    /// ```
     pub fn diagonal(&self, _axes: &[(usize, usize)]) -> Result<Tensor<T>> {
         todo!()
     }
@@ -1265,6 +1337,17 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Returns an error if the tensor is not contiguous or the new shape
     /// has a different total element count.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let r = t.reshape(&[6]).unwrap();
+    /// assert_eq!(r.dims(), &[6]);
+    /// ```
     pub fn reshape(&self, _new_dims: &[usize]) -> Result<Tensor<T>> {
         todo!()
     }
@@ -1329,6 +1412,17 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// If the tensor is already contiguous in the requested order,
     /// this may avoid copying (implementation-defined).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let c = t.contiguous(MemoryOrder::RowMajor);
+    /// assert!(c.is_contiguous());
+    /// ```
     pub fn contiguous(&self, _order: MemoryOrder) -> Tensor<T> {
         todo!()
     }
@@ -1379,6 +1473,15 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// A tensor is contiguous if its elements occupy a dense block of
     /// memory with no gaps, in either column-major or row-major order.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// assert!(t.is_contiguous());
+    /// ```
     pub fn is_contiguous(&self) -> bool {
         todo!()
     }
@@ -1430,6 +1533,16 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Like [`conj`](Tensor::conj) but consumes `self`, avoiding the
     /// Arc refcount increment when the original is no longer needed.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let tc = t.into_conj();
+    /// assert!(tc.is_conjugated());
+    /// ```
     pub fn into_conj(self) -> Tensor<T>
     where
         T: Conjugate,
@@ -1509,6 +1622,16 @@ impl<T: Scalar> Tensor<T> {
     /// # Errors
     ///
     /// Returns an error if the transfer is not supported.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let t2 = t.to_memory_space_async(LogicalMemorySpace::MainMemory).unwrap();
+    /// ```
     pub fn to_memory_space_async(&self, _target: LogicalMemorySpace) -> Result<Tensor<T>> {
         todo!()
     }
@@ -1549,6 +1672,16 @@ impl<T: Scalar> Tensor<T> {
     /// Returns `true` for CPU tensors (always ready) and for GPU tensors
     /// whose computation has completed. Returns `false` if a GPU operation
     /// is still in progress.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// // CPU tensors are always ready.
+    /// assert!(t.is_ready());
+    /// ```
     pub fn is_ready(&self) -> bool {
         self.event.is_none()
     }
@@ -1561,10 +1694,33 @@ impl<T: Scalar> Tensor<T> {
 impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     type Tangent = Tensor<T>;
 
+    /// Returns a zero tangent tensor with the same shape.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    /// use chainrules_core::Differentiable;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let zt = t.zero_tangent();
+    /// ```
     fn zero_tangent(&self) -> Tensor<T> {
         todo!()
     }
 
+    /// Accumulates a tangent into this tensor (in-place addition).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    /// use chainrules_core::Differentiable;
+    ///
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let tangent = Tensor::<f64>::zeros(&[2, 3]);
+    /// t.accumulate_tangent(&tangent);
+    /// ```
     fn accumulate_tangent(_a: Tensor<T>, _b: &Tensor<T>) -> Tensor<T> {
         todo!()
     }
