@@ -11,6 +11,7 @@
 | [tensor.md](./tensor.md) | `Tensor<T>`, `TensorView`, ownership model, async `CompletionEvent` |
 | [algebra.md](./algebra.md) | `HasAlgebra`, `Semiring`, tropical and user-defined algebra extensibility |
 | [autodiff.md](./autodiff.md) | `chainrules-core`/`chainrules` AD architecture, linalg AD rules, SVD rrule |
+| [linalg.md](./linalg.md) | `tenferro-linalg` decompositions, solvers, utilities, stateless AD rules |
 | [testing.md](./testing.md) | Testing strategy, linalg test cases ([JSON](../../tenferro-linalg/tests/data/linalg_cases.json)), gradient check method |
 
 ## Reference
