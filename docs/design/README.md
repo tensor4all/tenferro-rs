@@ -5,6 +5,7 @@
 | Document | Description |
 |----------|-------------|
 | [architecture.md](./architecture.md) | Workspace layers, crate dependency graph, device layer, ecosystem relationships |
+| [device.md](./device.md) | `tenferro-device`: memory spaces, compute devices, error types, device selection |
 | [tensor-prims.md](./tensor-prims.md) | `TensorPrims<A>` trait, `PrimDescriptor`, plan-based execution, CPU/GPU backends |
 | [einsum.md](./einsum.md) | Einsum public API (9 functions), N-ary contraction tree, algebra dispatch |
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision, `MakeContiguous`, HPTT experiments |

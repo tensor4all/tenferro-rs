@@ -64,72 +64,13 @@ implementation, `BackendRegistry`, and `TensorLibVtable` are future work.
 
 ## tenferro-device
 
-The device crate provides shared infrastructure used across all tenferro crates.
+Device abstraction and shared error types. Provides `LogicalMemorySpace`,
+`ComputeDevice`, `OpKind`, `preferred_compute_devices()`, and the workspace
+`Error`/`Result` types.
 
-```rust
-/// Logical memory space where tensor buffers reside.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum LogicalMemorySpace {
-    MainMemory,
-    PinnedMemory,
-    GpuMemory { device_id: usize },
-    ManagedMemory,
-}
+Dependencies: `thiserror` only.
 
-/// Compute device where kernels execute.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ComputeDevice {
-    Cpu { device_id: usize },
-    Cuda { device_id: usize },
-    Rocm { device_id: usize },
-}
-
-/// Operation kind used for capability filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum OpKind { Contract, BatchedGemm, Reduce, Trace, Permute, ElementwiseMul }
-
-/// Returns executable compute devices in descending preference order.
-pub fn preferred_compute_devices(
-    space: LogicalMemorySpace,
-    op_kind: OpKind,
-) -> Result<Vec<ComputeDevice>>;
-```
-
-**Error types** using `thiserror`:
-
-```rust
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("shape mismatch: expected {expected:?}, got {got:?}")]
-    ShapeMismatch { expected: Vec<usize>, got: Vec<usize> },
-
-    #[error("rank mismatch: expected {expected}, got {got}")]
-    RankMismatch { expected: usize, got: usize },
-
-    #[error("device error: {0}")]
-    DeviceError(String),
-
-    #[error("no compatible compute device for {op:?} in memory space {space:?}")]
-    NoCompatibleComputeDevice { space: LogicalMemorySpace, op: OpKind },
-
-    #[error("operation across distinct logical memory spaces is not allowed by default")]
-    CrossMemorySpaceOperation,
-
-    #[error("invalid argument: {0}")]
-    InvalidArgument(String),
-
-    #[error(transparent)]
-    Strided(#[from] strided_view::StridedError),
-}
-
-pub type Result<T> = std::result::Result<T, Error>;
-```
-
-**Dependencies**: `strided-view` (for `StridedError`), `thiserror`.
-
-**Note**: `BackendRegistry`, `CudaBackend`, `RocmBackend`, and
-`TensorLibVtable` are **not** in the POC. They are planned for future
-GPU support.
+See [device.md](./device.md) for the full API reference.
 
 ---
 
@@ -145,9 +86,8 @@ tenferro-device              tenferro-algebra
   (LogicalMemorySpace +        (HasAlgebra trait (UX sugar),
    ComputeDevice, Error,       Semiring trait,
    Result)                     Standard<T> typed algebra)
-  (depends on: strided-view
-   for StridedError,
-   thiserror)
+  (depends on: thiserror
+   only)
                               (depends on: strided-traits,
                                num-complex)
         │                              │
