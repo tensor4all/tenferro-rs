@@ -366,6 +366,10 @@ cannot carry; it must be allocated and managed by the custom kernel. When
 designing the tropical GPU backend, the plan type must accommodate an optional
 argmax buffer:
 
+**Tie-break contract**: The argmax buffer must store the smallest linear index
+when ties occur. Custom GPU kernels must implement this deterministically
+(e.g., via `atomicMin` on the index when values are equal).
+
 ```rust
 enum TropicalCudaPlan<T: ScalarBase> {
     Contract {

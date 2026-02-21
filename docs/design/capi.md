@@ -22,6 +22,13 @@ Dependencies: `tenferro-device`, `tenferro-tensor`, `tenferro-einsum`,
 Tropical extension: `tenferro-tropical-capi` (separate shared library)
 reuses `TfeTensorF64` handles and adds tropical einsum functions.
 
+**Error mapping for unsupported AD modes:** `AutodiffError::ModeNotSupported`
+maps to `TFE_INVALID_ARGUMENT` in the C-API. No `_frule_<algebra>_f64`
+functions are provided for tropical einsum (consistent with issue #66);
+if a caller were to invoke such a path internally, it would surface as
+`TFE_INVALID_ARGUMENT` with a descriptive message, not a panic or
+`TFE_INTERNAL_ERROR`.
+
 ---
 
 ## Design Principles
@@ -201,8 +208,15 @@ selected by function name, not tensor type (`MaxPlus<f64>` is
 | `tfe_tropical_einsum_minplus_f64` | MinPlus (⊕=min, ⊗=+) |
 | `tfe_tropical_einsum_maxmul_f64` | MaxMul (⊕=max, ⊗=×) |
 
-Each has corresponding `_rrule_<algebra>_f64` and `_frule_<algebra>_f64`
-functions (same signatures as standard einsum AD).
+Each has a corresponding `_rrule_<algebra>_f64` function (same signature as
+standard einsum rrule). No `_frule_<algebra>_f64` is provided for tropical
+einsum: tropical semirings (max/min) are not smooth, so JVP is not
+well-defined. Only VJP (rrule via argmax) is supported.
+
+The **smallest linear index wins** tie-break rule applies to all tropical rrule
+functions: when multiple elements share the maximum (or minimum) value, the
+gradient is routed to the element with the smallest linear index. This is
+consistent across CPU and GPU backends.
 
 ---
 

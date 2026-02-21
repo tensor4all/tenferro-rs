@@ -124,6 +124,7 @@ Port from `tests/tropical.rs` and tropical-related tests in other files.
 | MaxPlus chain | `test_tropical_chain` (integration.rs) | |
 | Tropical unary ops | `test_tropical_unary_*` (unary_ops.rs) | trace, sum, row/col max |
 | Tropical backward | `test_backward_tropical_matmul` (backward.rs) | Sparse gradients via argmax |
+| Tropical argmax tie-break | new test | Verify that when multiple elements share the max, the gradient flows to the smallest-index element. Must produce identical results on CPU and GPU backends. |
 | Shortest path (MinPlus) | `test_minplus_shortest_path` | Bellman-Ford step |
 | Viterbi (MaxMul) | `test_viterbi_example` | |
 
@@ -272,6 +273,35 @@ Notes:
 - hvp for tropical einsum is not planned for the same reason.
 - argmax route testing may require a custom kernel infrastructure separate from
   cuTENSOR/hipTensor; CPU-only tests can run with the reference kernel.
+
+#### Error path: `ModeNotSupported`
+
+These tests verify the explicit error contract for unsupported AD modes
+(issue #68). They live in `tenferro-tropical/tests/` and must not depend
+on a full AD tape.
+
+| Test | Expected result |
+|------|----------------|
+| Call tropical einsum frule (`MaxPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
+| Call tropical einsum frule (`MinPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
+| Call tropical einsum frule (`MaxMul`) | `Err(AutodiffError::ModeNotSupported { mode: "frule", .. })` |
+| Call tropical einsum hvp (`MaxPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "hvp", .. })` |
+| Call tropical einsum hvp (`MinPlus`) | `Err(AutodiffError::ModeNotSupported { mode: "hvp", .. })` |
+
+Example test structure:
+
+```rust
+#[test]
+fn tropical_frule_returns_mode_not_supported() {
+    let result = einsum_frule(/* tropical MaxPlus ctx */, "ij,jk->ik", &primals, &tangents);
+    match result {
+        Err(AutodiffError::ModeNotSupported { ref mode, .. }) => {
+            assert_eq!(mode, "frule");
+        }
+        other => panic!("expected ModeNotSupported, got {other:?}"),
+    }
+}
+```
 
 ### Linalg AD
 
