@@ -244,3 +244,81 @@ consistent across CPU and GPU backends.
 5. **`catch_unwind` for panic safety.** All extern "C" functions wrap
    their body in `catch_unwind` to prevent Rust panics from unwinding
    through C frames (undefined behavior).
+
+---
+
+## Implementation Phases
+
+### Phase 1: Tensor Lifecycle + Status Plumbing
+- Implement: `tfe_tensor_f64_from_data`, `_zeros`, `_clone`, `_release`, `_ndim`, `_shape`, `_len`, `_data`
+- Status plumbing: `catch_unwind` wrapper, `tfe_status_t` return convention
+- Exit criteria: All tensor lifecycle functions pass null-safety and round-trip tests
+
+### Phase 2: DLPack Import/Export
+- Implement: `tfe_tensor_f64_to_dlpack`, `_from_dlpack`
+- Exit criteria: Round-trip test (Rust -> DLPack -> Rust) preserves data, shape, strides; deleter is called exactly once
+
+### Phase 3: Einsum + SVD + AD
+- Implement: `tfe_einsum_f64`, `_rrule`, `_frule`; `tfe_svd_f64`, `_rrule`, `_frule`
+- Exit criteria: Gradient check passes for einsum rrule/frule; SVD round-trip U*S*Vt ~= A
+
+### Phase 4: Tropical C-API
+- Implement: `tfe_tropical_einsum_maxplus_f64` etc. + `_rrule` variants
+- No `_frule` for tropical (rrule-only policy)
+- Exit criteria: Tropical einsum matches CPU reference; rrule gradient check passes
+
+---
+
+## Error Mapping
+
+| Rust Error | `tfe_status_t` | Notes |
+|-----------|---------------|-------|
+| `tenferro_device::Error::InvalidArgument` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_device::Error::ShapeMismatch` | `TFE_SHAPE_MISMATCH` (-2) | |
+| `tenferro_device::Error::RankMismatch` | `TFE_SHAPE_MISMATCH` (-2) | Shape/rank grouped |
+| `tenferro_device::Error::DeviceError` | `TFE_INTERNAL_ERROR` (-3) | |
+| `tenferro_device::Error::NoCompatibleComputeDevice` | `TFE_INTERNAL_ERROR` (-3) | |
+| `tenferro_device::Error::CrossMemorySpaceOperation` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `tenferro_device::Error::StrideError` | `TFE_INVALID_ARGUMENT` (-1) | |
+| `chainrules_core::AutodiffError::ModeNotSupported` | `TFE_INVALID_ARGUMENT` (-1) | Tropical frule/hvp |
+| `chainrules_core::AutodiffError::*` (other) | `TFE_INTERNAL_ERROR` (-3) | |
+| Rust panic (caught by `catch_unwind`) | `TFE_INTERNAL_ERROR` (-3) | |
+
+Status message: human-readable, non-empty. Written to an internal thread-local buffer accessible via future `tfe_last_error_message()` API.
+
+---
+
+## C-API Test Matrix
+
+| Category | Test Cases |
+|----------|-----------|
+| NULL safety | NULL tensor pointer to all query functions; NULL status pointer |
+| Invalid shape | Zero-dim shape, empty data with non-zero shape, mismatched len |
+| Einsum errors | Invalid subscript string, shape mismatch between operands |
+| DLPack | Unsupported dtype, device mismatch, deleter called exactly once |
+| Ownership | Double release (must not crash), release after to_dlpack (must not crash) |
+| Panic safety | Internal panic caught and converted to TFE_INTERNAL_ERROR |
+| AD error paths | Tropical frule returns TFE_INVALID_ARGUMENT; NULL cotangent in rrule |
+
+See [testing.md](./testing.md) for the workspace-level testing strategy.
+
+---
+
+## ABI Policy
+
+### Header Generation
+C header generated via `cbindgen` from `tenferro-capi/src/lib.rs`.
+Run `cbindgen --config cbindgen.toml --output tenferro.h` after API changes.
+
+### Symbol Naming
+All public symbols use the `tfe_` prefix. Tropical extension uses `tfe_tropical_` prefix.
+
+### Versioning
+- Shared library versioned as `libtenferro.so.{major}.{minor}.{patch}`
+- ABI compatibility: patch releases are backward-compatible; minor releases may add symbols; major releases may break ABI
+- Version query: `tfe_version()` returns `(major, minor, patch)` tuple
+
+### Backward Compatibility
+- Existing function signatures are frozen after 1.0
+- New functions added with new names (no overloading)
+- Deprecated functions kept for one major version cycle
