@@ -1,0 +1,92 @@
+# Linear Solve AD Rules (`solve`, `solve_triangular`)
+
+## Forward
+
+$$
+AX = B, \quad A \in \mathbb{C}^{N \times N},\; B \in \mathbb{C}^{N \times K}
+$$
+
+Solution: $X = A^{-1}B$.
+
+## Forward rule (JVP)
+
+Differentiating $AX = B$:
+
+$$
+\dot{A}\,X + A\,\dot{X} = \dot{B}
+$$
+
+$$
+\dot{X} = A^{-1}(\dot{B} - \dot{A}\,X)
+$$
+
+i.e., solve $A\,\dot{X} = \dot{B} - \dot{A}\,X$ reusing the LU factorization of $A$.
+
+## Reverse rule (VJP)
+
+Given cotangent $\bar{X}$:
+
+$$
+\delta\ell = \langle \bar{X},\,\dot{X}\rangle
+= \langle \bar{X},\, A^{-1}(\dot{B} - \dot{A}\,X)\rangle
+= \langle A^{-\mathsf{H}}\bar{X},\, \dot{B}\rangle
+- \langle A^{-\mathsf{H}}\bar{X},\, \dot{A}\,X\rangle
+$$
+
+Define $G = A^{-\mathsf{H}}\bar{X}$ (solve $A^{\mathsf{H}} G = \bar{X}$). Then:
+
+$$
+\bar{B} = G, \qquad \bar{A} = -G\,X^{\mathsf{H}}
+$$
+
+**Derivation.** The second term:
+$\langle G,\, \dot{A}\,X\rangle = \operatorname{tr}(G^{\mathsf{H}}\,\dot{A}\,X)
+= \operatorname{tr}(X\,G^{\mathsf{H}}\,\dot{A})
+= \langle G\,X^{\mathsf{H}},\, \dot{A}\rangle$,
+so $\bar{A} = -G\,X^{\mathsf{H}}$.
+
+## Triangular solve
+
+When $A$ is lower (or upper) triangular, the same formulas apply with
+triangular solves instead of general LU solves. Additionally, the
+cotangent $\bar{A}$ must be projected onto the triangular structure:
+
+$$
+\bar{A} = \operatorname{tril}(-G\,X^{\mathsf{H}}) \quad \text{(lower triangular case)}
+$$
+
+$$
+\bar{A} = \operatorname{triu}(-G\,X^{\mathsf{H}}) \quad \text{(upper triangular case)}
+$$
+
+For unit-triangular matrices, the diagonal of $\bar{A}$ is additionally
+zeroed out.
+
+## Right-side solve ($XA = B$)
+
+By transposition symmetry:
+
+| | Left ($AX = B$) | Right ($XA = B$) |
+|---|---|---|
+| JVP | $A\,\dot{X} = \dot{B} - \dot{A}\,X$ | $\dot{X}\,A = \dot{B} - X\,\dot{A}$ |
+| $\bar{B}$ | $A^{-\mathsf{H}}\bar{X}$ | $\bar{X}\,A^{-\mathsf{H}}$ |
+| $\bar{A}$ | $-G\,X^{\mathsf{H}}$ | $-X^{\mathsf{H}}\,G$ |
+
+## Implementation notes
+
+- Reuse the LU (or triangular) factorization from the forward pass for
+  both JVP and VJP solves.
+- Never form $A^{-1}$ explicitly.
+- For higher-order AD, call `solve(A.mH(), ...)` instead of
+  `lu_solve(LU, pivots, ...)` so the solve itself is differentiable
+  (PyTorch convention).
+
+## References
+
+1. Giles, M. B. (2008). ["An extended collection of matrix derivative
+   results for forward and reverse mode AD."](https://people.maths.ox.ac.uk/gilesm/files/NA-08-01.pdf)
+2. PyTorch `FunctionsManual.cpp`: `linalg_solve_jvp` (L6052),
+   `linalg_solve_backward` (L6084), triangular solve backward (L4541).
+3. ChainRules.jl `src/rulesets/LinearAlgebra/structured.jl`:
+   `rrule` for `\` and `/`.
+4. JAX `jax/_src/lax/linalg.py`: `triangular_solve` JVP and transpose rules.
