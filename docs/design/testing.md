@@ -236,6 +236,72 @@ Here `H` and `op` are random Hermitian (or symmetric) matrices, generated indepe
 - Degenerate singular/eigenvalues (stress test for `η` regularization)
 - frule (JVP) — BackwardsLinalg.jl only covers rrule
 
+---
+
+## AD Test Matrix
+
+Coverage targets for reverse-mode (rrule/VJP), forward-mode (frule/JVP), and
+Hessian-vector product (hvp) across all differentiable operations.
+
+**Test ownership:**
+
+- Unit tests for each rule live in the crate that owns the rule:
+  - `tenferro-einsum/tests/` — einsum AD tests
+  - `tenferro-linalg/tests/` — linalg AD tests
+  - `chainrules/tests/` — tape/tracking infrastructure tests
+- Workspace-level integration tests (in `tests/` at the workspace root) cover
+  cross-crate AD scenarios: e.g., an einsum followed by an SVD inside a single
+  tape, or C-API roundtrip correctness for AD.
+
+### Einsum AD
+
+| Operation | rrule | frule | hvp | Tropical-specific | Notes |
+|-----------|-------|-------|-----|-------------------|-------|
+| Matmul `ij,jk->ik` (Standard) | planned | planned | planned | — | Finite-diff + hand-computed |
+| Trace `ii->` (Standard) | planned | planned | — | — | Gradient = identity diagonal |
+| Sum `ij->` (Standard) | planned | planned | — | — | Gradient = all-ones |
+| Transpose `ij->ji` (Standard) | planned | planned | — | — | |
+| 3-tensor chain (Standard) | planned | planned | planned | — | Full chain rule |
+| MaxPlus matmul (tropical) | planned | — | — | argmax route | Sparse gradient via argmax; GPU requires custom kernel |
+| MinPlus matmul (tropical) | planned | — | — | argmax route | Same kernel requirement as MaxPlus |
+| MaxPlus chain (tropical) | planned | — | — | argmax route | Gradient sparsity increases with chain length |
+
+Notes:
+- frule for tropical einsum is not planned: tropical algebra has no
+  meaningful JVP (the `max` operation is not differentiable in the usual sense).
+- hvp for tropical einsum is not planned for the same reason.
+- argmax route testing may require a custom kernel infrastructure separate from
+  cuTENSOR/hipTensor; CPU-only tests can run with the reference kernel.
+
+### Linalg AD
+
+| Operation | rrule | frule | hvp | Tropical-specific | Notes |
+|-----------|-------|-------|-----|-------------------|-------|
+| SVD | planned | planned | — | — | Finite-diff gradient check per cotangent branch |
+| QR | planned | planned | — | — | Joint dQ+dR; phase freedom handled by reconstruction |
+| LU | planned | planned | — | — | dL, dU, joint dL+dU branches |
+| Eigen (symmetric) | planned | planned | — | — | dE only, dU only |
+| Cholesky | planned | planned | — | — | |
+| `solve` / `lstsq` | planned | planned | — | — | dA and db branches isolated |
+| `inv` | planned | planned | — | — | |
+| `det` / `slogdet` | planned | planned | — | — | |
+| `pinv` | planned | — | — | — | SVD-based; frule deferred |
+| `matrix_exp` | planned | — | — | — | Complex frule; deferred |
+| `norm` | planned | planned | — | — | Fro and L2 norms first |
+
+Notes:
+- hvp for linalg operations is not planned in the POC phase. Second-order
+  differentiation through linalg (e.g., SVD Hessians) is mathematically
+  complex and deferred.
+- All linalg AD tests use the finite-difference gradient check method
+  documented above (ported from BackwardsLinalg.jl). frule tests additionally
+  verify the JVP–VJP consistency identity: `⟨cotangent, frule(tangent)⟩ = ⟨rrule(cotangent), tangent⟩`.
+- `tenferro-linalg` AD rules depend only on `chainrules-core` (not the full
+  `chainrules` engine); test infrastructure must not require a tape to call
+  `svd_rrule` etc. directly.
+
+---
+
 ### chainrules-core / chainrules
 
 - Tape: leaf registration, pullback execution

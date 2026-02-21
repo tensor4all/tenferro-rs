@@ -345,11 +345,33 @@ pub struct PlanCache {
 Plan cache is stored in the Context (CpuContext, CudaContext, RocmContext).
 This is why `plan()` and `execute()` take `&mut Context`.
 
-**Cache key design** (to be finalized):
-- CPU: keyed by `(PrimDescriptor, shapes)` — strides are not part of the
-  key because CPU plans depend on shape, not layout
-- GPU: keyed by `(PrimDescriptor, shapes, strides)` — cuTENSOR plans are
-  stride-dependent (see gpu-backend-design.md G4)
+**Cache key policy** (decided):
+
+- **CPU** (`CpuBackend`): Key = `(PrimDescriptor variant, input shapes,
+  output shape)`. Strides are **not** included because `CpuPlan` records
+  the shape-derived loop structure; strides are resolved at `execute()`
+  time from the live `StridedView`. Concretely, the key must include:
+  - The `PrimDescriptor` discriminant (enum variant tag)
+  - All mode labels (`modes_a`, `modes_b`, `modes_c`) from the descriptor
+  - The concrete dimension value for each mode (i.e., the shapes of all
+    input and output tensors)
+  - For `BatchedGemm`: `(batch_dims, m, n, k)`
+  - For `Reduce`/`Trace`: the `ReduceOp` kind
+  - For `ElementwiseUnary`: the `UnaryOp` kind
+
+- **GPU** (`CudaBackend`, `RocmBackend`): Key = `(PrimDescriptor variant,
+  input shapes, output shape, input strides, output strides, scalar data
+  type)`. cuTENSOR/hipTENSOR plans encode memory layout into the plan
+  handle — a plan created for row-major input cannot be reused for
+  column-major input. Concretely, the key must include everything in the
+  CPU key **plus**:
+  - The stride vector for each input tensor
+  - The stride vector for the output tensor
+  - The scalar element type (e.g., `f32` vs `f64`), encoded as a
+    `cutensorDataType_t` / `hiptensorDataType_t` discriminant
+
+  See [gpu-backend-design.md](./gpu-backend-design.md) for the full GPU
+  plan lifecycle and the G4 problem entry.
 
 ---
 
