@@ -123,7 +123,6 @@
 
 pub mod backend;
 
-use backend::FaerOps;
 use chainrules_core::AdResult;
 use num_traits::Float;
 use tenferro_algebra::Scalar;
@@ -146,9 +145,8 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 /// fn my_func<T: LinalgScalar>(x: T) -> T { x }
 /// let y = my_func(1.0_f64);
 /// ```
-#[allow(private_bounds)]
 pub trait LinalgScalar:
-    Scalar + Float + std::ops::Sub<Output = Self> + std::fmt::Debug + 'static + FaerOps
+    Scalar + Float + std::ops::Sub<Output = Self> + std::fmt::Debug + 'static
 {
 }
 
@@ -1881,6 +1879,93 @@ fn phi<T: LinalgScalar>(data: &[T], n: usize) -> Vec<T> {
     result
 }
 
+// ============================================================================
+// LinalgBackend convenience wrappers for AD code
+// ============================================================================
+
+/// Mat mul via LinalgBackend, returning Vec for convenience in AD code.
+fn backend_mat_mul<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+    backend: &mut B,
+    a: &[T],
+    m: usize,
+    k: usize,
+    b: &[T],
+    n: usize,
+) -> Vec<T> {
+    let mut c = vec![T::zero(); m * n];
+    backend
+        .mat_mul(a, m, k, b, n, &mut c)
+        .expect("mat_mul failed in AD rule");
+    c
+}
+
+/// Solve via LinalgBackend, returning Vec for convenience in AD code.
+fn backend_solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+    backend: &mut B,
+    a: &[T],
+    b: &[T],
+    n: usize,
+    nrhs: usize,
+) -> Vec<T> {
+    let mut x = vec![T::zero(); n * nrhs];
+    backend
+        .solve(a, b, n, nrhs, &mut x)
+        .expect("solve failed in AD rule");
+    x
+}
+
+/// Solve triangular via LinalgBackend, returning Vec for convenience in AD code.
+fn backend_solve_tri<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+    backend: &mut B,
+    a: &[T],
+    b: &[T],
+    n: usize,
+    nrhs: usize,
+    upper: bool,
+) -> Vec<T> {
+    let mut x = vec![T::zero(); n * nrhs];
+    backend
+        .solve_triangular(a, b, n, nrhs, upper, &mut x)
+        .expect("solve_triangular failed in AD rule");
+    x
+}
+
+/// Thin SVD via LinalgBackend, returning (U, S, V) for convenience in AD code.
+/// Note: returns V (not Vt) as column-major n×k for convenience in AD code.
+fn backend_thin_svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+    backend: &mut B,
+    a: &[T],
+    m: usize,
+    n: usize,
+) -> (Vec<T>, Vec<T>, Vec<T>) {
+    let k = m.min(n);
+    let mut u = vec![T::zero(); m * k];
+    let mut s = vec![T::zero(); k];
+    let mut vt = vec![T::zero(); k * n];
+    backend
+        .thin_svd(a, m, n, &mut u, &mut s, &mut vt)
+        .expect("thin_svd failed in AD rule");
+    // Convert Vt (k×n) to V (n×k) for convenience
+    let v = transpose(&vt, k, n);
+    (u, s, v)
+}
+
+/// QR decomposition via LinalgBackend, returning (Q, R) for convenience in AD code.
+fn backend_qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+    backend: &mut B,
+    a: &[T],
+    m: usize,
+    n: usize,
+) -> (Vec<T>, Vec<T>) {
+    let k = m.min(n);
+    let mut q = vec![T::zero(); m * k];
+    let mut r = vec![T::zero(); k * n];
+    backend
+        .qr(a, m, n, &mut q, &mut r)
+        .expect("qr failed in AD rule");
+    (q, r)
+}
+
 /// phi* (adjoint of phi): phi*(X) = (X + X^T - diag(X)) / 2
 /// Diagonal gets halved, off-diagonal gets symmetrized.
 fn phi_star<T: LinalgScalar>(data: &[T], n: usize) -> Vec<T> {
@@ -1996,7 +2081,7 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             let (du_data, _) = extract_data(du);
             let du_b = &du_data[b * m * k..(b + 1) * m * k];
             // U^T dU (k×k)
-            let ut_du = T::mat_mul(&transpose(u_b, m, k), k, m, du_b, k);
+            let ut_du = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, du_b, k);
             for i in 0..k {
                 for j in 0..k {
                     let sym = ut_du[i + j * k] + ut_du[j + i * k];
@@ -2012,7 +2097,7 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             // dV = dVt^T (n×k)
             let dv_b = transpose(dvt_b, k, n);
             // V^T dV (k×k)
-            let vt_dv = T::mat_mul(&transpose(&v_b, n, k), k, n, &dv_b, k);
+            let vt_dv = backend_mat_mul(backend, &transpose(&v_b, n, k), k, n, &dv_b, k);
             for i in 0..k {
                 for j in 0..k {
                     let sym = vt_dv[i + j * k] + vt_dv[j + i * k];
@@ -2022,8 +2107,8 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         }
 
         // Core: dA_core = U * Gamma * V^T (m×k × k×k × k×n = m×n)
-        let u_gamma = T::mat_mul(u_b, m, k, &gamma, k);
-        let da_core = T::mat_mul(&u_gamma, m, k, &transpose(&v_b, n, k), n);
+        let u_gamma = backend_mat_mul(backend, u_b, m, k, &gamma, k);
+        let da_core = backend_mat_mul(backend, &u_gamma, m, k, &transpose(&v_b, n, k), n);
 
         // Copy core to output
         for i in 0..m * n {
@@ -2048,15 +2133,10 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
                     }
                 }
                 // (I - UU^T) * du_sinv * V^T
-                let uut_du = T::mat_mul(
-                    u_b,
-                    m,
-                    k,
-                    &T::mat_mul(&transpose(u_b, m, k), k, m, &du_sinv, k),
-                    k,
-                );
+                let inner = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, &du_sinv, k);
+                let uut_du = backend_mat_mul(backend, u_b, m, k, &inner, k);
                 let proj = sub_vec(&du_sinv, &uut_du);
-                let correction = T::mat_mul(&proj, m, k, &transpose(&v_b, n, k), n);
+                let correction = backend_mat_mul(backend, &proj, m, k, &transpose(&v_b, n, k), n);
                 for i in 0..m * n {
                     grad_a[b * m * n + i] = grad_a[b * m * n + i] + correction[i];
                 }
@@ -2071,13 +2151,8 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
                 let dv_b = transpose(dvt_b, k, n);
                 // diag(1/S) * dV^T (k×n) = diag(1/S) * Vt_cotangent
                 // But we need dV (n×k), so: (I - VV^T) dV → project
-                let vvt_dv = T::mat_mul(
-                    &v_b,
-                    n,
-                    k,
-                    &T::mat_mul(&transpose(&v_b, n, k), k, n, &dv_b, k),
-                    k,
-                );
+                let inner = backend_mat_mul(backend, &transpose(&v_b, n, k), k, n, &dv_b, k);
+                let vvt_dv = backend_mat_mul(backend, &v_b, n, k, &inner, k);
                 let proj_dv = sub_vec(&dv_b, &vvt_dv);
                 // U * diag(1/S) * proj_dv^T
                 let mut u_sinv = vec![T::zero(); m * k];
@@ -2091,7 +2166,8 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
                         u_sinv[i + j * m] = u_b[i + j * m] * sinv;
                     }
                 }
-                let correction = T::mat_mul(&u_sinv, m, k, &transpose(&proj_dv, n, k), n);
+                let correction =
+                    backend_mat_mul(backend, &u_sinv, m, k, &transpose(&proj_dv, n, k), n);
                 for i in 0..m * n {
                     grad_a[b * m * n + i] = grad_a[b * m * n + i] + correction[i];
                 }
@@ -2159,15 +2235,15 @@ pub fn qr_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
         // For thin QR (m >= n): A = QR where Q is m×k, R is k×n
         // W = R dR^T - dQ^T Q (k×k)
-        let r_drt = T::mat_mul(r_b, k, n, &transpose(&dr_b, k, n), k);
-        let dqt_q = T::mat_mul(&transpose(&dq_b, m, k), k, m, q_b, k);
+        let r_drt = backend_mat_mul(backend, r_b, k, n, &transpose(&dr_b, k, n), k);
+        let dqt_q = backend_mat_mul(backend, &transpose(&dq_b, m, k), k, m, q_b, k);
         let w = sub_vec(&r_drt, &dqt_q);
 
         // H = copyltu(W) — symmetrize from lower triangle
         let h = copyltu(&w, k);
 
         // B = dQ + Q H (m×k)
-        let qh = T::mat_mul(q_b, m, k, &h, k);
+        let qh = backend_mat_mul(backend, q_b, m, k, &h, k);
         let rhs = add_vec(&dq_b, &qh);
 
         // dA = B R^{-T} = solve R^T x = B^T, then transpose
@@ -2187,7 +2263,7 @@ pub fn qr_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
         // dA[:, :k] = B R_square^{-T} (m×k solve)
         let rhs_t = transpose(&rhs, m, k);
-        let da_t = T::mat_solve_triangular(&r_square, &rhs_t, k, m, true);
+        let da_t = backend_solve_tri(backend, &r_square, &rhs_t, k, m, true);
         let da_first_k = transpose(&da_t, k, m);
 
         // Copy first k columns
@@ -2274,8 +2350,9 @@ pub fn lu_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         };
 
         // F_bar = tril_strict(L^T dL) + triu(dU U^T) (k×k)
-        let lt_dl = T::mat_mul(&transpose(l_b, m, k), k, m, &dl_b[..m * k], k);
-        let du_ut = T::mat_mul(
+        let lt_dl = backend_mat_mul(backend, &transpose(l_b, m, k), k, m, &dl_b[..m * k], k);
+        let du_ut = backend_mat_mul(
+            backend,
             &du_b[..k * k],
             k,
             n.min(k),
@@ -2306,7 +2383,7 @@ pub fn lu_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         } else {
             lt
         };
-        let linvt_fbar = T::mat_solve_triangular(&lt_square, &f_bar, k, k, true);
+        let linvt_fbar = backend_solve_tri(backend, &lt_square, &f_bar, k, k, true);
 
         let ut = transpose(u_b, k, n);
         let ut_square: Vec<T> = if n > k {
@@ -2320,8 +2397,14 @@ pub fn lu_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         } else {
             ut
         };
-        let da_inner_t =
-            T::mat_solve_triangular(&ut_square, &transpose(&linvt_fbar, k, k), k, k, false);
+        let da_inner_t = backend_solve_tri(
+            backend,
+            &ut_square,
+            &transpose(&linvt_fbar, k, k),
+            k,
+            k,
+            false,
+        );
         let da_inner = transpose(&da_inner_t, k, k);
 
         // Apply P^T (inverse permutation)
@@ -2430,7 +2513,7 @@ pub fn eigen_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         if let Some(ref dv) = cotangent.vectors {
             let (dv_data, _) = extract_data(dv);
             let dv_b = &dv_data[b * n * n..(b + 1) * n * n];
-            let vt_dv = T::mat_mul(&transpose(v_b, n, n), n, n, dv_b, n);
+            let vt_dv = backend_mat_mul(backend, &transpose(v_b, n, n), n, n, dv_b, n);
             let half = T::from(0.5).unwrap();
             for i in 0..n {
                 for j in 0..n {
@@ -2441,8 +2524,8 @@ pub fn eigen_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         }
 
         // dA = V D V^T
-        let vd = T::mat_mul(v_b, n, n, &d_mat, n);
-        let da_b = T::mat_mul(&vd, n, n, &transpose(v_b, n, n), n);
+        let vd = backend_mat_mul(backend, v_b, n, n, &d_mat, n);
+        let da_b = backend_mat_mul(backend, &vd, n, n, &transpose(v_b, n, n), n);
 
         grad_a[b * n * n..(b + 1) * n * n].copy_from_slice(&da_b);
     }
@@ -2504,7 +2587,7 @@ pub fn lstsq_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         // z = A^{+T} dx = (A^T A)^{-1} A dx (solve via the transpose pinv)
         // A^T A z = A^T ... but simpler: z = pinv(A^T) dx
         // Use QR: A = QR, then A^{+T} = Q R^{-1}, so z = Q R^{-1} dx
-        let (q_d, r_d) = T::qr_decomp(a_b, m, n);
+        let (q_d, r_d) = backend_qr(backend, a_b, m, n);
         let k = m.min(n);
         // r_square: first k×k of R
         let r_square: Vec<T> = {
@@ -2516,12 +2599,12 @@ pub fn lstsq_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             }
             rs
         };
-        let rinv_dx = T::mat_solve_triangular(&r_square, dx_b, k, 1, true);
+        let rinv_dx = backend_solve_tri(backend, &r_square, dx_b, k, 1, true);
         // z = Q * rinv_dx (m×1)
-        let z = T::mat_mul(&q_d, m, k, &rinv_dx, 1);
+        let z = backend_mat_mul(backend, &q_d, m, k, &rinv_dx, 1);
 
         // residual = b - Ax
-        let ax = T::mat_mul(a_b, m, n, x_b, 1);
+        let ax = backend_mat_mul(backend, a_b, m, n, x_b, 1);
         let residual: Vec<T> = b_b
             .iter()
             .zip(ax.iter())
@@ -2596,18 +2679,18 @@ pub fn cholesky_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let dl_b = &dl_data[b * n * n..(b + 1) * n * n];
 
         // S = tril(L^T dL)
-        let lt_dl = T::mat_mul(&transpose(l_b, n, n), n, n, dl_b, n);
+        let lt_dl = backend_mat_mul(backend, &transpose(l_b, n, n), n, n, dl_b, n);
         let s = tril(&lt_dl, n);
 
         // Apply phi*: symmetrize S → (S + S^T) / 2
         let s_sym = phi_star(&s, n);
 
         // Solve L^T x = S_sym → x = L^{-T} S_sym
-        let x = T::mat_solve_triangular(&transpose(l_b, n, n), &s_sym, n, n, true);
+        let x = backend_solve_tri(backend, &transpose(l_b, n, n), &s_sym, n, n, true);
 
         // Solve x L = result → result = x L^{-1} → L^T result^T = x^T → result^T = L^{-T} x^T
         let xt = transpose(&x, n, n);
-        let result_t = T::mat_solve_triangular(&transpose(l_b, n, n), &xt, n, n, true);
+        let result_t = backend_solve_tri(backend, &transpose(l_b, n, n), &xt, n, n, true);
         let da_b = transpose(&result_t, n, n);
 
         grad_a[b * n * n..(b + 1) * n * n].copy_from_slice(&da_b);
@@ -2668,13 +2751,13 @@ pub fn solve_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
         // G = A^{-T} dx = solve(A^T, dx)
         let at = transpose(a_b, n, n);
-        let g = T::mat_solve(&at, dx_b, n, nrhs);
+        let g = backend_solve(backend, &at, dx_b, n, nrhs);
 
         // dB = G
         grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
 
         // dA = -G x^T (n×nrhs × nrhs×n = n×n)
-        let g_xt = T::mat_mul(&g, n, nrhs, &transpose(x_b, n, nrhs), n);
+        let g_xt = backend_mat_mul(backend, &g, n, nrhs, &transpose(x_b, n, nrhs), n);
         let neg_g_xt = scale_vec(&g_xt, -T::one());
         grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg_g_xt);
     }
@@ -2728,8 +2811,8 @@ pub fn inv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let db_b = &db_data[batch * n * n..(batch + 1) * n * n];
 
         let bt = transpose(b_b, n, n);
-        let bt_db = T::mat_mul(&bt, n, n, db_b, n);
-        let bt_db_bt = T::mat_mul(&bt_db, n, n, &bt, n);
+        let bt_db = backend_mat_mul(backend, &bt, n, n, db_b, n);
+        let bt_db_bt = backend_mat_mul(backend, &bt_db, n, n, &bt, n);
         let neg = scale_vec(&bt_db_bt, -T::one());
         grad_a[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg);
     }
@@ -2780,7 +2863,7 @@ pub fn det_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let dd = ddet_data[batch];
 
         // A^{-T}
-        let a_inv = T::mat_solve(a_b, &eye::<T>(n), n, n);
+        let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n);
         let a_inv_t = transpose(&a_inv, n, n);
 
         let scale = dd * d;
@@ -2813,7 +2896,7 @@ pub fn det_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let grad_a = slogdet_rrule(&a, &cotangent).unwrap();
 /// ```
 pub fn slogdet_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
-    _backend: &mut B,
+    backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &SlogdetCotangent<T>,
 ) -> AdResult<Tensor<T>> {
@@ -2832,7 +2915,7 @@ pub fn slogdet_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
             let dl = dlog_data[batch];
 
-            let a_inv = T::mat_solve(a_b, &eye::<T>(n), n, n);
+            let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n);
             let a_inv_t = transpose(&a_inv, n, n);
             let da_b = scale_vec(&a_inv_t, dl);
             grad_a[batch * n * n..(batch + 1) * n * n].copy_from_slice(&da_b);
@@ -2917,31 +3000,31 @@ pub fn pinv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
         // Term 1: -(A+)^T dA+ (A+)^T = -apt * dap * apt^T
         // apt: m×n, dap: n×m, apt: m×n → m×n * n×m * m×n = m×n
-        let t1 = T::mat_mul(&apt, m, n, dap_b, m);
-        let t1 = T::mat_mul(&t1, m, m, &apt, n);
+        let t1 = backend_mat_mul(backend, &apt, m, n, dap_b, m);
+        let t1 = backend_mat_mul(backend, &t1, m, m, &apt, n);
         let t1 = scale_vec(&t1, -T::one());
 
         // Term 2: (I - AA+)(dA+)^T A+ (A+)^T
         // AA+ (m×m)
-        let aap = T::mat_mul(a_b, m, n, ap_b, m);
+        let aap = backend_mat_mul(backend, a_b, m, n, ap_b, m);
         let i_m = eye::<T>(m);
         let i_aap = sub_vec(&i_m, &aap);
         // (dA+)^T A+ = dapt * ap (m×n * n×m = m×m)
-        let dapt_ap = T::mat_mul(&dapt, m, n, ap_b, m);
+        let dapt_ap = backend_mat_mul(backend, &dapt, m, n, ap_b, m);
         // * (A+)^T = * apt (m×m * m×n = m×n)
-        let dapt_ap_apt = T::mat_mul(&dapt_ap, m, m, &apt, n);
-        let t2 = T::mat_mul(&i_aap, m, m, &dapt_ap_apt, n);
+        let dapt_ap_apt = backend_mat_mul(backend, &dapt_ap, m, m, &apt, n);
+        let t2 = backend_mat_mul(backend, &i_aap, m, m, &dapt_ap_apt, n);
 
         // Term 3: (A+)^T A+ (dA+)^T (I - A+A)
         // A+A (n×n)
-        let apa = T::mat_mul(ap_b, n, m, a_b, n);
+        let apa = backend_mat_mul(backend, ap_b, n, m, a_b, n);
         let i_n = eye::<T>(n);
         let i_apa = sub_vec(&i_n, &apa);
         // (A+)^T A+ = apt * ap (m×n * n×m = m×m)
-        let apt_ap = T::mat_mul(&apt, m, n, ap_b, m);
+        let apt_ap = backend_mat_mul(backend, &apt, m, n, ap_b, m);
         // * (dA+)^T = * dapt (m×m * m×n = m×n)
-        let apt_ap_dapt = T::mat_mul(&apt_ap, m, m, &dapt, n);
-        let t3 = T::mat_mul(&apt_ap_dapt, m, n, &i_apa, n);
+        let apt_ap_dapt = backend_mat_mul(backend, &apt_ap, m, m, &dapt, n);
+        let t3 = backend_mat_mul(backend, &apt_ap_dapt, m, n, &i_apa, n);
 
         let da_b = add_vec(&t1, &add_vec(&t2, &t3));
         grad_a[batch * m * n..(batch + 1) * m * n].copy_from_slice(&da_b);
@@ -3029,9 +3112,9 @@ pub fn norm_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             // dA = dn * U V^T
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = T::thin_svd(a_b, m, n);
+                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n);
                 let k = m.min(n);
-                let uv = T::mat_mul(&u, m, k, &transpose(&v, n, k), n);
+                let uv = backend_mat_mul(backend, &u, m, k, &transpose(&v, n, k), n);
                 let dn = dn_data[batch];
                 for i in 0..m * n {
                     grad_a[batch * m * n + i] = dn * uv[i];
@@ -3042,7 +3125,7 @@ pub fn norm_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             // dA = dn * u1 v1^T (rank-1 outer product of leading singular vectors)
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = T::thin_svd(a_b, m, n);
+                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n);
                 let dn = dn_data[batch];
                 for j in 0..n {
                     for i in 0..m {
@@ -3116,9 +3199,9 @@ pub fn svd_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let da_b = &da_data[b * m * n..(b + 1) * m * n];
 
         // C = U^T dA V (k×k)
-        let ut_da = T::mat_mul(&transpose(u_b, m, k), k, m, da_b, n);
+        let ut_da = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, da_b, n);
         let v_b = transpose(vt_b, k, n);
-        let c = T::mat_mul(&ut_da, k, n, &v_b, k);
+        let c = backend_mat_mul(backend, &ut_da, k, n, &v_b, k);
 
         // dS = diag(C)
         for i in 0..k {
@@ -3151,23 +3234,18 @@ pub fn svd_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             }
         }
         let f_inner = hadamard(&f_mat, &sc_t_plus_cs);
-        let du_core = T::mat_mul(u_b, m, k, &f_inner, k);
+        let du_core = backend_mat_mul(backend, u_b, m, k, &f_inner, k);
 
         // Projector term for dU
         if m > k {
-            let uut_da = T::mat_mul(
-                u_b,
-                m,
-                k,
-                &T::mat_mul(&transpose(u_b, m, k), k, m, da_b, n),
-                n,
-            );
+            let inner = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, da_b, n);
+            let uut_da = backend_mat_mul(backend, u_b, m, k, &inner, n);
             let proj_da: Vec<T> = da_b
                 .iter()
                 .zip(uut_da.iter())
                 .map(|(&a, &b)| a - b)
                 .collect();
-            let proj_da_v = T::mat_mul(&proj_da, m, n, &v_b, k);
+            let proj_da_v = backend_mat_mul(backend, &proj_da, m, n, &v_b, k);
             for j in 0..k {
                 let sinv = if s_b[j].abs() > eta {
                     T::one() / s_b[j]
@@ -3191,13 +3269,13 @@ pub fn svd_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             }
         }
         let f_inner2 = hadamard(&f_mat, &st_c_plus_ct_s);
-        let dvt_core = T::mat_mul(&f_inner2, k, k, vt_b, n);
+        let dvt_core = backend_mat_mul(backend, &f_inner2, k, k, vt_b, n);
 
         if n > k {
-            let vvt = T::mat_mul(&v_b, n, k, vt_b, n);
+            let vvt = backend_mat_mul(backend, &v_b, n, k, vt_b, n);
             let i_n = eye::<T>(n);
             let i_vvt = sub_vec(&i_n, &vvt);
-            let ut_da = T::mat_mul(&transpose(u_b, m, k), k, m, da_b, n);
+            let ut_da = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, da_b, n);
             let sinv_ut_da = {
                 let mut r = vec![T::zero(); k * n];
                 for i in 0..k {
@@ -3212,7 +3290,7 @@ pub fn svd_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
                 }
                 r
             };
-            let proj = T::mat_mul(&sinv_ut_da, k, n, &i_vvt, n);
+            let proj = backend_mat_mul(backend, &sinv_ut_da, k, n, &i_vvt, n);
             dvt_data[b * k * n..(b + 1) * k * n].copy_from_slice(&add_vec(&dvt_core, &proj));
         } else {
             dvt_data[b * k * n..(b + 1) * k * n].copy_from_slice(&dvt_core);
@@ -3275,7 +3353,7 @@ pub fn qr_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let da_b = &da_data[b * m * n..(b + 1) * m * n];
 
         // Q^T dA (k×n)
-        let qt_da = T::mat_mul(&transpose(q_b, m, k), k, m, da_b, n);
+        let qt_da = backend_mat_mul(backend, &transpose(q_b, m, k), k, m, da_b, n);
 
         // M = R^{-1} Q^T dA → solve R M = Q^T dA (for square R block)
         let r_sq: Vec<T> = {
@@ -3304,7 +3382,7 @@ pub fn qr_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         }
 
         // dQ = (dA - Q dR) R^{-1}
-        let q_dr = T::mat_mul(q_b, m, k, &dr_b_vec, n);
+        let q_dr = backend_mat_mul(backend, q_b, m, k, &dr_b_vec, n);
         let da_minus_qdr: Vec<T> = da_b.iter().zip(q_dr.iter()).map(|(&a, &b)| a - b).collect();
 
         // Solve (dA - Q dR) = dQ R → dQ = (dA - Q dR) R^{-1}
@@ -3321,7 +3399,7 @@ pub fn qr_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         // Solve: dQ R = rhs → dQ = rhs R^{-1} → R^T dQ^T = rhs^T
         let rhs_t = transpose(&rhs, m, k);
         let r_sq_t = transpose(&r_sq, k, k);
-        let dq_t = T::mat_solve_triangular(&r_sq_t, &rhs_t, k, m, false);
+        let dq_t = backend_solve_tri(backend, &r_sq_t, &rhs_t, k, m, false);
         let dq_b_vec = transpose(&dq_t, k, m);
 
         dq_data[b * m * k..(b + 1) * m * k].copy_from_slice(&dq_b_vec);
@@ -3415,7 +3493,7 @@ pub fn lu_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             }
             s
         };
-        let linv_pda = T::mat_solve_triangular(&l_sq, &pda_sq, k, n, false);
+        let linv_pda = backend_solve_tri(backend, &l_sq, &pda_sq, k, n, false);
 
         // Then: (L^{-1} PdA) U^{-1} → solve (result) U = linv_pda
         let u_sq: Vec<T> = {
@@ -3428,7 +3506,8 @@ pub fn lu_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             s
         };
         // Solve x U = linv_pda → U^T x^T = linv_pda^T
-        let f_t = T::mat_solve_triangular(
+        let f_t = backend_solve_tri(
+            backend,
             &transpose(&u_sq, k, k),
             &transpose(&linv_pda, k, n),
             k,
@@ -3439,7 +3518,7 @@ pub fn lu_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
         // dL = L tril_strict(F) (m×k)
         let tril_f = tril_strict(&f, k);
-        let dl_b_vec = T::mat_mul(&l_sq, k, k, &tril_f, k);
+        let dl_b_vec = backend_mat_mul(backend, &l_sq, k, k, &tril_f, k);
         for j in 0..k {
             for i in 0..k {
                 dl_data[b * m * k + i + j * m] = dl_b_vec[i + j * k];
@@ -3448,7 +3527,7 @@ pub fn lu_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
         // dU = triu(F) U (k×n)
         let triu_f = triu(&f, k);
-        let du_b_vec = T::mat_mul(&triu_f, k, k, &u_sq, k);
+        let du_b_vec = backend_mat_mul(backend, &triu_f, k, k, &u_sq, k);
         for j in 0..k {
             for i in 0..k {
                 du_data[b * k * n + i + j * k] = du_b_vec[i + j * k];
@@ -3508,8 +3587,8 @@ pub fn eigen_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let da_b = &da_data[b * n * n..(b + 1) * n * n];
 
         // C = V^T dA V (n×n)
-        let vt_da = T::mat_mul(&transpose(v_b, n, n), n, n, da_b, n);
-        let c = T::mat_mul(&vt_da, n, n, v_b, n);
+        let vt_da = backend_mat_mul(backend, &transpose(v_b, n, n), n, n, da_b, n);
+        let c = backend_mat_mul(backend, &vt_da, n, n, v_b, n);
 
         // dE = diag(C)
         for i in 0..n {
@@ -3534,7 +3613,7 @@ pub fn eigen_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
                 }
             }
         }
-        let dv_b_vec = T::mat_mul(v_b, n, n, &fc, n);
+        let dv_b_vec = backend_mat_mul(backend, v_b, n, n, &fc, n);
         dv_data[b * n * n..(b + 1) * n * n].copy_from_slice(&dv_b_vec);
     }
 
@@ -3595,18 +3674,18 @@ pub fn lstsq_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let db_b = &db_data[batch * m..(batch + 1) * m];
 
         // dA x (m×1)
-        let da_x = T::mat_mul(da_b, m, n, x_b, 1);
+        let da_x = backend_mat_mul(backend, da_b, m, n, x_b, 1);
         // db - dA x
         let rhs: Vec<T> = db_b.iter().zip(da_x.iter()).map(|(&a, &b)| a - b).collect();
 
         // A^+ rhs = (A^T A)^{-1} A^T rhs
-        let at_rhs = T::mat_mul(&transpose(a_b, m, n), n, m, &rhs, 1);
-        let ata = T::mat_mul(&transpose(a_b, m, n), n, m, a_b, n);
-        let dx_b_vec = T::mat_solve(&ata, &at_rhs, n, 1);
+        let at_rhs = backend_mat_mul(backend, &transpose(a_b, m, n), n, m, &rhs, 1);
+        let ata = backend_mat_mul(backend, &transpose(a_b, m, n), n, m, a_b, n);
+        let dx_b_vec = backend_solve(backend, &ata, &at_rhs, n, 1);
         dx_data[batch * n..(batch + 1) * n].copy_from_slice(&dx_b_vec);
 
         // d(residual) = db - dA x - A dx
-        let a_dx = T::mat_mul(a_b, m, n, &dx_b_vec, 1);
+        let a_dx = backend_mat_mul(backend, a_b, m, n, &dx_b_vec, 1);
         for i in 0..m {
             dres_data[batch * m + i] = rhs[i] - a_dx[i];
         }
@@ -3660,16 +3739,17 @@ pub fn cholesky_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let da_b = &da_data[b * n * n..(b + 1) * n * n];
 
         // L^{-1} dA: solve L x = dA
-        let linv_da = T::mat_solve_triangular(l_b, da_b, n, n, false);
+        let linv_da = backend_solve_tri(backend, l_b, da_b, n, n, false);
         // (L^{-1} dA) L^{-T}: solve (result) L^T = linv_da → L x^T = linv_da^T
-        let linv_da_linvt_t = T::mat_solve_triangular(l_b, &transpose(&linv_da, n, n), n, n, false);
+        let linv_da_linvt_t =
+            backend_solve_tri(backend, l_b, &transpose(&linv_da, n, n), n, n, false);
         let inner = transpose(&linv_da_linvt_t, n, n);
 
         // phi(inner) = tril with diagonal halved
         let phi_inner = phi(&inner, n);
 
         // dL = L phi(inner)
-        let dl_b_vec = T::mat_mul(l_b, n, n, &phi_inner, n);
+        let dl_b_vec = backend_mat_mul(backend, l_b, n, n, &phi_inner, n);
         dl_data[b * n * n..(b + 1) * n * n].copy_from_slice(&dl_b_vec);
     }
 
@@ -3729,11 +3809,11 @@ pub fn solve_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let db_b = &db_data[batch * n * nrhs..(batch + 1) * n * nrhs];
 
         // dA x (n×nrhs)
-        let da_x = T::mat_mul(da_b, n, n, x_b, nrhs);
+        let da_x = backend_mat_mul(backend, da_b, n, n, x_b, nrhs);
         // db - dA x
         let rhs = sub_vec(db_b, &da_x);
         // A^{-1} (db - dA x)
-        let dx_b_vec = T::mat_solve(a_b, &rhs, n, nrhs);
+        let dx_b_vec = backend_solve(backend, a_b, &rhs, n, nrhs);
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b_vec);
     }
 
@@ -3779,8 +3859,8 @@ pub fn inv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let b_b = &binv_data[batch * n * n..(batch + 1) * n * n];
         let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
 
-        let b_da = T::mat_mul(b_b, n, n, da_b, n);
-        let b_da_b = T::mat_mul(&b_da, n, n, b_b, n);
+        let b_da = backend_mat_mul(backend, b_b, n, n, da_b, n);
+        let b_da_b = backend_mat_mul(backend, &b_da, n, n, b_b, n);
         let neg = scale_vec(&b_da_b, -T::one());
         db_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg);
     }
@@ -3828,8 +3908,8 @@ pub fn det_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
         let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
 
-        let a_inv = T::mat_solve(a_b, &eye::<T>(n), n, n);
-        let a_inv_da = T::mat_mul(&a_inv, n, n, da_b, n);
+        let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n);
+        let a_inv_da = backend_mat_mul(backend, &a_inv, n, n, da_b, n);
         let mut trace = T::zero();
         for i in 0..n {
             trace = trace + a_inv_da[i + i * n];
@@ -3880,8 +3960,8 @@ pub fn slogdet_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
         let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
 
-        let a_inv = T::mat_solve(a_b, &eye::<T>(n), n, n);
-        let a_inv_da = T::mat_mul(&a_inv, n, n, da_b, n);
+        let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n);
+        let a_inv_da = backend_mat_mul(backend, &a_inv, n, n, da_b, n);
         let mut trace = T::zero();
         for i in 0..n {
             trace = trace + a_inv_da[i + i * n];
@@ -3968,24 +4048,25 @@ pub fn pinv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         let apt = transpose(ap_b, n, m); // m×n
 
         // Term 1: -A+ dA A+ (n×m × m×n × n×m = n×m)
-        let ap_da = T::mat_mul(ap_b, n, m, da_b, n);
-        let t1 = scale_vec(&T::mat_mul(&ap_da, n, n, ap_b, m), -T::one());
+        let ap_da = backend_mat_mul(backend, ap_b, n, m, da_b, n);
+        let ap_da_ap = backend_mat_mul(backend, &ap_da, n, n, ap_b, m);
+        let t1 = scale_vec(&ap_da_ap, -T::one());
 
         // Term 2: (I - A+A) dA^T (A+)^T A+
-        let apa = T::mat_mul(ap_b, n, m, a_b, n); // n×n
+        let apa = backend_mat_mul(backend, ap_b, n, m, a_b, n); // n×n
         let i_n = eye::<T>(n);
         let i_apa = sub_vec(&i_n, &apa);
-        let dat_apt = T::mat_mul(&dat, n, m, &apt, n); // n×n
-        let dat_apt_ap = T::mat_mul(&dat_apt, n, n, ap_b, m); // n×m
-        let t2 = T::mat_mul(&i_apa, n, n, &dat_apt_ap, m);
+        let dat_apt = backend_mat_mul(backend, &dat, n, m, &apt, n); // n×n
+        let dat_apt_ap = backend_mat_mul(backend, &dat_apt, n, n, ap_b, m); // n×m
+        let t2 = backend_mat_mul(backend, &i_apa, n, n, &dat_apt_ap, m);
 
         // Term 3: A+ (A+)^T dA^T (I - AA+)
-        let aap = T::mat_mul(a_b, m, n, ap_b, m); // m×m
+        let aap = backend_mat_mul(backend, a_b, m, n, ap_b, m); // m×m
         let i_m = eye::<T>(m);
         let i_aap = sub_vec(&i_m, &aap);
-        let ap_apt = T::mat_mul(ap_b, n, m, &apt, n); // n×n
-        let ap_apt_dat = T::mat_mul(&ap_apt, n, n, &dat, m); // n×m
-        let t3 = T::mat_mul(&ap_apt_dat, n, m, &i_aap, m);
+        let ap_apt = backend_mat_mul(backend, ap_b, n, m, &apt, n); // n×n
+        let ap_apt_dat = backend_mat_mul(backend, &ap_apt, n, n, &dat, m); // n×m
+        let t3 = backend_mat_mul(backend, &ap_apt_dat, n, m, &i_aap, m);
 
         let dap_b_vec = add_vec(&t1, &add_vec(&t2, &t3));
         dap_data[batch * n * m..(batch + 1) * n * m].copy_from_slice(&dap_b_vec);
@@ -4075,10 +4156,10 @@ pub fn norm_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
                 let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = T::thin_svd(a_b, m, n);
+                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n);
                 let k = m.min(n);
-                let ut_da = T::mat_mul(&transpose(&u, m, k), k, m, da_b, n);
-                let ut_da_v = T::mat_mul(&ut_da, k, n, &v, k);
+                let ut_da = backend_mat_mul(backend, &transpose(&u, m, k), k, m, da_b, n);
+                let ut_da_v = backend_mat_mul(backend, &ut_da, k, n, &v, k);
                 let mut trace = T::zero();
                 for i in 0..k {
                     trace = trace + ut_da_v[i + i * k];
@@ -4091,7 +4172,7 @@ pub fn norm_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
                 let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = T::thin_svd(a_b, m, n);
+                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n);
                 let mut val = T::zero();
                 for i in 0..m {
                     for j in 0..n {

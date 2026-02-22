@@ -156,10 +156,6 @@ pub trait LinalgBackend<T: Copy + 'static> {
     ) -> Result<()>;
 }
 
-// Re-export the FaerOps trait (still used by the existing public API; to be removed in Task 6).
-#[cfg(feature = "faer")]
-pub(crate) use faer_backend::FaerOps;
-
 /// Compute column-major strides for given dimensions.
 pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
     let mut strides = vec![0isize; dims.len()];
