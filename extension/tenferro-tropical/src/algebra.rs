@@ -102,19 +102,19 @@ impl Semiring for MaxPlusAlgebra {
     type Scalar = MaxPlus<f64>;
 
     fn zero() -> Self::Scalar {
-        todo!()
+        MaxPlus(f64::NEG_INFINITY)
     }
 
     fn one() -> Self::Scalar {
-        todo!()
+        MaxPlus(0.0)
     }
 
-    fn add(_a: Self::Scalar, _b: Self::Scalar) -> Self::Scalar {
-        todo!()
+    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
+        a + b // max
     }
 
-    fn mul(_a: Self::Scalar, _b: Self::Scalar) -> Self::Scalar {
-        todo!()
+    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
+        a * b // ordinary +
     }
 }
 
@@ -128,19 +128,19 @@ impl Semiring for MinPlusAlgebra {
     type Scalar = MinPlus<f64>;
 
     fn zero() -> Self::Scalar {
-        todo!()
+        MinPlus(f64::INFINITY)
     }
 
     fn one() -> Self::Scalar {
-        todo!()
+        MinPlus(0.0)
     }
 
-    fn add(_a: Self::Scalar, _b: Self::Scalar) -> Self::Scalar {
-        todo!()
+    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
+        a + b // min
     }
 
-    fn mul(_a: Self::Scalar, _b: Self::Scalar) -> Self::Scalar {
-        todo!()
+    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
+        a * b // ordinary +
     }
 }
 
@@ -154,18 +154,18 @@ impl Semiring for MaxMulAlgebra {
     type Scalar = MaxMul<f64>;
 
     fn zero() -> Self::Scalar {
-        todo!()
+        MaxMul(0.0)
     }
 
     fn one() -> Self::Scalar {
-        todo!()
+        MaxMul(1.0)
     }
 
-    fn add(_a: Self::Scalar, _b: Self::Scalar) -> Self::Scalar {
-        todo!()
+    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
+        a + b // max
     }
 
-    fn mul(_a: Self::Scalar, _b: Self::Scalar) -> Self::Scalar {
-        todo!()
+    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
+        a * b // ordinary *
     }
 }

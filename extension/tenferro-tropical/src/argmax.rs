@@ -46,8 +46,12 @@ impl ArgmaxTracker {
     /// let tracker = ArgmaxTracker::new(&[3, 5]);
     /// assert_eq!(tracker.output_shape(), &[3, 5]);
     /// ```
-    pub fn new(_output_shape: &[usize]) -> Self {
-        todo!()
+    pub fn new(output_shape: &[usize]) -> Self {
+        let total: usize = output_shape.iter().product();
+        Self {
+            output_shape: output_shape.to_vec(),
+            indices: vec![0; total],
+        }
     }
 
     /// Return the output shape.
@@ -75,7 +79,14 @@ impl ArgmaxTracker {
     /// let tracker = ArgmaxTracker::new(&[3, 5]);
     /// let k = tracker.winner_index(&[1, 2]);
     /// ```
-    pub fn winner_index(&self, _position: &[usize]) -> usize {
-        todo!()
+    pub fn winner_index(&self, position: &[usize]) -> usize {
+        // Column-major linear index
+        let mut linear = 0;
+        let mut stride = 1;
+        for (i, &p) in position.iter().enumerate() {
+            linear += p * stride;
+            stride *= self.output_shape[i];
+        }
+        self.indices[linear]
     }
 }

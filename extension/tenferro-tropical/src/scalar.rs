@@ -112,8 +112,12 @@ impl<T: Copy + PartialOrd> ops::Add for MaxPlus<T> {
     type Output = Self;
 
     /// Tropical addition: max(a, b).
-    fn add(self, _rhs: Self) -> Self {
-        todo!()
+    fn add(self, rhs: Self) -> Self {
+        if self.0 >= rhs.0 {
+            self
+        } else {
+            rhs
+        }
     }
 }
 
@@ -121,26 +125,26 @@ impl<T: Copy + ops::Add<Output = T>> ops::Mul for MaxPlus<T> {
     type Output = Self;
 
     /// Tropical multiplication: a + b (ordinary addition).
-    fn mul(self, _rhs: Self) -> Self {
-        todo!()
+    fn mul(self, rhs: Self) -> Self {
+        MaxPlus(self.0 + rhs.0)
     }
 }
 
 impl<T: num_traits::Float> num_traits::Zero for MaxPlus<T> {
     /// Additive identity: −∞ (negative infinity).
     fn zero() -> Self {
-        todo!()
+        MaxPlus(T::neg_infinity())
     }
 
     fn is_zero(&self) -> bool {
-        todo!()
+        self.0 == T::neg_infinity()
     }
 }
 
 impl<T: num_traits::Float> num_traits::One for MaxPlus<T> {
     /// Multiplicative identity: 0.
     fn one() -> Self {
-        todo!()
+        MaxPlus(T::zero())
     }
 }
 
@@ -152,8 +156,12 @@ impl<T: Copy + PartialOrd> ops::Add for MinPlus<T> {
     type Output = Self;
 
     /// Tropical addition: min(a, b).
-    fn add(self, _rhs: Self) -> Self {
-        todo!()
+    fn add(self, rhs: Self) -> Self {
+        if self.0 <= rhs.0 {
+            self
+        } else {
+            rhs
+        }
     }
 }
 
@@ -161,26 +169,26 @@ impl<T: Copy + ops::Add<Output = T>> ops::Mul for MinPlus<T> {
     type Output = Self;
 
     /// Tropical multiplication: a + b (ordinary addition).
-    fn mul(self, _rhs: Self) -> Self {
-        todo!()
+    fn mul(self, rhs: Self) -> Self {
+        MinPlus(self.0 + rhs.0)
     }
 }
 
 impl<T: num_traits::Float> num_traits::Zero for MinPlus<T> {
     /// Additive identity: +∞ (positive infinity).
     fn zero() -> Self {
-        todo!()
+        MinPlus(T::infinity())
     }
 
     fn is_zero(&self) -> bool {
-        todo!()
+        self.0 == T::infinity()
     }
 }
 
 impl<T: num_traits::Float> num_traits::One for MinPlus<T> {
     /// Multiplicative identity: 0.
     fn one() -> Self {
-        todo!()
+        MinPlus(T::zero())
     }
 }
 
@@ -192,8 +200,12 @@ impl<T: Copy + PartialOrd> ops::Add for MaxMul<T> {
     type Output = Self;
 
     /// Tropical addition: max(a, b).
-    fn add(self, _rhs: Self) -> Self {
-        todo!()
+    fn add(self, rhs: Self) -> Self {
+        if self.0 >= rhs.0 {
+            self
+        } else {
+            rhs
+        }
     }
 }
 
@@ -201,26 +213,26 @@ impl<T: Copy + ops::Mul<Output = T>> ops::Mul for MaxMul<T> {
     type Output = Self;
 
     /// Tropical multiplication: a × b (ordinary multiplication).
-    fn mul(self, _rhs: Self) -> Self {
-        todo!()
+    fn mul(self, rhs: Self) -> Self {
+        MaxMul(self.0 * rhs.0)
     }
 }
 
 impl<T: num_traits::Float> num_traits::Zero for MaxMul<T> {
     /// Additive identity: 0 (for max, 0 is the identity when values are non-negative).
     fn zero() -> Self {
-        todo!()
+        MaxMul(T::zero())
     }
 
     fn is_zero(&self) -> bool {
-        todo!()
+        self.0 == T::zero()
     }
 }
 
 impl<T: num_traits::Float> num_traits::One for MaxMul<T> {
     /// Multiplicative identity: 1.
     fn one() -> Self {
-        todo!()
+        MaxMul(T::one())
     }
 }
 
