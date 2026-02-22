@@ -232,6 +232,98 @@ fn data_null_tensor_returns_error() {
 }
 
 // ============================================================================
+// Last-error message API tests
+// ============================================================================
+
+#[test]
+fn last_error_null_out_len_returns_error() {
+    unsafe {
+        let status = tfe_last_error_message(std::ptr::null_mut(), 0, std::ptr::null_mut());
+        assert_eq!(status, TFE_INVALID_ARGUMENT);
+    }
+}
+
+#[test]
+fn last_error_query_length_only() {
+    unsafe {
+        // Trigger an error to populate last-error
+        let mut status: tfe_status_t = -999;
+        let _ = tfe_tensor_f64_from_data(std::ptr::null(), 6, std::ptr::null(), 2, &mut status);
+        assert_ne!(status, TFE_SUCCESS);
+
+        // Query length (buf=NULL)
+        let mut out_len: usize = 0;
+        let s = tfe_last_error_message(std::ptr::null_mut(), 0, &mut out_len);
+        assert_eq!(s, TFE_SUCCESS);
+        assert!(out_len > 0); // includes null terminator
+    }
+}
+
+#[test]
+fn last_error_buffer_too_small() {
+    unsafe {
+        // Trigger an error that goes through map_device_error (shape mismatch)
+        let data = [1.0_f64; 5]; // 5 elements
+        let shape = [2_usize, 3]; // needs 6
+        let mut status: tfe_status_t = -999;
+        let _ = tfe_tensor_f64_from_data(
+            data.as_ptr(),
+            data.len(),
+            shape.as_ptr(),
+            shape.len(),
+            &mut status,
+        );
+        assert_ne!(status, TFE_SUCCESS);
+
+        // Query required length
+        let mut out_len: usize = 0;
+        tfe_last_error_message(std::ptr::null_mut(), 0, &mut out_len);
+        assert!(out_len > 1);
+
+        // Provide a too-small buffer
+        let mut buf = vec![0u8; 1];
+        let s = tfe_last_error_message(buf.as_mut_ptr(), buf.len(), &mut out_len);
+        assert_eq!(s, TFE_BUFFER_TOO_SMALL);
+        assert!(out_len > 1);
+    }
+}
+
+#[test]
+fn last_error_round_trip() {
+    unsafe {
+        // Trigger shape mismatch error via from_data
+        let data = [1.0_f64; 5]; // 5 elements
+        let shape = [2_usize, 3]; // needs 6
+        let mut status: tfe_status_t = -999;
+        let _ = tfe_tensor_f64_from_data(
+            data.as_ptr(),
+            data.len(),
+            shape.as_ptr(),
+            shape.len(),
+            &mut status,
+        );
+        assert_ne!(status, TFE_SUCCESS);
+
+        // Query length
+        let mut out_len: usize = 0;
+        tfe_last_error_message(std::ptr::null_mut(), 0, &mut out_len);
+
+        if out_len > 0 {
+            // Read the message
+            let mut buf = vec![0u8; out_len];
+            let s = tfe_last_error_message(buf.as_mut_ptr(), buf.len(), &mut out_len);
+            assert_eq!(s, TFE_SUCCESS);
+
+            // Should be a valid null-terminated string
+            let msg = std::ffi::CStr::from_ptr(buf.as_ptr() as *const i8)
+                .to_str()
+                .unwrap();
+            assert!(!msg.is_empty());
+        }
+    }
+}
+
+// ============================================================================
 // Phase 3: Einsum tests
 // ============================================================================
 
