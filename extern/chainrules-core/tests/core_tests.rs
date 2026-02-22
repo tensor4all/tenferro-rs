@@ -201,7 +201,10 @@ fn ad_result_ok() {
 #[test]
 fn ad_result_err() {
     let result: AdResult<i32> = Err(AutodiffError::MissingNode);
-    assert!(result.is_err());
+    match result {
+        Err(AutodiffError::MissingNode) => {}
+        other => panic!("expected Err(MissingNode), got {other:?}"),
+    }
 }
 
 // ============================================================================

@@ -54,14 +54,16 @@ fn cpu_context_creation() {
 
 #[test]
 fn cpu_context_thread_pool() {
-    let ctx = CpuContext::new(1);
-    let _pool = ctx.thread_pool();
+    let ctx = CpuContext::new(2);
+    let pool = ctx.thread_pool();
+    assert_eq!(pool.current_num_threads(), 2);
 }
 
 #[test]
 fn cpu_context_plan_cache() {
     let mut ctx = CpuContext::new(1);
     let _cache = ctx.plan_cache_mut();
+    // Verify we get a mutable reference to PlanCache (type-level check).
 }
 
 // ============================================================================
@@ -350,7 +352,12 @@ fn reduce_max_returns_error() {
     let a = StridedArray::<f64>::col_major(&[3, 4]);
     let mut c = StridedArray::<f64>::col_major(&[3]);
     let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
-    assert!(result.is_err());
+    match result {
+        Err(tenferro_device::Error::InvalidArgument(msg)) => {
+            assert!(msg.contains("Max"), "error should mention Max, got: {msg}");
+        }
+        other => panic!("expected InvalidArgument about Max, got: {other:?}"),
+    }
 }
 
 // ============================================================================
@@ -553,7 +560,15 @@ fn elementwise_unary_negate_returns_error() {
     let a = StridedArray::<f64>::col_major(&[3]);
     let mut c = StridedArray::<f64>::col_major(&[3]);
     let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
-    assert!(result.is_err());
+    match result {
+        Err(tenferro_device::Error::InvalidArgument(msg)) => {
+            assert!(
+                msg.contains("Negate"),
+                "error should mention Negate, got: {msg}"
+            );
+        }
+        other => panic!("expected InvalidArgument about Negate, got: {other:?}"),
+    }
 }
 
 // ============================================================================
@@ -597,14 +612,30 @@ fn backend_registry_default() {
 fn load_cutensor_returns_error() {
     let mut registry = BackendRegistry::new();
     let result = registry.load_cutensor("/nonexistent/path");
-    assert!(result.is_err());
+    match result {
+        Err(tenferro_device::Error::DeviceError(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("cutensor"),
+                "error should mention cutensor, got: {msg}"
+            );
+        }
+        other => panic!("expected DeviceError about cutensor, got: {other:?}"),
+    }
 }
 
 #[test]
 fn load_hiptensor_returns_error() {
     let mut registry = BackendRegistry::new();
     let result = registry.load_hiptensor("/nonexistent/path");
-    assert!(result.is_err());
+    match result {
+        Err(tenferro_device::Error::DeviceError(msg)) => {
+            assert!(
+                msg.to_lowercase().contains("hiptensor"),
+                "error should mention hiptensor, got: {msg}"
+            );
+        }
+        other => panic!("expected DeviceError about hiptensor, got: {other:?}"),
+    }
 }
 
 // ============================================================================

@@ -75,12 +75,24 @@ fn parse_uppercase() {
 
 #[test]
 fn parse_invalid_no_arrow() {
-    assert!(Subscripts::parse("ij,jk").is_err());
+    assert!(
+        matches!(
+            Subscripts::parse("ij,jk"),
+            Err(tenferro_device::Error::InvalidArgument(ref msg)) if msg.contains("->")
+        ),
+        "expected InvalidArgument mentioning '->' for missing arrow"
+    );
 }
 
 #[test]
 fn parse_invalid_char() {
-    assert!(Subscripts::parse("i1,1j->ij").is_err());
+    assert!(
+        matches!(
+            Subscripts::parse("i1,1j->ij"),
+            Err(tenferro_device::Error::InvalidArgument(ref msg)) if msg.contains("invalid")
+        ),
+        "expected InvalidArgument for invalid character"
+    );
 }
 
 #[test]
@@ -621,7 +633,11 @@ fn einsum_shape_mismatch() {
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     // j=3 in A but j=2 in B → shape mismatch
     let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None);
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(tenferro_device::Error::ShapeMismatch { .. })),
+        "expected ShapeMismatch, got: {:?}",
+        result.as_ref().err()
+    );
 }
 
 #[test]
@@ -630,5 +646,9 @@ fn einsum_wrong_operand_count() {
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     // Subscripts say 2 inputs but only 1 provided
     let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a], None);
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
+        "expected InvalidArgument for wrong operand count, got: {:?}",
+        result.as_ref().err()
+    );
 }
