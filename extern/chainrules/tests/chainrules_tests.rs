@@ -12,12 +12,20 @@ use chainrules::{
 
 #[test]
 fn tape_new() {
-    let _tape = Tape::<f64>::new();
+    let tape = Tape::<f64>::new();
+    // A fresh tape should be able to create leaves
+    let x = tape.leaf(1.0);
+    assert!(x.requires_grad());
+    assert_eq!(*x.value(), 1.0);
 }
 
 #[test]
 fn tape_default() {
-    let _tape = Tape::<f64>::default();
+    let tape = Tape::<f64>::default();
+    // Default tape behaves the same as Tape::new
+    let x = tape.leaf(2.0);
+    assert!(x.requires_grad());
+    assert_eq!(*x.value(), 2.0);
 }
 
 #[test]
@@ -473,7 +481,11 @@ fn pullback_plan_build() {
 fn pullback_plan_build_missing_node() {
     let x = TrackedTensor::new(2.0_f64);
     let result = PullbackPlan::build(&x);
-    assert!(result.is_err());
+    match result {
+        Err(AutodiffError::MissingNode) => {}
+        Err(other) => panic!("expected MissingNode, got {other:?}"),
+        Ok(_) => panic!("expected error"),
+    }
 }
 
 #[test]

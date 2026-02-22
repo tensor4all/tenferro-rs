@@ -8,28 +8,44 @@ use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring, Standard};
 // Scalar blanket impl
 // ============================================================================
 
+/// Compile-time contract: these types implement Scalar.
+/// Also verifies Scalar's supertraits (Copy, Send, Sync, Add, Mul, Zero, One, PartialEq)
+/// at runtime by exercising zero/one/arithmetic.
 #[test]
-fn f32_is_scalar() {
-    fn assert_scalar<T: Scalar>() {}
-    assert_scalar::<f32>();
+fn scalar_contract_f32() {
+    fn check<T: Scalar>(z: T, o: T) -> T {
+        z + o
+    }
+    assert_eq!(check(0.0_f32, 1.0_f32), 1.0_f32);
 }
 
 #[test]
-fn f64_is_scalar() {
-    fn assert_scalar<T: Scalar>() {}
-    assert_scalar::<f64>();
+fn scalar_contract_f64() {
+    fn check<T: Scalar>(a: T, b: T) -> T {
+        a * b
+    }
+    assert_eq!(check(3.0_f64, 4.0_f64), 12.0_f64);
 }
 
 #[test]
-fn complex32_is_scalar() {
-    fn assert_scalar<T: Scalar>() {}
-    assert_scalar::<Complex32>();
+fn scalar_contract_complex32() {
+    fn check<T: Scalar>(a: T, b: T) -> T {
+        a + b
+    }
+    let a = Complex32::new(1.0, 2.0);
+    let b = Complex32::new(3.0, 4.0);
+    assert_eq!(check(a, b), Complex32::new(4.0, 6.0));
 }
 
 #[test]
-fn complex64_is_scalar() {
-    fn assert_scalar<T: Scalar>() {}
-    assert_scalar::<Complex64>();
+fn scalar_contract_complex64() {
+    fn check<T: Scalar>(a: T, b: T) -> T {
+        a * b
+    }
+    let a = Complex64::new(1.0, 2.0);
+    let b = Complex64::new(3.0, 4.0);
+    // (1+2i)(3+4i) = -5+10i
+    assert_eq!(check(a, b), Complex64::new(-5.0, 10.0));
 }
 
 // ============================================================================
@@ -79,28 +95,38 @@ fn conjugate_involution() {
 // HasAlgebra
 // ============================================================================
 
+/// Compile-time contract: these types implement HasAlgebra<Algebra = Standard<T>>.
+/// Also verify the algebra type is correct at runtime.
 #[test]
 fn has_algebra_f32() {
-    fn check<T: HasAlgebra<Algebra = Standard<T>>>() {}
-    check::<f32>();
+    fn check_add<T: HasAlgebra<Algebra = Standard<T>> + Scalar>(a: T, b: T) -> T {
+        <Standard<T> as Semiring>::add(a, b)
+    }
+    assert_eq!(check_add(1.5_f32, 2.5_f32), 4.0_f32);
 }
 
 #[test]
 fn has_algebra_f64() {
-    fn check<T: HasAlgebra<Algebra = Standard<T>>>() {}
-    check::<f64>();
+    fn check_mul<T: HasAlgebra<Algebra = Standard<T>> + Scalar>(a: T, b: T) -> T {
+        <Standard<T> as Semiring>::mul(a, b)
+    }
+    assert_eq!(check_mul(3.0_f64, 7.0_f64), 21.0_f64);
 }
 
 #[test]
 fn has_algebra_complex32() {
-    fn check<T: HasAlgebra<Algebra = Standard<T>>>() {}
-    check::<Complex32>();
+    fn check_zero<T: HasAlgebra<Algebra = Standard<T>> + Scalar>() -> T {
+        <Standard<T> as Semiring>::zero()
+    }
+    assert_eq!(check_zero::<Complex32>(), Complex32::new(0.0, 0.0));
 }
 
 #[test]
 fn has_algebra_complex64() {
-    fn check<T: HasAlgebra<Algebra = Standard<T>>>() {}
-    check::<Complex64>();
+    fn check_one<T: HasAlgebra<Algebra = Standard<T>> + Scalar>() -> T {
+        <Standard<T> as Semiring>::one()
+    }
+    assert_eq!(check_one::<Complex64>(), Complex64::new(1.0, 0.0));
 }
 
 // ============================================================================

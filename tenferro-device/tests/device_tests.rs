@@ -215,11 +215,23 @@ fn preferred_devices_gpu_memory_no_backend() {
 #[test]
 fn preferred_devices_pinned_memory_no_backend() {
     let result = preferred_compute_devices(LogicalMemorySpace::PinnedMemory, OpKind::BatchedGemm);
-    assert!(result.is_err());
+    match result {
+        Err(Error::NoCompatibleComputeDevice { space, op }) => {
+            assert_eq!(space, LogicalMemorySpace::PinnedMemory);
+            assert_eq!(op, OpKind::BatchedGemm);
+        }
+        other => panic!("expected NoCompatibleComputeDevice, got {other:?}"),
+    }
 }
 
 #[test]
 fn preferred_devices_managed_memory_no_backend() {
     let result = preferred_compute_devices(LogicalMemorySpace::ManagedMemory, OpKind::Contract);
-    assert!(result.is_err());
+    match result {
+        Err(Error::NoCompatibleComputeDevice { space, op }) => {
+            assert_eq!(space, LogicalMemorySpace::ManagedMemory);
+            assert_eq!(op, OpKind::Contract);
+        }
+        other => panic!("expected NoCompatibleComputeDevice, got {other:?}"),
+    }
 }

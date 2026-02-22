@@ -127,7 +127,11 @@ fn from_slice_row_major() {
 fn from_slice_length_mismatch() {
     let data = [1.0, 2.0, 3.0];
     let result = Tensor::<f64>::from_slice(&data, &[2, 3], COL);
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
+        "expected InvalidArgument, got: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -149,14 +153,22 @@ fn from_vec_with_offset() {
 fn from_vec_invalid_layout() {
     let data = vec![1.0, 2.0, 3.0];
     let result = Tensor::<f64>::from_vec(data, &[2, 3], &[1, 2], 0);
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(tenferro_device::Error::StrideError(_))),
+        "expected StrideError, got: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn from_vec_strides_length_mismatch() {
     let data = vec![1.0; 6];
     let result = Tensor::<f64>::from_vec(data, &[2, 3], &[1], 0);
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
+        "expected InvalidArgument, got: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -349,19 +361,37 @@ fn permute_3d() {
 #[test]
 fn permute_invalid_length() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    assert!(t.permute(&[0]).is_err());
+    assert!(
+        matches!(
+            t.permute(&[0]),
+            Err(tenferro_device::Error::InvalidArgument(_))
+        ),
+        "expected InvalidArgument for wrong permutation length"
+    );
 }
 
 #[test]
 fn permute_out_of_range() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    assert!(t.permute(&[0, 5]).is_err());
+    assert!(
+        matches!(
+            t.permute(&[0, 5]),
+            Err(tenferro_device::Error::InvalidArgument(_))
+        ),
+        "expected InvalidArgument for out-of-range axis"
+    );
 }
 
 #[test]
 fn permute_duplicate() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    assert!(t.permute(&[0, 0]).is_err());
+    assert!(
+        matches!(
+            t.permute(&[0, 0]),
+            Err(tenferro_device::Error::InvalidArgument(_))
+        ),
+        "expected InvalidArgument for duplicate axis"
+    );
 }
 
 // ============================================================================
@@ -387,7 +417,13 @@ fn broadcast_same_shape() {
 #[test]
 fn broadcast_incompatible() {
     let t = Tensor::<f64>::ones(&[3, 2], MEM, COL);
-    assert!(t.broadcast(&[3, 4]).is_err());
+    assert!(
+        matches!(
+            t.broadcast(&[3, 4]),
+            Err(tenferro_device::Error::ShapeMismatch { .. })
+        ),
+        "expected ShapeMismatch for incompatible broadcast"
+    );
 }
 
 // ============================================================================
@@ -420,13 +456,25 @@ fn diagonal_data_access() {
 #[test]
 fn diagonal_mismatched_dims() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    assert!(t.diagonal(&[(0, 1)]).is_err());
+    assert!(
+        matches!(
+            t.diagonal(&[(0, 1)]),
+            Err(tenferro_device::Error::ShapeMismatch { .. })
+        ),
+        "expected ShapeMismatch for non-square diagonal"
+    );
 }
 
 #[test]
 fn diagonal_same_axis() {
     let t = Tensor::<f64>::zeros(&[3, 3], MEM, COL);
-    assert!(t.diagonal(&[(0, 0)]).is_err());
+    assert!(
+        matches!(
+            t.diagonal(&[(0, 0)]),
+            Err(tenferro_device::Error::InvalidArgument(_))
+        ),
+        "expected InvalidArgument for same-axis diagonal"
+    );
 }
 
 // ============================================================================
@@ -458,14 +506,26 @@ fn reshape_different_shape() {
 #[test]
 fn reshape_incompatible_size() {
     let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    assert!(t.reshape(&[5]).is_err());
+    assert!(
+        matches!(
+            t.reshape(&[5]),
+            Err(tenferro_device::Error::ShapeMismatch { .. })
+        ),
+        "expected ShapeMismatch for incompatible total size"
+    );
 }
 
 #[test]
 fn reshape_non_contiguous_fails() {
     let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
     let tp = t.permute(&[2, 0, 1]).unwrap();
-    assert!(tp.reshape(&[24]).is_err());
+    assert!(
+        matches!(
+            tp.reshape(&[24]),
+            Err(tenferro_device::Error::StrideError(_))
+        ),
+        "expected StrideError for non-contiguous reshape"
+    );
 }
 
 // ============================================================================
@@ -500,13 +560,25 @@ fn select_dim1() {
 #[test]
 fn select_out_of_range_dim() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    assert!(t.select(2, 0).is_err());
+    assert!(
+        matches!(
+            t.select(2, 0),
+            Err(tenferro_device::Error::InvalidArgument(_))
+        ),
+        "expected InvalidArgument for out-of-range dim"
+    );
 }
 
 #[test]
 fn select_out_of_range_index() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    assert!(t.select(0, 3).is_err());
+    assert!(
+        matches!(
+            t.select(0, 3),
+            Err(tenferro_device::Error::InvalidArgument(_))
+        ),
+        "expected InvalidArgument for out-of-range index"
+    );
 }
 
 // ============================================================================
@@ -537,7 +609,13 @@ fn narrow_full_range() {
 #[test]
 fn narrow_out_of_range() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    assert!(t.narrow(1, 3, 2).is_err()); // 3+2=5 > 4
+    assert!(
+        matches!(
+            t.narrow(1, 3, 2),
+            Err(tenferro_device::Error::InvalidArgument(_))
+        ),
+        "expected InvalidArgument for out-of-range narrow (3+2=5 > 4)"
+    );
 }
 
 // ============================================================================
@@ -662,9 +740,13 @@ fn to_memory_space_same_space() {
 #[test]
 fn to_memory_space_gpu_fails() {
     let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    assert!(t
-        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
-        .is_err());
+    assert!(
+        matches!(
+            t.to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 }),
+            Err(tenferro_device::Error::DeviceError(_))
+        ),
+        "expected DeviceError for GPU memory transfer"
+    );
 }
 
 // ============================================================================
