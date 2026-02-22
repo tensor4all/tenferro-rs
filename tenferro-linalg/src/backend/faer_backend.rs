@@ -1245,4 +1245,331 @@ mod tests {
         let result = backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt);
         assert!(result.is_err());
     }
+
+    // ========================================================================
+    // Complex64 backend tests
+    // ========================================================================
+
+    /// Helper: complex matrix multiplication C = A * B (col-major, m x k times k x n).
+    fn complex_mat_mul(
+        a: &[Complex64],
+        m: usize,
+        k: usize,
+        b: &[Complex64],
+        n: usize,
+    ) -> Vec<Complex64> {
+        let mut c = vec![Complex64::new(0.0, 0.0); m * n];
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for p in 0..k {
+                    sum += a[i + p * m] * b[p + j * k];
+                }
+                c[i + j * m] = sum;
+            }
+        }
+        c
+    }
+
+    /// Helper: maximum element-wise absolute difference between two Complex64 slices.
+    fn complex_max_err(a: &[Complex64], b: &[Complex64]) -> f64 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).norm())
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_complex64_identity() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // 2x2 complex identity, col-major
+        let a = [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)];
+        let mut u = vec![Complex64::new(0.0, 0.0); 4];
+        let mut s = [0.0_f64; 2];
+        let mut vt = vec![Complex64::new(0.0, 0.0); 4];
+
+        backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).unwrap();
+
+        // Singular values should be 1.0
+        for &val in &s {
+            assert!(
+                (val - 1.0).abs() < 1e-10,
+                "singular value should be 1.0, got {val}"
+            );
+        }
+
+        // Reconstruct: U * diag(S) * Vt should equal A
+        let mut recon = vec![Complex64::new(0.0, 0.0); 4];
+        for i in 0..2 {
+            for j in 0..2 {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for p in 0..2 {
+                    sum += u[i + p * 2] * s[p] * vt[p + j * 2];
+                }
+                recon[i + j * 2] = sum;
+            }
+        }
+        assert!(
+            complex_max_err(&recon, &a) < 1e-10,
+            "SVD reconstruction of complex identity failed"
+        );
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_complex64_hermitian() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // Hermitian matrix: [[2, 1+i], [1-i, 3]], col-major: [2, 1-i, 1+i, 3]
+        let a = [c(2.0, 0.0), c(1.0, -1.0), c(1.0, 1.0), c(3.0, 0.0)];
+        let m = 2;
+        let n = 2;
+        let k = 2;
+        let mut u = vec![Complex64::new(0.0, 0.0); m * k];
+        let mut s = vec![0.0_f64; k];
+        let mut vt = vec![Complex64::new(0.0, 0.0); k * n];
+
+        backend.thin_svd(&a, m, n, &mut u, &mut s, &mut vt).unwrap();
+
+        // Singular values should be positive
+        assert!(s[0] > 0.0);
+        assert!(s[1] > 0.0);
+        assert!(s[0] >= s[1]);
+
+        // Reconstruct: U * diag(S) * Vt = A
+        let mut recon = vec![Complex64::new(0.0, 0.0); m * n];
+        for i in 0..m {
+            for j in 0..n {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for p in 0..k {
+                    sum += u[i + p * m] * s[p] * vt[p + j * k];
+                }
+                recon[i + j * m] = sum;
+            }
+        }
+        assert!(
+            complex_max_err(&recon, &a) < 1e-10,
+            "SVD reconstruction of Hermitian complex matrix failed"
+        );
+    }
+
+    #[test]
+    fn faer_backend_qr_complex64() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // 3x2 complex matrix, col-major
+        let a = [
+            c(1.0, 1.0),
+            c(2.0, -1.0),
+            c(0.0, 3.0),
+            c(4.0, 0.0),
+            c(-1.0, 2.0),
+            c(3.0, 1.0),
+        ];
+        let m = 3;
+        let n = 2;
+        let k = 2;
+        let mut q = vec![Complex64::new(0.0, 0.0); m * k];
+        let mut r = vec![Complex64::new(0.0, 0.0); k * n];
+
+        backend.qr(&a, m, n, &mut q, &mut r).unwrap();
+
+        // Q * R should reconstruct A
+        let recon = complex_mat_mul(&q, m, k, &r, n);
+        assert!(
+            complex_max_err(&recon, &a) < 1e-10,
+            "QR reconstruction of complex matrix failed"
+        );
+    }
+
+    #[test]
+    fn faer_backend_lu_complex64() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // 3x3 complex matrix, col-major
+        let a = [
+            c(2.0, 1.0),
+            c(4.0, 0.0),
+            c(1.0, -1.0),
+            c(1.0, 0.0),
+            c(3.0, 2.0),
+            c(0.0, 1.0),
+            c(0.0, 1.0),
+            c(1.0, 0.0),
+            c(5.0, 0.0),
+        ];
+        let m = 3;
+        let n = 3;
+        let k = 3;
+        let mut perm = vec![0usize; m];
+        let mut l = vec![Complex64::new(0.0, 0.0); m * k];
+        let mut u_out = vec![Complex64::new(0.0, 0.0); k * n];
+
+        backend.lu(&a, m, n, &mut perm, &mut l, &mut u_out).unwrap();
+
+        // L * U = P * A -> reconstruct by applying P^{-1}
+        let lu_prod = complex_mat_mul(&l, m, k, &u_out, n);
+
+        // Apply P^{-1} to rows of lu_prod to get A back.
+        // perm[i] = j means row i of P*A comes from row j of A.
+        let mut recon = vec![Complex64::new(0.0, 0.0); m * n];
+        for i in 0..m {
+            for j in 0..n {
+                recon[perm[i] + j * m] = lu_prod[i + j * m];
+            }
+        }
+        assert!(
+            complex_max_err(&recon, &a) < 1e-10,
+            "LU reconstruction of complex matrix failed"
+        );
+    }
+
+    #[test]
+    fn faer_backend_cholesky_complex64() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // Hermitian positive definite: [[4, 1+i], [1-i, 3]], col-major: [4, 1-i, 1+i, 3]
+        let a = [c(4.0, 0.0), c(1.0, -1.0), c(1.0, 1.0), c(3.0, 0.0)];
+        let n = 2;
+        let mut l = vec![Complex64::new(0.0, 0.0); n * n];
+
+        backend.cholesky(&a, n, &mut l).unwrap();
+
+        // L * L^H should reconstruct A
+        let mut recon = vec![Complex64::new(0.0, 0.0); n * n];
+        for i in 0..n {
+            for j in 0..n {
+                let mut sum = Complex64::new(0.0, 0.0);
+                for p in 0..n {
+                    // L^H[p,j] = conj(L[j,p])
+                    sum += l[i + p * n] * l[j + p * n].conj();
+                }
+                recon[i + j * n] = sum;
+            }
+        }
+        assert!(
+            complex_max_err(&recon, &a) < 1e-10,
+            "Cholesky reconstruction of complex HPD matrix failed"
+        );
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_complex64() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // Hermitian: [[3, 1-i], [1+i, 2]], col-major: [3, 1+i, 1-i, 2]
+        // Eigenvalues: tr=5, det=3*2-(1-i)(1+i)=6-2=4, disc=sqrt(25-16)=3
+        // lambda = (5 +/- 3)/2 = 4, 1
+        let a = [c(3.0, 0.0), c(1.0, 1.0), c(1.0, -1.0), c(2.0, 0.0)];
+        let n = 2;
+        let mut values = vec![0.0_f64; n];
+        let mut vectors = vec![Complex64::new(0.0, 0.0); n * n];
+
+        backend.eigen_sym(&a, n, &mut values, &mut vectors).unwrap();
+
+        // Eigenvalues should be 1.0 and 4.0 (ascending)
+        assert!(
+            (values[0] - 1.0).abs() < 1e-10,
+            "eigenvalue[0] = {}, expected 1.0",
+            values[0]
+        );
+        assert!(
+            (values[1] - 4.0).abs() < 1e-10,
+            "eigenvalue[1] = {}, expected 4.0",
+            values[1]
+        );
+
+        // Verify A * v = lambda * v for each eigenvector
+        for col in 0..n {
+            let lambda = Complex64::new(values[col], 0.0);
+            for row in 0..n {
+                let mut av = Complex64::new(0.0, 0.0);
+                for p in 0..n {
+                    av += a[row + p * n] * vectors[p + col * n];
+                }
+                let lv = lambda * vectors[row + col * n];
+                assert!(
+                    (av - lv).norm() < 1e-10,
+                    "A*v != lambda*v at ({row},{col}): av={av}, lv={lv}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn faer_backend_mat_mul_complex64() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // A = 2x2 identity, B = [[1+i, 3], [2, 4-i]]
+        let a = [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)];
+        let b = [c(1.0, 1.0), c(2.0, 0.0), c(3.0, 0.0), c(4.0, -1.0)];
+        let mut result = vec![Complex64::new(0.0, 0.0); 4];
+
+        backend.mat_mul(&a, 2, 2, &b, 2, &mut result).unwrap();
+
+        // Identity * B = B
+        assert!(complex_max_err(&result, &b) < 1e-10, "mat_mul: I * B != B");
+    }
+
+    #[test]
+    fn faer_backend_solve_complex64() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // A = [[2+i, 1], [0, 3-i]], b = [3+i, 6-2i]
+        let a = [c(2.0, 1.0), c(0.0, 0.0), c(1.0, 0.0), c(3.0, -1.0)];
+        let b = [c(3.0, 1.0), c(6.0, -2.0)];
+        let mut x = vec![Complex64::new(0.0, 0.0); 2];
+
+        backend.solve(&a, &b, 2, 1, &mut x).unwrap();
+
+        // Verify A * x = b
+        let ax = complex_mat_mul(&a, 2, 2, &x, 1);
+        assert!(
+            complex_max_err(&ax, &b) < 1e-10,
+            "solve: A*x != b, got A*x = {:?}",
+            ax
+        );
+    }
+
+    #[test]
+    fn faer_backend_solve_triangular_complex64_lower() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // Lower triangular: [[2+i, 0], [1-i, 3]], col-major: [2+i, 1-i, 0, 3]
+        let a = [c(2.0, 1.0), c(1.0, -1.0), c(0.0, 0.0), c(3.0, 0.0)];
+        let b = [c(4.0, 2.0), c(5.0, 0.0)];
+        let mut x = vec![Complex64::new(0.0, 0.0); 2];
+
+        backend
+            .solve_triangular(&a, &b, 2, 1, false, &mut x)
+            .unwrap();
+
+        // Verify A * x = b
+        let ax = complex_mat_mul(&a, 2, 2, &x, 1);
+        assert!(
+            complex_max_err(&ax, &b) < 1e-10,
+            "solve_triangular(lower): A*x != b"
+        );
+    }
+
+    #[test]
+    fn faer_backend_solve_triangular_complex64_upper() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        // Upper triangular: [[3, 1+2i], [0, 2-i]], col-major: [3, 0, 1+2i, 2-i]
+        let a = [c(3.0, 0.0), c(0.0, 0.0), c(1.0, 2.0), c(2.0, -1.0)];
+        let b = [c(7.0, 2.0), c(4.0, -2.0)];
+        let mut x = vec![Complex64::new(0.0, 0.0); 2];
+
+        backend
+            .solve_triangular(&a, &b, 2, 1, true, &mut x)
+            .unwrap();
+
+        // Verify A * x = b
+        let ax = complex_mat_mul(&a, 2, 2, &x, 1);
+        assert!(
+            complex_max_err(&ax, &b) < 1e-10,
+            "solve_triangular(upper): A*x != b"
+        );
+    }
 }

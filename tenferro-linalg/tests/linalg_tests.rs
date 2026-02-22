@@ -856,3 +856,309 @@ fn test_solve_dimension_mismatch_returns_error() {
     let b = make_tensor(vec![1.0, 2.0], &[2, 1]);
     assert!(solve(&mut backend, &a, &b).is_err());
 }
+
+// ============================================================================
+// Complex64 integration tests (Tensor-level API)
+// ============================================================================
+
+use num_complex::Complex64;
+
+/// Create a column-major Tensor<Complex64> from a flat vec and shape.
+fn make_complex_tensor(data: Vec<Complex64>, dims: &[usize]) -> Tensor<Complex64> {
+    let ndim = dims.len();
+    let mut strides = vec![0isize; ndim];
+    if ndim > 0 {
+        strides[0] = 1;
+        for i in 1..ndim {
+            strides[i] = strides[i - 1] * dims[i - 1] as isize;
+        }
+    }
+    Tensor::from_vec(data, dims, &strides, 0).unwrap()
+}
+
+/// Extract flat data from a Tensor<Complex64>.
+fn complex_tensor_data(t: &Tensor<Complex64>) -> Vec<Complex64> {
+    let c = t.contiguous(COL);
+    let off = c.offset() as usize;
+    let len: usize = c.dims().iter().product();
+    c.buffer().as_slice().unwrap()[off..off + len].to_vec()
+}
+
+/// Extract flat data from a Tensor<f64> (for real results like singular values).
+fn real_tensor_data(t: &Tensor<f64>) -> Vec<f64> {
+    tensor_data(t)
+}
+
+/// Maximum element-wise absolute error between two Complex64 slices.
+fn complex_max_err(a: &[Complex64], b: &[Complex64]) -> f64 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x - y).norm())
+        .fold(0.0, f64::max)
+}
+
+/// Shorthand to construct Complex64.
+fn c(re: f64, im: f64) -> Complex64 {
+    Complex64::new(re, im)
+}
+
+#[test]
+fn test_svd_complex64_identity() {
+    let mut backend = FaerBackend::new();
+    let data = vec![c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)];
+    let a = make_complex_tensor(data, &[2, 2]);
+    let result = svd(&mut backend, &a, None).unwrap();
+
+    // Check shapes
+    assert_eq!(result.u.dims(), &[2, 2]);
+    assert_eq!(result.s.dims(), &[2]);
+    assert_eq!(result.vt.dims(), &[2, 2]);
+
+    // Singular values should be 1.0
+    let s = real_tensor_data(&result.s);
+    for &val in &s {
+        assert!(
+            (val - 1.0).abs() < 1e-10,
+            "singular value should be 1.0, got {val}"
+        );
+    }
+}
+
+#[test]
+fn test_svd_complex64_reconstruction() {
+    let mut backend = FaerBackend::new();
+    // Non-trivial 2x3 complex matrix
+    let data = vec![
+        c(1.0, 2.0),
+        c(3.0, -1.0),
+        c(0.0, 1.0),
+        c(4.0, 0.0),
+        c(-1.0, 3.0),
+        c(2.0, 2.0),
+    ];
+    let a = make_complex_tensor(data.clone(), &[2, 3]);
+    let result = svd(&mut backend, &a, None).unwrap();
+
+    let u = complex_tensor_data(&result.u);
+    let s = real_tensor_data(&result.s);
+    let vt = complex_tensor_data(&result.vt);
+    let m = 2;
+    let n = 3;
+    let k = 2;
+
+    assert_eq!(result.u.dims(), &[m, k]);
+    assert_eq!(result.s.dims(), &[k]);
+    assert_eq!(result.vt.dims(), &[k, n]);
+
+    // Reconstruct: A = U * diag(S) * Vt
+    let mut recon = vec![c(0.0, 0.0); m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut val = c(0.0, 0.0);
+            for l in 0..k {
+                val += u[i + l * m] * s[l] * vt[l + j * k];
+            }
+            recon[i + j * m] = val;
+        }
+    }
+
+    let err = complex_max_err(&data, &recon);
+    assert!(err < 1e-10, "SVD reconstruction error: {err}");
+}
+
+#[test]
+fn test_svd_complex64_with_max_rank() {
+    let mut backend = FaerBackend::new();
+    let data = vec![
+        c(1.0, 0.0),
+        c(0.0, 1.0),
+        c(2.0, 1.0),
+        c(-1.0, 0.0),
+        c(3.0, -1.0),
+        c(0.0, 2.0),
+    ];
+    let a = make_complex_tensor(data, &[2, 3]);
+    let opts = SvdOptions {
+        max_rank: Some(1),
+        cutoff: None,
+    };
+    let result = svd(&mut backend, &a, Some(&opts)).unwrap();
+    assert_eq!(result.s.dims(), &[1]);
+    assert_eq!(result.u.dims(), &[2, 1]);
+    assert_eq!(result.vt.dims(), &[1, 3]);
+}
+
+#[test]
+fn test_qr_complex64_reconstruction() {
+    let mut backend = FaerBackend::new();
+    let data = vec![
+        c(1.0, 1.0),
+        c(2.0, -1.0),
+        c(0.0, 3.0),
+        c(4.0, 0.0),
+        c(-1.0, 2.0),
+        c(3.0, 1.0),
+    ];
+    let a = make_complex_tensor(data.clone(), &[3, 2]);
+    let result = qr(&mut backend, &a).unwrap();
+
+    assert_eq!(result.q.dims(), &[3, 2]);
+    assert_eq!(result.r.dims(), &[2, 2]);
+
+    let q = complex_tensor_data(&result.q);
+    let r = complex_tensor_data(&result.r);
+    let m = 3;
+    let n = 2;
+    let k = 2;
+
+    // Q * R = A
+    let mut recon = vec![c(0.0, 0.0); m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut val = c(0.0, 0.0);
+            for l in 0..k {
+                val += q[i + l * m] * r[l + j * k];
+            }
+            recon[i + j * m] = val;
+        }
+    }
+    let err = complex_max_err(&data, &recon);
+    assert!(err < 1e-10, "QR reconstruction error: {err}");
+}
+
+#[test]
+fn test_lu_complex64_reconstruction() {
+    let mut backend = FaerBackend::new();
+    let data = vec![
+        c(2.0, 1.0),
+        c(4.0, 0.0),
+        c(1.0, -1.0),
+        c(1.0, 0.0),
+        c(3.0, 2.0),
+        c(0.0, 1.0),
+        c(0.0, 1.0),
+        c(1.0, 0.0),
+        c(5.0, 0.0),
+    ];
+    let a = make_complex_tensor(data.clone(), &[3, 3]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+
+    let l = complex_tensor_data(&result.l);
+    let u = complex_tensor_data(&result.u);
+    let p = result.p.unwrap();
+    let n = 3;
+
+    // L * U = P * A
+    let mut lu_prod = vec![c(0.0, 0.0); n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = c(0.0, 0.0);
+            for k in 0..n {
+                val += l[i + k * n] * u[k + j * n];
+            }
+            lu_prod[i + j * n] = val;
+        }
+    }
+
+    // Apply P^{-1} to rows of lu_prod to get A back
+    let mut recon = vec![c(0.0, 0.0); n * n];
+    for i in 0..n {
+        for j in 0..n {
+            recon[p[i] + j * n] = lu_prod[i + j * n];
+        }
+    }
+    let err = complex_max_err(&data, &recon);
+    assert!(err < 1e-10, "LU reconstruction error: {err}");
+}
+
+#[test]
+fn test_cholesky_complex64_reconstruction() {
+    let mut backend = FaerBackend::new();
+    // Hermitian positive definite: [[4, 1+i], [1-i, 3]]
+    let data = vec![c(4.0, 0.0), c(1.0, -1.0), c(1.0, 1.0), c(3.0, 0.0)];
+    let a = make_complex_tensor(data.clone(), &[2, 2]);
+    let l_tensor = cholesky(&mut backend, &a).unwrap();
+
+    assert_eq!(l_tensor.dims(), &[2, 2]);
+    let l = complex_tensor_data(&l_tensor);
+    let n = 2;
+
+    // L * L^H = A
+    let mut recon = vec![c(0.0, 0.0); n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut sum = c(0.0, 0.0);
+            for p in 0..n {
+                sum += l[i + p * n] * l[j + p * n].conj();
+            }
+            recon[i + j * n] = sum;
+        }
+    }
+    let err = complex_max_err(&data, &recon);
+    assert!(err < 1e-10, "Cholesky reconstruction error: {err}");
+}
+
+#[test]
+fn test_eigen_complex64_hermitian() {
+    let mut backend = FaerBackend::new();
+    // Hermitian: [[3, 1-i], [1+i, 2]], eigenvalues 1 and 4
+    let data = vec![c(3.0, 0.0), c(1.0, 1.0), c(1.0, -1.0), c(2.0, 0.0)];
+    let a = make_complex_tensor(data, &[2, 2]);
+    let result = eigen(&mut backend, &a).unwrap();
+
+    let vals = real_tensor_data(&result.values);
+    assert!(
+        (vals[0] - 1.0).abs() < 1e-10,
+        "eigenvalue 0: {}, expected 1.0",
+        vals[0]
+    );
+    assert!(
+        (vals[1] - 4.0).abs() < 1e-10,
+        "eigenvalue 1: {}, expected 4.0",
+        vals[1]
+    );
+}
+
+#[test]
+fn test_solve_complex64() {
+    let mut backend = FaerBackend::new();
+    // A = [[2+i, 1], [0, 3-i]], b = [3+i, 6-2i]
+    let a_data = vec![c(2.0, 1.0), c(0.0, 0.0), c(1.0, 0.0), c(3.0, -1.0)];
+    let b_data = vec![c(3.0, 1.0), c(6.0, -2.0)];
+    let a = make_complex_tensor(a_data.clone(), &[2, 2]);
+    let b = make_complex_tensor(b_data.clone(), &[2, 1]);
+    let x = solve(&mut backend, &a, &b).unwrap();
+    let xd = complex_tensor_data(&x);
+
+    // Verify A * x = b
+    let mut ax = vec![c(0.0, 0.0); 2];
+    for i in 0..2 {
+        for k in 0..2 {
+            ax[i] += a_data[i + k * 2] * xd[k];
+        }
+    }
+    let err = complex_max_err(&ax, &b_data);
+    assert!(err < 1e-10, "solve residual: {err}");
+}
+
+#[test]
+fn test_solve_triangular_complex64() {
+    let mut backend = FaerBackend::new();
+    // Lower triangular: [[2+i, 0], [1-i, 3]]
+    let a_data = vec![c(2.0, 1.0), c(1.0, -1.0), c(0.0, 0.0), c(3.0, 0.0)];
+    let b_data = vec![c(4.0, 2.0), c(5.0, 0.0)];
+    let a = make_complex_tensor(a_data.clone(), &[2, 2]);
+    let b = make_complex_tensor(b_data.clone(), &[2, 1]);
+    let x = solve_triangular(&mut backend, &a, &b, false).unwrap();
+    let xd = complex_tensor_data(&x);
+
+    // Verify A * x = b
+    let mut ax = vec![c(0.0, 0.0); 2];
+    for i in 0..2 {
+        for k in 0..2 {
+            ax[i] += a_data[i + k * 2] * xd[k];
+        }
+    }
+    let err = complex_max_err(&ax, &b_data);
+    assert!(err < 1e-10, "solve_triangular residual: {err}");
+}
