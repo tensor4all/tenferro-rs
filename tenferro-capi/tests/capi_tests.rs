@@ -3,6 +3,90 @@
 //! TDD approach: tests written to verify correctness based on docs/design/capi.md.
 
 use tenferro_capi::*;
+use tenferro_linalg::{svd_frule, svd_rrule, SvdCotangent};
+use tenferro_tensor::{MemoryOrder, Tensor};
+
+fn approx_eq_slice(actual: &[f64], expected: &[f64], tol: f64) {
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "length mismatch: {} != {}",
+        actual.len(),
+        expected.len()
+    );
+    for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (a - e).abs() <= tol,
+            "mismatch at {i}: actual={a}, expected={e}, |diff|={}",
+            (a - e).abs()
+        );
+    }
+}
+
+unsafe fn handle_dims_data(
+    t: *const TfeTensorF64,
+    status: &mut tfe_status_t,
+) -> (Vec<usize>, Vec<f64>) {
+    let ndim = tfe_tensor_f64_ndim(t, status);
+    assert_eq!(*status, TFE_SUCCESS);
+    let mut dims = vec![0usize; ndim];
+    tfe_tensor_f64_shape(t, dims.as_mut_ptr(), status);
+    assert_eq!(*status, TFE_SUCCESS);
+    let len = tfe_tensor_f64_len(t, status);
+    assert_eq!(*status, TFE_SUCCESS);
+    let ptr = tfe_tensor_f64_data(t, status);
+    assert_eq!(*status, TFE_SUCCESS);
+    let data = std::slice::from_raw_parts(ptr, len).to_vec();
+    (dims, data)
+}
+
+fn matrixize_for_test(
+    tensor: &Tensor<f64>,
+    left: &[usize],
+    right: &[usize],
+) -> (Tensor<f64>, Vec<usize>, Vec<usize>) {
+    let dims = tensor.dims();
+    let left_dims: Vec<usize> = left.iter().map(|&i| dims[i]).collect();
+    let right_dims: Vec<usize> = right.iter().map(|&i| dims[i]).collect();
+    let m: usize = left_dims.iter().product();
+    let n: usize = right_dims.iter().product();
+
+    let mut perm = Vec::with_capacity(dims.len());
+    perm.extend_from_slice(left);
+    perm.extend_from_slice(right);
+    let matrix = tensor
+        .permute(&perm)
+        .unwrap()
+        .contiguous(MemoryOrder::ColumnMajor)
+        .reshape(&[m, n])
+        .unwrap()
+        .contiguous(MemoryOrder::ColumnMajor);
+    (matrix, left_dims, right_dims)
+}
+
+fn unmatrixize_grad_for_test(
+    grad_matrix: Tensor<f64>,
+    left: &[usize],
+    right: &[usize],
+    left_dims: &[usize],
+    right_dims: &[usize],
+) -> Tensor<f64> {
+    let mut perm_dims = left_dims.to_vec();
+    perm_dims.extend_from_slice(right_dims);
+    let reshaped = grad_matrix.reshape(&perm_dims).unwrap();
+
+    let mut perm = Vec::with_capacity(left.len() + right.len());
+    perm.extend_from_slice(left);
+    perm.extend_from_slice(right);
+    let mut inv = vec![0usize; perm.len()];
+    for (i, &p) in perm.iter().enumerate() {
+        inv[p] = i;
+    }
+    reshaped
+        .permute(&inv)
+        .unwrap()
+        .contiguous(MemoryOrder::ColumnMajor)
+}
 
 // ============================================================================
 // Phase 1: Tensor lifecycle tests
@@ -439,6 +523,20 @@ fn einsum_rrule_matmul() {
         // grad_B shape should be (2, 2)
         assert_eq!(tfe_tensor_f64_len(grads[1] as *const _, &mut status), 4);
 
+        // Numeric oracle:
+        // grad_A = cot * B^T, grad_B = A^T * cot, with cot = ones(2x2).
+        // A = [[1,2],[3,4]], B = [[5,6],[7,8]].
+        // grad_A = [[11,15],[11,15]]  -> col-major [11,11,15,15]
+        // grad_B = [[4,4],[6,6]]      -> col-major [4,6,4,6]
+        let grad_a_ptr = tfe_tensor_f64_data(grads[0] as *const _, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+        let grad_b_ptr = tfe_tensor_f64_data(grads[1] as *const _, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+        let grad_a = std::slice::from_raw_parts(grad_a_ptr, 4);
+        let grad_b = std::slice::from_raw_parts(grad_b_ptr, 4);
+        approx_eq_slice(grad_a, &[11.0, 11.0, 15.0, 15.0], 1e-12);
+        approx_eq_slice(grad_b, &[4.0, 6.0, 4.0, 6.0], 1e-12);
+
         tfe_tensor_f64_release(grads[0]);
         tfe_tensor_f64_release(grads[1]);
         tfe_tensor_f64_release(cot as *mut _);
@@ -740,5 +838,202 @@ fn svd_null_tensor_returns_error() {
             &mut status,
         );
         assert_eq!(status, TFE_INVALID_ARGUMENT);
+    }
+}
+
+#[test]
+fn svd_rrule_rank3_permuted_axes_matches_rust_oracle() {
+    unsafe {
+        let shape = [2_usize, 3, 2];
+        let left = [2_usize, 0];
+        let right = [1_usize];
+        let mut status: tfe_status_t = -999;
+
+        let a_data: Vec<f64> = (0..12).map(|i| (i + 1) as f64).collect();
+        let cot_u_data: Vec<f64> = (0..12).map(|i| 0.1 * (i as f64 + 1.0)).collect();
+        let cot_s_data = [0.3_f64, -0.2, 0.5];
+        let cot_vt_data: Vec<f64> = (0..9).map(|i| -0.05 * (i as f64 + 1.0)).collect();
+
+        let a = tfe_tensor_f64_from_data(
+            a_data.as_ptr(),
+            a_data.len(),
+            shape.as_ptr(),
+            3,
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+        let cot_u_shape = [2_usize, 2, 3]; // [left_dims..., k]
+        let cot_vt_shape = [3_usize, 3]; // [k, right_dims...]
+        let cot_s_shape = [3_usize];
+        let cot_u = tfe_tensor_f64_from_data(
+            cot_u_data.as_ptr(),
+            cot_u_data.len(),
+            cot_u_shape.as_ptr(),
+            cot_u_shape.len(),
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+        let cot_s = tfe_tensor_f64_from_data(
+            cot_s_data.as_ptr(),
+            cot_s_data.len(),
+            cot_s_shape.as_ptr(),
+            cot_s_shape.len(),
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+        let cot_vt = tfe_tensor_f64_from_data(
+            cot_vt_data.as_ptr(),
+            cot_vt_data.len(),
+            cot_vt_shape.as_ptr(),
+            cot_vt_shape.len(),
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+
+        let grad = tfe_svd_rrule_f64(
+            a as *const _,
+            left.as_ptr(),
+            left.len(),
+            right.as_ptr(),
+            right.len(),
+            0,
+            -1.0,
+            cot_u as *const _,
+            cot_s as *const _,
+            cot_vt as *const _,
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+        assert!(!grad.is_null());
+
+        let (grad_dims, grad_data) = handle_dims_data(grad as *const _, &mut status);
+        assert_eq!(grad_dims, shape);
+
+        let t = Tensor::from_slice(&a_data, &shape, MemoryOrder::ColumnMajor).unwrap();
+        let (matrix, left_dims, right_dims) = matrixize_for_test(&t, &left, &right);
+        let cot_u_public =
+            Tensor::from_slice(&cot_u_data, &cot_u_shape, MemoryOrder::ColumnMajor).unwrap();
+        let cot_s_public =
+            Tensor::from_slice(&cot_s_data, &cot_s_shape, MemoryOrder::ColumnMajor).unwrap();
+        let cot_vt_public =
+            Tensor::from_slice(&cot_vt_data, &cot_vt_shape, MemoryOrder::ColumnMajor).unwrap();
+
+        let m: usize = left_dims.iter().product();
+        let n: usize = right_dims.iter().product();
+        let cot_u_mat = cot_u_public.reshape(&[m, cot_s_data.len()]).unwrap();
+        let cot_vt_mat = cot_vt_public.reshape(&[cot_s_data.len(), n]).unwrap();
+        let cot = SvdCotangent {
+            u: Some(cot_u_mat),
+            s: Some(cot_s_public),
+            vt: Some(cot_vt_mat),
+        };
+        let grad_matrix = svd_rrule(&matrix, &cot, None).unwrap();
+        let grad_expected =
+            unmatrixize_grad_for_test(grad_matrix, &left, &right, &left_dims, &right_dims);
+        let expected_data = grad_expected
+            .buffer()
+            .as_slice()
+            .expect("CPU tensor")
+            .to_vec();
+        approx_eq_slice(&grad_data, &expected_data, 1e-10);
+
+        tfe_tensor_f64_release(grad);
+        tfe_tensor_f64_release(cot_vt);
+        tfe_tensor_f64_release(cot_s);
+        tfe_tensor_f64_release(cot_u);
+        tfe_tensor_f64_release(a);
+    }
+}
+
+#[test]
+fn svd_frule_rank3_permuted_axes_matches_rust_oracle() {
+    unsafe {
+        let shape = [2_usize, 3, 2];
+        let left = [2_usize, 0];
+        let right = [1_usize];
+        let mut status: tfe_status_t = -999;
+
+        let a_data: Vec<f64> = (0..12).map(|i| 0.2 * (i as f64 + 1.0)).collect();
+        let da_data: Vec<f64> = (0..12).map(|i| -0.1 * (i as f64 + 1.0)).collect();
+        let a = tfe_tensor_f64_from_data(
+            a_data.as_ptr(),
+            a_data.len(),
+            shape.as_ptr(),
+            3,
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+        let da = tfe_tensor_f64_from_data(
+            da_data.as_ptr(),
+            da_data.len(),
+            shape.as_ptr(),
+            3,
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+
+        let mut du: *mut TfeTensorF64 = std::ptr::null_mut();
+        let mut ds: *mut TfeTensorF64 = std::ptr::null_mut();
+        let mut dvt: *mut TfeTensorF64 = std::ptr::null_mut();
+        tfe_svd_frule_f64(
+            a as *const _,
+            left.as_ptr(),
+            left.len(),
+            right.as_ptr(),
+            right.len(),
+            0,
+            -1.0,
+            da as *const _,
+            &mut du,
+            &mut ds,
+            &mut dvt,
+            &mut status,
+        );
+        assert_eq!(status, TFE_SUCCESS);
+        assert!(!du.is_null());
+        assert!(!ds.is_null());
+        assert!(!dvt.is_null());
+
+        let (du_dims, du_data) = handle_dims_data(du as *const _, &mut status);
+        let (ds_dims, ds_data) = handle_dims_data(ds as *const _, &mut status);
+        let (dvt_dims, dvt_data) = handle_dims_data(dvt as *const _, &mut status);
+        assert_eq!(du_dims, vec![2, 2, 3]); // [left_dims..., k]
+        assert_eq!(ds_dims, vec![3]); // [k]
+        assert_eq!(dvt_dims, vec![3, 3]); // [k, right_dims...]
+
+        let t = Tensor::from_slice(&a_data, &shape, MemoryOrder::ColumnMajor).unwrap();
+        let dt = Tensor::from_slice(&da_data, &shape, MemoryOrder::ColumnMajor).unwrap();
+        let (matrix, left_dims, right_dims) = matrixize_for_test(&t, &left, &right);
+        let (tang_matrix, _, _) = matrixize_for_test(&dt, &left, &right);
+        let (_primal, tangent_result) = svd_frule(&matrix, &tang_matrix, None).unwrap();
+
+        let k = tangent_result.s.len();
+        let mut du_expected_dims = left_dims.clone();
+        du_expected_dims.push(k);
+        let du_expected = tangent_result
+            .u
+            .reshape(&du_expected_dims)
+            .unwrap()
+            .contiguous(MemoryOrder::ColumnMajor);
+        let mut dvt_expected_dims = vec![k];
+        dvt_expected_dims.extend_from_slice(&right_dims);
+        let dvt_expected = tangent_result
+            .vt
+            .reshape(&dvt_expected_dims)
+            .unwrap()
+            .contiguous(MemoryOrder::ColumnMajor);
+        let du_expected_data = du_expected.buffer().as_slice().expect("CPU tensor");
+        let ds_expected_data = tangent_result.s.buffer().as_slice().expect("CPU tensor");
+        let dvt_expected_data = dvt_expected.buffer().as_slice().expect("CPU tensor");
+
+        approx_eq_slice(&du_data, du_expected_data, 1e-10);
+        approx_eq_slice(&ds_data, ds_expected_data, 1e-10);
+        approx_eq_slice(&dvt_data, dvt_expected_data, 1e-10);
+
+        tfe_tensor_f64_release(dvt);
+        tfe_tensor_f64_release(ds);
+        tfe_tensor_f64_release(du);
+        tfe_tensor_f64_release(da);
+        tfe_tensor_f64_release(a);
     }
 }

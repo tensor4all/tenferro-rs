@@ -439,19 +439,31 @@ fn matricize(
     right: &[usize],
 ) -> Result<(Tensor<f64>, Vec<usize>, Vec<usize>), tfe_status_t> {
     let dims = tensor.dims();
+    let mut seen = vec![false; dims.len()];
 
     // Validate indices
     for &l in left {
         if l >= dims.len() {
             return Err(TFE_INVALID_ARGUMENT);
         }
+        if seen[l] {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        seen[l] = true;
     }
     for &r in right {
         if r >= dims.len() {
             return Err(TFE_INVALID_ARGUMENT);
         }
+        if seen[r] {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        seen[r] = true;
     }
     if left.len() + right.len() != dims.len() {
+        return Err(TFE_INVALID_ARGUMENT);
+    }
+    if seen.iter().any(|&v| !v) {
         return Err(TFE_INVALID_ARGUMENT);
     }
 
@@ -474,6 +486,125 @@ fn matricize(
         .contiguous(MemoryOrder::ColumnMajor);
 
     Ok((permuted, left_dims, right_dims))
+}
+
+/// Compute inverse permutation: `inv_perm[perm[i]] = i`.
+fn inverse_permutation(perm: &[usize]) -> Vec<usize> {
+    let mut inv = vec![0; perm.len()];
+    for (i, &p) in perm.iter().enumerate() {
+        inv[p] = i;
+    }
+    inv
+}
+
+/// Convert public U-cotangent shape `[left_dims..., k]` to matrix shape `[m, k]`.
+fn u_cotangent_to_matrix(
+    cot_u: &Tensor<f64>,
+    left_dims: &[usize],
+) -> Result<(Tensor<f64>, usize), tfe_status_t> {
+    let u_dims = cot_u.dims();
+    if u_dims.len() != left_dims.len() + 1 {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+    if &u_dims[..left_dims.len()] != left_dims {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+    let k = u_dims[left_dims.len()];
+    let m: usize = left_dims.iter().product();
+    let mat = cot_u
+        .contiguous(MemoryOrder::ColumnMajor)
+        .reshape(&[m, k])
+        .map_err(|_| TFE_SHAPE_MISMATCH)?
+        .contiguous(MemoryOrder::ColumnMajor);
+    Ok((mat, k))
+}
+
+/// Convert public Vt-cotangent shape `[k, right_dims...]` to matrix shape `[k, n]`.
+fn vt_cotangent_to_matrix(
+    cot_vt: &Tensor<f64>,
+    right_dims: &[usize],
+) -> Result<(Tensor<f64>, usize), tfe_status_t> {
+    let vt_dims = cot_vt.dims();
+    if vt_dims.len() != right_dims.len() + 1 {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+    if &vt_dims[1..] != right_dims {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+    let k = vt_dims[0];
+    let n: usize = right_dims.iter().product();
+    let mat = cot_vt
+        .contiguous(MemoryOrder::ColumnMajor)
+        .reshape(&[k, n])
+        .map_err(|_| TFE_SHAPE_MISMATCH)?
+        .contiguous(MemoryOrder::ColumnMajor);
+    Ok((mat, k))
+}
+
+/// Validate S-cotangent shape `[k]`.
+fn validate_s_cotangent(cot_s: &Tensor<f64>) -> Result<usize, tfe_status_t> {
+    let dims = cot_s.dims();
+    if dims.len() != 1 {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+    Ok(dims[0])
+}
+
+/// Reshape matrix U (`[m, k]`) back to public shape `[left_dims..., k]`.
+fn u_matrix_to_public(u: Tensor<f64>, left_dims: &[usize]) -> Result<Tensor<f64>, tfe_status_t> {
+    if u.dims().len() != 2 {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+    let k = u.dims()[1];
+    let mut out_dims = left_dims.to_vec();
+    out_dims.push(k);
+    u.reshape(&out_dims)
+        .map_err(|_| TFE_SHAPE_MISMATCH)
+        .map(|t| t.contiguous(MemoryOrder::ColumnMajor))
+}
+
+/// Reshape matrix Vt (`[k, n]`) back to public shape `[k, right_dims...]`.
+fn vt_matrix_to_public(vt: Tensor<f64>, right_dims: &[usize]) -> Result<Tensor<f64>, tfe_status_t> {
+    if vt.dims().len() != 2 {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+    let k = vt.dims()[0];
+    let mut out_dims = vec![k];
+    out_dims.extend_from_slice(right_dims);
+    vt.reshape(&out_dims)
+        .map_err(|_| TFE_SHAPE_MISMATCH)
+        .map(|t| t.contiguous(MemoryOrder::ColumnMajor))
+}
+
+/// Convert input gradient from matrixized layout `[m, n]` back to original tensor layout.
+fn grad_matrix_to_public(
+    grad_matrix: Tensor<f64>,
+    original_dims: &[usize],
+    left: &[usize],
+    right: &[usize],
+    left_dims: &[usize],
+    right_dims: &[usize],
+) -> Result<Tensor<f64>, tfe_status_t> {
+    if grad_matrix.dims().len() != 2 {
+        return Err(TFE_SHAPE_MISMATCH);
+    }
+
+    let mut permuted_dims = left_dims.to_vec();
+    permuted_dims.extend_from_slice(right_dims);
+    let reshaped = grad_matrix
+        .contiguous(MemoryOrder::ColumnMajor)
+        .reshape(&permuted_dims)
+        .map_err(|_| TFE_SHAPE_MISMATCH)?;
+
+    let mut perm = Vec::with_capacity(original_dims.len());
+    perm.extend_from_slice(left);
+    perm.extend_from_slice(right);
+    let inv_perm = inverse_permutation(&perm);
+
+    reshaped
+        .permute(&inv_perm)
+        .map_err(|_| TFE_INTERNAL_ERROR)
+        .map(|t| t.contiguous(MemoryOrder::ColumnMajor))
 }
 
 // ============================================================================
@@ -1271,23 +1402,45 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
             &[]
         };
 
-        let (matrix, _left_dims, _right_dims) = matricize(t, left_indices, right_indices)?;
+        let original_dims = t.dims().to_vec();
+        let (matrix, left_dims, right_dims) = matricize(t, left_indices, right_indices)?;
 
+        let mut inferred_k: Option<usize> = None;
         let cot_u = if cotangent_u.is_null() {
             None
         } else {
-            Some(handle_to_ref(cotangent_u).clone())
+            let (u_mat, k) = u_cotangent_to_matrix(handle_to_ref(cotangent_u), &left_dims)?;
+            inferred_k = Some(k);
+            Some(u_mat)
         };
         let cot_s = if cotangent_s.is_null() {
             None
         } else {
-            Some(handle_to_ref(cotangent_s).clone())
+            let cot_s_ref = handle_to_ref(cotangent_s);
+            let k = validate_s_cotangent(cot_s_ref)?;
+            if let Some(prev) = inferred_k {
+                if prev != k {
+                    return Err(TFE_SHAPE_MISMATCH);
+                }
+            } else {
+                inferred_k = Some(k);
+            }
+            Some(cot_s_ref.clone())
         };
         let cot_vt = if cotangent_vt.is_null() {
             None
         } else {
-            Some(handle_to_ref(cotangent_vt).clone())
+            let (vt_mat, k) = vt_cotangent_to_matrix(handle_to_ref(cotangent_vt), &right_dims)?;
+            if let Some(prev) = inferred_k {
+                if prev != k {
+                    return Err(TFE_SHAPE_MISMATCH);
+                }
+            } else {
+                inferred_k = Some(k);
+            }
+            Some(vt_mat)
         };
+        let _ = inferred_k;
 
         let cotangent = SvdCotangent {
             u: cot_u,
@@ -1296,7 +1449,16 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
         };
 
         let opts = build_svd_options(max_rank, cutoff);
-        let grad = svd_rrule(&matrix, &cotangent, opts.as_ref()).map_err(|e| map_ad_error(&e))?;
+        let grad_matrix =
+            svd_rrule(&matrix, &cotangent, opts.as_ref()).map_err(|e| map_ad_error(&e))?;
+        let grad = grad_matrix_to_public(
+            grad_matrix,
+            &original_dims,
+            left_indices,
+            right_indices,
+            &left_dims,
+            &right_dims,
+        )?;
 
         Ok(tensor_to_handle(grad))
     }));
@@ -1371,7 +1533,7 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
             &[]
         };
 
-        let (matrix, _left_dims, _right_dims) = matricize(t, left_indices, right_indices)?;
+        let (matrix, left_dims, right_dims) = matricize(t, left_indices, right_indices)?;
 
         let tang = if tangent.is_null() {
             Tensor::<f64>::zeros(
@@ -1389,9 +1551,12 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
         let (_primal, tangent_result) =
             svd_frule(&matrix, &tang, opts.as_ref()).map_err(|e| map_ad_error(&e))?;
 
-        *u_out = tensor_to_handle(tangent_result.u);
+        let u_public = u_matrix_to_public(tangent_result.u, &left_dims)?;
+        let vt_public = vt_matrix_to_public(tangent_result.vt, &right_dims)?;
+
+        *u_out = tensor_to_handle(u_public);
         *s_out = tensor_to_handle(tangent_result.s);
-        *vt_out = tensor_to_handle(tangent_result.vt);
+        *vt_out = tensor_to_handle(vt_public);
         Ok(())
     }));
 
