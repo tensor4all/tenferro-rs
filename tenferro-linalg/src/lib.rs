@@ -8,7 +8,10 @@
 //!
 //! - **First 2 dimensions** are the matrix (`m × n`).
 //! - **All following dimensions** (`*`) are independent batch dimensions.
-//! - Input must be **column-major contiguous** (LAPACK/cuSOLVER native).
+//! - Inputs are **internally normalized** to column-major contiguous layout.
+//!   If an input is not already contiguous, an internal copy is performed.
+//!   Calling `.contiguous(ColumnMajor)` explicitly is optional but useful
+//!   when you want to control exactly where copies happen.
 //!
 //! This convention mirrors PyTorch's `(*, m, n)` but is flipped for
 //! col-major: in col-major the first dimensions are contiguous, so
@@ -17,8 +20,8 @@
 //!
 //! This module is **context-agnostic**: it does not know about tensor
 //! networks, MPS, or any specific application. If you need to decompose
-//! a tensor along arbitrary legs, `permute` + `reshape` +
-//! `contiguous(ColumnMajor)` before calling these functions.
+//! a tensor along arbitrary legs, `permute` + `reshape` before calling
+//! these functions.
 //!
 //! # AD rules
 //!
@@ -35,7 +38,7 @@
 //!
 //! ## SVD of a matrix
 //!
-//! ```ignore
+//! ```
 //! use tenferro_linalg::{svd, SvdOptions};
 //! use tenferro_linalg::backend::FaerBackend;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
@@ -55,7 +58,7 @@
 //!
 //! ## Batched SVD
 //!
-//! ```ignore
+//! ```
 //! use tenferro_linalg::svd;
 //! use tenferro_linalg::backend::FaerBackend;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
@@ -75,7 +78,7 @@
 //!
 //! ## Decomposing a 4D tensor along specific legs
 //!
-//! ```ignore
+//! ```
 //! use tenferro_linalg::svd;
 //! use tenferro_linalg::backend::FaerBackend;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
@@ -88,17 +91,16 @@
 //! // 4D tensor [2, 3, 4, 5] — want SVD with left=[0,1], right=[2,3]
 //! let t = Tensor::<f64>::zeros(&[2, 3, 4, 5], mem, col);
 //!
-//! // User's responsibility: permute + reshape + contiguous
-//! let mat = t.permute(&[0, 1, 2, 3])   // already in order
-//!            .reshape(&[6, 20]).unwrap() // m = 2*3 = 6, n = 4*5 = 20
-//!            .contiguous(col);
+//! // permute + reshape (contiguous is handled internally, but can be called explicitly)
+//! let mat = t.permute(&[0, 1, 2, 3]).unwrap()  // already in order
+//!            .reshape(&[6, 20]).unwrap();        // m = 2*3 = 6, n = 4*5 = 20
 //! let result = svd(&mut backend, &mat, None).unwrap();
 //! // Then reshape result.u, result.vt back to desired tensor shape
 //! ```
 //!
 //! ## Reverse-mode AD (stateless rrule)
 //!
-//! ```ignore
+//! ```
 //! use tenferro_linalg::{svd, svd_rrule, SvdCotangent};
 //! use tenferro_linalg::backend::FaerBackend;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
@@ -147,7 +149,7 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::LinalgScalar;
 ///
 /// fn my_func<T: LinalgScalar>(x: T) -> T { x }
@@ -379,7 +381,7 @@ fn tensor_from_data<T: LinalgScalar>(data: Vec<T>, dims: &[usize]) -> Result<Ten
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::svd;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -442,7 +444,7 @@ impl Default for SvdOptions {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::qr;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -494,7 +496,7 @@ pub enum LuPivot {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -530,7 +532,7 @@ pub struct LuResult<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::eigen;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -559,7 +561,7 @@ pub struct EigenResult<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::slogdet;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -581,7 +583,7 @@ pub struct SlogdetResult<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::solve_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -647,7 +649,7 @@ pub enum NormKind {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{svd, SvdOptions};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -761,7 +763,7 @@ pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::qr;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -824,7 +826,7 @@ pub fn qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -900,7 +902,7 @@ pub fn lu<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::eigen;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -960,7 +962,7 @@ pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::lstsq;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1060,7 +1062,7 @@ pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tenferro_linalg::cholesky;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1103,7 +1105,7 @@ pub fn cholesky<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::solve;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1152,7 +1154,7 @@ pub fn solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::inv;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1199,7 +1201,7 @@ pub fn inv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::det;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1284,7 +1286,7 @@ pub fn det<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::slogdet;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1383,7 +1385,7 @@ pub fn slogdet<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::eig;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1415,7 +1417,7 @@ pub fn eig<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::pinv;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1498,7 +1500,7 @@ pub fn pinv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::matrix_exp;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1527,7 +1529,7 @@ pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::solve_triangular;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1585,7 +1587,7 @@ pub fn solve_triangular<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{norm, NormKind};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1673,7 +1675,7 @@ pub fn norm<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::lstsq;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1698,7 +1700,7 @@ pub struct LstsqResult<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{lstsq, lstsq_rrule};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -1731,7 +1733,7 @@ pub struct LstsqGrad<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::SvdCotangent;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
@@ -1759,7 +1761,7 @@ pub struct SvdCotangent<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::QrCotangent;
 ///
 /// let cotangent = QrCotangent::<f64> { q: None, r: None };
@@ -1777,7 +1779,7 @@ pub struct QrCotangent<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::LuCotangent;
 ///
 /// let cotangent = LuCotangent::<f64> { l: None, u: None };
@@ -1793,7 +1795,7 @@ pub struct LuCotangent<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::EigenCotangent;
 ///
 /// let cotangent = EigenCotangent::<f64> { values: None, vectors: None };
@@ -1812,7 +1814,7 @@ pub struct EigenCotangent<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::SlogdetCotangent;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
@@ -2057,7 +2059,7 @@ fn extract_data<T: LinalgScalar>(tensor: &Tensor<T>) -> (Vec<T>, usize) {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{svd, svd_rrule, SvdCotangent};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2240,7 +2242,7 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{qr_rrule, QrCotangent};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2357,7 +2359,7 @@ pub fn qr_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{lu_rrule, LuCotangent, LuPivot};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2505,7 +2507,7 @@ pub fn lu_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{eigen_rrule, EigenCotangent};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2603,7 +2605,7 @@ pub fn eigen_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::lstsq_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2710,7 +2712,7 @@ pub fn lstsq_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tenferro_linalg::cholesky_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2773,7 +2775,7 @@ pub fn cholesky_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::solve_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2846,7 +2848,7 @@ pub fn solve_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::inv_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2898,7 +2900,7 @@ pub fn inv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::det_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -2954,7 +2956,7 @@ pub fn det_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{slogdet_rrule, SlogdetCotangent};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3005,7 +3007,7 @@ pub fn slogdet_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tenferro_linalg::{eig_rrule, EigenCotangent};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3036,7 +3038,7 @@ pub fn eig_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::pinv_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3117,7 +3119,7 @@ pub fn pinv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tenferro_linalg::matrix_exp_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3145,7 +3147,7 @@ pub fn matrix_exp_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{norm_rrule, NormKind};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3240,7 +3242,7 @@ pub fn norm_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::svd_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3401,7 +3403,7 @@ pub fn svd_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::qr_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3509,7 +3511,7 @@ pub fn qr_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{lu_frule, LuPivot};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3639,7 +3641,7 @@ pub fn lu_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::eigen_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3722,7 +3724,7 @@ pub fn eigen_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::lstsq_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3798,7 +3800,7 @@ pub fn lstsq_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tenferro_linalg::cholesky_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3857,7 +3859,7 @@ pub fn cholesky_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::solve_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3923,7 +3925,7 @@ pub fn solve_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::inv_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3973,7 +3975,7 @@ pub fn inv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::det_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4027,7 +4029,7 @@ pub fn det_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::slogdet_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4085,7 +4087,7 @@ pub fn slogdet_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tenferro_linalg::eig_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4113,7 +4115,7 @@ pub fn eig_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::pinv_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4188,7 +4190,7 @@ pub fn pinv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
 /// use tenferro_linalg::matrix_exp_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4216,7 +4218,7 @@ pub fn matrix_exp_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::{norm_frule, NormKind};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};

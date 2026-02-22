@@ -43,8 +43,8 @@ If an input is not already contiguous, an internal copy is performed.
 
 For arbitrary tensor decomposition (e.g., SVD along legs [0,1] vs [2,3]),
 the caller still performs `permute` + `reshape` before calling linalg.
-Calling `contiguous(ColumnMajor)` explicitly remains recommended when the
-caller wants predictable memory behavior and copy control.
+Calling `contiguous(ColumnMajor)` explicitly is optional but useful
+when the caller wants to control exactly where memory copies occur.
 
 ---
 
