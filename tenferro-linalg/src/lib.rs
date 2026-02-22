@@ -134,7 +134,8 @@
 pub mod backend;
 
 use chainrules_core::AdResult;
-use num_traits::Float;
+use num_complex::{Complex32, Complex64};
+use num_traits::Zero;
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -145,7 +146,12 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 /// Types that support linear algebra decompositions.
 ///
-/// Automatically implemented for `f64` and `f32`. Complex type support is planned.
+/// Implemented for `f64`, `f32`, `Complex64`, and `Complex32`.
+///
+/// The associated type [`Real`](LinalgScalar::Real) maps to the underlying
+/// real scalar for eigenvalues / singular values.  For real types
+/// (`f64`, `f32`) `Real = Self`; for complex types (`Complex64`, `Complex32`)
+/// `Real` is the real part type (`f64`, `f32`).
 ///
 /// # Examples
 ///
@@ -156,12 +162,90 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 /// let y = my_func(1.0_f64);
 /// ```
 pub trait LinalgScalar:
-    Scalar + Float + std::ops::Sub<Output = Self> + std::fmt::Debug + 'static
+    Scalar
+    + std::ops::Sub<Output = Self>
+    + std::ops::Neg<Output = Self>
+    + std::ops::Div<Output = Self>
+    + num_traits::NumCast
+    + std::fmt::Debug
+    + 'static
 {
+    /// The real scalar type for eigenvalues / singular values.
+    type Real: LinalgScalar<Real = Self::Real> + num_traits::Float;
+
+    /// Absolute value mapped to the real type (modulus for complex).
+    fn abs_real(&self) -> Self::Real;
+
+    /// Machine epsilon for the underlying real type.
+    fn real_epsilon() -> Self::Real;
+
+    /// Complex conjugate (identity for real types).
+    fn conj(&self) -> Self;
 }
 
-impl LinalgScalar for f64 {}
-impl LinalgScalar for f32 {}
+impl LinalgScalar for f64 {
+    type Real = f64;
+    #[inline]
+    fn abs_real(&self) -> f64 {
+        num_traits::Float::abs(*self)
+    }
+    #[inline]
+    fn real_epsilon() -> f64 {
+        <f64 as num_traits::Float>::epsilon()
+    }
+    #[inline]
+    fn conj(&self) -> f64 {
+        *self
+    }
+}
+
+impl LinalgScalar for f32 {
+    type Real = f32;
+    #[inline]
+    fn abs_real(&self) -> f32 {
+        num_traits::Float::abs(*self)
+    }
+    #[inline]
+    fn real_epsilon() -> f32 {
+        <f32 as num_traits::Float>::epsilon()
+    }
+    #[inline]
+    fn conj(&self) -> f32 {
+        *self
+    }
+}
+
+impl LinalgScalar for Complex64 {
+    type Real = f64;
+    #[inline]
+    fn abs_real(&self) -> f64 {
+        self.norm()
+    }
+    #[inline]
+    fn real_epsilon() -> f64 {
+        <f64 as num_traits::Float>::epsilon()
+    }
+    #[inline]
+    fn conj(&self) -> Complex64 {
+        Complex64::conj(self)
+    }
+}
+
+impl LinalgScalar for Complex32 {
+    type Real = f32;
+    #[inline]
+    fn abs_real(&self) -> f32 {
+        self.norm()
+    }
+    #[inline]
+    fn real_epsilon() -> f32 {
+        <f32 as num_traits::Float>::epsilon()
+    }
+    #[inline]
+    fn conj(&self) -> Complex32 {
+        Complex32::conj(self)
+    }
+}
 
 // ============================================================================
 // Batch processing helpers
@@ -312,6 +396,9 @@ fn validate_norm_cotangent<T: LinalgScalar>(
 
 /// Validate Hermitian/symmetric structure for batched square matrices stored
 /// in column-major contiguous layout.
+///
+/// For complex types, checks `A[i,j] == conj(A[j,i])`.
+/// For real types, checks `A[i,j] == A[j,i]`.
 fn validate_hermitian_batches<T: LinalgScalar>(
     data: &[T],
     offset: usize,
@@ -320,7 +407,8 @@ fn validate_hermitian_batches<T: LinalgScalar>(
     op_name: &str,
 ) -> Result<()> {
     let mat_size = n * n;
-    let tol_scale = T::from(128.0).unwrap_or(T::one());
+    let tol_scale = <T::Real as num_traits::NumCast>::from(128.0)
+        .unwrap_or(<T::Real as num_traits::One>::one());
 
     for b in 0..bc {
         let start = offset + b * mat_size;
@@ -329,9 +417,11 @@ fn validate_hermitian_batches<T: LinalgScalar>(
             for i in 0..j {
                 let a_ij = batch_data[i + j * n];
                 let a_ji = batch_data[j + i * n];
-                let diff = (a_ij - a_ji).abs();
-                let scale = T::one() + a_ij.abs().max(a_ji.abs());
-                let tol = T::epsilon() * tol_scale * scale;
+                // Hermitian check: a_ij should equal conj(a_ji)
+                let diff = (a_ij - a_ji.conj()).abs_real();
+                let scale = <T::Real as num_traits::One>::one()
+                    + num_traits::Float::max(a_ij.abs_real(), a_ji.abs_real());
+                let tol = T::real_epsilon() * tol_scale * scale;
                 if diff > tol {
                     return Err(Error::InvalidArgument(format!(
                         "{op_name} expects symmetric/Hermitian input; mismatch at ({i}, {j}) in batch {b}"
@@ -418,11 +508,11 @@ fn tensor_from_data<T: LinalgScalar>(data: Vec<T>, dims: &[usize]) -> Result<Ten
 /// let result = svd(&mut backend, &a, None).unwrap();
 /// assert_eq!(result.s.ndim(), 1);
 /// ```
-pub struct SvdResult<T: Scalar> {
+pub struct SvdResult<T: Scalar, R: Scalar = T> {
     /// Left singular vectors. Shape: `(m, k, *)`.
     pub u: Tensor<T>,
-    /// Singular values (descending order). Shape: `(k, *)`.
-    pub s: Tensor<T>,
+    /// Singular values (descending order, always real). Shape: `(k, *)`.
+    pub s: Tensor<R>,
     /// Right singular vectors (conjugate-transposed). Shape: `(k, n, *)`.
     pub vt: Tensor<T>,
 }
@@ -570,9 +660,9 @@ pub struct LuResult<T: Scalar> {
 /// assert_eq!(result.values.dims(), &[3]);
 /// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
-pub struct EigenResult<T: Scalar> {
-    /// Eigenvalues. Shape: `(n, *)`.
-    pub values: Tensor<T>,
+pub struct EigenResult<T: Scalar, R: Scalar = T> {
+    /// Eigenvalues (real for Hermitian/symmetric). Shape: `(n, *)`.
+    pub values: Tensor<R>,
     /// Right eigenvectors (columns). Shape: `(n, n, *)`.
     pub vectors: Tensor<T>,
 }
@@ -597,11 +687,11 @@ pub struct EigenResult<T: Scalar> {
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = slogdet(&mut backend, &a).unwrap();
 /// ```
-pub struct SlogdetResult<T: Scalar> {
+pub struct SlogdetResult<T: Scalar, R: Scalar = T> {
     /// Sign of determinant. Shape: `(*)`.
     pub sign: Tensor<T>,
-    /// Log of absolute value of determinant. Shape: `(*)`.
-    pub logabsdet: Tensor<T>,
+    /// Log of absolute value of determinant (always real). Shape: `(*)`.
+    pub logabsdet: Tensor<R>,
 }
 
 /// Gradient result for `solve_rrule`: cotangents for both `A` and `b`.
@@ -696,11 +786,11 @@ pub enum NormKind {
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     tensor: &Tensor<T>,
     options: Option<&SvdOptions>,
-) -> Result<SvdResult<T>> {
+) -> Result<SvdResult<T, B::Real>> {
     let (m, n, batch_dims) = validate_2d(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -717,12 +807,12 @@ pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
     };
 
     let mut u_data = vec![T::zero(); m * max_k * bc];
-    let mut s_data = vec![T::zero(); max_k * bc];
+    let mut s_data = vec![<B::Real>::zero(); max_k * bc];
     let mut vt_data = vec![T::zero(); max_k * n * bc];
 
     // Pre-allocate temp buffers for full-rank results per batch
     let mut u_full = vec![T::zero(); m * k];
-    let mut s_full = vec![T::zero(); k];
+    let mut s_full = vec![<B::Real>::zero(); k];
     let mut vt_full = vec![T::zero(); k * n];
 
     for b in 0..bc {
@@ -734,9 +824,9 @@ pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
         // Apply cutoff truncation
         let actual_k = if let Some(opts) = options {
             if let Some(cutoff) = opts.cutoff {
-                let cutoff_t: T = scalar_from(cutoff)?;
+                let cutoff_r: B::Real = scalar_from(cutoff)?;
                 let mut ak = max_k;
-                while ak > 0 && s_full[ak - 1] < cutoff_t {
+                while ak > 0 && s_full[ak - 1] < cutoff_r {
                     ak -= 1;
                 }
                 ak
@@ -803,7 +893,7 @@ pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     tensor: &Tensor<T>,
 ) -> Result<QrResult<T>> {
@@ -871,7 +961,7 @@ pub fn qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn lu<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn lu<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     tensor: &Tensor<T>,
     pivot: LuPivot,
@@ -943,10 +1033,10 @@ pub fn lu<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// Returns an error if the input has fewer than 2 dimensions, the first two
 /// dimensions are not equal, or the matrix is not symmetric/Hermitian.
-pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     tensor: &Tensor<T>,
-) -> Result<EigenResult<T>> {
+) -> Result<EigenResult<T, B::Real>> {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -956,7 +1046,7 @@ pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
     validate_hermitian_batches(data, offset, n, bc, "eigen")?;
 
-    let mut val_data = vec![T::zero(); n * bc];
+    let mut val_data = vec![<B::Real>::zero(); n * bc];
     let mut vec_data = vec![T::zero(); n * n * bc];
 
     for b in 0..bc {
@@ -1005,7 +1095,7 @@ pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///
 /// Returns an error if `A` has fewer than 2 dimensions, `m < n`, or `b`
 /// does not match `(m, *)` with the same batch dimensions as `A`.
-pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -1098,7 +1188,7 @@ pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let l = cholesky(&mut backend, &a).unwrap();
 /// ```
-pub fn cholesky<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn cholesky<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>> {
@@ -1143,7 +1233,7 @@ pub fn cholesky<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let x = solve(&mut backend, &a, &b).unwrap();
 /// ```
-pub fn solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -1190,7 +1280,7 @@ pub fn solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let a_inv = inv(&mut backend, &a).unwrap();
 /// ```
-pub fn inv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn inv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>> {
@@ -1237,7 +1327,10 @@ pub fn inv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let d = det(&mut backend, &a).unwrap();
 /// ```
-pub fn det<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn det<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>> {
@@ -1323,7 +1416,10 @@ pub fn det<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let result = slogdet(&mut backend, &a).unwrap();
 /// // det(A) ≈ result.sign * exp(result.logabsdet)
 /// ```
-pub fn slogdet<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn slogdet<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
 ) -> Result<SlogdetResult<T>> {
@@ -1421,10 +1517,10 @@ pub fn slogdet<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// assert!(eig(&mut backend, &a).is_err());
 /// ```
-pub fn eig<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn eig<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     _backend: &mut B,
     _tensor: &Tensor<T>,
-) -> Result<EigenResult<T>> {
+) -> Result<EigenResult<T, B::Real>> {
     // General (non-symmetric) eigendecomposition requires complex output.
     // Deferred until complex type support is added.
     Err(Error::InvalidArgument(
@@ -1453,7 +1549,10 @@ pub fn eig<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let a_pinv = pinv(&mut backend, &a, None).unwrap();
 /// ```
-pub fn pinv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn pinv<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     rcond: Option<f64>,
@@ -1536,7 +1635,7 @@ pub fn pinv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// assert!(matrix_exp(&mut backend, &a).is_err());
 /// ```
-pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     _backend: &mut B,
     _tensor: &Tensor<T>,
 ) -> Result<Tensor<T>> {
@@ -1567,7 +1666,7 @@ pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let x = solve_triangular(&mut backend, &a, &b, true).unwrap(); // upper=true
 /// ```
-pub fn solve_triangular<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn solve_triangular<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     backend: &mut B,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -1623,7 +1722,10 @@ pub fn solve_triangular<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let fro = norm(&mut backend, &a, NormKind::Fro).unwrap();
 /// ```
-pub fn norm<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn norm<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     kind: NormKind,
@@ -1965,7 +2067,10 @@ fn phi<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
 // ============================================================================
 
 /// Mat mul via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_mat_mul<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+fn backend_mat_mul<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &[T],
     m: usize,
@@ -1979,7 +2084,10 @@ fn backend_mat_mul<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 }
 
 /// Solve via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+fn backend_solve<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &[T],
     b: &[T],
@@ -1992,7 +2100,10 @@ fn backend_solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 }
 
 /// Solve triangular via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve_tri<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+fn backend_solve_tri<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &[T],
     b: &[T],
@@ -2009,7 +2120,10 @@ fn backend_solve_tri<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 
 /// Thin SVD via LinalgBackend, returning (U, S, V) for convenience in AD code.
 /// Note: returns V (not Vt) as column-major n×k for convenience in AD code.
-fn backend_thin_svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+fn backend_thin_svd<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &[T],
     m: usize,
@@ -2028,7 +2142,10 @@ fn backend_thin_svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 }
 
 /// QR decomposition via LinalgBackend, returning (Q, R) for convenience in AD code.
-fn backend_qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+fn backend_qr<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &[T],
     m: usize,
@@ -2096,7 +2213,10 @@ fn extract_data<T: LinalgScalar>(tensor: &Tensor<T>) -> AdResult<(Vec<T>, usize)
 /// };
 /// let grad_a = svd_rrule(&mut backend, &a, &cotangent, None).unwrap();
 /// ```
-pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn svd_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &SvdCotangent<T>,
@@ -2277,7 +2397,10 @@ pub fn svd_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// };
 /// let grad_a = qr_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn qr_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn qr_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &QrCotangent<T>,
@@ -2394,7 +2517,10 @@ pub fn qr_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// };
 /// let grad_a = lu_rrule(&mut backend, &a, &cotangent, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn lu_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &LuCotangent<T>,
@@ -2542,7 +2668,10 @@ pub fn lu_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// };
 /// let grad_a = eigen_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn eigen_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn eigen_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &EigenCotangent<T>,
@@ -2639,7 +2768,10 @@ pub fn eigen_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let grad = lstsq_rrule(&mut backend, &a, &b, &dx).unwrap();
 /// // grad.a: cotangent for A, grad.b: cotangent for b
 /// ```
-pub fn lstsq_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn lstsq_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -2744,7 +2876,10 @@ pub fn lstsq_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = cholesky_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn cholesky_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn cholesky_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -2808,7 +2943,10 @@ pub fn cholesky_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut backend, &a, &b, &cotangent).unwrap();
 /// ```
-pub fn solve_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn solve_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -2880,7 +3018,10 @@ pub fn solve_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = inv_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn inv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn inv_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -2932,7 +3073,10 @@ pub fn inv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
 /// let grad_a = det_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn det_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn det_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -2990,7 +3134,10 @@ pub fn det_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// };
 /// let grad_a = slogdet_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn slogdet_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn slogdet_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &SlogdetCotangent<T>,
@@ -3042,7 +3189,10 @@ pub fn slogdet_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// };
 /// let grad_a = eig_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn eig_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn eig_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     _backend: &mut B,
     _tensor: &Tensor<T>,
     _cotangent: &EigenCotangent<T>,
@@ -3070,7 +3220,10 @@ pub fn eig_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let grad_a = pinv_rrule(&mut backend, &a, &cotangent, None).unwrap();
 /// ```
-pub fn pinv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn pinv_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -3151,7 +3304,10 @@ pub fn pinv_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = matrix_exp_rrule(&mut backend, &a, &cotangent).unwrap();
 /// ```
-pub fn matrix_exp_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn matrix_exp_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     _backend: &mut B,
     _tensor: &Tensor<T>,
     _cotangent: &Tensor<T>,
@@ -3179,7 +3335,10 @@ pub fn matrix_exp_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
 /// let grad_a = norm_rrule(&mut backend, &a, &cotangent, NormKind::Fro).unwrap();
 /// ```
-pub fn norm_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn norm_rrule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -3274,7 +3433,10 @@ pub fn norm_rrule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
 /// ```
-pub fn svd_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn svd_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -3435,7 +3597,10 @@ pub fn svd_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let (result, dresult) = qr_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn qr_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn qr_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -3543,7 +3708,10 @@ pub fn qr_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = lu_frule(&mut backend, &a, &da, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn lu_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -3673,7 +3841,10 @@ pub fn lu_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eigen_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn eigen_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn eigen_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -3758,7 +3929,10 @@ pub fn eigen_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let db = Tensor::<f64>::ones(&[10], mem, col);
 /// let (result, dresult) = lstsq_frule(&mut backend, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn lstsq_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn lstsq_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -3832,7 +4006,10 @@ pub fn lstsq_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (l, dl) = cholesky_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn cholesky_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn cholesky_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -3893,7 +4070,10 @@ pub fn cholesky_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (x, dx) = solve_frule(&mut backend, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn solve_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn solve_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -3957,7 +4137,10 @@ pub fn solve_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (a_inv, da_inv) = inv_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn inv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn inv_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -4007,7 +4190,10 @@ pub fn inv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (d, dd) = det_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn det_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn det_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -4061,7 +4247,10 @@ pub fn det_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = slogdet_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn slogdet_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn slogdet_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -4119,7 +4308,10 @@ pub fn slogdet_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eig_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn eig_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn eig_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     _backend: &mut B,
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -4147,7 +4339,10 @@ pub fn eig_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (pinv_a, dpinv_a) = pinv_frule(&mut backend, &a, &da, None).unwrap();
 /// ```
-pub fn pinv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn pinv_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -4222,7 +4417,10 @@ pub fn pinv_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (exp_a, dexp_a) = matrix_exp_frule(&mut backend, &a, &da).unwrap();
 /// ```
-pub fn matrix_exp_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn matrix_exp_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     _backend: &mut B,
     _tensor: &Tensor<T>,
     _tangent: &Tensor<T>,
@@ -4250,7 +4448,10 @@ pub fn matrix_exp_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (n, dn) = norm_frule(&mut backend, &a, &da, NormKind::Fro).unwrap();
 /// ```
-pub fn norm_frule<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T>>(
+pub fn norm_frule<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
     backend: &mut B,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
