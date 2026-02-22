@@ -55,7 +55,16 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(non_camel_case_types)]
 
+use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+
+use tenferro_algebra::Standard;
+use tenferro_device::LogicalMemorySpace;
+use tenferro_einsum::{einsum, einsum_frule, einsum_rrule};
+use tenferro_linalg::{svd, svd_frule, svd_rrule, SvdCotangent, SvdOptions};
+use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 // ============================================================================
 // Status codes
@@ -205,6 +214,95 @@ pub struct TfeTensorF64 {
 }
 
 // ============================================================================
+// Internal helpers
+// ============================================================================
+
+/// Convert a `Tensor<f64>` into an opaque handle.
+fn tensor_to_handle(tensor: Tensor<f64>) -> *mut TfeTensorF64 {
+    Box::into_raw(Box::new(tensor)) as *mut TfeTensorF64
+}
+
+/// Borrow the tensor behind an opaque handle.
+///
+/// # Safety
+///
+/// `handle` must be a valid, non-null pointer returned by `tensor_to_handle`.
+unsafe fn handle_to_ref<'a>(handle: *const TfeTensorF64) -> &'a Tensor<f64> {
+    &*(handle as *const Tensor<f64>)
+}
+
+/// Take ownership of the tensor behind an opaque handle (frees on drop).
+///
+/// # Safety
+///
+/// `handle` must be a valid, non-null pointer returned by `tensor_to_handle`.
+/// Must not be used after this call.
+unsafe fn handle_take(handle: *mut TfeTensorF64) -> Box<Tensor<f64>> {
+    Box::from_raw(handle as *mut Tensor<f64>)
+}
+
+/// Build `SvdOptions` from C-API parameters.
+fn build_svd_options(max_rank: usize, cutoff: f64) -> Option<SvdOptions> {
+    let mr = if max_rank == 0 { None } else { Some(max_rank) };
+    let co = if cutoff < 0.0 { None } else { Some(cutoff) };
+    if mr.is_none() && co.is_none() {
+        None
+    } else {
+        Some(SvdOptions {
+            max_rank: mr,
+            cutoff: co,
+        })
+    }
+}
+
+/// Matricize a tensor according to left/right dimension indices.
+///
+/// Returns `(matrix, left_dims, right_dims)` where `matrix` is a 2D
+/// column-major contiguous tensor of shape `[m, n]`.
+fn matricize(
+    tensor: &Tensor<f64>,
+    left: &[usize],
+    right: &[usize],
+) -> Result<(Tensor<f64>, Vec<usize>, Vec<usize>), tfe_status_t> {
+    let dims = tensor.dims();
+
+    // Validate indices
+    for &l in left {
+        if l >= dims.len() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+    }
+    for &r in right {
+        if r >= dims.len() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+    }
+    if left.len() + right.len() != dims.len() {
+        return Err(TFE_INVALID_ARGUMENT);
+    }
+
+    let left_dims: Vec<usize> = left.iter().map(|&i| dims[i]).collect();
+    let right_dims: Vec<usize> = right.iter().map(|&i| dims[i]).collect();
+    let m: usize = left_dims.iter().product();
+    let n: usize = right_dims.iter().product();
+
+    // Build permutation: left dims first, then right dims
+    let mut perm: Vec<usize> = Vec::with_capacity(dims.len());
+    perm.extend_from_slice(left);
+    perm.extend_from_slice(right);
+
+    let permuted = tensor
+        .permute(&perm)
+        .map_err(|_| TFE_INTERNAL_ERROR)?
+        .contiguous(MemoryOrder::ColumnMajor)
+        .reshape(&[m, n])
+        .map_err(|_| TFE_SHAPE_MISMATCH)?
+        .contiguous(MemoryOrder::ColumnMajor);
+
+    Ok((permuted, left_dims, right_dims))
+}
+
+// ============================================================================
 // Tensor lifecycle
 // ============================================================================
 
@@ -235,13 +333,51 @@ pub struct TfeTensorF64 {
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_from_data(
-    _data: *const f64,
-    _len: usize,
-    _shape: *const usize,
-    _ndim: usize,
-    _status: *mut tfe_status_t,
+    data: *const f64,
+    len: usize,
+    shape: *const usize,
+    ndim: usize,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if data.is_null() && len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if shape.is_null() && ndim > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let dims = if ndim > 0 {
+            std::slice::from_raw_parts(shape, ndim).to_vec()
+        } else {
+            vec![]
+        };
+
+        let data_slice = if len > 0 {
+            std::slice::from_raw_parts(data, len)
+        } else {
+            &[]
+        };
+
+        Tensor::from_slice(data_slice, &dims, MemoryOrder::ColumnMajor)
+            .map(|t| tensor_to_handle(t))
+            .map_err(|_| TFE_INVALID_ARGUMENT)
+    }));
+
+    match result {
+        Ok(Ok(ptr)) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Ok(Err(code)) => {
+            *status = code;
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Create a tensor filled with zeros.
@@ -263,11 +399,43 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_data(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_zeros(
-    _shape: *const usize,
-    _ndim: usize,
-    _status: *mut tfe_status_t,
+    shape: *const usize,
+    ndim: usize,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if shape.is_null() && ndim > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let dims = if ndim > 0 {
+            std::slice::from_raw_parts(shape, ndim).to_vec()
+        } else {
+            vec![]
+        };
+
+        let t = Tensor::<f64>::zeros(
+            &dims,
+            LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        Ok(tensor_to_handle(t))
+    }));
+
+    match result {
+        Ok(Ok(ptr)) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Ok(Err(code)) => {
+            *status = code;
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Deep-copy a tensor.
@@ -291,10 +459,40 @@ pub unsafe extern "C" fn tfe_tensor_f64_zeros(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_clone(
-    _tensor: *const TfeTensorF64,
-    _status: *mut tfe_status_t,
+    tensor: *const TfeTensorF64,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if tensor.is_null() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        let src = handle_to_ref(tensor);
+        let src_data = src.buffer().as_slice().unwrap();
+        let n = src.len();
+        let off = src.offset() as usize;
+        let copy = Tensor::from_slice(
+            &src_data[off..off + n],
+            src.dims(),
+            MemoryOrder::ColumnMajor,
+        )
+        .map_err(|_| TFE_INTERNAL_ERROR)?;
+        Ok(tensor_to_handle(copy))
+    }));
+
+    match result {
+        Ok(Ok(ptr)) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Ok(Err(code)) => {
+            *status = code;
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Release (free) a tensor.
@@ -310,8 +508,13 @@ pub unsafe extern "C" fn tfe_tensor_f64_clone(
 /// `tensor` must be null or a valid pointer returned by a
 /// `tfe_tensor_f64_*` creation function that has not yet been released.
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_release(_tensor: *mut TfeTensorF64) {
-    todo!()
+pub unsafe extern "C" fn tfe_tensor_f64_release(tensor: *mut TfeTensorF64) {
+    if tensor.is_null() {
+        return;
+    }
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        drop(handle_take(tensor));
+    }));
 }
 
 /// Return the number of dimensions (rank) of the tensor.
@@ -320,8 +523,8 @@ pub unsafe extern "C" fn tfe_tensor_f64_release(_tensor: *mut TfeTensorF64) {
 ///
 /// `tensor` must be a valid, non-null tensor pointer.
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_ndim(_tensor: *const TfeTensorF64) -> usize {
-    todo!()
+pub unsafe extern "C" fn tfe_tensor_f64_ndim(tensor: *const TfeTensorF64) -> usize {
+    handle_to_ref(tensor).ndim()
 }
 
 /// Write the shape of the tensor into the caller-provided buffer.
@@ -344,11 +547,10 @@ pub unsafe extern "C" fn tfe_tensor_f64_ndim(_tensor: *const TfeTensorF64) -> us
 /// free(shape);
 /// ```
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_shape(
-    _tensor: *const TfeTensorF64,
-    _out_shape: *mut usize,
-) {
-    todo!()
+pub unsafe extern "C" fn tfe_tensor_f64_shape(tensor: *const TfeTensorF64, out_shape: *mut usize) {
+    let t = handle_to_ref(tensor);
+    let dims = t.dims();
+    std::ptr::copy_nonoverlapping(dims.as_ptr(), out_shape, dims.len());
 }
 
 /// Return the total number of elements in the tensor.
@@ -357,8 +559,8 @@ pub unsafe extern "C" fn tfe_tensor_f64_shape(
 ///
 /// `tensor` must be a valid, non-null tensor pointer.
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_len(_tensor: *const TfeTensorF64) -> usize {
-    todo!()
+pub unsafe extern "C" fn tfe_tensor_f64_len(tensor: *const TfeTensorF64) -> usize {
+    handle_to_ref(tensor).len()
 }
 
 /// Return a pointer to the tensor's raw data buffer.
@@ -381,8 +583,10 @@ pub unsafe extern "C" fn tfe_tensor_f64_len(_tensor: *const TfeTensorF64) -> usi
 /// }
 /// ```
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_data(_tensor: *const TfeTensorF64) -> *const f64 {
-    todo!()
+pub unsafe extern "C" fn tfe_tensor_f64_data(tensor: *const TfeTensorF64) -> *const f64 {
+    let t = handle_to_ref(tensor);
+    let slice = t.buffer().as_slice().unwrap();
+    slice.as_ptr().add(t.offset() as usize)
 }
 
 // ============================================================================
@@ -492,12 +696,52 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_einsum_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
-    _num_operands: usize,
-    _status: *mut tfe_status_t,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
+    num_operands: usize,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if subscripts.is_null() || operands.is_null() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let subs = CStr::from_ptr(subscripts)
+            .to_str()
+            .map_err(|_| TFE_INVALID_ARGUMENT)?;
+
+        let op_ptrs = std::slice::from_raw_parts(operands, num_operands);
+        let ops: Vec<&Tensor<f64>> = op_ptrs
+            .iter()
+            .map(|&p| {
+                if p.is_null() {
+                    Err(TFE_INVALID_ARGUMENT)
+                } else {
+                    Ok(handle_to_ref(p))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut ctx = CpuContext::new(1);
+        einsum::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, None)
+            .map(|t| tensor_to_handle(t))
+            .map_err(|_| TFE_INTERNAL_ERROR)
+    }));
+
+    match result {
+        Ok(Ok(ptr)) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Ok(Err(code)) => {
+            *status = code;
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Reverse-mode rule (VJP) for einsum.
@@ -531,14 +775,60 @@ pub unsafe extern "C" fn tfe_einsum_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_einsum_rrule_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
-    _num_operands: usize,
-    _cotangent: *const TfeTensorF64,
-    _grads_out: *mut *mut TfeTensorF64,
-    _status: *mut tfe_status_t,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
+    num_operands: usize,
+    cotangent: *const TfeTensorF64,
+    grads_out: *mut *mut TfeTensorF64,
+    status: *mut tfe_status_t,
 ) {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if subscripts.is_null() || operands.is_null() || cotangent.is_null() || grads_out.is_null()
+        {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let subs = CStr::from_ptr(subscripts)
+            .to_str()
+            .map_err(|_| TFE_INVALID_ARGUMENT)?;
+
+        let op_ptrs = std::slice::from_raw_parts(operands, num_operands);
+        let ops: Vec<&Tensor<f64>> = op_ptrs
+            .iter()
+            .map(|&p| {
+                if p.is_null() {
+                    Err(TFE_INVALID_ARGUMENT)
+                } else {
+                    Ok(handle_to_ref(p))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let cot = handle_to_ref(cotangent);
+
+        let mut ctx = CpuContext::new(1);
+        let grads = einsum_rrule::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, cot)
+            .map_err(|_| TFE_INTERNAL_ERROR)?;
+
+        let out_slice = std::slice::from_raw_parts_mut(grads_out, num_operands);
+        for (i, g) in grads.into_iter().enumerate() {
+            out_slice[i] = tensor_to_handle(g);
+        }
+
+        Ok(())
+    }));
+
+    match result {
+        Ok(Ok(())) => {
+            *status = TFE_SUCCESS;
+        }
+        Ok(Err(code)) => {
+            *status = code;
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+        }
+    }
 }
 
 /// Forward-mode rule (JVP) for einsum.
@@ -566,13 +856,65 @@ pub unsafe extern "C" fn tfe_einsum_rrule_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_einsum_frule_f64(
-    _subscripts: *const c_char,
-    _primals: *const *const TfeTensorF64,
-    _num_operands: usize,
-    _tangents: *const *const TfeTensorF64,
-    _status: *mut tfe_status_t,
+    subscripts: *const c_char,
+    primals: *const *const TfeTensorF64,
+    num_operands: usize,
+    tangents: *const *const TfeTensorF64,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if subscripts.is_null() || primals.is_null() || tangents.is_null() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let subs = CStr::from_ptr(subscripts)
+            .to_str()
+            .map_err(|_| TFE_INVALID_ARGUMENT)?;
+
+        let primal_ptrs = std::slice::from_raw_parts(primals, num_operands);
+        let primal_refs: Vec<&Tensor<f64>> = primal_ptrs
+            .iter()
+            .map(|&p| {
+                if p.is_null() {
+                    Err(TFE_INVALID_ARGUMENT)
+                } else {
+                    Ok(handle_to_ref(p))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let tangent_ptrs = std::slice::from_raw_parts(tangents, num_operands);
+        let tangent_refs: Vec<Option<&Tensor<f64>>> = tangent_ptrs
+            .iter()
+            .map(|&p| {
+                if p.is_null() {
+                    None
+                } else {
+                    Some(handle_to_ref(p))
+                }
+            })
+            .collect();
+
+        let mut ctx = CpuContext::new(1);
+        einsum_frule::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &primal_refs, &tangent_refs)
+            .map(|t| tensor_to_handle(t))
+            .map_err(|_| TFE_INTERNAL_ERROR)
+    }));
+
+    match result {
+        Ok(Ok(ptr)) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Ok(Err(code)) => {
+            *status = code;
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null_mut()
+        }
+    }
 }
 
 // ============================================================================
@@ -612,19 +954,82 @@ pub unsafe extern "C" fn tfe_einsum_frule_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_svd_f64(
-    _tensor: *const TfeTensorF64,
-    _left: *const usize,
-    _left_len: usize,
-    _right: *const usize,
-    _right_len: usize,
-    _max_rank: usize,
-    _cutoff: f64,
-    _u_out: *mut *mut TfeTensorF64,
-    _s_out: *mut *mut TfeTensorF64,
-    _vt_out: *mut *mut TfeTensorF64,
-    _status: *mut tfe_status_t,
+    tensor: *const TfeTensorF64,
+    left: *const usize,
+    left_len: usize,
+    right: *const usize,
+    right_len: usize,
+    max_rank: usize,
+    cutoff: f64,
+    u_out: *mut *mut TfeTensorF64,
+    s_out: *mut *mut TfeTensorF64,
+    vt_out: *mut *mut TfeTensorF64,
+    status: *mut tfe_status_t,
 ) {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if tensor.is_null() || u_out.is_null() || s_out.is_null() || vt_out.is_null() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if left.is_null() && left_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if right.is_null() && right_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let t = handle_to_ref(tensor);
+        let left_indices = if left_len > 0 {
+            std::slice::from_raw_parts(left, left_len)
+        } else {
+            &[]
+        };
+        let right_indices = if right_len > 0 {
+            std::slice::from_raw_parts(right, right_len)
+        } else {
+            &[]
+        };
+
+        let (matrix, left_dims, right_dims) = matricize(t, left_indices, right_indices)?;
+
+        let opts = build_svd_options(max_rank, cutoff);
+        let result = svd(&matrix, opts.as_ref()).map_err(|_| TFE_INTERNAL_ERROR)?;
+
+        // Reshape U from [m, k] to [left_dims..., k]
+        let k = result.s.len();
+        let mut u_dims: Vec<usize> = left_dims;
+        u_dims.push(k);
+        let u_reshaped = result
+            .u
+            .reshape(&u_dims)
+            .map_err(|_| TFE_INTERNAL_ERROR)?
+            .contiguous(MemoryOrder::ColumnMajor);
+
+        // Reshape Vt from [k, n] to [k, right_dims...]
+        let mut vt_dims: Vec<usize> = vec![k];
+        vt_dims.extend_from_slice(&right_dims);
+        let vt_reshaped = result
+            .vt
+            .reshape(&vt_dims)
+            .map_err(|_| TFE_INTERNAL_ERROR)?
+            .contiguous(MemoryOrder::ColumnMajor);
+
+        *u_out = tensor_to_handle(u_reshaped);
+        *s_out = tensor_to_handle(result.s);
+        *vt_out = tensor_to_handle(vt_reshaped);
+        Ok(())
+    }));
+
+    match result {
+        Ok(Ok(())) => {
+            *status = TFE_SUCCESS;
+        }
+        Ok(Err(code)) => {
+            *status = code;
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+        }
+    }
 }
 
 /// Reverse-mode rule (VJP) for SVD.
@@ -657,19 +1062,79 @@ pub unsafe extern "C" fn tfe_svd_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_svd_rrule_f64(
-    _tensor: *const TfeTensorF64,
-    _left: *const usize,
-    _left_len: usize,
-    _right: *const usize,
-    _right_len: usize,
-    _max_rank: usize,
-    _cutoff: f64,
-    _cotangent_u: *const TfeTensorF64,
-    _cotangent_s: *const TfeTensorF64,
-    _cotangent_vt: *const TfeTensorF64,
-    _status: *mut tfe_status_t,
+    tensor: *const TfeTensorF64,
+    left: *const usize,
+    left_len: usize,
+    right: *const usize,
+    right_len: usize,
+    max_rank: usize,
+    cutoff: f64,
+    cotangent_u: *const TfeTensorF64,
+    cotangent_s: *const TfeTensorF64,
+    cotangent_vt: *const TfeTensorF64,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if tensor.is_null() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let t = handle_to_ref(tensor);
+        let left_indices = if left_len > 0 {
+            std::slice::from_raw_parts(left, left_len)
+        } else {
+            &[]
+        };
+        let right_indices = if right_len > 0 {
+            std::slice::from_raw_parts(right, right_len)
+        } else {
+            &[]
+        };
+
+        let (matrix, _left_dims, _right_dims) = matricize(t, left_indices, right_indices)?;
+
+        let cot_u = if cotangent_u.is_null() {
+            None
+        } else {
+            Some(handle_to_ref(cotangent_u).clone())
+        };
+        let cot_s = if cotangent_s.is_null() {
+            None
+        } else {
+            Some(handle_to_ref(cotangent_s).clone())
+        };
+        let cot_vt = if cotangent_vt.is_null() {
+            None
+        } else {
+            Some(handle_to_ref(cotangent_vt).clone())
+        };
+
+        let cotangent = SvdCotangent {
+            u: cot_u,
+            s: cot_s,
+            vt: cot_vt,
+        };
+
+        let opts = build_svd_options(max_rank, cutoff);
+        let grad = svd_rrule(&matrix, &cotangent, opts.as_ref()).map_err(|_| TFE_INTERNAL_ERROR)?;
+
+        Ok(tensor_to_handle(grad))
+    }));
+
+    match result {
+        Ok(Ok(ptr)) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Ok(Err(code)) => {
+            *status = code;
+            std::ptr::null_mut()
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Forward-mode rule (JVP) for SVD.
@@ -703,18 +1168,69 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_svd_frule_f64(
-    _tensor: *const TfeTensorF64,
-    _left: *const usize,
-    _left_len: usize,
-    _right: *const usize,
-    _right_len: usize,
-    _max_rank: usize,
-    _cutoff: f64,
-    _tangent: *const TfeTensorF64,
-    _u_out: *mut *mut TfeTensorF64,
-    _s_out: *mut *mut TfeTensorF64,
-    _vt_out: *mut *mut TfeTensorF64,
-    _status: *mut tfe_status_t,
+    tensor: *const TfeTensorF64,
+    left: *const usize,
+    left_len: usize,
+    right: *const usize,
+    right_len: usize,
+    max_rank: usize,
+    cutoff: f64,
+    tangent: *const TfeTensorF64,
+    u_out: *mut *mut TfeTensorF64,
+    s_out: *mut *mut TfeTensorF64,
+    vt_out: *mut *mut TfeTensorF64,
+    status: *mut tfe_status_t,
 ) {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if tensor.is_null() || u_out.is_null() || s_out.is_null() || vt_out.is_null() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+
+        let t = handle_to_ref(tensor);
+        let left_indices = if left_len > 0 {
+            std::slice::from_raw_parts(left, left_len)
+        } else {
+            &[]
+        };
+        let right_indices = if right_len > 0 {
+            std::slice::from_raw_parts(right, right_len)
+        } else {
+            &[]
+        };
+
+        let (matrix, _left_dims, _right_dims) = matricize(t, left_indices, right_indices)?;
+
+        let tang = if tangent.is_null() {
+            Tensor::<f64>::zeros(
+                matrix.dims(),
+                LogicalMemorySpace::MainMemory,
+                MemoryOrder::ColumnMajor,
+            )
+        } else {
+            let tang_tensor = handle_to_ref(tangent);
+            let (tang_matrix, _, _) = matricize(tang_tensor, left_indices, right_indices)?;
+            tang_matrix
+        };
+
+        let opts = build_svd_options(max_rank, cutoff);
+        let (_primal, tangent_result) =
+            svd_frule(&matrix, &tang, opts.as_ref()).map_err(|_| TFE_INTERNAL_ERROR)?;
+
+        *u_out = tensor_to_handle(tangent_result.u);
+        *s_out = tensor_to_handle(tangent_result.s);
+        *vt_out = tensor_to_handle(tangent_result.vt);
+        Ok(())
+    }));
+
+    match result {
+        Ok(Ok(())) => {
+            *status = TFE_SUCCESS;
+        }
+        Ok(Err(code)) => {
+            *status = code;
+        }
+        Err(_) => {
+            *status = TFE_INTERNAL_ERROR;
+        }
+    }
 }
