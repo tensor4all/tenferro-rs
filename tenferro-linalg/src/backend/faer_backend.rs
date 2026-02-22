@@ -1,9 +1,10 @@
 //! Faer backend for linear algebra operations.
 //!
 //! This module provides the [`FaerBackend`] struct implementing
-//! [`LinalgBackend`] for `f64` and `f32`.
+//! [`LinalgBackend`] for `f64`, `f32`, `Complex64`, and `Complex32`.
 
 use faer::linalg::solvers::SpSolver;
+use num_complex::{Complex32, Complex64};
 
 // ============================================================================
 // FaerBackend: LinalgBackend implementation using faer
@@ -466,6 +467,466 @@ macro_rules! impl_linalg_backend {
 
 impl_linalg_backend!(f64);
 impl_linalg_backend!(f32);
+
+// ============================================================================
+// Complex type conversion helpers
+// ============================================================================
+
+/// Convert a slice of `Complex64` to a `Vec` of faer `c64` (safe element-wise copy).
+fn to_faer_c64(src: &[Complex64]) -> Vec<faer::complex_native::c64> {
+    src.iter()
+        .map(|c| faer::complex_native::c64::new(c.re, c.im))
+        .collect()
+}
+
+/// Copy a faer `c64` matrix (column-major) into a `Complex64` output slice.
+fn from_faer_c64_mat(
+    mat: faer::MatRef<'_, faer::complex_native::c64>,
+    out: &mut [Complex64],
+    rows: usize,
+    cols: usize,
+) {
+    for j in 0..cols {
+        for i in 0..rows {
+            let v = mat[(i, j)];
+            out[i + j * rows] = Complex64::new(v.re, v.im);
+        }
+    }
+}
+
+/// Convert a slice of `Complex32` to a `Vec` of faer `c32` (safe element-wise copy).
+fn to_faer_c32(src: &[Complex32]) -> Vec<faer::complex_native::c32> {
+    src.iter()
+        .map(|c| faer::complex_native::c32::new(c.re, c.im))
+        .collect()
+}
+
+/// Copy a faer `c32` matrix (column-major) into a `Complex32` output slice.
+fn from_faer_c32_mat(
+    mat: faer::MatRef<'_, faer::complex_native::c32>,
+    out: &mut [Complex32],
+    rows: usize,
+    cols: usize,
+) {
+    for j in 0..cols {
+        for i in 0..rows {
+            let v = mat[(i, j)];
+            out[i + j * rows] = Complex32::new(v.re, v.im);
+        }
+    }
+}
+
+// ============================================================================
+// Complex LinalgBackend implementations
+// ============================================================================
+
+/// Macro for implementing `LinalgBackend` for complex types (`Complex64`, `Complex32`).
+///
+/// Unlike the real-valued macro, this one converts between `num_complex` types
+/// and faer's native complex types (`c64`, `c32`) via safe element-wise copy.
+macro_rules! impl_complex_linalg_backend {
+    ($complex_ty:ty, $real_ty:ty, $to_faer:ident, $from_faer_mat:ident) => {
+        impl LinalgBackend<$complex_ty> for FaerBackend {
+            type Real = $real_ty;
+
+            fn thin_svd(
+                &mut self,
+                a: &[$complex_ty],
+                m: usize,
+                n: usize,
+                u: &mut [$complex_ty],
+                s: &mut [Self::Real],
+                vt: &mut [$complex_ty],
+            ) -> Result<()> {
+                let k = m.min(n);
+                if a.len() < m * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "thin_svd: input slice length {} < m*n = {}",
+                        a.len(),
+                        m * n
+                    )));
+                }
+                if u.len() < m * k {
+                    return Err(Error::InvalidArgument(format!(
+                        "thin_svd: u slice length {} < m*k = {}",
+                        u.len(),
+                        m * k
+                    )));
+                }
+                if s.len() < k {
+                    return Err(Error::InvalidArgument(format!(
+                        "thin_svd: s slice length {} < k = {}",
+                        s.len(),
+                        k
+                    )));
+                }
+                if vt.len() < k * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "thin_svd: vt slice length {} < k*n = {}",
+                        vt.len(),
+                        k * n
+                    )));
+                }
+
+                let a_faer = $to_faer(a);
+                let mat = faer::mat::from_column_major_slice(&a_faer, m, n);
+                let svd = mat.thin_svd();
+
+                let u_ref = svd.u();
+                let v_ref = svd.v();
+                let s_col = svd.s_diagonal();
+
+                // Copy U (m x k)
+                $from_faer_mat(u_ref, u, m, k);
+
+                // Singular values are real (stored as complex with zero imag)
+                for i in 0..k {
+                    s[i] = s_col[i].re;
+                }
+
+                // Vt = conjugate transpose of V: vt[i + j*k] = conj(V[j, i])
+                for j in 0..n {
+                    for i in 0..k {
+                        let v = v_ref[(j, i)];
+                        vt[i + j * k] = <$complex_ty>::new(v.re, -v.im);
+                    }
+                }
+
+                Ok(())
+            }
+
+            fn qr(
+                &mut self,
+                a: &[$complex_ty],
+                m: usize,
+                n: usize,
+                q: &mut [$complex_ty],
+                r: &mut [$complex_ty],
+            ) -> Result<()> {
+                let k = m.min(n);
+                if a.len() < m * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "qr: input slice length {} < m*n = {}",
+                        a.len(),
+                        m * n
+                    )));
+                }
+                if q.len() < m * k {
+                    return Err(Error::InvalidArgument(format!(
+                        "qr: q slice length {} < m*k = {}",
+                        q.len(),
+                        m * k
+                    )));
+                }
+                if r.len() < k * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "qr: r slice length {} < k*n = {}",
+                        r.len(),
+                        k * n
+                    )));
+                }
+
+                let a_faer = $to_faer(a);
+                let mat = faer::mat::from_column_major_slice(&a_faer, m, n);
+                let qr_result = mat.qr();
+
+                let q_mat = qr_result.compute_thin_q();
+                let r_mat = qr_result.compute_thin_r();
+
+                $from_faer_mat(q_mat.as_ref(), q, m, k);
+                $from_faer_mat(r_mat.as_ref(), r, k, n);
+
+                Ok(())
+            }
+
+            fn lu(
+                &mut self,
+                a: &[$complex_ty],
+                m: usize,
+                n: usize,
+                perm: &mut [usize],
+                l: &mut [$complex_ty],
+                u_out: &mut [$complex_ty],
+            ) -> Result<()> {
+                let k = m.min(n);
+                if a.len() < m * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "lu: input slice length {} < m*n = {}",
+                        a.len(),
+                        m * n
+                    )));
+                }
+                if perm.len() < m {
+                    return Err(Error::InvalidArgument(format!(
+                        "lu: perm slice length {} < m = {}",
+                        perm.len(),
+                        m
+                    )));
+                }
+                if l.len() < m * k {
+                    return Err(Error::InvalidArgument(format!(
+                        "lu: l slice length {} < m*k = {}",
+                        l.len(),
+                        m * k
+                    )));
+                }
+                if u_out.len() < k * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "lu: u_out slice length {} < k*n = {}",
+                        u_out.len(),
+                        k * n
+                    )));
+                }
+
+                let a_faer = $to_faer(a);
+                let mat = faer::mat::from_column_major_slice(&a_faer, m, n);
+                let lu_result = mat.partial_piv_lu();
+
+                let l_mat = lu_result.compute_l();
+                let u_mat = lu_result.compute_u();
+
+                $from_faer_mat(l_mat.as_ref(), l, m, k);
+                $from_faer_mat(u_mat.as_ref(), u_out, k, n);
+
+                let perm_ref = lu_result.row_permutation();
+                let (fwd, _inv) = perm_ref.arrays();
+                perm[..m].copy_from_slice(fwd);
+
+                Ok(())
+            }
+
+            fn cholesky(
+                &mut self,
+                a: &[$complex_ty],
+                n: usize,
+                l: &mut [$complex_ty],
+            ) -> Result<()> {
+                if a.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "cholesky: input slice length {} < n*n = {}",
+                        a.len(),
+                        n * n
+                    )));
+                }
+                if l.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "cholesky: l slice length {} < n*n = {}",
+                        l.len(),
+                        n * n
+                    )));
+                }
+
+                let a_faer = $to_faer(a);
+                let mat = faer::mat::from_column_major_slice(&a_faer, n, n);
+                match mat.cholesky(faer::Side::Lower) {
+                    Ok(chol) => {
+                        let l_mat = chol.compute_l();
+                        $from_faer_mat(l_mat.as_ref(), l, n, n);
+                        Ok(())
+                    }
+                    Err(_) => Err(Error::InvalidArgument(
+                        "cholesky: matrix is not positive definite".to_string(),
+                    )),
+                }
+            }
+
+            fn eigen_sym(
+                &mut self,
+                a: &[$complex_ty],
+                n: usize,
+                values: &mut [Self::Real],
+                vectors: &mut [$complex_ty],
+            ) -> Result<()> {
+                if a.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eigen_sym: input slice length {} < n*n = {}",
+                        a.len(),
+                        n * n
+                    )));
+                }
+                if values.len() < n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eigen_sym: values slice length {} < n = {}",
+                        values.len(),
+                        n
+                    )));
+                }
+                if vectors.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eigen_sym: vectors slice length {} < n*n = {}",
+                        vectors.len(),
+                        n * n
+                    )));
+                }
+
+                let a_faer = $to_faer(a);
+                let mat = faer::mat::from_column_major_slice(&a_faer, n, n);
+                let eig = mat.selfadjoint_eigendecomposition(faer::Side::Lower);
+
+                let u_ref = eig.u();
+                let s_diag = eig.s();
+
+                $from_faer_mat(u_ref, vectors, n, n);
+
+                // Eigenvalues of a Hermitian matrix are real
+                let s_col = s_diag.column_vector();
+                for i in 0..n {
+                    values[i] = s_col[i].re;
+                }
+
+                Ok(())
+            }
+
+            fn mat_mul(
+                &mut self,
+                a: &[$complex_ty],
+                m: usize,
+                k: usize,
+                b: &[$complex_ty],
+                n: usize,
+                c: &mut [$complex_ty],
+            ) -> Result<()> {
+                if a.len() < m * k {
+                    return Err(Error::InvalidArgument(format!(
+                        "mat_mul: a slice length {} < m*k = {}",
+                        a.len(),
+                        m * k
+                    )));
+                }
+                if b.len() < k * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "mat_mul: b slice length {} < k*n = {}",
+                        b.len(),
+                        k * n
+                    )));
+                }
+                if c.len() < m * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "mat_mul: c slice length {} < m*n = {}",
+                        c.len(),
+                        m * n
+                    )));
+                }
+
+                let a_faer = $to_faer(a);
+                let b_faer = $to_faer(b);
+                let a_mat = faer::mat::from_column_major_slice(&a_faer, m, k);
+                let b_mat = faer::mat::from_column_major_slice(&b_faer, k, n);
+                let result = &a_mat * &b_mat;
+
+                $from_faer_mat(result.as_ref(), c, m, n);
+
+                Ok(())
+            }
+
+            fn solve(
+                &mut self,
+                a: &[$complex_ty],
+                b: &[$complex_ty],
+                n: usize,
+                nrhs: usize,
+                x: &mut [$complex_ty],
+            ) -> Result<()> {
+                if a.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "solve: a slice length {} < n*n = {}",
+                        a.len(),
+                        n * n
+                    )));
+                }
+                if b.len() < n * nrhs {
+                    return Err(Error::InvalidArgument(format!(
+                        "solve: b slice length {} < n*nrhs = {}",
+                        b.len(),
+                        n * nrhs
+                    )));
+                }
+                if x.len() < n * nrhs {
+                    return Err(Error::InvalidArgument(format!(
+                        "solve: x slice length {} < n*nrhs = {}",
+                        x.len(),
+                        n * nrhs
+                    )));
+                }
+
+                let a_faer = $to_faer(a);
+                let b_faer = $to_faer(b);
+                let a_mat = faer::mat::from_column_major_slice(&a_faer, n, n);
+                let b_mat = faer::mat::from_column_major_slice(&b_faer, n, nrhs);
+                let lu = a_mat.partial_piv_lu();
+                let result = lu.solve(&b_mat);
+
+                $from_faer_mat(result.as_ref(), x, n, nrhs);
+
+                Ok(())
+            }
+
+            fn solve_triangular(
+                &mut self,
+                a: &[$complex_ty],
+                b: &[$complex_ty],
+                n: usize,
+                nrhs: usize,
+                upper: bool,
+                x: &mut [$complex_ty],
+            ) -> Result<()> {
+                if a.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "solve_triangular: a slice length {} < n*n = {}",
+                        a.len(),
+                        n * n
+                    )));
+                }
+                if b.len() < n * nrhs {
+                    return Err(Error::InvalidArgument(format!(
+                        "solve_triangular: b slice length {} < n*nrhs = {}",
+                        b.len(),
+                        n * nrhs
+                    )));
+                }
+                if x.len() < n * nrhs {
+                    return Err(Error::InvalidArgument(format!(
+                        "solve_triangular: x slice length {} < n*nrhs = {}",
+                        x.len(),
+                        n * nrhs
+                    )));
+                }
+
+                // Perform forward/back substitution directly on Complex slices.
+                // Use column-major indexing: a[(i,j)] = a[i + j*n].
+                for col in 0..nrhs {
+                    let b_col = &b[col * n..(col + 1) * n];
+                    let x_col = &mut x[col * n..(col + 1) * n];
+
+                    if upper {
+                        // Back substitution for upper triangular
+                        for i in (0..n).rev() {
+                            let mut sum = b_col[i];
+                            for j in (i + 1)..n {
+                                sum = sum - a[i + j * n] * x_col[j];
+                            }
+                            x_col[i] = sum / a[i + i * n];
+                        }
+                    } else {
+                        // Forward substitution for lower triangular
+                        for i in 0..n {
+                            let mut sum = b_col[i];
+                            for j in 0..i {
+                                sum = sum - a[i + j * n] * x_col[j];
+                            }
+                            x_col[i] = sum / a[i + i * n];
+                        }
+                    }
+                }
+
+                Ok(())
+            }
+        }
+    };
+}
+
+impl_complex_linalg_backend!(Complex64, f64, to_faer_c64, from_faer_c64_mat);
+impl_complex_linalg_backend!(Complex32, f32, to_faer_c32, from_faer_c32_mat);
 
 // ============================================================================
 // Tests
