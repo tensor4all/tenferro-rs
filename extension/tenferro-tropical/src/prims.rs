@@ -11,6 +11,7 @@
 //! `sum = sum + a * b` becomes `sum = max(sum, a_val + b_val)` for MaxPlus,
 //! which is exactly tropical GEMM.
 
+use std::collections::HashSet;
 use std::marker::PhantomData;
 
 use strided_traits::ScalarBase;
@@ -261,8 +262,34 @@ fn execute_trace<T: ScalarBase>(
     paired_axes: &[(usize, usize)],
     free_axes: &[usize],
 ) -> Result<()> {
+    if paired_axes.is_empty() {
+        return Err(Error::InvalidArgument(
+            "trace requires at least one paired axis".into(),
+        ));
+    }
+
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
+    for &(ax1, ax2) in paired_axes {
+        if ax1 >= in_dims.len() || ax2 >= in_dims.len() {
+            return Err(Error::InvalidArgument(
+                "trace paired axis out of bounds".into(),
+            ));
+        }
+    }
+    for &ax in free_axes {
+        if ax >= in_dims.len() {
+            return Err(Error::InvalidArgument(
+                "trace free axis out of bounds".into(),
+            ));
+        }
+    }
+    if out_dims.len() != free_axes.len() {
+        return Err(Error::InvalidArgument(
+            "trace output rank does not match free axes".into(),
+        ));
+    }
+
     let diag_dim = in_dims[paired_axes[0].0];
 
     for_each_index(&out_dims, |out_idx| {
@@ -324,10 +351,35 @@ fn execute_anti_trace<T: ScalarBase>(
     paired_axes: &[(usize, usize)],
     free_axes: &[usize],
 ) -> Result<()> {
+    if paired_axes.is_empty() {
+        return Err(Error::InvalidArgument(
+            "anti-trace requires at least one paired axis".into(),
+        ));
+    }
+
     scale_output(output, beta);
 
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
+    for &(ax1, ax2) in paired_axes {
+        if ax1 >= out_dims.len() || ax2 >= out_dims.len() {
+            return Err(Error::InvalidArgument(
+                "anti-trace paired axis out of bounds".into(),
+            ));
+        }
+    }
+    for &ax in free_axes {
+        if ax >= out_dims.len() {
+            return Err(Error::InvalidArgument(
+                "anti-trace free axis out of bounds".into(),
+            ));
+        }
+    }
+    if in_dims.len() != free_axes.len() {
+        return Err(Error::InvalidArgument(
+            "anti-trace input rank does not match free axes".into(),
+        ));
+    }
     let diag_dim = out_dims[paired_axes[0].0];
 
     for_each_index(&in_dims, |in_idx| {
@@ -356,10 +408,35 @@ fn execute_anti_diag<T: ScalarBase>(
     paired_axes: &[(usize, usize)],
     free_axes: &[usize],
 ) -> Result<()> {
+    if paired_axes.is_empty() {
+        return Err(Error::InvalidArgument(
+            "anti-diag requires at least one paired axis".into(),
+        ));
+    }
+
     scale_output(output, beta);
 
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
+    for &(ax1, ax2) in paired_axes {
+        if ax1 >= out_dims.len() || ax2 >= out_dims.len() {
+            return Err(Error::InvalidArgument(
+                "anti-diag paired axis out of bounds".into(),
+            ));
+        }
+    }
+    for &ax in free_axes {
+        if ax >= out_dims.len() {
+            return Err(Error::InvalidArgument(
+                "anti-diag free axis out of bounds".into(),
+            ));
+        }
+    }
+    if in_dims.len() != free_axes.len() {
+        return Err(Error::InvalidArgument(
+            "anti-diag input rank does not match free axes".into(),
+        ));
+    }
 
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
@@ -380,26 +457,133 @@ fn execute_anti_diag<T: ScalarBase>(
 // Plan construction (shared logic for all three tropical algebras)
 // ===========================================================================
 
-fn tropical_plan<T: ScalarBase>(desc: &PrimDescriptor) -> Result<TropicalPlan<T>> {
+fn ensure_shape_count(shapes: &[&[usize]], expected: usize, op: &str) -> Result<()> {
+    if shapes.len() != expected {
+        return Err(Error::InvalidArgument(format!(
+            "{op} expects {expected} shapes, got {}",
+            shapes.len()
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_unique_modes(modes: &[u32], name: &str) -> Result<()> {
+    let mut seen = HashSet::new();
+    for &m in modes {
+        if !seen.insert(m) {
+            return Err(Error::InvalidArgument(format!(
+                "{name} contains duplicate mode label {m}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_pair_labels_unique(paired: &[(u32, u32)], name: &str) -> Result<()> {
+    let mut seen = HashSet::new();
+    for &(m1, m2) in paired {
+        if m1 == m2 {
+            return Err(Error::InvalidArgument(format!(
+                "{name} contains invalid pair ({m1},{m2})"
+            )));
+        }
+        if !seen.insert(m1) || !seen.insert(m2) {
+            return Err(Error::InvalidArgument(format!(
+                "{name} contains duplicated paired label"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn tropical_plan<T: ScalarBase>(
+    desc: &PrimDescriptor,
+    shapes: &[&[usize]],
+) -> Result<TropicalPlan<T>> {
     match desc {
         PrimDescriptor::BatchedGemm {
             batch_dims,
             m,
             n,
             k,
-        } => Ok(TropicalPlan::BatchedGemm {
-            batch_dims: batch_dims.clone(),
-            m: *m,
-            n: *n,
-            k: *k,
-            _marker: PhantomData,
-        }),
+        } => {
+            ensure_shape_count(shapes, 3, "BatchedGemm")?;
+            let a_shape = shapes[0];
+            let b_shape = shapes[1];
+            let c_shape = shapes[2];
+            let expected_rank = batch_dims.len() + 2;
+            if a_shape.len() != expected_rank
+                || b_shape.len() != expected_rank
+                || c_shape.len() != expected_rank
+            {
+                return Err(Error::InvalidArgument(
+                    "BatchedGemm rank mismatch between descriptor and shapes".into(),
+                ));
+            }
+            for (i, &bd) in batch_dims.iter().enumerate() {
+                if a_shape[i] != bd || b_shape[i] != bd || c_shape[i] != bd {
+                    return Err(Error::InvalidArgument(
+                        "BatchedGemm batch dimensions do not match shapes".into(),
+                    ));
+                }
+            }
+            let off = batch_dims.len();
+            if a_shape[off] != *m || a_shape[off + 1] != *k {
+                return Err(Error::InvalidArgument(
+                    "BatchedGemm A shape mismatch".into(),
+                ));
+            }
+            if b_shape[off] != *k || b_shape[off + 1] != *n {
+                return Err(Error::InvalidArgument(
+                    "BatchedGemm B shape mismatch".into(),
+                ));
+            }
+            if c_shape[off] != *m || c_shape[off + 1] != *n {
+                return Err(Error::InvalidArgument(
+                    "BatchedGemm C shape mismatch".into(),
+                ));
+            }
+
+            Ok(TropicalPlan::BatchedGemm {
+                batch_dims: batch_dims.clone(),
+                m: *m,
+                n: *n,
+                k: *k,
+                _marker: PhantomData,
+            })
+        }
 
         PrimDescriptor::Reduce {
             modes_a,
             modes_c,
             op,
         } => {
+            ensure_shape_count(shapes, 2, "Reduce")?;
+            ensure_unique_modes(modes_a, "modes_a")?;
+            ensure_unique_modes(modes_c, "modes_c")?;
+            let a_shape = shapes[0];
+            let c_shape = shapes[1];
+            if modes_a.len() != a_shape.len() || modes_c.len() != c_shape.len() {
+                return Err(Error::InvalidArgument(
+                    "Reduce mode rank does not match shape rank".into(),
+                ));
+            }
+            for &m in modes_c {
+                if !modes_a.contains(&m) {
+                    return Err(Error::InvalidArgument(
+                        "Reduce modes_c must be a subset of modes_a".into(),
+                    ));
+                }
+            }
+            for (out_ax, &m) in modes_c.iter().enumerate() {
+                let in_ax = mode_position(modes_a, m)?;
+                if a_shape[in_ax] != c_shape[out_ax] {
+                    return Err(Error::InvalidArgument(
+                        "Reduce output shape does not match input modes".into(),
+                    ));
+                }
+            }
+
             let reduced_axes: Vec<usize> = modes_a
                 .iter()
                 .enumerate()
@@ -418,6 +602,65 @@ fn tropical_plan<T: ScalarBase>(desc: &PrimDescriptor) -> Result<TropicalPlan<T>
             modes_c,
             paired,
         } => {
+            ensure_shape_count(shapes, 2, "Trace")?;
+            ensure_unique_modes(modes_a, "modes_a")?;
+            ensure_unique_modes(modes_c, "modes_c")?;
+            if paired.is_empty() {
+                return Err(Error::InvalidArgument(
+                    "Trace requires non-empty paired axes".into(),
+                ));
+            }
+            ensure_pair_labels_unique(paired, "Trace paired")?;
+            let a_shape = shapes[0];
+            let c_shape = shapes[1];
+            if modes_a.len() != a_shape.len() || modes_c.len() != c_shape.len() {
+                return Err(Error::InvalidArgument(
+                    "Trace mode rank does not match shape rank".into(),
+                ));
+            }
+
+            let paired_labels: HashSet<u32> =
+                paired.iter().flat_map(|(m1, m2)| [*m1, *m2]).collect();
+            for &(m1, m2) in paired {
+                if !modes_a.contains(&m1) || !modes_a.contains(&m2) {
+                    return Err(Error::InvalidArgument(
+                        "Trace paired labels must exist in modes_a".into(),
+                    ));
+                }
+                if modes_c.contains(&m1) || modes_c.contains(&m2) {
+                    return Err(Error::InvalidArgument(
+                        "Trace paired labels must be reduced (not present in modes_c)".into(),
+                    ));
+                }
+                let ax1 = mode_position(modes_a, m1)?;
+                let ax2 = mode_position(modes_a, m2)?;
+                if a_shape[ax1] != a_shape[ax2] {
+                    return Err(Error::InvalidArgument(
+                        "Trace paired dimensions must be equal".into(),
+                    ));
+                }
+            }
+            for &m in modes_a {
+                if !modes_c.contains(&m) && !paired_labels.contains(&m) {
+                    return Err(Error::InvalidArgument(
+                        "Trace modes_a contains labels neither free nor paired".into(),
+                    ));
+                }
+            }
+            for (out_ax, &m) in modes_c.iter().enumerate() {
+                if paired_labels.contains(&m) {
+                    return Err(Error::InvalidArgument(
+                        "Trace free labels must not be in paired set".into(),
+                    ));
+                }
+                let in_ax = mode_position(modes_a, m)?;
+                if a_shape[in_ax] != c_shape[out_ax] {
+                    return Err(Error::InvalidArgument(
+                        "Trace output shape does not match free modes".into(),
+                    ));
+                }
+            }
+
             let paired_axes: Vec<(usize, usize)> = paired
                 .iter()
                 .map(|(m1, m2)| Ok((mode_position(modes_a, *m1)?, mode_position(modes_a, *m2)?)))
@@ -434,6 +677,35 @@ fn tropical_plan<T: ScalarBase>(desc: &PrimDescriptor) -> Result<TropicalPlan<T>
         }
 
         PrimDescriptor::Permute { modes_a, modes_b } => {
+            ensure_shape_count(shapes, 2, "Permute")?;
+            ensure_unique_modes(modes_a, "modes_a")?;
+            ensure_unique_modes(modes_b, "modes_b")?;
+            let a_shape = shapes[0];
+            let b_shape = shapes[1];
+            if modes_a.len() != a_shape.len()
+                || modes_b.len() != b_shape.len()
+                || modes_a.len() != modes_b.len()
+            {
+                return Err(Error::InvalidArgument(
+                    "Permute mode rank does not match shape rank".into(),
+                ));
+            }
+            for &m in modes_b {
+                if !modes_a.contains(&m) {
+                    return Err(Error::InvalidArgument(
+                        "Permute modes_b must be a permutation of modes_a".into(),
+                    ));
+                }
+            }
+            for (out_ax, &m) in modes_b.iter().enumerate() {
+                let in_ax = mode_position(modes_a, m)?;
+                if a_shape[in_ax] != b_shape[out_ax] {
+                    return Err(Error::InvalidArgument(
+                        "Permute output shape does not match permutation".into(),
+                    ));
+                }
+            }
+
             let perm: Vec<usize> = modes_b
                 .iter()
                 .map(|m| mode_position(modes_a, *m))
@@ -449,6 +721,65 @@ fn tropical_plan<T: ScalarBase>(desc: &PrimDescriptor) -> Result<TropicalPlan<T>
             modes_c,
             paired,
         } => {
+            ensure_shape_count(shapes, 2, "AntiTrace")?;
+            ensure_unique_modes(modes_a, "modes_a")?;
+            ensure_unique_modes(modes_c, "modes_c")?;
+            if paired.is_empty() {
+                return Err(Error::InvalidArgument(
+                    "AntiTrace requires non-empty paired axes".into(),
+                ));
+            }
+            ensure_pair_labels_unique(paired, "AntiTrace paired")?;
+            let a_shape = shapes[0];
+            let c_shape = shapes[1];
+            if modes_a.len() != a_shape.len() || modes_c.len() != c_shape.len() {
+                return Err(Error::InvalidArgument(
+                    "AntiTrace mode rank does not match shape rank".into(),
+                ));
+            }
+
+            let paired_labels: HashSet<u32> =
+                paired.iter().flat_map(|(m1, m2)| [*m1, *m2]).collect();
+            for &(m1, m2) in paired {
+                if !modes_c.contains(&m1) || !modes_c.contains(&m2) {
+                    return Err(Error::InvalidArgument(
+                        "AntiTrace paired labels must exist in modes_c".into(),
+                    ));
+                }
+                if modes_a.contains(&m1) || modes_a.contains(&m2) {
+                    return Err(Error::InvalidArgument(
+                        "AntiTrace paired labels must not be in modes_a".into(),
+                    ));
+                }
+                let ax1 = mode_position(modes_c, m1)?;
+                let ax2 = mode_position(modes_c, m2)?;
+                if c_shape[ax1] != c_shape[ax2] {
+                    return Err(Error::InvalidArgument(
+                        "AntiTrace paired dimensions must be equal".into(),
+                    ));
+                }
+            }
+            for &m in modes_c {
+                if !modes_a.contains(&m) && !paired_labels.contains(&m) {
+                    return Err(Error::InvalidArgument(
+                        "AntiTrace modes_c contains labels neither free nor paired".into(),
+                    ));
+                }
+            }
+            for (in_ax, &m) in modes_a.iter().enumerate() {
+                if paired_labels.contains(&m) {
+                    return Err(Error::InvalidArgument(
+                        "AntiTrace free labels must not be in paired set".into(),
+                    ));
+                }
+                let out_ax = mode_position(modes_c, m)?;
+                if a_shape[in_ax] != c_shape[out_ax] {
+                    return Err(Error::InvalidArgument(
+                        "AntiTrace input shape does not match output free modes".into(),
+                    ));
+                }
+            }
+
             let paired_axes: Vec<(usize, usize)> = paired
                 .iter()
                 .map(|(m1, m2)| Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?)))
@@ -469,6 +800,66 @@ fn tropical_plan<T: ScalarBase>(desc: &PrimDescriptor) -> Result<TropicalPlan<T>
             modes_c,
             paired,
         } => {
+            ensure_shape_count(shapes, 2, "AntiDiag")?;
+            ensure_unique_modes(modes_a, "modes_a")?;
+            ensure_unique_modes(modes_c, "modes_c")?;
+            if paired.is_empty() {
+                return Err(Error::InvalidArgument(
+                    "AntiDiag requires non-empty paired axes".into(),
+                ));
+            }
+            ensure_pair_labels_unique(paired, "AntiDiag paired")?;
+            let a_shape = shapes[0];
+            let c_shape = shapes[1];
+            if modes_a.len() != a_shape.len() || modes_c.len() != c_shape.len() {
+                return Err(Error::InvalidArgument(
+                    "AntiDiag mode rank does not match shape rank".into(),
+                ));
+            }
+
+            let paired_labels: HashSet<u32> =
+                paired.iter().flat_map(|(m1, m2)| [*m1, *m2]).collect();
+            let free_labels: HashSet<u32> = modes_a.iter().copied().collect();
+            for &(m1, m2) in paired {
+                if !modes_c.contains(&m1) || !modes_c.contains(&m2) {
+                    return Err(Error::InvalidArgument(
+                        "AntiDiag paired labels must exist in modes_c".into(),
+                    ));
+                }
+                if !free_labels.contains(&m1) {
+                    return Err(Error::InvalidArgument(
+                        "AntiDiag first paired label must exist in modes_a".into(),
+                    ));
+                }
+                if free_labels.contains(&m2) {
+                    return Err(Error::InvalidArgument(
+                        "AntiDiag second paired label must not exist in modes_a".into(),
+                    ));
+                }
+                let ax1 = mode_position(modes_c, m1)?;
+                let ax2 = mode_position(modes_c, m2)?;
+                if c_shape[ax1] != c_shape[ax2] {
+                    return Err(Error::InvalidArgument(
+                        "AntiDiag paired dimensions must be equal".into(),
+                    ));
+                }
+            }
+            for &m in modes_c {
+                if !free_labels.contains(&m) && !paired_labels.contains(&m) {
+                    return Err(Error::InvalidArgument(
+                        "AntiDiag modes_c contains labels neither free nor paired".into(),
+                    ));
+                }
+            }
+            for (in_ax, &m) in modes_a.iter().enumerate() {
+                let out_ax = mode_position(modes_c, m)?;
+                if a_shape[in_ax] != c_shape[out_ax] {
+                    return Err(Error::InvalidArgument(
+                        "AntiDiag input shape does not match output free modes".into(),
+                    ));
+                }
+            }
+
             let paired_axes: Vec<(usize, usize)> = paired
                 .iter()
                 .map(|(m1, m2)| Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?)))
@@ -507,12 +898,26 @@ fn tropical_execute<T: ScalarBase>(
             n,
             k,
             ..
-        } => execute_batched_gemm(alpha, inputs, beta, output, batch_dims, *m, *n, *k),
+        } => {
+            if inputs.len() != 2 {
+                return Err(Error::InvalidArgument(
+                    "BatchedGemm execute requires 2 input tensors".into(),
+                ));
+            }
+            execute_batched_gemm(alpha, inputs, beta, output, batch_dims, *m, *n, *k)
+        }
 
         TropicalPlan::Reduce {
             reduced_axes, op, ..
         } => match op {
-            ReduceOp::Sum => execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes),
+            ReduceOp::Sum => {
+                if inputs.len() != 1 {
+                    return Err(Error::InvalidArgument(
+                        "Reduce execute requires 1 input tensor".into(),
+                    ));
+                }
+                execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes)
+            }
             ReduceOp::Max | ReduceOp::Min => {
                 // For tropical types, "Sum" reduction already uses tropical addition
                 // (max or min), so ReduceOp::Sum is the correct choice for callers.
@@ -527,21 +932,49 @@ fn tropical_execute<T: ScalarBase>(
             paired_axes,
             free_axes,
             ..
-        } => execute_trace(alpha, inputs[0], beta, output, paired_axes, free_axes),
+        } => {
+            if inputs.len() != 1 {
+                return Err(Error::InvalidArgument(
+                    "Trace execute requires 1 input tensor".into(),
+                ));
+            }
+            execute_trace(alpha, inputs[0], beta, output, paired_axes, free_axes)
+        }
 
-        TropicalPlan::Permute { perm, .. } => execute_permute(alpha, inputs[0], beta, output, perm),
+        TropicalPlan::Permute { perm, .. } => {
+            if inputs.len() != 1 {
+                return Err(Error::InvalidArgument(
+                    "Permute execute requires 1 input tensor".into(),
+                ));
+            }
+            execute_permute(alpha, inputs[0], beta, output, perm)
+        }
 
         TropicalPlan::AntiTrace {
             paired_axes,
             free_axes,
             ..
-        } => execute_anti_trace(alpha, inputs[0], beta, output, paired_axes, free_axes),
+        } => {
+            if inputs.len() != 1 {
+                return Err(Error::InvalidArgument(
+                    "AntiTrace execute requires 1 input tensor".into(),
+                ));
+            }
+            execute_anti_trace(alpha, inputs[0], beta, output, paired_axes, free_axes)
+        }
 
         TropicalPlan::AntiDiag {
             paired_axes,
             free_axes,
             ..
-        } => execute_anti_diag(alpha, inputs[0], beta, output, paired_axes, free_axes),
+        } => {
+            if inputs.len() != 1 {
+                return Err(Error::InvalidArgument(
+                    "AntiDiag execute requires 1 input tensor".into(),
+                ));
+            }
+            execute_anti_diag(alpha, inputs[0], beta, output, paired_axes, free_axes)
+        }
     }
 }
 
@@ -556,9 +989,9 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
     fn plan<T: ScalarBase>(
         _ctx: &mut CpuContext,
         desc: &PrimDescriptor,
-        _shapes: &[&[usize]],
+        shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
-        tropical_plan(desc)
+        tropical_plan(desc, shapes)
     }
 
     fn execute<T: ScalarBase>(
@@ -589,9 +1022,9 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
     fn plan<T: ScalarBase>(
         _ctx: &mut CpuContext,
         desc: &PrimDescriptor,
-        _shapes: &[&[usize]],
+        shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
-        tropical_plan(desc)
+        tropical_plan(desc, shapes)
     }
 
     fn execute<T: ScalarBase>(
@@ -622,9 +1055,9 @@ impl TensorPrims<MaxMulAlgebra> for CpuBackend {
     fn plan<T: ScalarBase>(
         _ctx: &mut CpuContext,
         desc: &PrimDescriptor,
-        _shapes: &[&[usize]],
+        shapes: &[&[usize]],
     ) -> Result<TropicalPlan<T>> {
-        tropical_plan(desc)
+        tropical_plan(desc, shapes)
     }
 
     fn execute<T: ScalarBase>(

@@ -913,3 +913,103 @@ fn tropical_no_extensions() {
         Extension::Contract
     ));
 }
+
+#[test]
+fn tropical_plan_trace_empty_paired_returns_error() {
+    use tenferro_device::Error;
+    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Trace {
+        modes_a: vec![0, 1],
+        modes_c: vec![0],
+        paired: vec![],
+    };
+    let err = match <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::plan::<
+        MaxPlus<f64>,
+    >(&mut ctx, &desc, &[&[2, 2], &[2]])
+    {
+        Ok(_) => panic!("expected InvalidArgument error"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, Error::InvalidArgument(_)));
+}
+
+#[test]
+fn tropical_plan_antidiag_invalid_pair_anchor_returns_error() {
+    use tenferro_device::Error;
+    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::AntiDiag {
+        modes_a: vec![0],
+        modes_c: vec![0, 1],
+        // first paired label must exist in modes_a, but here it's 1
+        paired: vec![(1, 0)],
+    };
+    let err = match <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::plan::<
+        MaxPlus<f64>,
+    >(&mut ctx, &desc, &[&[2], &[2, 2]])
+    {
+        Ok(_) => panic!("expected InvalidArgument error"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, Error::InvalidArgument(_)));
+}
+
+#[test]
+fn tropical_plan_batched_gemm_shape_mismatch_returns_error() {
+    use tenferro_device::Error;
+    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: vec![],
+        m: 2,
+        n: 2,
+        k: 3,
+    };
+    // B shape is wrong (should be [3, 2], here [4, 2])
+    let err = match <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::plan::<
+        MaxPlus<f64>,
+    >(&mut ctx, &desc, &[&[2, 3], &[4, 2], &[2, 2]])
+    {
+        Ok(_) => panic!("expected InvalidArgument error"),
+        Err(e) => e,
+    };
+    assert!(matches!(err, Error::InvalidArgument(_)));
+}
+
+#[test]
+fn tropical_execute_wrong_input_arity_returns_error() {
+    use tenferro_device::Error;
+    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+    let plan =
+        <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::plan::<MaxPlus<f64>>(
+            &mut ctx,
+            &desc,
+            &[&[2, 2], &[2, 2]],
+        )
+        .unwrap();
+
+    let mut out = [MaxPlus::<f64>::zero(); 4];
+    let mut out_view = strided_view::StridedViewMut::new(&mut out, &[2, 2], &[1, 2], 0).unwrap();
+
+    let no_inputs: [&strided_view::StridedView<MaxPlus<f64>>; 0] = [];
+    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
+        &mut ctx,
+        &plan,
+        MaxPlus::one(),
+        &no_inputs,
+        MaxPlus::zero(),
+        &mut out_view,
+    )
+    .unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(_)));
+}
