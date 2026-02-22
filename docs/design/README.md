@@ -30,6 +30,7 @@
 | [reference/libtorch.md](./reference/libtorch.md) | PyTorch/libtorch C++ tensor infrastructure survey |
 | [reference/itensor-ecosystem.md](./reference/itensor-ecosystem.md) | ITensor Julia ecosystem analysis and Rust mapping |
 | [reference/einsum-algorithm-comparison.md](./reference/einsum-algorithm-comparison.md) | strided-rs vs omeinsum-rs optimization comparison (historical decision record) |
+| [batch-permute-note.md](./batch-permute-note.md) | Batch-axis ordering note: eager vs lazy permutation/materialization behavior |
 
 ## Integrations
 
