@@ -4,8 +4,8 @@
 //! values. It supports:
 //!
 //! - **String notation**: `"ij,jk->ik"` (NumPy/PyTorch compatible)
-//! - **Parenthesized contraction order**: `"ij,(jk,kl)->il"` to control
-//!   pairwise contraction sequence in string notation
+//! - **Parenthesized notation**: `"ij,(jk,kl)->il"` is accepted but
+//!   grouping is currently ignored (optimizer picks order)
 //! - **Integer label notation**: omeinsum-rs compatible, using `u32` labels
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
@@ -65,7 +65,7 @@
 //! let t = einsum::<_, _, CpuBackend>(&mut ctx, "i->iii", &[&v], None).unwrap();
 //! assert_eq!(t.dims(), &[3, 3, 3]);
 //!
-//! // Consuming variant: operands are moved, buffers may be reused
+//! // Consuming variant: operands are moved (buffer reuse not yet implemented)
 //! use tenferro_einsum::einsum_owned;
 //! let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 //! let y = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
@@ -152,6 +152,9 @@
 //!
 //! ## GPU async chaining (deferred evaluation)
 //!
+//! > **Status: Not yet implemented.** GPU backends do not exist yet.
+//! > The examples below are aspirational design targets, not working code.
+//!
 //! GPU einsum operations return immediately. The result tensor carries a
 //! [`CompletionEvent`](tenferro_tensor::CompletionEvent) that tracks the
 //! pending accelerator work. Passing this tensor to another einsum chains
@@ -186,6 +189,8 @@
 //! ```
 //!
 //! ## Specifying a compute device
+//!
+//! > **Status: Not yet implemented.** See GPU note above.
 //!
 //! ```ignore
 //! use tenferro_einsum::einsum;
@@ -1264,6 +1269,9 @@ where
 /// their buffers for intermediate results or the final output. This avoids
 /// allocation when an operand buffer is already the right shape and layout.
 ///
+/// **Note:** Buffer reuse is not yet implemented. The owned variants
+/// currently delegate to the borrowed API.
+///
 /// # Examples
 ///
 /// ```ignore
@@ -1587,6 +1595,13 @@ impl<T: Scalar + Differentiable<Tangent = Tensor<T>>> ReverseRule<Tensor<T>>
 /// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
+///
+/// # Current Limitations
+///
+/// The reverse rule is built but **not recorded on the tape** because
+/// the current API does not pass tape access. Gradients will not flow
+/// through this operation via `tape.pullback()`.
+/// See [#136](https://github.com/tensor4all/tenferro-rs/issues/136).
 pub fn tracked_einsum<T, A, B>(
     ctx: &mut B::Context,
     subscripts: &str,

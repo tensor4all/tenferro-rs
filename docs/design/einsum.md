@@ -32,6 +32,10 @@ impl Subscripts {
 }
 ```
 
+> **Status: Partially implemented.** The parser accepts parenthesized notation
+> (e.g. `"ij,(jk,kl)->il"`) but **silently discards the grouping**. The
+> optimizer picks contraction order regardless of parentheses. See #144.
+
 ### ContractionTree
 
 ```rust
@@ -187,6 +191,10 @@ Input tensors are moved. The implementation may reuse their buffers for
 intermediate results, avoiding allocation in contraction trees. Buffer
 reuse is deterministic — Rust ownership guarantees no other references.
 
+> **Status: Not yet implemented.** The `_owned` variants currently delegate
+> to the borrowed API without buffer reuse. Ownership is accepted but
+> buffers are not reused for intermediates.
+
 ### Summary: Nine API Functions
 
 | | Allocating | Accumulating (`_into`) | Consuming (`_owned`) |
@@ -306,6 +314,10 @@ B::execute(&mut ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
 See [contraction-pipeline.md](./contraction-pipeline.md) for details on
 the `permute_view + MakeContiguous + BatchedGemm` pipeline.
 
+> **Status: Not yet implemented.** Path B (core-op decomposition) is not
+> implemented. If the backend does not support the `Contract` extension,
+> `binary_contraction` returns an error. See #141.
+
 **Example: `"iij,jkk->ik"`**:
 ```
 1. a' = a.diagonal([(0,1)])    → a'[i,j]    (zero-copy)
@@ -370,7 +382,13 @@ where
     T: Scalar + HasAlgebra<Algebra = A>,
     B: TensorPrims<A>,
     Tensor<T>: Differentiable;
+```
 
+> **Status: POC limitation.** `tracked_einsum` builds a reverse rule but
+> cannot record it on the tape (no tape access in current API). Calling
+> `tape.pullback()` will not compute gradients through einsum. See #136.
+
+```rust
 /// Dual einsum (forward-mode JVP propagation).
 pub fn dual_einsum<T, A, B>(
     ctx: &mut B::Context,
@@ -443,6 +461,9 @@ Backward: ∂A = anti_diag(repeat(∂y, i_dim), [(0,1)])
 
 Both VJP and JVP go through `TensorPrims` primitives, working on CPU and
 GPU uniformly.
+
+> **Status: Not yet implemented.** GPU backends (CUDA, ROCm) do not exist
+> yet. AD rules currently execute on CPU only. See #141.
 
 ### Optimizations from strided-opteinsum (Future)
 
