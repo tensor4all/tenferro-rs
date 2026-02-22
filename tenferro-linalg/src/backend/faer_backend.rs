@@ -1,7 +1,7 @@
 //! Faer backend for linear algebra operations.
 //!
 //! This module provides the [`FaerBackend`] struct implementing
-//! [`LinalgBackend`](super::LinalgBackend) for `f64` and `f32`.
+//! [`LinalgBackend`] for `f64` and `f32`.
 
 use faer::linalg::solvers::SpSolver;
 
