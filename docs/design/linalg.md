@@ -300,6 +300,51 @@ directly for the forward decompositions (not through TensorPrims).
 
 ---
 
+## Prims-First Boundary
+
+The project adopts a **prims-first** implementation strategy where possible,
+with explicit boundaries:
+
+1. **Primal forward for heavy decompositions is backend-native.**
+   `svd/qr/lu/eig/cholesky/solve/lstsq` primal implementations use dedicated
+   CPU/GPU solver backends (faer/LAPACK/cuSOLVER family), not a decomposition
+   synthesized only from `TensorPrims`.
+
+2. **AD rules should be expressed in TensorPrims as far as practical.**
+   Reverse/forward rules are written with `BatchedGemm`, `Permute`, `Reduce`,
+   `Trace`, `AntiTrace`, `ElementwiseMul`, and `ElementwiseUnary` so the same
+   rule logic can run across CPU/GPU backends.
+
+3. **Why this split exists.**
+   Reconstructing full linalg primal kernels from generic prims is possible in
+   principle but is not practical for numerical stability, performance, and
+   implementation complexity.
+
+This keeps rule logic backend-agnostic while preserving production-grade
+numerics for primal evaluation.
+
+---
+
+## Design Record Workflow
+
+For linalg/prims integration changes, design records are managed as follows:
+
+1. **Source of truth lives in docs.**
+   Keep design details in existing files under `docs/design/` (this file and
+   `tensor-prims.md`) and formula-level notes in `docs/AD/`.
+
+2. **Issues track execution, not full specs.**
+   GitHub issues should capture scope, acceptance criteria, and task breakdown,
+   and must link back to the canonical design doc section.
+
+3. **One topic, one design anchor.**
+   For each major change, update one primary design location first, then create
+   a parent issue that references it and spawns implementation sub-issues.
+
+This reduces drift between discussion threads and technical decisions.
+
+---
+
 ## Design Decisions
 
 1. **Matrix-only API.** Higher-level tensor decomposition (e.g., SVD along
