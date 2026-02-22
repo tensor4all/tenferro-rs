@@ -56,6 +56,8 @@ Before pushing or creating a pull request, **all** of the following must pass:
 ```bash
 cargo fmt --all --check   # formatting
 cargo test --workspace    # all tests
+cargo llvm-cov --workspace --json --output-path coverage.json
+python3 scripts/check-coverage.py coverage.json
 ```
 
 If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting automatically.
@@ -87,6 +89,10 @@ cargo test test_name
 
 # Check formatting
 cargo fmt --check
+
+# Coverage check (per-file thresholds)
+cargo llvm-cov --workspace --json --output-path coverage.json
+python3 scripts/check-coverage.py coverage.json
 
 # Run benchmarks
 cargo bench
@@ -168,4 +174,3 @@ tenferro-device  tenferro-tensor
           tenferro-capi
               (← tenferro-tensor, ← tenferro-einsum, ← tenferro-linalg, ← tenferro-device)
 ```
-

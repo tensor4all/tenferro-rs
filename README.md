@@ -35,6 +35,16 @@ Output:
 - `target/docs-site/design/` (formal design docs)
 - `target/docs-site/api/` (`cargo doc --workspace` output)
 
+## Coverage
+
+Per-file line coverage is checked against thresholds in `coverage-thresholds.json`.
+Files listed in `exclude` are skipped from threshold checking.
+
+```bash
+cargo llvm-cov --workspace --json --output-path coverage.json
+python3 scripts/check-coverage.py coverage.json
+```
+
 ## License
 
 Licensed under either of:
