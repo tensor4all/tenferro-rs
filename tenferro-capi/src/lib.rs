@@ -1078,6 +1078,12 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
         if tensor.is_null() {
             return Err(TFE_INVALID_ARGUMENT);
         }
+        if left.is_null() && left_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if right.is_null() && right_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
 
         let t = handle_to_ref(tensor);
         let left_indices = if left_len > 0 {
@@ -1183,6 +1189,12 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
 ) {
     let result = catch_unwind(AssertUnwindSafe(|| {
         if tensor.is_null() || u_out.is_null() || s_out.is_null() || vt_out.is_null() {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if left.is_null() && left_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if right.is_null() && right_len > 0 {
             return Err(TFE_INVALID_ARGUMENT);
         }
 

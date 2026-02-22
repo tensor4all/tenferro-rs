@@ -446,6 +446,144 @@ fn svd_reconstruction() {
 }
 
 #[test]
+fn svd_rrule_null_left_with_nonzero_len_returns_error() {
+    unsafe {
+        let a_data = [1.0_f64, 3.0, 2.0, 4.0];
+        let shape = [2_usize, 2];
+        let mut status: tfe_status_t = -999;
+
+        let a = tfe_tensor_f64_from_data(a_data.as_ptr(), 4, shape.as_ptr(), 2, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+
+        let right = [1_usize];
+
+        // null left pointer with left_len=1 should fail
+        let result = tfe_svd_rrule_f64(
+            a as *const _,
+            std::ptr::null(),
+            1,
+            right.as_ptr(),
+            1,
+            0,
+            -1.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut status,
+        );
+        assert_eq!(status, TFE_INVALID_ARGUMENT);
+        assert!(result.is_null());
+
+        tfe_tensor_f64_release(a);
+    }
+}
+
+#[test]
+fn svd_rrule_null_right_with_nonzero_len_returns_error() {
+    unsafe {
+        let a_data = [1.0_f64, 3.0, 2.0, 4.0];
+        let shape = [2_usize, 2];
+        let mut status: tfe_status_t = -999;
+
+        let a = tfe_tensor_f64_from_data(a_data.as_ptr(), 4, shape.as_ptr(), 2, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+
+        let left = [0_usize];
+
+        // null right pointer with right_len=1 should fail
+        let result = tfe_svd_rrule_f64(
+            a as *const _,
+            left.as_ptr(),
+            1,
+            std::ptr::null(),
+            1,
+            0,
+            -1.0,
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+            &mut status,
+        );
+        assert_eq!(status, TFE_INVALID_ARGUMENT);
+        assert!(result.is_null());
+
+        tfe_tensor_f64_release(a);
+    }
+}
+
+#[test]
+fn svd_frule_null_left_with_nonzero_len_returns_error() {
+    unsafe {
+        let a_data = [1.0_f64, 3.0, 2.0, 4.0];
+        let shape = [2_usize, 2];
+        let mut status: tfe_status_t = -999;
+
+        let a = tfe_tensor_f64_from_data(a_data.as_ptr(), 4, shape.as_ptr(), 2, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+
+        let right = [1_usize];
+        let mut u: *mut TfeTensorF64 = std::ptr::null_mut();
+        let mut s: *mut TfeTensorF64 = std::ptr::null_mut();
+        let mut vt: *mut TfeTensorF64 = std::ptr::null_mut();
+
+        // null left pointer with left_len=1 should fail
+        tfe_svd_frule_f64(
+            a as *const _,
+            std::ptr::null(),
+            1,
+            right.as_ptr(),
+            1,
+            0,
+            -1.0,
+            std::ptr::null(),
+            &mut u,
+            &mut s,
+            &mut vt,
+            &mut status,
+        );
+        assert_eq!(status, TFE_INVALID_ARGUMENT);
+
+        tfe_tensor_f64_release(a);
+    }
+}
+
+#[test]
+fn svd_frule_null_right_with_nonzero_len_returns_error() {
+    unsafe {
+        let a_data = [1.0_f64, 3.0, 2.0, 4.0];
+        let shape = [2_usize, 2];
+        let mut status: tfe_status_t = -999;
+
+        let a = tfe_tensor_f64_from_data(a_data.as_ptr(), 4, shape.as_ptr(), 2, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+
+        let left = [0_usize];
+        let mut u: *mut TfeTensorF64 = std::ptr::null_mut();
+        let mut s: *mut TfeTensorF64 = std::ptr::null_mut();
+        let mut vt: *mut TfeTensorF64 = std::ptr::null_mut();
+
+        // null right pointer with right_len=1 should fail
+        tfe_svd_frule_f64(
+            a as *const _,
+            left.as_ptr(),
+            1,
+            std::ptr::null(),
+            1,
+            0,
+            -1.0,
+            std::ptr::null(),
+            &mut u,
+            &mut s,
+            &mut vt,
+            &mut status,
+        );
+        assert_eq!(status, TFE_INVALID_ARGUMENT);
+
+        tfe_tensor_f64_release(a);
+    }
+}
+
+#[test]
 fn svd_null_tensor_returns_error() {
     unsafe {
         let left = [0_usize];
