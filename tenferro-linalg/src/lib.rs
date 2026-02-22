@@ -121,7 +121,7 @@
 //! let grad_a2 = svd_rrule(&a, &cotangent_s_only, None).unwrap();
 //! ```
 
-mod backend;
+pub mod backend;
 
 use backend::FaerOps;
 use chainrules_core::AdResult;

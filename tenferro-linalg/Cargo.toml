@@ -6,11 +6,15 @@ license = "MIT OR Apache-2.0"
 description = "Batched matrix linear algebra decompositions (SVD, QR, LU, eigen) with AD rules for the tenferro workspace."
 publish = false
 
+[features]
+default = ["faer"]
+faer = ["dep:faer"]
+
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
 chainrules-core = { path = "../extern/chainrules-core" }
-faer = { workspace = true }
+faer = { workspace = true, optional = true }
 num-traits = { workspace = true }
