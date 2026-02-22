@@ -1,0 +1,18 @@
+{
+  "_comment": "Per-file line coverage thresholds (%). Files not listed use 'default'.",
+  "default": 80,
+  "exclude": [
+    "extension/tenferro-burn/src/backward.rs",
+    "extension/tenferro-burn/src/convert.rs",
+    "extension/tenferro-burn/src/forward.rs",
+    "extension/tenferro-burn/src/lib.rs",
+    "extension/tenferro-mdarray/src/lib.rs",
+    "extension/tenferro-tropical-capi/src/lib.rs"
+  ],
+  "files": {
+    "extension/tenferro-tropical/src/prims.rs": 55,
+    "tenferro-capi/src/lib.rs": 65,
+    "tenferro-einsum/src/lib.rs": 65,
+    "tenferro-linalg/src/lib.rs": 30
+  }
+}
