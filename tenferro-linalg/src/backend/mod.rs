@@ -160,6 +160,15 @@ pub trait LinalgBackend<T: Copy + 'static> {
 #[cfg(feature = "faer")]
 pub(crate) use faer_backend::FaerOps;
 
-// Re-export col_major_strides helper (pub(crate), used by lib.rs).
-#[cfg(feature = "faer")]
-pub(crate) use faer_backend::col_major_strides;
+/// Compute column-major strides for given dimensions.
+pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
+    let mut strides = vec![0isize; dims.len()];
+    if dims.is_empty() {
+        return strides;
+    }
+    strides[0] = 1;
+    for i in 1..dims.len() {
+        strides[i] = strides[i - 1] * dims[i - 1] as isize;
+    }
+    strides
+}

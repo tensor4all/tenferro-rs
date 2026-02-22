@@ -260,23 +260,6 @@ impl_faer_ops!(f64);
 impl_faer_ops!(f32);
 
 // ============================================================================
-// Batch helpers
-// ============================================================================
-
-/// Compute column-major strides for given dimensions.
-pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
-    let mut strides = vec![0isize; dims.len()];
-    if dims.is_empty() {
-        return strides;
-    }
-    strides[0] = 1;
-    for i in 1..dims.len() {
-        strides[i] = strides[i - 1] * dims[i - 1] as isize;
-    }
-    strides
-}
-
-// ============================================================================
 // FaerBackend: LinalgBackend implementation using faer
 // ============================================================================
 
