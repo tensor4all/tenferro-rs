@@ -12,3 +12,5 @@ tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
 chainrules = { path = "../extern/chainrules" }
+strided-view.workspace = true
+strided-traits.workspace = true
