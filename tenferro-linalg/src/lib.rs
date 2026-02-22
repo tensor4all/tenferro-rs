@@ -8,7 +8,10 @@
 //!
 //! - **First 2 dimensions** are the matrix (`m × n`).
 //! - **All following dimensions** (`*`) are independent batch dimensions.
-//! - Input must be **column-major contiguous** (LAPACK/cuSOLVER native).
+//! - Inputs are **internally normalized** to column-major contiguous layout.
+//!   If an input is not already contiguous, an internal copy is performed.
+//!   Calling `.contiguous(ColumnMajor)` explicitly is optional but useful
+//!   when you want to control exactly where copies happen.
 //!
 //! This convention mirrors PyTorch's `(*, m, n)` but is flipped for
 //! col-major: in col-major the first dimensions are contiguous, so
@@ -17,8 +20,8 @@
 //!
 //! This module is **context-agnostic**: it does not know about tensor
 //! networks, MPS, or any specific application. If you need to decompose
-//! a tensor along arbitrary legs, `permute` + `reshape` +
-//! `contiguous(ColumnMajor)` before calling these functions.
+//! a tensor along arbitrary legs, `permute` + `reshape` before calling
+//! these functions.
 //!
 //! # AD rules
 //!
@@ -88,10 +91,9 @@
 //! // 4D tensor [2, 3, 4, 5] — want SVD with left=[0,1], right=[2,3]
 //! let t = Tensor::<f64>::zeros(&[2, 3, 4, 5], mem, col);
 //!
-//! // User's responsibility: permute + reshape + contiguous
-//! let mat = t.permute(&[0, 1, 2, 3])   // already in order
-//!            .reshape(&[6, 20]).unwrap() // m = 2*3 = 6, n = 4*5 = 20
-//!            .contiguous(col);
+//! // permute + reshape (contiguous is handled internally, but can be called explicitly)
+//! let mat = t.permute(&[0, 1, 2, 3])    // already in order
+//!            .reshape(&[6, 20]).unwrap(); // m = 2*3 = 6, n = 4*5 = 20
 //! let result = svd(&mut backend, &mat, None).unwrap();
 //! // Then reshape result.u, result.vt back to desired tensor shape
 //! ```
