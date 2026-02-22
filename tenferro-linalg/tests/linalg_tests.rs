@@ -822,3 +822,37 @@ fn linalg_scalar_f32() {
     let s = s_data.buffer().as_slice().unwrap();
     assert!((s[0] - 1.0_f32).abs() < 1e-5);
 }
+
+// ============================================================================
+// Regression tests: invalid inputs must return Err, not panic (#124)
+// ============================================================================
+
+#[test]
+fn test_svd_1d_returns_error() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0], &[5]);
+    assert!(svd(&mut backend, &a, None).is_err());
+}
+
+#[test]
+fn test_qr_1d_returns_error() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0], &[5]);
+    assert!(qr(&mut backend, &a).is_err());
+}
+
+#[test]
+fn test_cholesky_non_square_returns_error() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    assert!(cholesky(&mut backend, &a).is_err());
+}
+
+#[test]
+fn test_solve_dimension_mismatch_returns_error() {
+    let mut backend = FaerBackend::new();
+    // A is 3x3 but b has leading dimension 2 (mismatch)
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], &[3, 3]);
+    let b = make_tensor(vec![1.0, 2.0], &[2, 1]);
+    assert!(solve(&mut backend, &a, &b).is_err());
+}
