@@ -18,7 +18,7 @@ use tenferro_device::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::backend::{FaerBackend, LinalgBackend};
 ///
 /// let mut backend = FaerBackend::new();

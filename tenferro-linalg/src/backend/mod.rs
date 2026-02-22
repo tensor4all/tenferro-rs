@@ -15,7 +15,7 @@
 //!
 //! # Examples
 //!
-//! ```ignore
+//! ```
 //! use tenferro_linalg::backend::{LinalgBackend, FaerBackend};
 //!
 //! let mut backend = FaerBackend::new();
@@ -43,10 +43,10 @@ use tenferro_device::Result;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_linalg::backend::LinalgBackend;
 ///
-/// fn do_svd<B: LinalgBackend<f64>>(backend: &mut B) {
+/// fn do_svd<B: LinalgBackend<f64, Real = f64>>(backend: &mut B) {
 ///     let a = [1.0, 0.0, 0.0, 1.0]; // 2x2 identity
 ///     let mut u = [0.0; 4];
 ///     let mut s = [0.0; 2];
