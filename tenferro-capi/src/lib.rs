@@ -55,6 +55,7 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(non_camel_case_types)]
 
+use std::cell::RefCell;
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_void};
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -84,6 +85,95 @@ pub const TFE_SHAPE_MISMATCH: tfe_status_t = -2;
 
 /// Internal error (Rust panic or unexpected failure).
 pub const TFE_INTERNAL_ERROR: tfe_status_t = -3;
+
+/// Output buffer is too small for the requested data.
+pub const TFE_BUFFER_TOO_SMALL: tfe_status_t = -4;
+
+// ============================================================================
+// Thread-local last-error storage
+// ============================================================================
+
+thread_local! {
+    static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
+}
+
+/// Store an error message in thread-local storage.
+fn set_last_error(msg: &str) {
+    LAST_ERROR.with(|cell| {
+        *cell.borrow_mut() = msg.to_string();
+    });
+}
+
+/// Extract a human-readable message from a panic payload.
+fn panic_message(payload: &dyn std::any::Any) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Retrieve the last error message (UTF-8, null-terminated).
+///
+/// - `buf == NULL`: query required length only (written to `*out_len`).
+/// - `buf != NULL`: copy message into buffer.
+///
+/// `out_len` receives the required buffer size including the null terminator.
+///
+/// # Returns
+///
+/// - `TFE_SUCCESS` on success (or query-only mode).
+/// - `TFE_INVALID_ARGUMENT` if `out_len` is null.
+/// - `TFE_BUFFER_TOO_SMALL` if `buf_len` is too small (required size in `*out_len`).
+///
+/// # Safety
+///
+/// - `out_len` must be a valid, non-null pointer.
+/// - If `buf` is non-null, it must point to a buffer of at least `buf_len` bytes.
+///
+/// # Examples (C)
+///
+/// ```c
+/// // Query length
+/// size_t len;
+/// tfe_last_error_message(NULL, 0, &len);
+/// if (len > 0) {
+///     char *buf = malloc(len);
+///     tfe_last_error_message((uint8_t *)buf, len, &len);
+///     printf("Error: %s\n", buf);
+///     free(buf);
+/// }
+/// ```
+#[no_mangle]
+pub unsafe extern "C" fn tfe_last_error_message(
+    buf: *mut u8,
+    buf_len: usize,
+    out_len: *mut usize,
+) -> tfe_status_t {
+    if out_len.is_null() {
+        return TFE_INVALID_ARGUMENT;
+    }
+
+    LAST_ERROR.with(|cell| {
+        let msg = cell.borrow();
+        let required = msg.len() + 1; // include null terminator
+        *out_len = required;
+
+        if buf.is_null() {
+            return TFE_SUCCESS;
+        }
+
+        if buf_len < required {
+            return TFE_BUFFER_TOO_SMALL;
+        }
+
+        std::ptr::copy_nonoverlapping(msg.as_ptr(), buf, msg.len());
+        *buf.add(msg.len()) = 0; // null terminator
+        TFE_SUCCESS
+    })
+}
 
 // ============================================================================
 // DLPack v1.0 C ABI types
@@ -255,6 +345,90 @@ fn build_svd_options(max_rank: usize, cutoff: f64) -> Option<SvdOptions> {
     }
 }
 
+// ============================================================================
+// Error mapping helpers
+// ============================================================================
+
+/// Map `tenferro_device::Error` to the appropriate status code.
+///
+/// Also stores the error message in thread-local storage.
+fn map_device_error(err: &tenferro_device::Error) -> tfe_status_t {
+    set_last_error(&err.to_string());
+    use tenferro_device::Error;
+    match err {
+        Error::InvalidArgument(_)
+        | Error::StrideError(_)
+        | Error::CrossMemorySpaceOperation { .. } => TFE_INVALID_ARGUMENT,
+        Error::ShapeMismatch { .. } | Error::RankMismatch { .. } => TFE_SHAPE_MISMATCH,
+        Error::DeviceError(_) | Error::NoCompatibleComputeDevice { .. } => TFE_INTERNAL_ERROR,
+    }
+}
+
+/// Map `chainrules_core::AutodiffError` to the appropriate status code.
+///
+/// Also stores the error message in thread-local storage.
+fn map_ad_error(err: &chainrules_core::AutodiffError) -> tfe_status_t {
+    set_last_error(&err.to_string());
+    use chainrules_core::AutodiffError;
+    match err {
+        AutodiffError::InvalidArgument(_)
+        | AutodiffError::ModeNotSupported { .. }
+        | AutodiffError::NonScalarLoss { .. }
+        | AutodiffError::HvpNotSupported => TFE_INVALID_ARGUMENT,
+        AutodiffError::TangentShapeMismatch { .. } => TFE_SHAPE_MISMATCH,
+        AutodiffError::MissingNode => TFE_INTERNAL_ERROR,
+    }
+}
+
+/// Finalize a `catch_unwind` result for functions returning a pointer via status.
+///
+/// # Safety
+///
+/// `status` must be a valid, non-null pointer.
+unsafe fn finalize_ptr(
+    result: std::thread::Result<Result<*mut TfeTensorF64, tfe_status_t>>,
+    status: *mut tfe_status_t,
+) -> *mut TfeTensorF64 {
+    match result {
+        Ok(Ok(ptr)) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Ok(Err(code)) => {
+            *status = code;
+            std::ptr::null_mut()
+        }
+        Err(panic) => {
+            set_last_error(&panic_message(&*panic));
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Finalize a `catch_unwind` result for functions returning void via status.
+///
+/// # Safety
+///
+/// `status` must be a valid, non-null pointer.
+unsafe fn finalize_void(
+    result: std::thread::Result<Result<(), tfe_status_t>>,
+    status: *mut tfe_status_t,
+) {
+    match result {
+        Ok(Ok(())) => {
+            *status = TFE_SUCCESS;
+        }
+        Ok(Err(code)) => {
+            *status = code;
+        }
+        Err(panic) => {
+            set_last_error(&panic_message(&*panic));
+            *status = TFE_INTERNAL_ERROR;
+        }
+    }
+}
+
 /// Matricize a tensor according to left/right dimension indices.
 ///
 /// Returns `(matrix, left_dims, right_dims)` where `matrix` is a 2D
@@ -361,23 +535,10 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_data(
 
         Tensor::from_slice(data_slice, &dims, MemoryOrder::ColumnMajor)
             .map(|t| tensor_to_handle(t))
-            .map_err(|_| TFE_INVALID_ARGUMENT)
+            .map_err(|e| map_device_error(&e))
     }));
 
-    match result {
-        Ok(Ok(ptr)) => {
-            *status = TFE_SUCCESS;
-            ptr
-        }
-        Ok(Err(code)) => {
-            *status = code;
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-            std::ptr::null_mut()
-        }
-    }
+    finalize_ptr(result, status)
 }
 
 /// Create a tensor filled with zeros.
@@ -422,20 +583,7 @@ pub unsafe extern "C" fn tfe_tensor_f64_zeros(
         Ok(tensor_to_handle(t))
     }));
 
-    match result {
-        Ok(Ok(ptr)) => {
-            *status = TFE_SUCCESS;
-            ptr
-        }
-        Ok(Err(code)) => {
-            *status = code;
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-            std::ptr::null_mut()
-        }
-    }
+    finalize_ptr(result, status)
 }
 
 /// Deep-copy a tensor.
@@ -475,24 +623,11 @@ pub unsafe extern "C" fn tfe_tensor_f64_clone(
             src.dims(),
             MemoryOrder::ColumnMajor,
         )
-        .map_err(|_| TFE_INTERNAL_ERROR)?;
+        .map_err(|e| map_device_error(&e))?;
         Ok(tensor_to_handle(copy))
     }));
 
-    match result {
-        Ok(Ok(ptr)) => {
-            *status = TFE_SUCCESS;
-            ptr
-        }
-        Ok(Err(code)) => {
-            *status = code;
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-            std::ptr::null_mut()
-        }
-    }
+    finalize_ptr(result, status)
 }
 
 /// Release (free) a tensor.
@@ -519,12 +654,33 @@ pub unsafe extern "C" fn tfe_tensor_f64_release(tensor: *mut TfeTensorF64) {
 
 /// Return the number of dimensions (rank) of the tensor.
 ///
+/// Returns 0 if `tensor` is null (and sets `status` to `TFE_INVALID_ARGUMENT`).
+///
 /// # Safety
 ///
-/// `tensor` must be a valid, non-null tensor pointer.
+/// - `tensor` must be a valid tensor pointer or null.
+/// - `status` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_ndim(tensor: *const TfeTensorF64) -> usize {
-    handle_to_ref(tensor).ndim()
+pub unsafe extern "C" fn tfe_tensor_f64_ndim(
+    tensor: *const TfeTensorF64,
+    status: *mut tfe_status_t,
+) -> usize {
+    if tensor.is_null() {
+        *status = TFE_INVALID_ARGUMENT;
+        return 0;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| handle_to_ref(tensor).ndim()));
+    match result {
+        Ok(n) => {
+            *status = TFE_SUCCESS;
+            n
+        }
+        Err(panic) => {
+            set_last_error(&panic_message(&*panic));
+            *status = TFE_INTERNAL_ERROR;
+            0
+        }
+    }
 }
 
 /// Write the shape of the tensor into the caller-provided buffer.
@@ -536,57 +692,121 @@ pub unsafe extern "C" fn tfe_tensor_f64_ndim(tensor: *const TfeTensorF64) -> usi
 ///
 /// - `tensor` must be a valid, non-null tensor pointer.
 /// - `out_shape` must point to a buffer with at least `ndim` `usize` slots.
+/// - `status` must be a valid, non-null pointer.
 ///
 /// # Examples (C)
 ///
 /// ```c
-/// size_t ndim = tfe_tensor_f64_ndim(t);
+/// tfe_status_t status;
+/// size_t ndim = tfe_tensor_f64_ndim(t, &status);
 /// size_t *shape = malloc(ndim * sizeof(size_t));
-/// tfe_tensor_f64_shape(t, shape);
+/// tfe_tensor_f64_shape(t, shape, &status);
 /// // shape now contains the dimensions
 /// free(shape);
 /// ```
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_shape(tensor: *const TfeTensorF64, out_shape: *mut usize) {
-    let t = handle_to_ref(tensor);
-    let dims = t.dims();
-    std::ptr::copy_nonoverlapping(dims.as_ptr(), out_shape, dims.len());
+pub unsafe extern "C" fn tfe_tensor_f64_shape(
+    tensor: *const TfeTensorF64,
+    out_shape: *mut usize,
+    status: *mut tfe_status_t,
+) {
+    if tensor.is_null() || out_shape.is_null() {
+        *status = TFE_INVALID_ARGUMENT;
+        return;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let t = handle_to_ref(tensor);
+        let dims = t.dims();
+        std::ptr::copy_nonoverlapping(dims.as_ptr(), out_shape, dims.len());
+    }));
+    match result {
+        Ok(()) => {
+            *status = TFE_SUCCESS;
+        }
+        Err(panic) => {
+            set_last_error(&panic_message(&*panic));
+            *status = TFE_INTERNAL_ERROR;
+        }
+    }
 }
 
 /// Return the total number of elements in the tensor.
 ///
+/// Returns 0 if `tensor` is null (and sets `status` to `TFE_INVALID_ARGUMENT`).
+///
 /// # Safety
 ///
-/// `tensor` must be a valid, non-null tensor pointer.
+/// - `tensor` must be a valid tensor pointer or null.
+/// - `status` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_len(tensor: *const TfeTensorF64) -> usize {
-    handle_to_ref(tensor).len()
+pub unsafe extern "C" fn tfe_tensor_f64_len(
+    tensor: *const TfeTensorF64,
+    status: *mut tfe_status_t,
+) -> usize {
+    if tensor.is_null() {
+        *status = TFE_INVALID_ARGUMENT;
+        return 0;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| handle_to_ref(tensor).len()));
+    match result {
+        Ok(n) => {
+            *status = TFE_SUCCESS;
+            n
+        }
+        Err(panic) => {
+            set_last_error(&panic_message(&*panic));
+            *status = TFE_INTERNAL_ERROR;
+            0
+        }
+    }
 }
 
 /// Return a pointer to the tensor's raw data buffer.
 ///
 /// The pointer is valid until `tfe_tensor_f64_release` is called on
-/// the tensor.
+/// the tensor. Returns null if `tensor` is null.
 ///
 /// # Safety
 ///
-/// `tensor` must be a valid, non-null tensor pointer. The returned
-/// pointer must not be used after `tfe_tensor_f64_release(tensor)`.
+/// - `tensor` must be a valid tensor pointer or null.
+/// - `status` must be a valid, non-null pointer.
+/// - The returned pointer must not be used after `tfe_tensor_f64_release(tensor)`.
 ///
 /// # Examples (C)
 ///
 /// ```c
-/// const double *ptr = tfe_tensor_f64_data(t);
-/// size_t n = tfe_tensor_f64_len(t);
+/// tfe_status_t status;
+/// const double *ptr = tfe_tensor_f64_data(t, &status);
+/// size_t n = tfe_tensor_f64_len(t, &status);
 /// for (size_t i = 0; i < n; i++) {
 ///     printf("%f ", ptr[i]);
 /// }
 /// ```
 #[no_mangle]
-pub unsafe extern "C" fn tfe_tensor_f64_data(tensor: *const TfeTensorF64) -> *const f64 {
-    let t = handle_to_ref(tensor);
-    let slice = t.buffer().as_slice().unwrap();
-    slice.as_ptr().add(t.offset() as usize)
+pub unsafe extern "C" fn tfe_tensor_f64_data(
+    tensor: *const TfeTensorF64,
+    status: *mut tfe_status_t,
+) -> *const f64 {
+    if tensor.is_null() {
+        *status = TFE_INVALID_ARGUMENT;
+        return std::ptr::null();
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let t = handle_to_ref(tensor);
+        let slice = t.buffer().as_slice().unwrap();
+        slice.as_ptr().add(t.offset() as usize)
+    }));
+    match result {
+        Ok(ptr) => {
+            *status = TFE_SUCCESS;
+            ptr
+        }
+        Err(panic) => {
+            set_last_error(&panic_message(&*panic));
+            *status = TFE_INTERNAL_ERROR;
+            std::ptr::null()
+        }
+    }
 }
 
 // ============================================================================
@@ -725,23 +945,10 @@ pub unsafe extern "C" fn tfe_einsum_f64(
         let mut ctx = CpuContext::new(1);
         einsum::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, None)
             .map(|t| tensor_to_handle(t))
-            .map_err(|_| TFE_INTERNAL_ERROR)
+            .map_err(|e| map_device_error(&e))
     }));
 
-    match result {
-        Ok(Ok(ptr)) => {
-            *status = TFE_SUCCESS;
-            ptr
-        }
-        Ok(Err(code)) => {
-            *status = code;
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-            std::ptr::null_mut()
-        }
-    }
+    finalize_ptr(result, status)
 }
 
 /// Reverse-mode rule (VJP) for einsum.
@@ -808,7 +1015,7 @@ pub unsafe extern "C" fn tfe_einsum_rrule_f64(
 
         let mut ctx = CpuContext::new(1);
         let grads = einsum_rrule::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, cot)
-            .map_err(|_| TFE_INTERNAL_ERROR)?;
+            .map_err(|e| map_device_error(&e))?;
 
         let out_slice = std::slice::from_raw_parts_mut(grads_out, num_operands);
         for (i, g) in grads.into_iter().enumerate() {
@@ -818,17 +1025,7 @@ pub unsafe extern "C" fn tfe_einsum_rrule_f64(
         Ok(())
     }));
 
-    match result {
-        Ok(Ok(())) => {
-            *status = TFE_SUCCESS;
-        }
-        Ok(Err(code)) => {
-            *status = code;
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-        }
-    }
+    finalize_void(result, status)
 }
 
 /// Forward-mode rule (JVP) for einsum.
@@ -898,23 +1095,10 @@ pub unsafe extern "C" fn tfe_einsum_frule_f64(
         let mut ctx = CpuContext::new(1);
         einsum_frule::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &primal_refs, &tangent_refs)
             .map(|t| tensor_to_handle(t))
-            .map_err(|_| TFE_INTERNAL_ERROR)
+            .map_err(|e| map_device_error(&e))
     }));
 
-    match result {
-        Ok(Ok(ptr)) => {
-            *status = TFE_SUCCESS;
-            ptr
-        }
-        Ok(Err(code)) => {
-            *status = code;
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-            std::ptr::null_mut()
-        }
-    }
+    finalize_ptr(result, status)
 }
 
 // ============================================================================
@@ -992,7 +1176,7 @@ pub unsafe extern "C" fn tfe_svd_f64(
         let (matrix, left_dims, right_dims) = matricize(t, left_indices, right_indices)?;
 
         let opts = build_svd_options(max_rank, cutoff);
-        let result = svd(&matrix, opts.as_ref()).map_err(|_| TFE_INTERNAL_ERROR)?;
+        let result = svd(&matrix, opts.as_ref()).map_err(|e| map_device_error(&e))?;
 
         // Reshape U from [m, k] to [left_dims..., k]
         let k = result.s.len();
@@ -1001,7 +1185,7 @@ pub unsafe extern "C" fn tfe_svd_f64(
         let u_reshaped = result
             .u
             .reshape(&u_dims)
-            .map_err(|_| TFE_INTERNAL_ERROR)?
+            .map_err(|e| map_device_error(&e))?
             .contiguous(MemoryOrder::ColumnMajor);
 
         // Reshape Vt from [k, n] to [k, right_dims...]
@@ -1010,7 +1194,7 @@ pub unsafe extern "C" fn tfe_svd_f64(
         let vt_reshaped = result
             .vt
             .reshape(&vt_dims)
-            .map_err(|_| TFE_INTERNAL_ERROR)?
+            .map_err(|e| map_device_error(&e))?
             .contiguous(MemoryOrder::ColumnMajor);
 
         *u_out = tensor_to_handle(u_reshaped);
@@ -1019,17 +1203,7 @@ pub unsafe extern "C" fn tfe_svd_f64(
         Ok(())
     }));
 
-    match result {
-        Ok(Ok(())) => {
-            *status = TFE_SUCCESS;
-        }
-        Ok(Err(code)) => {
-            *status = code;
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-        }
-    }
+    finalize_void(result, status)
 }
 
 /// Reverse-mode rule (VJP) for SVD.
@@ -1078,6 +1252,12 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
         if tensor.is_null() {
             return Err(TFE_INVALID_ARGUMENT);
         }
+        if left.is_null() && left_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if right.is_null() && right_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
 
         let t = handle_to_ref(tensor);
         let left_indices = if left_len > 0 {
@@ -1116,25 +1296,12 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
         };
 
         let opts = build_svd_options(max_rank, cutoff);
-        let grad = svd_rrule(&matrix, &cotangent, opts.as_ref()).map_err(|_| TFE_INTERNAL_ERROR)?;
+        let grad = svd_rrule(&matrix, &cotangent, opts.as_ref()).map_err(|e| map_ad_error(&e))?;
 
         Ok(tensor_to_handle(grad))
     }));
 
-    match result {
-        Ok(Ok(ptr)) => {
-            *status = TFE_SUCCESS;
-            ptr
-        }
-        Ok(Err(code)) => {
-            *status = code;
-            std::ptr::null_mut()
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-            std::ptr::null_mut()
-        }
-    }
+    finalize_ptr(result, status)
 }
 
 /// Forward-mode rule (JVP) for SVD.
@@ -1185,6 +1352,12 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
         if tensor.is_null() || u_out.is_null() || s_out.is_null() || vt_out.is_null() {
             return Err(TFE_INVALID_ARGUMENT);
         }
+        if left.is_null() && left_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
+        if right.is_null() && right_len > 0 {
+            return Err(TFE_INVALID_ARGUMENT);
+        }
 
         let t = handle_to_ref(tensor);
         let left_indices = if left_len > 0 {
@@ -1214,7 +1387,7 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
 
         let opts = build_svd_options(max_rank, cutoff);
         let (_primal, tangent_result) =
-            svd_frule(&matrix, &tang, opts.as_ref()).map_err(|_| TFE_INTERNAL_ERROR)?;
+            svd_frule(&matrix, &tang, opts.as_ref()).map_err(|e| map_ad_error(&e))?;
 
         *u_out = tensor_to_handle(tangent_result.u);
         *s_out = tensor_to_handle(tangent_result.s);
@@ -1222,15 +1395,5 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
         Ok(())
     }));
 
-    match result {
-        Ok(Ok(())) => {
-            *status = TFE_SUCCESS;
-        }
-        Ok(Err(code)) => {
-            *status = code;
-        }
-        Err(_) => {
-            *status = TFE_INTERNAL_ERROR;
-        }
-    }
+    finalize_void(result, status)
 }
