@@ -263,6 +263,14 @@ fn eigen_symmetric() {
     assert!((vals[1] - 3.0).abs() < 1e-10, "eigenvalue 1: {}", vals[1]);
 }
 
+#[test]
+fn eigen_nonsymmetric_returns_error() {
+    // Non-symmetric matrix: [[2, 3], [1, 4]]
+    let data = vec![2.0, 1.0, 3.0, 4.0];
+    let a = make_tensor(data, &[2, 2]);
+    assert!(eigen(&a).is_err());
+}
+
 // ============================================================================
 // Solve tests
 // ============================================================================
@@ -291,6 +299,41 @@ fn solve_general() {
     let res1 = 1.0 * xd[0] + 3.0 * xd[1] - 10.0;
     assert!(res0.abs() < 1e-10, "residual[0] = {res0}");
     assert!(res1.abs() < 1e-10, "residual[1] = {res1}");
+}
+
+#[test]
+fn solve_rhs_shape_mismatch_returns_error() {
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    // Wrong leading dim: expected 2, got 3
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+    assert!(solve(&a, &b).is_err());
+}
+
+#[test]
+fn solve_scalar_rhs_returns_error() {
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    // Scalar RHS is invalid; previously this could hit panic-prone paths.
+    let b = make_tensor(vec![1.0], &[]);
+    assert!(solve(&a, &b).is_err());
+}
+
+#[test]
+fn solve_triangular_batch_mismatch_returns_error() {
+    // A has batch dim [2], b has batch dim [3]
+    let a_data = vec![
+        1.0, 0.0, 0.0, 1.0, // batch 0
+        1.0, 0.0, 0.0, 1.0, // batch 1
+    ];
+    let a = make_tensor(a_data, &[2, 2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    assert!(solve_triangular(&a, &b, true).is_err());
+}
+
+#[test]
+fn lstsq_rhs_shape_mismatch_returns_error() {
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]); // expected [2]
+    assert!(lstsq(&a, &b).is_err());
 }
 
 // ============================================================================
@@ -381,6 +424,21 @@ fn norm_spectral() {
     assert!((nv[0] - 2.0).abs() < 1e-10, "spectral norm should be 2.0");
 }
 
+#[test]
+fn norm_frobenius_batched_returns_batch_shape() {
+    // Shape [2,2,2]: two batches of 2x2 matrices.
+    let data = vec![
+        1.0, 2.0, 3.0, 4.0, // batch 0
+        5.0, 6.0, 7.0, 8.0, // batch 1
+    ];
+    let a = make_tensor(data, &[2, 2, 2]);
+    let n = norm(&a, NormKind::Fro).unwrap();
+    assert_eq!(n.dims(), &[2]);
+    let nv = tensor_data(&n);
+    assert!((nv[0] - (30.0_f64).sqrt()).abs() < 1e-10);
+    assert!((nv[1] - (174.0_f64).sqrt()).abs() < 1e-10);
+}
+
 // ============================================================================
 // Pinv tests
 // ============================================================================
@@ -438,6 +496,20 @@ fn eig_returns_error() {
 fn matrix_exp_returns_error() {
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     assert!(matrix_exp(&a).is_err());
+}
+
+#[test]
+fn norm_rrule_batched_cotangent_shape_mismatch_returns_error() {
+    let a = make_tensor(
+        vec![
+            1.0, 2.0, 3.0, 4.0, // batch 0
+            5.0, 6.0, 7.0, 8.0, // batch 1
+        ],
+        &[2, 2, 2],
+    );
+    // For batch shape [2], cotangent must be [2]. Scalar is invalid here.
+    let bad_cot = make_tensor(vec![1.0], &[]);
+    assert!(norm_rrule(&a, &bad_cot, NormKind::Fro).is_err());
 }
 
 // ============================================================================

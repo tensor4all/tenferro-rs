@@ -38,12 +38,13 @@ This is the column-major counterpart to PyTorch's `(*, m, n)`: in col-major
 layout the first dimensions are contiguous, so placing the matrix there
 lets LAPACK/cuSOLVER operate without transposition.
 
-**Requirement**: all inputs must be column-major contiguous.
+Linalg APIs internally normalize inputs to column-major contiguous layout.
+If an input is not already contiguous, an internal copy is performed.
 
 For arbitrary tensor decomposition (e.g., SVD along legs [0,1] vs [2,3]),
-the caller performs `permute` + `reshape` + `contiguous(ColumnMajor)` before
-calling linalg functions. This is **not** linalg's responsibility — linalg
-operates on matrices only.
+the caller still performs `permute` + `reshape` before calling linalg.
+Calling `contiguous(ColumnMajor)` explicitly remains recommended when the
+caller wants predictable memory behavior and copy control.
 
 ---
 
@@ -55,18 +56,18 @@ operates on matrices only.
 |----------|-------------|-------------|-------------|
 | `svd` | `(m, n, *)` | `SvdResult { u, s, vt }` | `A = U diag(S) Vt`, optional truncation via `SvdOptions` |
 | `qr` | `(m, n, *)` | `QrResult { q, r }` | `A = QR`, thin QR |
-| `lu` | `(m, n, *)` | `LuResult { p, l, u }` | `A = PLU`, with `LuPivot` strategy |
+| `lu` | `(m, n, *)` | `LuResult { p, l, u }` | `A = PLU`, with `LuPivot` strategy (`NoPivot` currently returns error) |
 | `cholesky` | `(n, n, *)` | `Tensor<T>` | `A = LLᴴ`, returns lower triangular L |
-| `eigen` | `(n, n, *)` | `EigenResult { values, vectors }` | Symmetric/Hermitian eigendecomposition |
-| `eig` | `(n, n, *)` | `EigenResult { values, vectors }` | General (non-symmetric) eigendecomposition |
+| `eigen` | `(n, n, *)` | `EigenResult { values, vectors }` | Symmetric/Hermitian eigendecomposition (validated) |
+| `eig` | `(n, n, *)` | `EigenResult { values, vectors }` | General (non-symmetric) eigendecomposition (currently returns error) |
 
 ### Solvers
 
 | Function | Inputs | Output | Description |
 |----------|--------|--------|-------------|
 | `solve` | `A: (n,n,*)`, `b: (n,*)` or `(n,k,*)` | `Tensor<T>` | General square system `Ax = b` |
-| `solve_triangular` | `A: (n,n,*)`, `b: (n,*)`, `upper: bool` | `Tensor<T>` | Triangular system |
-| `lstsq` | `A: (m,n,*)`, `b: (m,*)` | `LstsqResult { x, residual }` | Least squares `argmin \|\|Ax-b\|\|²` (m >= n) |
+| `solve_triangular` | `A: (n,n,*)`, `b: (n,*)` or `(n,k,*)`, `upper: bool` | `Tensor<T>` | Triangular system |
+| `lstsq` | `A: (m,n,*)`, `b: (m,*)` | `LstsqResult { x, residual }` | Least squares `argmin \|\|Ax-b\|\|²` (m >= n), vector RHS in current implementation |
 
 ### Utilities
 
@@ -76,8 +77,15 @@ operates on matrices only.
 | `det` | `(n, n, *)` | `Tensor<T>` shape `(*)` | Determinant |
 | `slogdet` | `(n, n, *)` | `SlogdetResult { sign, logabsdet }` | Numerically stable log-determinant |
 | `pinv` | `(m, n, *)` | `Tensor<T>` | Moore-Penrose pseudoinverse (SVD-based) |
-| `matrix_exp` | `(n, n, *)` | `Tensor<T>` | Matrix exponential exp(A) |
-| `norm` | `(m, n, *)` or `(n, *)` | `Tensor<T>` | Matrix/vector norm (`NormKind`) |
+| `matrix_exp` | `(n, n, *)` | `Tensor<T>` | Matrix exponential exp(A) (currently returns error) |
+| `norm` | `(m, n, *)` | `Tensor<T>` shape `(*)` | Matrix norm (`Fro`, `Nuclear`, `Spectral`) |
+
+### Current Availability Notes
+
+- `lu(..., LuPivot::NoPivot)` currently returns `Error::InvalidArgument`.
+- `eig(...)` currently returns `Error::InvalidArgument` (complex-valued path deferred).
+- `matrix_exp(...)` currently returns `Error::InvalidArgument`.
+- `norm(...)` currently implements `Fro`, `Nuclear`, and `Spectral` only.
 
 ---
 
@@ -360,8 +368,9 @@ This reduces drift between discussion threads and technical decisions.
    stable, avoiding the F-matrix singularity issues that arise when
    differentiating through `U`/`Vt` with degenerate singular values).
 
-4. **Column-major contiguous requirement.** Avoids hidden copies. If data
-   is row-major, the caller explicitly calls `contiguous(ColumnMajor)`.
+4. **Column-major internal normalization.** Linalg operations normalize inputs
+   to column-major contiguous internally, potentially with copies. Callers may
+   still make layout explicit up front to control allocation points.
 
 5. **chainrules-core dependency, not chainrules.** Linalg only uses
    `AdResult` from chainrules-core. It never creates tapes or tracked

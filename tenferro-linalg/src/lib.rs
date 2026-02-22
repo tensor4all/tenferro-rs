@@ -187,6 +187,155 @@ fn validate_square<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<(usize, &[usiz
     Ok((n, batch))
 }
 
+/// Validate RHS shape for solve/solve_triangular.
+///
+/// Accepted shapes for `b` when `a` is `(n, n, *)`:
+/// - `(n, *)` (vector RHS, implied `nrhs=1`)
+/// - `(n, k, *)` (multiple RHS)
+fn validate_solve_rhs<T: LinalgScalar>(
+    b: &Tensor<T>,
+    n: usize,
+    batch_dims: &[usize],
+    op_name: &str,
+) -> Result<usize> {
+    if b.ndim() == 1 + batch_dims.len() {
+        if b.dims()[0] != n {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} expects b dim[0] == n ({n}), got {}",
+                b.dims()[0]
+            )));
+        }
+        if &b.dims()[1..] != batch_dims {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
+                batch_dims,
+                &b.dims()[1..]
+            )));
+        }
+        return Ok(1);
+    }
+
+    if b.ndim() == 2 + batch_dims.len() {
+        if b.dims()[0] != n {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} expects b dim[0] == n ({n}), got {}",
+                b.dims()[0]
+            )));
+        }
+        if &b.dims()[2..] != batch_dims {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
+                batch_dims,
+                &b.dims()[2..]
+            )));
+        }
+        let nrhs = b.dims()[1];
+        if nrhs == 0 {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} requires b dim[1] (nrhs) > 0"
+            )));
+        }
+        return Ok(nrhs);
+    }
+
+    Err(Error::InvalidArgument(format!(
+        "{op_name} expects b shape (n, *) or (n, k, *), got {:?}",
+        b.dims()
+    )))
+}
+
+/// Validate RHS shape for least squares.
+///
+/// Current implementation supports vector RHS only:
+/// `a: (m, n, *)`, `b: (m, *)`.
+fn validate_lstsq_rhs<T: LinalgScalar>(
+    b: &Tensor<T>,
+    m: usize,
+    batch_dims: &[usize],
+) -> Result<()> {
+    if b.ndim() != 1 + batch_dims.len() {
+        return Err(Error::InvalidArgument(format!(
+            "lstsq expects b shape (m, *), got {:?}",
+            b.dims()
+        )));
+    }
+    if b.dims()[0] != m {
+        return Err(Error::InvalidArgument(format!(
+            "lstsq expects b dim[0] == m ({m}), got {}",
+            b.dims()[0]
+        )));
+    }
+    if &b.dims()[1..] != batch_dims {
+        return Err(Error::InvalidArgument(format!(
+            "lstsq batch dims mismatch: expected {:?}, got {:?}",
+            batch_dims,
+            &b.dims()[1..]
+        )));
+    }
+    Ok(())
+}
+
+/// Validate cotangent shape for norm AD.
+/// For primal output shape `(*)`, cotangent must have the same shape.
+fn validate_norm_cotangent<T: LinalgScalar>(
+    cotangent: &Tensor<T>,
+    batch_dims: &[usize],
+) -> Result<()> {
+    if batch_dims.is_empty() {
+        if cotangent.ndim() == 0 {
+            return Ok(());
+        }
+        return Err(Error::InvalidArgument(format!(
+            "norm cotangent shape mismatch: expected scalar [], got {:?}",
+            cotangent.dims()
+        )));
+    }
+
+    if cotangent.dims() != batch_dims {
+        return Err(Error::InvalidArgument(format!(
+            "norm cotangent shape mismatch: expected {:?}, got {:?}",
+            batch_dims,
+            cotangent.dims()
+        )));
+    }
+
+    Ok(())
+}
+
+/// Validate Hermitian/symmetric structure for batched square matrices stored
+/// in column-major contiguous layout.
+fn validate_hermitian_batches<T: LinalgScalar>(
+    data: &[T],
+    offset: usize,
+    n: usize,
+    bc: usize,
+    op_name: &str,
+) -> Result<()> {
+    let mat_size = n * n;
+    let tol_scale = T::from(128.0).unwrap_or(T::one());
+
+    for b in 0..bc {
+        let start = offset + b * mat_size;
+        let batch_data = &data[start..start + mat_size];
+        for j in 0..n {
+            for i in 0..j {
+                let a_ij = batch_data[i + j * n];
+                let a_ji = batch_data[j + i * n];
+                let diff = (a_ij - a_ji).abs();
+                let scale = T::one() + a_ij.abs().max(a_ji.abs());
+                let tol = T::epsilon() * tol_scale * scale;
+                if diff > tol {
+                    return Err(Error::InvalidArgument(format!(
+                        "{op_name} expects symmetric/Hermitian input; mismatch at ({i}, {j}) in batch {b}"
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Ensure tensor is column-major contiguous. Returns a (possibly cloned) contiguous tensor.
 fn ensure_col_major<T: LinalgScalar>(tensor: &Tensor<T>) -> Tensor<T> {
     tensor.contiguous(MemoryOrder::ColumnMajor)
@@ -347,9 +496,8 @@ pub enum LuPivot {
 /// let result = lu(&a, LuPivot::Partial).unwrap();
 /// assert!(result.p.is_some());
 ///
-/// // Without pivoting
-/// let result = lu(&a, LuPivot::NoPivot).unwrap();
-/// assert!(result.p.is_none());
+/// // NoPivot currently returns an error in this implementation.
+/// assert!(lu(&a, LuPivot::NoPivot).is_err());
 /// ```
 pub struct LuResult<T: Scalar> {
     /// Row permutation indices. `Some` for [`LuPivot::Partial`], `None` for
@@ -469,7 +617,10 @@ pub enum NormKind {
 
 /// Compute the SVD of a batched matrix.
 ///
-/// Input shape: `(m, n, *)`. Must be column-major contiguous.
+/// Input shape: `(m, n, *)`.
+///
+/// The function internally normalizes input to column-major contiguous layout.
+/// If the input is not already contiguous, an internal copy is performed.
 ///
 /// # Arguments
 ///
@@ -577,7 +728,10 @@ pub fn svd<T: LinalgScalar>(
 
 /// Compute the QR decomposition of a batched matrix.
 ///
-/// Input shape: `(m, n, *)`. Must be column-major contiguous.
+/// Input shape: `(m, n, *)`.
+///
+/// The function internally normalizes input to column-major contiguous layout.
+/// If the input is not already contiguous, an internal copy is performed.
 ///
 /// # Examples
 ///
@@ -627,7 +781,10 @@ pub fn qr<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<QrResult<T>> {
 
 /// Compute the LU decomposition of a batched matrix.
 ///
-/// Input shape: `(m, n, *)`. Must be column-major contiguous.
+/// Input shape: `(m, n, *)`.
+///
+/// The function internally normalizes input to column-major contiguous layout.
+/// If the input is not already contiguous, an internal copy is performed.
 ///
 /// # Arguments
 ///
@@ -648,8 +805,8 @@ pub fn qr<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<QrResult<T>> {
 /// // Partial pivoting (default)
 /// let result = lu(&a, LuPivot::Partial).unwrap();
 ///
-/// // No pivoting
-/// let result = lu(&a, LuPivot::NoPivot).unwrap();
+/// // NoPivot currently returns an error in this implementation.
+/// assert!(lu(&a, LuPivot::NoPivot).is_err());
 /// ```
 ///
 /// # Errors
@@ -698,7 +855,13 @@ pub fn lu<T: LinalgScalar>(tensor: &Tensor<T>, pivot: LuPivot) -> Result<LuResul
 
 /// Compute the eigendecomposition of a batched square matrix.
 ///
-/// Input shape: `(n, n, *)`. Must be column-major contiguous.
+/// Input shape: `(n, n, *)`.
+///
+/// The function internally normalizes input to column-major contiguous layout.
+/// If the input is not already contiguous, an internal copy is performed.
+///
+/// `eigen` uses a symmetric/Hermitian eigensolver and validates
+/// `A[i, j] == A[j, i]` (within floating-point tolerance) for each batch.
 ///
 /// # Examples
 ///
@@ -714,8 +877,8 @@ pub fn lu<T: LinalgScalar>(tensor: &Tensor<T>, pivot: LuPivot) -> Result<LuResul
 ///
 /// # Errors
 ///
-/// Returns an error if the input has fewer than 2 dimensions or
-/// the first two dimensions are not equal.
+/// Returns an error if the input has fewer than 2 dimensions, the first two
+/// dimensions are not equal, or the matrix is not symmetric/Hermitian.
 pub fn eigen<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<EigenResult<T>> {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -723,6 +886,8 @@ pub fn eigen<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<EigenResult<T>> {
     let offset = input.offset() as usize;
     let bc = batch_count(batch_dims);
     let mat_size = n * n;
+
+    validate_hermitian_batches(data, offset, n, bc, "eigen")?;
 
     let mut val_data = vec![T::zero(); n * bc];
     let mut vec_data = vec![T::zero(); n * n * bc];
@@ -749,7 +914,8 @@ pub fn eigen<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<EigenResult<T>> {
 /// Solve the least squares problem: `x = argmin ||Ax - b||²`.
 ///
 /// Input shapes: `A` is `(m, n, *)`, `b` is `(m, *)`, with `m >= n`.
-/// Both must be column-major contiguous.
+/// The function internally normalizes inputs to column-major contiguous layout.
+/// If inputs are not already contiguous, internal copies are performed.
 ///
 /// Internally computes `x = R⁻¹ Q† b` via thin QR decomposition of `A`.
 ///
@@ -769,8 +935,8 @@ pub fn eigen<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<EigenResult<T>> {
 ///
 /// # Errors
 ///
-/// Returns an error if `A` has fewer than 2 dimensions, `b` has fewer
-/// than 1 dimension, or `m < n`.
+/// Returns an error if `A` has fewer than 2 dimensions, `m < n`, or `b`
+/// does not match `(m, *)` with the same batch dimensions as `A`.
 pub fn lstsq<T: LinalgScalar>(a: &Tensor<T>, b: &Tensor<T>) -> Result<LstsqResult<T>> {
     let (m, n, batch_dims) = validate_2d(a)?;
     if m < n {
@@ -778,6 +944,7 @@ pub fn lstsq<T: LinalgScalar>(a: &Tensor<T>, b: &Tensor<T>) -> Result<LstsqResul
             "lstsq requires m >= n, got m={m}, n={n}"
         )));
     }
+    validate_lstsq_rhs(b, m, batch_dims)?;
 
     // Solve via QR: A = Q R, then x = R^{-1} Q^T b
     let qr_result = qr(a)?;
@@ -880,6 +1047,7 @@ pub fn cholesky<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<Tensor<T>> {
 /// Solve a square linear system `A x = b`.
 ///
 /// Input shapes: `A` is `(n, n, *)`, `b` is `(n, *)` or `(n, k, *)`.
+/// Batch dimensions in `b` must match those of `A`.
 ///
 /// # Examples
 ///
@@ -896,6 +1064,7 @@ pub fn cholesky<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<Tensor<T>> {
 /// ```
 pub fn solve<T: LinalgScalar>(a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>> {
     let (n, batch_dims) = validate_square(a)?;
+    let nrhs = validate_solve_rhs(b, n, batch_dims, "solve")?;
     let a_input = ensure_col_major(a);
     let b_input = ensure_col_major(b);
 
@@ -904,13 +1073,6 @@ pub fn solve<T: LinalgScalar>(a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
     let a_off = a_input.offset() as usize;
     let b_off = b_input.offset() as usize;
     let bc = batch_count(batch_dims);
-
-    // Determine nrhs from b's shape
-    let nrhs = if b.ndim() == a.ndim() - 1 {
-        1 // b is (n, *)
-    } else {
-        b.dims()[1] // b is (n, nrhs, *)
-    };
 
     let mut x_data = vec![T::zero(); n * nrhs * bc];
 
@@ -1145,7 +1307,7 @@ pub fn slogdet<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<SlogdetResult<T>> 
 ///
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = eig(&a).unwrap();
+/// assert!(eig(&a).is_err());
 /// ```
 pub fn eig<T: LinalgScalar>(_tensor: &Tensor<T>) -> Result<EigenResult<T>> {
     // General (non-symmetric) eigendecomposition requires complex output.
@@ -1249,7 +1411,7 @@ pub fn pinv<T: LinalgScalar>(tensor: &Tensor<T>, rcond: Option<f64>) -> Result<T
 ///
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let exp_a = matrix_exp(&a).unwrap();
+/// assert!(matrix_exp(&a).is_err());
 /// ```
 pub fn matrix_exp<T: LinalgScalar>(_tensor: &Tensor<T>) -> Result<Tensor<T>> {
     Err(Error::InvalidArgument(
@@ -1262,6 +1424,7 @@ pub fn matrix_exp<T: LinalgScalar>(_tensor: &Tensor<T>) -> Result<Tensor<T>> {
 /// `A` must be upper or lower triangular (specified by `upper`).
 ///
 /// Input shapes: `A` is `(n, n, *)`, `b` is `(n, *)` or `(n, k, *)`.
+/// Batch dimensions in `b` must match those of `A`.
 ///
 /// # Examples
 ///
@@ -1282,6 +1445,7 @@ pub fn solve_triangular<T: LinalgScalar>(
     upper: bool,
 ) -> Result<Tensor<T>> {
     let (n, batch_dims) = validate_square(a)?;
+    let nrhs = validate_solve_rhs(b, n, batch_dims, "solve_triangular")?;
     let a_input = ensure_col_major(a);
     let b_input = ensure_col_major(b);
 
@@ -1290,12 +1454,6 @@ pub fn solve_triangular<T: LinalgScalar>(
     let a_off = a_input.offset() as usize;
     let b_off = b_input.offset() as usize;
     let bc = batch_count(batch_dims);
-
-    let nrhs = if b.ndim() == a.ndim() - 1 {
-        1
-    } else {
-        b.dims()[1]
-    };
 
     let mut x_data = vec![T::zero(); n * nrhs * bc];
 
@@ -1311,9 +1469,17 @@ pub fn solve_triangular<T: LinalgScalar>(
     tensor_from_data(x_data, &x_dims)
 }
 
-/// Compute a matrix or vector norm.
+/// Compute a matrix norm.
 ///
-/// Input shape: `(m, n, *)` for matrix norms, `(n, *)` for vector norms.
+/// Input shape: `(m, n, *)`.
+///
+/// Supported kinds in the current implementation:
+/// - `NormKind::Fro`
+/// - `NormKind::Nuclear`
+/// - `NormKind::Spectral`
+///
+/// Return shape is `(*)` (batch dimensions). For non-batched input this is
+/// a scalar tensor `[]`.
 ///
 /// # Examples
 ///
@@ -1327,41 +1493,62 @@ pub fn solve_triangular<T: LinalgScalar>(
 /// let fro = norm(&a, NormKind::Fro).unwrap();
 /// ```
 pub fn norm<T: LinalgScalar>(tensor: &Tensor<T>, kind: NormKind) -> Result<Tensor<T>> {
+    let (m, n, batch_dims) = validate_2d(tensor)?;
+    let bc = batch_count(batch_dims);
+    let mat_size = m * n;
+    let out_dims = if batch_dims.is_empty() {
+        vec![]
+    } else {
+        batch_dims.to_vec()
+    };
+
     let input = ensure_col_major(tensor);
     let data = input.buffer().as_slice().unwrap();
     let offset = input.offset() as usize;
 
     match kind {
         NormKind::Fro => {
-            // Frobenius norm: sqrt(sum of squares of all elements)
-            let total = tensor.len();
-            let mut sum = T::zero();
-            for i in 0..total {
-                let v = data[offset + i];
-                sum = sum + v * v;
+            // Frobenius norm per batch: sqrt(sum of squares over matrix dims)
+            let mut out = vec![T::zero(); bc];
+            for batch in 0..bc {
+                let start = offset + batch * mat_size;
+                let mut sum = T::zero();
+                for i in 0..mat_size {
+                    let v = data[start + i];
+                    sum = sum + v * v;
+                }
+                out[batch] = sum.sqrt();
             }
-            let result = vec![sum.sqrt()];
-            tensor_from_data(result, &[])
+            tensor_from_data(out, &out_dims)
         }
         NormKind::Nuclear => {
-            // Nuclear norm: sum of singular values
+            // Nuclear norm per batch: sum of singular values
             let svd_result = svd(tensor, None)?;
             let s_data = svd_result.s.buffer().as_slice().unwrap();
             let s_off = svd_result.s.offset() as usize;
-            let mut sum = T::zero();
-            for i in 0..svd_result.s.len() {
-                sum = sum + s_data[s_off + i];
+            let k = m.min(n);
+            let mut out = vec![T::zero(); bc];
+            for batch in 0..bc {
+                let mut sum = T::zero();
+                let start = s_off + batch * k;
+                for i in 0..k {
+                    sum = sum + s_data[start + i];
+                }
+                out[batch] = sum;
             }
-            let result = vec![sum];
-            tensor_from_data(result, &[])
+            tensor_from_data(out, &out_dims)
         }
         NormKind::Spectral => {
-            // Spectral norm: largest singular value
+            // Spectral norm per batch: largest singular value
             let svd_result = svd(tensor, None)?;
             let s_data = svd_result.s.buffer().as_slice().unwrap();
             let s_off = svd_result.s.offset() as usize;
-            let result = vec![s_data[s_off]]; // first singular value (largest)
-            tensor_from_data(result, &[])
+            let k = m.min(n);
+            let mut out = vec![T::zero(); bc];
+            for batch in 0..bc {
+                out[batch] = s_data[s_off + batch * k];
+            }
+            tensor_from_data(out, &out_dims)
         }
         _ => Err(Error::InvalidArgument(format!(
             "norm kind {kind:?} not yet implemented"
@@ -2741,6 +2928,8 @@ pub fn norm_rrule<T: LinalgScalar>(
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
+    validate_norm_cotangent(cotangent, batch_dims)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
 
     let (a_data, _) = extract_data(tensor);
     let (dn_data, _) = extract_data(cotangent);
@@ -3836,4 +4025,28 @@ pub fn norm_frule<T: LinalgScalar>(
     let dnrm = tensor_from_data(dnrm_data, &dims)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((nrm, dnrm))
+}
+
+#[cfg(test)]
+mod internal_tests {
+    use super::*;
+
+    #[test]
+    fn validate_hermitian_batches_accepts_symmetric_input() {
+        // Two 2x2 symmetric matrices in column-major layout.
+        let data = vec![
+            2.0, 1.0, 1.0, 3.0, // batch 0
+            5.0, 0.0, 0.0, 7.0, // batch 1
+        ];
+        let result = validate_hermitian_batches(&data, 0, 2, 2, "eigen");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_hermitian_batches_rejects_nonsymmetric_input() {
+        // 2x2 non-symmetric matrix [[2, 4], [1, 3]] in column-major layout.
+        let data = vec![2.0, 1.0, 4.0, 3.0];
+        let result = validate_hermitian_batches(&data, 0, 2, 1, "eigen");
+        assert!(matches!(result, Err(Error::InvalidArgument(_))));
+    }
 }
