@@ -11,6 +11,8 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
+tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-tensor = { path = "../tenferro-tensor" }
+tenferro-prims = { path = "../tenferro-prims" }
 tenferro-einsum = { path = "../tenferro-einsum" }
 tenferro-linalg = { path = "../tenferro-linalg" }
