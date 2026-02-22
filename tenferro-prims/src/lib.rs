@@ -905,27 +905,28 @@ fn execute_anti_diag<T: ScalarBase>(
     paired_axes: &[(usize, usize)],
     free_axes: &[usize],
 ) -> Result<()> {
-    // AntiDiag: write input values to diagonal positions in output
+    // AntiDiag: write input values to diagonal positions in output.
+    // This is the AD backward of diagonal extraction ("ii->i"):
+    // for each input element input[k], write to output[..., k, ..., k, ...]
+    // where the paired axes both get the value determined by the free axis.
     scale_output(output, beta);
 
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
-    let diag_dim = out_dims[paired_axes[0].0];
 
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
-        for d in 0..diag_dim {
-            let mut out_idx = vec![0; out_dims.len()];
-            for (in_pos, &out_ax) in free_axes.iter().enumerate() {
-                out_idx[out_ax] = in_idx[in_pos];
-            }
-            for &(ax1, ax2) in paired_axes {
-                out_idx[ax1] = d;
-                out_idx[ax2] = d;
-            }
-            let old = output.get(&out_idx);
-            output.set(&out_idx, old + val);
+        let mut out_idx = vec![0; out_dims.len()];
+        // Set free axes from input indices
+        for (in_pos, &out_ax) in free_axes.iter().enumerate() {
+            out_idx[out_ax] = in_idx[in_pos];
         }
+        // Propagate paired constraint: second axis copies first axis value
+        for &(ax1, ax2) in paired_axes {
+            out_idx[ax2] = out_idx[ax1];
+        }
+        let old = output.get(&out_idx);
+        output.set(&out_idx, old + val);
     });
     Ok(())
 }
