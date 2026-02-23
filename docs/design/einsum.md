@@ -384,9 +384,10 @@ where
     Tensor<T>: Differentiable;
 ```
 
-> **Status: POC limitation.** `tracked_einsum` builds a reverse rule but
-> cannot record it on the tape (no tape access in current API). Calling
-> `tape.pullback()` will not compute gradients through einsum. See #136.
+`tracked_einsum` records einsum operations onto the AD tape via
+`tape.record_op()`. Calling `tape.pullback()` computes gradients through
+einsum, and end-to-end pullback tests exist (see `tracked_einsum_matmul_pullback`
+in `tenferro-einsum/tests/einsum_tests.rs`).
 
 ```rust
 /// Dual einsum (forward-mode JVP propagation).

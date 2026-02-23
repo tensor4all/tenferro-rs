@@ -186,35 +186,20 @@ non-overlapping input/output buffers.
 
 ---
 
-## Tensor / TensorView Split
+## View Operations: No Separate TensorView Type
 
-### Motivation
-
-Even with Arc-based `Tensor<T>`, a borrowed `TensorView<'a, T>` is
-useful for:
-- **CPU data inspection** — `tensor_view()` waits for pending GPU events,
-  then returns a read-safe view
-- **Prims internal operand passing** — `as_operand_view()` propagates
-  events for GPU chaining without CPU sync
-- **Lifetime safety** — borrows the source tensor's buffer without
-  touching the Arc refcount
-
-### API Design
-
-**Tensor (owned) methods:**
+All view operations return `Tensor<T>`, not a separate `TensorView` type.
+Because `DataBuffer<T>` uses `Arc`, view operations are zero-copy: they
+share the underlying buffer and only change metadata (dims, strides, offset).
 
 ```rust
 impl<T: Scalar> Tensor<T> {
-    // Public: Borrow → TensorView (waits if pending)
-    fn tensor_view(&self) -> TensorView<'_, T>;
-
-    // Internal: Non-blocking operand view (event propagated)
-    pub(crate) fn as_operand_view(&self) -> TensorView<'_, T>;
-
     // Zero-copy metadata operations → return Tensor (Arc shared)
     fn permute(&self, perm: &[usize]) -> Result<Tensor<T>>;
     fn broadcast(&self, dims: &[usize]) -> Result<Tensor<T>>;
     fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>>;
+    fn select(&self, dim: usize, index: usize) -> Result<Tensor<T>>;
+    fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Tensor<T>>;
 
     // Consume self → Tensor (may reuse buffer if unique)
     fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
@@ -226,22 +211,7 @@ impl<T: Scalar> Tensor<T> {
 }
 ```
 
-**TensorView methods:**
-
-```rust
-impl<'a, T: Scalar> TensorView<'a, T> {
-    fn permute(&self, perm: &[usize]) -> Result<TensorView<'a, T>>;
-    fn broadcast(&self, dims: &[usize]) -> Result<TensorView<'a, T>>;
-    fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'a, T>>;
-    fn select(&self, dim: usize, index: usize) -> Result<TensorView<'a, T>>;
-    fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<TensorView<'a, T>>;
-    fn to_tensor(&self, order: MemoryOrder) -> Tensor<T>;
-    fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
-    fn conj(&self) -> TensorView<'a, T>;  // lazy: flag flip, zero-cost
-}
-```
-
-**einsum takes &Tensor references (not TensorView):**
+**einsum takes &Tensor references:**
 
 ```rust
 pub fn einsum<T, A, B>(
@@ -268,24 +238,20 @@ assert_eq!(at.dims(), &[4, 3]);
 
 // clone is cheap (Arc refcount++)
 let a2 = a.clone();
-
-// TensorView for CPU data inspection
-let tv = a.tensor_view();  // waits if pending GPU work
-assert_eq!(tv.dims(), a.dims());
 ```
 
-### Design Choice: Arc + TensorView Hybrid
+### Design Choice: Arc-Only (No TensorView)
 
-Arc was chosen over pure TensorView because:
+Arc was chosen over a separate `TensorView<'a, T>` because:
 1. `Differentiable::Tangent: Clone` in chainrules-core requires Clone on Tensor
 2. GPU buffer clone needs device operations — Arc avoids this for shallow clone
 3. `conj()` needs buffer sharing for lazy semantics (both CPU and GPU)
 4. View operations return owned `Tensor<T>` — simpler API, no lifetime propagation
 
-TensorView remains useful for:
-1. CPU data inspection (with wait semantics)
-2. Prims internal operand passing (event propagation)
-3. Avoiding unnecessary Arc refcount for read-only access
+A borrowed `TensorView<'a, T>` could be added in the future for
+specialized use cases (e.g., GPU event wait semantics, avoiding Arc
+refcount overhead on read-only access), but the current implementation
+uses `Tensor<T>` uniformly
 
 ---
 

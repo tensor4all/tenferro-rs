@@ -54,12 +54,26 @@ The core operations form **adjoint pairs** for clean AD support:
 `trace ↔ anti_trace`, `diag ↔ anti_diag`, `reduce ↔ repeat`,
 `permute ↔ inverse permute`, `batched_gemm` uses the Leibniz rule.
 
-**POC status**: The [tenferro-rs POC](https://github.com/tensor4all/tenferro-rs/)
-implements the full workspace structure with API skeletons (`todo!()` bodies).
-All crates exist including `tenferro-linalg`, `tenferro-capi`,
-`chainrules-core`, and `chainrules`. GPU backend types (`CudaBackend`,
-`RocmBackend`) are defined as stubs in `tenferro-prims`; actual GPU
-implementation, `BackendRegistry`, and `TensorLibVtable` are future work.
+**Implementation status**: The following crates are fully implemented with
+working tests:
+
+| Crate | Status |
+|-------|--------|
+| `tenferro-tensor` | Implemented (Tensor, DataBuffer, view ops, contiguous, conj) |
+| `tenferro-prims` | Implemented (CpuBackend with all core + extended ops) |
+| `tenferro-einsum` | Implemented (all 9 API functions, N-ary tree, AD rules) |
+| `tenferro-linalg` | Implemented (SVD, QR, LU, eigen, cholesky, solve, inv) |
+| `chainrules-core` | Implemented (Differentiable, ReverseRule, ForwardRule traits) |
+| `chainrules` | Implemented (Tape, TrackedTensor, DualTensor, pullback) |
+| `tenferro-algebra` | Implemented (HasAlgebra, Semiring, Standard) |
+| `tenferro-device` | Implemented (Device enum, Error/Result types) |
+| `tenferro-tropical` (extension) | Implemented (MaxPlus algebra, TensorPrims, SIMD dispatch) |
+| `tenferro-capi` | Partially implemented (einsum + linalg FFI; DLPack interop stubs) |
+
+GPU backend types (`CudaBackend`, `RocmBackend`) are defined as stubs
+in `tenferro-prims` (return errors when called); `CudaBackend` has a
+real implementation behind the `cuda` feature flag. `BackendRegistry`
+and `TensorLibVtable` are future work.
 
 ---
 
@@ -133,13 +147,13 @@ tenferro-device              tenferro-algebra
              strided-traits)
 ```
 
-POC skeleton crates (API defined, `todo!()` bodies):
-- `tenferro-linalg` — Tensor-level linalg wrapper (SVD, QR, eigen) with AD rules
-- `chainrules-core` / `chainrules` — AD traits and engine
-- `tenferro-capi` — C FFI for Julia/Python integration
+Fully implemented crates:
+- `tenferro-linalg` — Tensor-level linalg wrapper (SVD, QR, LU, eigen, cholesky, solve, inv)
+- `chainrules-core` / `chainrules` — AD traits and engine (tape recording, pullback, dual)
+- `tenferro-tropical` (extension) — Tropical algebra types, `TensorPrims<MaxPlus>` for CpuBackend
 
-Extension crates (separate workspace, POC stubs):
-- `tenferro-tropical` — Tropical algebra types, `TensorPrims<MaxPlus>` for CpuBackend
+Partially implemented:
+- `tenferro-capi` — C FFI for Julia/Python (einsum + linalg working; DLPack interop stubs)
 
 ---
 
