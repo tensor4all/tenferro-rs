@@ -354,10 +354,10 @@ without spelling out the algebra explicitly at call sites.
 Backend selection is determined by `T: HasAlgebra → infers algebra A`:
 
 ```rust
-// impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend  → faer/cblas GEMM
+// impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend  → faer/cblas GEMM  [current]
 // impl TensorPrims<MaxPlus> for CpuBackend                 → tropical-gemm (tenferro-tropical)
-// impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend → cuTENSOR [future]
-// impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend → hipTensor [future]
+// impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend → cuTENSOR   [not yet implemented]
+// impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend → hipTensor  [not yet implemented]
 // impl TensorPrims<MyAlgebra> for CpuBackend               → user-provided kernels
 ```
 
@@ -460,10 +460,11 @@ Backward: ∂A = anti_diag(repeat(∂y, i_dim), [(0,1)])
 ```
 
 Both VJP and JVP go through `TensorPrims` primitives, working on CPU and
-GPU uniformly.
+GPU uniformly (once GPU backends are available).
 
-> **Status: Not yet implemented.** GPU backends (CUDA, ROCm) do not exist
-> yet. AD rules currently execute on CPU only. See #141.
+> **Status: Not yet implemented.** GPU backends (`CudaBackend`, `RocmBackend`)
+> are API stubs that return errors. AD rules currently execute on CPU only.
+> See #141.
 
 ### Optimizations from strided-opteinsum (Future)
 
