@@ -91,7 +91,7 @@ use std::marker::PhantomData;
 
 use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
-use tenferro_algebra::{Scalar, Standard};
+use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
 
 /// Reduction operation kind.
@@ -594,24 +594,24 @@ impl CpuBackend {
     /// let a_resolved = CpuBackend::resolve_conj(&mut ctx, &a_conj);
     /// assert!(!a_resolved.is_conjugated());
     /// ```
-    pub fn resolve_conj<T: Scalar>(
+    pub fn resolve_conj<T: Scalar + Conjugate>(
         _ctx: &mut CpuContext,
         src: &tenferro_tensor::Tensor<T>,
     ) -> tenferro_tensor::Tensor<T> {
         if !src.is_conjugated() {
             return src.clone();
         }
-        // Create a fresh non-conjugated copy of the data.
-        // For real types (f64, f32), conjugation is identity, so raw data copy is correct.
-        // Complex types would additionally need element-wise conjugation (requires
-        // Conjugate trait bound, not available via Scalar).
+        // Create a fresh non-conjugated copy with element-wise conjugation applied.
+        // For real types (f64, f32), Conjugate::conj() is identity so this is a plain copy.
+        // For complex types (Complex64, Complex32), conj() negates the imaginary part.
         let contiguous = src.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
         let data = contiguous
             .buffer()
             .as_slice()
             .expect("CPU tensor must have CPU-accessible data");
+        let conjugated_data: Vec<T> = data.iter().map(|&v| v.conj()).collect();
         tenferro_tensor::Tensor::from_slice(
-            data,
+            &conjugated_data,
             src.dims(),
             tenferro_tensor::MemoryOrder::ColumnMajor,
         )

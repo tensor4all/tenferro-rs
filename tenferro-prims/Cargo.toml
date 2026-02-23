@@ -15,3 +15,6 @@ strided-traits.workspace = true
 strided-perm.workspace = true
 rayon = "1.10"
 libloading.workspace = true
+
+[dev-dependencies]
+num-complex.workspace = true
