@@ -250,6 +250,7 @@ pub fn tropical_einsum_rrule<T, Alg, Backend>(
     cotangent: &Tensor<T::Inner>,
 ) -> Result<Vec<Tensor<T::Inner>>>
 where
+    Alg: tenferro_algebra::Algebra,
     T: TropicalScalar + HasAlgebra<Algebra = Alg>,
     Backend: TensorPrims<Alg>,
 {
@@ -639,6 +640,7 @@ pub fn tracked_tropical_einsum<T, Alg, Backend>(
     operands: &[&TrackedTensor<Tensor<T::Inner>>],
 ) -> AdResult<TrackedTensor<Tensor<T::Inner>>>
 where
+    Alg: tenferro_algebra::Algebra,
     T: TropicalScalar + HasAlgebra<Algebra = Alg> + 'static,
     T::Inner: Scalar + HasAlgebra,
     Backend: TensorPrims<Alg>,

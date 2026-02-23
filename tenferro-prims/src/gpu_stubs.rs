@@ -75,33 +75,33 @@ impl CudaBackend {
 
 #[cfg(not(feature = "cuda"))]
 impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
-    type Plan<T: Scalar> = CudaPlan<T>;
+    type Plan = CudaPlan<S>;
     type Context = CudaContext;
 
-    fn plan<T: Scalar>(
+    fn plan(
         _ctx: &mut CudaContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
-    ) -> Result<CudaPlan<T>> {
+    ) -> Result<CudaPlan<S>> {
         Err(Error::DeviceError(
             "CUDA backend not available: load cuTENSOR library first".into(),
         ))
     }
 
-    fn execute<T: Scalar>(
+    fn execute(
         _ctx: &mut CudaContext,
-        _plan: &CudaPlan<T>,
-        _alpha: T,
-        _inputs: &[&Tensor<T>],
-        _beta: T,
-        _output: &mut Tensor<T>,
+        _plan: &CudaPlan<S>,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
     ) -> Result<()> {
         Err(Error::DeviceError(
             "CUDA backend not available: load cuTENSOR library first".into(),
         ))
     }
 
-    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
+    fn has_extension_for(_ext: Extension) -> bool {
         false
     }
 }
@@ -192,33 +192,33 @@ impl RocmBackend {
 }
 
 impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
-    type Plan<T: Scalar> = RocmPlan<T>;
+    type Plan = RocmPlan<S>;
     type Context = RocmContext;
 
-    fn plan<T: Scalar>(
+    fn plan(
         _ctx: &mut RocmContext,
         _desc: &PrimDescriptor,
         _shapes: &[&[usize]],
-    ) -> Result<RocmPlan<T>> {
+    ) -> Result<RocmPlan<S>> {
         Err(Error::DeviceError(
             "ROCm backend not available: load hipTENSOR library first".into(),
         ))
     }
 
-    fn execute<T: Scalar>(
+    fn execute(
         _ctx: &mut RocmContext,
-        _plan: &RocmPlan<T>,
-        _alpha: T,
-        _inputs: &[&Tensor<T>],
-        _beta: T,
-        _output: &mut Tensor<T>,
+        _plan: &RocmPlan<S>,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
     ) -> Result<()> {
         Err(Error::DeviceError(
             "ROCm backend not available: load hipTENSOR library first".into(),
         ))
     }
 
-    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
+    fn has_extension_for(_ext: Extension) -> bool {
         // Not yet implemented. When available, hipTENSOR will support
         // Contract and ElementwiseMul for f32/f64/Complex.
         false

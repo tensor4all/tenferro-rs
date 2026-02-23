@@ -18,7 +18,7 @@ fn cpu_plan<T: Scalar>(
     desc: &PrimDescriptor,
     shapes: &[&[usize]],
 ) -> tenferro_device::Result<CpuPlan<T>> {
-    <CpuBackend as TensorPrims<Standard<T>>>::plan::<T>(ctx, desc, shapes)
+    <CpuBackend as TensorPrims<Standard<T>>>::plan(ctx, desc, shapes)
 }
 
 fn cpu_execute<T: Scalar>(
@@ -33,7 +33,7 @@ fn cpu_execute<T: Scalar>(
 }
 
 fn cpu_has_ext<T: Scalar>(ext: Extension) -> bool {
-    <CpuBackend as TensorPrims<Standard<T>>>::has_extension_for::<T>(ext)
+    <CpuBackend as TensorPrims<Standard<T>>>::has_extension_for(ext)
 }
 
 // ---------------------------------------------------------------------------

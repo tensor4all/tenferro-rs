@@ -12,7 +12,7 @@
 
 use std::marker::PhantomData;
 
-use tenferro_algebra::{HasAlgebra, Semiring};
+use tenferro_algebra::{Algebra, HasAlgebra, Semiring};
 
 use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 
@@ -44,9 +44,15 @@ macro_rules! define_tropical_algebra {
             type Algebra = $marker<f64>;
         }
 
-        impl Semiring for $marker<f32> {
+        impl Algebra for $marker<f32> {
             type Scalar = $wrapper<f32>;
+        }
 
+        impl Algebra for $marker<f64> {
+            type Scalar = $wrapper<f64>;
+        }
+
+        impl Semiring for $marker<f32> {
             fn zero() -> Self::Scalar { $z32 }
             fn one() -> Self::Scalar { $o32 }
             fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar { a + b }
@@ -54,8 +60,6 @@ macro_rules! define_tropical_algebra {
         }
 
         impl Semiring for $marker<f64> {
-            type Scalar = $wrapper<f64>;
-
             fn zero() -> Self::Scalar { $z64 }
             fn one() -> Self::Scalar { $o64 }
             fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar { a + b }

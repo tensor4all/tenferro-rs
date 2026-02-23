@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 
 use strided_view::{StridedView, StridedViewMut};
-use tenferro_algebra::Scalar;
+use tenferro_algebra::{Algebra, Scalar};
 use tenferro_device::{Error, Result};
 use tenferro_prims::{CpuBackend, CpuContext, Extension, PrimDescriptor, ReduceOp, TensorPrims};
 use tenferro_tensor::Tensor;
@@ -1230,31 +1230,35 @@ macro_rules! try_simd_dispatch {
 /// tropical scalar wrapper, then falls back to the generic `tropical_execute`.
 macro_rules! impl_tropical_prims {
     ($marker:ident, $wrapper:ident) => {
-        impl<S: Scalar> TensorPrims<$marker<S>> for CpuBackend {
-            type Plan<T: Scalar> = TropicalPlan<T>;
+        impl<S: Scalar + num_traits::Float> TensorPrims<$marker<S>> for CpuBackend
+        where
+            $marker<S>: Algebra<Scalar = $wrapper<S>>,
+            $wrapper<S>: Scalar,
+        {
+            type Plan = TropicalPlan<$wrapper<S>>;
             type Context = CpuContext;
 
-            fn plan<T: Scalar>(
+            fn plan(
                 _ctx: &mut CpuContext,
                 desc: &PrimDescriptor,
                 shapes: &[&[usize]],
-            ) -> Result<TropicalPlan<T>> {
+            ) -> Result<TropicalPlan<$wrapper<S>>> {
                 tropical_plan(desc, shapes)
             }
 
-            fn execute<T: Scalar>(
+            fn execute(
                 _ctx: &mut CpuContext,
-                plan: &TropicalPlan<T>,
-                alpha: T,
-                inputs: &[&Tensor<T>],
-                beta: T,
-                output: &mut Tensor<T>,
+                plan: &TropicalPlan<$wrapper<S>>,
+                alpha: $wrapper<S>,
+                inputs: &[&Tensor<$wrapper<S>>],
+                beta: $wrapper<S>,
+                output: &mut Tensor<$wrapper<S>>,
             ) -> Result<()> {
-                let views: Vec<StridedView<T>> = inputs
+                let views: Vec<StridedView<$wrapper<S>>> = inputs
                     .iter()
                     .map(|t| tensor_to_view(t))
                     .collect::<Result<Vec<_>>>()?;
-                let view_refs: Vec<&StridedView<T>> = views.iter().collect();
+                let view_refs: Vec<&StridedView<$wrapper<S>>> = views.iter().collect();
                 let mut out_view = tensor_to_view_mut(output)?;
 
                 if let TropicalPlan::BatchedGemm {
@@ -1271,7 +1275,7 @@ macro_rules! impl_tropical_prims {
                         ));
                     }
                     try_simd_dispatch!(
-                        T,
+                        $wrapper<S>,
                         $wrapper<f64>,
                         &view_refs,
                         alpha,
@@ -1283,7 +1287,7 @@ macro_rules! impl_tropical_prims {
                         *k
                     );
                     try_simd_dispatch!(
-                        T,
+                        $wrapper<S>,
                         $wrapper<f32>,
                         &view_refs,
                         alpha,
@@ -1298,7 +1302,7 @@ macro_rules! impl_tropical_prims {
                 tropical_execute(plan, alpha, &view_refs, beta, &mut out_view)
             }
 
-            fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
+            fn has_extension_for(_ext: Extension) -> bool {
                 false
             }
         }
