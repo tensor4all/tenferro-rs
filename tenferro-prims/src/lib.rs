@@ -118,7 +118,7 @@ pub enum ReduceOp {
 ///
 /// Used with [`PrimDescriptor::ElementwiseUnary`] for point-wise
 /// transformations. Maps to `cutensorElementwiseTrinary` (unary case)
-/// on GPU.
+/// on GPU backends (not yet implemented).
 ///
 /// Note: square (`x²`) is omitted — expressible as
 /// `ElementwiseMul(x, x)` without an extra copy.
@@ -145,7 +145,7 @@ pub enum UnaryOp {
     ///
     /// Used by `resolve_conj()` to materialize a lazily-conjugated tensor.
     /// For real types, this is a no-op (identity).
-    /// Maps to `CUTENSOR_OP_CONJ` on GPU.
+    /// Maps to `CUTENSOR_OP_CONJ` on GPU backends (not yet implemented).
     Conj,
 }
 
@@ -164,9 +164,11 @@ pub enum UnaryOp {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Extension {
-    /// Fused contraction (permute + GEMM). Maps to `cutensorContract` on GPU.
+    /// Fused contraction (permute + GEMM). Maps to `cutensorContract` on GPU
+    /// backends (not yet implemented).
     Contract,
-    /// Element-wise multiplication. Maps to `cutensorElementwiseBinary` on GPU.
+    /// Element-wise multiplication. Maps to `cutensorElementwiseBinary` on GPU
+    /// backends (not yet implemented).
     ElementwiseMul,
 }
 
@@ -289,7 +291,8 @@ pub enum PrimDescriptor {
     /// `C[modes_c] = alpha * contract(A[modes_a], B[modes_b]) + beta * C`
     ///
     /// The backend controls internal data movement (copy elision, copy
-    /// strategy). Maps to `cutensorContract` on GPU.
+    /// strategy). Maps to `cutensorContract` on GPU backends
+    /// (not yet implemented).
     ///
     /// Available when `has_extension_for::<T>(Extension::Contract)` returns true.
     Contract {
@@ -335,8 +338,8 @@ pub enum PrimDescriptor {
 /// All operations receive a `&mut Self::Context` that encapsulates the backend's
 /// execution resources:
 ///
-/// - **CPU**: thread pool, buffer pool, plan cache
-/// - **GPU**: CUDA stream, device handle, workspace
+/// - **CPU** (current): thread pool, buffer pool, plan cache
+/// - **GPU** (not yet implemented): CUDA stream, device handle, workspace
 ///
 /// # Examples
 ///
@@ -357,8 +360,9 @@ pub trait TensorPrims<A> {
 
     /// Backend-specific execution context.
     ///
-    /// Encapsulates execution resources (thread pool for CPU, CUDA stream
-    /// for GPU). Analogous to cuTENSOR's `cutensorHandle_t`.
+    /// Encapsulates execution resources (thread pool for CPU; CUDA stream
+    /// for GPU -- not yet implemented). Analogous to cuTENSOR's
+    /// `cutensorHandle_t`.
     type Context;
 
     /// Create an execution plan from an operation descriptor.
@@ -1251,17 +1255,22 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
 }
 
 // ===========================================================================
-// GPU Backends (future — runtime dlopen via libloading)
+// GPU Backends (not yet implemented — runtime dlopen via libloading)
 // ===========================================================================
 
 /// CUDA execution context.
 ///
-/// Encapsulates CUDA-side execution resources: a CUDA stream, GPU workspace
-/// buffer, and plan cache. Analogous to cuTENSOR's `cutensorHandle_t`.
+/// **Status: Not yet implemented.** This type exists as an API placeholder.
+/// All operations on [`CudaBackend`] currently return errors.
+///
+/// When implemented, will encapsulate CUDA-side execution resources: a CUDA
+/// stream, GPU workspace buffer, and plan cache. Analogous to cuTENSOR's
+/// `cutensorHandle_t`.
 ///
 /// # Examples
 ///
 /// ```ignore
+/// // Aspirational API — not yet functional.
 /// use tenferro_prims::CudaContext;
 ///
 /// // Created internally by CudaBackend::load_cutensor()
@@ -1274,6 +1283,8 @@ pub struct CudaContext {
 
 /// CUDA plan — wraps a cuTENSOR plan handle.
 ///
+/// **Status: Not yet implemented.** This type exists as an API placeholder.
+///
 /// Created by [`CudaBackend::plan`](TensorPrims::plan) and consumed by
 /// [`CudaBackend::execute`](TensorPrims::execute).
 pub struct CudaPlan<T: ScalarBase> {
@@ -1284,17 +1295,24 @@ pub struct CudaPlan<T: ScalarBase> {
 
 /// CUDA backend using cuTENSOR via runtime dlopen.
 ///
-/// Loaded at runtime from a user-provided `.so` path. No compile-time
-/// CUDA SDK dependency. Implements [`TensorPrims<Standard<T>>`](TensorPrims)
-/// for standard arithmetic on NVIDIA GPUs.
+/// **Status: Not yet implemented.** All methods currently return errors.
+/// The type exists to define the intended API surface. `plan()` and
+/// `execute()` return `Err(DeviceError)`. `load_cutensor()` on
+/// [`BackendRegistry`] also returns an error.
+///
+/// When implemented, will be loaded at runtime from a user-provided `.so`
+/// path with no compile-time CUDA SDK dependency. Will implement
+/// [`TensorPrims<Standard<T>>`](TensorPrims) for standard arithmetic on
+/// NVIDIA GPUs.
 ///
 /// cuTENSOR natively supports `Contract`, `Permute`, `Reduce`, and
-/// `ElementwiseMul`. `AntiTrace`/`AntiDiag` are composed via
-/// `Contract(eye, ∂C)`.
+/// `ElementwiseMul`. `AntiTrace`/`AntiDiag` will be composed via
+/// `Contract(eye, dC)`.
 ///
 /// # Examples
 ///
 /// ```ignore
+/// // Aspirational API — not yet functional.
 /// use tenferro_prims::{CudaBackend, BackendRegistry};
 ///
 /// let mut registry = BackendRegistry::new();
@@ -1308,8 +1326,11 @@ pub struct CudaBackend {
 impl CudaBackend {
     /// Materialize a lazily-conjugated tensor on GPU.
     ///
-    /// Uses `ElementwiseUnary(Conj)` via cuTENSOR to produce a new
-    /// tensor with `conjugated = false`.
+    /// **Status: Not yet implemented.** Currently panics with
+    /// `unimplemented!`.
+    ///
+    /// When implemented, will use `ElementwiseUnary(Conj)` via cuTENSOR
+    /// to produce a new tensor with `conjugated = false`.
     pub fn resolve_conj<T: Scalar>(
         _ctx: &mut CudaContext,
         _src: &tenferro_tensor::Tensor<T>,
@@ -1346,19 +1367,25 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
     }
 
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
-        // cuTENSOR supports Contract and ElementwiseMul for f32/f64/Complex
+        // Not yet implemented. When available, cuTENSOR will support
+        // Contract and ElementwiseMul for f32/f64/Complex.
         false
     }
 }
 
 /// ROCm execution context.
 ///
-/// Encapsulates ROCm-side execution resources: a HIP stream, GPU workspace
-/// buffer, and plan cache. Analogous to hipTENSOR's handle.
+/// **Status: Not yet implemented.** This type exists as an API placeholder.
+/// All operations on [`RocmBackend`] currently return errors.
+///
+/// When implemented, will encapsulate ROCm-side execution resources: a HIP
+/// stream, GPU workspace buffer, and plan cache. Analogous to hipTENSOR's
+/// handle.
 ///
 /// # Examples
 ///
 /// ```ignore
+/// // Aspirational API — not yet functional.
 /// use tenferro_prims::RocmContext;
 ///
 /// // Created internally by RocmBackend::load_hiptensor()
@@ -1371,6 +1398,8 @@ pub struct RocmContext {
 
 /// ROCm plan — wraps a hipTENSOR plan handle.
 ///
+/// **Status: Not yet implemented.** This type exists as an API placeholder.
+///
 /// Created by [`RocmBackend::plan`](TensorPrims::plan) and consumed by
 /// [`RocmBackend::execute`](TensorPrims::execute).
 pub struct RocmPlan<T: ScalarBase> {
@@ -1381,17 +1410,24 @@ pub struct RocmPlan<T: ScalarBase> {
 
 /// ROCm backend using hipTENSOR via runtime dlopen.
 ///
-/// Loaded at runtime from a user-provided `.so` path. No compile-time
-/// ROCm SDK dependency. Implements [`TensorPrims<Standard<T>>`](TensorPrims)
-/// for standard arithmetic on AMD GPUs.
+/// **Status: Not yet implemented.** All methods currently return errors.
+/// The type exists to define the intended API surface. `plan()` and
+/// `execute()` return `Err(DeviceError)`. `load_hiptensor()` on
+/// [`BackendRegistry`] also returns an error.
+///
+/// When implemented, will be loaded at runtime from a user-provided `.so`
+/// path with no compile-time ROCm SDK dependency. Will implement
+/// [`TensorPrims<Standard<T>>`](TensorPrims) for standard arithmetic on
+/// AMD GPUs.
 ///
 /// hipTENSOR natively supports `Contract`, `Permute`, `Reduce`, and
-/// `ElementwiseMul`. `AntiTrace`/`AntiDiag` are composed via
-/// `Contract(eye, ∂C)`.
+/// `ElementwiseMul`. `AntiTrace`/`AntiDiag` will be composed via
+/// `Contract(eye, dC)`.
 ///
 /// # Examples
 ///
 /// ```ignore
+/// // Aspirational API — not yet functional.
 /// use tenferro_prims::{RocmBackend, BackendRegistry};
 ///
 /// let mut registry = BackendRegistry::new();
@@ -1405,8 +1441,11 @@ pub struct RocmBackend {
 impl RocmBackend {
     /// Materialize a lazily-conjugated tensor on GPU.
     ///
-    /// Uses `ElementwiseUnary(Conj)` via hipTENSOR to produce a new
-    /// tensor with `conjugated = false`.
+    /// **Status: Not yet implemented.** Currently panics with
+    /// `unimplemented!`.
+    ///
+    /// When implemented, will use `ElementwiseUnary(Conj)` via hipTENSOR
+    /// to produce a new tensor with `conjugated = false`.
     pub fn resolve_conj<T: Scalar>(
         _ctx: &mut RocmContext,
         _src: &tenferro_tensor::Tensor<T>,
@@ -1443,7 +1482,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
     }
 
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
-        // hipTENSOR supports Contract and ElementwiseMul for f32/f64/Complex
+        // Not yet implemented. When available, hipTENSOR will support
+        // Contract and ElementwiseMul for f32/f64/Complex.
         false
     }
 }
@@ -1454,13 +1494,19 @@ impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
 
 /// Registry of available compute backends.
 ///
-/// Holds the CPU backend (always available) and optional GPU backends
-/// loaded at runtime via [`load_cutensor`](BackendRegistry::load_cutensor)
-/// or [`load_hiptensor`](BackendRegistry::load_hiptensor).
+/// **Current behavior:** Only the CPU backend is available.
+/// [`load_cutensor`](BackendRegistry::load_cutensor) and
+/// [`load_hiptensor`](BackendRegistry::load_hiptensor) always return
+/// errors. GPU backend loading is not yet implemented.
+///
+/// When GPU support is implemented, this registry will hold the CPU
+/// backend (always available) and optional GPU backends loaded at
+/// runtime.
 ///
 /// # Examples
 ///
 /// ```ignore
+/// // Aspirational API — GPU loading not yet functional.
 /// use tenferro_prims::BackendRegistry;
 ///
 /// let mut registry = BackendRegistry::new(); // CPU only
@@ -1485,8 +1531,11 @@ impl BackendRegistry {
 
     /// Load the cuTENSOR library from the given path.
     ///
-    /// The caller (Julia, Python, or standalone Rust) provides the path
-    /// to the shared library. No auto-search.
+    /// **Status: Not yet implemented.** Always returns
+    /// `Err(DeviceError)`.
+    ///
+    /// When implemented, the caller (Julia, Python, or standalone Rust)
+    /// will provide the path to the shared library. No auto-search.
     pub fn load_cutensor(&mut self, _path: &str) -> Result<()> {
         Err(Error::DeviceError(
             "cuTENSOR runtime loading not yet implemented".into(),
@@ -1495,8 +1544,11 @@ impl BackendRegistry {
 
     /// Load the hipTENSOR library from the given path.
     ///
-    /// The caller (Julia, Python, or standalone Rust) provides the path
-    /// to the shared library. No auto-search.
+    /// **Status: Not yet implemented.** Always returns
+    /// `Err(DeviceError)`.
+    ///
+    /// When implemented, the caller (Julia, Python, or standalone Rust)
+    /// will provide the path to the shared library. No auto-search.
     pub fn load_hiptensor(&mut self, _path: &str) -> Result<()> {
         Err(Error::DeviceError(
             "hipTENSOR runtime loading not yet implemented".into(),
