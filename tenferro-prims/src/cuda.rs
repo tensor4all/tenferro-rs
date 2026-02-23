@@ -25,7 +25,9 @@ use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::*;
-use crate::{validate_shape_count, Extension, PlanCache, PrimDescriptor, TensorPrims};
+use crate::{
+    validate_shape_count, Extension, PlanCache, PrimDescriptor, ReduceOp, TensorPrims, UnaryOp,
+};
 
 // ============================================================================
 // Error helper
@@ -373,6 +375,180 @@ fn plan_contraction(
     // desc_a, desc_b, desc_c, desc_d, op_desc all drop here
 }
 
+/// Create a cuTENSOR permutation plan.
+fn plan_permutation(
+    ctx: &mut CudaContext,
+    data_type: CutensorDataType,
+    compute: cutensorComputeDescriptor_t,
+    modes_a: &[i32],
+    shape_a: &[usize],
+    strides_a: &[isize],
+    modes_b: &[i32],
+    shape_b: &[usize],
+    strides_b: &[isize],
+) -> Result<(PlanWrapper, u64)> {
+    let vtable = &ctx.vtable;
+    let handle = ctx.handle.raw;
+    let desc_a = create_tensor_desc(handle, vtable, shape_a, strides_a, data_type)?;
+    let desc_b = create_tensor_desc(handle, vtable, shape_b, strides_b, data_type)?;
+
+    let mut op_raw: cutensorOperationDescriptor_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_permutation)(
+            handle,
+            &mut op_raw,
+            desc_a.raw,
+            modes_a.as_ptr(),
+            CutensorOperator::Identity,
+            desc_b.raw,
+            modes_b.as_ptr(),
+            compute,
+        )
+    };
+    check_status(status, "cutensorCreatePermutation")?;
+    let op_desc = OpDescWrapper {
+        raw: op_raw,
+        vtable: Arc::clone(vtable),
+    };
+    build_cutensor_plan(handle, vtable, &op_desc)
+}
+
+/// Create a cuTENSOR reduction plan.
+fn plan_reduction(
+    ctx: &mut CudaContext,
+    data_type: CutensorDataType,
+    compute: cutensorComputeDescriptor_t,
+    modes_a: &[i32],
+    shape_a: &[usize],
+    strides_a: &[isize],
+    modes_c: &[i32],
+    shape_c: &[usize],
+    strides_c: &[isize],
+    reduce_op: CutensorReduceOp,
+) -> Result<(PlanWrapper, u64)> {
+    let vtable = &ctx.vtable;
+    let handle = ctx.handle.raw;
+    let desc_a = create_tensor_desc(handle, vtable, shape_a, strides_a, data_type)?;
+    let desc_c = create_tensor_desc(handle, vtable, shape_c, strides_c, data_type)?;
+    // D descriptor same as C
+    let desc_d = create_tensor_desc(handle, vtable, shape_c, strides_c, data_type)?;
+
+    let mut op_raw: cutensorOperationDescriptor_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_reduction)(
+            handle,
+            &mut op_raw,
+            desc_a.raw,
+            modes_a.as_ptr(),
+            CutensorOperator::Identity,
+            desc_c.raw,
+            modes_c.as_ptr(),
+            CutensorOperator::Identity,
+            desc_d.raw,
+            modes_c.as_ptr(),
+            reduce_op,
+            compute,
+        )
+    };
+    check_status(status, "cutensorCreateReduction")?;
+    let op_desc = OpDescWrapper {
+        raw: op_raw,
+        vtable: Arc::clone(vtable),
+    };
+    build_cutensor_plan(handle, vtable, &op_desc)
+}
+
+/// Create a cuTENSOR elementwise binary plan (for ElementwiseMul).
+fn plan_elementwise_binary(
+    ctx: &mut CudaContext,
+    data_type: CutensorDataType,
+    compute: cutensorComputeDescriptor_t,
+    modes: &[i32],
+    shape: &[usize],
+    strides: &[isize],
+) -> Result<(PlanWrapper, u64)> {
+    let vtable = &ctx.vtable;
+    let handle = ctx.handle.raw;
+    let desc_a = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
+    // C and D same shape/strides as A
+    let desc_c = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
+    let desc_d = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
+
+    let mut op_raw: cutensorOperationDescriptor_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_elementwise_binary)(
+            handle,
+            &mut op_raw,
+            desc_a.raw,
+            modes.as_ptr(),
+            CutensorOperator::Identity,
+            desc_c.raw,
+            modes.as_ptr(),
+            CutensorOperator::Identity,
+            desc_d.raw,
+            modes.as_ptr(),
+            CutensorReduceOp::Add,
+            compute,
+        )
+    };
+    check_status(status, "cutensorCreateElementwiseBinary")?;
+    let op_desc = OpDescWrapper {
+        raw: op_raw,
+        vtable: Arc::clone(vtable),
+    };
+    build_cutensor_plan(handle, vtable, &op_desc)
+}
+
+/// Create a cuTENSOR elementwise trinary plan (for ElementwiseUnary).
+///
+/// cuTENSOR's elementwise trinary: D = op_abc(op_ab(alpha * op_a(A), beta * op_b(B)), gamma * op_c(C))
+/// For unary case, we use A = input, B = input (identity), C = output, with appropriate operators.
+fn plan_elementwise_trinary(
+    ctx: &mut CudaContext,
+    data_type: CutensorDataType,
+    compute: cutensorComputeDescriptor_t,
+    op_a: CutensorOperator,
+    modes: &[i32],
+    shape: &[usize],
+    strides: &[isize],
+) -> Result<(PlanWrapper, u64)> {
+    let vtable = &ctx.vtable;
+    let handle = ctx.handle.raw;
+    // A, B, C, D all same shape
+    let desc_a = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
+    let desc_b = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
+    let desc_c = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
+    let desc_d = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
+
+    let mut op_raw: cutensorOperationDescriptor_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_elementwise_trinary)(
+            handle,
+            &mut op_raw,
+            desc_a.raw,
+            modes.as_ptr(),
+            op_a,
+            desc_b.raw,
+            modes.as_ptr(),
+            CutensorOperator::Identity,
+            desc_c.raw,
+            modes.as_ptr(),
+            CutensorOperator::Identity,
+            desc_d.raw,
+            modes.as_ptr(),
+            CutensorReduceOp::Add, // op_ab
+            CutensorReduceOp::Add, // op_abc
+            compute,
+        )
+    };
+    check_status(status, "cutensorCreateElementwiseTrinary")?;
+    let op_desc = OpDescWrapper {
+        raw: op_raw,
+        vtable: Arc::clone(vtable),
+    };
+    build_cutensor_plan(handle, vtable, &op_desc)
+}
+
 // ============================================================================
 // Public types
 // ============================================================================
@@ -585,19 +761,129 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
             | PrimDescriptor::AntiTrace { .. }
             | PrimDescriptor::AntiDiag { .. } => {
                 // These operations contract the input with an identity tensor.
-                // For now, use the fallback contraction path — the identity
-                // tensor will be constructed at execute time.
-                todo!(
-                    "Trace/AntiTrace/AntiDiag plan via identity contraction — not yet implemented"
-                )
+                // For Trace: C = sum_over_diag(A) via contraction with eye tensor
+                // For AntiTrace/AntiDiag: reverse operation
+                // The identity tensor must be created at execute time on GPU.
+                // For now, return an error — the einsum layer falls back to
+                // the non-extension (core) path which decomposes these into
+                // simpler operations.
+                Err(Error::DeviceError(
+                    "Trace/AntiTrace/AntiDiag not yet supported on CUDA backend".into(),
+                ))
             }
 
-            PrimDescriptor::Permute { .. }
-            | PrimDescriptor::MakeContiguous
-            | PrimDescriptor::Reduce { .. }
-            | PrimDescriptor::ElementwiseUnary { .. }
-            | PrimDescriptor::ElementwiseMul => {
-                todo!("Non-contraction plan variants — will be implemented in Task 5")
+            PrimDescriptor::Permute { modes_a, modes_b } => {
+                validate_shape_count(shapes, 2, "Permute")?;
+                let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
+                let modes_b_i32: Vec<i32> = modes_b.iter().map(|&m| m as i32).collect();
+                let strides_a = default_col_major_strides(shapes[0]);
+                let strides_b = default_col_major_strides(shapes[1]);
+                let (plan, ws) = plan_permutation(
+                    ctx,
+                    data_type,
+                    compute,
+                    &modes_a_i32,
+                    shapes[0],
+                    &strides_a,
+                    &modes_b_i32,
+                    shapes[1],
+                    &strides_b,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: desc.clone(),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::MakeContiguous => {
+                // Identity permutation: modes_a == modes_b = [0, 1, ..., ndim-1]
+                validate_shape_count(shapes, 2, "MakeContiguous")?;
+                let ndim = shapes[0].len();
+                let modes: Vec<i32> = (0..ndim as i32).collect();
+                let strides_a = default_col_major_strides(shapes[0]);
+                let strides_b = default_col_major_strides(shapes[1]);
+                let (plan, ws) = plan_permutation(
+                    ctx, data_type, compute, &modes, shapes[0], &strides_a, &modes, shapes[1],
+                    &strides_b,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: desc.clone(),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Reduce {
+                modes_a,
+                modes_c,
+                op,
+            } => {
+                validate_shape_count(shapes, 2, "Reduce")?;
+                let reduce_op = match op {
+                    ReduceOp::Sum => CutensorReduceOp::Add,
+                    ReduceOp::Max => CutensorReduceOp::Max,
+                    ReduceOp::Min => CutensorReduceOp::Min,
+                };
+                let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
+                let modes_c_i32: Vec<i32> = modes_c.iter().map(|&m| m as i32).collect();
+                let strides_a = default_col_major_strides(shapes[0]);
+                let strides_c = default_col_major_strides(shapes[1]);
+                let (plan, ws) = plan_reduction(
+                    ctx,
+                    data_type,
+                    compute,
+                    &modes_a_i32,
+                    shapes[0],
+                    &strides_a,
+                    &modes_c_i32,
+                    shapes[1],
+                    &strides_c,
+                    reduce_op,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: desc.clone(),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::ElementwiseUnary { op } => {
+                validate_shape_count(shapes, 2, "ElementwiseUnary")?;
+                let op_a = match op {
+                    UnaryOp::Conj => CutensorOperator::Conj,
+                    _ => CutensorOperator::Identity,
+                };
+                let ndim = shapes[0].len();
+                let modes: Vec<i32> = (0..ndim as i32).collect();
+                let strides = default_col_major_strides(shapes[0]);
+                let (plan, ws) = plan_elementwise_trinary(
+                    ctx, data_type, compute, op_a, &modes, shapes[0], &strides,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: desc.clone(),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::ElementwiseMul => {
+                validate_shape_count(shapes, 3, "ElementwiseMul")?;
+                let ndim = shapes[0].len();
+                let modes: Vec<i32> = (0..ndim as i32).collect();
+                let strides = default_col_major_strides(shapes[0]);
+                let (plan, ws) =
+                    plan_elementwise_binary(ctx, data_type, compute, &modes, shapes[0], &strides)?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: desc.clone(),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
             }
         }
     }
