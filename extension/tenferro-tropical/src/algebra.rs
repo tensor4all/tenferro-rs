@@ -89,7 +89,12 @@ impl HasAlgebra for MaxMul<f64> {
 }
 
 // ---------------------------------------------------------------------------
-// Semiring implementations (f64 only for POC)
+// Semiring implementations
+//
+// The Semiring trait uses an associated type `type Scalar`, so each algebra
+// marker can only be associated with one scalar type. We use f64 as the
+// canonical Semiring scalar. f32 is fully supported at the TensorPrims level
+// (plan/execute) — only the Semiring constants are f64.
 // ---------------------------------------------------------------------------
 
 /// Max-plus semiring over `MaxPlus<f64>`.

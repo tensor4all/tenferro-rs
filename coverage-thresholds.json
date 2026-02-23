@@ -10,7 +10,7 @@
     "extension/tenferro-tropical-capi/src/lib.rs"
   ],
   "files": {
-    "extension/tenferro-tropical/src/prims.rs": 55,
+    "extension/tenferro-tropical/src/prims.rs": 80,
     "tenferro-capi/src/lib.rs": 65,
     "tenferro-einsum/src/lib.rs": 65,
     "tenferro-linalg/src/lib.rs": 30,
