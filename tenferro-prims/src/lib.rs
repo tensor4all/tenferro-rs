@@ -1350,11 +1350,27 @@ fn execute_elementwise_unary<T: ScalarBase>(
 ) -> Result<()> {
     match op {
         UnaryOp::Conj => {
-            // Conj through ScalarBase is identity (no imaginary part accessible).
-            // For complex types dispatched via Standard<Complex64>, the impl
-            // also passes through here — but ScalarBase-level Conj is always
-            // identity. True complex conjugation is handled by resolve_conj().
-            execute_make_contiguous(alpha, input, beta, output)
+            let tid = TypeId::of::<T>();
+            if tid == TypeId::of::<f64>() || tid == TypeId::of::<f32>() {
+                // Real types: conjugation is identity
+                execute_make_contiguous(alpha, input, beta, output)
+            } else if tid == TypeId::of::<Complex64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex64) };
+                    let r = x.conj();
+                    unsafe { *(&r as *const Complex64 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex32) };
+                    let r = x.conj();
+                    unsafe { *(&r as *const Complex32 as *const T) }
+                })
+            } else {
+                Err(Error::InvalidArgument(format!(
+                    "Conj not supported for this scalar type"
+                )))
+            }
         }
         UnaryOp::Negate => {
             let tid = TypeId::of::<T>();

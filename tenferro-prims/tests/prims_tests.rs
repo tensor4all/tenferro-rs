@@ -734,6 +734,74 @@ fn elementwise_unary_conj_identity() {
 }
 
 // ============================================================================
+// ElementwiseUnary -- Conj for complex types
+// ============================================================================
+
+#[test]
+fn elementwise_unary_conj_complex64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex64::new(idx[0] as f64 + 1.0, idx[0] as f64 + 2.0)
+    });
+    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = Complex64::new(i as f64 + 1.0, -(i as f64 + 2.0));
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_conj_complex32() {
+    use num_complex::Complex32;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex32::new(idx[0] as f32 + 1.0, idx[0] as f32 + 2.0)
+    });
+    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex32::new(1.0, 0.0),
+        &[&a.view()],
+        Complex32::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = Complex32::new(i as f32 + 1.0, -(i as f32 + 2.0));
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
 // ElementwiseUnary -- Negate
 // ============================================================================
 
