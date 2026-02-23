@@ -15,7 +15,6 @@
 //! let (backend, mut ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
 //! ```
 
-use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 use std::sync::Arc;
@@ -174,6 +173,115 @@ impl CutensorType for Complex64 {
 }
 
 // ============================================================================
+// Helper functions
+// ============================================================================
+
+/// Compute default column-major strides for a given shape.
+fn default_col_major_strides(shape: &[usize]) -> Vec<isize> {
+    let n = shape.len();
+    if n == 0 {
+        return vec![];
+    }
+    let mut strides = vec![0isize; n];
+    strides[0] = 1;
+    for i in 1..n {
+        strides[i] = strides[i - 1] * shape[i - 1] as isize;
+    }
+    strides
+}
+
+/// Create a cuTENSOR tensor descriptor from shape and strides.
+fn create_tensor_desc(
+    handle: cutensorHandle_t,
+    vtable: &Arc<CutensorVtable>,
+    shape: &[usize],
+    strides: &[isize],
+    data_type: CutensorDataType,
+) -> Result<TensorDescWrapper> {
+    let num_modes = shape.len() as u32;
+    let extent: Vec<i64> = shape.iter().map(|&d| d as i64).collect();
+    let stride: Vec<i64> = strides.iter().map(|&s| s as i64).collect();
+    let mut raw: cutensorTensorDescriptor_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_tensor_descriptor)(
+            handle,
+            &mut raw,
+            num_modes,
+            extent.as_ptr(),
+            stride.as_ptr(),
+            data_type,
+            128, // alignment requirement
+        )
+    };
+    check_status(status, "cutensorCreateTensorDescriptor")?;
+    Ok(TensorDescWrapper {
+        raw,
+        vtable: Arc::clone(vtable),
+    })
+}
+
+/// Create a cuTENSOR plan (shared logic for all operation types).
+///
+/// Takes an already-created operation descriptor, creates plan preference,
+/// estimates workspace, and builds the plan.
+fn build_cutensor_plan(
+    handle: cutensorHandle_t,
+    vtable: &Arc<CutensorVtable>,
+    op_desc: &OpDescWrapper,
+) -> Result<(PlanWrapper, u64)> {
+    // Create plan preference
+    let mut pref_raw: cutensorPlanPreference_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_plan_preference)(
+            handle,
+            &mut pref_raw,
+            CutensorAlgo::Default,
+            CutensorJitMode::None,
+        )
+    };
+    check_status(status, "cutensorCreatePlanPreference")?;
+    let _pref = PlanPrefWrapper {
+        raw: pref_raw,
+        vtable: Arc::clone(vtable),
+    };
+
+    // Estimate workspace
+    let mut workspace_size: u64 = 0;
+    let status = unsafe {
+        (vtable.estimate_workspace_size)(
+            handle,
+            op_desc.raw,
+            _pref.raw,
+            CutensorWorksizePref::Recommended,
+            &mut workspace_size,
+        )
+    };
+    check_status(status, "cutensorEstimateWorkspaceSize")?;
+
+    // Create plan
+    let mut plan_raw: cutensorPlan_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_plan)(
+            handle,
+            &mut plan_raw,
+            op_desc.raw,
+            _pref.raw,
+            workspace_size,
+        )
+    };
+    check_status(status, "cutensorCreatePlan")?;
+
+    Ok((
+        PlanWrapper {
+            raw: plan_raw,
+            vtable: Arc::clone(vtable),
+        },
+        workspace_size,
+    ))
+    // _pref RAII wrapper drops here, freeing cuTENSOR plan preference
+}
+
+// ============================================================================
 // Public types
 // ============================================================================
 
@@ -241,6 +349,10 @@ pub struct CudaBackend {
 impl CudaBackend {
     /// Load cuTENSOR library and initialize CUDA context.
     ///
+    /// Opens the cuTENSOR shared library at `path` via `libloading`, populates
+    /// the function-pointer vtable, creates a cuTENSOR handle, and initializes
+    /// a CUDA device and stream via cudarc.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -248,8 +360,39 @@ impl CudaBackend {
     ///
     /// let (backend, ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
     /// ```
-    pub fn load(_path: &str) -> Result<(Self, CudaContext)> {
-        todo!("CudaBackend::load — cuTENSOR runtime loading not yet implemented")
+    pub fn load(path: &str) -> Result<(Self, CudaContext)> {
+        // 1. Open shared library
+        let lib = unsafe { libloading::Library::new(path) }
+            .map_err(|e| Error::DeviceError(format!("Failed to load cuTENSOR: {e}")))?;
+
+        // 2. Populate vtable
+        let vtable = unsafe { CutensorVtable::load(&lib) }
+            .map_err(|e| Error::DeviceError(format!("Failed to load cuTENSOR symbols: {e}")))?;
+        let vtable = Arc::new(vtable);
+
+        // 3. Initialize cuTENSOR handle
+        let mut handle_raw: cutensorHandle_t = ptr::null_mut();
+        let status = unsafe { (vtable.create)(&mut handle_raw) };
+        check_status(status, "cutensorCreate")?;
+        let handle = HandleWrapper {
+            raw: handle_raw,
+            vtable: Arc::clone(&vtable),
+        };
+
+        // 4. Initialize CUDA device and stream via cudarc
+        let cuda_ctx = cudarc::driver::CudaContext::new(0)
+            .map_err(|e| Error::DeviceError(format!("CUDA device init failed: {e:?}")))?;
+        let stream = cuda_ctx.default_stream();
+
+        let ctx = CudaContext {
+            handle,
+            stream,
+            vtable: Arc::clone(&vtable),
+            workspace: Vec::new(),
+            plan_cache: PlanCache::new(),
+        };
+
+        Ok((CudaBackend { _lib: lib }, ctx))
     }
 
     /// Materialize a lazily-conjugated tensor on GPU.
