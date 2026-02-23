@@ -659,6 +659,13 @@ pub struct Tensor<T: Scalar> {
     /// natively via `CUTENSOR_OP_CONJ` / `HIPTENSOR_OP_CONJ` in tensor
     /// descriptors. CPU backends apply conjugation during execution.
     conjugated: bool,
+    /// Forward-mode tangent (libtorch-aligned).
+    ///
+    /// When `Some`, this tensor carries a forward-mode gradient used for
+    /// JVP (Jacobian-vector product) propagation. Operations that support
+    /// forward-mode AD detect this field and propagate tangents automatically.
+    /// Single-level only (no nested forward AD).
+    fw_grad: Option<Box<Tensor<T>>>,
 }
 
 /// Synchronization event for asynchronous accelerator operations.
@@ -728,6 +735,7 @@ impl<T: Scalar> Clone for Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: self.event.clone(),
             conjugated: self.conjugated,
+            fw_grad: self.fw_grad.clone(),
         }
     }
 }
@@ -773,6 +781,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: None,
             event: None,
             conjugated: false,
+            fw_grad: None,
         }
     }
 
@@ -809,6 +818,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: None,
             event: None,
             conjugated: false,
+            fw_grad: None,
         }
     }
 
@@ -849,6 +859,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: None,
             event: None,
             conjugated: false,
+            fw_grad: None,
         })
     }
 
@@ -917,6 +928,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: None,
             event: None,
             conjugated: false,
+            fw_grad: None,
         })
     }
 
@@ -957,6 +969,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: None,
             event: None,
             conjugated: false,
+            fw_grad: None,
         }
     }
 
@@ -1120,6 +1133,70 @@ impl<T: Scalar> Tensor<T> {
         self.conjugated
     }
 
+    /// Returns a reference to the forward-mode tangent, if set.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// assert!(t.fw_grad().is_none());
+    /// ```
+    pub fn fw_grad(&self) -> Option<&Tensor<T>> {
+        self.fw_grad.as_deref()
+    }
+
+    /// Returns `true` if this tensor carries a forward-mode tangent.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// assert!(!t.has_fw_grad());
+    /// ```
+    pub fn has_fw_grad(&self) -> bool {
+        self.fw_grad.is_some()
+    }
+
+    /// Attach a forward-mode tangent to this tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let grad = Tensor::<f64>::ones(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// t.set_fw_grad(grad);
+    /// assert!(t.has_fw_grad());
+    /// ```
+    pub fn set_fw_grad(&mut self, grad: Tensor<T>) {
+        self.fw_grad = Some(Box::new(grad));
+    }
+
+    /// Detach and return the forward-mode tangent, leaving `None`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{Tensor, MemoryOrder};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// t.set_fw_grad(Tensor::<f64>::ones(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
+    /// let grad = t.detach_fw_grad().unwrap();
+    /// assert!(!t.has_fw_grad());
+    /// ```
+    pub fn detach_fw_grad(&mut self) -> Option<Tensor<T>> {
+        self.fw_grad.take().map(|b| *b)
+    }
+
     /// Return the effective compute devices for a given operation kind.
     ///
     /// If a preferred compute device is set, returns a single-element vector
@@ -1207,6 +1284,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         })
     }
 
@@ -1261,6 +1339,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         })
     }
 
@@ -1340,6 +1419,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         })
     }
 
@@ -1393,6 +1473,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         })
     }
 
@@ -1446,6 +1527,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         })
     }
 
@@ -1499,6 +1581,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         })
     }
 
@@ -1549,6 +1632,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         }
     }
 
@@ -1655,6 +1739,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: self.event.clone(),
             conjugated: !self.conjugated,
+            fw_grad: None,
         }
     }
 
@@ -1685,6 +1770,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: self.event,
             conjugated: !self.conjugated,
+            fw_grad: None,
         }
     }
 
@@ -1770,6 +1856,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         }
     }
 
@@ -1855,6 +1942,7 @@ impl<T: Scalar> Tensor<T> {
             preferred_compute_device: self.preferred_compute_device,
             event: None,
             conjugated: self.conjugated,
+            fw_grad: None,
         }
     }
 
@@ -2020,6 +2108,7 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
             preferred_compute_device: a.preferred_compute_device,
             event: None,
             conjugated: false,
+            fw_grad: None,
         }
     }
 }
