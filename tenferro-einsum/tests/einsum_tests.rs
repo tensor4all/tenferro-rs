@@ -847,6 +847,25 @@ fn tracked_einsum_matmul_pullback() {
     }
 }
 
+#[test]
+fn tracked_einsum_rejects_mixed_tapes() {
+    use chainrules::Tape;
+
+    let mut ctx = CpuContext::new(1);
+
+    let tape1 = Tape::<Tensor<f64>>::new();
+    let tape2 = Tape::<Tensor<f64>>::new();
+
+    let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let a = tape1.leaf(a_data);
+    let b = tape2.leaf(b_data);
+
+    let result = tracked_einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b]);
+    assert!(result.is_err(), "expected error for mixed-tape operands");
+}
+
 // ============================================================================
 // Typed test scaffolding: trait and macro for multi-scalar einsum tests
 // ============================================================================

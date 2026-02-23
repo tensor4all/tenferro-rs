@@ -1674,6 +1674,17 @@ where
         .ok_or(chainrules::AutodiffError::MissingNode)?
         .clone();
 
+    // Reject mixed-tape operands: all grad-tracked tensors must share the same tape
+    for op in operands.iter().filter(|op| op.requires_grad()) {
+        if let Some(op_tape) = op.tape() {
+            if !tape.same_tape(op_tape) {
+                return Err(chainrules::AutodiffError::InvalidArgument(
+                    "tracked_einsum: operands belong to different AD tapes".into(),
+                ));
+            }
+        }
+    }
+
     let rule = EinsumReverseRule {
         subscripts: subs,
         primals: primals.iter().map(|&t| t.clone()).collect(),
