@@ -10,6 +10,7 @@
 | [einsum.md](./einsum.md) | Einsum public API (9 functions), N-ary contraction tree, algebra dispatch |
 | [contraction-pipeline.md](./contraction-pipeline.md) | Binary contraction pipeline, copy elision, `MakeContiguous`, HPTT experiments |
 | [tensor.md](./tensor.md) | `Tensor<T>`, `TensorView`, ownership model, async `CompletionEvent` |
+| [inplace-indexing.md](./inplace-indexing.md) | Design for partial in-place updates (`set_item_`, `IndexPut` extension, AD safety policy) |
 | [algebra.md](./algebra.md) | `HasAlgebra`, `Semiring`, tropical and user-defined algebra extensibility |
 | [autodiff.md](./autodiff.md) | `chainrules-core`/`chainrules` AD architecture, linalg AD rules, SVD rrule |
 | [linalg.md](./linalg.md) | `tenferro-linalg` decompositions, solvers, utilities, stateless AD rules |

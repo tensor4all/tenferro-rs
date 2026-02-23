@@ -11,6 +11,7 @@ This is the top-level architecture document for tenferro-rs. It covers:
 
 Per-crate API details are in companion documents:
 [tensor-prims](./tensor-prims.md),
+[inplace-indexing](./inplace-indexing.md),
 [einsum](./einsum.md),
 [tensor](./tensor.md),
 [algebra](./algebra.md),
