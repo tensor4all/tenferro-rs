@@ -64,7 +64,7 @@ fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_,
 ///     modes_c: vec![0],
 ///     op: ReduceOp::Sum,
 /// };
-/// let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra>>::plan::<f64>(
+/// let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan::<f64>(
 ///     &mut ctx, &desc, &[&[3, 4], &[3]],
 /// ).unwrap();
 /// ```
@@ -1224,259 +1224,87 @@ macro_rules! try_simd_dispatch {
     };
 }
 
-/// Execute tropical operations with SIMD-optimized GEMM for MaxPlus<f64/f32>.
-fn tropical_execute_maxplus<T: Scalar>(
-    plan: &TropicalPlan<T>,
-    alpha: T,
-    inputs: &[&StridedView<T>],
-    beta: T,
-    output: &mut StridedViewMut<T>,
-) -> Result<()> {
-    if let TropicalPlan::BatchedGemm {
-        batch_dims,
-        m,
-        n,
-        k,
-        ..
-    } = plan
-    {
-        if inputs.len() != 2 {
-            return Err(Error::InvalidArgument(
-                "BatchedGemm execute requires 2 input tensors".into(),
-            ));
+/// Generates `TensorPrims<$marker<S>>` impl for `CpuBackend` with SIMD dispatch.
+///
+/// The macro inlines SIMD dispatch for f64 and f32 variants of the given
+/// tropical scalar wrapper, then falls back to the generic `tropical_execute`.
+macro_rules! impl_tropical_prims {
+    ($marker:ident, $wrapper:ident) => {
+        impl<S: Scalar> TensorPrims<$marker<S>> for CpuBackend {
+            type Plan<T: Scalar> = TropicalPlan<T>;
+            type Context = CpuContext;
+
+            fn plan<T: Scalar>(
+                _ctx: &mut CpuContext,
+                desc: &PrimDescriptor,
+                shapes: &[&[usize]],
+            ) -> Result<TropicalPlan<T>> {
+                tropical_plan(desc, shapes)
+            }
+
+            fn execute<T: Scalar>(
+                _ctx: &mut CpuContext,
+                plan: &TropicalPlan<T>,
+                alpha: T,
+                inputs: &[&Tensor<T>],
+                beta: T,
+                output: &mut Tensor<T>,
+            ) -> Result<()> {
+                let views: Vec<StridedView<T>> = inputs
+                    .iter()
+                    .map(|t| tensor_to_view(t))
+                    .collect::<Result<Vec<_>>>()?;
+                let view_refs: Vec<&StridedView<T>> = views.iter().collect();
+                let mut out_view = tensor_to_view_mut(output)?;
+
+                if let TropicalPlan::BatchedGemm {
+                    batch_dims,
+                    m,
+                    n,
+                    k,
+                    ..
+                } = plan
+                {
+                    if views.len() != 2 {
+                        return Err(Error::InvalidArgument(
+                            "BatchedGemm execute requires 2 input tensors".into(),
+                        ));
+                    }
+                    try_simd_dispatch!(
+                        T,
+                        $wrapper<f64>,
+                        &view_refs,
+                        alpha,
+                        beta,
+                        &mut out_view,
+                        batch_dims,
+                        *m,
+                        *n,
+                        *k
+                    );
+                    try_simd_dispatch!(
+                        T,
+                        $wrapper<f32>,
+                        &view_refs,
+                        alpha,
+                        beta,
+                        &mut out_view,
+                        batch_dims,
+                        *m,
+                        *n,
+                        *k
+                    );
+                }
+                tropical_execute(plan, alpha, &view_refs, beta, &mut out_view)
+            }
+
+            fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
+                false
+            }
         }
-        try_simd_dispatch!(
-            T,
-            MaxPlus<f64>,
-            inputs,
-            alpha,
-            beta,
-            output,
-            batch_dims,
-            *m,
-            *n,
-            *k
-        );
-        try_simd_dispatch!(
-            T,
-            MaxPlus<f32>,
-            inputs,
-            alpha,
-            beta,
-            output,
-            batch_dims,
-            *m,
-            *n,
-            *k
-        );
-    }
-    tropical_execute(plan, alpha, inputs, beta, output)
+    };
 }
 
-/// Execute tropical operations with SIMD-optimized GEMM for MinPlus<f64/f32>.
-fn tropical_execute_minplus<T: Scalar>(
-    plan: &TropicalPlan<T>,
-    alpha: T,
-    inputs: &[&StridedView<T>],
-    beta: T,
-    output: &mut StridedViewMut<T>,
-) -> Result<()> {
-    if let TropicalPlan::BatchedGemm {
-        batch_dims,
-        m,
-        n,
-        k,
-        ..
-    } = plan
-    {
-        if inputs.len() != 2 {
-            return Err(Error::InvalidArgument(
-                "BatchedGemm execute requires 2 input tensors".into(),
-            ));
-        }
-        try_simd_dispatch!(
-            T,
-            MinPlus<f64>,
-            inputs,
-            alpha,
-            beta,
-            output,
-            batch_dims,
-            *m,
-            *n,
-            *k
-        );
-        try_simd_dispatch!(
-            T,
-            MinPlus<f32>,
-            inputs,
-            alpha,
-            beta,
-            output,
-            batch_dims,
-            *m,
-            *n,
-            *k
-        );
-    }
-    tropical_execute(plan, alpha, inputs, beta, output)
-}
-
-/// Execute tropical operations with SIMD-optimized GEMM for MaxMul<f64/f32>.
-fn tropical_execute_maxmul<T: Scalar>(
-    plan: &TropicalPlan<T>,
-    alpha: T,
-    inputs: &[&StridedView<T>],
-    beta: T,
-    output: &mut StridedViewMut<T>,
-) -> Result<()> {
-    if let TropicalPlan::BatchedGemm {
-        batch_dims,
-        m,
-        n,
-        k,
-        ..
-    } = plan
-    {
-        if inputs.len() != 2 {
-            return Err(Error::InvalidArgument(
-                "BatchedGemm execute requires 2 input tensors".into(),
-            ));
-        }
-        try_simd_dispatch!(
-            T,
-            MaxMul<f64>,
-            inputs,
-            alpha,
-            beta,
-            output,
-            batch_dims,
-            *m,
-            *n,
-            *k
-        );
-        try_simd_dispatch!(
-            T,
-            MaxMul<f32>,
-            inputs,
-            alpha,
-            beta,
-            output,
-            batch_dims,
-            *m,
-            *n,
-            *k
-        );
-    }
-    tropical_execute(plan, alpha, inputs, beta, output)
-}
-
-impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
-    type Plan<T: Scalar> = TropicalPlan<T>;
-    type Context = CpuContext;
-
-    fn plan<T: Scalar>(
-        _ctx: &mut CpuContext,
-        desc: &PrimDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<TropicalPlan<T>> {
-        tropical_plan(desc, shapes)
-    }
-
-    fn execute<T: Scalar>(
-        _ctx: &mut CpuContext,
-        plan: &TropicalPlan<T>,
-        alpha: T,
-        inputs: &[&Tensor<T>],
-        beta: T,
-        output: &mut Tensor<T>,
-    ) -> Result<()> {
-        let views: Vec<StridedView<T>> = inputs
-            .iter()
-            .map(|t| tensor_to_view(t))
-            .collect::<Result<Vec<_>>>()?;
-        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
-        let mut out_view = tensor_to_view_mut(output)?;
-        tropical_execute_maxplus(plan, alpha, &view_refs, beta, &mut out_view)
-    }
-
-    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
-        false
-    }
-}
-
-// ===========================================================================
-// impl TensorPrims<MinPlusAlgebra> for CpuBackend
-// ===========================================================================
-
-impl TensorPrims<MinPlusAlgebra> for CpuBackend {
-    type Plan<T: Scalar> = TropicalPlan<T>;
-    type Context = CpuContext;
-
-    fn plan<T: Scalar>(
-        _ctx: &mut CpuContext,
-        desc: &PrimDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<TropicalPlan<T>> {
-        tropical_plan(desc, shapes)
-    }
-
-    fn execute<T: Scalar>(
-        _ctx: &mut CpuContext,
-        plan: &TropicalPlan<T>,
-        alpha: T,
-        inputs: &[&Tensor<T>],
-        beta: T,
-        output: &mut Tensor<T>,
-    ) -> Result<()> {
-        let views: Vec<StridedView<T>> = inputs
-            .iter()
-            .map(|t| tensor_to_view(t))
-            .collect::<Result<Vec<_>>>()?;
-        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
-        let mut out_view = tensor_to_view_mut(output)?;
-        tropical_execute_minplus(plan, alpha, &view_refs, beta, &mut out_view)
-    }
-
-    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
-        false
-    }
-}
-
-// ===========================================================================
-// impl TensorPrims<MaxMulAlgebra> for CpuBackend
-// ===========================================================================
-
-impl TensorPrims<MaxMulAlgebra> for CpuBackend {
-    type Plan<T: Scalar> = TropicalPlan<T>;
-    type Context = CpuContext;
-
-    fn plan<T: Scalar>(
-        _ctx: &mut CpuContext,
-        desc: &PrimDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<TropicalPlan<T>> {
-        tropical_plan(desc, shapes)
-    }
-
-    fn execute<T: Scalar>(
-        _ctx: &mut CpuContext,
-        plan: &TropicalPlan<T>,
-        alpha: T,
-        inputs: &[&Tensor<T>],
-        beta: T,
-        output: &mut Tensor<T>,
-    ) -> Result<()> {
-        let views: Vec<StridedView<T>> = inputs
-            .iter()
-            .map(|t| tensor_to_view(t))
-            .collect::<Result<Vec<_>>>()?;
-        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
-        let mut out_view = tensor_to_view_mut(output)?;
-        tropical_execute_maxmul(plan, alpha, &view_refs, beta, &mut out_view)
-    }
-
-    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
-        false
-    }
-}
+impl_tropical_prims!(MaxPlusAlgebra, MaxPlus);
+impl_tropical_prims!(MinPlusAlgebra, MinPlus);
+impl_tropical_prims!(MaxMulAlgebra, MaxMul);
