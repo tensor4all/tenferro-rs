@@ -1657,7 +1657,7 @@ fn einsum_error_non_square_trace() {
 }
 
 // ============================================================================
-// Forward-mode tangent auto-propagation
+// Forward-mode tangent auto-propagation and HVP
 // ============================================================================
 
 #[test]
@@ -1708,4 +1708,130 @@ fn einsum_no_fw_grad_unchanged() {
         !c.has_fw_grad(),
         "output should NOT carry fw_grad when inputs have none"
     );
+}
+
+/// HVP via jvp(grad(f)) composition.
+///
+/// f(A) = sum(A @ B) = einsum("ij,jk->ik", A, B) then einsum("ij->", C)
+/// grad_A = ones_{ik} @ B^T_{kj} = einsum("ik,jk->ij", ones, B)
+/// HVP in direction dA: d(grad_A)/dt = einsum("ik,jk->ij", zeros, B) = 0
+///   (loss cotangent ones has no tangent, B has no tangent)
+///
+/// But the forward pass C = A@B, dC = dA@B, and loss = sum(C), dloss = sum(dC).
+/// The pullback sees cotangent = ones (no fw_grad) and primals [A, B] where A has fw_grad.
+/// Reverse einsum for grad_A: einsum("ik,jk->ij", cot, B). Neither cot nor B has fw_grad.
+/// So grad_A should NOT have fw_grad. This is correct: the HVP of a linear function is 0.
+///
+/// For a more interesting case, use loss = sum(C^2) where C = A @ B:
+/// grad_A = 2*C @ B^T, and d(grad_A)/dt = 2*(dA@B)@B^T
+#[test]
+fn hvp_via_fw_grad_composition() {
+    use chainrules::Tape;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+
+    // A = [[1, 3], [2, 4]] (col-major), B = [[5, 7], [6, 8]] (col-major)
+    let mut a_data =
+        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b_data =
+        Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    // Tangent direction: dA = ones
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    a_data.set_fw_grad(da);
+
+    let tape = Tape::<Tensor<f64>>::new();
+    let a = tape.leaf(a_data.clone());
+    let b = tape.leaf(b_data.clone());
+    let a_id = a.node_id().unwrap();
+
+    // loss = sum_{ij} C_{ij}^2 where C = A @ B
+    let c =
+        tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss =
+        tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
+
+    let grads = tape.pullback(&loss).unwrap();
+    let ga = grads.get(a_id).unwrap();
+
+    // grad_A should match 2*C @ B^T
+    let c_val = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ij,jk->ik",
+        &[&a_data, &b_data],
+        None,
+    )
+    .unwrap();
+    let two = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+    let two_c = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ij,->ij",
+        &[&c_val, &two],
+        None,
+    )
+    .unwrap();
+    let expected_ga = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ik,jk->ij",
+        &[&two_c, &b_data],
+        None,
+    )
+    .unwrap();
+
+    // Verify grad_A primal
+    let ga_data = ga.buffer().as_slice().unwrap();
+    let exp_data = expected_ga.buffer().as_slice().unwrap();
+    for i in 0..4 {
+        assert!(
+            (ga_data[i] - exp_data[i]).abs() < 1e-10,
+            "grad_A[{i}] = {}, expected {}",
+            ga_data[i],
+            exp_data[i]
+        );
+    }
+
+    // HVP: d(grad_A)/dt = 2*(dA@B)@B^T where dA = ones
+    // dA@B = ones @ B = einsum("ij,jk->ik", ones, B)
+    let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da_b = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ij,jk->ik",
+        &[&ones, &b_data],
+        None,
+    )
+    .unwrap();
+    // 2*(dA@B)@B^T = einsum("ik,jk->ij", 2*dA_B, B)
+    let two_da_b = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ij,->ij",
+        &[&da_b, &two],
+        None,
+    )
+    .unwrap();
+    let expected_hvp = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ik,jk->ij",
+        &[&two_da_b, &b_data],
+        None,
+    )
+    .unwrap();
+
+    // grad_A should carry fw_grad = HVP
+    assert!(
+        ga.has_fw_grad(),
+        "gradient should carry fw_grad for HVP"
+    );
+    let hvp = ga.fw_grad().unwrap();
+    let hvp_data = hvp.buffer().as_slice().unwrap();
+    let exp_hvp_data = expected_hvp.buffer().as_slice().unwrap();
+    for i in 0..4 {
+        assert!(
+            (hvp_data[i] - exp_hvp_data[i]).abs() < 1e-10,
+            "hvp[{i}] = {}, expected {}",
+            hvp_data[i],
+            exp_hvp_data[i]
+        );
+    }
 }
