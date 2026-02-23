@@ -733,24 +733,528 @@ fn elementwise_unary_conj_identity() {
     }
 }
 
+// ============================================================================
+// ElementwiseUnary -- Negate
+// ============================================================================
+
 #[test]
-fn elementwise_unary_negate_returns_error() {
+fn elementwise_unary_negate_f64() {
     let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[4], |idx| idx[0] as f64 + 1.0);
+    let mut c = StridedArray::<f64>::col_major(&[4]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Negate,
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+
+    for i in 0..4 {
+        let expected = -(i as f64 + 1.0);
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
+// ElementwiseUnary -- Reciprocal
+// ============================================================================
+
+#[test]
+fn elementwise_unary_reciprocal_f64() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[4], |idx| idx[0] as f64 + 1.0);
+    let mut c = StridedArray::<f64>::col_major(&[4]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Reciprocal,
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+
+    for i in 0..4 {
+        let expected = 1.0 / (i as f64 + 1.0);
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
+// ElementwiseUnary -- Abs
+// ============================================================================
+
+#[test]
+fn elementwise_unary_abs_f64() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[4], |idx| -(idx[0] as f64 + 1.0));
+    let mut c = StridedArray::<f64>::col_major(&[4]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+
+    for i in 0..4 {
+        let expected = (i as f64 + 1.0).abs();
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
+// ElementwiseUnary -- Sqrt
+// ============================================================================
+
+#[test]
+fn elementwise_unary_sqrt_f64() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[4], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f64);
+    let mut c = StridedArray::<f64>::col_major(&[4]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+
+    for i in 0..4 {
+        let expected = i as f64 + 1.0;
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
+// ElementwiseUnary -- Complex64 tests
+// ============================================================================
+
+#[test]
+fn elementwise_unary_negate_complex64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex64::new(idx[0] as f64 + 1.0, idx[0] as f64 + 2.0)
+    });
+    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Negate,
+    };
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = -Complex64::new(i as f64 + 1.0, i as f64 + 2.0);
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_reciprocal_complex64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex64::new(idx[0] as f64 + 1.0, idx[0] as f64 + 2.0)
+    });
+    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Reciprocal,
+    };
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let z = Complex64::new(i as f64 + 1.0, i as f64 + 2.0);
+        let expected = Complex64::new(1.0, 0.0) / z;
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_abs_complex64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex64::new(3.0 * (idx[0] as f64 + 1.0), 4.0 * (idx[0] as f64 + 1.0))
+    });
+    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        // |3k + 4ki| = 5k, returned as Complex64 with zero imaginary part
+        let expected = Complex64::new(5.0 * (i as f64 + 1.0), 0.0);
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_sqrt_complex64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    // Use perfect squares: sqrt(z^2) = z for z with positive real part
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        let z = Complex64::new(idx[0] as f64 + 1.0, 0.0);
+        z * z // perfect square
+    });
+    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = Complex64::new(i as f64 + 1.0, 0.0);
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
+// ElementwiseUnary -- alpha/beta support
+// ============================================================================
+
+#[test]
+fn elementwise_unary_negate_with_alpha_beta() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| idx[0] as f64 + 1.0);
+    let mut c = StridedArray::from_fn_col_major(&[3], |_| 10.0_f64);
+
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Negate,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
-    let a = StridedArray::<f64>::col_major(&[3]);
-    let mut c = StridedArray::<f64>::col_major(&[3]);
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
-    match result {
-        Err(tenferro_device::Error::InvalidArgument(msg)) => {
-            assert!(
-                msg.contains("Negate"),
-                "error should mention Negate, got: {msg}"
-            );
-        }
-        other => panic!("expected InvalidArgument about Negate, got: {other:?}"),
+    // C = 2 * (-A) + 3 * C = 2 * (-(i+1)) + 3 * 10
+    cpu_execute(&mut ctx, &plan, 2.0, &[&a.view()], 3.0, &mut c.view_mut()).unwrap();
+
+    for i in 0..3 {
+        let expected = 2.0 * (-(i as f64 + 1.0)) + 3.0 * 10.0;
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
+// ElementwiseUnary -- f32 tests
+// ============================================================================
+
+#[test]
+fn elementwise_unary_negate_f32() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| idx[0] as f32 + 1.0);
+    let mut c = StridedArray::<f32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Negate,
+    };
+    let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        1.0_f32,
+        &[&a.view()],
+        0.0_f32,
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = -(i as f32 + 1.0);
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_reciprocal_f32() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| idx[0] as f32 + 1.0);
+    let mut c = StridedArray::<f32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Reciprocal,
+    };
+    let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        1.0_f32,
+        &[&a.view()],
+        0.0_f32,
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = 1.0_f32 / (i as f32 + 1.0);
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_abs_f32() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| -(idx[0] as f32 + 1.0));
+    let mut c = StridedArray::<f32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+    let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        1.0_f32,
+        &[&a.view()],
+        0.0_f32,
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = i as f32 + 1.0;
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_sqrt_f32() {
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f32);
+    let mut c = StridedArray::<f32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+    let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        1.0_f32,
+        &[&a.view()],
+        0.0_f32,
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = i as f32 + 1.0;
+        assert!(
+            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
+// ElementwiseUnary -- Complex32 tests
+// ============================================================================
+
+#[test]
+fn elementwise_unary_negate_complex32() {
+    use num_complex::Complex32;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex32::new(idx[0] as f32 + 1.0, idx[0] as f32 + 2.0)
+    });
+    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Negate,
+    };
+    let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex32::new(1.0, 0.0),
+        &[&a.view()],
+        Complex32::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = -Complex32::new(i as f32 + 1.0, i as f32 + 2.0);
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_reciprocal_complex32() {
+    use num_complex::Complex32;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex32::new(idx[0] as f32 + 1.0, idx[0] as f32 + 2.0)
+    });
+    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary {
+        op: UnaryOp::Reciprocal,
+    };
+    let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex32::new(1.0, 0.0),
+        &[&a.view()],
+        Complex32::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let z = Complex32::new(i as f32 + 1.0, i as f32 + 2.0);
+        let expected = Complex32::new(1.0, 0.0) / z;
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_abs_complex32() {
+    use num_complex::Complex32;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex32::new(3.0 * (idx[0] as f32 + 1.0), 4.0 * (idx[0] as f32 + 1.0))
+    });
+    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+    let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex32::new(1.0, 0.0),
+        &[&a.view()],
+        Complex32::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = Complex32::new(5.0 * (i as f32 + 1.0), 0.0);
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-4,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_sqrt_complex32() {
+    use num_complex::Complex32;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        let z = Complex32::new(idx[0] as f32 + 1.0, 0.0);
+        z * z
+    });
+    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+    let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex32::new(1.0, 0.0),
+        &[&a.view()],
+        Complex32::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = Complex32::new(i as f32 + 1.0, 0.0);
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-4,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
     }
 }
 

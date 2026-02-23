@@ -90,6 +90,7 @@ use std::ffi::c_void;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+use num_complex::{Complex32, Complex64};
 use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
@@ -120,6 +121,9 @@ pub enum ReduceOp {
 /// Used with [`PrimDescriptor::ElementwiseUnary`] for point-wise
 /// transformations. Maps to `cutensorElementwiseTrinary` (unary case)
 /// on GPU backends (not yet implemented).
+///
+/// All variants are supported on the CPU backend for f32, f64,
+/// Complex32, and Complex64 scalar types.
 ///
 /// Note: square (`x²`) is omitted — expressible as
 /// `ElementwiseMul(x, x)` without an extra copy.
@@ -1311,6 +1315,181 @@ fn execute_elementwise_mul<T: ScalarBase>(
     Ok(())
 }
 
+/// Apply a unary function element-wise: C = alpha * f(A) + beta * C.
+fn execute_unary_map<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    f: impl Fn(T) -> T,
+) -> Result<()> {
+    let dims = output.dims().to_vec();
+    for_each_index(&dims, |idx| {
+        let val = alpha * f(input.get(idx));
+        if beta == T::zero() {
+            output.set(idx, val);
+        } else {
+            output.set(idx, val + beta * output.get(idx));
+        }
+    });
+    Ok(())
+}
+
+/// Execute element-wise unary operation with type-based dispatch.
+///
+/// Since `ScalarBase` does not provide `Neg`, `Div`, or floating-point ops,
+/// we dispatch to concrete type implementations (f32, f64, Complex32, Complex64)
+/// at runtime using `TypeId`. This keeps the `TensorPrims` trait generic while
+/// supporting all standard unary operations on the CPU backend.
+fn execute_elementwise_unary<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    op: &UnaryOp,
+) -> Result<()> {
+    match op {
+        UnaryOp::Conj => {
+            // Conj through ScalarBase is identity (no imaginary part accessible).
+            // For complex types dispatched via Standard<Complex64>, the impl
+            // also passes through here — but ScalarBase-level Conj is always
+            // identity. True complex conjugation is handled by resolve_conj().
+            execute_make_contiguous(alpha, input, beta, output)
+        }
+        UnaryOp::Negate => {
+            let tid = TypeId::of::<T>();
+            if tid == TypeId::of::<f64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    // SAFETY: T is f64; transmute is safe because we checked TypeId
+                    let x = unsafe { *(&v as *const T as *const f64) };
+                    let r = -x;
+                    unsafe { *(&r as *const f64 as *const T) }
+                })
+            } else if tid == TypeId::of::<f32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const f32) };
+                    let r = -x;
+                    unsafe { *(&r as *const f32 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex64) };
+                    let r = -x;
+                    unsafe { *(&r as *const Complex64 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex32) };
+                    let r = -x;
+                    unsafe { *(&r as *const Complex32 as *const T) }
+                })
+            } else {
+                Err(Error::InvalidArgument(format!(
+                    "Negate not supported for this scalar type"
+                )))
+            }
+        }
+        UnaryOp::Reciprocal => {
+            let tid = TypeId::of::<T>();
+            if tid == TypeId::of::<f64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const f64) };
+                    let r = 1.0_f64 / x;
+                    unsafe { *(&r as *const f64 as *const T) }
+                })
+            } else if tid == TypeId::of::<f32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const f32) };
+                    let r = 1.0_f32 / x;
+                    unsafe { *(&r as *const f32 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex64) };
+                    let r = Complex64::new(1.0, 0.0) / x;
+                    unsafe { *(&r as *const Complex64 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex32) };
+                    let r = Complex32::new(1.0, 0.0) / x;
+                    unsafe { *(&r as *const Complex32 as *const T) }
+                })
+            } else {
+                Err(Error::InvalidArgument(format!(
+                    "Reciprocal not supported for this scalar type"
+                )))
+            }
+        }
+        UnaryOp::Abs => {
+            let tid = TypeId::of::<T>();
+            if tid == TypeId::of::<f64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const f64) };
+                    let r = x.abs();
+                    unsafe { *(&r as *const f64 as *const T) }
+                })
+            } else if tid == TypeId::of::<f32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const f32) };
+                    let r = x.abs();
+                    unsafe { *(&r as *const f32 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex64>() {
+                // For complex, abs returns the modulus as a real number.
+                // But since T is Complex64, we return it as Complex64 with zero imaginary part.
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex64) };
+                    let r = Complex64::new(x.norm(), 0.0);
+                    unsafe { *(&r as *const Complex64 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex32) };
+                    let r = Complex32::new(x.norm(), 0.0);
+                    unsafe { *(&r as *const Complex32 as *const T) }
+                })
+            } else {
+                Err(Error::InvalidArgument(format!(
+                    "Abs not supported for this scalar type"
+                )))
+            }
+        }
+        UnaryOp::Sqrt => {
+            let tid = TypeId::of::<T>();
+            if tid == TypeId::of::<f64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const f64) };
+                    let r = x.sqrt();
+                    unsafe { *(&r as *const f64 as *const T) }
+                })
+            } else if tid == TypeId::of::<f32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const f32) };
+                    let r = x.sqrt();
+                    unsafe { *(&r as *const f32 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex64) };
+                    let r = x.sqrt();
+                    unsafe { *(&r as *const Complex64 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex32) };
+                    let r = x.sqrt();
+                    unsafe { *(&r as *const Complex32 as *const T) }
+                })
+            } else {
+                Err(Error::InvalidArgument(format!(
+                    "Sqrt not supported for this scalar type"
+                )))
+            }
+        }
+    }
+}
+
 fn execute_contract<T: ScalarBase>(
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -1481,13 +1660,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
 
             CpuPlan::ElementwiseUnary { op, .. } => {
                 validate_execute_inputs(inputs, 1, "ElementwiseUnary")?;
-                // Conj is identity for real types (ScalarBase)
-                match op {
-                    UnaryOp::Conj => execute_make_contiguous(alpha, inputs[0], beta, output),
-                    _ => Err(Error::InvalidArgument(format!(
-                        "unary op {op:?} requires additional trait bounds not available via ScalarBase"
-                    ))),
-                }
+                execute_elementwise_unary(alpha, inputs[0], beta, output, op)
             }
 
             CpuPlan::ElementwiseMul { .. } => {
