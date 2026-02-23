@@ -1551,15 +1551,19 @@ where
 // ============================================================================
 
 /// ReverseRule for einsum — stores subscripts and primal tensors for pullback.
-struct EinsumReverseRule<T: Scalar + Differentiable<Tangent = Tensor<T>>> {
+struct EinsumReverseRule<T: Scalar>
+where
+    Tensor<T>: Differentiable<Tangent = Tensor<T>>,
+{
     subscripts: Subscripts,
     primals: Vec<Tensor<T>>,
     input_node_ids: Vec<Option<NodeId>>,
     size_dict: HashMap<u32, usize>,
 }
 
-impl<T: Scalar + Differentiable<Tangent = Tensor<T>>> ReverseRule<Tensor<T>>
-    for EinsumReverseRule<T>
+impl<T: Scalar> ReverseRule<Tensor<T>> for EinsumReverseRule<T>
+where
+    Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
     fn pullback(&self, cotangent: &Tensor<T>) -> AdResult<Vec<(NodeId, Tensor<T>)>> {
         let n = self.primals.len();
@@ -1632,19 +1636,13 @@ impl<T: Scalar + Differentiable<Tangent = Tensor<T>>> ReverseRule<Tensor<T>>
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
 ///
-/// # Current Limitations
-///
-/// The reverse rule is built but **not recorded on the tape** because
-/// the current API does not pass tape access. Gradients will not flow
-/// through this operation via `tape.pullback()`.
-/// See [#136](https://github.com/tensor4all/tenferro-rs/issues/136).
 pub fn tracked_einsum<T, A, B>(
     ctx: &mut B::Context,
     subscripts: &str,
     operands: &[&TrackedTensor<Tensor<T>>],
 ) -> AdResult<TrackedTensor<Tensor<T>>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A> + Differentiable<Tangent = Tensor<T>>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
     B: TensorPrims<A>,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
@@ -1668,23 +1666,13 @@ where
         return Ok(TrackedTensor::new(output));
     }
 
-    // Find tape from operands
+    // Find tape from the first tracked operand that has one
     let tape = operands
         .iter()
-        .find_map(|op| {
-            if op.requires_grad() {
-                op.node_id().map(|_| ())
-            } else {
-                None
-            }
-        })
-        .ok_or(chainrules::AutodiffError::MissingNode)?;
-    let _ = tape;
-
-    // Get the actual tape reference from the first tracked operand
-    // We need to find a tape to record on. Since TrackedTensor doesn't expose
-    // the tape directly, we rely on the caller having a Tape.
-    // For the POC, we construct the rule and let the caller record it.
+        .filter(|op| op.requires_grad())
+        .find_map(|op| op.tape())
+        .ok_or(chainrules::AutodiffError::MissingNode)?
+        .clone();
 
     let rule = EinsumReverseRule {
         subscripts: subs,
@@ -1693,13 +1681,8 @@ where
         size_dict,
     };
 
-    // We can't record on the tape without access to it.
-    // Return a TrackedTensor without recording (gradient tracking will be limited).
-    // For proper tape recording, the tracked_einsum would need tape access.
-    // This is a known limitation in the POC.
-    let mut result = TrackedTensor::new(output);
-    let _ = rule; // Rule cannot be recorded without tape access
-    let _ = &mut result;
+    // Record the operation on the tape so pullback can compute gradients
+    let result = tape.record_op(output, Box::new(rule), None);
 
     Ok(result)
 }

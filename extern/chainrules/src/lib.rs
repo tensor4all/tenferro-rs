@@ -615,6 +615,27 @@ impl<V: Differentiable> TrackedTensor<V> {
         self.tangent.is_some()
     }
 
+    /// Returns a reference to the tape this value is connected to, if any.
+    ///
+    /// Leaf values created via [`Tape::leaf`] are connected to a tape.
+    /// Values created via [`TrackedTensor::new`] are not.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{Tape, TrackedTensor};
+    ///
+    /// let tape = Tape::<f64>::new();
+    /// let x = tape.leaf(2.0);
+    /// assert!(x.tape().is_some());
+    ///
+    /// let y = TrackedTensor::new(3.0_f64);
+    /// assert!(y.tape().is_none());
+    /// ```
+    pub fn tape(&self) -> Option<&Tape<V>> {
+        self.tape.as_ref()
+    }
+
     /// Consumes and returns a detached value that does not require gradients.
     ///
     /// # Examples
