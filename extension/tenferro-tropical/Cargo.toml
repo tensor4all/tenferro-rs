@@ -11,6 +11,8 @@ tenferro-device = { path = "../../tenferro-device" }
 tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-prims = { path = "../../tenferro-prims" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+chainrules = { path = "../../extern/chainrules" }
 strided-view.workspace = true
 strided-traits.workspace = true
 strided-perm.workspace = true
@@ -18,4 +20,3 @@ num-traits = { workspace = true }
 tropical-gemm = { git = "https://github.com/TensorBFS/tropical-gemm", version = "0.2" }
 
 [dev-dependencies]
-tenferro-einsum = { path = "../../tenferro-einsum" }
