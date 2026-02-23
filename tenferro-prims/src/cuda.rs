@@ -26,7 +26,8 @@ use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::*;
 use crate::{
-    validate_shape_count, Extension, PlanCache, PrimDescriptor, ReduceOp, TensorPrims, UnaryOp,
+    validate_execute_inputs, validate_shape_count, Extension, PlanCache, PrimDescriptor, ReduceOp,
+    TensorPrims, UnaryOp,
 };
 
 // ============================================================================
@@ -889,14 +890,191 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
     }
 
     fn execute<T: Scalar>(
-        _ctx: &mut CudaContext,
-        _plan: &CudaPlan<T>,
-        _alpha: T,
-        _inputs: &[&Tensor<T>],
-        _beta: T,
-        _output: &mut Tensor<T>,
+        ctx: &mut CudaContext,
+        plan: &CudaPlan<T>,
+        alpha: T,
+        inputs: &[&Tensor<T>],
+        beta: T,
+        output: &mut Tensor<T>,
     ) -> Result<()> {
-        todo!("CudaBackend::execute — cuTENSOR execution not yet implemented")
+        use std::ffi::c_void;
+
+        let handle = ctx.handle.raw;
+        // Use null stream (default CUDA stream)
+        let stream: *mut c_void = ptr::null_mut();
+        // Workspace: pass null with 0 size (cuTENSOR works without workspace, just slower)
+        let ws_ptr: *mut c_void = ptr::null_mut();
+        let ws_size: u64 = 0;
+
+        let alpha_ptr = &alpha as *const T as *const c_void;
+        let beta_ptr = &beta as *const T as *const c_void;
+
+        match &plan.desc {
+            PrimDescriptor::Contract { .. }
+            | PrimDescriptor::BatchedGemm { .. }
+            | PrimDescriptor::Trace { .. }
+            | PrimDescriptor::AntiTrace { .. }
+            | PrimDescriptor::AntiDiag { .. } => {
+                validate_execute_inputs(inputs, 2, "Contraction")?;
+                let a_ptr = inputs[0]
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("input A not on GPU".into()))?
+                    as *const c_void;
+                let b_ptr = inputs[1]
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("input B not on GPU".into()))?
+                    as *const c_void;
+                let c_ptr = output
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("output not on GPU".into()))?
+                    as *const c_void;
+                let d_ptr = c_ptr as *mut c_void;
+
+                let status = unsafe {
+                    (ctx.vtable.contract)(
+                        handle,
+                        plan.plan.raw,
+                        alpha_ptr,
+                        a_ptr,
+                        b_ptr,
+                        beta_ptr,
+                        c_ptr,
+                        d_ptr,
+                        ws_ptr,
+                        ws_size,
+                        stream,
+                    )
+                };
+                check_status(status, "cutensorContract")
+            }
+
+            PrimDescriptor::Permute { .. } | PrimDescriptor::MakeContiguous => {
+                validate_execute_inputs(inputs, 1, "Permute")?;
+                let a_ptr = inputs[0]
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("input A not on GPU".into()))?
+                    as *const c_void;
+                let b_ptr = output
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("output not on GPU".into()))?
+                    as *const c_void as *mut c_void;
+
+                let status = unsafe {
+                    (ctx.vtable.permute)(handle, plan.plan.raw, alpha_ptr, a_ptr, b_ptr, stream)
+                };
+                check_status(status, "cutensorPermute")
+            }
+
+            PrimDescriptor::Reduce { .. } => {
+                validate_execute_inputs(inputs, 1, "Reduce")?;
+                let a_ptr = inputs[0]
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("input A not on GPU".into()))?
+                    as *const c_void;
+                let c_ptr = output
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("output not on GPU".into()))?
+                    as *const c_void;
+                let d_ptr = c_ptr as *mut c_void;
+
+                let status = unsafe {
+                    (ctx.vtable.reduce)(
+                        handle,
+                        plan.plan.raw,
+                        alpha_ptr,
+                        a_ptr,
+                        beta_ptr,
+                        c_ptr,
+                        d_ptr,
+                        ws_ptr,
+                        ws_size,
+                        stream,
+                    )
+                };
+                check_status(status, "cutensorReduce")
+            }
+
+            PrimDescriptor::ElementwiseMul => {
+                validate_execute_inputs(inputs, 2, "ElementwiseMul")?;
+                let a_ptr = inputs[0]
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("input A not on GPU".into()))?
+                    as *const c_void;
+                // C = inputs[1] (the second operand in element-wise binary)
+                let c_ptr = inputs[1]
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("input C not on GPU".into()))?
+                    as *const c_void;
+                let d_ptr = output
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("output not on GPU".into()))?
+                    as *const c_void as *mut c_void;
+
+                // gamma = beta for the C input scaling
+                let gamma_ptr = beta_ptr;
+
+                let status = unsafe {
+                    (ctx.vtable.elementwise_binary_execute)(
+                        handle,
+                        plan.plan.raw,
+                        alpha_ptr,
+                        a_ptr,
+                        gamma_ptr,
+                        c_ptr,
+                        d_ptr,
+                        stream,
+                    )
+                };
+                check_status(status, "cutensorElementwiseBinaryExecute")
+            }
+
+            PrimDescriptor::ElementwiseUnary { .. } => {
+                validate_execute_inputs(inputs, 1, "ElementwiseUnary")?;
+                let a_ptr = inputs[0]
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("input A not on GPU".into()))?
+                    as *const c_void;
+                // For trinary unary case: B = A, C = output
+                let b_ptr = a_ptr;
+                let c_ptr = output
+                    .buffer()
+                    .as_device_ptr()
+                    .ok_or_else(|| Error::DeviceError("output not on GPU".into()))?
+                    as *const c_void;
+                let d_ptr = c_ptr as *mut c_void;
+
+                let beta_zero = T::zero();
+                let beta_zero_ptr = &beta_zero as *const T as *const c_void;
+                let gamma_ptr = beta_ptr;
+
+                let status = unsafe {
+                    (ctx.vtable.elementwise_trinary_execute)(
+                        handle,
+                        plan.plan.raw,
+                        alpha_ptr,
+                        a_ptr,
+                        beta_zero_ptr,
+                        b_ptr,
+                        gamma_ptr,
+                        c_ptr,
+                        d_ptr,
+                        stream,
+                    )
+                };
+                check_status(status, "cutensorElementwiseTrinaryExecute")
+            }
+        }
     }
 
     fn has_extension_for<T: Scalar>(ext: Extension) -> bool {
