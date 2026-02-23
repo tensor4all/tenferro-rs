@@ -5,7 +5,7 @@ use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{
     einsum, einsum_frule, einsum_into, einsum_owned, einsum_rrule, einsum_with_plan,
-    einsum_with_subscripts, ContractionTree, Subscripts,
+    einsum_with_subscripts, tracked_einsum, ContractionTree, Subscripts,
 };
 use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -651,4 +651,112 @@ fn einsum_wrong_operand_count() {
         "expected InvalidArgument for wrong operand count, got: {:?}",
         result.as_ref().err()
     );
+}
+
+// ============================================================================
+// Tracked einsum: end-to-end AD via tape recording
+// ============================================================================
+
+#[test]
+fn tracked_einsum_matmul_pullback() {
+    use chainrules::Tape;
+
+    let mut ctx = CpuContext::new(1);
+
+    // Create tape and leaf tensors
+    let tape = Tape::<Tensor<f64>>::new();
+    let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b_data = Tensor::<f64>::from_slice(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+
+    let a = tape.leaf(a_data.clone());
+    let b = tape.leaf(b_data.clone());
+    let a_id = a.node_id().expect("leaf should have node_id");
+    let b_id = b.node_id().expect("leaf should have node_id");
+
+    // C = A @ B  (tracked)
+    let c = tracked_einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b])
+        .expect("tracked_einsum should succeed");
+
+    // loss = sum_{ij} C_{ij}^2  via "ij,ij->"
+    let loss = tracked_einsum::<f64, S, CpuBackend>(&mut ctx, "ij,ij->", &[&c, &c])
+        .expect("tracked_einsum for loss should succeed");
+
+    // Pullback
+    let grads = tape.pullback(&loss).expect("pullback should succeed");
+
+    // Verify gradients exist for both leaves
+    let ga = grads.get(a_id).expect("gradient for A should exist");
+    let gb = grads.get(b_id).expect("gradient for B should exist");
+
+    // Gradient shapes must match the input shapes
+    assert_eq!(ga.dims(), &[2, 3], "grad_A shape mismatch");
+    assert_eq!(gb.dims(), &[3, 4], "grad_B shape mismatch");
+
+    // Verify grad values are non-zero
+    // loss = sum_{ik} C_{ik}^2 where C = A @ B
+    // d(loss)/d(C_{ik}) = 2 * C_{ik}
+    // d(loss)/d(A_{ij}) = sum_k 2*C_{ik} * B_{jk}
+    // At least some gradient entries should be non-zero since inputs are non-zero
+    let ga_data = ga.buffer().as_slice().expect("should get ga slice");
+    let gb_data = gb.buffer().as_slice().expect("should get gb slice");
+    let ga_norm: f64 = ga_data.iter().map(|x| x * x).sum();
+    let gb_norm: f64 = gb_data.iter().map(|x| x * x).sum();
+    assert!(
+        ga_norm > 0.0,
+        "gradient for A should be non-zero, got norm^2 = {ga_norm}"
+    );
+    assert!(
+        gb_norm > 0.0,
+        "gradient for B should be non-zero, got norm^2 = {gb_norm}"
+    );
+
+    // Numerical verification: d(loss)/dA = 2 * C @ B^T
+    // C = A @ B
+    let c_val = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_data, &b_data], None)
+        .expect("einsum for C");
+    // grad_C = 2 * C (since loss = sum C_{ik}^2)
+    let two_c = einsum::<f64, S, CpuBackend>(
+        &mut ctx,
+        "ij,->ij",
+        &[
+            &c_val,
+            &Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap(),
+        ],
+        None,
+    )
+    .expect("scale by 2");
+    // grad_A = grad_C @ B^T = einsum("ik,jk->ij", [2*C, B])
+    let expected_ga = einsum::<f64, S, CpuBackend>(&mut ctx, "ik,jk->ij", &[&two_c, &b_data], None)
+        .expect("expected grad_A");
+    // grad_B = A^T @ grad_C = einsum("ij,ik->jk", [A, 2*C])
+    let expected_gb = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,ik->jk", &[&a_data, &two_c], None)
+        .expect("expected grad_B");
+
+    for i in 0..2 {
+        for j in 0..3 {
+            assert!(
+                (get(ga, &[i, j]) - get(&expected_ga, &[i, j])).abs() < 1e-10,
+                "grad_A[{i},{j}] = {}, expected {}",
+                get(ga, &[i, j]),
+                get(&expected_ga, &[i, j])
+            );
+        }
+    }
+    for i in 0..3 {
+        for j in 0..4 {
+            assert!(
+                (get(gb, &[i, j]) - get(&expected_gb, &[i, j])).abs() < 1e-10,
+                "grad_B[{i},{j}] = {}, expected {}",
+                get(gb, &[i, j]),
+                get(&expected_gb, &[i, j])
+            );
+        }
+    }
 }
