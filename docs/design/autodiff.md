@@ -239,6 +239,130 @@ are supported where implemented.
 
 ---
 
+## Forward-Mode AD Redesign: libtorch-Aligned Tangent-in-Tensor
+
+> **Status:** Planned redesign. Current POC uses separate `DualTensor<V>` and
+> per-rule `pullback_with_tangents`. This section describes the target design.
+
+### Motivation
+
+The current design has two problems:
+
+1. **Performance:** `EinsumReverseRule::pullback` uses `manual_einsum` (naive
+   multi-index loop) instead of the optimized backend. This is too slow for
+   production use.
+2. **HVP architecture:** Each `ReverseRule` must explicitly implement
+   `pullback_with_tangents` for HVP. This per-rule approach does not scale
+   and diverges from PyTorch/JAX where HVP is computed by composing
+   `jvp(grad(f))`.
+
+### Target Design (libtorch-aligned)
+
+Align with libtorch's C++ forward-mode AD architecture
+(`torch/csrc/autograd/forward_grad.h`, `autograd_meta.cpp`):
+
+**Core principle:** `Tensor<T>` carries optional forward-mode tangent metadata.
+Operations detect tangent presence at runtime and propagate automatically.
+No separate `DualTensor` type needed. `pullback_with_tangents` not needed.
+
+#### 1. Tangent-in-Tensor
+
+```
+Tensor<T>
+  ├── buffer, dims, strides, offset, ...  (existing)
+  └── fw_grad: Option<Box<Tensor<T>>>     (NEW: forward-mode tangent)
+```
+
+libtorch stores `shared_ptr<ForwardGrad>` with a `map<level, Tensor>` to
+support nested forward AD. For the initial implementation, single-level
+(level 0 only) is sufficient. Multi-level can be added when needed.
+
+Tensor API additions:
+
+- `fw_grad(&self) -> Option<&Tensor<T>>`
+- `set_fw_grad(&mut self, grad: Tensor<T>)`
+- `has_fw_grad(&self) -> bool`
+- `detach_fw_grad(&mut self) -> Option<Tensor<T>>`
+
+#### 2. Automatic Tangent Propagation in Operations
+
+Each operation (einsum, prims ops) checks input tensors for `fw_grad` and
+computes the output tangent using the operation's JVP rule:
+
+```
+fn einsum(..., primals) -> Tensor<T> {
+    let output = backend_einsum(primals);
+    if any input has fw_grad {
+        let tangents = extract_fw_grads(primals);
+        let output_tangent = einsum_frule(subscripts, primals, &tangents);
+        output.set_fw_grad(output_tangent);
+    }
+    output
+}
+```
+
+This matches libtorch where each op's derivative formula checks
+`_fw_grad(level)` on inputs and calls `_set_fw_grad` on outputs.
+
+#### 3. HVP via Composition (not per-rule)
+
+With tangent-in-tensor, HVP becomes:
+
+1. Seed leaf tensors with `fw_grad` (tangent direction v)
+2. Run forward pass — tangents propagate automatically through all ops
+3. Run `tape.pullback(loss)` — pullback calls einsum internally
+4. Those einsum calls see `fw_grad` on their inputs (cotangents carry
+   tangent metadata from the forward pass) and propagate automatically
+5. Result: both gradient and HVP emerge without `pullback_with_tangents`
+
+This matches PyTorch's `jvp(grad(f))` pattern and JAX's composability.
+
+#### 4. Backend-Optimized Pullback
+
+`EinsumReverseRule` stores `Rc<RefCell<B::Context>>` (or equivalent) to
+execute pullback via the optimized backend instead of `manual_einsum`.
+
+The `ReverseRule` trait signature (`pullback(&self, cotangent)`) does not
+need `ctx` — the concrete rule struct stores it internally, just as
+libtorch's backward functions capture saved tensors and context.
+
+#### 5. Deprecation Path
+
+| Current | Target | Migration |
+|---------|--------|-----------|
+| `DualTensor<V>` | `Tensor<T>` with `fw_grad` | Thin wrapper or remove |
+| `pullback_with_tangents` | Automatic via tangent-in-tensor | Remove from `ReverseRule` trait |
+| `Tape::hvp` (explicit) | Composition: seed `fw_grad` + `pullback` | Simplify or keep as convenience |
+| `manual_einsum` in pullback | Backend-optimized einsum | Store ctx in rule |
+| `einsum_hvp` (standalone) | Automatic via propagation | Keep for FFI/manual use |
+
+### Key Differences from libtorch
+
+| Aspect | libtorch | tenferro-rs (target) |
+|--------|----------|---------------------|
+| Tangent storage | `map<level, Tensor>` (multi-level) | `Option<Box<Tensor<T>>>` (single-level initially) |
+| Dispatch | Runtime dispatcher (CPU/CUDA/autograd/forward_ad) | Static dispatch via generics + runtime `fw_grad` check |
+| Thread safety | `mutex` on `ForwardGrad` | Single-threaded initially; `Rc<RefCell>` |
+| Type system | Single `at::Tensor` type for everything | `Tensor<T>` generic over scalar type |
+
+### Implementation Phases
+
+**Phase 1:** Add `fw_grad` field to `Tensor<T>`, add accessor API.
+Existing code unaffected (field defaults to `None`).
+
+**Phase 2:** Wire tangent propagation into einsum. `einsum` auto-propagates
+`fw_grad` using existing `einsum_frule`. Test with `dual_einsum` equivalence.
+
+**Phase 3:** Store backend context in `EinsumReverseRule`, replace
+`manual_einsum` with optimized backend calls. Fix pullback performance.
+
+**Phase 4:** Remove `pullback_with_tangents` from `ReverseRule` trait.
+Simplify `Tape::hvp`. Deprecate `DualTensor` in favor of tangent-in-tensor.
+
+**Phase 5:** Wire tangent propagation into prims ops and linalg.
+
+---
+
 ## Scope
 
 **Current POC:**
