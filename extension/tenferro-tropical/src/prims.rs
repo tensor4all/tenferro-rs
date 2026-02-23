@@ -18,8 +18,10 @@ use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_device::{Error, Result};
 use tenferro_prims::{CpuBackend, CpuContext, Extension, PrimDescriptor, ReduceOp, TensorPrims};
+use tropical_gemm::{TropicalMaxMul, TropicalMaxPlus, TropicalMinPlus, TropicalSemiring};
 
 use crate::algebra::{MaxMulAlgebra, MaxPlusAlgebra, MinPlusAlgebra};
+use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 
 /// Execution plan for tropical primitive operations on CPU.
 ///
@@ -93,6 +95,8 @@ pub enum TropicalPlan<T: ScalarBase> {
         free_axes: Vec<usize>,
         _marker: PhantomData<T>,
     },
+    /// Plan for making a tensor contiguous.
+    MakeContiguous { _marker: PhantomData<T> },
 }
 
 // ===========================================================================
@@ -161,7 +165,189 @@ fn scale_output<T: ScalarBase>(output: &mut StridedViewMut<T>, beta: T) {
 // Execute helpers (reused across all three tropical algebras)
 // ===========================================================================
 
-fn execute_batched_gemm<T: ScalarBase>(
+/// Trait for dispatching to SIMD-optimized tropical GEMM via tropical-gemm crate.
+///
+/// Maps tenferro's tropical scalar types to tropical-gemm's types and calls
+/// `tropical_matmul_strided_batched` for SIMD-accelerated computation.
+trait TropicalGemmDispatch: ScalarBase {
+    /// Extract the inner scalar value (f64 or f32).
+    fn inner_value(&self) -> f64;
+    /// Wrap an inner scalar value back into the tropical type.
+    fn from_inner(v: f64) -> Self;
+    /// Execute SIMD-optimized batched GEMM.
+    /// Input: row-major f64 buffers packed per batch element.
+    /// Returns: row-major f64 result buffer.
+    fn dispatch_gemm(
+        a: &[f64],
+        b: &[f64],
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<f64>;
+}
+
+impl TropicalGemmDispatch for MaxPlus<f64> {
+    #[inline]
+    fn inner_value(&self) -> f64 {
+        self.0
+    }
+    #[inline]
+    fn from_inner(v: f64) -> Self {
+        MaxPlus(v)
+    }
+    fn dispatch_gemm(
+        a: &[f64],
+        b: &[f64],
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<f64> {
+        if batch_size <= 1 {
+            let result = tropical_gemm::tropical_matmul::<TropicalMaxPlus<f64>>(a, m, k, b, n);
+            result.iter().map(|v| v.value()).collect()
+        } else {
+            let result = tropical_gemm::tropical_matmul_strided_batched::<TropicalMaxPlus<f64>>(
+                a, b, batch_size, m, k, n,
+            );
+            result.iter().map(|v| v.value()).collect()
+        }
+    }
+}
+
+impl TropicalGemmDispatch for MinPlus<f64> {
+    #[inline]
+    fn inner_value(&self) -> f64 {
+        self.0
+    }
+    #[inline]
+    fn from_inner(v: f64) -> Self {
+        MinPlus(v)
+    }
+    fn dispatch_gemm(
+        a: &[f64],
+        b: &[f64],
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<f64> {
+        if batch_size <= 1 {
+            let result = tropical_gemm::tropical_matmul::<TropicalMinPlus<f64>>(a, m, k, b, n);
+            result.iter().map(|v| v.value()).collect()
+        } else {
+            let result = tropical_gemm::tropical_matmul_strided_batched::<TropicalMinPlus<f64>>(
+                a, b, batch_size, m, k, n,
+            );
+            result.iter().map(|v| v.value()).collect()
+        }
+    }
+}
+
+impl TropicalGemmDispatch for MaxMul<f64> {
+    #[inline]
+    fn inner_value(&self) -> f64 {
+        self.0
+    }
+    #[inline]
+    fn from_inner(v: f64) -> Self {
+        MaxMul(v)
+    }
+    fn dispatch_gemm(
+        a: &[f64],
+        b: &[f64],
+        batch_size: usize,
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Vec<f64> {
+        if batch_size <= 1 {
+            let result = tropical_gemm::tropical_matmul::<TropicalMaxMul<f64>>(a, m, k, b, n);
+            result.iter().map(|v| v.value()).collect()
+        } else {
+            let result = tropical_gemm::tropical_matmul_strided_batched::<TropicalMaxMul<f64>>(
+                a, b, batch_size, m, k, n,
+            );
+            result.iter().map(|v| v.value()).collect()
+        }
+    }
+}
+
+/// SIMD-optimized tropical GEMM using the tropical-gemm crate.
+///
+/// Extracts data into row-major contiguous buffers, calls tropical-gemm,
+/// and writes results back with alpha/beta scaling.
+fn execute_batched_gemm_optimized<T: ScalarBase + TropicalGemmDispatch>(
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    batch_dims: &[usize],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let a = inputs[0];
+    let b = inputs[1];
+    let batch_size: usize = batch_dims.iter().product::<usize>().max(1);
+
+    // Extract A into contiguous row-major f64 buffer: [batch, m, k] row-major
+    let a_total = batch_size * m * k;
+    let b_total = batch_size * k * n;
+    let mut a_buf = Vec::with_capacity(a_total);
+    let mut b_buf = Vec::with_capacity(b_total);
+
+    for batch_flat in 0..batch_size {
+        let batch_idx = unflatten_index(batch_flat, batch_dims);
+        for i in 0..m {
+            for j in 0..k {
+                let mut idx = batch_idx.clone();
+                idx.push(i);
+                idx.push(j);
+                a_buf.push(a.get(&idx).inner_value());
+            }
+        }
+    }
+    for batch_flat in 0..batch_size {
+        let batch_idx = unflatten_index(batch_flat, batch_dims);
+        for i in 0..k {
+            for j in 0..n {
+                let mut idx = batch_idx.clone();
+                idx.push(i);
+                idx.push(j);
+                b_buf.push(b.get(&idx).inner_value());
+            }
+        }
+    }
+
+    // Call SIMD-optimized tropical GEMM
+    let result = T::dispatch_gemm(&a_buf, &b_buf, batch_size, m, k, n);
+
+    // Write results back with alpha/beta scaling
+    for batch_flat in 0..batch_size {
+        let batch_idx = unflatten_index(batch_flat, batch_dims);
+        for i in 0..m {
+            for j in 0..n {
+                let mut c_idx = batch_idx.clone();
+                c_idx.push(i);
+                c_idx.push(j);
+                let flat = batch_flat * m * n + i * n + j;
+                let val = T::from_inner(result[flat]);
+                let old = if beta == T::zero() {
+                    T::zero()
+                } else {
+                    beta * output.get(&c_idx)
+                };
+                output.set(&c_idx, alpha * val + old);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Fallback loop-based tropical GEMM for unsupported scalar types (e.g., f32).
+fn execute_batched_gemm_fallback<T: ScalarBase>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -183,8 +369,6 @@ fn execute_batched_gemm<T: ScalarBase>(
         let batch_idx = unflatten_index(batch_flat, batch_dims);
         for i in 0..m {
             for j in 0..n {
-                // Initialize sum to the semiring zero (additive identity).
-                // For MaxPlus: -inf, for MinPlus: +inf, for MaxMul: 0.
                 let mut sum = T::zero();
                 for kk in 0..k {
                     let mut a_idx = batch_idx.clone();
@@ -193,8 +377,6 @@ fn execute_batched_gemm<T: ScalarBase>(
                     let mut b_idx = batch_idx.clone();
                     b_idx.push(kk);
                     b_idx.push(j);
-                    // sum = sum ⊕ (a[i,kk] ⊗ b[kk,j])
-                    // For MaxPlus: sum = max(sum, a + b)
                     sum = sum + a.get(&a_idx) * b.get(&b_idx);
                 }
                 let mut c_idx = batch_idx.clone();
@@ -875,15 +1057,27 @@ fn tropical_plan<T: ScalarBase>(
             })
         }
 
+        PrimDescriptor::MakeContiguous => {
+            ensure_shape_count(shapes, 2, "MakeContiguous")?;
+            if shapes[0] != shapes[1] {
+                return Err(Error::InvalidArgument(
+                    "MakeContiguous input and output shapes must match".into(),
+                ));
+            }
+            Ok(TropicalPlan::MakeContiguous {
+                _marker: PhantomData,
+            })
+        }
+
         PrimDescriptor::ElementwiseUnary { .. }
         | PrimDescriptor::Contract { .. }
-        | PrimDescriptor::ElementwiseMul
-        | PrimDescriptor::MakeContiguous => Err(Error::InvalidArgument(
+        | PrimDescriptor::ElementwiseMul => Err(Error::InvalidArgument(
             "tropical algebras do not support this operation".into(),
         )),
     }
 }
 
+/// Execute tropical operations using the fallback loop-based GEMM.
 fn tropical_execute<T: ScalarBase>(
     plan: &TropicalPlan<T>,
     alpha: T,
@@ -904,7 +1098,7 @@ fn tropical_execute<T: ScalarBase>(
                     "BatchedGemm execute requires 2 input tensors".into(),
                 ));
             }
-            execute_batched_gemm(alpha, inputs, beta, output, batch_dims, *m, *n, *k)
+            execute_batched_gemm_fallback(alpha, inputs, beta, output, batch_dims, *m, *n, *k)
         }
 
         TropicalPlan::Reduce {
@@ -975,12 +1169,189 @@ fn tropical_execute<T: ScalarBase>(
             }
             execute_anti_diag(alpha, inputs[0], beta, output, paired_axes, free_axes)
         }
+
+        TropicalPlan::MakeContiguous { .. } => {
+            if inputs.len() != 1 {
+                return Err(Error::InvalidArgument(
+                    "MakeContiguous execute requires 1 input tensor".into(),
+                ));
+            }
+            execute_make_contiguous(alpha, inputs[0], beta, output)
+        }
     }
+}
+
+fn execute_make_contiguous<T: ScalarBase>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+) -> Result<()> {
+    if alpha == T::one() && beta == T::zero() {
+        strided_perm::copy_into(output, input).map_err(|e| Error::StrideError(e.to_string()))?;
+    } else {
+        let dims = output.dims().to_vec();
+        for_each_index(&dims, |idx| {
+            let val = alpha * input.get(idx);
+            if beta == T::zero() {
+                output.set(idx, val);
+            } else {
+                output.set(idx, val + beta * output.get(idx));
+            }
+        });
+    }
+    Ok(())
 }
 
 // ===========================================================================
 // impl TensorPrims<MaxPlusAlgebra> for CpuBackend
 // ===========================================================================
+
+/// Execute tropical operations with SIMD-optimized GEMM for MaxPlus<f64>.
+fn tropical_execute_maxplus<T: ScalarBase>(
+    plan: &TropicalPlan<T>,
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+) -> Result<()> {
+    if let TropicalPlan::BatchedGemm {
+        batch_dims,
+        m,
+        n,
+        k,
+        ..
+    } = plan
+    {
+        if inputs.len() != 2 {
+            return Err(Error::InvalidArgument(
+                "BatchedGemm execute requires 2 input tensors".into(),
+            ));
+        }
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<MaxPlus<f64>>() {
+            // SAFETY: T == MaxPlus<f64> confirmed by TypeId check.
+            // All references are transmuted to the same repr(transparent) type.
+            let a = unsafe {
+                &*(inputs[0] as *const StridedView<T> as *const StridedView<MaxPlus<f64>>)
+            };
+            let b = unsafe {
+                &*(inputs[1] as *const StridedView<T> as *const StridedView<MaxPlus<f64>>)
+            };
+            let out = unsafe {
+                &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<MaxPlus<f64>>)
+            };
+            let alpha = unsafe { *(&alpha as *const T as *const MaxPlus<f64>) };
+            let beta = unsafe { *(&beta as *const T as *const MaxPlus<f64>) };
+            return execute_batched_gemm_optimized(
+                alpha,
+                &[a, b],
+                beta,
+                out,
+                batch_dims,
+                *m,
+                *n,
+                *k,
+            );
+        }
+    }
+    tropical_execute(plan, alpha, inputs, beta, output)
+}
+
+/// Execute tropical operations with SIMD-optimized GEMM for MinPlus<f64>.
+fn tropical_execute_minplus<T: ScalarBase>(
+    plan: &TropicalPlan<T>,
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+) -> Result<()> {
+    if let TropicalPlan::BatchedGemm {
+        batch_dims,
+        m,
+        n,
+        k,
+        ..
+    } = plan
+    {
+        if inputs.len() != 2 {
+            return Err(Error::InvalidArgument(
+                "BatchedGemm execute requires 2 input tensors".into(),
+            ));
+        }
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<MinPlus<f64>>() {
+            let a = unsafe {
+                &*(inputs[0] as *const StridedView<T> as *const StridedView<MinPlus<f64>>)
+            };
+            let b = unsafe {
+                &*(inputs[1] as *const StridedView<T> as *const StridedView<MinPlus<f64>>)
+            };
+            let out = unsafe {
+                &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<MinPlus<f64>>)
+            };
+            let alpha = unsafe { *(&alpha as *const T as *const MinPlus<f64>) };
+            let beta = unsafe { *(&beta as *const T as *const MinPlus<f64>) };
+            return execute_batched_gemm_optimized(
+                alpha,
+                &[a, b],
+                beta,
+                out,
+                batch_dims,
+                *m,
+                *n,
+                *k,
+            );
+        }
+    }
+    tropical_execute(plan, alpha, inputs, beta, output)
+}
+
+/// Execute tropical operations with SIMD-optimized GEMM for MaxMul<f64>.
+fn tropical_execute_maxmul<T: ScalarBase>(
+    plan: &TropicalPlan<T>,
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+) -> Result<()> {
+    if let TropicalPlan::BatchedGemm {
+        batch_dims,
+        m,
+        n,
+        k,
+        ..
+    } = plan
+    {
+        if inputs.len() != 2 {
+            return Err(Error::InvalidArgument(
+                "BatchedGemm execute requires 2 input tensors".into(),
+            ));
+        }
+        if std::any::TypeId::of::<T>() == std::any::TypeId::of::<MaxMul<f64>>() {
+            let a = unsafe {
+                &*(inputs[0] as *const StridedView<T> as *const StridedView<MaxMul<f64>>)
+            };
+            let b = unsafe {
+                &*(inputs[1] as *const StridedView<T> as *const StridedView<MaxMul<f64>>)
+            };
+            let out = unsafe {
+                &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<MaxMul<f64>>)
+            };
+            let alpha = unsafe { *(&alpha as *const T as *const MaxMul<f64>) };
+            let beta = unsafe { *(&beta as *const T as *const MaxMul<f64>) };
+            return execute_batched_gemm_optimized(
+                alpha,
+                &[a, b],
+                beta,
+                out,
+                batch_dims,
+                *m,
+                *n,
+                *k,
+            );
+        }
+    }
+    tropical_execute(plan, alpha, inputs, beta, output)
+}
 
 impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
     type Plan<T: ScalarBase> = TropicalPlan<T>;
@@ -1002,10 +1373,9 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
         beta: T,
         output: &mut StridedViewMut<T>,
     ) -> Result<()> {
-        tropical_execute(plan, alpha, inputs, beta, output)
+        tropical_execute_maxplus(plan, alpha, inputs, beta, output)
     }
 
-    /// Tropical backends do not support extended operations.
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
         false
     }
@@ -1035,10 +1405,9 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
         beta: T,
         output: &mut StridedViewMut<T>,
     ) -> Result<()> {
-        tropical_execute(plan, alpha, inputs, beta, output)
+        tropical_execute_minplus(plan, alpha, inputs, beta, output)
     }
 
-    /// Tropical backends do not support extended operations.
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
         false
     }
@@ -1068,10 +1437,9 @@ impl TensorPrims<MaxMulAlgebra> for CpuBackend {
         beta: T,
         output: &mut StridedViewMut<T>,
     ) -> Result<()> {
-        tropical_execute(plan, alpha, inputs, beta, output)
+        tropical_execute_maxmul(plan, alpha, inputs, beta, output)
     }
 
-    /// Tropical backends do not support extended operations.
     fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
         false
     }

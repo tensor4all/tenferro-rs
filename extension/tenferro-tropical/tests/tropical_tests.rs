@@ -885,6 +885,184 @@ fn maxplus_permute_transpose() {
 }
 
 // ============================================================================
+// Tropical trace execution test
+// ============================================================================
+
+#[test]
+fn maxplus_trace_3x3() {
+    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+
+    // A = [[10, 4, 7],   (3x3, column-major)
+    //      [ 2, 8, 5],
+    //      [ 6, 3, 1]]
+    //
+    // Trace = A[0,0] ⊕ A[1,1] ⊕ A[2,2] = max(10, 8, 1) = 10
+    let mut ctx = CpuContext::new(1);
+
+    // Column-major: data[i + 3*j]
+    let a_data = [
+        MaxPlus(10.0),
+        MaxPlus(2.0),
+        MaxPlus(6.0), // col 0
+        MaxPlus(4.0),
+        MaxPlus(8.0),
+        MaxPlus(3.0), // col 1
+        MaxPlus(7.0),
+        MaxPlus(5.0),
+        MaxPlus(1.0), // col 2
+    ];
+    let mut c_data = [MaxPlus::<f64>::zero()]; // scalar output
+
+    let a_view = strided_view::StridedView::new(&a_data, &[3, 3], &[1, 3], 0).unwrap();
+    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[], &[], 0).unwrap();
+
+    let desc = PrimDescriptor::Trace {
+        modes_a: vec![0, 1],
+        modes_c: vec![],
+        paired: vec![(0, 1)],
+    };
+    let plan =
+        <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::plan::<MaxPlus<f64>>(
+            &mut ctx,
+            &desc,
+            &[&[3, 3], &[]],
+        )
+        .unwrap();
+    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
+        &mut ctx,
+        &plan,
+        MaxPlus::one(),
+        &[&a_view],
+        MaxPlus::zero(),
+        &mut c_view,
+    )
+    .unwrap();
+
+    assert_eq!(c_data[0].0, 10.0); // max(10, 8, 1)
+}
+
+#[test]
+fn maxplus_trace_partial_3d() {
+    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+
+    // Partial trace: "iij->j" on a [2,2,3] tensor.
+    // Result[j] = max_i(A[i,i,j]) = max of diagonal slices.
+    //
+    // A[0,0,:] = [1, 2, 3]
+    // A[1,1,:] = [8, 5, 6]
+    // Result = [max(1,8), max(2,5), max(3,6)] = [8, 5, 6]
+    let mut ctx = CpuContext::new(1);
+
+    // Shape [2,2,3], column-major: data[i + 2*j + 4*k]
+    let a_data = [
+        // k=0: [[1,?],[?,8]]
+        MaxPlus(1.0),
+        MaxPlus(10.0), // i=0,j=0; i=1,j=0
+        MaxPlus(10.0),
+        MaxPlus(8.0), // i=0,j=1; i=1,j=1
+        // k=1: [[2,?],[?,5]]
+        MaxPlus(2.0),
+        MaxPlus(10.0),
+        MaxPlus(10.0),
+        MaxPlus(5.0),
+        // k=2: [[3,?],[?,6]]
+        MaxPlus(3.0),
+        MaxPlus(10.0),
+        MaxPlus(10.0),
+        MaxPlus(6.0),
+    ];
+    let mut c_data = [MaxPlus::<f64>::zero(); 3];
+
+    let a_view = strided_view::StridedView::new(&a_data, &[2, 2, 3], &[1, 2, 4], 0).unwrap();
+    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[3], &[1], 0).unwrap();
+
+    let desc = PrimDescriptor::Trace {
+        modes_a: vec![0, 1, 2],
+        modes_c: vec![2],
+        paired: vec![(0, 1)],
+    };
+    let plan =
+        <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::plan::<MaxPlus<f64>>(
+            &mut ctx,
+            &desc,
+            &[&[2, 2, 3], &[3]],
+        )
+        .unwrap();
+    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
+        &mut ctx,
+        &plan,
+        MaxPlus::one(),
+        &[&a_view],
+        MaxPlus::zero(),
+        &mut c_view,
+    )
+    .unwrap();
+
+    // Off-diagonal values are 10, but those are not summed in trace
+    assert_eq!(c_data[0].0, 8.0); // max(1, 8)
+    assert_eq!(c_data[1].0, 5.0); // max(2, 5)
+    assert_eq!(c_data[2].0, 6.0); // max(3, 6)
+}
+
+// ============================================================================
+// Anti-trace: embed scalar/vector into diagonal of a matrix
+// (AD backward of trace operation)
+// ============================================================================
+
+#[test]
+fn maxplus_anti_trace_scalar_to_diag() {
+    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+
+    // AntiTrace: scalar → 2x2 matrix with value on diagonal
+    // input = MaxPlus(5.0) (scalar)
+    // output[i,j] = alpha * input if i==j, else unchanged (beta * old)
+    //
+    // With alpha=1, beta=0:
+    // output = [[5, -inf],
+    //           [-inf, 5]]
+    let mut ctx = CpuContext::new(1);
+
+    let in_data = [MaxPlus(5.0)];
+    let mut out_data = [MaxPlus::<f64>::zero(); 4]; // 2x2
+
+    let in_view = strided_view::StridedView::new(&in_data, &[], &[], 0).unwrap();
+    let mut out_view =
+        strided_view::StridedViewMut::new(&mut out_data, &[2, 2], &[1, 2], 0).unwrap();
+
+    let desc = PrimDescriptor::AntiTrace {
+        modes_a: vec![],
+        modes_c: vec![0, 1],
+        paired: vec![(0, 1)],
+    };
+    let plan =
+        <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::plan::<MaxPlus<f64>>(
+            &mut ctx,
+            &desc,
+            &[&[], &[2, 2]],
+        )
+        .unwrap();
+    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
+        &mut ctx,
+        &plan,
+        MaxPlus::one(),
+        &[&in_view],
+        MaxPlus::zero(),
+        &mut out_view,
+    )
+    .unwrap();
+
+    // Column-major: [out[0,0], out[1,0], out[0,1], out[1,1]]
+    // Diagonal gets 5.0, off-diagonal stays at zero (-inf) + 5.0 = 5.0...
+    // Actually anti-trace adds val to each diagonal position:
+    // out[d,d] += alpha * input for d in 0..diag_dim
+    // After scale_output with beta=0, all entries are -inf, then add 5.0 to diag
+    assert_eq!(out_data[0].0, 5.0); // [0,0] diagonal
+    assert_eq!(out_data[1].0, f64::NEG_INFINITY); // [1,0] off-diagonal
+    assert_eq!(out_data[2].0, f64::NEG_INFINITY); // [0,1] off-diagonal
+    assert_eq!(out_data[3].0, 5.0); // [1,1] diagonal
+}
+
+// ============================================================================
 // Extension not supported test
 // ============================================================================
 
