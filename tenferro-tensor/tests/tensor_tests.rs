@@ -901,3 +901,56 @@ fn fw_grad_view_ops_strip() {
     let reshaped = t.reshape(&[6]).unwrap();
     assert!(!reshaped.has_fw_grad());
 }
+
+#[test]
+fn accumulate_tangent_propagates_fw_grad() {
+    use chainrules_core::Differentiable;
+
+    let mut a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+    let mut b = Tensor::<f64>::from_slice(&[4.0, 5.0, 6.0], &[3], COL).unwrap();
+    a.set_fw_grad(Tensor::<f64>::from_slice(&[0.1, 0.2, 0.3], &[3], COL).unwrap());
+    b.set_fw_grad(Tensor::<f64>::from_slice(&[0.4, 0.5, 0.6], &[3], COL).unwrap());
+
+    let result = Tensor::<f64>::accumulate_tangent(a, &b);
+
+    // Primal: [5.0, 7.0, 9.0]
+    let r_data = result.buffer().as_slice().unwrap();
+    assert!((r_data[0] - 5.0).abs() < 1e-10);
+    assert!((r_data[1] - 7.0).abs() < 1e-10);
+    assert!((r_data[2] - 9.0).abs() < 1e-10);
+
+    // fw_grad: [0.5, 0.7, 0.9]
+    assert!(result.has_fw_grad());
+    let fg = result.fw_grad().unwrap();
+    let fg_data = fg.buffer().as_slice().unwrap();
+    assert!((fg_data[0] - 0.5).abs() < 1e-10);
+    assert!((fg_data[1] - 0.7).abs() < 1e-10);
+    assert!((fg_data[2] - 0.9).abs() < 1e-10);
+}
+
+#[test]
+fn accumulate_tangent_one_has_fw_grad() {
+    use chainrules_core::Differentiable;
+
+    let mut a = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], COL).unwrap();
+    a.set_fw_grad(Tensor::<f64>::from_slice(&[0.1, 0.2], &[2], COL).unwrap());
+
+    let result = Tensor::<f64>::accumulate_tangent(a, &b);
+    assert!(result.has_fw_grad());
+    let fg = result.fw_grad().unwrap();
+    let fg_data = fg.buffer().as_slice().unwrap();
+    assert!((fg_data[0] - 0.1).abs() < 1e-10);
+    assert!((fg_data[1] - 0.2).abs() < 1e-10);
+}
+
+#[test]
+fn accumulate_tangent_no_fw_grad() {
+    use chainrules_core::Differentiable;
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], COL).unwrap();
+
+    let result = Tensor::<f64>::accumulate_tangent(a, &b);
+    assert!(!result.has_fw_grad());
+}

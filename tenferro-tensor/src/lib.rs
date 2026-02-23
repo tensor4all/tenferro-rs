@@ -2080,6 +2080,11 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
             a.dims, b.dims,
             "tangent shape mismatch in accumulate_tangent"
         );
+
+        // Capture fw_grad before consuming a's fields
+        let a_fw = a.fw_grad().cloned();
+        let b_fw = b.fw_grad().cloned();
+
         let n_elements = a.len();
         let order = MemoryOrder::ColumnMajor;
         let dst_strides = compute_contiguous_strides(&a.dims, order);
@@ -2099,7 +2104,16 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
                 &dst_strides,
             );
         }
-        Tensor {
+
+        // Propagate fw_grad
+        let fw = match (a_fw, b_fw) {
+            (Some(fa), Some(fb)) => Some(Self::accumulate_tangent(fa, &fb)),
+            (Some(fa), None) => Some(fa),
+            (None, Some(fb)) => Some(fb.clone()),
+            (None, None) => None,
+        };
+
+        let mut result = Tensor {
             buffer: DataBuffer::from_vec(data),
             dims: a.dims.clone(),
             strides: dst_strides,
@@ -2109,7 +2123,11 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
             event: None,
             conjugated: false,
             fw_grad: None,
+        };
+        if let Some(fg) = fw {
+            result.set_fw_grad(fg);
         }
+        result
     }
 }
 
