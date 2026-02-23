@@ -1817,6 +1817,69 @@ fn plan_make_contiguous_wrong_shape_count() {
 }
 
 #[test]
+fn plan_elementwise_unary_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    // Same rank but different dimensions: input [3,4] vs output [3,5]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5]]);
+    assert!(result.is_err(), "expected error for shape mismatch");
+}
+
+#[test]
+fn plan_elementwise_unary_rank_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    // Different ranks: input [3,4] vs output [3,4,2]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4, 2]]);
+    assert!(result.is_err(), "expected error for rank mismatch");
+}
+
+#[test]
+fn plan_elementwise_mul_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    // A=[3,4], B=[3,4], C=[3,5] — C dimension mismatch
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 5]]);
+    assert!(result.is_err(), "expected error for shape mismatch");
+}
+
+#[test]
+fn plan_elementwise_mul_rank_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    // A=[3,4], B=[3,4], C=[3] — rank mismatch
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3]]);
+    assert!(result.is_err(), "expected error for rank mismatch");
+}
+
+#[test]
+fn plan_elementwise_mul_b_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    // A=[3,4], B=[3,5], C=[3,4] — B dimension mismatch
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5], &[3, 4]]);
+    assert!(result.is_err(), "expected error for B shape mismatch");
+}
+
+#[test]
+fn plan_make_contiguous_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::MakeContiguous;
+    // input [3,4] vs output [3,5]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5]]);
+    assert!(result.is_err(), "expected error for shape mismatch");
+}
+
+#[test]
+fn plan_make_contiguous_rank_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::MakeContiguous;
+    // input [3,4] vs output [12]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[12]]);
+    assert!(result.is_err(), "expected error for rank mismatch");
+}
+
+#[test]
 fn plan_anti_trace_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
     let desc = PrimDescriptor::AntiTrace {

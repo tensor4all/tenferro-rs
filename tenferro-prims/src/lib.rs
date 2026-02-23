@@ -880,6 +880,7 @@ impl CpuBackend {
             PrimDescriptor::ElementwiseUnary { op } => {
                 // ElementwiseUnary expects 2 shapes: A (input), C (output)
                 validate_shape_count(shapes, 2, "ElementwiseUnary")?;
+                validate_shape_eq(shapes[1], shapes[0], "ElementwiseUnary output")?;
                 Ok(CpuPlan::ElementwiseUnary {
                     op: *op,
                     _marker: PhantomData,
@@ -919,6 +920,8 @@ impl CpuBackend {
             PrimDescriptor::ElementwiseMul => {
                 // ElementwiseMul expects 3 shapes: A, B, C
                 validate_shape_count(shapes, 3, "ElementwiseMul")?;
+                validate_shape_eq(shapes[1], shapes[0], "ElementwiseMul input B")?;
+                validate_shape_eq(shapes[2], shapes[0], "ElementwiseMul output C")?;
                 Ok(CpuPlan::ElementwiseMul {
                     _marker: PhantomData,
                 })
@@ -927,6 +930,7 @@ impl CpuBackend {
             PrimDescriptor::MakeContiguous => {
                 // MakeContiguous expects 2 shapes: A (input), C (output)
                 validate_shape_count(shapes, 2, "MakeContiguous")?;
+                validate_shape_eq(shapes[1], shapes[0], "MakeContiguous output")?;
                 Ok(CpuPlan::MakeContiguous {
                     _marker: PhantomData,
                 })
