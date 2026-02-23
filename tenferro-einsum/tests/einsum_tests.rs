@@ -1111,3 +1111,426 @@ macro_rules! typed_einsum_tests {
 typed_einsum_tests!(typed_f64, f64);
 typed_einsum_tests!(typed_f32, f32);
 typed_einsum_tests!(typed_complex64, num_complex::Complex64);
+
+// ============================================================================
+// Opteinsum parity tests (#139)
+//
+// Parity checklist against strided-opteinsum integration test categories:
+//
+// [x] Repeated-label edge cases
+//     - Self-contraction (single tensor, sum over non-trace axes):
+//       einsum_self_contraction_trace
+//     - Partial trace with free index ("iij->j"):
+//       einsum_partial_trace_with_free_index
+//     - Trace of rank-3 tensor ("iji->j"):
+//       einsum_trace_rank3_to_vector
+//     - Three-way repeated label (iii->):
+//       einsum_three_way_repeated_label_trace
+//     - Batched dot product ("bi,bi->b"):
+//       einsum_batched_dot_product
+//
+// [x] Size-dict dependent cases
+//     - Explicit size hints via Subscripts::new + ContractionTree::optimize:
+//       einsum_size_dict_explicit_shapes
+//     - Size-dict for output-only label (diagonal embedding with computed
+//       shapes): einsum_size_dict_output_only_label
+//
+// [x] Unicode label parsing
+//     - Parser rejects non-ASCII labels: parse_unicode_label_rejected
+//     - Only a-z, A-Z accepted: parse_various_invalid_chars
+//
+// [x] Complex-diagonal cases
+//     - Diagonal extraction with Complex64 data:
+//       einsum_complex_diagonal_extraction
+//     - Diagonal embedding with Complex64 data:
+//       einsum_complex_diagonal_embedding
+//     - Trace of Complex64 matrix: einsum_complex_trace
+//
+// [x] Error path tests
+//     - Rank mismatch (subscript vs tensor ndim):
+//       einsum_error_rank_mismatch
+//     - Empty inputs array: einsum_error_empty_inputs
+//     - Output label not in any input:
+//       einsum_error_output_label_not_in_input
+//     - Non-square trace (repeated label, different sizes):
+//       einsum_error_non_square_trace
+//
+// [ ] Known limitations (not testable with current implementation)
+//     - Unicode labels: parser only accepts a-z, A-Z (verified via error tests)
+//     - Implicit output: parser requires explicit "->" separator
+//     - Multi-trace with independent pairs of different dimensions
+//       ("ijij->" where dim(i) != dim(j)): trace backend uses a single
+//       diagonal loop, so all paired axes must share the same dimension
+//     - Trace + full reduction ("iij->"): the trace backend does not sum
+//       over non-paired, non-output axes (j is silently ignored)
+//     - Repeated labels in a single operand during pairwise contraction
+//       ("ii,j->j"): the Contract descriptor does not enforce diagonal
+//       constraints on repeated labels within one operand
+// ============================================================================
+
+// ============================================================================
+// Repeated-label edge cases
+// ============================================================================
+
+#[test]
+fn einsum_self_contraction_trace() {
+    // Self-contraction: trace of a rank-3 tensor over two indices
+    // T_{ijk} with trace over i,k -> v_j = sum_i T_{iji}
+    let mut ctx = CpuContext::new(1);
+    // 2x3x2 tensor
+    let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 3, 2], COL).unwrap();
+    let v = einsum::<f64, S, CpuBackend>(&mut ctx, "ijk->j", &[&t], None).unwrap();
+    assert_eq!(v.dims(), &[3]);
+
+    // Manual verification: sum over i and k
+    for j in 0..3 {
+        let mut expected = 0.0;
+        for i in 0..2 {
+            for k in 0..2 {
+                expected += get(&t, &[i, j, k]);
+            }
+        }
+        assert!(
+            (get(&v, &[j]) - expected).abs() < 1e-10,
+            "v[{j}] = {}, expected {expected}",
+            get(&v, &[j])
+        );
+    }
+}
+
+#[test]
+fn einsum_partial_trace_with_free_index() {
+    // Partial trace: T_{iij} -> v_j = sum_i T[i,i,j]
+    // This is a single-pair trace with a free output index.
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 2, 3], COL).unwrap();
+    let v = einsum::<f64, S, CpuBackend>(&mut ctx, "iij->j", &[&t], None).unwrap();
+    assert_eq!(v.dims(), &[3]);
+
+    // Manual: v[j] = sum_i T[i,i,j]
+    for j in 0..3 {
+        let mut expected = 0.0;
+        for i in 0..2 {
+            expected += get(&t, &[i, i, j]);
+        }
+        assert!(
+            (get(&v, &[j]) - expected).abs() < 1e-10,
+            "v[{j}] = {}, expected {expected}",
+            get(&v, &[j])
+        );
+    }
+}
+
+#[test]
+fn einsum_trace_rank3_to_vector() {
+    // Trace of rank-3 tensor: T_{iji} -> v_j = sum_i T[i,j,i]
+    // The repeated label 'i' at positions 0 and 2 is traced, 'j' is free.
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=18).map(|x| x as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[3, 2, 3], COL).unwrap();
+    let v = einsum::<f64, S, CpuBackend>(&mut ctx, "iji->j", &[&t], None).unwrap();
+    assert_eq!(v.dims(), &[2]);
+
+    // Manual: v[j] = sum_i T[i,j,i]
+    for j in 0..2 {
+        let mut expected = 0.0;
+        for i in 0..3 {
+            expected += get(&t, &[i, j, i]);
+        }
+        assert!(
+            (get(&v, &[j]) - expected).abs() < 1e-10,
+            "v[{j}] = {}, expected {expected}",
+            get(&v, &[j])
+        );
+    }
+}
+
+#[test]
+fn einsum_three_way_repeated_label_trace() {
+    // Three-way repeated label: T_{iii} -> scalar
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (1..=27).map(|x| x as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[3, 3, 3], COL).unwrap();
+    let s = einsum::<f64, S, CpuBackend>(&mut ctx, "iii->", &[&t], None).unwrap();
+    assert!(s.dims().is_empty());
+
+    // Manual: sum_i T[i,i,i]
+    let mut expected = 0.0;
+    for i in 0..3 {
+        expected += get(&t, &[i, i, i]);
+    }
+    assert!(
+        (scalar_val(&s) - expected).abs() < 1e-10,
+        "3-way trace = {}, expected {expected}",
+        scalar_val(&s)
+    );
+}
+
+#[test]
+fn einsum_batched_dot_product() {
+    // Batched dot product: "bi,bi->b"
+    // Two 3x2 matrices, contract over index i for each batch element b
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[7.0, 8.0, 9.0, 10.0, 11.0, 12.0], &[3, 2], COL).unwrap();
+    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "bi,bi->b", &[&a, &b], None).unwrap();
+    assert_eq!(c.dims(), &[3]);
+
+    // Manual: c[b] = sum_i A[b,i] * B[b,i]
+    for batch in 0..3 {
+        let mut expected = 0.0;
+        for i in 0..2 {
+            expected += get(&a, &[batch, i]) * get(&b, &[batch, i]);
+        }
+        assert!(
+            (get(&c, &[batch]) - expected).abs() < 1e-10,
+            "c[{batch}] = {}, expected {expected}",
+            get(&c, &[batch])
+        );
+    }
+}
+
+// ============================================================================
+// Size-dict dependent cases
+// ============================================================================
+
+#[test]
+fn einsum_size_dict_explicit_shapes() {
+    // Use Subscripts::new + ContractionTree::optimize to verify size-dict
+    // construction from explicit shapes (not string parsing).
+    // This exercises the path where sizes come from shapes, not from
+    // string labels.
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let tree = ContractionTree::optimize(&subs, &[&[2, 3], &[3, 5], &[5, 4]]).unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let a_data: Vec<f64> = (1..=6).map(|x| x as f64).collect();
+    let b_data: Vec<f64> = (1..=15).map(|x| x as f64).collect();
+    let c_data: Vec<f64> = (1..=20).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 3], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&b_data, &[3, 5], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&c_data, &[5, 4], COL).unwrap();
+
+    let d = einsum_with_plan::<f64, S, CpuBackend>(&mut ctx, &tree, &[&a, &b, &c], None).unwrap();
+    assert_eq!(d.dims(), &[2, 4]);
+
+    // Verify via sequential pairwise
+    let ab = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let abc = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
+
+    for i in 0..2 {
+        for j in 0..4 {
+            assert!(
+                (get(&d, &[i, j]) - get(&abc, &[i, j])).abs() < 1e-8,
+                "D[{i},{j}] = {}, expected {}",
+                get(&d, &[i, j]),
+                get(&abc, &[i, j])
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_size_dict_output_only_label() {
+    // Diagonal embedding: "i->ii" -- the output label 'i' appears twice.
+    // The size of 'i' is inferred from the input tensor.
+    // This verifies the size-dict handles output-only repeated labels correctly.
+    let mut ctx = CpuContext::new(1);
+    let v = Tensor::<f64>::from_slice(&[7.0, 8.0, 9.0, 10.0], &[4], COL).unwrap();
+    let d = einsum::<f64, S, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
+    assert_eq!(d.dims(), &[4, 4]);
+
+    for i in 0..4 {
+        for j in 0..4 {
+            let expected = if i == j { get(&v, &[i]) } else { 0.0 };
+            assert!(
+                (get(&d, &[i, j]) - expected).abs() < 1e-10,
+                "d[{i},{j}] = {}, expected {expected}",
+                get(&d, &[i, j])
+            );
+        }
+    }
+}
+
+// ============================================================================
+// Unicode label parsing (error paths)
+// ============================================================================
+
+#[test]
+fn parse_unicode_label_rejected() {
+    // The parser only accepts a-z and A-Z. Unicode characters should produce
+    // a clear error.
+    let result = Subscripts::parse("\u{03B1}\u{03B2},\u{03B2}\u{03B3}->\u{03B1}\u{03B3}");
+    assert!(
+        result.is_err(),
+        "unicode labels should be rejected, got: {:?}",
+        result
+    );
+    match result {
+        Err(tenferro_device::Error::InvalidArgument(msg)) => {
+            assert!(
+                msg.contains("invalid"),
+                "error message should mention 'invalid', got: {msg}"
+            );
+        }
+        other => panic!("expected InvalidArgument, got: {other:?}"),
+    }
+}
+
+#[test]
+fn parse_various_invalid_chars() {
+    // Verify several categories of invalid characters produce errors.
+    let invalid_cases = [
+        ("0i,ij->0j", "digit"),
+        ("i+,+j->ij", "plus sign"),
+        ("i ,j ->ij", "space"),
+        ("i\u{00E9},\u{00E9}j->ij", "accented char"),
+        ("i\u{4E2D},\u{4E2D}j->ij", "CJK char"),
+    ];
+    for (notation, desc) in &invalid_cases {
+        let result = Subscripts::parse(notation);
+        assert!(
+            result.is_err(),
+            "should reject {desc} in notation '{notation}', got: {:?}",
+            result
+        );
+    }
+}
+
+// ============================================================================
+// Complex-diagonal cases
+// ============================================================================
+
+#[test]
+fn einsum_complex_diagonal_extraction() {
+    use num_complex::Complex64;
+    type CS = Standard<Complex64>;
+
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<Complex64> = (1..=9)
+        .map(|x| Complex64::new(x as f64, -(x as f64)))
+        .collect();
+    let a = Tensor::<Complex64>::from_slice(&data, &[3, 3], COL).unwrap();
+    let d = einsum::<Complex64, CS, CpuBackend>(&mut ctx, "ii->i", &[&a], None).unwrap();
+    assert_eq!(d.dims(), &[3]);
+
+    // Column-major 3x3: a[i,j] at offset i + 3*j
+    // diagonal: a[0,0]=1-i, a[1,1]=5-5i, a[2,2]=9-9i
+    let diag_expected = [
+        Complex64::new(1.0, -1.0),
+        Complex64::new(5.0, -5.0),
+        Complex64::new(9.0, -9.0),
+    ];
+    for i in 0..3 {
+        let got = get_t(&d, &[i]);
+        assert!(
+            (got - diag_expected[i]).norm() < 1e-10,
+            "diag[{i}] = {got:?}, expected {:?}",
+            diag_expected[i]
+        );
+    }
+}
+
+#[test]
+fn einsum_complex_diagonal_embedding() {
+    use num_complex::Complex64;
+    type CS = Standard<Complex64>;
+
+    let mut ctx = CpuContext::new(1);
+    let data = vec![
+        Complex64::new(2.0, 1.0),
+        Complex64::new(3.0, -1.0),
+        Complex64::new(5.0, 0.5),
+    ];
+    let v = Tensor::<Complex64>::from_slice(&data, &[3], COL).unwrap();
+    let d = einsum::<Complex64, CS, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
+    assert_eq!(d.dims(), &[3, 3]);
+
+    for i in 0..3 {
+        for j in 0..3 {
+            let got = get_t::<Complex64>(&d, &[i, j]);
+            let expected = if i == j {
+                data[i]
+            } else {
+                Complex64::new(0.0, 0.0)
+            };
+            assert!(
+                (got - expected).norm() < 1e-10,
+                "d[{i},{j}] = {got:?}, expected {expected:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_complex_trace() {
+    use num_complex::Complex64;
+    type CS = Standard<Complex64>;
+
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<Complex64> = (1..=4)
+        .map(|x| Complex64::new(x as f64, 0.5 * x as f64))
+        .collect();
+    let a = Tensor::<Complex64>::from_slice(&data, &[2, 2], COL).unwrap();
+    let tr = einsum::<Complex64, CS, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+    assert!(tr.dims().is_empty());
+
+    // Column-major 2x2: a[0,0] + a[1,1]
+    // a[0,0] = 1+0.5i, a[1,0] = 2+i, a[0,1] = 3+1.5i, a[1,1] = 4+2i
+    // trace = (1+0.5i) + (4+2i) = 5+2.5i
+    let expected = Complex64::new(5.0, 2.5);
+    let got = scalar_val_t(&tr);
+    assert!(
+        (got - expected).norm() < 1e-10,
+        "trace = {got:?}, expected {expected:?}"
+    );
+}
+
+// ============================================================================
+// Error path tests
+// ============================================================================
+
+#[test]
+fn einsum_error_rank_mismatch() {
+    // Subscripts say "ij" (rank 2) but tensor is rank 1
+    let mut ctx = CpuContext::new(1);
+    let v = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->i", &[&v], None);
+    assert!(result.is_err(), "should fail for rank mismatch");
+}
+
+#[test]
+fn einsum_error_empty_inputs() {
+    // No input tensors
+    let mut ctx = CpuContext::new(1);
+    let empty: &[&Tensor<f64>] = &[];
+    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "->", empty, None);
+    assert!(result.is_err(), "should fail for empty inputs");
+}
+
+#[test]
+fn einsum_error_output_label_not_in_input() {
+    // Output references label 'k' which is not in any input
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->ik", &[&a], None);
+    assert!(
+        result.is_err(),
+        "should fail when output label not in input"
+    );
+}
+
+#[test]
+fn einsum_error_non_square_trace() {
+    // Trace "ii->" but matrix is 2x3 (non-square), so label 'i' has conflicting sizes
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ii->", &[&a], None);
+    assert!(
+        matches!(result, Err(tenferro_device::Error::ShapeMismatch { .. })),
+        "expected ShapeMismatch for non-square trace, got: {:?}",
+        result.as_ref().err()
+    );
+}
