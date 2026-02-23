@@ -25,7 +25,7 @@ use crate::algebra::{MaxMulAlgebra, MaxPlusAlgebra, MinPlusAlgebra};
 use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 
 /// Convert a CPU tensor to an immutable strided view.
-fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
+pub(crate) fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
     let data = t
         .buffer()
         .as_slice()
@@ -129,7 +129,7 @@ pub enum TropicalPlan<T: Scalar> {
 // ===========================================================================
 
 /// Iterate over all index combinations for the given dimensions (column-major order).
-fn for_each_index(dims: &[usize], mut f: impl FnMut(&[usize])) {
+pub(crate) fn for_each_index(dims: &[usize], mut f: impl FnMut(&[usize])) {
     let ndim = dims.len();
     if ndim == 0 {
         f(&[]);
@@ -153,7 +153,7 @@ fn for_each_index(dims: &[usize], mut f: impl FnMut(&[usize])) {
 }
 
 /// Unflatten a linear index to multi-dimensional indices (column-major).
-fn unflatten_index(flat: usize, dims: &[usize]) -> Vec<usize> {
+pub(crate) fn unflatten_index(flat: usize, dims: &[usize]) -> Vec<usize> {
     let mut indices = vec![0; dims.len()];
     let mut remainder = flat;
     for d in 0..dims.len() {

@@ -71,6 +71,7 @@
 //! ).unwrap();
 //! ```
 
+pub mod ad;
 pub mod algebra;
 pub mod argmax;
 pub mod prims;
