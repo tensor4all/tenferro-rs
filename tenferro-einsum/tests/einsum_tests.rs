@@ -826,21 +826,13 @@ fn tracked_einsum_matmul_pullback() {
     )
     .expect("scale by 2");
     // grad_A = grad_C @ B^T = einsum("ik,jk->ij", [2*C, B])
-    let expected_ga = einsum::<f64, S, CpuBackend>(
-        &mut ctx.borrow_mut(),
-        "ik,jk->ij",
-        &[&two_c, &b_data],
-        None,
-    )
-    .expect("expected grad_A");
+    let expected_ga =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
+            .expect("expected grad_A");
     // grad_B = A^T @ grad_C = einsum("ij,ik->jk", [A, 2*C])
-    let expected_gb = einsum::<f64, S, CpuBackend>(
-        &mut ctx.borrow_mut(),
-        "ij,ik->jk",
-        &[&a_data, &two_c],
-        None,
-    )
-    .expect("expected grad_B");
+    let expected_gb =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,ik->jk", &[&a_data, &two_c], None)
+            .expect("expected grad_B");
 
     for i in 0..2 {
         for j in 0..3 {
@@ -1733,10 +1725,8 @@ fn hvp_via_fw_grad_composition() {
     let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 
     // A = [[1, 3], [2, 4]] (col-major), B = [[5, 7], [6, 8]] (col-major)
-    let mut a_data =
-        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
-    let b_data =
-        Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let mut a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
 
     // Tangent direction: dA = ones
     let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
@@ -1748,10 +1738,8 @@ fn hvp_via_fw_grad_composition() {
     let a_id = a.node_id().unwrap();
 
     // loss = sum_{ij} C_{ij}^2 where C = A @ B
-    let c =
-        tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
-    let loss =
-        tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
+    let c = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 
     let grads = tape.pullback(&loss).unwrap();
     let ga = grads.get(a_id).unwrap();
@@ -1765,20 +1753,12 @@ fn hvp_via_fw_grad_composition() {
     )
     .unwrap();
     let two = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
-    let two_c = einsum::<f64, S, CpuBackend>(
-        &mut ctx.borrow_mut(),
-        "ij,->ij",
-        &[&c_val, &two],
-        None,
-    )
-    .unwrap();
-    let expected_ga = einsum::<f64, S, CpuBackend>(
-        &mut ctx.borrow_mut(),
-        "ik,jk->ij",
-        &[&two_c, &b_data],
-        None,
-    )
-    .unwrap();
+    let two_c =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&c_val, &two], None)
+            .unwrap();
+    let expected_ga =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
+            .unwrap();
 
     // Verify grad_A primal
     let ga_data = ga.buffer().as_slice().unwrap();
@@ -1795,21 +1775,13 @@ fn hvp_via_fw_grad_composition() {
     // HVP: d(grad_A)/dt = 2*(dA@B)@B^T where dA = ones
     // dA@B = ones @ B = einsum("ij,jk->ik", ones, B)
     let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL);
-    let da_b = einsum::<f64, S, CpuBackend>(
-        &mut ctx.borrow_mut(),
-        "ij,jk->ik",
-        &[&ones, &b_data],
-        None,
-    )
-    .unwrap();
+    let da_b =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,jk->ik", &[&ones, &b_data], None)
+            .unwrap();
     // 2*(dA@B)@B^T = einsum("ik,jk->ij", 2*dA_B, B)
-    let two_da_b = einsum::<f64, S, CpuBackend>(
-        &mut ctx.borrow_mut(),
-        "ij,->ij",
-        &[&da_b, &two],
-        None,
-    )
-    .unwrap();
+    let two_da_b =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&da_b, &two], None)
+            .unwrap();
     let expected_hvp = einsum::<f64, S, CpuBackend>(
         &mut ctx.borrow_mut(),
         "ik,jk->ij",
@@ -1819,10 +1791,7 @@ fn hvp_via_fw_grad_composition() {
     .unwrap();
 
     // grad_A should carry fw_grad = HVP
-    assert!(
-        ga.has_fw_grad(),
-        "gradient should carry fw_grad for HVP"
-    );
+    assert!(ga.has_fw_grad(), "gradient should carry fw_grad for HVP");
     let hvp = ga.fw_grad().unwrap();
     let hvp_data = hvp.buffer().as_slice().unwrap();
     let exp_hvp_data = expected_hvp.buffer().as_slice().unwrap();
