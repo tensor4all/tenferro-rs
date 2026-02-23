@@ -18,8 +18,8 @@
 //!   semantics. Satisfy the [`Scalar`](tenferro_algebra::Scalar) blanket impl.
 //!
 //! - **Algebra markers** ([`MaxPlusAlgebra`], [`MinPlusAlgebra`], [`MaxMulAlgebra`]):
-//!   Zero-sized types used as the algebra parameter `A` in
-//!   [`TensorPrims<A>`](tenferro_prims::TensorPrims).
+//!   Zero-sized types used as the algebra parameter `Alg` in
+//!   [`TensorPrims<Alg>`](tenferro_prims::TensorPrims).
 //!
 //! - **[`TensorPrims`](tenferro_prims::TensorPrims) implementations**:
 //!   `impl TensorPrims<MaxPlusAlgebra> for CpuBackend` etc. Orphan rule

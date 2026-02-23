@@ -15,8 +15,8 @@
 //!
 //! # Backend dispatch
 //!
-//! The backend is passed explicitly as a type parameter `B: TensorPrims<A>`
-//! with a mutable context `&mut B::Context`.  This follows Rust idiom of
+//! The backend is passed explicitly as a type parameter `Backend: TensorPrims<Alg>`
+//! with a mutable context `&mut Backend::Context`.  This follows Rust idiom of
 //! explicit ownership and mutability (no global/thread-local state).
 //! The context provides access to the thread pool and plan cache.
 //!
@@ -503,8 +503,8 @@ fn manual_einsum<T: Scalar>(
 // ============================================================================
 
 /// Execute a single-tensor einsum operation via TensorPrims.
-fn execute_single_tensor_einsum<T, A, B>(
-    ctx: &mut B::Context,
+fn execute_single_tensor_einsum<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subs_a: &[u32],
     subs_c: &[u32],
     input: &Tensor<T>,
@@ -513,8 +513,8 @@ fn execute_single_tensor_einsum<T, A, B>(
     output: &mut Tensor<T>,
 ) -> Result<()>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     // Count label occurrences in input and output
     let mut label_positions: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -545,10 +545,10 @@ where
                 modes_b: subs_c.to_vec(),
             };
             let shapes = [input.dims(), output.dims()];
-            let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+            let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
             let input_sv = tensor_to_view(input)?;
             let mut output_sv = tensor_to_view_mut(output)?;
-            B::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
+            Backend::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
         } else if output_set.is_subset(&input_set) {
             // Reduction (sum over labels not in output)
             let desc = PrimDescriptor::Reduce {
@@ -557,10 +557,10 @@ where
                 op: ReduceOp::Sum,
             };
             let shapes = [input.dims(), output.dims()];
-            let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+            let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
             let input_sv = tensor_to_view(input)?;
             let mut output_sv = tensor_to_view_mut(output)?;
-            B::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
+            Backend::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
         } else {
             Err(Error::InvalidArgument(
                 "output labels contain labels not in input".into(),
@@ -622,10 +622,10 @@ where
                 paired,
             };
             let shapes = [input.dims(), output.dims()];
-            let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+            let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
             let input_sv = tensor_to_view(input)?;
             let mut output_sv = tensor_to_view_mut(output)?;
-            B::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
+            Backend::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
         } else {
             // Diagonal extraction: repeated labels appear in output
             // Diagonal extraction + copy
@@ -686,9 +686,9 @@ where
                     modes_b: subs_c.to_vec(),
                 };
                 let shapes = [diag_tensor.dims(), output.dims()];
-                let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+                let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
                 let mut output_sv = tensor_to_view_mut(output)?;
-                B::execute(ctx, &plan, alpha, &[&sv], beta, &mut output_sv)
+                Backend::execute(ctx, &plan, alpha, &[&sv], beta, &mut output_sv)
             } else {
                 // Copy diagonal to contiguous temp, then reduce
                 let diag_tensor = diag_tensor.contiguous(MemoryOrder::ColumnMajor);
@@ -698,10 +698,10 @@ where
                     op: ReduceOp::Sum,
                 };
                 let shapes = [diag_tensor.dims(), output.dims()];
-                let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+                let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
                 let diag_sv = tensor_to_view(&diag_tensor)?;
                 let mut output_sv = tensor_to_view_mut(output)?;
-                B::execute(ctx, &plan, alpha, &[&diag_sv], beta, &mut output_sv)
+                Backend::execute(ctx, &plan, alpha, &[&diag_sv], beta, &mut output_sv)
             }
         }
     } else if repeated_labels.is_empty() && output_has_repeated {
@@ -742,10 +742,10 @@ where
             paired,
         };
         let shapes = [input.dims(), output.dims()];
-        let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+        let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
         let input_sv = tensor_to_view(input)?;
         let mut output_sv = tensor_to_view_mut(output)?;
-        B::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
+        Backend::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
     } else {
         Err(Error::InvalidArgument(
             "simultaneous repeated labels in both input and output not yet supported".into(),
@@ -757,8 +757,69 @@ where
 // Pairwise contraction execution
 // ============================================================================
 
-/// Execute a pairwise contraction of two tensors via TensorPrims.
-fn execute_pairwise_contraction<T, A, B>(
+/// Classify contraction modes into batch, left-only, right-only, and summed.
+///
+/// - batch: modes in A ∩ B ∩ C (preserved in both inputs and output)
+/// - lo (left-only): modes in (A ∩ C) \ B (free modes of A)
+/// - ro (right-only): modes in (B ∩ C) \ A (free modes of B)
+/// - sum: modes in (A ∩ B) \ C (contracted/summed over)
+///
+/// Each category preserves the order in which modes first appear in subs_a
+/// (for batch, lo, sum) or subs_b (for ro).
+fn classify_modes(
+    subs_a: &[u32],
+    subs_b: &[u32],
+    subs_c: &[u32],
+) -> (Vec<u32>, Vec<u32>, Vec<u32>, Vec<u32>) {
+    let set_a: HashSet<u32> = subs_a.iter().copied().collect();
+    let set_b: HashSet<u32> = subs_b.iter().copied().collect();
+    let set_c: HashSet<u32> = subs_c.iter().copied().collect();
+
+    let mut batch = Vec::new();
+    let mut lo = Vec::new();
+    let mut sum = Vec::new();
+    let mut seen = HashSet::new();
+
+    // Scan A modes: classify as batch, lo, or sum
+    for &m in subs_a {
+        if !seen.insert(m) {
+            continue;
+        }
+        if set_b.contains(&m) && set_c.contains(&m) {
+            batch.push(m);
+        } else if set_c.contains(&m) && !set_b.contains(&m) {
+            lo.push(m);
+        } else if set_b.contains(&m) && !set_c.contains(&m) {
+            sum.push(m);
+        }
+        // mode only in A and not in B or C: ignored (won't appear in output)
+    }
+
+    // Scan B modes for right-only
+    let mut ro = Vec::new();
+    let mut seen_b = HashSet::new();
+    for &m in subs_b {
+        if !seen_b.insert(m) {
+            continue;
+        }
+        if set_c.contains(&m) && !set_a.contains(&m) {
+            ro.push(m);
+        }
+    }
+
+    (batch, lo, ro, sum)
+}
+
+/// Fallback pairwise contraction using core primitives only.
+///
+/// Decomposes a binary contraction into:
+/// 1. Permute A → [batch, lo, sum], B → [batch, sum, ro]
+/// 2. MakeContiguous (conditional copy)
+/// 3. Reshape to [batch..., m, k] and [batch..., k, n]
+/// 4. BatchedGemm → temp [batch..., m, n]
+/// 5. Reshape temp → [batch..., lo..., ro...]
+/// 6. Permute to output with alpha/beta
+fn fallback_pairwise_contraction<T, A, B>(
     ctx: &mut B::Context,
     subs_a: &[u32],
     subs_b: &[u32],
@@ -773,35 +834,257 @@ where
     T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
     B: TensorPrims<A>,
 {
+    let (batch_modes, lo_modes, ro_modes, sum_modes) = classify_modes(subs_a, subs_b, subs_c);
+
+    // Build size_dict from input subscripts and shapes
+    let mut size_dict: HashMap<u32, usize> = HashMap::new();
+    for (&label, &dim) in subs_a.iter().zip(a.dims()) {
+        size_dict.insert(label, dim);
+    }
+    for (&label, &dim) in subs_b.iter().zip(b.dims()) {
+        size_dict.insert(label, dim);
+    }
+
+    let batch_sizes: Vec<usize> = batch_modes.iter().map(|m| size_dict[m]).collect();
+    let lo_sizes: Vec<usize> = lo_modes.iter().map(|m| size_dict[m]).collect();
+    let ro_sizes: Vec<usize> = ro_modes.iter().map(|m| size_dict[m]).collect();
+    let sum_sizes: Vec<usize> = sum_modes.iter().map(|m| size_dict[m]).collect();
+
+    let m: usize = lo_sizes.iter().product::<usize>().max(1);
+    let n: usize = ro_sizes.iter().product::<usize>().max(1);
+    let k: usize = sum_sizes.iter().product::<usize>().max(1);
+
+    // --- Step 1: Permute A to [batch, lo, sum] ---
+    let target_a: Vec<u32> = batch_modes
+        .iter()
+        .chain(lo_modes.iter())
+        .chain(sum_modes.iter())
+        .copied()
+        .collect();
+    let perm_a = permute_or_copy::<T, A, B>(ctx, a, subs_a, &target_a)?;
+
+    // --- Step 2: Permute B to [batch, sum, ro] ---
+    let target_b: Vec<u32> = batch_modes
+        .iter()
+        .chain(sum_modes.iter())
+        .chain(ro_modes.iter())
+        .copied()
+        .collect();
+    let perm_b = permute_or_copy::<T, A, B>(ctx, b, subs_b, &target_b)?;
+
+    // --- Step 3: Reshape to [batch..., m, k] and [batch..., k, n] ---
+    let a_gemm_shape: Vec<usize> = batch_sizes
+        .iter()
+        .copied()
+        .chain(std::iter::once(m))
+        .chain(std::iter::once(k))
+        .collect();
+    let b_gemm_shape: Vec<usize> = batch_sizes
+        .iter()
+        .copied()
+        .chain(std::iter::once(k))
+        .chain(std::iter::once(n))
+        .collect();
+    let c_gemm_shape: Vec<usize> = batch_sizes
+        .iter()
+        .copied()
+        .chain(std::iter::once(m))
+        .chain(std::iter::once(n))
+        .collect();
+
+    let a_reshaped = perm_a.reshape(&a_gemm_shape)?;
+    let b_reshaped = perm_b.reshape(&b_gemm_shape)?;
+
+    // --- Step 4: BatchedGemm → temp ---
+    let memory_space = a.logical_memory_space();
+    let mut temp = Tensor::<T>::zeros(&c_gemm_shape, memory_space, MemoryOrder::ColumnMajor);
+
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: batch_sizes.clone(),
+        m,
+        n,
+        k,
+    };
+    let shapes = [a_reshaped.dims(), b_reshaped.dims(), temp.dims()];
+    let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+    let a_sv = tensor_to_view(&a_reshaped)?;
+    let b_sv = tensor_to_view(&b_reshaped)?;
+    let mut temp_sv = tensor_to_view_mut(&mut temp)?;
+    B::execute(
+        ctx,
+        &plan,
+        T::one(),
+        &[&a_sv, &b_sv],
+        T::zero(),
+        &mut temp_sv,
+    )?;
+    drop(temp_sv);
+
+    // --- Step 5: Reshape temp → [batch..., lo..., ro...] and permute to output ---
+    let expanded_shape: Vec<usize> = batch_sizes
+        .iter()
+        .chain(lo_sizes.iter())
+        .chain(ro_sizes.iter())
+        .copied()
+        .collect();
+    let temp_expanded = temp.reshape(&expanded_shape)?;
+
+    // Canonical mode labels for the expanded temp
+    let canonical_modes: Vec<u32> = batch_modes
+        .iter()
+        .chain(lo_modes.iter())
+        .chain(ro_modes.iter())
+        .copied()
+        .collect();
+
+    // If canonical == subs_c, we can skip the final permute
+    if canonical_modes == subs_c {
+        // Direct copy with alpha/beta
+        if alpha == T::one() && beta == T::zero() {
+            *output = temp_expanded;
+        } else {
+            let desc = PrimDescriptor::Permute {
+                modes_a: canonical_modes.clone(),
+                modes_b: subs_c.to_vec(),
+            };
+            let shapes = [temp_expanded.dims(), output.dims()];
+            let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+            let src_sv = tensor_to_view(&temp_expanded)?;
+            let mut out_sv = tensor_to_view_mut(output)?;
+            B::execute(ctx, &plan, alpha, &[&src_sv], beta, &mut out_sv)?;
+        }
+    } else {
+        // Permute from canonical order to output order with alpha/beta
+        let desc = PrimDescriptor::Permute {
+            modes_a: canonical_modes,
+            modes_b: subs_c.to_vec(),
+        };
+        let shapes = [temp_expanded.dims(), output.dims()];
+        let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+        let src_sv = tensor_to_view(&temp_expanded)?;
+        let mut out_sv = tensor_to_view_mut(output)?;
+        B::execute(ctx, &plan, alpha, &[&src_sv], beta, &mut out_sv)?;
+    }
+
+    Ok(())
+}
+
+/// Permute a tensor to a target mode order and ensure contiguous layout.
+///
+/// If `current_subs == target_subs`, returns a contiguous copy (MakeContiguous)
+/// if needed. Otherwise, permutes to the target order, then makes contiguous.
+fn permute_or_copy<T, A, B>(
+    ctx: &mut B::Context,
+    tensor: &Tensor<T>,
+    current_subs: &[u32],
+    target_subs: &[u32],
+) -> Result<Tensor<T>>
+where
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    if current_subs == target_subs {
+        // No permutation needed; ensure contiguous
+        return make_contiguous_if_needed::<T, A, B>(ctx, tensor);
+    }
+
+    // Compute target shape from the permutation
+    let label_to_pos: HashMap<u32, usize> = current_subs
+        .iter()
+        .enumerate()
+        .map(|(i, &l)| (l, i))
+        .collect();
+    let target_shape: Vec<usize> = target_subs
+        .iter()
+        .map(|l| tensor.dims()[label_to_pos[l]])
+        .collect();
+
+    // Permute via prim
+    let memory_space = tensor.logical_memory_space();
+    let mut permuted = Tensor::<T>::zeros(&target_shape, memory_space, MemoryOrder::ColumnMajor);
+    let desc = PrimDescriptor::Permute {
+        modes_a: current_subs.to_vec(),
+        modes_b: target_subs.to_vec(),
+    };
+    let shapes = [tensor.dims(), permuted.dims()];
+    let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+    let src_sv = tensor_to_view(tensor)?;
+    let mut dst_sv = tensor_to_view_mut(&mut permuted)?;
+    B::execute(ctx, &plan, T::one(), &[&src_sv], T::zero(), &mut dst_sv)?;
+    drop(dst_sv);
+
+    // The result is already contiguous (freshly allocated)
+    Ok(permuted)
+}
+
+/// Ensure a tensor is contiguous, copying if necessary.
+fn make_contiguous_if_needed<T, A, B>(ctx: &mut B::Context, tensor: &Tensor<T>) -> Result<Tensor<T>>
+where
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    if tensor.is_contiguous() {
+        return Ok(tensor.clone());
+    }
+    let memory_space = tensor.logical_memory_space();
+    let mut result = Tensor::<T>::zeros(tensor.dims(), memory_space, MemoryOrder::ColumnMajor);
+    let desc = PrimDescriptor::MakeContiguous;
+    let shapes = [tensor.dims(), result.dims()];
+    let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+    let src_sv = tensor_to_view(tensor)?;
+    let mut dst_sv = tensor_to_view_mut(&mut result)?;
+    B::execute(ctx, &plan, T::one(), &[&src_sv], T::zero(), &mut dst_sv)?;
+    Ok(result)
+}
+
+/// Execute a pairwise contraction of two tensors via TensorPrims.
+fn execute_pairwise_contraction<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
+    subs_a: &[u32],
+    subs_b: &[u32],
+    subs_c: &[u32],
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()>
+where
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
     // Check for element-wise multiplication (same labels, same order)
-    if subs_a == subs_b && subs_a == subs_c && B::has_extension_for::<T>(Extension::ElementwiseMul)
+    if subs_a == subs_b
+        && subs_a == subs_c
+        && Backend::has_extension_for::<T>(Extension::ElementwiseMul)
     {
         let desc = PrimDescriptor::ElementwiseMul;
         let shapes = [a.dims(), b.dims(), output.dims()];
-        let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+        let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
         let a_sv = tensor_to_view(a)?;
         let b_sv = tensor_to_view(b)?;
         let mut out_sv = tensor_to_view_mut(output)?;
-        return B::execute(ctx, &plan, alpha, &[&a_sv, &b_sv], beta, &mut out_sv);
+        return Backend::execute(ctx, &plan, alpha, &[&a_sv, &b_sv], beta, &mut out_sv);
     }
 
     // General contraction via Contract extension
-    if B::has_extension_for::<T>(Extension::Contract) {
+    if Backend::has_extension_for::<T>(Extension::Contract) {
         let desc = PrimDescriptor::Contract {
             modes_a: subs_a.to_vec(),
             modes_b: subs_b.to_vec(),
             modes_c: subs_c.to_vec(),
         };
         let shapes = [a.dims(), b.dims(), output.dims()];
-        let plan = B::plan::<T>(ctx, &desc, &shapes)?;
+        let plan = Backend::plan::<T>(ctx, &desc, &shapes)?;
         let a_sv = tensor_to_view(a)?;
         let b_sv = tensor_to_view(b)?;
         let mut out_sv = tensor_to_view_mut(output)?;
-        B::execute(ctx, &plan, alpha, &[&a_sv, &b_sv], beta, &mut out_sv)
+        Backend::execute(ctx, &plan, alpha, &[&a_sv, &b_sv], beta, &mut out_sv)
     } else {
-        Err(Error::DeviceError(
-            "backend does not support Contract extension".into(),
-        ))
+        // Fallback: decompose into Permute + BatchedGemm
+        fallback_pairwise_contraction::<T, Alg, Backend>(
+            ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+        )
     }
 }
 
@@ -810,8 +1093,8 @@ where
 // ============================================================================
 
 /// Execute a ContractionTree against concrete input tensors.
-fn execute_tree<T, A, B>(
-    ctx: &mut B::Context,
+fn execute_tree<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
     alpha: T,
@@ -819,8 +1102,8 @@ fn execute_tree<T, A, B>(
     output: &mut Tensor<T>,
 ) -> Result<()>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let n_inputs = tree.subscripts.inputs.len();
 
@@ -831,7 +1114,7 @@ where
                 "ContractionTree with no steps requires exactly 1 input".into(),
             ));
         }
-        return execute_single_tensor_einsum::<T, A, B>(
+        return execute_single_tensor_einsum::<T, Alg, Backend>(
             ctx,
             &tree.subscripts.inputs[0],
             &tree.subscripts.output,
@@ -863,7 +1146,7 @@ where
 
         if is_last {
             // Last step: write directly to output with alpha/beta
-            execute_pairwise_contraction::<T, A, B>(
+            execute_pairwise_contraction::<T, Alg, Backend>(
                 ctx,
                 subs_left,
                 subs_right,
@@ -883,7 +1166,7 @@ where
             let memory_space = infer_memory_space(operands)?;
             let mut result =
                 Tensor::<T>::zeros(&result_shape, memory_space, MemoryOrder::ColumnMajor);
-            execute_pairwise_contraction::<T, A, B>(
+            execute_pairwise_contraction::<T, Alg, Backend>(
                 ctx,
                 subs_left,
                 subs_right,
@@ -1225,24 +1508,26 @@ impl ContractionTree {
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    let mut output = einsum_with_subscripts::<T, A, B>(ctx, &subs, operands, size_dict)?;
+    let mut output = einsum_with_subscripts::<T, Alg, Backend>(ctx, &subs, operands, size_dict)?;
 
     // Auto-propagate forward-mode tangents
     if operands.iter().any(|t| t.has_fw_grad()) {
         let tangents: Vec<Option<&Tensor<T>>> = operands.iter().map(|t| t.fw_grad()).collect();
         // einsum_frule_impl calls einsum_with_subscripts (not einsum), so no recursion
-        if let Ok(output_tangent) = einsum_frule_impl::<T, A, B>(ctx, &subs, operands, &tangents) {
+        if let Ok(output_tangent) =
+            einsum_frule_impl::<T, Alg, Backend>(ctx, &subs, operands, &tangents)
+        {
             output.set_fw_grad(output_tangent);
         }
     }
@@ -1258,19 +1543,19 @@ where
 /// # Errors
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
-pub fn einsum_with_subscripts<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_with_subscripts<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)?;
-    einsum_with_plan::<T, A, B>(ctx, &tree, operands, size_dict)
+    einsum_with_plan::<T, Alg, Backend>(ctx, &tree, operands, size_dict)
 }
 
 /// Execute einsum with a pre-optimized [`ContractionTree`].
@@ -1283,15 +1568,15 @@ where
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
-pub fn einsum_with_plan<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_with_plan<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     // Merge size_dict from tree and optional extra
     let mut sd = tree.size_dict.clone();
@@ -1304,7 +1589,7 @@ where
     // Allocate the output tensor on the same memory space as the operands.
     let memory_space = infer_memory_space(operands)?;
     let mut output = Tensor::<T>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor);
-    execute_tree::<T, A, B>(ctx, tree, operands, T::one(), T::zero(), &mut output)?;
+    execute_tree::<T, Alg, Backend>(ctx, tree, operands, T::one(), T::zero(), &mut output)?;
     Ok(output)
 }
 
@@ -1341,18 +1626,18 @@ where
 ///
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
-pub fn einsum_owned<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_owned<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &str,
     operands: Vec<Tensor<T>>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let refs: Vec<&Tensor<T>> = operands.iter().collect();
-    einsum::<T, A, B>(ctx, subscripts, &refs, size_dict)
+    einsum::<T, Alg, Backend>(ctx, subscripts, &refs, size_dict)
 }
 
 /// Execute einsum with pre-built [`Subscripts`], consuming the input tensors.
@@ -1363,18 +1648,18 @@ where
 /// # Errors
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
-pub fn einsum_with_subscripts_owned<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_with_subscripts_owned<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &Subscripts,
     operands: Vec<Tensor<T>>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let refs: Vec<&Tensor<T>> = operands.iter().collect();
-    einsum_with_subscripts::<T, A, B>(ctx, subscripts, &refs, size_dict)
+    einsum_with_subscripts::<T, Alg, Backend>(ctx, subscripts, &refs, size_dict)
 }
 
 /// Execute einsum with a pre-optimized [`ContractionTree`], consuming the
@@ -1388,18 +1673,18 @@ where
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
-pub fn einsum_with_plan_owned<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_with_plan_owned<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     tree: &ContractionTree,
     operands: Vec<Tensor<T>>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let refs: Vec<&Tensor<T>> = operands.iter().collect();
-    einsum_with_plan::<T, A, B>(ctx, tree, &refs, size_dict)
+    einsum_with_plan::<T, Alg, Backend>(ctx, tree, &refs, size_dict)
 }
 
 // ============================================================================
@@ -1447,8 +1732,8 @@ where
 ///
 /// Returns an error if the notation is invalid, tensor shapes are
 /// incompatible, or the output shape does not match the expected result.
-pub fn einsum_into<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_into<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
     alpha: T,
@@ -1457,11 +1742,13 @@ pub fn einsum_into<T, A, B>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    einsum_with_subscripts_into::<T, A, B>(ctx, &subs, operands, alpha, beta, output, size_dict)
+    einsum_with_subscripts_into::<T, Alg, Backend>(
+        ctx, &subs, operands, alpha, beta, output, size_dict,
+    )
 }
 
 /// Execute einsum with pre-built [`Subscripts`], accumulating into an existing output.
@@ -1491,8 +1778,8 @@ where
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts
 /// or the output shape does not match.
-pub fn einsum_with_subscripts_into<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_with_subscripts_into<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &Subscripts,
     operands: &[&Tensor<T>],
     alpha: T,
@@ -1501,12 +1788,12 @@ pub fn einsum_with_subscripts_into<T, A, B>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)?;
-    einsum_with_plan_into::<T, A, B>(ctx, &tree, operands, alpha, beta, output, size_dict)
+    einsum_with_plan_into::<T, Alg, Backend>(ctx, &tree, operands, alpha, beta, output, size_dict)
 }
 
 /// Execute einsum with a pre-optimized [`ContractionTree`], accumulating
@@ -1542,8 +1829,8 @@ where
 ///
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree, or the output shape is incorrect.
-pub fn einsum_with_plan_into<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_with_plan_into<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     tree: &ContractionTree,
     operands: &[&Tensor<T>],
     alpha: T,
@@ -1552,11 +1839,11 @@ pub fn einsum_with_plan_into<T, A, B>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let _ = size_dict; // size_dict already captured in tree.size_dict
-    execute_tree::<T, A, B>(ctx, tree, operands, alpha, beta, output)
+    execute_tree::<T, Alg, Backend>(ctx, tree, operands, alpha, beta, output)
 }
 
 // ============================================================================
@@ -1565,23 +1852,23 @@ where
 
 /// ReverseRule for einsum — stores subscripts, primal tensors, and shared
 /// backend context for backend-optimized pullback.
-struct EinsumReverseRule<T, A, B>
+struct EinsumReverseRule<T, Alg, Backend>
 where
     T: Scalar,
-    B: TensorPrims<A>,
+    Backend: TensorPrims<Alg>,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
-    ctx: Rc<RefCell<B::Context>>,
+    ctx: Rc<RefCell<Backend::Context>>,
     subscripts: Subscripts,
     primals: Vec<Tensor<T>>,
     input_node_ids: Vec<Option<NodeId>>,
-    _phantom: PhantomData<A>,
+    _phantom: PhantomData<Alg>,
 }
 
-impl<T, A, B> ReverseRule<Tensor<T>> for EinsumReverseRule<T, A, B>
+impl<T, Alg, Backend> ReverseRule<Tensor<T>> for EinsumReverseRule<T, Alg, Backend>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
     fn pullback(&self, cotangent: &Tensor<T>) -> AdResult<Vec<(NodeId, Tensor<T>)>> {
@@ -1612,17 +1899,24 @@ where
             };
 
             // Use backend-optimized einsum
-            let mut grad =
-                einsum_with_subscripts::<T, A, B>(&mut *ctx, &rev_subs, &rev_operands, None)
-                    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+            let mut grad = einsum_with_subscripts::<T, Alg, Backend>(
+                &mut *ctx,
+                &rev_subs,
+                &rev_operands,
+                None,
+            )
+            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
             // Propagate fw_grad from operands through the reverse einsum
             if rev_operands.iter().any(|t| t.has_fw_grad()) {
                 let tangents: Vec<Option<&Tensor<T>>> =
                     rev_operands.iter().map(|t| t.fw_grad()).collect();
-                if let Ok(grad_tangent) =
-                    einsum_frule_impl::<T, A, B>(&mut *ctx, &rev_subs, &rev_operands, &tangents)
-                {
+                if let Ok(grad_tangent) = einsum_frule_impl::<T, Alg, Backend>(
+                    &mut *ctx,
+                    &rev_subs,
+                    &rev_operands,
+                    &tangents,
+                ) {
                     grad.set_fw_grad(grad_tangent);
                 }
             }
@@ -1675,14 +1969,14 @@ where
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
 ///
-pub fn tracked_einsum<T, A: 'static, B>(
-    ctx: Rc<RefCell<B::Context>>,
+pub fn tracked_einsum<T, Alg: 'static, Backend>(
+    ctx: Rc<RefCell<Backend::Context>>,
     subscripts: &str,
     operands: &[&TrackedTensor<Tensor<T>>],
 ) -> AdResult<TrackedTensor<Tensor<T>>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A> + 'static,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg> + 'static,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
     let subs = Subscripts::parse(subscripts)
@@ -1690,7 +1984,7 @@ where
 
     // Extract primals and run forward einsum
     let primals: Vec<&Tensor<T>> = operands.iter().map(|op| op.value()).collect();
-    let output = einsum::<T, A, B>(&mut *ctx.borrow_mut(), subscripts, &primals, None)
+    let output = einsum::<T, Alg, Backend>(&mut *ctx.borrow_mut(), subscripts, &primals, None)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     // Check if any operand requires gradients
@@ -1719,7 +2013,7 @@ where
         }
     }
 
-    let rule = EinsumReverseRule::<T, A, B> {
+    let rule = EinsumReverseRule::<T, Alg, Backend> {
         ctx: ctx.clone(),
         subscripts: subs,
         primals: primals.iter().map(|&t| t.clone()).collect(),
@@ -1757,27 +2051,27 @@ where
 /// let c_dual = dual_einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
 /// let _tangent = c_dual.tangent();
 /// ```
-pub fn dual_einsum<T, A, B>(
-    ctx: &mut B::Context,
+pub fn dual_einsum<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &str,
     operands: &[&DualTensor<Tensor<T>>],
 ) -> AdResult<DualTensor<Tensor<T>>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
     // Extract primals
     let primals: Vec<&Tensor<T>> = operands.iter().map(|op| op.primal()).collect();
 
     // Compute primal output
-    let output = einsum::<T, A, B>(ctx, subscripts, &primals, None)
+    let output = einsum::<T, Alg, Backend>(ctx, subscripts, &primals, None)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     // Compute tangent: dC = sum_k einsum(subs, [A0, ..., dAk, ..., An])
     let tangents: Vec<Option<&Tensor<T>>> = operands.iter().map(|op| op.tangent()).collect();
 
-    let tangent = einsum_frule::<T, A, B>(ctx, subscripts, &primals, &tangents);
+    let tangent = einsum_frule::<T, Alg, Backend>(ctx, subscripts, &primals, &tangents);
 
     match tangent {
         Ok(t) => DualTensor::with_tangent(output, t),
@@ -1809,15 +2103,15 @@ where
 /// let grads = einsum_rrule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c).unwrap();
 /// assert_eq!(grads.len(), 2);
 /// ```
-pub fn einsum_rrule<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_rrule<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &str,
     operands: &[&Tensor<T>],
     cotangent: &Tensor<T>,
 ) -> Result<Vec<Tensor<T>>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = operands.len();
@@ -1841,7 +2135,7 @@ where
             output: subs.inputs[k].clone(),
         };
 
-        let grad = einsum_with_subscripts::<T, A, B>(ctx, &rev_subs, &rev_operands, None)?;
+        let grad = einsum_with_subscripts::<T, Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
         grads.push(grad);
     }
 
@@ -1872,15 +2166,15 @@ where
 /// let dc = einsum_frule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
 /// Internal frule implementation with pre-parsed subscripts.
-fn einsum_frule_impl<T, A, B>(
-    ctx: &mut B::Context,
+fn einsum_frule_impl<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subs: &Subscripts,
     primals: &[&Tensor<T>],
     tangents: &[Option<&Tensor<T>>],
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let n = primals.len();
 
@@ -1892,7 +2186,7 @@ where
             let mut ops: Vec<&Tensor<T>> = primals.to_vec();
             ops[k] = tangent_k;
 
-            let term = einsum_with_subscripts::<T, A, B>(ctx, subs, &ops, None)?;
+            let term = einsum_with_subscripts::<T, Alg, Backend>(ctx, subs, &ops, None)?;
 
             result = Some(match result {
                 None => term,
@@ -1904,18 +2198,18 @@ where
     result.ok_or_else(|| Error::InvalidArgument("no tangents provided".into()))
 }
 
-pub fn einsum_frule<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_frule<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &str,
     primals: &[&Tensor<T>],
     tangents: &[Option<&Tensor<T>>],
 ) -> Result<Tensor<T>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    einsum_frule_impl::<T, A, B>(ctx, &subs, primals, tangents)
+    einsum_frule_impl::<T, Alg, Backend>(ctx, &subs, primals, tangents)
 }
 
 /// Local HVP rule for einsum without building a global tape.
@@ -1959,8 +2253,8 @@ where
 /// let (_grad_a, _hvp_a) = &results[0];
 /// let (_grad_b, _hvp_b) = &results[1];
 /// ```
-pub fn einsum_hvp<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum_hvp<T, Alg, Backend>(
+    ctx: &mut Backend::Context,
     subscripts: &str,
     primals: &[&Tensor<T>],
     tangents: &[Option<&Tensor<T>>],
@@ -1968,8 +2262,8 @@ pub fn einsum_hvp<T, A, B>(
     cotangent_tangent: &Tensor<T>,
 ) -> Result<Vec<(Tensor<T>, Tensor<T>)>>
 where
-    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = primals.len();
@@ -2000,7 +2294,8 @@ where
                 rev_operands.push(op);
             }
         }
-        let grad_k = einsum_with_subscripts::<T, A, B>(ctx, &rev_subs, &rev_operands, None)?;
+        let grad_k =
+            einsum_with_subscripts::<T, Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
 
         // Compute hvp_k: differentiate the gradient w.r.t. v
         // hvp_k = einsum([dḡ, A_others...]) + sum_{j!=k} einsum([ḡ, ..., dA_j, ...])
@@ -2013,7 +2308,7 @@ where
                 ops.push(op);
             }
         }
-        let term = einsum_with_subscripts::<T, A, B>(ctx, &rev_subs, &ops, None)?;
+        let term = einsum_with_subscripts::<T, Alg, Backend>(ctx, &rev_subs, &ops, None)?;
         hvp_k = Some(term);
 
         // Terms from tangents of other primals
@@ -2032,7 +2327,7 @@ where
                         }
                     }
                 }
-                let term = einsum_with_subscripts::<T, A, B>(ctx, &rev_subs, &ops, None)?;
+                let term = einsum_with_subscripts::<T, Alg, Backend>(ctx, &rev_subs, &ops, None)?;
                 hvp_k = Some(match hvp_k {
                     None => term,
                     Some(existing) => Tensor::<T>::accumulate_tangent(existing, &term),

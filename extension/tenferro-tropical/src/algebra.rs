@@ -1,7 +1,7 @@
 //! Tropical algebra markers, [`HasAlgebra`], and [`Semiring`] implementations.
 //!
 //! Each zero-sized struct identifies a tropical algebra for use with
-//! [`TensorPrims<A>`](tenferro_prims::TensorPrims). The orphan rule is
+//! [`TensorPrims<Alg>`](tenferro_prims::TensorPrims). The orphan rule is
 //! satisfied because the algebra markers are defined in this crate.
 //!
 //! | Algebra marker | Scalar wrapper | ⊕ | ⊗ |
@@ -16,7 +16,7 @@ use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 
 /// Algebra marker for the max-plus tropical semiring (⊕ = max, ⊗ = +).
 ///
-/// Used as the algebra parameter `A` in
+/// Used as the algebra parameter `Alg` in
 /// [`TensorPrims<MaxPlusAlgebra>`](tenferro_prims::TensorPrims).
 ///
 /// # Examples
@@ -89,7 +89,12 @@ impl HasAlgebra for MaxMul<f64> {
 }
 
 // ---------------------------------------------------------------------------
-// Semiring implementations (f64 only for POC)
+// Semiring implementations
+//
+// The Semiring trait uses an associated type `type Scalar`, so each algebra
+// marker can only be associated with one scalar type. We use f64 as the
+// canonical Semiring scalar. f32 is fully supported at the TensorPrims level
+// (plan/execute) — only the Semiring constants are f64.
 // ---------------------------------------------------------------------------
 
 /// Max-plus semiring over `MaxPlus<f64>`.
