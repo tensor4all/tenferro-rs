@@ -709,6 +709,134 @@ fn reduce_sum_with_alpha_beta() {
 // ============================================================================
 
 #[test]
+fn permute_complex64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+        Complex64::new((idx[0] * 3 + idx[1] + 1) as f64, 0.0)
+    });
+    let mut b = StridedArray::<Complex64>::col_major(&[3, 2]);
+
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut b.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..2 {
+        for j in 0..3 {
+            assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+        }
+    }
+}
+
+// ============================================================================
+// resolve_conj for Complex64
+// ============================================================================
+
+#[test]
+fn resolve_conj_complex64_non_conjugated() {
+    use num_complex::Complex64;
+    use tenferro_tensor::{MemoryOrder, Tensor};
+
+    let mut ctx = CpuContext::new(1);
+    let data = vec![
+        Complex64::new(1.0, 2.0),
+        Complex64::new(3.0, 4.0),
+        Complex64::new(5.0, 6.0),
+        Complex64::new(7.0, 8.0),
+    ];
+    let t = Tensor::<Complex64>::from_slice(&data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    assert!(!t.is_conjugated());
+
+    let resolved = CpuBackend::resolve_conj(&mut ctx, &t);
+    assert!(!resolved.is_conjugated());
+    assert_eq!(resolved.dims(), t.dims());
+
+    // Data should be unchanged (no conjugation applied)
+    let resolved_data = resolved
+        .buffer()
+        .as_slice()
+        .expect("CPU tensor must have CPU-accessible data");
+    for (orig, res) in data.iter().zip(resolved_data.iter()) {
+        assert_eq!(orig, res);
+    }
+}
+
+#[test]
+fn resolve_conj_complex64_conjugated() {
+    use num_complex::Complex64;
+    use tenferro_tensor::{MemoryOrder, Tensor};
+
+    let mut ctx = CpuContext::new(1);
+    let data = vec![
+        Complex64::new(1.0, 2.0),
+        Complex64::new(3.0, 4.0),
+        Complex64::new(5.0, 6.0),
+        Complex64::new(7.0, 8.0),
+    ];
+    let t = Tensor::<Complex64>::from_slice(&data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let t_conj = t.into_conj();
+    assert!(t_conj.is_conjugated());
+
+    let resolved = CpuBackend::resolve_conj(&mut ctx, &t_conj);
+    assert!(!resolved.is_conjugated());
+    assert_eq!(resolved.dims(), &[2, 2]);
+
+    // Data should have imaginary parts negated
+    let resolved_data = resolved
+        .buffer()
+        .as_slice()
+        .expect("CPU tensor must have CPU-accessible data");
+    let expected = vec![
+        Complex64::new(1.0, -2.0),
+        Complex64::new(3.0, -4.0),
+        Complex64::new(5.0, -6.0),
+        Complex64::new(7.0, -8.0),
+    ];
+    for (exp, res) in expected.iter().zip(resolved_data.iter()) {
+        assert_eq!(exp, res, "expected {exp}, got {res}");
+    }
+}
+
+#[test]
+fn resolve_conj_f64_conjugated_is_identity() {
+    use tenferro_tensor::{MemoryOrder, Tensor};
+
+    let mut ctx = CpuContext::new(1);
+    let data = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let t = Tensor::<f64>::from_slice(&data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let t_conj = t.into_conj();
+    assert!(t_conj.is_conjugated());
+
+    let resolved = CpuBackend::resolve_conj(&mut ctx, &t_conj);
+    assert!(!resolved.is_conjugated());
+
+    // For real types, conjugation is identity — data should be unchanged
+    let resolved_data = resolved
+        .buffer()
+        .as_slice()
+        .expect("CPU tensor must have CPU-accessible data");
+    for (orig, res) in data.iter().zip(resolved_data.iter()) {
+        assert!((orig - res).abs() < 1e-15, "expected {orig}, got {res}");
+    }
+}
+
+// ============================================================================
+// f32 type
+// ============================================================================
+
+#[test]
 fn permute_f32() {
     let mut ctx = CpuContext::new(1);
     let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f32);
