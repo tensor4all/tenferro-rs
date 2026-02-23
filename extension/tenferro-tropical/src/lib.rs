@@ -17,12 +17,12 @@
 //!   `#[repr(transparent)]` newtypes that redefine `Add`/`Mul` with tropical
 //!   semantics. Satisfy the [`Scalar`](tenferro_algebra::Scalar) blanket impl.
 //!
-//! - **Algebra markers** ([`MaxPlusAlgebra`], [`MinPlusAlgebra`], [`MaxMulAlgebra`]):
+//! - **Algebra markers** ([`MaxPlusAlgebra<T>`], [`MinPlusAlgebra<T>`], [`MaxMulAlgebra<T>`]):
 //!   Zero-sized types used as the algebra parameter `Alg` in
 //!   [`TensorPrims<Alg>`](tenferro_prims::TensorPrims).
 //!
 //! - **[`TensorPrims`](tenferro_prims::TensorPrims) implementations**:
-//!   `impl TensorPrims<MaxPlusAlgebra> for CpuBackend` etc. Orphan rule
+//!   `impl TensorPrims<MaxPlusAlgebra<f64>> for CpuBackend` etc. Orphan rule
 //!   compatible because algebra markers are defined locally.
 //!
 //! - **[`ArgmaxTracker`]**: Records winner indices during tropical forward
@@ -49,10 +49,13 @@
 //! use tenferro_algebra::HasAlgebra;
 //! use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
 //!
-//! // MaxPlus<f64> and MaxPlus<f32> both map to MaxPlusAlgebra
-//! fn check<T: HasAlgebra<Algebra = MaxPlusAlgebra>>() {}
-//! check::<MaxPlus<f64>>();
-//! check::<MaxPlus<f32>>();
+//! // MaxPlus<f64> maps to MaxPlusAlgebra<f64>
+//! fn check_f64<T: HasAlgebra<Algebra = MaxPlusAlgebra<f64>>>() {}
+//! check_f64::<MaxPlus<f64>>();
+//!
+//! // MaxPlus<f32> maps to MaxPlusAlgebra<f32>
+//! fn check_f32<T: HasAlgebra<Algebra = MaxPlusAlgebra<f32>>>() {}
+//! check_f32::<MaxPlus<f32>>();
 //! ```
 //!
 //! ## Plan-based tropical contraction
@@ -64,9 +67,9 @@
 //! let desc = PrimDescriptor::BatchedGemm {
 //!     batch_dims: vec![], m: 3, n: 5, k: 4,
 //! };
-//! // Under MaxPlusAlgebra, GEMM computes:
+//! // Under MaxPlusAlgebra<f64>, GEMM computes:
 //! //   C[i,j] = max_k (A[i,k] + B[k,j])
-//! let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra>>::plan::<f64>(
+//! let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan::<f64>(
 //!     &desc, &[&[3, 4], &[4, 5], &[3, 5]],
 //! ).unwrap();
 //! ```
