@@ -70,6 +70,186 @@ fn cpu_context_plan_cache() {
 }
 
 // ============================================================================
+// PlanCache: cache hit/miss semantics
+// ============================================================================
+
+#[test]
+fn plan_cache_hit_same_signature() {
+    // Repeated plan() calls with the same descriptor+shapes should hit the cache.
+    let mut ctx = CpuContext::new(1);
+    assert!(ctx.plan_cache_mut().is_empty());
+
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+
+    // First call: cache miss, builds and stores the plan.
+    let _plan1 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
+
+    // Second call: cache hit, should not increase cache size.
+    let _plan2 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
+}
+
+#[test]
+fn plan_cache_miss_different_shapes() {
+    // Different shapes should produce separate cache entries.
+    let mut ctx = CpuContext::new(1);
+
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+
+    let _plan1 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
+
+    // Different shapes: 4x5 instead of 2x3
+    let _plan2 = cpu_plan::<f64>(&mut ctx, &desc, &[&[4, 5], &[5, 4]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 2);
+}
+
+#[test]
+fn plan_cache_miss_different_scalar_type() {
+    // Same descriptor and shapes but different scalar type should miss.
+    let mut ctx = CpuContext::new(1);
+
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+
+    let _plan_f64 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
+
+    let _plan_f32 = cpu_plan::<f32>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 2);
+}
+
+#[test]
+fn plan_cache_miss_different_descriptor() {
+    // Same shapes but different descriptor should miss.
+    let mut ctx = CpuContext::new(1);
+
+    let desc1 = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+    let desc2 = PrimDescriptor::MakeContiguous;
+
+    let _plan1 = cpu_plan::<f64>(&mut ctx, &desc1, &[&[2, 3], &[3, 2]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
+
+    let _plan2 = cpu_plan::<f64>(&mut ctx, &desc2, &[&[2, 3], &[2, 3]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 2);
+}
+
+#[test]
+fn plan_cache_clear() {
+    let mut ctx = CpuContext::new(1);
+
+    let desc = PrimDescriptor::MakeContiguous;
+    let _plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
+
+    ctx.plan_cache_mut().clear();
+    assert!(ctx.plan_cache_mut().is_empty());
+}
+
+#[test]
+fn plan_cache_hit_produces_correct_results() {
+    // Verify that a cached plan produces the same correct results as the original.
+    let mut ctx = CpuContext::new(1);
+
+    let desc = PrimDescriptor::Contract {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 2],
+        modes_c: vec![0, 2],
+    };
+    let shapes: &[&[usize]] = &[&[2, 3], &[3, 4], &[2, 4]];
+
+    // Build and cache the plan
+    let _plan1 = cpu_plan::<f64>(&mut ctx, &desc, shapes).unwrap();
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
+
+    // Use cached plan for actual computation
+    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
+    let b = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] * 4 + idx[1] + 1) as f64);
+    let mut c = StridedArray::<f64>::col_major(&[2, 4]);
+
+    let plan2 = cpu_plan::<f64>(&mut ctx, &desc, shapes).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan2,
+        1.0,
+        &[&a.view(), &b.view()],
+        0.0,
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    // Verify results match manual computation
+    for i in 0..2 {
+        for j in 0..4 {
+            let mut expected = 0.0;
+            for k in 0..3 {
+                expected += a.view().get(&[i, k]) * b.view().get(&[k, j]);
+            }
+            assert!(
+                (c.view().get(&[i, j]) - expected).abs() < 1e-10,
+                "C[{i},{j}] = {}, expected {expected}",
+                c.view().get(&[i, j])
+            );
+        }
+    }
+}
+
+#[test]
+fn plan_cache_complex64_separate_from_f64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+
+    // Build f64 plan
+    let _plan_f64 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+
+    // Build Complex64 plan with same shapes
+    let _plan_c64 = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+
+    // Should be 2 distinct cache entries
+    assert_eq!(ctx.plan_cache_mut().len(), 2);
+
+    // Execute Complex64 plan to verify it works correctly
+    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+        Complex64::new((idx[0] * 3 + idx[1] + 1) as f64, 0.0)
+    });
+    let mut b = StridedArray::<Complex64>::col_major(&[3, 2]);
+
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut b.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..2 {
+        for j in 0..3 {
+            assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+        }
+    }
+}
+
+// ============================================================================
 // has_extension_for
 // ============================================================================
 

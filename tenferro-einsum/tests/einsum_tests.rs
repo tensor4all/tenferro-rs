@@ -509,6 +509,89 @@ fn einsum_into_accumulate() {
 }
 
 // ============================================================================
+// einsum: plan cache integration
+// ============================================================================
+
+#[test]
+fn einsum_reuses_cached_plans() {
+    // Repeated einsum calls with the same contraction populate the plan cache
+    // and subsequent calls reuse cached plans.
+    let mut ctx = CpuContext::new(1);
+    assert!(ctx.plan_cache_mut().is_empty());
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+
+    // First call: populates cache
+    let c1 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let cache_size_after_first = ctx.plan_cache_mut().len();
+    assert!(
+        cache_size_after_first > 0,
+        "cache should be populated after first einsum call"
+    );
+
+    // Second call with same shapes: cache should not grow
+    let c2 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let cache_size_after_second = ctx.plan_cache_mut().len();
+    assert_eq!(
+        cache_size_after_first, cache_size_after_second,
+        "cache should not grow when same contraction is repeated"
+    );
+
+    // Results should be identical
+    for i in 0..2 {
+        for k in 0..4 {
+            assert!(
+                (get(&c1, &[i, k]) - get(&c2, &[i, k])).abs() < 1e-10,
+                "results should be identical across calls"
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_different_shapes_miss_cache() {
+    // Calling einsum with different-shaped tensors should produce cache misses.
+    let mut ctx = CpuContext::new(1);
+
+    // 2x3 @ 3x4
+    let a1 = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b1 = Tensor::<f64>::from_slice(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+    let _c1 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a1, &b1], None).unwrap();
+    let cache_size_1 = ctx.plan_cache_mut().len();
+
+    // 3x2 @ 2x5 (different shapes)
+    let a2 = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2], COL).unwrap();
+    let b2 = Tensor::<f64>::from_slice(
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
+        &[2, 5],
+        COL,
+    )
+    .unwrap();
+    let _c2 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a2, &b2], None).unwrap();
+    let cache_size_2 = ctx.plan_cache_mut().len();
+
+    assert!(
+        cache_size_2 > cache_size_1,
+        "different shapes should produce additional cache entries"
+    );
+}
+
+// ============================================================================
 // einsum: AD rules (standalone) -- kept on f64 only
 // ============================================================================
 
