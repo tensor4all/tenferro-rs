@@ -162,7 +162,7 @@
 //! accessed from the host.
 //!
 //! - `wait()` — explicitly blocks until computation completes
-//! - `tensor_view()`, `dims()`, `strides()` — implicitly call `wait()`
+//! - `dims()`, `strides()` — implicitly call `wait()`
 //! - For CPU tensors, `event` is always `None` (zero overhead)
 //!
 //! ```ignore
@@ -625,7 +625,7 @@ where
             B::execute(ctx, &plan, alpha, &[&input_sv], beta, &mut output_sv)
         } else {
             // Diagonal extraction: repeated labels appear in output
-            // Use TensorView::diagonal() + copy
+            // Diagonal extraction + copy
             let mut axis_pairs = Vec::new();
             for &l in &repeated_in_output {
                 let positions = &label_positions[&l];
@@ -639,9 +639,8 @@ where
                 axis_pairs.push((positions[0], positions[1]));
             }
 
-            // Extract diagonal view
-            let tv = input.tensor_view();
-            let diag_view = tv.diagonal(&axis_pairs)?;
+            // Extract diagonal as a new Tensor (shares buffer via Arc)
+            let diag_tensor = input.diagonal(&axis_pairs)?;
 
             // Build subscripts after diagonal extraction
             let mut used = vec![false; subs_a.len()];
@@ -659,16 +658,16 @@ where
                 after_diag_subs.push(l);
             }
 
-            // Create StridedView from diagonal view's raw data
-            let data = input
+            // Create StridedView from diagonal tensor's data
+            let data = diag_tensor
                 .buffer()
                 .as_slice()
                 .ok_or_else(|| Error::DeviceError("GPU not supported".into()))?;
             let sv = StridedView::new(
                 data,
-                diag_view.dims(),
-                diag_view.strides(),
-                diag_view.offset(),
+                diag_tensor.dims(),
+                diag_tensor.strides(),
+                diag_tensor.offset(),
             )
             .map_err(|e| Error::StrideError(format!("{e}")))?;
 
@@ -683,13 +682,13 @@ where
                     modes_a: after_diag_subs,
                     modes_b: subs_c.to_vec(),
                 };
-                let shapes = [diag_view.dims(), output.dims()];
+                let shapes = [diag_tensor.dims(), output.dims()];
                 let plan = B::plan::<T>(ctx, &desc, &shapes)?;
                 let mut output_sv = tensor_to_view_mut(output)?;
                 B::execute(ctx, &plan, alpha, &[&sv], beta, &mut output_sv)
             } else {
-                // Copy diagonal to temp, then reduce
-                let diag_tensor = diag_view.to_tensor(MemoryOrder::ColumnMajor);
+                // Copy diagonal to contiguous temp, then reduce
+                let diag_tensor = diag_tensor.contiguous(MemoryOrder::ColumnMajor);
                 let desc = PrimDescriptor::Reduce {
                     modes_a: after_diag_subs,
                     modes_c: subs_c.to_vec(),

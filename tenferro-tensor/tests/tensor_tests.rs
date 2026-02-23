@@ -750,72 +750,64 @@ fn to_memory_space_gpu_fails() {
 }
 
 // ============================================================================
-// TensorView operations
+// View operations (permute, broadcast, select, narrow, diagonal, conj)
 // ============================================================================
 
 #[test]
-fn tensor_view_metadata() {
+fn tensor_metadata() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    let v = t.tensor_view();
-    assert_eq!(v.dims(), &[3, 4]);
-    assert_eq!(v.strides(), t.strides());
-    assert_eq!(v.ndim(), 2);
-    assert_eq!(v.offset(), 0);
-    assert!(!v.is_conjugated());
-    assert_eq!(v.logical_memory_space(), MEM);
-    assert!(v.preferred_compute_device().is_none());
+    assert_eq!(t.dims(), &[3, 4]);
+    assert_eq!(t.ndim(), 2);
+    assert_eq!(t.offset(), 0);
+    assert!(!t.is_conjugated());
+    assert_eq!(t.logical_memory_space(), MEM);
+    assert!(t.preferred_compute_device().is_none());
 }
 
 #[test]
-fn tensor_view_permute() {
+fn tensor_permute() {
     let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
-    let v = t.tensor_view();
-    let vp = v.permute(&[1, 0]).unwrap();
-    assert_eq!(vp.dims(), &[4, 3]);
+    let tp = t.permute(&[1, 0]).unwrap();
+    assert_eq!(tp.dims(), &[4, 3]);
 }
 
 #[test]
-fn tensor_view_broadcast() {
+fn tensor_broadcast() {
     let t = Tensor::<f64>::ones(&[1, 3], MEM, COL);
-    let v = t.tensor_view();
-    let vb = v.broadcast(&[4, 3]).unwrap();
-    assert_eq!(vb.dims(), &[4, 3]);
-    assert_eq!(vb.strides()[0], 0);
+    let tb = t.broadcast(&[4, 3]).unwrap();
+    assert_eq!(tb.dims(), &[4, 3]);
+    assert_eq!(tb.strides()[0], 0);
 }
 
 #[test]
-fn tensor_view_select() {
+fn tensor_select() {
     let t = Tensor::<f64>::zeros(&[3, 4, 5], MEM, COL);
-    let v = t.tensor_view();
-    let vs = v.select(2, 2).unwrap();
-    assert_eq!(vs.dims(), &[3, 4]);
+    let ts = t.select(2, 2).unwrap();
+    assert_eq!(ts.dims(), &[3, 4]);
 }
 
 #[test]
-fn tensor_view_narrow() {
+fn tensor_narrow() {
     let t = Tensor::<f64>::zeros(&[3, 10], MEM, COL);
-    let v = t.tensor_view();
-    let vn = v.narrow(1, 2, 3).unwrap();
-    assert_eq!(vn.dims(), &[3, 3]);
+    let tn = t.narrow(1, 2, 3).unwrap();
+    assert_eq!(tn.dims(), &[3, 3]);
 }
 
 #[test]
-fn tensor_view_to_tensor() {
+fn tensor_permute_contiguous() {
     let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let t = Tensor::<f64>::from_slice(&data, &[2, 3], COL).unwrap();
-    let v = t.tensor_view();
-    let vp = v.permute(&[1, 0]).unwrap();
-    let owned = vp.to_tensor(COL);
+    let tp = t.permute(&[1, 0]).unwrap();
+    let owned = tp.contiguous(COL);
     assert_eq!(owned.dims(), &[3, 2]);
     assert!(owned.is_contiguous());
 }
 
 #[test]
-fn tensor_view_conj() {
+fn tensor_conj() {
     let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let v = t.tensor_view();
-    let vc = v.conj();
-    assert!(vc.is_conjugated());
+    let tc = t.conj();
+    assert!(tc.is_conjugated());
 }
 
 // ============================================================================
