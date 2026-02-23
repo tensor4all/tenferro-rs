@@ -47,7 +47,7 @@ fn tropical_maxplus_matmul() {
     // C[0,1] = max(1+7, 3+8) = max(8, 11) = 11
     // C[1,1] = max(2+7, 4+8) = max(9, 12) = 12
     let c =
-        einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+        einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 
     assert_eq!(c.dims(), &[2, 2]);
     let data = c.buffer().as_slice().unwrap();
@@ -76,7 +76,7 @@ fn tropical_maxplus_trace() {
     .unwrap();
 
     // trace = A[0,0] ⊕ A[1,1] = max(1, 4) = 4
-    let tr = einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+    let tr = einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
 
     assert_eq!(tr.dims(), &[] as &[usize]);
     let data = tr.buffer().as_slice().unwrap();
@@ -131,7 +131,7 @@ fn tropical_maxplus_batch_matmul() {
     .unwrap();
 
     let c =
-        einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
+        einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
 
     assert_eq!(c.dims(), &[2, 2, 2]);
 
@@ -173,7 +173,7 @@ fn tropical_maxplus_elementwise() {
 
     // Element-wise tropical mul: C[i,j] = A[i,j] ⊗ B[i,j] = A[i,j] + B[i,j]
     let c =
-        einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "ij,ij->ij", &[&a, &b], None).unwrap();
+        einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "ij,ij->ij", &[&a, &b], None).unwrap();
 
     assert_eq!(c.dims(), &[2, 2]);
     let data = c.buffer().as_slice().unwrap();
@@ -201,7 +201,7 @@ fn tropical_maxplus_outer_product() {
     .unwrap();
 
     // C[i,j] = A[i] ⊗ B[j] = A[i] + B[j]  (no sum modes, k=1)
-    let c = einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "i,j->ij", &[&a, &b], None).unwrap();
+    let c = einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "i,j->ij", &[&a, &b], None).unwrap();
 
     assert_eq!(c.dims(), &[2, 3]);
     let data = c.buffer().as_slice().unwrap();
@@ -236,7 +236,7 @@ fn tropical_maxplus_vecmat() {
     // C[k] = max_j(v[j] + M[j,k])
     // C[0] = max(1+5, 3+6) = max(6, 9) = 9
     // C[1] = max(1+7, 3+8) = max(8, 11) = 11
-    let c = einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "j,jk->k", &[&v, &m], None).unwrap();
+    let c = einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "j,jk->k", &[&v, &m], None).unwrap();
 
     assert_eq!(c.dims(), &[2]);
     let data = c.buffer().as_slice().unwrap();
@@ -268,7 +268,7 @@ fn tropical_maxplus_full_contraction() {
 
     // scalar = max_{i,j}(A[i,j] + B[i,j])
     // = max(1+10, 2+20, 3+30, 4+40) = max(11, 22, 33, 44) = 44
-    let c = einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "ij,ij->", &[&a, &b], None).unwrap();
+    let c = einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "ij,ij->", &[&a, &b], None).unwrap();
 
     assert_eq!(c.dims(), &[] as &[usize]);
     let data = c.buffer().as_slice().unwrap();
@@ -306,7 +306,7 @@ fn tropical_maxplus_three_chain() {
 
     // D = A ⊗ B ⊗ C  (tropical chain multiplication)
     let d =
-        einsum::<_, MaxPlusAlgebra, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c_mat], None)
+        einsum::<_, MaxPlusAlgebra<f64>, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c_mat], None)
             .unwrap();
 
     assert_eq!(d.dims(), &[2, 2]);
@@ -374,7 +374,7 @@ fn tropical_minplus_matmul_shortest_path() {
     // W^2[2,1] = min(2+1, inf+0, 0+inf) = 3
     // W^2[2,2] = min(2+inf, inf+3, 0+0) = 0
     let w2 =
-        einsum::<_, MinPlusAlgebra, CpuBackend>(&mut ctx, "ij,jk->ik", &[&w, &w], None).unwrap();
+        einsum::<_, MinPlusAlgebra<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&w, &w], None).unwrap();
 
     assert_eq!(w2.dims(), &[3, 3]);
     let data = w2.buffer().as_slice().unwrap();
@@ -455,7 +455,7 @@ fn tropical_maxmul_matmul_viterbi() {
     // P[1,1] = max(0.7*0.1, 0.4*0.8, 0.1*0.5) = max(0.07, 0.32, 0.05) = 0.32
     // P[2,1] = max(0.2*0.1, 0.3*0.8, 0.4*0.5) = max(0.02, 0.24, 0.20) = 0.24
     let p =
-        einsum::<_, MaxMulAlgebra, CpuBackend>(&mut ctx, "ij,jk->ik", &[&tt, &e], None).unwrap();
+        einsum::<_, MaxMulAlgebra<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&tt, &e], None).unwrap();
 
     assert_eq!(p.dims(), &[3, 2]);
     let data = p.buffer().as_slice().unwrap();
@@ -488,7 +488,7 @@ fn tropical_minplus_trace() {
     .unwrap();
 
     // trace = D[0,0] ⊕ D[1,1] = min(2, 3) = 2
-    let tr = einsum::<_, MinPlusAlgebra, CpuBackend>(&mut ctx, "ii->", &[&d], None).unwrap();
+    let tr = einsum::<_, MinPlusAlgebra<f64>, CpuBackend>(&mut ctx, "ii->", &[&d], None).unwrap();
 
     assert_eq!(tr.dims(), &[] as &[usize]);
     let data = tr.buffer().as_slice().unwrap();
