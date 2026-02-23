@@ -112,18 +112,18 @@ pub enum Extension { Contract, ElementwiseMul }
 ## TensorPrims\<A\> Trait
 
 ```rust
-/// Backend trait parameterized by algebra A.
+/// Backend trait parameterized by algebra Alg.
 ///
 /// Provides a cuTENSOR-compatible plan-based execution model for all
 /// operations. Core ops (batched_gemm, reduce, trace, permute, make_contiguous,
 /// anti_trace, anti_diag) must be implemented. Extended ops (contract,
 /// elementwise_mul) have default implementations that decompose into core ops.
 ///
-/// The algebra parameter A enables extensibility: external crates can
+/// The algebra parameter Alg enables extensibility: external crates can
 /// implement TensorPrims<MyAlgebra> for CpuBackend (orphan rule compatible).
-pub trait TensorPrims<A> {
-    /// Backend-specific plan type (no type erasure).
-    type Plan<T: ScalarBase>;
+pub trait TensorPrims<Alg: Algebra> {
+    /// Backend-specific plan type.
+    type Plan;
 
     /// Execution context (CPU: thread pool + plan cache; GPU: CUDA stream).
     type Context;
@@ -132,40 +132,44 @@ pub trait TensorPrims<A> {
     ///
     /// Takes `&mut Self::Context` because plan creation may update the
     /// plan cache (PlanCache) stored in the context.
-    fn plan<T: ScalarBase>(
+    fn plan(
         ctx: &mut Self::Context,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
-    ) -> Result<Self::Plan<T>>;
+    ) -> Result<Self::Plan>;
 
     /// Execute a plan (cuTENSOR: plan → execute).
     ///
-    /// Takes `&mut Self::Context` for consistency and to allow future
-    /// context state updates (e.g., workspace resizing on GPU).
-    fn execute<T: ScalarBase>(
+    /// Operations receive `Tensor<Alg::Scalar>` directly (PyTorch-aligned).
+    /// CPU backends convert to strided views internally; GPU backends
+    /// extract device pointers.
+    fn execute(
         ctx: &mut Self::Context,
-        plan: &Self::Plan<T>,
-        alpha: T,
-        inputs: &[&StridedView<T>],
-        beta: T,
-        output: &mut StridedViewMut<T>,
+        plan: &Self::Plan,
+        alpha: Alg::Scalar,
+        inputs: &[&Tensor<Alg::Scalar>],
+        beta: Alg::Scalar,
+        output: &mut Tensor<Alg::Scalar>,
     ) -> Result<()>;
 
-    /// Query whether an extended operation is available for scalar type T.
-    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool;
+    /// Query whether an extended operation is available for this algebra.
+    fn has_extension_for(ext: Extension) -> bool;
 }
 ```
 
 Key design decisions:
 
 1. **Associated functions, not methods** — No `&self` receiver. Call as
-   `CpuBackend::plan::<f64>(&mut ctx, ...)`. Execution resources (thread pool,
+   `CpuBackend::plan(&mut ctx, ...)`. Execution resources (thread pool,
    CUDA stream, plan cache) are passed via `type Context`.
 2. **`&mut Context`** — Both `plan()` and `execute()` take mutable context.
    `plan()` updates the PlanCache. `execute()` may resize GPU workspace.
-3. **StridedView/StridedViewMut directly** — Not `Storage<T>` + `TensorMeta`.
+3. **`Tensor<Alg::Scalar>` in execute** — Operations take `Tensor` references
+   directly (PyTorch-aligned). CPU backends convert to `StridedView` internally;
+   GPU backends extract device pointers. The `Plan` type is not parameterized
+   by scalar type (no GAT); the algebra's scalar type is fixed by `Alg`.
 4. **Modes are `u32`** — Matching cuTENSOR's unsigned mode labels.
-5. **Single trait with dynamic extension query** — `has_extension_for::<T>(ext)`
+5. **Single trait with dynamic extension query** — `has_extension_for(ext)`
    for runtime capability detection. Supports GPU backends loaded via dlopen.
 6. **Plan-based execution for all ops** — cuTENSOR pattern: `PrimDescriptor`
    → `plan` → `execute`. Plans cache expensive analysis for reuse.
@@ -199,22 +203,24 @@ impl CpuContext {
 /// Standard arithmetic on CPU (faer GEMM for f64/f32, naive for others).
 /// Implemented generically for all scalar types S that implement Scalar.
 impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
-    type Plan<T: ScalarBase> = CpuPlan<T>;
+    type Plan = CpuPlan;
     type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(ctx: &mut CpuContext, desc: &PrimDescriptor, shapes: &[&[usize]])
-        -> Result<CpuPlan<T>> { ... }
+    fn plan(ctx: &mut CpuContext, desc: &PrimDescriptor, shapes: &[&[usize]])
+        -> Result<CpuPlan> { ... }
 
-    fn execute<T: ScalarBase>(ctx: &mut CpuContext, plan: &CpuPlan<T>, ...) -> Result<()> { ... }
+    fn execute(ctx: &mut CpuContext, plan: &CpuPlan,
+        alpha: S, inputs: &[&Tensor<S>], beta: S, output: &mut Tensor<S>,
+    ) -> Result<()> { ... }
 
-    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
+    fn has_extension_for(ext: Extension) -> bool {
         // CPU supports Contract and ElementwiseMul for all standard types
         true
     }
 }
 
 /// CPU plan — concrete enum, no type erasure.
-enum CpuPlan<T: ScalarBase> {
+enum CpuPlan {
     BatchedGemm { m: usize, n: usize, k: usize, ... },
     Reduce { axis: usize, op: ReduceOp },
     Trace { paired: Vec<(u32, u32)> },
@@ -302,7 +308,7 @@ pub struct CudaContext {
 }
 
 impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
-    type Plan<T: ScalarBase> = CudaPlan<T>;
+    type Plan = CudaPlan;
     type Context = CudaContext;
     // ...
 }
@@ -398,10 +404,10 @@ pub struct MaxPlus<T>(PhantomData<T>);
 impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus<f64>; }
 
 impl TensorPrims<MaxPlus<f64>> for CpuBackend {
-    type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Plan = TropicalPlan;
     type Context = CpuContext;
 
-    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
+    fn has_extension_for(ext: Extension) -> bool {
         false  // tropical uses core ops decomposition, no fused contract
     }
     ...
@@ -419,7 +425,7 @@ impl ScalarBase for MyScalar { ... }
 impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }
 
 impl TensorPrims<MyAlgebra> for CpuBackend {
-    type Plan<T: ScalarBase> = MyPlan<T>;
+    type Plan = MyPlan;
     type Context = CpuContext;
     ...
 }
