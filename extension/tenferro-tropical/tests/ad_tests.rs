@@ -93,12 +93,11 @@ fn maxplus_matmul_backward_routes_to_winner() {
     // Cotangent: all ones
     let grad_c = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "ij,jk->ik",
-        &[&a, &b],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c)
     .unwrap();
 
     assert_eq!(grads.len(), 2);
@@ -162,12 +161,11 @@ fn maxplus_matmul_backward_mixed_winners() {
 
     let grad_c = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "ij,jk->ik",
-        &[&a, &b],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c)
     .unwrap();
 
     let da = grads[0].buffer().as_slice().unwrap();
@@ -230,12 +228,11 @@ fn minplus_matmul_backward_routes_to_argmin() {
 
     let grad_c = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MinPlus<f64>, MinPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "ij,jk->ik",
-        &[&a, &b],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MinPlus<f64>,
+        MinPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c)
     .unwrap();
 
     let da = grads[0].buffer().as_slice().unwrap();
@@ -297,13 +294,14 @@ fn maxmul_matmul_backward_product_rule() {
 
     let grad_c = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxMul<f64>, MaxMulAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "ij,jk->ik",
-        &[&a, &b],
-        &grad_c,
-    )
-    .unwrap();
+    let grads =
+        tropical_einsum_rrule::<MaxMul<f64>, MaxMulAlgebra<f64>, tenferro_prims::CpuBackend>(
+            &mut ctx,
+            "ij,jk->ik",
+            &[&a, &b],
+            &grad_c,
+        )
+        .unwrap();
 
     let da = grads[0].buffer().as_slice().unwrap();
     let db = grads[1].buffer().as_slice().unwrap();
@@ -356,11 +354,12 @@ fn tracked_maxplus_matmul_pullback() {
     let b = tape.leaf(b_data);
 
     // C = MaxPlus matmul(A, B)
-    let c = tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        "ij,jk->ik",
-        &[&a, &b],
-    )
-    .unwrap();
+    let c =
+        tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
+            "ij,jk->ik",
+            &[&a, &b],
+        )
+        .unwrap();
 
     // Verify the forward pass produced correct inner values
     let c_data = c.value().buffer().as_slice().unwrap();
@@ -440,12 +439,11 @@ fn maxplus_vecmat_backward() {
 
     let grad_c = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "j,jk->k",
-        &[&v, &m],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "j,jk->k", &[&v, &m], &grad_c)
     .unwrap();
 
     let dv = grads[0].buffer().as_slice().unwrap();
@@ -482,12 +480,11 @@ fn maxplus_outer_product_backward() {
 
     let grad_c = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "i,j->ij",
-        &[&a, &b],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "i,j->ij", &[&a, &b], &grad_c)
     .unwrap();
 
     let da = grads[0].buffer().as_slice().unwrap();
@@ -534,12 +531,11 @@ fn maxplus_matmul_backward_nonuniform_cotangent() {
     //       [20, 40]]
     let grad_c = Tensor::<f64>::from_slice(&[10.0, 20.0, 30.0, 40.0], &[2, 2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "ij,jk->ik",
-        &[&a, &b],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c)
     .unwrap();
 
     let da = grads[0].buffer().as_slice().unwrap();
@@ -599,12 +595,11 @@ fn maxplus_full_contraction_backward() {
 
     let grad_c = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "ij,ij->",
-        &[&a, &b],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,ij->", &[&a, &b], &grad_c)
     .unwrap();
 
     let da = grads[0].buffer().as_slice().unwrap();
@@ -675,12 +670,11 @@ fn maxplus_rectangular_matmul_backward() {
 
     let grad_c = Tensor::<f64>::from_slice(&[1.0, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
 
-    let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "ij,jk->ik",
-        &[&a, &b],
-        &grad_c,
-    )
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c)
     .unwrap();
 
     let da = grads[0].buffer().as_slice().unwrap();
@@ -726,12 +720,11 @@ fn rrule_rejects_single_operand() {
     let a = Tensor::<MaxPlus<f64>>::from_slice(&[MaxPlus(1.0), MaxPlus(2.0)], &[2], COL).unwrap();
     let grad = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
 
-    let result = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "i->",
-        &[&a],
-        &grad,
-    );
+    let result = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "i->", &[&a], &grad);
     assert!(result.is_err());
 }
 
@@ -744,12 +737,11 @@ fn rrule_rejects_three_operands() {
     let c = Tensor::<MaxPlus<f64>>::from_slice(&[MaxPlus(5.0), MaxPlus(6.0)], &[2], COL).unwrap();
     let grad = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
 
-    let result = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        &mut ctx,
-        "i,i,i->",
-        &[&a, &b, &c],
-        &grad,
-    );
+    let result = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "i,i,i->", &[&a, &b, &c], &grad);
     assert!(result.is_err());
 }
 
@@ -759,10 +751,11 @@ fn tracked_rejects_single_operand() {
     let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
     let a = tape.leaf(a_data);
 
-    let result = tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        "i->",
-        &[&a],
-    );
+    let result = tracked_tropical_einsum::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >("i->", &[&a]);
     assert!(result.is_err());
 }
 
@@ -777,11 +770,12 @@ fn tracked_no_grad_returns_plain_tensor() {
     let a = chainrules::TrackedTensor::new(a_data);
     let b = chainrules::TrackedTensor::new(b_data);
 
-    let c = tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
-        "ij,jk->ik",
-        &[&a, &b],
-    )
-    .unwrap();
+    let c =
+        tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
+            "ij,jk->ik",
+            &[&a, &b],
+        )
+        .unwrap();
 
     // Result should not have a node ID (not recorded on tape)
     assert!(c.node_id().is_none());
@@ -837,8 +831,7 @@ fn maxplus_f32_matmul_backward() {
     // C[1,1] = max(2+7, 4+8) = max(9, 12) = 12   -> winner j=1
 
     // Cotangent: all ones
-    let grad_c =
-        Tensor::<f32>::from_slice(&[1.0f32, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
+    let grad_c = Tensor::<f32>::from_slice(&[1.0f32, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
 
     let grads = tropical_einsum_rrule::<
         MaxPlus<f32>,

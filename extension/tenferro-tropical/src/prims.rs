@@ -1258,7 +1258,11 @@ macro_rules! impl_tropical_prims {
                 let mut out_view = tensor_to_view_mut(output)?;
 
                 if let TropicalPlan::BatchedGemm {
-                    batch_dims, m, n, k, ..
+                    batch_dims,
+                    m,
+                    n,
+                    k,
+                    ..
                 } = plan
                 {
                     if views.len() != 2 {
@@ -1267,12 +1271,28 @@ macro_rules! impl_tropical_prims {
                         ));
                     }
                     try_simd_dispatch!(
-                        T, $wrapper<f64>, &view_refs, alpha, beta, &mut out_view,
-                        batch_dims, *m, *n, *k
+                        T,
+                        $wrapper<f64>,
+                        &view_refs,
+                        alpha,
+                        beta,
+                        &mut out_view,
+                        batch_dims,
+                        *m,
+                        *n,
+                        *k
                     );
                     try_simd_dispatch!(
-                        T, $wrapper<f32>, &view_refs, alpha, beta, &mut out_view,
-                        batch_dims, *m, *n, *k
+                        T,
+                        $wrapper<f32>,
+                        &view_refs,
+                        alpha,
+                        beta,
+                        &mut out_view,
+                        batch_dims,
+                        *m,
+                        *n,
+                        *k
                     );
                 }
                 tropical_execute(plan, alpha, &view_refs, beta, &mut out_view)
