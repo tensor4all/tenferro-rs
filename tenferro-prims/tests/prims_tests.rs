@@ -4,45 +4,98 @@
 //! Core numeric tests are parameterized across f32, f64, and Complex64 via the
 //! `typed_prims_tests!` macro at the bottom of this file.
 
-use strided_traits::ScalarBase;
-use strided_view::{StridedArray, StridedView, StridedViewMut};
-use tenferro_algebra::Standard;
+use tenferro_algebra::{Scalar, Standard};
+use tenferro_device::LogicalMemorySpace;
 use tenferro_prims::{
     BackendRegistry, CpuBackend, CpuContext, CpuPlan, Extension, PrimDescriptor, ReduceOp,
     TensorPrims, UnaryOp,
 };
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 // Helper functions to disambiguate the algebra parameter S for the CPU backend.
-fn cpu_plan<T: ScalarBase>(
+fn cpu_plan<T: Scalar>(
     ctx: &mut CpuContext,
     desc: &PrimDescriptor,
     shapes: &[&[usize]],
-) -> tenferro_device::Result<CpuPlan<T>>
-where
-    T: tenferro_algebra::Scalar,
-{
+) -> tenferro_device::Result<CpuPlan<T>> {
     <CpuBackend as TensorPrims<Standard<T>>>::plan::<T>(ctx, desc, shapes)
 }
 
-fn cpu_execute<T: ScalarBase>(
+fn cpu_execute<T: Scalar>(
     ctx: &mut CpuContext,
     plan: &CpuPlan<T>,
     alpha: T,
-    inputs: &[&StridedView<T>],
+    inputs: &[&Tensor<T>],
     beta: T,
-    output: &mut StridedViewMut<T>,
-) -> tenferro_device::Result<()>
-where
-    T: tenferro_algebra::Scalar,
-{
+    output: &mut Tensor<T>,
+) -> tenferro_device::Result<()> {
     <CpuBackend as TensorPrims<Standard<T>>>::execute(ctx, plan, alpha, inputs, beta, output)
 }
 
-fn cpu_has_ext<T: ScalarBase>(ext: Extension) -> bool
-where
-    T: tenferro_algebra::Scalar,
-{
+fn cpu_has_ext<T: Scalar>(ext: Extension) -> bool {
     <CpuBackend as TensorPrims<Standard<T>>>::has_extension_for::<T>(ext)
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers: Tensor construction and element access
+// ---------------------------------------------------------------------------
+
+/// Create a Tensor from a closure, column-major order.
+/// Equivalent to the old `StridedArray::from_fn_col_major`.
+fn tensor_from_fn<T: Scalar>(dims: &[usize], f: impl Fn(&[usize]) -> T) -> Tensor<T> {
+    let ndim = dims.len();
+    let n_elements: usize = dims.iter().product();
+    let mut data = vec![T::zero(); n_elements];
+    let strides = col_major_strides(dims);
+    let mut idx = vec![0usize; ndim];
+    for _ in 0..n_elements {
+        let linear: usize = idx.iter().zip(strides.iter()).map(|(&i, &s)| i * s).sum();
+        data[linear] = f(&idx);
+        // increment index in column-major (first axis fastest)
+        for d in 0..ndim {
+            idx[d] += 1;
+            if idx[d] < dims[d] {
+                break;
+            }
+            idx[d] = 0;
+        }
+    }
+    Tensor::from_slice(&data, dims, MemoryOrder::ColumnMajor).unwrap()
+}
+
+/// Zero-initialized Tensor (column-major).
+fn tensor_zeros<T: Scalar>(dims: &[usize]) -> Tensor<T> {
+    Tensor::<T>::zeros(
+        dims,
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+}
+
+/// Column-major strides in element counts (not isize).
+fn col_major_strides(dims: &[usize]) -> Vec<usize> {
+    let ndim = dims.len();
+    if ndim == 0 {
+        return vec![];
+    }
+    let mut strides = vec![0usize; ndim];
+    strides[0] = 1;
+    for i in 1..ndim {
+        strides[i] = strides[i - 1] * dims[i - 1];
+    }
+    strides
+}
+
+/// Read a single element from a Tensor by multi-dimensional index.
+fn tensor_get<T: Scalar>(t: &Tensor<T>, idx: &[usize]) -> T {
+    let data = t.buffer().as_slice().expect("CPU tensor");
+    let offset = t.offset()
+        + idx
+            .iter()
+            .zip(t.strides().iter())
+            .map(|(&i, &s)| i as isize * s)
+            .sum::<isize>();
+    data[offset as usize]
 }
 
 // ============================================================================
@@ -175,32 +228,24 @@ fn plan_cache_hit_produces_correct_results() {
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 
     // Use cached plan for actual computation
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
-    let b = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] * 4 + idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[2, 4]);
+    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
+    let b = tensor_from_fn(&[3, 4], |idx| (idx[0] * 4 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[2, 4]);
 
     let plan2 = cpu_plan::<f64>(&mut ctx, &desc, shapes).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan2,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan2, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
     // Verify results match manual computation
     for i in 0..2 {
         for j in 0..4 {
             let mut expected = 0.0;
             for k in 0..3 {
-                expected += a.view().get(&[i, k]) * b.view().get(&[k, j]);
+                expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
             }
             assert!(
-                (c.view().get(&[i, j]) - expected).abs() < 1e-10,
+                (tensor_get(&c, &[i, j]) - expected).abs() < 1e-10,
                 "C[{i},{j}] = {}, expected {expected}",
-                c.view().get(&[i, j])
+                tensor_get(&c, &[i, j])
             );
         }
     }
@@ -226,25 +271,25 @@ fn plan_cache_complex64_separate_from_f64() {
     assert_eq!(ctx.plan_cache_mut().len(), 2);
 
     // Execute Complex64 plan to verify it works correctly
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+    let a = tensor_from_fn(&[2, 3], |idx| {
         Complex64::new((idx[0] * 3 + idx[1] + 1) as f64, 0.0)
     });
-    let mut b = StridedArray::<Complex64>::col_major(&[3, 2]);
+    let mut b = tensor_zeros::<Complex64>(&[3, 2]);
 
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
     cpu_execute(
         &mut ctx,
         &plan,
         Complex64::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex64::new(0.0, 0.0),
-        &mut b.view_mut(),
+        &mut b,
     )
     .unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
         }
     }
 }
@@ -270,19 +315,19 @@ fn cpu_has_extension_elementwise_mul() {
 #[test]
 fn permute_transpose_2x3() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] + 1 + idx[1] * 2) as f64);
-    let mut b = StridedArray::<f64>::col_major(&[3, 2]);
+    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] + 1 + idx[1] * 2) as f64);
+    let mut b = tensor_zeros::<f64>(&[3, 2]);
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1],
         modes_b: vec![1, 0],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut b.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
         }
     }
 }
@@ -290,8 +335,8 @@ fn permute_transpose_2x3() {
 #[test]
 fn permute_with_alpha_beta() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] + idx[1] * 2 + 1) as f64);
-    let mut b = StridedArray::from_fn_col_major(&[3, 2], |_| 1.0_f64);
+    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] + idx[1] * 2 + 1) as f64);
+    let mut b = tensor_from_fn(&[3, 2], |_| 1.0_f64);
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1],
@@ -299,12 +344,12 @@ fn permute_with_alpha_beta() {
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
     // B = 2 * A^T + 3 * B
-    cpu_execute(&mut ctx, &plan, 2.0, &[&a.view()], 3.0, &mut b.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 2.0, &[&a], 3.0, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            let expected = 2.0 * a.view().get(&[i, j]) + 3.0;
-            assert_eq!(b.view().get(&[j, i]), expected);
+            let expected = 2.0 * tensor_get(&a, &[i, j]) + 3.0;
+            assert_eq!(tensor_get(&b, &[j, i]), expected);
         }
     }
 }
@@ -312,22 +357,22 @@ fn permute_with_alpha_beta() {
 #[test]
 fn permute_3d() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3, 4], |idx| {
+    let a = tensor_from_fn(&[2, 3, 4], |idx| {
         (idx[0] * 100 + idx[1] * 10 + idx[2]) as f64
     });
-    let mut b = StridedArray::<f64>::col_major(&[4, 2, 3]);
+    let mut b = tensor_zeros::<f64>(&[4, 2, 3]);
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1, 2],
         modes_b: vec![2, 0, 1],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3, 4], &[4, 2, 3]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut b.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
             for k in 0..4 {
-                assert_eq!(b.view().get(&[k, i, j]), a.view().get(&[i, j, k]));
+                assert_eq!(tensor_get(&b, &[k, i, j]), tensor_get(&a, &[i, j, k]));
             }
         }
     }
@@ -340,16 +385,16 @@ fn permute_3d() {
 #[test]
 fn make_contiguous() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] * 10 + idx[1]) as f64);
-    let mut b = StridedArray::<f64>::col_major(&[3, 4]);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1]) as f64);
+    let mut b = tensor_zeros::<f64>(&[3, 4]);
 
     let desc = PrimDescriptor::MakeContiguous;
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut b.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut b).unwrap();
 
     for i in 0..3 {
         for j in 0..4 {
-            assert_eq!(b.view().get(&[i, j]), a.view().get(&[i, j]));
+            assert_eq!(tensor_get(&b, &[i, j]), tensor_get(&a, &[i, j]));
         }
     }
 }
@@ -361,9 +406,9 @@ fn make_contiguous() {
 #[test]
 fn batched_gemm_2x3_times_3x2() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
-    let b = StridedArray::from_fn_col_major(&[3, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[2, 2]);
+    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
+    let b = tensor_from_fn(&[3, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[2, 2]);
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -372,26 +417,18 @@ fn batched_gemm_2x3_times_3x2() {
         k: 3,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
     for i in 0..2 {
         for j in 0..2 {
             let mut expected = 0.0;
             for k in 0..3 {
-                expected += a.view().get(&[i, k]) * b.view().get(&[k, j]);
+                expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
             }
             assert!(
-                (c.view().get(&[i, j]) - expected).abs() < 1e-10,
+                (tensor_get(&c, &[i, j]) - expected).abs() < 1e-10,
                 "C[{i},{j}] = {}, expected {expected}",
-                c.view().get(&[i, j])
+                tensor_get(&c, &[i, j])
             );
         }
     }
@@ -400,13 +437,13 @@ fn batched_gemm_2x3_times_3x2() {
 #[test]
 fn batched_gemm_with_batch() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 2, 3], |idx| {
+    let a = tensor_from_fn(&[2, 2, 3], |idx| {
         (idx[0] * 100 + idx[1] * 10 + idx[2] + 1) as f64
     });
-    let b = StridedArray::from_fn_col_major(&[2, 3, 2], |idx| {
+    let b = tensor_from_fn(&[2, 3, 2], |idx| {
         (idx[0] * 100 + idx[1] * 10 + idx[2] + 1) as f64
     });
-    let mut c = StridedArray::<f64>::col_major(&[2, 2, 2]);
+    let mut c = tensor_zeros::<f64>(&[2, 2, 2]);
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![2],
@@ -415,27 +452,19 @@ fn batched_gemm_with_batch() {
         k: 3,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 2, 3], &[2, 3, 2], &[2, 2, 2]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
     for batch in 0..2 {
         for i in 0..2 {
             for j in 0..2 {
                 let mut expected = 0.0;
                 for k in 0..3 {
-                    expected += a.view().get(&[batch, i, k]) * b.view().get(&[batch, k, j]);
+                    expected += tensor_get(&a, &[batch, i, k]) * tensor_get(&b, &[batch, k, j]);
                 }
                 assert!(
-                    (c.view().get(&[batch, i, j]) - expected).abs() < 1e-10,
+                    (tensor_get(&c, &[batch, i, j]) - expected).abs() < 1e-10,
                     "C[{batch},{i},{j}] = {}, expected {expected}",
-                    c.view().get(&[batch, i, j])
+                    tensor_get(&c, &[batch, i, j])
                 );
             }
         }
@@ -449,8 +478,8 @@ fn batched_gemm_with_batch() {
 #[test]
 fn reduce_sum_axis1() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[3]);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[3]);
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
@@ -458,17 +487,17 @@ fn reduce_sum_axis1() {
         op: ReduceOp::Sum,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..3 {
         let mut expected = 0.0;
         for j in 0..4 {
-            expected += a.view().get(&[i, j]);
+            expected += tensor_get(&a, &[i, j]);
         }
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -476,8 +505,8 @@ fn reduce_sum_axis1() {
 #[test]
 fn reduce_sum_axis0() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[4]);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[4]);
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
@@ -485,17 +514,17 @@ fn reduce_sum_axis0() {
         op: ReduceOp::Sum,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for j in 0..4 {
         let mut expected = 0.0;
         for i in 0..3 {
-            expected += a.view().get(&[i, j]);
+            expected += tensor_get(&a, &[i, j]);
         }
         assert!(
-            (c.view().get(&[j]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[j]) - expected).abs() < 1e-10,
             "C[{j}] = {}, expected {expected}",
-            c.view().get(&[j])
+            tensor_get(&c, &[j])
         );
     }
 }
@@ -503,8 +532,8 @@ fn reduce_sum_axis0() {
 #[test]
 fn reduce_sum_full() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] + idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[]);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[]);
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
@@ -512,7 +541,7 @@ fn reduce_sum_full() {
         op: ReduceOp::Sum,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     let mut expected = 0.0;
     for i in 0..3 {
@@ -520,7 +549,7 @@ fn reduce_sum_full() {
             expected += (i + j + 1) as f64;
         }
     }
-    assert!((c.view().get(&[]) - expected).abs() < 1e-10);
+    assert!((tensor_get(&c, &[]) - expected).abs() < 1e-10);
 }
 
 #[test]
@@ -532,9 +561,9 @@ fn reduce_max_returns_error() {
         op: ReduceOp::Max,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
-    let a = StridedArray::<f64>::col_major(&[3, 4]);
-    let mut c = StridedArray::<f64>::col_major(&[3]);
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
+    let a = tensor_zeros::<f64>(&[3, 4]);
+    let mut c = tensor_zeros::<f64>(&[3]);
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c);
     match result {
         Err(tenferro_device::Error::InvalidArgument(msg)) => {
             assert!(msg.contains("Max"), "error should mention Max, got: {msg}");
@@ -550,14 +579,14 @@ fn reduce_max_returns_error() {
 #[test]
 fn trace_2d_matrix() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3, 3], |idx| {
+    let a = tensor_from_fn(&[3, 3], |idx| {
         if idx[0] == idx[1] {
             (idx[0] + 1) as f64
         } else {
             0.0
         }
     });
-    let mut c = StridedArray::<f64>::col_major(&[]);
+    let mut c = tensor_zeros::<f64>(&[]);
 
     let desc = PrimDescriptor::Trace {
         modes_a: vec![0, 1],
@@ -565,19 +594,19 @@ fn trace_2d_matrix() {
         paired: vec![(0, 1)],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     // tr(diag(1,2,3)) = 6
-    assert!((c.view().get(&[]) - 6.0).abs() < 1e-10);
+    assert!((tensor_get(&c, &[]) - 6.0).abs() < 1e-10);
 }
 
 #[test]
 fn trace_with_free_axis() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3, 3], |idx| {
+    let a = tensor_from_fn(&[2, 3, 3], |idx| {
         (idx[0] * 100 + idx[1] * 10 + idx[2]) as f64
     });
-    let mut c = StridedArray::<f64>::col_major(&[2]);
+    let mut c = tensor_zeros::<f64>(&[2]);
 
     let desc = PrimDescriptor::Trace {
         modes_a: vec![0, 1, 2],
@@ -585,17 +614,17 @@ fn trace_with_free_axis() {
         paired: vec![(1, 2)],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3, 3], &[2]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..2 {
         let mut expected = 0.0;
         for d in 0..3 {
-            expected += a.view().get(&[i, d, d]);
+            expected += tensor_get(&a, &[i, d, d]);
         }
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -607,29 +636,21 @@ fn trace_with_free_axis() {
 #[test]
 fn elementwise_mul_2d() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] + 1) as f64);
-    let b = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[3, 4]);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] + 1) as f64);
+    let b = tensor_from_fn(&[3, 4], |idx| (idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[3, 4]);
 
     let desc = PrimDescriptor::ElementwiseMul;
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 4]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
     for i in 0..3 {
         for j in 0..4 {
             let expected = ((i + 1) * (j + 1)) as f64;
             assert!(
-                (c.view().get(&[i, j]) - expected).abs() < 1e-10,
+                (tensor_get(&c, &[i, j]) - expected).abs() < 1e-10,
                 "C[{i},{j}] = {}, expected {expected}",
-                c.view().get(&[i, j])
+                tensor_get(&c, &[i, j])
             );
         }
     }
@@ -642,9 +663,9 @@ fn elementwise_mul_2d() {
 #[test]
 fn contract_matrix_multiply() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
-    let b = StridedArray::from_fn_col_major(&[3, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[2, 2]);
+    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
+    let b = tensor_from_fn(&[3, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[2, 2]);
 
     let desc = PrimDescriptor::Contract {
         modes_a: vec![0, 1],
@@ -652,26 +673,18 @@ fn contract_matrix_multiply() {
         modes_c: vec![0, 2],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
     for i in 0..2 {
         for j in 0..2 {
             let mut expected = 0.0;
             for k in 0..3 {
-                expected += a.view().get(&[i, k]) * b.view().get(&[k, j]);
+                expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
             }
             assert!(
-                (c.view().get(&[i, j]) - expected).abs() < 1e-10,
+                (tensor_get(&c, &[i, j]) - expected).abs() < 1e-10,
                 "C[{i},{j}] = {}, expected {expected}",
-                c.view().get(&[i, j])
+                tensor_get(&c, &[i, j])
             );
         }
     }
@@ -680,9 +693,9 @@ fn contract_matrix_multiply() {
 #[test]
 fn contract_outer_product() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| (idx[0] + 1) as f64);
-    let b = StridedArray::from_fn_col_major(&[4], |idx| (idx[0] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[3, 4]);
+    let a = tensor_from_fn(&[3], |idx| (idx[0] + 1) as f64);
+    let b = tensor_from_fn(&[4], |idx| (idx[0] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[3, 4]);
 
     let desc = PrimDescriptor::Contract {
         modes_a: vec![0],
@@ -690,23 +703,15 @@ fn contract_outer_product() {
         modes_c: vec![0, 1],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[4], &[3, 4]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
     for i in 0..3 {
         for j in 0..4 {
             let expected = ((i + 1) * (j + 1)) as f64;
             assert!(
-                (c.view().get(&[i, j]) - expected).abs() < 1e-10,
+                (tensor_get(&c, &[i, j]) - expected).abs() < 1e-10,
                 "C[{i},{j}] = {}, expected {expected}",
-                c.view().get(&[i, j])
+                tensor_get(&c, &[i, j])
             );
         }
     }
@@ -719,16 +724,16 @@ fn contract_outer_product() {
 #[test]
 fn elementwise_unary_conj_identity() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[3, 4]);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[3, 4]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..3 {
         for j in 0..4 {
-            assert_eq!(c.view().get(&[i, j]), a.view().get(&[i, j]));
+            assert_eq!(tensor_get(&c, &[i, j]), tensor_get(&a, &[i, j]));
         }
     }
 }
@@ -742,10 +747,10 @@ fn elementwise_unary_conj_complex64() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex64::new(idx[0] as f64 + 1.0, idx[0] as f64 + 2.0)
     });
-    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex64>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
@@ -753,18 +758,18 @@ fn elementwise_unary_conj_complex64() {
         &mut ctx,
         &plan,
         Complex64::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex64::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
     for i in 0..3 {
         let expected = Complex64::new(i as f64 + 1.0, -(i as f64 + 2.0));
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -774,10 +779,10 @@ fn elementwise_unary_conj_complex32() {
     use num_complex::Complex32;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex32::new(idx[0] as f32 + 1.0, idx[0] as f32 + 2.0)
     });
-    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
@@ -785,18 +790,18 @@ fn elementwise_unary_conj_complex32() {
         &mut ctx,
         &plan,
         Complex32::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex32::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
     for i in 0..3 {
         let expected = Complex32::new(i as f32 + 1.0, -(i as f32 + 2.0));
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-5,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-5,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -808,21 +813,21 @@ fn elementwise_unary_conj_complex32() {
 #[test]
 fn elementwise_unary_negate_f64() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[4], |idx| idx[0] as f64 + 1.0);
-    let mut c = StridedArray::<f64>::col_major(&[4]);
+    let a = tensor_from_fn(&[4], |idx| idx[0] as f64 + 1.0);
+    let mut c = tensor_zeros::<f64>(&[4]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Negate,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..4 {
         let expected = -(i as f64 + 1.0);
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -834,21 +839,21 @@ fn elementwise_unary_negate_f64() {
 #[test]
 fn elementwise_unary_reciprocal_f64() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[4], |idx| idx[0] as f64 + 1.0);
-    let mut c = StridedArray::<f64>::col_major(&[4]);
+    let a = tensor_from_fn(&[4], |idx| idx[0] as f64 + 1.0);
+    let mut c = tensor_zeros::<f64>(&[4]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Reciprocal,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..4 {
         let expected = 1.0 / (i as f64 + 1.0);
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -860,19 +865,19 @@ fn elementwise_unary_reciprocal_f64() {
 #[test]
 fn elementwise_unary_abs_f64() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[4], |idx| -(idx[0] as f64 + 1.0));
-    let mut c = StridedArray::<f64>::col_major(&[4]);
+    let a = tensor_from_fn(&[4], |idx| -(idx[0] as f64 + 1.0));
+    let mut c = tensor_zeros::<f64>(&[4]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..4 {
         let expected = (i as f64 + 1.0).abs();
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -884,19 +889,19 @@ fn elementwise_unary_abs_f64() {
 #[test]
 fn elementwise_unary_sqrt_f64() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[4], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f64);
-    let mut c = StridedArray::<f64>::col_major(&[4]);
+    let a = tensor_from_fn(&[4], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f64);
+    let mut c = tensor_zeros::<f64>(&[4]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..4 {
         let expected = i as f64 + 1.0;
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -910,10 +915,10 @@ fn elementwise_unary_negate_complex64() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex64::new(idx[0] as f64 + 1.0, idx[0] as f64 + 2.0)
     });
-    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex64>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Negate,
@@ -923,18 +928,18 @@ fn elementwise_unary_negate_complex64() {
         &mut ctx,
         &plan,
         Complex64::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex64::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
     for i in 0..3 {
         let expected = -Complex64::new(i as f64 + 1.0, i as f64 + 2.0);
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -944,10 +949,10 @@ fn elementwise_unary_reciprocal_complex64() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex64::new(idx[0] as f64 + 1.0, idx[0] as f64 + 2.0)
     });
-    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex64>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Reciprocal,
@@ -957,9 +962,9 @@ fn elementwise_unary_reciprocal_complex64() {
         &mut ctx,
         &plan,
         Complex64::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex64::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
@@ -967,9 +972,9 @@ fn elementwise_unary_reciprocal_complex64() {
         let z = Complex64::new(i as f64 + 1.0, i as f64 + 2.0);
         let expected = Complex64::new(1.0, 0.0) / z;
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -979,10 +984,10 @@ fn elementwise_unary_abs_complex64() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex64::new(3.0 * (idx[0] as f64 + 1.0), 4.0 * (idx[0] as f64 + 1.0))
     });
-    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex64>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
@@ -990,9 +995,9 @@ fn elementwise_unary_abs_complex64() {
         &mut ctx,
         &plan,
         Complex64::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex64::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
@@ -1000,9 +1005,9 @@ fn elementwise_unary_abs_complex64() {
         // |3k + 4ki| = 5k, returned as Complex64 with zero imaginary part
         let expected = Complex64::new(5.0 * (i as f64 + 1.0), 0.0);
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1013,11 +1018,11 @@ fn elementwise_unary_sqrt_complex64() {
 
     let mut ctx = CpuContext::new(1);
     // Use perfect squares: sqrt(z^2) = z for z with positive real part
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         let z = Complex64::new(idx[0] as f64 + 1.0, 0.0);
         z * z // perfect square
     });
-    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex64>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
@@ -1025,18 +1030,18 @@ fn elementwise_unary_sqrt_complex64() {
         &mut ctx,
         &plan,
         Complex64::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex64::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
     for i in 0..3 {
         let expected = Complex64::new(i as f64 + 1.0, 0.0);
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1048,22 +1053,22 @@ fn elementwise_unary_sqrt_complex64() {
 #[test]
 fn elementwise_unary_negate_with_alpha_beta() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| idx[0] as f64 + 1.0);
-    let mut c = StridedArray::from_fn_col_major(&[3], |_| 10.0_f64);
+    let a = tensor_from_fn(&[3], |idx| idx[0] as f64 + 1.0);
+    let mut c = tensor_from_fn(&[3], |_| 10.0_f64);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Negate,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     // C = 2 * (-A) + 3 * C = 2 * (-(i+1)) + 3 * 10
-    cpu_execute(&mut ctx, &plan, 2.0, &[&a.view()], 3.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 2.0, &[&a], 3.0, &mut c).unwrap();
 
     for i in 0..3 {
         let expected = 2.0 * (-(i as f64 + 1.0)) + 3.0 * 10.0;
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1075,29 +1080,21 @@ fn elementwise_unary_negate_with_alpha_beta() {
 #[test]
 fn elementwise_unary_negate_f32() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| idx[0] as f32 + 1.0);
-    let mut c = StridedArray::<f32>::col_major(&[3]);
+    let a = tensor_from_fn(&[3], |idx| idx[0] as f32 + 1.0);
+    let mut c = tensor_zeros::<f32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Negate,
     };
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0_f32,
-        &[&a.view()],
-        0.0_f32,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
     for i in 0..3 {
         let expected = -(i as f32 + 1.0);
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-5,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1105,29 +1102,21 @@ fn elementwise_unary_negate_f32() {
 #[test]
 fn elementwise_unary_reciprocal_f32() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| idx[0] as f32 + 1.0);
-    let mut c = StridedArray::<f32>::col_major(&[3]);
+    let a = tensor_from_fn(&[3], |idx| idx[0] as f32 + 1.0);
+    let mut c = tensor_zeros::<f32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Reciprocal,
     };
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0_f32,
-        &[&a.view()],
-        0.0_f32,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
     for i in 0..3 {
         let expected = 1.0_f32 / (i as f32 + 1.0);
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-5,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1135,27 +1124,19 @@ fn elementwise_unary_reciprocal_f32() {
 #[test]
 fn elementwise_unary_abs_f32() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| -(idx[0] as f32 + 1.0));
-    let mut c = StridedArray::<f32>::col_major(&[3]);
+    let a = tensor_from_fn(&[3], |idx| -(idx[0] as f32 + 1.0));
+    let mut c = tensor_zeros::<f32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0_f32,
-        &[&a.view()],
-        0.0_f32,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
     for i in 0..3 {
         let expected = i as f32 + 1.0;
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-5,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1163,27 +1144,19 @@ fn elementwise_unary_abs_f32() {
 #[test]
 fn elementwise_unary_sqrt_f32() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f32);
-    let mut c = StridedArray::<f32>::col_major(&[3]);
+    let a = tensor_from_fn(&[3], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f32);
+    let mut c = tensor_zeros::<f32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0_f32,
-        &[&a.view()],
-        0.0_f32,
-        &mut c.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
     for i in 0..3 {
         let expected = i as f32 + 1.0;
         assert!(
-            (c.view().get(&[i]) - expected).abs() < 1e-5,
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-5,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1197,10 +1170,10 @@ fn elementwise_unary_negate_complex32() {
     use num_complex::Complex32;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex32::new(idx[0] as f32 + 1.0, idx[0] as f32 + 2.0)
     });
-    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Negate,
@@ -1210,18 +1183,18 @@ fn elementwise_unary_negate_complex32() {
         &mut ctx,
         &plan,
         Complex32::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex32::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
     for i in 0..3 {
         let expected = -Complex32::new(i as f32 + 1.0, i as f32 + 2.0);
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-5,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-5,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1231,10 +1204,10 @@ fn elementwise_unary_reciprocal_complex32() {
     use num_complex::Complex32;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex32::new(idx[0] as f32 + 1.0, idx[0] as f32 + 2.0)
     });
-    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary {
         op: UnaryOp::Reciprocal,
@@ -1244,9 +1217,9 @@ fn elementwise_unary_reciprocal_complex32() {
         &mut ctx,
         &plan,
         Complex32::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex32::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
@@ -1254,9 +1227,9 @@ fn elementwise_unary_reciprocal_complex32() {
         let z = Complex32::new(i as f32 + 1.0, i as f32 + 2.0);
         let expected = Complex32::new(1.0, 0.0) / z;
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-5,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-5,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1266,10 +1239,10 @@ fn elementwise_unary_abs_complex32() {
     use num_complex::Complex32;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         Complex32::new(3.0 * (idx[0] as f32 + 1.0), 4.0 * (idx[0] as f32 + 1.0))
     });
-    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
@@ -1277,18 +1250,18 @@ fn elementwise_unary_abs_complex32() {
         &mut ctx,
         &plan,
         Complex32::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex32::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
     for i in 0..3 {
         let expected = Complex32::new(5.0 * (i as f32 + 1.0), 0.0);
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-4,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-4,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1298,11 +1271,11 @@ fn elementwise_unary_sqrt_complex32() {
     use num_complex::Complex32;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+    let a = tensor_from_fn(&[3], |idx| {
         let z = Complex32::new(idx[0] as f32 + 1.0, 0.0);
         z * z
     });
-    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+    let mut c = tensor_zeros::<Complex32>(&[3]);
 
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
@@ -1310,18 +1283,18 @@ fn elementwise_unary_sqrt_complex32() {
         &mut ctx,
         &plan,
         Complex32::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex32::new(0.0, 0.0),
-        &mut c.view_mut(),
+        &mut c,
     )
     .unwrap();
 
     for i in 0..3 {
         let expected = Complex32::new(i as f32 + 1.0, 0.0);
         assert!(
-            (c.view().get(&[i]) - expected).norm() < 1e-4,
+            (tensor_get(&c, &[i]) - expected).norm() < 1e-4,
             "C[{i}] = {}, expected {expected}",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1332,8 +1305,6 @@ fn elementwise_unary_sqrt_complex32() {
 
 #[test]
 fn resolve_conj_non_conjugated() {
-    use tenferro_tensor::{MemoryOrder, Tensor};
-
     let mut ctx = CpuContext::new(1);
     let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
@@ -1400,8 +1371,8 @@ fn load_hiptensor_returns_error() {
 #[test]
 fn anti_trace_scalar_to_diagonal() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[], |_| 5.0_f64);
-    let mut c = StridedArray::<f64>::col_major(&[3, 3]);
+    let a = tensor_from_fn(&[], |_| 5.0_f64);
+    let mut c = tensor_zeros::<f64>(&[3, 3]);
 
     let desc = PrimDescriptor::AntiTrace {
         modes_a: vec![],
@@ -1409,21 +1380,21 @@ fn anti_trace_scalar_to_diagonal() {
         paired: vec![(0, 1)],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[], &[3, 3]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
     for i in 0..3 {
         for j in 0..3 {
             if i == j {
                 assert!(
-                    (c.view().get(&[i, j]) - 5.0).abs() < 1e-10,
+                    (tensor_get(&c, &[i, j]) - 5.0).abs() < 1e-10,
                     "C[{i},{j}] = {}, expected 5.0",
-                    c.view().get(&[i, j])
+                    tensor_get(&c, &[i, j])
                 );
             } else {
                 assert!(
-                    c.view().get(&[i, j]).abs() < 1e-10,
+                    tensor_get(&c, &[i, j]).abs() < 1e-10,
                     "C[{i},{j}] = {}, expected 0.0",
-                    c.view().get(&[i, j])
+                    tensor_get(&c, &[i, j])
                 );
             }
         }
@@ -1437,8 +1408,8 @@ fn anti_trace_scalar_to_diagonal() {
 #[test]
 fn reduce_sum_with_alpha_beta() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3], |_| 1.0_f64);
-    let mut c = StridedArray::from_fn_col_major(&[2], |_| 10.0_f64);
+    let a = tensor_from_fn(&[2, 3], |_| 1.0_f64);
+    let mut c = tensor_from_fn(&[2], |_| 10.0_f64);
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
@@ -1448,13 +1419,13 @@ fn reduce_sum_with_alpha_beta() {
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[2]]).unwrap();
     // C = 2 * sum(A, axis=1) + 3 * C
     // sum over 3 ones = 3, so C = 2 * 3 + 3 * 10 = 36
-    cpu_execute(&mut ctx, &plan, 2.0, &[&a.view()], 3.0, &mut c.view_mut()).unwrap();
+    cpu_execute(&mut ctx, &plan, 2.0, &[&a], 3.0, &mut c).unwrap();
 
     for i in 0..2 {
         assert!(
-            (c.view().get(&[i]) - 36.0).abs() < 1e-10,
+            (tensor_get(&c, &[i]) - 36.0).abs() < 1e-10,
             "C[{i}] = {}, expected 36.0",
-            c.view().get(&[i])
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1468,10 +1439,10 @@ fn permute_complex64() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+    let a = tensor_from_fn(&[2, 3], |idx| {
         Complex64::new((idx[0] * 3 + idx[1] + 1) as f64, 0.0)
     });
-    let mut b = StridedArray::<Complex64>::col_major(&[3, 2]);
+    let mut b = tensor_zeros::<Complex64>(&[3, 2]);
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1],
@@ -1482,15 +1453,15 @@ fn permute_complex64() {
         &mut ctx,
         &plan,
         Complex64::new(1.0, 0.0),
-        &[&a.view()],
+        &[&a],
         Complex64::new(0.0, 0.0),
-        &mut b.view_mut(),
+        &mut b,
     )
     .unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
         }
     }
 }
@@ -1502,7 +1473,6 @@ fn permute_complex64() {
 #[test]
 fn resolve_conj_complex64_non_conjugated() {
     use num_complex::Complex64;
-    use tenferro_tensor::{MemoryOrder, Tensor};
 
     let mut ctx = CpuContext::new(1);
     let data = vec![
@@ -1531,7 +1501,6 @@ fn resolve_conj_complex64_non_conjugated() {
 #[test]
 fn resolve_conj_complex64_conjugated() {
     use num_complex::Complex64;
-    use tenferro_tensor::{MemoryOrder, Tensor};
 
     let mut ctx = CpuContext::new(1);
     let data = vec![
@@ -1566,8 +1535,6 @@ fn resolve_conj_complex64_conjugated() {
 
 #[test]
 fn resolve_conj_f64_conjugated_is_identity() {
-    use tenferro_tensor::{MemoryOrder, Tensor};
-
     let mut ctx = CpuContext::new(1);
     let data = vec![1.0_f64, 2.0, 3.0, 4.0];
     let t = Tensor::<f64>::from_slice(&data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
@@ -1594,27 +1561,19 @@ fn resolve_conj_f64_conjugated_is_identity() {
 #[test]
 fn permute_f32() {
     let mut ctx = CpuContext::new(1);
-    let a = StridedArray::from_fn_col_major(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f32);
-    let mut b = StridedArray::<f32>::col_major(&[3, 2]);
+    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f32);
+    let mut b = tensor_zeros::<f32>(&[3, 2]);
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1],
         modes_b: vec![1, 0],
     };
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-    cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0_f32,
-        &[&a.view()],
-        0.0_f32,
-        &mut b.view_mut(),
-    )
-    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
         }
     }
 }
@@ -1917,18 +1876,11 @@ fn execute_permute_wrong_input_count() {
         modes_b: vec![1, 0],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-    let a = StridedArray::<f64>::col_major(&[2, 3]);
-    let b = StridedArray::<f64>::col_major(&[2, 3]);
-    let mut c = StridedArray::<f64>::col_major(&[3, 2]);
+    let a = tensor_zeros::<f64>(&[2, 3]);
+    let b = tensor_zeros::<f64>(&[2, 3]);
+    let mut c = tensor_zeros::<f64>(&[3, 2]);
     // Provide 2 inputs instead of 1
-    let result = cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    );
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c);
     assert!(result.is_err(), "expected error for wrong input count");
     let err = result.unwrap_err();
     assert!(
@@ -1945,9 +1897,9 @@ fn execute_permute_zero_inputs() {
         modes_b: vec![1, 0],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-    let mut c = StridedArray::<f64>::col_major(&[3, 2]);
+    let mut c = tensor_zeros::<f64>(&[3, 2]);
     // Provide 0 inputs instead of 1
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c);
     assert!(result.is_err(), "expected error for zero inputs");
 }
 
@@ -1961,10 +1913,10 @@ fn execute_batched_gemm_wrong_input_count() {
         k: 4,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[4, 3], &[2, 3]]).unwrap();
-    let a = StridedArray::<f64>::col_major(&[2, 4]);
-    let mut c = StridedArray::<f64>::col_major(&[2, 3]);
+    let a = tensor_zeros::<f64>(&[2, 4]);
+    let mut c = tensor_zeros::<f64>(&[2, 3]);
     // Only 1 input instead of 2
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c);
     assert!(result.is_err(), "expected error for wrong input count");
 }
 
@@ -1977,10 +1929,10 @@ fn execute_contract_wrong_input_count() {
         modes_c: vec![0, 2],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 4], &[2, 4]]).unwrap();
-    let a = StridedArray::<f64>::col_major(&[2, 3]);
-    let mut c = StridedArray::<f64>::col_major(&[2, 4]);
+    let a = tensor_zeros::<f64>(&[2, 3]);
+    let mut c = tensor_zeros::<f64>(&[2, 4]);
     // Only 1 input instead of 2
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c);
     assert!(result.is_err(), "expected error for wrong input count");
 }
 
@@ -1989,10 +1941,10 @@ fn execute_elementwise_mul_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
     let desc = PrimDescriptor::ElementwiseMul;
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3], &[3]]).unwrap();
-    let a = StridedArray::<f64>::col_major(&[3]);
-    let mut c = StridedArray::<f64>::col_major(&[3]);
+    let a = tensor_zeros::<f64>(&[3]);
+    let mut c = tensor_zeros::<f64>(&[3]);
     // Only 1 input instead of 2
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c);
     assert!(result.is_err(), "expected error for wrong input count");
 }
 
@@ -2005,18 +1957,11 @@ fn execute_reduce_wrong_input_count() {
         op: ReduceOp::Sum,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
-    let a = StridedArray::<f64>::col_major(&[3, 4]);
-    let b = StridedArray::<f64>::col_major(&[3, 4]);
-    let mut c = StridedArray::<f64>::col_major(&[3]);
+    let a = tensor_zeros::<f64>(&[3, 4]);
+    let b = tensor_zeros::<f64>(&[3, 4]);
+    let mut c = tensor_zeros::<f64>(&[3]);
     // 2 inputs instead of 1
-    let result = cpu_execute(
-        &mut ctx,
-        &plan,
-        1.0,
-        &[&a.view(), &b.view()],
-        0.0,
-        &mut c.view_mut(),
-    );
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c);
     assert!(result.is_err(), "expected error for wrong input count");
 }
 
@@ -2029,9 +1974,9 @@ fn execute_trace_wrong_input_count() {
         paired: vec![(0, 1)],
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
-    let mut c = StridedArray::<f64>::col_major(&[]);
+    let mut c = tensor_zeros::<f64>(&[]);
     // 0 inputs instead of 1
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c);
     assert!(result.is_err(), "expected error for zero inputs");
 }
 
@@ -2040,9 +1985,9 @@ fn execute_make_contiguous_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
     let desc = PrimDescriptor::MakeContiguous;
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
-    let mut c = StridedArray::<f64>::col_major(&[3, 4]);
+    let mut c = tensor_zeros::<f64>(&[3, 4]);
     // 0 inputs instead of 1
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c);
     assert!(result.is_err(), "expected error for zero inputs");
 }
 
@@ -2051,9 +1996,9 @@ fn execute_elementwise_unary_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
     let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
-    let mut c = StridedArray::<f64>::col_major(&[3]);
+    let mut c = tensor_zeros::<f64>(&[3]);
     // 0 inputs instead of 1
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c);
     assert!(result.is_err(), "expected error for zero inputs");
 }
 
@@ -2062,7 +2007,7 @@ fn execute_elementwise_unary_wrong_input_count() {
 
 /// Trait to abstract over scalar construction and approximate comparison.
 /// This enables the typed test macro to work uniformly across f32, f64, Complex64.
-trait TestScalar: tenferro_algebra::Scalar + ScalarBase + std::fmt::Debug {
+trait TestScalar: tenferro_algebra::Scalar + std::fmt::Debug {
     /// Convert an integer value to this scalar type (for constructing test data).
     fn from_usize(v: usize) -> Self;
     /// Convert a f64 value to this scalar type.
@@ -2149,10 +2094,10 @@ macro_rules! typed_prims_tests {
             #[test]
             fn permute_transpose_2x3() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+                let a = tensor_from_fn(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] + 1 + idx[1] * 2)
                 });
-                let mut b = StridedArray::<$T>::col_major(&[3, 2]);
+                let mut b = tensor_zeros::<$T>(&[3, 2]);
 
                 let desc = PrimDescriptor::Permute {
                     modes_a: vec![0, 1],
@@ -2163,15 +2108,15 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut b.view_mut(),
+                    &mut b,
                 )
                 .unwrap();
 
                 for i in 0..2 {
                     for j in 0..3 {
-                        assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+                        assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
                     }
                 }
             }
@@ -2179,11 +2124,10 @@ macro_rules! typed_prims_tests {
             #[test]
             fn permute_with_alpha_beta() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+                let a = tensor_from_fn(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] + idx[1] * 2 + 1)
                 });
-                let mut b =
-                    StridedArray::from_fn_col_major(&[3, 2], |_| <$T as TestScalar>::from_f64(1.0));
+                let mut b = tensor_from_fn(&[3, 2], |_| <$T as TestScalar>::from_f64(1.0));
 
                 let desc = PrimDescriptor::Permute {
                     modes_a: vec![0, 1],
@@ -2195,24 +2139,24 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(2.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(3.0),
-                    &mut b.view_mut(),
+                    &mut b,
                 )
                 .unwrap();
 
                 for i in 0..2 {
                     for j in 0..3 {
-                        let expected = <$T as TestScalar>::from_f64(2.0) * a.view().get(&[i, j])
+                        let expected = <$T as TestScalar>::from_f64(2.0) * tensor_get(&a, &[i, j])
                             + <$T as TestScalar>::from_f64(3.0);
                         assert!(
-                            <$T as TestScalar>::approx_eq(b.view().get(&[j, i]), expected),
+                            <$T as TestScalar>::approx_eq(tensor_get(&b, &[j, i]), expected),
                             "B[{},{}] = {:?}, expected {:?}, diff = {}",
                             j,
                             i,
-                            b.view().get(&[j, i]),
+                            tensor_get(&b, &[j, i]),
                             expected,
-                            <$T as TestScalar>::diff_norm(b.view().get(&[j, i]), expected)
+                            <$T as TestScalar>::diff_norm(tensor_get(&b, &[j, i]), expected)
                         );
                     }
                 }
@@ -2221,10 +2165,10 @@ macro_rules! typed_prims_tests {
             #[test]
             fn permute_3d() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[2, 3, 4], |idx| {
+                let a = tensor_from_fn(&[2, 3, 4], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2])
                 });
-                let mut b = StridedArray::<$T>::col_major(&[4, 2, 3]);
+                let mut b = tensor_zeros::<$T>(&[4, 2, 3]);
 
                 let desc = PrimDescriptor::Permute {
                     modes_a: vec![0, 1, 2],
@@ -2235,16 +2179,16 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut b.view_mut(),
+                    &mut b,
                 )
                 .unwrap();
 
                 for i in 0..2 {
                     for j in 0..3 {
                         for k in 0..4 {
-                            assert_eq!(b.view().get(&[k, i, j]), a.view().get(&[i, j, k]));
+                            assert_eq!(tensor_get(&b, &[k, i, j]), tensor_get(&a, &[i, j, k]));
                         }
                     }
                 }
@@ -2253,10 +2197,10 @@ macro_rules! typed_prims_tests {
             #[test]
             fn make_contiguous() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                let a = tensor_from_fn(&[3, 4], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1])
                 });
-                let mut b = StridedArray::<$T>::col_major(&[3, 4]);
+                let mut b = tensor_zeros::<$T>(&[3, 4]);
 
                 let desc = PrimDescriptor::MakeContiguous;
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
@@ -2264,15 +2208,15 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut b.view_mut(),
+                    &mut b,
                 )
                 .unwrap();
 
                 for i in 0..3 {
                     for j in 0..4 {
-                        assert_eq!(b.view().get(&[i, j]), a.view().get(&[i, j]));
+                        assert_eq!(tensor_get(&b, &[i, j]), tensor_get(&a, &[i, j]));
                     }
                 }
             }
@@ -2280,13 +2224,13 @@ macro_rules! typed_prims_tests {
             #[test]
             fn contract_matrix_multiply() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+                let a = tensor_from_fn(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
                 });
-                let b = StridedArray::from_fn_col_major(&[3, 2], |idx| {
+                let b = tensor_from_fn(&[3, 2], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
                 });
-                let mut c = StridedArray::<$T>::col_major(&[2, 2]);
+                let mut c = tensor_zeros::<$T>(&[2, 2]);
 
                 let desc = PrimDescriptor::Contract {
                     modes_a: vec![0, 1],
@@ -2298,9 +2242,9 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view(), &b.view()],
+                    &[&a, &b],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut c.view_mut(),
+                    &mut c,
                 )
                 .unwrap();
 
@@ -2308,14 +2252,14 @@ macro_rules! typed_prims_tests {
                     for j in 0..2 {
                         let mut expected = <$T as TestScalar>::from_f64(0.0);
                         for k in 0..3 {
-                            expected = expected + a.view().get(&[i, k]) * b.view().get(&[k, j]);
+                            expected = expected + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
                         }
                         assert!(
-                            <$T as TestScalar>::approx_eq(c.view().get(&[i, j]), expected),
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
                             "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
-                            c.view().get(&[i, j]),
+                            tensor_get(&c, &[i, j]),
                             expected,
-                            <$T as TestScalar>::diff_norm(c.view().get(&[i, j]), expected)
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
                         );
                     }
                 }
@@ -2324,13 +2268,9 @@ macro_rules! typed_prims_tests {
             #[test]
             fn contract_outer_product() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[3], |idx| {
-                    <$T as TestScalar>::from_usize(idx[0] + 1)
-                });
-                let b = StridedArray::from_fn_col_major(&[4], |idx| {
-                    <$T as TestScalar>::from_usize(idx[0] + 1)
-                });
-                let mut c = StridedArray::<$T>::col_major(&[3, 4]);
+                let a = tensor_from_fn(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let b = tensor_from_fn(&[4], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let mut c = tensor_zeros::<$T>(&[3, 4]);
 
                 let desc = PrimDescriptor::Contract {
                     modes_a: vec![0],
@@ -2342,9 +2282,9 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view(), &b.view()],
+                    &[&a, &b],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut c.view_mut(),
+                    &mut c,
                 )
                 .unwrap();
 
@@ -2352,11 +2292,11 @@ macro_rules! typed_prims_tests {
                     for j in 0..4 {
                         let expected = <$T as TestScalar>::from_usize((i + 1) * (j + 1));
                         assert!(
-                            <$T as TestScalar>::approx_eq(c.view().get(&[i, j]), expected),
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
                             "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
-                            c.view().get(&[i, j]),
+                            tensor_get(&c, &[i, j]),
                             expected,
-                            <$T as TestScalar>::diff_norm(c.view().get(&[i, j]), expected)
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
                         );
                     }
                 }
@@ -2365,10 +2305,10 @@ macro_rules! typed_prims_tests {
             #[test]
             fn reduce_sum_axis1() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                let a = tensor_from_fn(&[3, 4], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1] + 1)
                 });
-                let mut c = StridedArray::<$T>::col_major(&[3]);
+                let mut c = tensor_zeros::<$T>(&[3]);
 
                 let desc = PrimDescriptor::Reduce {
                     modes_a: vec![0, 1],
@@ -2380,23 +2320,23 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut c.view_mut(),
+                    &mut c,
                 )
                 .unwrap();
 
                 for i in 0..3 {
                     let mut expected = <$T as TestScalar>::from_f64(0.0);
                     for j in 0..4 {
-                        expected = expected + a.view().get(&[i, j]);
+                        expected = expected + tensor_get(&a, &[i, j]);
                     }
                     assert!(
-                        <$T as TestScalar>::approx_eq(c.view().get(&[i]), expected),
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
                         "C[{i}] = {:?}, expected {:?}, diff = {}",
-                        c.view().get(&[i]),
+                        tensor_get(&c, &[i]),
                         expected,
-                        <$T as TestScalar>::diff_norm(c.view().get(&[i]), expected)
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
                     );
                 }
             }
@@ -2404,10 +2344,10 @@ macro_rules! typed_prims_tests {
             #[test]
             fn reduce_sum_full() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                let a = tensor_from_fn(&[3, 4], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] + idx[1] + 1)
                 });
-                let mut c = StridedArray::<$T>::col_major(&[]);
+                let mut c = tensor_zeros::<$T>(&[]);
 
                 let desc = PrimDescriptor::Reduce {
                     modes_a: vec![0, 1],
@@ -2419,9 +2359,9 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut c.view_mut(),
+                    &mut c,
                 )
                 .unwrap();
 
@@ -2432,25 +2372,25 @@ macro_rules! typed_prims_tests {
                     }
                 }
                 assert!(
-                    <$T as TestScalar>::approx_eq(c.view().get(&[]), expected),
+                    <$T as TestScalar>::approx_eq(tensor_get(&c, &[]), expected),
                     "scalar = {:?}, expected {:?}, diff = {}",
-                    c.view().get(&[]),
+                    tensor_get(&c, &[]),
                     expected,
-                    <$T as TestScalar>::diff_norm(c.view().get(&[]), expected)
+                    <$T as TestScalar>::diff_norm(tensor_get(&c, &[]), expected)
                 );
             }
 
             #[test]
             fn trace_2d_matrix() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[3, 3], |idx| {
+                let a = tensor_from_fn(&[3, 3], |idx| {
                     if idx[0] == idx[1] {
                         <$T as TestScalar>::from_usize(idx[0] + 1)
                     } else {
                         <$T as TestScalar>::from_f64(0.0)
                     }
                 });
-                let mut c = StridedArray::<$T>::col_major(&[]);
+                let mut c = tensor_zeros::<$T>(&[]);
 
                 let desc = PrimDescriptor::Trace {
                     modes_a: vec![0, 1],
@@ -2462,33 +2402,29 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut c.view_mut(),
+                    &mut c,
                 )
                 .unwrap();
 
                 // tr(diag(1,2,3)) = 6
                 let expected = <$T as TestScalar>::from_f64(6.0);
                 assert!(
-                    <$T as TestScalar>::approx_eq(c.view().get(&[]), expected),
+                    <$T as TestScalar>::approx_eq(tensor_get(&c, &[]), expected),
                     "trace = {:?}, expected {:?}, diff = {}",
-                    c.view().get(&[]),
+                    tensor_get(&c, &[]),
                     expected,
-                    <$T as TestScalar>::diff_norm(c.view().get(&[]), expected)
+                    <$T as TestScalar>::diff_norm(tensor_get(&c, &[]), expected)
                 );
             }
 
             #[test]
             fn elementwise_mul_2d() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
-                    <$T as TestScalar>::from_usize(idx[0] + 1)
-                });
-                let b = StridedArray::from_fn_col_major(&[3, 4], |idx| {
-                    <$T as TestScalar>::from_usize(idx[1] + 1)
-                });
-                let mut c = StridedArray::<$T>::col_major(&[3, 4]);
+                let a = tensor_from_fn(&[3, 4], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let b = tensor_from_fn(&[3, 4], |idx| <$T as TestScalar>::from_usize(idx[1] + 1));
+                let mut c = tensor_zeros::<$T>(&[3, 4]);
 
                 let desc = PrimDescriptor::ElementwiseMul;
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 4]]).unwrap();
@@ -2496,9 +2432,9 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view(), &b.view()],
+                    &[&a, &b],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut c.view_mut(),
+                    &mut c,
                 )
                 .unwrap();
 
@@ -2506,11 +2442,11 @@ macro_rules! typed_prims_tests {
                     for j in 0..4 {
                         let expected = <$T as TestScalar>::from_usize((i + 1) * (j + 1));
                         assert!(
-                            <$T as TestScalar>::approx_eq(c.view().get(&[i, j]), expected),
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
                             "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
-                            c.view().get(&[i, j]),
+                            tensor_get(&c, &[i, j]),
                             expected,
-                            <$T as TestScalar>::diff_norm(c.view().get(&[i, j]), expected)
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
                         );
                     }
                 }
@@ -2519,10 +2455,10 @@ macro_rules! typed_prims_tests {
             #[test]
             fn elementwise_conj() {
                 let mut ctx = CpuContext::new(1);
-                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                let a = tensor_from_fn(&[3, 4], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1] + 1)
                 });
-                let mut c = StridedArray::<$T>::col_major(&[3, 4]);
+                let mut c = tensor_zeros::<$T>(&[3, 4]);
 
                 let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
@@ -2530,9 +2466,9 @@ macro_rules! typed_prims_tests {
                     &mut ctx,
                     &plan,
                     <$T as TestScalar>::from_f64(1.0),
-                    &[&a.view()],
+                    &[&a],
                     <$T as TestScalar>::from_f64(0.0),
-                    &mut c.view_mut(),
+                    &mut c,
                 )
                 .unwrap();
 
@@ -2540,7 +2476,7 @@ macro_rules! typed_prims_tests {
                 // are purely real so conj is still identity.
                 for i in 0..3 {
                     for j in 0..4 {
-                        assert_eq!(c.view().get(&[i, j]), a.view().get(&[i, j]));
+                        assert_eq!(tensor_get(&c, &[i, j]), tensor_get(&a, &[i, j]));
                     }
                 }
             }

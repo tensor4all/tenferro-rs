@@ -10,6 +10,7 @@ publish = false
 tenferro-device = { path = "../../tenferro-device" }
 tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-prims = { path = "../../tenferro-prims" }
+tenferro-tensor = { path = "../../tenferro-tensor" }
 strided-view.workspace = true
 strided-traits.workspace = true
 strided-perm.workspace = true
@@ -18,4 +19,3 @@ tropical-gemm = { git = "https://github.com/TensorBFS/tropical-gemm", version = 
 
 [dev-dependencies]
 tenferro-einsum = { path = "../../tenferro-einsum" }
-tenferro-tensor = { path = "../../tenferro-tensor" }

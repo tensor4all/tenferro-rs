@@ -13,7 +13,6 @@ tenferro-prims = { path = "../tenferro-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
 chainrules = { path = "../extern/chainrules" }
 strided-view.workspace = true
-strided-traits.workspace = true
 
 [dev-dependencies]
 num-complex.workspace = true

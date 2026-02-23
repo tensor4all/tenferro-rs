@@ -882,7 +882,7 @@ fn tracked_einsum_rejects_mixed_tapes() {
 // ============================================================================
 
 /// Trait to abstract over scalar construction and approximate comparison.
-trait TestScalar: tenferro_algebra::Scalar + strided_traits::ScalarBase + std::fmt::Debug {
+trait TestScalar: tenferro_algebra::Scalar + std::fmt::Debug {
     fn from_usize(v: usize) -> Self;
     fn from_f64(v: f64) -> Self;
     fn tol() -> f64;
