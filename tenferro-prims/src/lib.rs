@@ -400,6 +400,7 @@ pub trait TensorPrims<A> {
 ///
 /// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
 /// [`CpuBackend::execute`](TensorPrims::execute).
+#[derive(Debug)]
 pub enum CpuPlan<T: ScalarBase> {
     /// Plan for batched GEMM.
     BatchedGemm {
@@ -669,6 +670,54 @@ fn mode_position(modes: &[u32], label: u32) -> Result<usize> {
         .iter()
         .position(|&m| m == label)
         .ok_or_else(|| Error::InvalidArgument(format!("mode label {label} not found")))
+}
+
+/// Validate that the number of shapes matches expectations for an operation.
+fn validate_shape_count(shapes: &[&[usize]], expected: usize, op_name: &str) -> Result<()> {
+    if shapes.len() != expected {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} expects {expected} shapes (got {})",
+            shapes.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that a shape has the expected rank.
+fn validate_rank(shape: &[usize], expected: usize, _operand_name: &str) -> Result<()> {
+    if shape.len() != expected {
+        return Err(Error::RankMismatch {
+            expected,
+            got: shape.len(),
+        });
+    }
+    Ok(())
+}
+
+/// Validate that a shape exactly matches the expected shape.
+fn validate_shape_eq(got: &[usize], expected: &[usize], _operand_name: &str) -> Result<()> {
+    if got != expected {
+        return Err(Error::ShapeMismatch {
+            expected: expected.to_vec(),
+            got: got.to_vec(),
+        });
+    }
+    Ok(())
+}
+
+/// Validate the number of input operands for execute.
+fn validate_execute_inputs<T: ScalarBase>(
+    inputs: &[&StridedView<T>],
+    expected: usize,
+    op_name: &str,
+) -> Result<()> {
+    if inputs.len() != expected {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} expects {expected} input(s) (got {})",
+            inputs.len()
+        )));
+    }
+    Ok(())
 }
 
 /// Scale all elements of the output by `beta`, or zero them if `beta == 0`.
@@ -1036,7 +1085,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     fn plan<T: ScalarBase>(
         _ctx: &mut CpuContext,
         desc: &PrimDescriptor,
-        _shapes: &[&[usize]],
+        shapes: &[&[usize]],
     ) -> Result<CpuPlan<T>> {
         match desc {
             PrimDescriptor::BatchedGemm {
@@ -1044,19 +1093,33 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 m,
                 n,
                 k,
-            } => Ok(CpuPlan::BatchedGemm {
-                batch_dims: batch_dims.clone(),
-                m: *m,
-                n: *n,
-                k: *k,
-                _marker: PhantomData,
-            }),
+            } => {
+                // BatchedGemm expects 3 shapes: A, B, C
+                validate_shape_count(shapes, 3, "BatchedGemm")?;
+                let expected_a: Vec<usize> = batch_dims.iter().copied().chain([*m, *k]).collect();
+                let expected_b: Vec<usize> = batch_dims.iter().copied().chain([*k, *n]).collect();
+                let expected_c: Vec<usize> = batch_dims.iter().copied().chain([*m, *n]).collect();
+                validate_shape_eq(shapes[0], &expected_a, "BatchedGemm input A")?;
+                validate_shape_eq(shapes[1], &expected_b, "BatchedGemm input B")?;
+                validate_shape_eq(shapes[2], &expected_c, "BatchedGemm output C")?;
+                Ok(CpuPlan::BatchedGemm {
+                    batch_dims: batch_dims.clone(),
+                    m: *m,
+                    n: *n,
+                    k: *k,
+                    _marker: PhantomData,
+                })
+            }
 
             PrimDescriptor::Reduce {
                 modes_a,
                 modes_c,
                 op,
             } => {
+                // Reduce expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "Reduce")?;
+                validate_rank(shapes[0], modes_a.len(), "Reduce input A")?;
+                validate_rank(shapes[1], modes_c.len(), "Reduce output C")?;
                 // reduced_axes = positions in modes_a not present in modes_c
                 let reduced_axes: Vec<usize> = modes_a
                     .iter()
@@ -1076,12 +1139,25 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 modes_c,
                 paired,
             } => {
+                // Trace expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "Trace")?;
+                validate_rank(shapes[0], modes_a.len(), "Trace input A")?;
+                validate_rank(shapes[1], modes_c.len(), "Trace output C")?;
                 let paired_axes: Vec<(usize, usize)> = paired
                     .iter()
                     .map(|(m1, m2)| {
                         Ok((mode_position(modes_a, *m1)?, mode_position(modes_a, *m2)?))
                     })
                     .collect::<Result<_>>()?;
+                // Validate that paired axes have equal dimensions
+                for &(ax1, ax2) in &paired_axes {
+                    if shapes[0][ax1] != shapes[0][ax2] {
+                        return Err(Error::InvalidArgument(format!(
+                            "Trace paired axes ({ax1}, {ax2}) have mismatched dimensions: {} vs {}",
+                            shapes[0][ax1], shapes[0][ax2]
+                        )));
+                    }
+                }
                 let free_axes: Vec<usize> = modes_c
                     .iter()
                     .map(|m| mode_position(modes_a, *m))
@@ -1094,6 +1170,10 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
             }
 
             PrimDescriptor::Permute { modes_a, modes_b } => {
+                // Permute expects 2 shapes: A (input), B (output)
+                validate_shape_count(shapes, 2, "Permute")?;
+                validate_rank(shapes[0], modes_a.len(), "Permute input A")?;
+                validate_rank(shapes[1], modes_b.len(), "Permute output B")?;
                 // perm[out_axis] = in_axis
                 let perm: Vec<usize> = modes_b
                     .iter()
@@ -1110,12 +1190,25 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 modes_c,
                 paired,
             } => {
+                // AntiTrace expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "AntiTrace")?;
+                validate_rank(shapes[0], modes_a.len(), "AntiTrace input A")?;
+                validate_rank(shapes[1], modes_c.len(), "AntiTrace output C")?;
                 let paired_axes: Vec<(usize, usize)> = paired
                     .iter()
                     .map(|(m1, m2)| {
                         Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
                     })
                     .collect::<Result<_>>()?;
+                // Validate that paired axes in output have equal dimensions
+                for &(ax1, ax2) in &paired_axes {
+                    if shapes[1][ax1] != shapes[1][ax2] {
+                        return Err(Error::InvalidArgument(format!(
+                            "AntiTrace paired axes ({ax1}, {ax2}) have mismatched dimensions: {} vs {}",
+                            shapes[1][ax1], shapes[1][ax2]
+                        )));
+                    }
+                }
                 let free_axes: Vec<usize> = modes_a
                     .iter()
                     .map(|m| mode_position(modes_c, *m))
@@ -1132,6 +1225,10 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 modes_c,
                 paired,
             } => {
+                // AntiDiag expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "AntiDiag")?;
+                validate_rank(shapes[0], modes_a.len(), "AntiDiag input A")?;
+                validate_rank(shapes[1], modes_c.len(), "AntiDiag output C")?;
                 let paired_axes: Vec<(usize, usize)> = paired
                     .iter()
                     .map(|(m1, m2)| {
@@ -1149,29 +1246,60 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 })
             }
 
-            PrimDescriptor::ElementwiseUnary { op } => Ok(CpuPlan::ElementwiseUnary {
-                op: *op,
-                _marker: PhantomData,
-            }),
+            PrimDescriptor::ElementwiseUnary { op } => {
+                // ElementwiseUnary expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "ElementwiseUnary")?;
+                Ok(CpuPlan::ElementwiseUnary {
+                    op: *op,
+                    _marker: PhantomData,
+                })
+            }
 
             PrimDescriptor::Contract {
                 modes_a,
                 modes_b,
                 modes_c,
-            } => Ok(CpuPlan::Contract {
-                modes_a: modes_a.clone(),
-                modes_b: modes_b.clone(),
-                modes_c: modes_c.clone(),
-                _marker: PhantomData,
-            }),
+            } => {
+                // Contract expects 3 shapes: A, B, C
+                validate_shape_count(shapes, 3, "Contract")?;
+                validate_rank(shapes[0], modes_a.len(), "Contract input A")?;
+                validate_rank(shapes[1], modes_b.len(), "Contract input B")?;
+                validate_rank(shapes[2], modes_c.len(), "Contract output C")?;
+                // Validate contracted dimensions match between A and B
+                for &mode in modes_a.iter() {
+                    if let Some(b_pos) = modes_b.iter().position(|&m| m == mode) {
+                        let a_pos = modes_a.iter().position(|&m| m == mode).unwrap();
+                        if shapes[0][a_pos] != shapes[1][b_pos] {
+                            return Err(Error::InvalidArgument(format!(
+                                "Contract mode {mode} has mismatched dimensions: A={} vs B={}",
+                                shapes[0][a_pos], shapes[1][b_pos]
+                            )));
+                        }
+                    }
+                }
+                Ok(CpuPlan::Contract {
+                    modes_a: modes_a.clone(),
+                    modes_b: modes_b.clone(),
+                    modes_c: modes_c.clone(),
+                    _marker: PhantomData,
+                })
+            }
 
-            PrimDescriptor::ElementwiseMul => Ok(CpuPlan::ElementwiseMul {
-                _marker: PhantomData,
-            }),
+            PrimDescriptor::ElementwiseMul => {
+                // ElementwiseMul expects 3 shapes: A, B, C
+                validate_shape_count(shapes, 3, "ElementwiseMul")?;
+                Ok(CpuPlan::ElementwiseMul {
+                    _marker: PhantomData,
+                })
+            }
 
-            PrimDescriptor::MakeContiguous => Ok(CpuPlan::MakeContiguous {
-                _marker: PhantomData,
-            }),
+            PrimDescriptor::MakeContiguous => {
+                // MakeContiguous expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "MakeContiguous")?;
+                Ok(CpuPlan::MakeContiguous {
+                    _marker: PhantomData,
+                })
+            }
         }
     }
 
@@ -1184,9 +1312,13 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
         output: &mut StridedViewMut<T>,
     ) -> Result<()> {
         match plan {
-            CpuPlan::Permute { perm, .. } => execute_permute(alpha, inputs[0], beta, output, perm),
+            CpuPlan::Permute { perm, .. } => {
+                validate_execute_inputs(inputs, 1, "Permute")?;
+                execute_permute(alpha, inputs[0], beta, output, perm)
+            }
 
             CpuPlan::MakeContiguous { .. } => {
+                validate_execute_inputs(inputs, 1, "MakeContiguous")?;
                 execute_make_contiguous(alpha, inputs[0], beta, output)
             }
 
@@ -1196,55 +1328,78 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 n,
                 k,
                 ..
-            } => execute_batched_gemm(alpha, inputs, beta, output, batch_dims, *m, *n, *k),
+            } => {
+                validate_execute_inputs(inputs, 2, "BatchedGemm")?;
+                execute_batched_gemm(alpha, inputs, beta, output, batch_dims, *m, *n, *k)
+            }
 
             CpuPlan::Reduce {
                 reduced_axes, op, ..
-            } => match op {
-                ReduceOp::Sum => execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes),
-                ReduceOp::Max | ReduceOp::Min => Err(Error::InvalidArgument(
-                    "Max/Min reduction requires PartialOrd, not available via ScalarBase".into(),
-                )),
-            },
+            } => {
+                validate_execute_inputs(inputs, 1, "Reduce")?;
+                match op {
+                    ReduceOp::Sum => {
+                        execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes)
+                    }
+                    ReduceOp::Max | ReduceOp::Min => Err(Error::InvalidArgument(
+                        "Max/Min reduction requires PartialOrd, not available via ScalarBase"
+                            .into(),
+                    )),
+                }
+            }
 
             CpuPlan::Trace {
                 paired_axes,
                 free_axes,
                 ..
-            } => execute_trace(alpha, inputs[0], beta, output, paired_axes, free_axes),
+            } => {
+                validate_execute_inputs(inputs, 1, "Trace")?;
+                execute_trace(alpha, inputs[0], beta, output, paired_axes, free_axes)
+            }
 
             CpuPlan::AntiTrace {
                 paired_axes,
                 free_axes,
                 ..
-            } => execute_anti_trace(alpha, inputs[0], beta, output, paired_axes, free_axes),
+            } => {
+                validate_execute_inputs(inputs, 1, "AntiTrace")?;
+                execute_anti_trace(alpha, inputs[0], beta, output, paired_axes, free_axes)
+            }
 
             CpuPlan::AntiDiag {
                 paired_axes,
                 free_axes,
                 ..
-            } => execute_anti_diag(alpha, inputs[0], beta, output, paired_axes, free_axes),
+            } => {
+                validate_execute_inputs(inputs, 1, "AntiDiag")?;
+                execute_anti_diag(alpha, inputs[0], beta, output, paired_axes, free_axes)
+            }
 
             CpuPlan::ElementwiseUnary { op, .. } => {
+                validate_execute_inputs(inputs, 1, "ElementwiseUnary")?;
                 // Conj is identity for real types (ScalarBase)
                 match op {
-                    UnaryOp::Conj => {
-                        execute_make_contiguous(alpha, inputs[0], beta, output)
-                    }
+                    UnaryOp::Conj => execute_make_contiguous(alpha, inputs[0], beta, output),
                     _ => Err(Error::InvalidArgument(format!(
                         "unary op {op:?} requires additional trait bounds not available via ScalarBase"
                     ))),
                 }
             }
 
-            CpuPlan::ElementwiseMul { .. } => execute_elementwise_mul(alpha, inputs, beta, output),
+            CpuPlan::ElementwiseMul { .. } => {
+                validate_execute_inputs(inputs, 2, "ElementwiseMul")?;
+                execute_elementwise_mul(alpha, inputs, beta, output)
+            }
 
             CpuPlan::Contract {
                 modes_a,
                 modes_b,
                 modes_c,
                 ..
-            } => execute_contract(alpha, inputs, beta, output, modes_a, modes_b, modes_c),
+            } => {
+                validate_execute_inputs(inputs, 2, "Contract")?;
+                execute_contract(alpha, inputs, beta, output, modes_a, modes_b, modes_c)
+            }
         }
     }
 

@@ -863,3 +863,378 @@ fn permute_f32() {
         }
     }
 }
+
+// ============================================================================
+// Validation: plan() shape count errors
+// ============================================================================
+
+#[test]
+fn plan_batched_gemm_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: vec![],
+        m: 2,
+        n: 3,
+        k: 4,
+    };
+    // Only 2 shapes instead of the required 3
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[4, 3]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, tenferro_device::Error::InvalidArgument(_)),
+        "expected InvalidArgument, got: {err:?}"
+    );
+}
+
+#[test]
+fn plan_batched_gemm_too_many_shapes() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: vec![],
+        m: 2,
+        n: 3,
+        k: 4,
+    };
+    // 4 shapes instead of 3
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[4, 3], &[2, 3], &[1]]);
+    assert!(result.is_err(), "expected error for too many shapes");
+}
+
+#[test]
+fn plan_batched_gemm_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: vec![],
+        m: 2,
+        n: 3,
+        k: 4,
+    };
+    // A shape [2, 4] is correct, B shape [5, 3] is wrong (should be [4, 3])
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[5, 3], &[2, 3]]);
+    assert!(result.is_err(), "expected error for mismatched shapes");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, tenferro_device::Error::ShapeMismatch { .. }),
+        "expected ShapeMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn plan_reduce_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Reduce {
+        modes_a: vec![0, 1],
+        modes_c: vec![0],
+        op: ReduceOp::Sum,
+    };
+    // Only 1 shape instead of 2
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_reduce_wrong_rank() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Reduce {
+        modes_a: vec![0, 1],
+        modes_c: vec![0],
+        op: ReduceOp::Sum,
+    };
+    // Input A has rank 3 but modes_a has 2 entries
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4, 5], &[3]]);
+    assert!(result.is_err(), "expected error for rank mismatch");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(
+            err,
+            tenferro_device::Error::RankMismatch {
+                expected: 2,
+                got: 3
+            }
+        ),
+        "expected RankMismatch, got: {err:?}"
+    );
+}
+
+#[test]
+fn plan_permute_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+    // 3 shapes instead of 2
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 3], &[1]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_trace_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Trace {
+        modes_a: vec![0, 1],
+        modes_c: vec![],
+        paired: vec![(0, 1)],
+    };
+    // Only 1 shape instead of 2
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_trace_mismatched_paired_dims() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Trace {
+        modes_a: vec![0, 1],
+        modes_c: vec![],
+        paired: vec![(0, 1)],
+    };
+    // Paired axes have dimensions 3 and 4 (must be equal for trace)
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[]]);
+    assert!(result.is_err(), "expected error for mismatched paired dims");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, tenferro_device::Error::InvalidArgument(_)),
+        "expected InvalidArgument, got: {err:?}"
+    );
+}
+
+#[test]
+fn plan_contract_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Contract {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 2],
+        modes_c: vec![0, 2],
+    };
+    // Only 2 shapes instead of 3
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 4]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_contract_mismatched_contracted_dims() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Contract {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 2],
+        modes_c: vec![0, 2],
+    };
+    // Mode 1 has dim 3 in A but dim 5 in B
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[5, 4], &[2, 4]]);
+    assert!(
+        result.is_err(),
+        "expected error for mismatched contracted dims"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, tenferro_device::Error::InvalidArgument(_)),
+        "expected InvalidArgument, got: {err:?}"
+    );
+}
+
+#[test]
+fn plan_elementwise_mul_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    // Only 1 shape instead of 3
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_elementwise_unary_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    // 3 shapes instead of 2
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3], &[3]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_make_contiguous_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::MakeContiguous;
+    // 0 shapes instead of 2
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_anti_trace_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::AntiTrace {
+        modes_a: vec![],
+        modes_c: vec![0, 1],
+        paired: vec![(0, 1)],
+    };
+    // Only 1 shape instead of 2
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_anti_diag_wrong_shape_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::AntiDiag {
+        modes_a: vec![0],
+        modes_c: vec![0, 1],
+        paired: vec![(0, 1)],
+    };
+    // 3 shapes instead of 2
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3, 3], &[1]]);
+    assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+// ============================================================================
+// Validation: execute() input count errors
+// ============================================================================
+
+#[test]
+fn execute_permute_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let a = StridedArray::<f64>::col_major(&[2, 3]);
+    let b = StridedArray::<f64>::col_major(&[2, 3]);
+    let mut c = StridedArray::<f64>::col_major(&[3, 2]);
+    // Provide 2 inputs instead of 1
+    let result = cpu_execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&a.view(), &b.view()],
+        0.0,
+        &mut c.view_mut(),
+    );
+    assert!(result.is_err(), "expected error for wrong input count");
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, tenferro_device::Error::InvalidArgument(_)),
+        "expected InvalidArgument, got: {err:?}"
+    );
+}
+
+#[test]
+fn execute_permute_zero_inputs() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let mut c = StridedArray::<f64>::col_major(&[3, 2]);
+    // Provide 0 inputs instead of 1
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    assert!(result.is_err(), "expected error for zero inputs");
+}
+
+#[test]
+fn execute_batched_gemm_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: vec![],
+        m: 2,
+        n: 3,
+        k: 4,
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[4, 3], &[2, 3]]).unwrap();
+    let a = StridedArray::<f64>::col_major(&[2, 4]);
+    let mut c = StridedArray::<f64>::col_major(&[2, 3]);
+    // Only 1 input instead of 2
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
+    assert!(result.is_err(), "expected error for wrong input count");
+}
+
+#[test]
+fn execute_contract_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Contract {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 2],
+        modes_c: vec![0, 2],
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 4], &[2, 4]]).unwrap();
+    let a = StridedArray::<f64>::col_major(&[2, 3]);
+    let mut c = StridedArray::<f64>::col_major(&[2, 4]);
+    // Only 1 input instead of 2
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
+    assert!(result.is_err(), "expected error for wrong input count");
+}
+
+#[test]
+fn execute_elementwise_mul_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3], &[3]]).unwrap();
+    let a = StridedArray::<f64>::col_major(&[3]);
+    let mut c = StridedArray::<f64>::col_major(&[3]);
+    // Only 1 input instead of 2
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut());
+    assert!(result.is_err(), "expected error for wrong input count");
+}
+
+#[test]
+fn execute_reduce_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Reduce {
+        modes_a: vec![0, 1],
+        modes_c: vec![0],
+        op: ReduceOp::Sum,
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
+    let a = StridedArray::<f64>::col_major(&[3, 4]);
+    let b = StridedArray::<f64>::col_major(&[3, 4]);
+    let mut c = StridedArray::<f64>::col_major(&[3]);
+    // 2 inputs instead of 1
+    let result = cpu_execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&a.view(), &b.view()],
+        0.0,
+        &mut c.view_mut(),
+    );
+    assert!(result.is_err(), "expected error for wrong input count");
+}
+
+#[test]
+fn execute_trace_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Trace {
+        modes_a: vec![0, 1],
+        modes_c: vec![],
+        paired: vec![(0, 1)],
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
+    let mut c = StridedArray::<f64>::col_major(&[]);
+    // 0 inputs instead of 1
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    assert!(result.is_err(), "expected error for zero inputs");
+}
+
+#[test]
+fn execute_make_contiguous_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::MakeContiguous;
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
+    let mut c = StridedArray::<f64>::col_major(&[3, 4]);
+    // 0 inputs instead of 1
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    assert!(result.is_err(), "expected error for zero inputs");
+}
+
+#[test]
+fn execute_elementwise_unary_wrong_input_count() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    let mut c = StridedArray::<f64>::col_major(&[3]);
+    // 0 inputs instead of 1
+    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
+    assert!(result.is_err(), "expected error for zero inputs");
+}
