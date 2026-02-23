@@ -1,5 +1,8 @@
 //! Tests for tenferro-prims: CPU backend plan/execute, resolve_conj,
 //! BackendRegistry, GPU stubs.
+//!
+//! Core numeric tests are parameterized across f32, f64, and Complex64 via the
+//! `typed_prims_tests!` macro at the bottom of this file.
 
 use strided_traits::ScalarBase;
 use strided_view::{StridedArray, StridedView, StridedViewMut};
@@ -81,7 +84,7 @@ fn cpu_has_extension_elementwise_mul() {
 }
 
 // ============================================================================
-// Permute
+// Permute (original f64 tests kept for backward compatibility)
 // ============================================================================
 
 #[test]
@@ -530,7 +533,7 @@ fn contract_outer_product() {
 }
 
 // ============================================================================
-// ElementwiseUnary — Conj is identity for real types
+// ElementwiseUnary -- Conj is identity for real types
 // ============================================================================
 
 #[test]
@@ -705,7 +708,7 @@ fn reduce_sum_with_alpha_beta() {
 }
 
 // ============================================================================
-// f32 type
+// Complex64 permute (original test kept)
 // ============================================================================
 
 #[test]
@@ -822,7 +825,7 @@ fn resolve_conj_f64_conjugated_is_identity() {
     let resolved = CpuBackend::resolve_conj(&mut ctx, &t_conj);
     assert!(!resolved.is_conjugated());
 
-    // For real types, conjugation is identity — data should be unchanged
+    // For real types, conjugation is identity -- data should be unchanged
     let resolved_data = resolved
         .buffer()
         .as_slice()
@@ -833,7 +836,7 @@ fn resolve_conj_f64_conjugated_is_identity() {
 }
 
 // ============================================================================
-// f32 type
+// f32 permute (original test kept)
 // ============================================================================
 
 #[test]
@@ -1238,3 +1241,498 @@ fn execute_elementwise_unary_wrong_input_count() {
     let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c.view_mut());
     assert!(result.is_err(), "expected error for zero inputs");
 }
+
+// Typed test scaffolding: macro that generates test modules per scalar type
+// ============================================================================
+
+/// Trait to abstract over scalar construction and approximate comparison.
+/// This enables the typed test macro to work uniformly across f32, f64, Complex64.
+trait TestScalar: tenferro_algebra::Scalar + ScalarBase + std::fmt::Debug {
+    /// Convert an integer value to this scalar type (for constructing test data).
+    fn from_usize(v: usize) -> Self;
+    /// Convert a f64 value to this scalar type.
+    fn from_f64(v: f64) -> Self;
+    /// Tolerance for approximate equality checks.
+    fn tol() -> f64;
+    /// Check approximate equality using per-type tolerance.
+    fn approx_eq(a: Self, b: Self) -> bool;
+    /// Norm of the difference (for error messages).
+    fn diff_norm(a: Self, b: Self) -> f64;
+}
+
+impl TestScalar for f64 {
+    fn from_usize(v: usize) -> Self {
+        v as f64
+    }
+    fn from_f64(v: f64) -> Self {
+        v
+    }
+    fn tol() -> f64 {
+        1e-10
+    }
+    fn approx_eq(a: Self, b: Self) -> bool {
+        (a - b).abs() < Self::tol()
+    }
+    fn diff_norm(a: Self, b: Self) -> f64 {
+        (a - b).abs()
+    }
+}
+
+impl TestScalar for f32 {
+    fn from_usize(v: usize) -> Self {
+        v as f32
+    }
+    fn from_f64(v: f64) -> Self {
+        v as f32
+    }
+    fn tol() -> f64 {
+        1e-4
+    }
+    fn approx_eq(a: Self, b: Self) -> bool {
+        (a - b).abs() < Self::tol() as f32
+    }
+    fn diff_norm(a: Self, b: Self) -> f64 {
+        (a - b).abs() as f64
+    }
+}
+
+impl TestScalar for num_complex::Complex64 {
+    fn from_usize(v: usize) -> Self {
+        num_complex::Complex64::new(v as f64, 0.0)
+    }
+    fn from_f64(v: f64) -> Self {
+        num_complex::Complex64::new(v, 0.0)
+    }
+    fn tol() -> f64 {
+        1e-10
+    }
+    fn approx_eq(a: Self, b: Self) -> bool {
+        (a - b).norm() < Self::tol()
+    }
+    fn diff_norm(a: Self, b: Self) -> f64 {
+        (a - b).norm()
+    }
+}
+
+/// Macro to generate typed test modules for prims operations.
+///
+/// Each invocation creates a module `typed_$mod_name` containing the core
+/// correctness tests parameterized for a specific scalar type `$T`.
+macro_rules! typed_prims_tests {
+    ($mod_name:ident, $T:ty) => {
+        mod $mod_name {
+            use super::*;
+            use num_complex::Complex64;
+
+            // Suppress unused-import warning for Complex64 in f32/f64 modules.
+            const _: () = {
+                fn _use_complex64() {
+                    let _ = std::mem::size_of::<Complex64>();
+                }
+            };
+
+            #[test]
+            fn permute_transpose_2x3() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] + 1 + idx[1] * 2)
+                });
+                let mut b = StridedArray::<$T>::col_major(&[3, 2]);
+
+                let desc = PrimDescriptor::Permute {
+                    modes_a: vec![0, 1],
+                    modes_b: vec![1, 0],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut b.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    for j in 0..3 {
+                        assert_eq!(b.view().get(&[j, i]), a.view().get(&[i, j]));
+                    }
+                }
+            }
+
+            #[test]
+            fn permute_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] + idx[1] * 2 + 1)
+                });
+                let mut b =
+                    StridedArray::from_fn_col_major(&[3, 2], |_| <$T as TestScalar>::from_f64(1.0));
+
+                let desc = PrimDescriptor::Permute {
+                    modes_a: vec![0, 1],
+                    modes_b: vec![1, 0],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+                // B = 2 * A^T + 3 * B
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut b.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    for j in 0..3 {
+                        let expected = <$T as TestScalar>::from_f64(2.0) * a.view().get(&[i, j])
+                            + <$T as TestScalar>::from_f64(3.0);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(b.view().get(&[j, i]), expected),
+                            "B[{},{}] = {:?}, expected {:?}, diff = {}",
+                            j,
+                            i,
+                            b.view().get(&[j, i]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(b.view().get(&[j, i]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn permute_3d() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[2, 3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2])
+                });
+                let mut b = StridedArray::<$T>::col_major(&[4, 2, 3]);
+
+                let desc = PrimDescriptor::Permute {
+                    modes_a: vec![0, 1, 2],
+                    modes_b: vec![2, 0, 1],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3, 4], &[4, 2, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut b.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    for j in 0..3 {
+                        for k in 0..4 {
+                            assert_eq!(b.view().get(&[k, i, j]), a.view().get(&[i, j, k]));
+                        }
+                    }
+                }
+            }
+
+            #[test]
+            fn make_contiguous() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1])
+                });
+                let mut b = StridedArray::<$T>::col_major(&[3, 4]);
+
+                let desc = PrimDescriptor::MakeContiguous;
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut b.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..4 {
+                        assert_eq!(b.view().get(&[i, j]), a.view().get(&[i, j]));
+                    }
+                }
+            }
+
+            #[test]
+            fn contract_matrix_multiply() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = StridedArray::from_fn_col_major(&[3, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+                let mut c = StridedArray::<$T>::col_major(&[2, 2]);
+
+                let desc = PrimDescriptor::Contract {
+                    modes_a: vec![0, 1],
+                    modes_b: vec![1, 2],
+                    modes_c: vec![0, 2],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view(), &b.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    for j in 0..2 {
+                        let mut expected = <$T as TestScalar>::from_f64(0.0);
+                        for k in 0..3 {
+                            expected = expected + a.view().get(&[i, k]) * b.view().get(&[k, j]);
+                        }
+                        assert!(
+                            <$T as TestScalar>::approx_eq(c.view().get(&[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            c.view().get(&[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(c.view().get(&[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn contract_outer_product() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] + 1)
+                });
+                let b = StridedArray::from_fn_col_major(&[4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] + 1)
+                });
+                let mut c = StridedArray::<$T>::col_major(&[3, 4]);
+
+                let desc = PrimDescriptor::Contract {
+                    modes_a: vec![0],
+                    modes_b: vec![1],
+                    modes_c: vec![0, 1],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[4], &[3, 4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view(), &b.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..4 {
+                        let expected = <$T as TestScalar>::from_usize((i + 1) * (j + 1));
+                        assert!(
+                            <$T as TestScalar>::approx_eq(c.view().get(&[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            c.view().get(&[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(c.view().get(&[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn reduce_sum_axis1() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1] + 1)
+                });
+                let mut c = StridedArray::<$T>::col_major(&[3]);
+
+                let desc = PrimDescriptor::Reduce {
+                    modes_a: vec![0, 1],
+                    modes_c: vec![0],
+                    op: ReduceOp::Sum,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    let mut expected = <$T as TestScalar>::from_f64(0.0);
+                    for j in 0..4 {
+                        expected = expected + a.view().get(&[i, j]);
+                    }
+                    assert!(
+                        <$T as TestScalar>::approx_eq(c.view().get(&[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        c.view().get(&[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(c.view().get(&[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn reduce_sum_full() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] + idx[1] + 1)
+                });
+                let mut c = StridedArray::<$T>::col_major(&[]);
+
+                let desc = PrimDescriptor::Reduce {
+                    modes_a: vec![0, 1],
+                    modes_c: vec![],
+                    op: ReduceOp::Sum,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c.view_mut(),
+                )
+                .unwrap();
+
+                let mut expected = <$T as TestScalar>::from_f64(0.0);
+                for i in 0..3 {
+                    for j in 0..4 {
+                        expected = expected + <$T as TestScalar>::from_usize(i + j + 1);
+                    }
+                }
+                assert!(
+                    <$T as TestScalar>::approx_eq(c.view().get(&[]), expected),
+                    "scalar = {:?}, expected {:?}, diff = {}",
+                    c.view().get(&[]),
+                    expected,
+                    <$T as TestScalar>::diff_norm(c.view().get(&[]), expected)
+                );
+            }
+
+            #[test]
+            fn trace_2d_matrix() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[3, 3], |idx| {
+                    if idx[0] == idx[1] {
+                        <$T as TestScalar>::from_usize(idx[0] + 1)
+                    } else {
+                        <$T as TestScalar>::from_f64(0.0)
+                    }
+                });
+                let mut c = StridedArray::<$T>::col_major(&[]);
+
+                let desc = PrimDescriptor::Trace {
+                    modes_a: vec![0, 1],
+                    modes_c: vec![],
+                    paired: vec![(0, 1)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c.view_mut(),
+                )
+                .unwrap();
+
+                // tr(diag(1,2,3)) = 6
+                let expected = <$T as TestScalar>::from_f64(6.0);
+                assert!(
+                    <$T as TestScalar>::approx_eq(c.view().get(&[]), expected),
+                    "trace = {:?}, expected {:?}, diff = {}",
+                    c.view().get(&[]),
+                    expected,
+                    <$T as TestScalar>::diff_norm(c.view().get(&[]), expected)
+                );
+            }
+
+            #[test]
+            fn elementwise_mul_2d() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] + 1)
+                });
+                let b = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[1] + 1)
+                });
+                let mut c = StridedArray::<$T>::col_major(&[3, 4]);
+
+                let desc = PrimDescriptor::ElementwiseMul;
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view(), &b.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c.view_mut(),
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..4 {
+                        let expected = <$T as TestScalar>::from_usize((i + 1) * (j + 1));
+                        assert!(
+                            <$T as TestScalar>::approx_eq(c.view().get(&[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            c.view().get(&[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(c.view().get(&[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn elementwise_conj() {
+                let mut ctx = CpuContext::new(1);
+                let a = StridedArray::from_fn_col_major(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1] + 1)
+                });
+                let mut c = StridedArray::<$T>::col_major(&[3, 4]);
+
+                let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a.view()],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c.view_mut(),
+                )
+                .unwrap();
+
+                // For real types, conj is identity. For complex, values here
+                // are purely real so conj is still identity.
+                for i in 0..3 {
+                    for j in 0..4 {
+                        assert_eq!(c.view().get(&[i, j]), a.view().get(&[i, j]));
+                    }
+                }
+            }
+        }
+    };
+}
+
+typed_prims_tests!(typed_f64, f64);
+typed_prims_tests!(typed_f32, f32);
+typed_prims_tests!(typed_complex64, num_complex::Complex64);
