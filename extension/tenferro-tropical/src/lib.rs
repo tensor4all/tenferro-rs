@@ -32,24 +32,27 @@
 //!
 //! ## Scalar arithmetic
 //!
-//! ```ignore
+//! ```
 //! use tenferro_tropical::MaxPlus;
 //!
 //! let a = MaxPlus(3.0_f64);
 //! let b = MaxPlus(5.0_f64);
-//! let c = a + b;   // MaxPlus(5.0) — tropical add = max
-//! let d = a * b;   // MaxPlus(8.0) — tropical mul = ordinary +
+//! let c = a + b;   // MaxPlus(5.0) -- tropical add = max
+//! assert_eq!(c, MaxPlus(5.0));
+//! let d = a * b;   // MaxPlus(8.0) -- tropical mul = ordinary +
+//! assert_eq!(d, MaxPlus(8.0));
 //! ```
 //!
 //! ## Algebra dispatch
 //!
-//! ```ignore
+//! ```
 //! use tenferro_algebra::HasAlgebra;
 //! use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
 //!
-//! // MaxPlus<f64> automatically maps to MaxPlusAlgebra
+//! // MaxPlus<f64> and MaxPlus<f32> both map to MaxPlusAlgebra
 //! fn check<T: HasAlgebra<Algebra = MaxPlusAlgebra>>() {}
 //! check::<MaxPlus<f64>>();
+//! check::<MaxPlus<f32>>();
 //! ```
 //!
 //! ## Plan-based tropical contraction

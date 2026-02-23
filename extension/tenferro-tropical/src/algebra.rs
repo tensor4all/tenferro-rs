@@ -92,9 +92,20 @@ impl HasAlgebra for MaxMul<f64> {
 // Semiring implementations
 //
 // The Semiring trait uses an associated type `type Scalar`, so each algebra
-// marker can only be associated with one scalar type. We use f64 as the
-// canonical Semiring scalar. f32 is fully supported at the TensorPrims level
-// (plan/execute) — only the Semiring constants are f64.
+// marker can only implement Semiring once (Rust does not allow two impls with
+// different associated types for the same struct). We choose f64 as the
+// canonical Semiring scalar for constant queries (zero/one/add/mul).
+//
+// f32 is fully supported at the TensorPrims level: plan() and execute() are
+// generic over `T: Scalar`, so MaxPlus<f32>, MinPlus<f32>, and MaxMul<f32>
+// work correctly through the standard operator overloads (Add/Mul/Zero/One
+// on the scalar wrappers). The Semiring trait is primarily used for querying
+// algebraic constants and is not in the critical TensorPrims execution path.
+//
+// If f32-specific Semiring constants are needed in the future, the options
+// are: (a) create separate algebra markers (MaxPlusF32Algebra, etc.), or
+// (b) make the Semiring trait generic (Semiring<T>). Both require changes
+// to tenferro-algebra and are deferred until a concrete use case arises.
 // ---------------------------------------------------------------------------
 
 /// Max-plus semiring over `MaxPlus<f64>`.
