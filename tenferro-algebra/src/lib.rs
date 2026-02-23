@@ -5,12 +5,12 @@
 //! - [`Scalar`]: Minimum requirements for tensor element types
 //!   (`Copy + Send + Sync + Add + Mul + Zero + One + PartialEq`).
 //! - [`Conjugate`]: Complex conjugation (identity for real types).
-//! - [`HasAlgebra`]: Maps a scalar type `T` to its default algebra `A`.
+//! - [`HasAlgebra`]: Maps a scalar type `T` to its default algebra `Alg`.
 //!   Enables automatic inference: `Tensor<f64>` → `Standard<f64>`,
 //!   `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra` (in external crate).
-//!   This is UX sugar — the core model is `A::Scalar`-centric.
+//!   This is UX sugar — the core model is `Alg::Scalar`-centric.
 //! - [`Semiring`]: Defines zero, one, add, mul for algebra-generic operations.
-//!   The algebra type `A` carries its scalar type via `A::Scalar`.
+//!   The algebra type `Alg` carries its scalar type via `Alg::Scalar`.
 //! - [`Standard<T>`](Standard): Typed standard arithmetic algebra (add = `+`, mul = `*`).
 //!
 //! # Extensibility
@@ -118,13 +118,13 @@ impl Conjugate for Complex64 {
     }
 }
 
-/// Maps a scalar type `T` to its default algebra `A`.
+/// Maps a scalar type `T` to its default algebra `Alg`.
 ///
 /// Enables automatic algebra inference: `Tensor<f64>` → `Standard<f64>`,
 /// `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra` (in external crate).
 ///
 /// This trait is **UX sugar** for default algebra inference. The core
-/// algebra model is `A::Scalar`-centric (see [`Semiring`]).
+/// algebra model is `Alg::Scalar`-centric (see [`Semiring`]).
 ///
 /// # Implementing for custom types
 ///
@@ -144,7 +144,7 @@ pub trait HasAlgebra {
 /// Typed standard arithmetic algebra (add = `+`, mul = `*`).
 ///
 /// The type parameter `T` carries the scalar type, making the algebra
-/// `A::Scalar`-centric. This is the canonical core model — `HasAlgebra`
+/// `Alg::Scalar`-centric. This is the canonical core model — `HasAlgebra`
 /// provides UX sugar for automatic inference (e.g., `f64` → `Standard<f64>`).
 ///
 /// This is the default algebra for built-in numeric types (`f32`, `f64`,
@@ -180,9 +180,9 @@ impl HasAlgebra for Complex64 {
 
 /// Semiring trait for algebra-generic operations.
 ///
-/// The algebra type `A` carries its scalar type via `A::Scalar`. This
-/// is the **core algebra model** — `TensorPrims<A>` and einsum/linalg
-/// trait bounds are centered on `A::Scalar`.
+/// The algebra type `Alg` carries its scalar type via `Alg::Scalar`. This
+/// is the **core algebra model** — `TensorPrims<Alg>` and einsum/linalg
+/// trait bounds are centered on `Alg::Scalar`.
 ///
 /// Defines the four fundamental operations needed for tensor contractions
 /// under a given algebra:

@@ -1,7 +1,7 @@
 //! Tensor primitive operations for the tenferro workspace.
 //!
-//! This crate defines the [`TensorPrims<A>`] trait, a backend-agnostic interface
-//! parameterized by algebra `A`. The API follows the cuTENSOR plan-based execution
+//! This crate defines the [`TensorPrims<Alg>`] trait, a backend-agnostic interface
+//! parameterized by algebra `Alg`. The API follows the cuTENSOR plan-based execution
 //! pattern:
 //!
 //! 1. Create a [`PrimDescriptor`] specifying the operation and index modes
@@ -25,9 +25,9 @@
 //!
 //! # Algebra parameterization
 //!
-//! [`TensorPrims<A>`] is parameterized by algebra `A` (e.g.,
+//! [`TensorPrims<Alg>`] is parameterized by algebra `Alg` (e.g.,
 //! [`Standard<f64>`](Standard), `MaxPlusAlgebra`). The algebra type carries
-//! its scalar type via `A::Scalar` (see [`Semiring`](tenferro_algebra::Semiring)).
+//! its scalar type via `Alg::Scalar` (see [`Semiring`](tenferro_algebra::Semiring)).
 //! External crates implement `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule
 //! compatible). The [`HasAlgebra`](tenferro_algebra::HasAlgebra) trait on scalar types
 //! provides UX sugar for automatic inference: `Tensor<f64>` → `Standard<f64>`.
@@ -326,7 +326,7 @@ pub enum PrimDescriptor {
     MakeContiguous,
 }
 
-/// Backend trait for tensor primitive operations, parameterized by algebra `A`.
+/// Backend trait for tensor primitive operations, parameterized by algebra `Alg`.
 ///
 /// Provides a cuTENSOR-compatible plan-based execution model for all
 /// operations. Core ops (batched_gemm, reduce, trace, permute,
@@ -336,7 +336,7 @@ pub enum PrimDescriptor {
 ///
 /// # Algebra parameterization
 ///
-/// The algebra parameter `A` enables extensibility: external crates can
+/// The algebra parameter `Alg` enables extensibility: external crates can
 /// implement `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule compatible).
 ///
 /// # Execution context
@@ -360,7 +360,7 @@ pub enum PrimDescriptor {
 /// let plan = CpuBackend::plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
 /// CpuBackend::execute(&mut ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
 /// ```
-pub trait TensorPrims<A> {
+pub trait TensorPrims<Alg> {
     /// Backend-specific plan type (no type erasure).
     type Plan<T: ScalarBase>;
 
