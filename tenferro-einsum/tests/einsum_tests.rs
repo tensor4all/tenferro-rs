@@ -1,5 +1,8 @@
 //! Tests for tenferro-einsum: subscript parsing, contraction tree,
 //! einsum execution (single-tensor, pairwise, N-ary), AD rules.
+//!
+//! Core numeric tests are parameterized across f32, f64, and Complex64 via the
+//! `typed_einsum_tests!` macro at the bottom of this file.
 
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
@@ -110,7 +113,7 @@ fn subscripts_new() {
 fn contraction_tree_single_tensor() {
     let subs = Subscripts::new(&[&[0, 1]], &[1, 0]);
     let tree = ContractionTree::optimize(&subs, &[&[3, 4]]).unwrap();
-    // Single tensor → no steps
+    // Single tensor -> no steps
     let a = Tensor::<f64>::from_slice(
         &[
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
@@ -145,7 +148,7 @@ fn contraction_tree_two_tensors() {
 #[test]
 fn contraction_tree_from_pairs() {
     // A[ij] B[jk] C[kl] -> D[il]
-    // Contract B*C first (pair 1,2 → index 3), then A*T (pair 0,3)
+    // Contract B*C first (pair 1,2 -> index 3), then A*T (pair 0,3)
     let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
     let tree = ContractionTree::from_pairs(&subs, &[&[2, 3], &[3, 4], &[4, 5]], &[(1, 2), (0, 3)])
         .unwrap();
@@ -506,7 +509,7 @@ fn einsum_into_accumulate() {
 }
 
 // ============================================================================
-// einsum: AD rules (standalone)
+// einsum: AD rules (standalone) -- kept on f64 only
 // ============================================================================
 
 #[test]
@@ -527,9 +530,9 @@ fn einsum_rrule_matmul() {
         einsum_rrule::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c).unwrap();
     assert_eq!(grads.len(), 2);
 
-    // grad_A = ḡ_C @ B^T: shape [2,4] x [4,3] = [2,3]
+    // grad_A = grad_C @ B^T: shape [2,4] x [4,3] = [2,3]
     assert_eq!(grads[0].dims(), &[2, 3]);
-    // grad_B = A^T @ ḡ_C: shape [3,2] x [2,4] = [3,4]
+    // grad_B = A^T @ grad_C: shape [3,2] x [2,4] = [3,4]
     assert_eq!(grads[1].dims(), &[3, 4]);
 
     // Verify grad_A = einsum("ik,jk->ij", [grad_c, b]) = grad_c @ b^T
@@ -631,7 +634,7 @@ fn einsum_shape_mismatch() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
-    // j=3 in A but j=2 in B → shape mismatch
+    // j=3 in A but j=2 in B -> shape mismatch
     let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None);
     assert!(
         matches!(result, Err(tenferro_device::Error::ShapeMismatch { .. })),
@@ -760,3 +763,351 @@ fn tracked_einsum_matmul_pullback() {
         }
     }
 }
+
+// ============================================================================
+// Typed test scaffolding: trait and macro for multi-scalar einsum tests
+// ============================================================================
+
+/// Trait to abstract over scalar construction and approximate comparison.
+trait TestScalar: tenferro_algebra::Scalar + strided_traits::ScalarBase + std::fmt::Debug {
+    fn from_usize(v: usize) -> Self;
+    fn from_f64(v: f64) -> Self;
+    fn tol() -> f64;
+    fn approx_eq(a: Self, b: Self) -> bool;
+    fn diff_norm(a: Self, b: Self) -> f64;
+}
+
+impl TestScalar for f64 {
+    fn from_usize(v: usize) -> Self {
+        v as f64
+    }
+    fn from_f64(v: f64) -> Self {
+        v
+    }
+    fn tol() -> f64 {
+        1e-10
+    }
+    fn approx_eq(a: Self, b: Self) -> bool {
+        (a - b).abs() < Self::tol()
+    }
+    fn diff_norm(a: Self, b: Self) -> f64 {
+        (a - b).abs()
+    }
+}
+
+impl TestScalar for f32 {
+    fn from_usize(v: usize) -> Self {
+        v as f32
+    }
+    fn from_f64(v: f64) -> Self {
+        v as f32
+    }
+    fn tol() -> f64 {
+        1e-4
+    }
+    fn approx_eq(a: Self, b: Self) -> bool {
+        (a - b).abs() < Self::tol() as f32
+    }
+    fn diff_norm(a: Self, b: Self) -> f64 {
+        (a - b).abs() as f64
+    }
+}
+
+impl TestScalar for num_complex::Complex64 {
+    fn from_usize(v: usize) -> Self {
+        num_complex::Complex64::new(v as f64, 0.0)
+    }
+    fn from_f64(v: f64) -> Self {
+        num_complex::Complex64::new(v, 0.0)
+    }
+    fn tol() -> f64 {
+        1e-10
+    }
+    fn approx_eq(a: Self, b: Self) -> bool {
+        (a - b).norm() < Self::tol()
+    }
+    fn diff_norm(a: Self, b: Self) -> f64 {
+        (a - b).norm()
+    }
+}
+
+/// Generic helper: read element at multi-index from a tensor of type T.
+fn get_t<T: tenferro_algebra::Scalar>(t: &Tensor<T>, idx: &[usize]) -> T {
+    let data = t.buffer().as_slice().unwrap();
+    let pos = t.offset()
+        + idx
+            .iter()
+            .zip(t.strides())
+            .map(|(&i, &s)| i as isize * s)
+            .sum::<isize>();
+    data[pos as usize]
+}
+
+/// Generic helper: read scalar (0-d) tensor value.
+fn scalar_val_t<T: tenferro_algebra::Scalar>(t: &Tensor<T>) -> T {
+    assert!(t.dims().is_empty(), "expected scalar tensor");
+    t.buffer().as_slice().unwrap()[t.offset() as usize]
+}
+
+/// Macro to generate typed test modules for einsum operations.
+macro_rules! typed_einsum_tests {
+    ($mod_name:ident, $T:ty) => {
+        mod $mod_name {
+            use super::*;
+            use num_complex::Complex64;
+
+            // Suppress unused-import warning for Complex64 in f32/f64 modules.
+            const _: () = {
+                fn _use_complex64() {
+                    let _ = std::mem::size_of::<Complex64>();
+                }
+            };
+
+            type TS = Standard<$T>;
+
+            /// Build a Tensor<$T> from a closure over multi-indices.
+            /// Data is produced in column-major flat order (leftmost index varies
+            /// fastest), matching `Tensor::from_slice(..., COL)`.
+            fn make_tensor(dims: &[usize], f: impl Fn(&[usize]) -> $T) -> Tensor<$T> {
+                let n: usize = dims.iter().product();
+                let mut data = Vec::with_capacity(n);
+                let mut idx = vec![0usize; dims.len()];
+                for _ in 0..n {
+                    data.push(f(&idx));
+                    // Increment multi-index (column-major: leftmost varies fastest)
+                    for d in 0..dims.len() {
+                        idx[d] += 1;
+                        if idx[d] < dims[d] {
+                            break;
+                        }
+                        idx[d] = 0;
+                    }
+                }
+                Tensor::<$T>::from_slice(&data, dims, COL).unwrap()
+            }
+
+            #[test]
+            fn einsum_identity() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->ij", &[&a], None).unwrap();
+                assert_eq!(b.dims(), &[2, 3]);
+                for i in 0..2 {
+                    for j in 0..3 {
+                        assert_eq!(get_t(&b, &[i, j]), get_t(&a, &[i, j]));
+                    }
+                }
+            }
+
+            #[test]
+            fn einsum_transpose() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->ji", &[&a], None).unwrap();
+                assert_eq!(b.dims(), &[3, 2]);
+                for i in 0..2 {
+                    for j in 0..3 {
+                        assert_eq!(get_t(&b, &[j, i]), get_t(&a, &[i, j]));
+                    }
+                }
+            }
+
+            #[test]
+            fn einsum_sum_reduce() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->i", &[&a], None).unwrap();
+                assert_eq!(b.dims(), &[2]);
+                for i in 0..2 {
+                    let mut expected = <$T as TestScalar>::from_f64(0.0);
+                    for j in 0..3 {
+                        expected = expected + get_t(&a, &[i, j]);
+                    }
+                    assert!(
+                        <$T as TestScalar>::approx_eq(get_t(&b, &[i]), expected),
+                        "b[{i}] = {:?}, expected {:?}, diff = {}",
+                        get_t(&b, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(get_t(&b, &[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn einsum_full_contraction() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->", &[&a], None).unwrap();
+                assert!(b.dims().is_empty());
+                // sum of 1..6 = 21
+                let expected = <$T as TestScalar>::from_f64(21.0);
+                assert!(
+                    <$T as TestScalar>::approx_eq(scalar_val_t(&b), expected),
+                    "scalar = {:?}, expected {:?}",
+                    scalar_val_t(&b),
+                    expected
+                );
+            }
+
+            #[test]
+            fn einsum_trace() {
+                let mut ctx = CpuContext::new(1);
+                // 2x2 matrix with known diagonal values
+                let a = make_tensor(&[2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+                // a[0,0]=1, a[0,1]=2, a[1,0]=3, a[1,1]=4
+                // trace = a[0,0] + a[1,1] = 1 + 4 = 5
+                let tr = einsum::<$T, TS, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+                assert!(tr.dims().is_empty());
+                let expected = get_t(&a, &[0, 0]) + get_t(&a, &[1, 1]);
+                assert!(
+                    <$T as TestScalar>::approx_eq(scalar_val_t(&tr), expected),
+                    "trace = {:?}, expected {:?}",
+                    scalar_val_t(&tr),
+                    expected
+                );
+            }
+
+            #[test]
+            fn einsum_matmul() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = make_tensor(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 4 + idx[1] + 1)
+                });
+                let c =
+                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+                assert_eq!(c.dims(), &[2, 4]);
+
+                for i in 0..2 {
+                    for k in 0..4 {
+                        let mut expected = <$T as TestScalar>::from_f64(0.0);
+                        for j in 0..3 {
+                            expected = expected + get_t(&a, &[i, j]) * get_t(&b, &[j, k]);
+                        }
+                        assert!(
+                            <$T as TestScalar>::approx_eq(get_t(&c, &[i, k]), expected),
+                            "C[{i},{k}] = {:?}, expected {:?}, diff = {}",
+                            get_t(&c, &[i, k]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(get_t(&c, &[i, k]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn einsum_outer_product() {
+                let mut ctx = CpuContext::new(1);
+                let u = make_tensor(&[2], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let v = make_tensor(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 3));
+                let m = einsum::<$T, TS, CpuBackend>(&mut ctx, "i,j->ij", &[&u, &v], None).unwrap();
+                assert_eq!(m.dims(), &[2, 3]);
+
+                for i in 0..2 {
+                    for j in 0..3 {
+                        let expected = get_t(&u, &[i]) * get_t(&v, &[j]);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(get_t(&m, &[i, j]), expected),
+                            "M[{i},{j}] = {:?}, expected {:?}",
+                            get_t(&m, &[i, j]),
+                            expected
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn einsum_dot_product() {
+                let mut ctx = CpuContext::new(1);
+                let u = make_tensor(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let v = make_tensor(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 4));
+                let d = einsum::<$T, TS, CpuBackend>(&mut ctx, "i,i->", &[&u, &v], None).unwrap();
+                assert!(d.dims().is_empty());
+                // u = [1,2,3], v = [4,5,6], dot = 4+10+18 = 32
+                let expected = <$T as TestScalar>::from_f64(32.0);
+                assert!(
+                    <$T as TestScalar>::approx_eq(scalar_val_t(&d), expected),
+                    "dot = {:?}, expected {:?}",
+                    scalar_val_t(&d),
+                    expected
+                );
+            }
+
+            #[test]
+            fn einsum_elementwise_mul() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+                let b = make_tensor(&[2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 5)
+                });
+                let c =
+                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,ij->ij", &[&a, &b], None).unwrap();
+                assert_eq!(c.dims(), &[2, 2]);
+
+                for i in 0..2 {
+                    for j in 0..2 {
+                        let expected = get_t(&a, &[i, j]) * get_t(&b, &[i, j]);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(get_t(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}",
+                            get_t(&c, &[i, j]),
+                            expected
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn einsum_three_matrices() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+                let b = make_tensor(&[2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 5)
+                });
+                let c = make_tensor(&[2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 9)
+                });
+                let d = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None)
+                    .unwrap();
+                assert_eq!(d.dims(), &[2, 2]);
+
+                // Verify: D = A @ B @ C
+                let ab =
+                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+                let abc =
+                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
+
+                for i in 0..2 {
+                    for j in 0..2 {
+                        assert!(
+                            <$T as TestScalar>::approx_eq(get_t(&d, &[i, j]), get_t(&abc, &[i, j])),
+                            "D[{i},{j}] = {:?}, expected {:?}",
+                            get_t(&d, &[i, j]),
+                            get_t(&abc, &[i, j])
+                        );
+                    }
+                }
+            }
+        }
+    };
+}
+
+typed_einsum_tests!(typed_f64, f64);
+typed_einsum_tests!(typed_f32, f32);
+typed_einsum_tests!(typed_complex64, num_complex::Complex64);
