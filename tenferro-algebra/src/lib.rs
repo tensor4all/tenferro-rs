@@ -7,7 +7,7 @@
 //! - [`Conjugate`]: Complex conjugation (identity for real types).
 //! - [`HasAlgebra`]: Maps a scalar type `T` to its default algebra `Alg`.
 //!   Enables automatic inference: `Tensor<f64>` → `Standard<f64>`,
-//!   `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra` (in external crate).
+//!   `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra<f64>` (in external crate).
 //!   This is UX sugar — the core model is `Alg::Scalar`-centric.
 //! - [`Semiring`]: Defines zero, one, add, mul for algebra-generic operations.
 //!   The algebra type `Alg` carries its scalar type via `Alg::Scalar`.
@@ -104,7 +104,7 @@ impl Conjugate for Complex64 {
 /// Maps a scalar type `T` to its default algebra `Alg`.
 ///
 /// Enables automatic algebra inference: `Tensor<f64>` → `Standard<f64>`,
-/// `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra` (in external crate).
+/// `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra<f64>` (in external crate).
 ///
 /// This trait is **UX sugar** for default algebra inference. The core
 /// algebra model is `Alg::Scalar`-centric (see [`Semiring`]).
