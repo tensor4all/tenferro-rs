@@ -574,6 +574,87 @@ fn hvp_square_function() {
     assert_eq!(*result.hvp.get(x.node_id().unwrap()).unwrap(), 2.0);
 }
 
+/// Rule: z = a + b (HVP-aware addition)
+/// pullback: dz/da = cotangent, dz/db = cotangent
+/// pullback_with_tangents: pass cotangent and cotangent_tangent through unchanged
+struct AddRuleHvp {
+    inputs: Vec<NodeId>,
+}
+
+impl ReverseRule<f64> for AddRuleHvp {
+    fn pullback(&self, cotangent: &f64) -> AdResult<Vec<(NodeId, f64)>> {
+        Ok(self.inputs.iter().map(|&id| (id, *cotangent)).collect())
+    }
+
+    fn inputs(&self) -> Vec<NodeId> {
+        self.inputs.clone()
+    }
+
+    fn pullback_with_tangents(
+        &self,
+        cotangent: &f64,
+        cotangent_tangent: &f64,
+    ) -> AdResult<Vec<(NodeId, f64, f64)>> {
+        Ok(self
+            .inputs
+            .iter()
+            .map(|&id| (id, *cotangent, *cotangent_tangent))
+            .collect())
+    }
+}
+
+#[test]
+fn hvp_dag_merge_point() {
+    // f(x) = x^2 + x^2 = 2x^2
+    // ∇f = 4x, H = 4, Hv = 4v
+    // At x = 3.0, v = 1.0: gradient = 12, HVP = 4
+    //
+    // DAG:  x ──> y1 = x^2 ──> z = y1 + y2
+    //       └──> y2 = x^2 ──┘
+    //
+    // During reverse traversal, x receives cotangent contributions from
+    // both y1 and y2, hitting the Some(existing) accumulation branches
+    // on lines 448 and 458 of lib.rs.
+    let tape = Tape::<f64>::new();
+    let x = tape.leaf_with_tangent(3.0, 1.0).unwrap();
+
+    // y1 = x^2 = 9, tangent dy1 = 2*x*dx = 6
+    let y1 = tape.record_op(
+        9.0,
+        Box::new(SquareRuleHvp {
+            input: x.node_id().unwrap(),
+            saved_x: 3.0,
+            saved_dx: 1.0,
+        }),
+        None,
+    );
+    // y2 = x^2 = 9, tangent dy2 = 2*x*dx = 6
+    let y2 = tape.record_op(
+        9.0,
+        Box::new(SquareRuleHvp {
+            input: x.node_id().unwrap(),
+            saved_x: 3.0,
+            saved_dx: 1.0,
+        }),
+        None,
+    );
+    // z = y1 + y2 = 18
+    let z = tape.record_op(
+        18.0,
+        Box::new(AddRuleHvp {
+            inputs: vec![y1.node_id().unwrap(), y2.node_id().unwrap()],
+        }),
+        None,
+    );
+
+    let result = tape.hvp(&z).unwrap();
+
+    // Gradient: d(2x^2)/dx = 4*3 = 12
+    assert_eq!(*result.gradients.get(x.node_id().unwrap()).unwrap(), 12.0);
+    // HVP: H*v = 4*1 = 4
+    assert_eq!(*result.hvp.get(x.node_id().unwrap()).unwrap(), 4.0);
+}
+
 #[test]
 fn hvp_missing_node_error() {
     let tape = Tape::<f64>::new();
