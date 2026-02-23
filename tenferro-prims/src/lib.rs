@@ -84,9 +84,10 @@
 //! }
 //! ```
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::hash::Hash;
 use std::marker::PhantomData;
 
 use strided_traits::ScalarBase;
@@ -104,7 +105,7 @@ use tenferro_device::{Error, Result};
 /// let op = ReduceOp::Sum;
 /// assert_eq!(op, ReduceOp::Sum);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReduceOp {
     /// Sum reduction.
     Sum,
@@ -131,7 +132,7 @@ pub enum ReduceOp {
 /// let op = UnaryOp::Reciprocal;
 /// assert_eq!(op, UnaryOp::Reciprocal);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UnaryOp {
     /// Negate: `-x`.
     Negate,
@@ -162,7 +163,7 @@ pub enum UnaryOp {
 /// // Check if element-wise multiplication is available for f64
 /// let available = CpuBackend::has_extension_for::<f64>(Extension::ElementwiseMul);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Extension {
     /// Fused contraction (permute + GEMM). Maps to `cutensorContract` on GPU
     /// backends (not yet implemented).
@@ -192,6 +193,7 @@ pub enum Extension {
 ///     batch_dims: vec![], m: 3, n: 5, k: 4,
 /// };
 /// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PrimDescriptor {
     // ====================================================================
     // Core operations (every backend must implement)
@@ -400,7 +402,7 @@ pub trait TensorPrims<A> {
 ///
 /// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
 /// [`CpuBackend::execute`](TensorPrims::execute).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CpuPlan<T: ScalarBase> {
     /// Plan for batched GEMM.
     BatchedGemm {
@@ -474,30 +476,113 @@ pub enum CpuPlan<T: ScalarBase> {
     MakeContiguous { _marker: PhantomData<T> },
 }
 
-/// Cache for pre-computed execution plans, keyed by `(PrimDescriptor, shapes)`.
+/// Composite key for plan cache lookup.
+///
+/// Discriminates plans by scalar type ([`TypeId`]), operation descriptor
+/// ([`PrimDescriptor`]), and tensor shapes. Two calls that match on all
+/// three components will produce identical plans, so the cached plan can
+/// be reused.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PlanCacheKey {
+    /// Scalar type discriminator (e.g., `TypeId::of::<f64>()`).
+    type_id: TypeId,
+    /// Operation descriptor.
+    descriptor: PrimDescriptor,
+    /// Shapes of all tensor operands (inputs + output).
+    shapes: Vec<Vec<usize>>,
+}
+
+impl PlanCacheKey {
+    /// Build a cache key from scalar type, descriptor, and shapes.
+    fn new<T: 'static>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Self {
+        Self {
+            type_id: TypeId::of::<T>(),
+            descriptor: desc.clone(),
+            shapes: shapes.iter().map(|s| s.to_vec()).collect(),
+        }
+    }
+}
+
+/// Cache for pre-computed execution plans, keyed by
+/// `(TypeId, PrimDescriptor, shapes)`.
 ///
 /// Avoids repeated plan generation when the same operation is executed
 /// with the same shapes (e.g., single-tensor einsum steps in a loop).
+/// Plans are stored type-erased and downcast on retrieval.
+///
+/// # Cache semantics
+///
+/// - **Hit**: A call to [`get`](PlanCache::get) with the same scalar type,
+///   descriptor, and shapes returns a clone of the cached plan.
+/// - **Miss**: A call with different shapes, descriptor, or scalar type
+///   returns `None`. The caller should build a new plan and
+///   [`insert`](PlanCache::insert) it.
+/// - **Thread safety**: `PlanCache` is not `Sync`; it is owned by a single
+///   [`CpuContext`] and accessed via `&mut`.
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_prims::PlanCache;
 ///
 /// let cache = PlanCache::new();
+/// assert_eq!(cache.len(), 0);
 /// ```
 pub struct PlanCache {
-    // Internal representation is private.
-    // Key: (PrimDescriptor hash, shapes hash) → type-erased plan.
-    _entries: HashMap<u64, Box<dyn Any>>,
+    entries: HashMap<PlanCacheKey, Box<dyn Any>>,
 }
 
 impl PlanCache {
     /// Create a new empty plan cache.
     pub fn new() -> Self {
         Self {
-            _entries: HashMap::new(),
+            entries: HashMap::new(),
         }
+    }
+
+    /// Returns the number of cached plans.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Returns `true` if the cache contains no plans.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Look up a cached plan for the given scalar type, descriptor, and shapes.
+    ///
+    /// Returns `Some(plan)` on cache hit, `None` on miss. The plan is
+    /// cloned out of the cache so the cache retains its copy.
+    pub fn get<T: ScalarBase + Clone + 'static>(
+        &self,
+        desc: &PrimDescriptor,
+        shapes: &[&[usize]],
+    ) -> Option<CpuPlan<T>> {
+        let key = PlanCacheKey::new::<T>(desc, shapes);
+        self.entries
+            .get(&key)
+            .and_then(|boxed| boxed.downcast_ref::<CpuPlan<T>>())
+            .cloned()
+    }
+
+    /// Insert a plan into the cache for the given scalar type, descriptor,
+    /// and shapes.
+    ///
+    /// If an entry with the same key already exists, it is replaced.
+    pub fn insert<T: ScalarBase + Clone + 'static>(
+        &mut self,
+        desc: &PrimDescriptor,
+        shapes: &[&[usize]],
+        plan: CpuPlan<T>,
+    ) {
+        let key = PlanCacheKey::new::<T>(desc, shapes);
+        self.entries.insert(key, Box::new(plan));
+    }
+
+    /// Remove all cached plans.
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
 }
 
@@ -621,6 +706,228 @@ impl CpuBackend {
             tenferro_tensor::MemoryOrder::ColumnMajor,
         )
         .expect("from_slice should succeed with valid data and dims")
+    }
+
+    /// Build a CPU plan from a descriptor and shapes (without cache lookup).
+    ///
+    /// This is the internal plan construction logic, factored out of
+    /// [`TensorPrims::plan`] so that the trait method can wrap it with
+    /// cache lookup/insert.
+    fn build_plan<T: ScalarBase>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Result<CpuPlan<T>> {
+        match desc {
+            PrimDescriptor::BatchedGemm {
+                batch_dims,
+                m,
+                n,
+                k,
+            } => {
+                // BatchedGemm expects 3 shapes: A, B, C
+                validate_shape_count(shapes, 3, "BatchedGemm")?;
+                let expected_a: Vec<usize> = batch_dims.iter().copied().chain([*m, *k]).collect();
+                let expected_b: Vec<usize> = batch_dims.iter().copied().chain([*k, *n]).collect();
+                let expected_c: Vec<usize> = batch_dims.iter().copied().chain([*m, *n]).collect();
+                validate_shape_eq(shapes[0], &expected_a, "BatchedGemm input A")?;
+                validate_shape_eq(shapes[1], &expected_b, "BatchedGemm input B")?;
+                validate_shape_eq(shapes[2], &expected_c, "BatchedGemm output C")?;
+                Ok(CpuPlan::BatchedGemm {
+                    batch_dims: batch_dims.clone(),
+                    m: *m,
+                    n: *n,
+                    k: *k,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Reduce {
+                modes_a,
+                modes_c,
+                op,
+            } => {
+                // Reduce expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "Reduce")?;
+                validate_rank(shapes[0], modes_a.len(), "Reduce input A")?;
+                validate_rank(shapes[1], modes_c.len(), "Reduce output C")?;
+                // reduced_axes = positions in modes_a not present in modes_c
+                let reduced_axes: Vec<usize> = modes_a
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| !modes_c.contains(m))
+                    .map(|(i, _)| i)
+                    .collect();
+                Ok(CpuPlan::Reduce {
+                    reduced_axes,
+                    op: *op,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Trace {
+                modes_a,
+                modes_c,
+                paired,
+            } => {
+                // Trace expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "Trace")?;
+                validate_rank(shapes[0], modes_a.len(), "Trace input A")?;
+                validate_rank(shapes[1], modes_c.len(), "Trace output C")?;
+                let paired_axes: Vec<(usize, usize)> = paired
+                    .iter()
+                    .map(|(m1, m2)| {
+                        Ok((mode_position(modes_a, *m1)?, mode_position(modes_a, *m2)?))
+                    })
+                    .collect::<Result<_>>()?;
+                // Validate that paired axes have equal dimensions
+                for &(ax1, ax2) in &paired_axes {
+                    if shapes[0][ax1] != shapes[0][ax2] {
+                        return Err(Error::InvalidArgument(format!(
+                            "Trace paired axes ({ax1}, {ax2}) have mismatched dimensions: {} vs {}",
+                            shapes[0][ax1], shapes[0][ax2]
+                        )));
+                    }
+                }
+                let free_axes: Vec<usize> = modes_c
+                    .iter()
+                    .map(|m| mode_position(modes_a, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::Trace {
+                    paired_axes,
+                    free_axes,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Permute { modes_a, modes_b } => {
+                // Permute expects 2 shapes: A (input), B (output)
+                validate_shape_count(shapes, 2, "Permute")?;
+                validate_rank(shapes[0], modes_a.len(), "Permute input A")?;
+                validate_rank(shapes[1], modes_b.len(), "Permute output B")?;
+                // perm[out_axis] = in_axis
+                let perm: Vec<usize> = modes_b
+                    .iter()
+                    .map(|m| mode_position(modes_a, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::Permute {
+                    perm,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::AntiTrace {
+                modes_a,
+                modes_c,
+                paired,
+            } => {
+                // AntiTrace expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "AntiTrace")?;
+                validate_rank(shapes[0], modes_a.len(), "AntiTrace input A")?;
+                validate_rank(shapes[1], modes_c.len(), "AntiTrace output C")?;
+                let paired_axes: Vec<(usize, usize)> = paired
+                    .iter()
+                    .map(|(m1, m2)| {
+                        Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
+                    })
+                    .collect::<Result<_>>()?;
+                // Validate that paired axes in output have equal dimensions
+                for &(ax1, ax2) in &paired_axes {
+                    if shapes[1][ax1] != shapes[1][ax2] {
+                        return Err(Error::InvalidArgument(format!(
+                            "AntiTrace paired axes ({ax1}, {ax2}) have mismatched dimensions: {} vs {}",
+                            shapes[1][ax1], shapes[1][ax2]
+                        )));
+                    }
+                }
+                let free_axes: Vec<usize> = modes_a
+                    .iter()
+                    .map(|m| mode_position(modes_c, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::AntiTrace {
+                    paired_axes,
+                    free_axes,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::AntiDiag {
+                modes_a,
+                modes_c,
+                paired,
+            } => {
+                // AntiDiag expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "AntiDiag")?;
+                validate_rank(shapes[0], modes_a.len(), "AntiDiag input A")?;
+                validate_rank(shapes[1], modes_c.len(), "AntiDiag output C")?;
+                let paired_axes: Vec<(usize, usize)> = paired
+                    .iter()
+                    .map(|(m1, m2)| {
+                        Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
+                    })
+                    .collect::<Result<_>>()?;
+                let free_axes: Vec<usize> = modes_a
+                    .iter()
+                    .map(|m| mode_position(modes_c, *m))
+                    .collect::<Result<_>>()?;
+                Ok(CpuPlan::AntiDiag {
+                    paired_axes,
+                    free_axes,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::ElementwiseUnary { op } => {
+                // ElementwiseUnary expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "ElementwiseUnary")?;
+                Ok(CpuPlan::ElementwiseUnary {
+                    op: *op,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Contract {
+                modes_a,
+                modes_b,
+                modes_c,
+            } => {
+                // Contract expects 3 shapes: A, B, C
+                validate_shape_count(shapes, 3, "Contract")?;
+                validate_rank(shapes[0], modes_a.len(), "Contract input A")?;
+                validate_rank(shapes[1], modes_b.len(), "Contract input B")?;
+                validate_rank(shapes[2], modes_c.len(), "Contract output C")?;
+                // Validate contracted dimensions match between A and B
+                for &mode in modes_a.iter() {
+                    if let Some(b_pos) = modes_b.iter().position(|&m| m == mode) {
+                        let a_pos = modes_a.iter().position(|&m| m == mode).unwrap();
+                        if shapes[0][a_pos] != shapes[1][b_pos] {
+                            return Err(Error::InvalidArgument(format!(
+                                "Contract mode {mode} has mismatched dimensions: A={} vs B={}",
+                                shapes[0][a_pos], shapes[1][b_pos]
+                            )));
+                        }
+                    }
+                }
+                Ok(CpuPlan::Contract {
+                    modes_a: modes_a.clone(),
+                    modes_b: modes_b.clone(),
+                    modes_c: modes_c.clone(),
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::ElementwiseMul => {
+                // ElementwiseMul expects 3 shapes: A, B, C
+                validate_shape_count(shapes, 3, "ElementwiseMul")?;
+                Ok(CpuPlan::ElementwiseMul {
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::MakeContiguous => {
+                // MakeContiguous expects 2 shapes: A (input), C (output)
+                validate_shape_count(shapes, 2, "MakeContiguous")?;
+                Ok(CpuPlan::MakeContiguous {
+                    _marker: PhantomData,
+                })
+            }
+        }
     }
 }
 
@@ -1083,224 +1390,21 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     type Context = CpuContext;
 
     fn plan<T: ScalarBase>(
-        _ctx: &mut CpuContext,
+        ctx: &mut CpuContext,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
     ) -> Result<CpuPlan<T>> {
-        match desc {
-            PrimDescriptor::BatchedGemm {
-                batch_dims,
-                m,
-                n,
-                k,
-            } => {
-                // BatchedGemm expects 3 shapes: A, B, C
-                validate_shape_count(shapes, 3, "BatchedGemm")?;
-                let expected_a: Vec<usize> = batch_dims.iter().copied().chain([*m, *k]).collect();
-                let expected_b: Vec<usize> = batch_dims.iter().copied().chain([*k, *n]).collect();
-                let expected_c: Vec<usize> = batch_dims.iter().copied().chain([*m, *n]).collect();
-                validate_shape_eq(shapes[0], &expected_a, "BatchedGemm input A")?;
-                validate_shape_eq(shapes[1], &expected_b, "BatchedGemm input B")?;
-                validate_shape_eq(shapes[2], &expected_c, "BatchedGemm output C")?;
-                Ok(CpuPlan::BatchedGemm {
-                    batch_dims: batch_dims.clone(),
-                    m: *m,
-                    n: *n,
-                    k: *k,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::Reduce {
-                modes_a,
-                modes_c,
-                op,
-            } => {
-                // Reduce expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "Reduce")?;
-                validate_rank(shapes[0], modes_a.len(), "Reduce input A")?;
-                validate_rank(shapes[1], modes_c.len(), "Reduce output C")?;
-                // reduced_axes = positions in modes_a not present in modes_c
-                let reduced_axes: Vec<usize> = modes_a
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, m)| !modes_c.contains(m))
-                    .map(|(i, _)| i)
-                    .collect();
-                Ok(CpuPlan::Reduce {
-                    reduced_axes,
-                    op: *op,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::Trace {
-                modes_a,
-                modes_c,
-                paired,
-            } => {
-                // Trace expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "Trace")?;
-                validate_rank(shapes[0], modes_a.len(), "Trace input A")?;
-                validate_rank(shapes[1], modes_c.len(), "Trace output C")?;
-                let paired_axes: Vec<(usize, usize)> = paired
-                    .iter()
-                    .map(|(m1, m2)| {
-                        Ok((mode_position(modes_a, *m1)?, mode_position(modes_a, *m2)?))
-                    })
-                    .collect::<Result<_>>()?;
-                // Validate that paired axes have equal dimensions
-                for &(ax1, ax2) in &paired_axes {
-                    if shapes[0][ax1] != shapes[0][ax2] {
-                        return Err(Error::InvalidArgument(format!(
-                            "Trace paired axes ({ax1}, {ax2}) have mismatched dimensions: {} vs {}",
-                            shapes[0][ax1], shapes[0][ax2]
-                        )));
-                    }
-                }
-                let free_axes: Vec<usize> = modes_c
-                    .iter()
-                    .map(|m| mode_position(modes_a, *m))
-                    .collect::<Result<_>>()?;
-                Ok(CpuPlan::Trace {
-                    paired_axes,
-                    free_axes,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::Permute { modes_a, modes_b } => {
-                // Permute expects 2 shapes: A (input), B (output)
-                validate_shape_count(shapes, 2, "Permute")?;
-                validate_rank(shapes[0], modes_a.len(), "Permute input A")?;
-                validate_rank(shapes[1], modes_b.len(), "Permute output B")?;
-                // perm[out_axis] = in_axis
-                let perm: Vec<usize> = modes_b
-                    .iter()
-                    .map(|m| mode_position(modes_a, *m))
-                    .collect::<Result<_>>()?;
-                Ok(CpuPlan::Permute {
-                    perm,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::AntiTrace {
-                modes_a,
-                modes_c,
-                paired,
-            } => {
-                // AntiTrace expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "AntiTrace")?;
-                validate_rank(shapes[0], modes_a.len(), "AntiTrace input A")?;
-                validate_rank(shapes[1], modes_c.len(), "AntiTrace output C")?;
-                let paired_axes: Vec<(usize, usize)> = paired
-                    .iter()
-                    .map(|(m1, m2)| {
-                        Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
-                    })
-                    .collect::<Result<_>>()?;
-                // Validate that paired axes in output have equal dimensions
-                for &(ax1, ax2) in &paired_axes {
-                    if shapes[1][ax1] != shapes[1][ax2] {
-                        return Err(Error::InvalidArgument(format!(
-                            "AntiTrace paired axes ({ax1}, {ax2}) have mismatched dimensions: {} vs {}",
-                            shapes[1][ax1], shapes[1][ax2]
-                        )));
-                    }
-                }
-                let free_axes: Vec<usize> = modes_a
-                    .iter()
-                    .map(|m| mode_position(modes_c, *m))
-                    .collect::<Result<_>>()?;
-                Ok(CpuPlan::AntiTrace {
-                    paired_axes,
-                    free_axes,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::AntiDiag {
-                modes_a,
-                modes_c,
-                paired,
-            } => {
-                // AntiDiag expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "AntiDiag")?;
-                validate_rank(shapes[0], modes_a.len(), "AntiDiag input A")?;
-                validate_rank(shapes[1], modes_c.len(), "AntiDiag output C")?;
-                let paired_axes: Vec<(usize, usize)> = paired
-                    .iter()
-                    .map(|(m1, m2)| {
-                        Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
-                    })
-                    .collect::<Result<_>>()?;
-                let free_axes: Vec<usize> = modes_a
-                    .iter()
-                    .map(|m| mode_position(modes_c, *m))
-                    .collect::<Result<_>>()?;
-                Ok(CpuPlan::AntiDiag {
-                    paired_axes,
-                    free_axes,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::ElementwiseUnary { op } => {
-                // ElementwiseUnary expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "ElementwiseUnary")?;
-                Ok(CpuPlan::ElementwiseUnary {
-                    op: *op,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::Contract {
-                modes_a,
-                modes_b,
-                modes_c,
-            } => {
-                // Contract expects 3 shapes: A, B, C
-                validate_shape_count(shapes, 3, "Contract")?;
-                validate_rank(shapes[0], modes_a.len(), "Contract input A")?;
-                validate_rank(shapes[1], modes_b.len(), "Contract input B")?;
-                validate_rank(shapes[2], modes_c.len(), "Contract output C")?;
-                // Validate contracted dimensions match between A and B
-                for &mode in modes_a.iter() {
-                    if let Some(b_pos) = modes_b.iter().position(|&m| m == mode) {
-                        let a_pos = modes_a.iter().position(|&m| m == mode).unwrap();
-                        if shapes[0][a_pos] != shapes[1][b_pos] {
-                            return Err(Error::InvalidArgument(format!(
-                                "Contract mode {mode} has mismatched dimensions: A={} vs B={}",
-                                shapes[0][a_pos], shapes[1][b_pos]
-                            )));
-                        }
-                    }
-                }
-                Ok(CpuPlan::Contract {
-                    modes_a: modes_a.clone(),
-                    modes_b: modes_b.clone(),
-                    modes_c: modes_c.clone(),
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::ElementwiseMul => {
-                // ElementwiseMul expects 3 shapes: A, B, C
-                validate_shape_count(shapes, 3, "ElementwiseMul")?;
-                Ok(CpuPlan::ElementwiseMul {
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::MakeContiguous => {
-                // MakeContiguous expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "MakeContiguous")?;
-                Ok(CpuPlan::MakeContiguous {
-                    _marker: PhantomData,
-                })
-            }
+        // Check cache first
+        if let Some(cached) = ctx.plan_cache.get::<T>(desc, shapes) {
+            return Ok(cached);
         }
+
+        let plan = Self::build_plan::<T>(desc, shapes)?;
+
+        // Store in cache for future reuse
+        ctx.plan_cache.insert::<T>(desc, shapes, plan.clone());
+
+        Ok(plan)
     }
 
     fn execute<T: ScalarBase>(
