@@ -399,77 +399,7 @@ fn make_contiguous() {
     }
 }
 
-// ============================================================================
-// BatchedGemm
-// ============================================================================
-
-#[test]
-fn batched_gemm_2x3_times_3x2() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
-    let b = tensor_from_fn(&[3, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
-    let mut c = tensor_zeros::<f64>(&[2, 2]);
-
-    let desc = PrimDescriptor::BatchedGemm {
-        batch_dims: vec![],
-        m: 2,
-        n: 2,
-        k: 3,
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
-
-    for i in 0..2 {
-        for j in 0..2 {
-            let mut expected = 0.0;
-            for k in 0..3 {
-                expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
-            }
-            assert!(
-                (tensor_get(&c, &[i, j]) - expected).abs() < 1e-10,
-                "C[{i},{j}] = {}, expected {expected}",
-                tensor_get(&c, &[i, j])
-            );
-        }
-    }
-}
-
-#[test]
-fn batched_gemm_with_batch() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 2, 3], |idx| {
-        (idx[0] * 100 + idx[1] * 10 + idx[2] + 1) as f64
-    });
-    let b = tensor_from_fn(&[2, 3, 2], |idx| {
-        (idx[0] * 100 + idx[1] * 10 + idx[2] + 1) as f64
-    });
-    let mut c = tensor_zeros::<f64>(&[2, 2, 2]);
-
-    let desc = PrimDescriptor::BatchedGemm {
-        batch_dims: vec![2],
-        m: 2,
-        n: 2,
-        k: 3,
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 2, 3], &[2, 3, 2], &[2, 2, 2]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
-
-    for batch in 0..2 {
-        for i in 0..2 {
-            for j in 0..2 {
-                let mut expected = 0.0;
-                for k in 0..3 {
-                    expected += tensor_get(&a, &[batch, i, k]) * tensor_get(&b, &[batch, k, j]);
-                }
-                assert!(
-                    (tensor_get(&c, &[batch, i, j]) - expected).abs() < 1e-10,
-                    "C[{batch},{i},{j}] = {}, expected {expected}",
-                    tensor_get(&c, &[batch, i, j])
-                );
-            }
-        }
-    }
-}
+// (BatchedGemm standalone tests moved to typed_prims_tests! macro)
 
 // ============================================================================
 // Reduce (Sum)
@@ -502,32 +432,7 @@ fn reduce_sum_axis1() {
     }
 }
 
-#[test]
-fn reduce_sum_axis0() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
-    let mut c = tensor_zeros::<f64>(&[4]);
-
-    let desc = PrimDescriptor::Reduce {
-        modes_a: vec![0, 1],
-        modes_c: vec![1],
-        op: ReduceOp::Sum,
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for j in 0..4 {
-        let mut expected = 0.0;
-        for i in 0..3 {
-            expected += tensor_get(&a, &[i, j]);
-        }
-        assert!(
-            (tensor_get(&c, &[j]) - expected).abs() < 1e-10,
-            "C[{j}] = {}, expected {expected}",
-            tensor_get(&c, &[j])
-        );
-    }
-}
+// (reduce_sum_axis0 standalone test moved to typed_prims_tests! macro)
 
 #[test]
 fn reduce_sum_full() {
@@ -600,34 +505,7 @@ fn trace_2d_matrix() {
     assert!((tensor_get(&c, &[]) - 6.0).abs() < 1e-10);
 }
 
-#[test]
-fn trace_with_free_axis() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3, 3], |idx| {
-        (idx[0] * 100 + idx[1] * 10 + idx[2]) as f64
-    });
-    let mut c = tensor_zeros::<f64>(&[2]);
-
-    let desc = PrimDescriptor::Trace {
-        modes_a: vec![0, 1, 2],
-        modes_c: vec![0],
-        paired: vec![(1, 2)],
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3, 3], &[2]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for i in 0..2 {
-        let mut expected = 0.0;
-        for d in 0..3 {
-            expected += tensor_get(&a, &[i, d, d]);
-        }
-        assert!(
-            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
-            "C[{i}] = {}, expected {expected}",
-            tensor_get(&c, &[i])
-        );
-    }
-}
+// (trace_with_free_axis standalone test moved to typed_prims_tests! macro)
 
 // ============================================================================
 // ElementwiseMul
@@ -717,26 +595,7 @@ fn contract_outer_product() {
     }
 }
 
-// ============================================================================
-// ElementwiseUnary -- Conj is identity for real types
-// ============================================================================
-
-#[test]
-fn elementwise_unary_conj_identity() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
-    let mut c = tensor_zeros::<f64>(&[3, 4]);
-
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for i in 0..3 {
-        for j in 0..4 {
-            assert_eq!(tensor_get(&c, &[i, j]), tensor_get(&a, &[i, j]));
-        }
-    }
-}
+// (elementwise_unary_conj_identity standalone test covered by typed_prims_tests! macro)
 
 // ============================================================================
 // ElementwiseUnary -- Conj for complex types
@@ -806,105 +665,7 @@ fn elementwise_unary_conj_complex32() {
     }
 }
 
-// ============================================================================
-// ElementwiseUnary -- Negate
-// ============================================================================
-
-#[test]
-fn elementwise_unary_negate_f64() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[4], |idx| idx[0] as f64 + 1.0);
-    let mut c = tensor_zeros::<f64>(&[4]);
-
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Negate,
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for i in 0..4 {
-        let expected = -(i as f64 + 1.0);
-        assert!(
-            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
-            "C[{i}] = {}, expected {expected}",
-            tensor_get(&c, &[i])
-        );
-    }
-}
-
-// ============================================================================
-// ElementwiseUnary -- Reciprocal
-// ============================================================================
-
-#[test]
-fn elementwise_unary_reciprocal_f64() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[4], |idx| idx[0] as f64 + 1.0);
-    let mut c = tensor_zeros::<f64>(&[4]);
-
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Reciprocal,
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for i in 0..4 {
-        let expected = 1.0 / (i as f64 + 1.0);
-        assert!(
-            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
-            "C[{i}] = {}, expected {expected}",
-            tensor_get(&c, &[i])
-        );
-    }
-}
-
-// ============================================================================
-// ElementwiseUnary -- Abs
-// ============================================================================
-
-#[test]
-fn elementwise_unary_abs_f64() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[4], |idx| -(idx[0] as f64 + 1.0));
-    let mut c = tensor_zeros::<f64>(&[4]);
-
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for i in 0..4 {
-        let expected = (i as f64 + 1.0).abs();
-        assert!(
-            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
-            "C[{i}] = {}, expected {expected}",
-            tensor_get(&c, &[i])
-        );
-    }
-}
-
-// ============================================================================
-// ElementwiseUnary -- Sqrt
-// ============================================================================
-
-#[test]
-fn elementwise_unary_sqrt_f64() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[4], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f64);
-    let mut c = tensor_zeros::<f64>(&[4]);
-
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for i in 0..4 {
-        let expected = i as f64 + 1.0;
-        assert!(
-            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
-            "C[{i}] = {}, expected {expected}",
-            tensor_get(&c, &[i])
-        );
-    }
-}
+// (elementwise_unary negate/reciprocal/abs/sqrt f64 standalone tests moved to typed_prims_tests! macro)
 
 // ============================================================================
 // ElementwiseUnary -- Complex64 tests
@@ -1046,32 +807,7 @@ fn elementwise_unary_sqrt_complex64() {
     }
 }
 
-// ============================================================================
-// ElementwiseUnary -- alpha/beta support
-// ============================================================================
-
-#[test]
-fn elementwise_unary_negate_with_alpha_beta() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[3], |idx| idx[0] as f64 + 1.0);
-    let mut c = tensor_from_fn(&[3], |_| 10.0_f64);
-
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Negate,
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
-    // C = 2 * (-A) + 3 * C = 2 * (-(i+1)) + 3 * 10
-    cpu_execute(&mut ctx, &plan, 2.0, &[&a], 3.0, &mut c).unwrap();
-
-    for i in 0..3 {
-        let expected = 2.0 * (-(i as f64 + 1.0)) + 3.0 * 10.0;
-        assert!(
-            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
-            "C[{i}] = {}, expected {expected}",
-            tensor_get(&c, &[i])
-        );
-    }
-}
+// (elementwise_unary_negate_with_alpha_beta standalone test moved to typed_prims_tests! macro)
 
 // ============================================================================
 // ElementwiseUnary -- f32 tests
@@ -1364,71 +1100,9 @@ fn load_hiptensor_returns_error() {
     }
 }
 
-// ============================================================================
-// AntiTrace
-// ============================================================================
+// (anti_trace_scalar_to_diagonal standalone test moved to typed_prims_tests! macro)
 
-#[test]
-fn anti_trace_scalar_to_diagonal() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[], |_| 5.0_f64);
-    let mut c = tensor_zeros::<f64>(&[3, 3]);
-
-    let desc = PrimDescriptor::AntiTrace {
-        modes_a: vec![],
-        modes_c: vec![0, 1],
-        paired: vec![(0, 1)],
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[], &[3, 3]]).unwrap();
-    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
-
-    for i in 0..3 {
-        for j in 0..3 {
-            if i == j {
-                assert!(
-                    (tensor_get(&c, &[i, j]) - 5.0).abs() < 1e-10,
-                    "C[{i},{j}] = {}, expected 5.0",
-                    tensor_get(&c, &[i, j])
-                );
-            } else {
-                assert!(
-                    tensor_get(&c, &[i, j]).abs() < 1e-10,
-                    "C[{i},{j}] = {}, expected 0.0",
-                    tensor_get(&c, &[i, j])
-                );
-            }
-        }
-    }
-}
-
-// ============================================================================
-// Reduce with alpha/beta
-// ============================================================================
-
-#[test]
-fn reduce_sum_with_alpha_beta() {
-    let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3], |_| 1.0_f64);
-    let mut c = tensor_from_fn(&[2], |_| 10.0_f64);
-
-    let desc = PrimDescriptor::Reduce {
-        modes_a: vec![0, 1],
-        modes_c: vec![0],
-        op: ReduceOp::Sum,
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[2]]).unwrap();
-    // C = 2 * sum(A, axis=1) + 3 * C
-    // sum over 3 ones = 3, so C = 2 * 3 + 3 * 10 = 36
-    cpu_execute(&mut ctx, &plan, 2.0, &[&a], 3.0, &mut c).unwrap();
-
-    for i in 0..2 {
-        assert!(
-            (tensor_get(&c, &[i]) - 36.0).abs() < 1e-10,
-            "C[{i}] = {}, expected 36.0",
-            tensor_get(&c, &[i])
-        );
-    }
-}
+// (reduce_sum_with_alpha_beta standalone test moved to typed_prims_tests! macro)
 
 // ============================================================================
 // Complex64 permute (original test kept)
@@ -2002,6 +1676,43 @@ fn execute_elementwise_unary_wrong_input_count() {
     assert!(result.is_err(), "expected error for zero inputs");
 }
 
+// ============================================================================
+// AntiTrace: mismatched paired dims
+// ============================================================================
+
+#[test]
+fn anti_trace_mismatched_paired_dims() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::AntiTrace {
+        modes_a: vec![],
+        modes_c: vec![0, 1],
+        paired: vec![(0, 1)],
+    };
+    // Paired axes have dimensions 3 and 4 (must be equal for anti-trace)
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[], &[3, 4]]);
+    assert!(
+        result.is_err(),
+        "expected error for mismatched paired dims in AntiTrace"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        matches!(err, tenferro_device::Error::InvalidArgument(_)),
+        "expected InvalidArgument, got: {err:?}"
+    );
+}
+
+// ============================================================================
+// PlanCache: default semantics
+// ============================================================================
+
+#[test]
+fn plan_cache_default_semantics() {
+    use tenferro_prims::PlanCache;
+    let cache = PlanCache::default();
+    assert!(cache.is_empty());
+    assert_eq!(cache.len(), 0);
+}
+
 // Typed test scaffolding: macro that generates test modules per scalar type
 // ============================================================================
 
@@ -2478,6 +2189,849 @@ macro_rules! typed_prims_tests {
                     for j in 0..4 {
                         assert_eq!(tensor_get(&c, &[i, j]), tensor_get(&a, &[i, j]));
                     }
+                }
+            }
+
+            // === Promoted from standalone tests (Issue #175) ===
+
+            #[test]
+            fn batched_gemm_2x3_times_3x2() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = tensor_from_fn(&[3, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+                let mut c = tensor_zeros::<$T>(&[2, 2]);
+
+                let desc = PrimDescriptor::BatchedGemm {
+                    batch_dims: vec![],
+                    m: 2,
+                    n: 2,
+                    k: 3,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a, &b],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    for j in 0..2 {
+                        let mut expected = <$T as TestScalar>::from_f64(0.0);
+                        for k in 0..3 {
+                            expected = expected + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+                        }
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn batched_gemm_with_batch() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[2, 2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2] + 1)
+                });
+                let b = tensor_from_fn(&[2, 3, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2] + 1)
+                });
+                let mut c = tensor_zeros::<$T>(&[2, 2, 2]);
+
+                let desc = PrimDescriptor::BatchedGemm {
+                    batch_dims: vec![2],
+                    m: 2,
+                    n: 2,
+                    k: 3,
+                };
+                let plan =
+                    cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 2, 3], &[2, 3, 2], &[2, 2, 2]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a, &b],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for batch in 0..2 {
+                    for i in 0..2 {
+                        for j in 0..2 {
+                            let mut expected = <$T as TestScalar>::from_f64(0.0);
+                            for k in 0..3 {
+                                expected = expected
+                                    + tensor_get(&a, &[batch, i, k])
+                                        * tensor_get(&b, &[batch, k, j]);
+                            }
+                            assert!(
+                                <$T as TestScalar>::approx_eq(
+                                    tensor_get(&c, &[batch, i, j]),
+                                    expected
+                                ),
+                                "C[{batch},{i},{j}] = {:?}, expected {:?}, diff = {}",
+                                tensor_get(&c, &[batch, i, j]),
+                                expected,
+                                <$T as TestScalar>::diff_norm(
+                                    tensor_get(&c, &[batch, i, j]),
+                                    expected
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+
+            #[test]
+            fn reduce_sum_axis0() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1] + 1)
+                });
+                let mut c = tensor_zeros::<$T>(&[4]);
+
+                let desc = PrimDescriptor::Reduce {
+                    modes_a: vec![0, 1],
+                    modes_c: vec![1],
+                    op: ReduceOp::Sum,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for j in 0..4 {
+                    let mut expected = <$T as TestScalar>::from_f64(0.0);
+                    for i in 0..3 {
+                        expected = expected + tensor_get(&a, &[i, j]);
+                    }
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[j]), expected),
+                        "C[{j}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[j]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[j]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn trace_with_free_axis() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[2, 3, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2])
+                });
+                let mut c = tensor_zeros::<$T>(&[2]);
+
+                let desc = PrimDescriptor::Trace {
+                    modes_a: vec![0, 1, 2],
+                    modes_c: vec![0],
+                    paired: vec![(1, 2)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3, 3], &[2]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    let mut expected = <$T as TestScalar>::from_f64(0.0);
+                    for d in 0..3 {
+                        expected = expected + tensor_get(&a, &[i, d, d]);
+                    }
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn elementwise_unary_negate() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[4], |idx| {
+                    <$T as TestScalar>::from_f64(idx[0] as f64 + 1.0)
+                });
+                let mut c = tensor_zeros::<$T>(&[4]);
+
+                let desc = PrimDescriptor::ElementwiseUnary {
+                    op: UnaryOp::Negate,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..4 {
+                    let expected = <$T as TestScalar>::from_f64(-(i as f64 + 1.0));
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn elementwise_unary_reciprocal() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[4], |idx| {
+                    <$T as TestScalar>::from_f64(idx[0] as f64 + 1.0)
+                });
+                let mut c = tensor_zeros::<$T>(&[4]);
+
+                let desc = PrimDescriptor::ElementwiseUnary {
+                    op: UnaryOp::Reciprocal,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..4 {
+                    let expected = <$T as TestScalar>::from_f64(1.0 / (i as f64 + 1.0));
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn elementwise_unary_abs() {
+                let mut ctx = CpuContext::new(1);
+                // Use negative real values; for complex, from_f64(-x) gives (-x, 0)
+                // whose abs is (x, 0) matching the real case.
+                let a = tensor_from_fn(&[4], |idx| {
+                    <$T as TestScalar>::from_f64(-(idx[0] as f64 + 1.0))
+                });
+                let mut c = tensor_zeros::<$T>(&[4]);
+
+                let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..4 {
+                    let expected = <$T as TestScalar>::from_f64(i as f64 + 1.0);
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn elementwise_unary_sqrt() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[4], |idx| {
+                    let v = <$T as TestScalar>::from_usize(idx[0] + 1);
+                    v * v // perfect square
+                });
+                let mut c = tensor_zeros::<$T>(&[4]);
+
+                let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..4 {
+                    let expected = <$T as TestScalar>::from_usize(i + 1);
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn anti_trace_scalar_to_diagonal() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(5.0));
+                let mut c = tensor_zeros::<$T>(&[3, 3]);
+
+                let desc = PrimDescriptor::AntiTrace {
+                    modes_a: vec![],
+                    modes_c: vec![0, 1],
+                    paired: vec![(0, 1)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[], &[3, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..3 {
+                        if i == j {
+                            let expected = <$T as TestScalar>::from_f64(5.0);
+                            assert!(
+                                <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                                "C[{i},{j}] = {:?}, expected {:?}",
+                                tensor_get(&c, &[i, j]),
+                                expected,
+                            );
+                        } else {
+                            let zero = <$T as TestScalar>::from_f64(0.0);
+                            assert!(
+                                <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), zero),
+                                "C[{i},{j}] = {:?}, expected {:?}",
+                                tensor_get(&c, &[i, j]),
+                                zero,
+                            );
+                        }
+                    }
+                }
+            }
+
+            #[test]
+            fn anti_trace_with_free_axis() {
+                let mut ctx = CpuContext::new(1);
+                // Input: [2, 3, 3], Output: [2]
+                // modes_a=[0, 1, 2], modes_c=[0], paired=[(1, 2)]
+                // Trace over axes 1,2 (sum of diagonal), with free axis 0 (batch).
+                // But this is AntiTrace (inverse of Trace):
+                // Input: [2], Output: [2, 3, 3]
+                // modes_a=[0], modes_c=[0, 1, 2], paired=[(1, 2)]
+                // A[b] -> C[b, d, d] = A[b] for all d=0..3
+                let a = tensor_from_fn(&[2], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let mut c = tensor_zeros::<$T>(&[2, 3, 3]);
+
+                let desc = PrimDescriptor::AntiTrace {
+                    modes_a: vec![0],
+                    modes_c: vec![0, 1, 2],
+                    paired: vec![(1, 2)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2], &[2, 3, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for b in 0..2 {
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            let expected = if i == j {
+                                // C[b, d, d] = A[b] for each diagonal d
+                                <$T as TestScalar>::from_usize(b + 1)
+                            } else {
+                                <$T as TestScalar>::from_f64(0.0)
+                            };
+                            assert!(
+                                <$T as TestScalar>::approx_eq(tensor_get(&c, &[b, i, j]), expected),
+                                "C[{b},{i},{j}] = {:?}, expected {:?}, diff = {}",
+                                tensor_get(&c, &[b, i, j]),
+                                expected,
+                                <$T as TestScalar>::diff_norm(tensor_get(&c, &[b, i, j]), expected)
+                            );
+                        }
+                    }
+                }
+            }
+
+            // === AntiDiag forward correctness tests (Issue #127) ===
+
+            #[test]
+            fn anti_diag_vector_to_diagonal() {
+                let mut ctx = CpuContext::new(1);
+                // Vector input [3] -> embed as diagonal of 3x3 matrix
+                // modes_a=[0], modes_c=[0,1], paired=[(0,1)]
+                // free_axes: mode 0 -> position 0 in C
+                // paired: axis 1 copies axis 0
+                // A[k] -> C[k, k] = A[k]
+                let a = tensor_from_fn(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let mut c = tensor_zeros::<$T>(&[3, 3]);
+
+                let desc = PrimDescriptor::AntiDiag {
+                    modes_a: vec![0],
+                    modes_c: vec![0, 1],
+                    paired: vec![(0, 1)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[3, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                // A[k] written to C[k,k]; off-diagonal stays 0
+                for i in 0..3 {
+                    for j in 0..3 {
+                        if i == j {
+                            let expected = <$T as TestScalar>::from_usize(i + 1);
+                            assert!(
+                                <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                                "C[{i},{j}] = {:?}, expected {:?}",
+                                tensor_get(&c, &[i, j]),
+                                expected,
+                            );
+                        } else {
+                            let zero = <$T as TestScalar>::from_f64(0.0);
+                            assert!(
+                                <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), zero),
+                                "C[{i},{j}] = {:?}, expected {:?}",
+                                tensor_get(&c, &[i, j]),
+                                zero,
+                            );
+                        }
+                    }
+                }
+            }
+
+            #[test]
+            fn anti_diag_with_free_axis() {
+                let mut ctx = CpuContext::new(1);
+                // Input: [2, 3] (batch=2, diag_size=3)
+                // Output: [2, 3, 3] where mode 0 is batch (free), modes (1,2) are paired
+                // modes_a=[0, 1], modes_c=[0, 1, 2], paired=[(1, 2)]
+                // free_axes: mode 0 -> pos 0, mode 1 -> pos 1
+                // For A[b, k]: out_idx[0]=b, out_idx[1]=k, paired: out_idx[2]=out_idx[1]=k
+                // Result: C[b, k, k] = A[b, k]
+                let a = tensor_from_fn(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1] + 1)
+                });
+                let mut c = tensor_zeros::<$T>(&[2, 3, 3]);
+
+                let desc = PrimDescriptor::AntiDiag {
+                    modes_a: vec![0, 1],
+                    modes_c: vec![0, 1, 2],
+                    paired: vec![(1, 2)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[2, 3, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for b in 0..2 {
+                    for i in 0..3 {
+                        for j in 0..3 {
+                            let expected = if i == j {
+                                // C[b, i, i] = A[b, i]
+                                <$T as TestScalar>::from_usize(b * 10 + i + 1)
+                            } else {
+                                <$T as TestScalar>::from_f64(0.0)
+                            };
+                            assert!(
+                                <$T as TestScalar>::approx_eq(tensor_get(&c, &[b, i, j]), expected),
+                                "C[{b},{i},{j}] = {:?}, expected {:?}, diff = {}",
+                                tensor_get(&c, &[b, i, j]),
+                                expected,
+                                <$T as TestScalar>::diff_norm(tensor_get(&c, &[b, i, j]), expected)
+                            );
+                        }
+                    }
+                }
+            }
+
+            #[test]
+            fn anti_diag_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                // A = vector [3] with values [1,2,3]
+                // C = pre-filled 3x3 with all 5.0
+                // C = 2 * AntiDiag(A) + 3 * C
+                // On diagonal: C[k,k] = 2 * A[k] + 3 * 5.0 = 2*(k+1) + 15
+                // Off diagonal: 0 + 3 * 5.0 = 15.0
+                let a = tensor_from_fn(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let mut c = tensor_from_fn(&[3, 3], |_| <$T as TestScalar>::from_f64(5.0));
+
+                let desc = PrimDescriptor::AntiDiag {
+                    modes_a: vec![0],
+                    modes_c: vec![0, 1],
+                    paired: vec![(0, 1)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[3, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..3 {
+                        let expected = if i == j {
+                            // 2 * (i+1) + 3 * 5 = 2*(i+1) + 15
+                            <$T as TestScalar>::from_f64(2.0 * (i as f64 + 1.0) + 15.0)
+                        } else {
+                            <$T as TestScalar>::from_f64(15.0) // 0 + 3*5
+                        };
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            // === Alpha/beta accumulation tests (Issue #174) ===
+
+            #[test]
+            fn make_contiguous_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[3, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 10 + idx[1] + 1)
+                });
+                let mut c = tensor_from_fn(&[3, 4], |_| <$T as TestScalar>::from_f64(5.0));
+
+                let desc = PrimDescriptor::MakeContiguous;
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
+                // C = 2 * contiguous(A) + 3 * C
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..4 {
+                        let a_val = <$T as TestScalar>::from_usize(i * 10 + j + 1);
+                        let expected = <$T as TestScalar>::from_f64(2.0) * a_val
+                            + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(5.0);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn batched_gemm_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = tensor_from_fn(&[3, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+                let mut c = tensor_from_fn(&[2, 2], |_| <$T as TestScalar>::from_f64(5.0));
+
+                let desc = PrimDescriptor::BatchedGemm {
+                    batch_dims: vec![],
+                    m: 2,
+                    n: 2,
+                    k: 3,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
+                // C = 2 * A@B + 3 * C
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a, &b],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    for j in 0..2 {
+                        let mut matmul = <$T as TestScalar>::from_f64(0.0);
+                        for k in 0..3 {
+                            matmul = matmul + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+                        }
+                        let expected = <$T as TestScalar>::from_f64(2.0) * matmul
+                            + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(5.0);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn trace_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[3, 3], |idx| {
+                    if idx[0] == idx[1] {
+                        <$T as TestScalar>::from_usize(idx[0] + 1)
+                    } else {
+                        <$T as TestScalar>::from_f64(0.0)
+                    }
+                });
+                let mut c = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(10.0));
+
+                let desc = PrimDescriptor::Trace {
+                    modes_a: vec![0, 1],
+                    modes_c: vec![],
+                    paired: vec![(0, 1)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
+                // C = 2 * tr(A) + 3 * C = 2 * 6 + 3 * 10 = 42
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                let expected = <$T as TestScalar>::from_f64(42.0);
+                assert!(
+                    <$T as TestScalar>::approx_eq(tensor_get(&c, &[]), expected),
+                    "trace = {:?}, expected {:?}, diff = {}",
+                    tensor_get(&c, &[]),
+                    expected,
+                    <$T as TestScalar>::diff_norm(tensor_get(&c, &[]), expected)
+                );
+            }
+
+            #[test]
+            fn reduce_sum_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[2, 3], |_| <$T as TestScalar>::from_f64(1.0));
+                let mut c = tensor_from_fn(&[2], |_| <$T as TestScalar>::from_f64(10.0));
+
+                let desc = PrimDescriptor::Reduce {
+                    modes_a: vec![0, 1],
+                    modes_c: vec![0],
+                    op: ReduceOp::Sum,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[2]]).unwrap();
+                // C = 2 * sum(A, axis=1) + 3 * C
+                // sum over 3 ones = 3, so C = 2 * 3 + 3 * 10 = 36
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                let expected = <$T as TestScalar>::from_f64(36.0);
+                for i in 0..2 {
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
+                    );
+                }
+            }
+
+            #[test]
+            fn elementwise_mul_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[3, 4], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
+                let b = tensor_from_fn(&[3, 4], |idx| <$T as TestScalar>::from_usize(idx[1] + 1));
+                let mut c = tensor_from_fn(&[3, 4], |_| <$T as TestScalar>::from_f64(5.0));
+
+                let desc = PrimDescriptor::ElementwiseMul;
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 4]]).unwrap();
+                // C = 2 * (A .* B) + 3 * C
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a, &b],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..4 {
+                        let mul_val = <$T as TestScalar>::from_usize((i + 1) * (j + 1));
+                        let expected = <$T as TestScalar>::from_f64(2.0) * mul_val
+                            + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(5.0);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn contract_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
+                });
+                let b = tensor_from_fn(&[3, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+                let mut c = tensor_from_fn(&[2, 2], |_| <$T as TestScalar>::from_f64(5.0));
+
+                let desc = PrimDescriptor::Contract {
+                    modes_a: vec![0, 1],
+                    modes_b: vec![1, 2],
+                    modes_c: vec![0, 2],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
+                // C = 2 * contract(A, B) + 3 * C
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a, &b],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..2 {
+                    for j in 0..2 {
+                        let mut matmul = <$T as TestScalar>::from_f64(0.0);
+                        for k in 0..3 {
+                            matmul = matmul + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+                        }
+                        let expected = <$T as TestScalar>::from_f64(2.0) * matmul
+                            + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(5.0);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn elementwise_unary_negate_with_alpha_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[3], |idx| {
+                    <$T as TestScalar>::from_f64(idx[0] as f64 + 1.0)
+                });
+                let mut c = tensor_from_fn(&[3], |_| <$T as TestScalar>::from_f64(10.0));
+
+                let desc = PrimDescriptor::ElementwiseUnary {
+                    op: UnaryOp::Negate,
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+                // C = 2 * (-A) + 3 * C = 2 * (-(i+1)) + 3 * 10
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    let neg_val = <$T as TestScalar>::from_f64(-(i as f64 + 1.0));
+                    let expected = <$T as TestScalar>::from_f64(2.0) * neg_val
+                        + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(10.0);
+                    assert!(
+                        <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
+                        "C[{i}] = {:?}, expected {:?}, diff = {}",
+                        tensor_get(&c, &[i]),
+                        expected,
+                        <$T as TestScalar>::diff_norm(tensor_get(&c, &[i]), expected)
+                    );
                 }
             }
         }
