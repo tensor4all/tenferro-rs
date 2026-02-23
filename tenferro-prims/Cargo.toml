@@ -6,6 +6,10 @@ license = "MIT OR Apache-2.0"
 description = "Tensor primitive operations (TensorPrims trait) for the tenferro workspace."
 publish = false
 
+[features]
+default = []
+cuda = ["dep:cudarc"]
+
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
@@ -16,5 +20,6 @@ strided-perm.workspace = true
 rayon = "1.10"
 libloading.workspace = true
 num-complex.workspace = true
+cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "dynamic-loading", "cuda-12060"] }
 
 [dev-dependencies]

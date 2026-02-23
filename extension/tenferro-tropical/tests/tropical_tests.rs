@@ -3,6 +3,7 @@
 //! TDD approach: tests written before implementation.
 
 use num_traits::{One, Zero};
+use tenferro_tensor::{MemoryOrder, Tensor};
 use tenferro_tropical::{MaxMul, MaxPlus, MinPlus};
 
 // ============================================================================
@@ -486,11 +487,15 @@ fn maxplus_matmul_2x2() {
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
     // Column-major: B stored as [0, 1, 2, 0]
     let b_data = [MaxPlus(0.0), MaxPlus(1.0), MaxPlus(2.0), MaxPlus(0.0)];
-    let mut c_data = [MaxPlus::<f64>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let b_view = strided_view::StridedView::new(&b_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -509,13 +514,14 @@ fn maxplus_matmul_2x2() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view, &b_view],
+        &[&a, &b],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
     // Expected column-major: [4, 5, 3, 4]
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 4.0); // C[0,0]
     assert_eq!(c_data[1].0, 5.0); // C[1,0]
     assert_eq!(c_data[2].0, 3.0); // C[0,1]
@@ -538,11 +544,15 @@ fn minplus_matmul_2x2() {
 
     let a_data = [MinPlus(1.0), MinPlus(2.0), MinPlus(3.0), MinPlus(4.0)];
     let b_data = [MinPlus(5.0), MinPlus(1.0), MinPlus(2.0), MinPlus(6.0)];
-    let mut c_data = [MinPlus::<f64>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let b_view = strided_view::StridedView::new(&b_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MinPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -561,12 +571,13 @@ fn minplus_matmul_2x2() {
         &mut ctx,
         &plan,
         MinPlus::one(),
-        &[&a_view, &b_view],
+        &[&a, &b],
         MinPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 4.0); // C[0,0]
     assert_eq!(c_data[1].0, 5.0); // C[1,0]
     assert_eq!(c_data[2].0, 3.0); // C[0,1]
@@ -589,11 +600,15 @@ fn maxmul_matmul_2x2() {
 
     let a_data = [MaxMul(0.5), MaxMul(0.2), MaxMul(0.3), MaxMul(0.9)];
     let b_data = [MaxMul(0.8), MaxMul(0.4), MaxMul(0.1), MaxMul(0.6)];
-    let mut c_data = [MaxMul::<f64>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let b_view = strided_view::StridedView::new(&b_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MaxMul::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -611,12 +626,13 @@ fn maxmul_matmul_2x2() {
         &mut ctx,
         &plan,
         MaxMul::one(),
-        &[&a_view, &b_view],
+        &[&a, &b],
         MaxMul::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert!((c_data[0].0 - 0.40).abs() < 1e-15); // C[0,0]
     assert!((c_data[1].0 - 0.36).abs() < 1e-15); // C[1,0]
     assert!((c_data[2].0 - 0.18).abs() < 1e-15); // C[0,1]
@@ -684,11 +700,14 @@ fn shortest_path_minplus_bellman_ford_step() {
     // d as column vector (3x1)
     let d_data: Vec<MinPlus<f64>> = vec![MinPlus(0.0), MinPlus(inf), MinPlus(inf)];
 
-    let mut result = vec![MinPlus::<f64>::zero(); 3];
-
-    let wt_view = strided_view::StridedView::new(&wt_data, &[3, 3], &[1, 3], 0).unwrap();
-    let d_view = strided_view::StridedView::new(&d_data, &[3, 1], &[1, 3], 0).unwrap();
-    let mut r_view = strided_view::StridedViewMut::new(&mut result, &[3, 1], &[1, 3], 0).unwrap();
+    let wt = Tensor::from_slice(&wt_data, &[3, 3], MemoryOrder::ColumnMajor).unwrap();
+    let d = Tensor::from_slice(&d_data, &[3, 1], MemoryOrder::ColumnMajor).unwrap();
+    let mut r = Tensor::from_slice(
+        &vec![MinPlus::<f64>::zero(); 3],
+        &[3, 1],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -707,33 +726,38 @@ fn shortest_path_minplus_bellman_ford_step() {
         &mut ctx,
         &plan,
         MinPlus::one(),
-        &[&wt_view, &d_view],
+        &[&wt, &d],
         MinPlus::zero(),
-        &mut r_view,
+        &mut r,
     )
     .unwrap();
 
     // First iteration: d' = [0, 1, +inf]
+    let result = r.buffer().as_slice().unwrap().to_vec();
     assert_eq!(result[0].0, 0.0);
     assert_eq!(result[1].0, 1.0);
     assert_eq!(result[2].0, inf);
 
     // Second iteration with d = result
-    let d2_data = result.clone();
-    let mut result2 = vec![MinPlus::<f64>::zero(); 3];
-    let d2_view = strided_view::StridedView::new(&d2_data, &[3, 1], &[1, 3], 0).unwrap();
-    let mut r2_view = strided_view::StridedViewMut::new(&mut result2, &[3, 1], &[1, 3], 0).unwrap();
+    let d2 = Tensor::from_slice(&result, &[3, 1], MemoryOrder::ColumnMajor).unwrap();
+    let mut r2 = Tensor::from_slice(
+        &vec![MinPlus::<f64>::zero(); 3],
+        &[3, 1],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
     <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MinPlus::one(),
-        &[&wt_view, &d2_view],
+        &[&wt, &d2],
         MinPlus::zero(),
-        &mut r2_view,
+        &mut r2,
     )
     .unwrap();
 
     // Second iteration: d' = [0, 1, 4]
+    let result2 = r2.buffer().as_slice().unwrap();
     assert_eq!(result2[0].0, 0.0);
     assert_eq!(result2[1].0, 1.0);
     assert_eq!(result2[2].0, 4.0);
@@ -757,11 +781,15 @@ fn viterbi_maxmul_hmm_step() {
     // T^T in column-major (2x2)
     let tt_data = [MaxMul(0.7), MaxMul(0.3), MaxMul(0.4), MaxMul(0.6)];
     let p_data = [MaxMul(0.5), MaxMul(0.5)];
-    let mut result = [MaxMul::<f64>::zero(); 2];
 
-    let tt_view = strided_view::StridedView::new(&tt_data, &[2, 2], &[1, 2], 0).unwrap();
-    let p_view = strided_view::StridedView::new(&p_data, &[2, 1], &[1, 2], 0).unwrap();
-    let mut r_view = strided_view::StridedViewMut::new(&mut result, &[2, 1], &[1, 2], 0).unwrap();
+    let tt = Tensor::from_slice(&tt_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let p = Tensor::from_slice(&p_data, &[2, 1], MemoryOrder::ColumnMajor).unwrap();
+    let mut r = Tensor::from_slice(
+        &[MaxMul::<f64>::zero(); 2],
+        &[2, 1],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -779,12 +807,13 @@ fn viterbi_maxmul_hmm_step() {
         &mut ctx,
         &plan,
         MaxMul::one(),
-        &[&tt_view, &p_view],
+        &[&tt, &p],
         MaxMul::zero(),
-        &mut r_view,
+        &mut r,
     )
     .unwrap();
 
+    let result = r.buffer().as_slice().unwrap();
     assert!((result[0].0 - 0.35).abs() < 1e-15);
     assert!((result[1].0 - 0.3).abs() < 1e-15);
 }
@@ -806,10 +835,10 @@ fn maxplus_reduce_sum() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
-    let mut c_data = [MaxPlus::<f64>::zero(); 2];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2], &[1], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c =
+        Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
@@ -827,12 +856,13 @@ fn maxplus_reduce_sum() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view],
+        &[&a],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 3.0); // max(1, 3)
     assert_eq!(c_data[1].0, 4.0); // max(2, 4)
 }
@@ -851,10 +881,14 @@ fn maxplus_permute_transpose() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
-    let mut c_data = [MaxPlus::<f64>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1],
@@ -871,13 +905,14 @@ fn maxplus_permute_transpose() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view],
+        &[&a],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
     // Transposed col-major: [1, 3, 2, 4]
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 1.0);
     assert_eq!(c_data[1].0, 3.0);
     assert_eq!(c_data[2].0, 2.0);
@@ -911,10 +946,10 @@ fn maxplus_trace_3x3() {
         MaxPlus(5.0),
         MaxPlus(1.0), // col 2
     ];
-    let mut c_data = [MaxPlus::<f64>::zero()]; // scalar output
 
-    let a_view = strided_view::StridedView::new(&a_data, &[3, 3], &[1, 3], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[], &[], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[3, 3], MemoryOrder::ColumnMajor).unwrap();
+    let mut c =
+        Tensor::from_slice(&[MaxPlus::<f64>::zero()], &[], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Trace {
         modes_a: vec![0, 1],
@@ -932,12 +967,13 @@ fn maxplus_trace_3x3() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view],
+        &[&a],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 10.0); // max(10, 8, 1)
 }
 
@@ -971,10 +1007,10 @@ fn maxplus_trace_partial_3d() {
         MaxPlus(10.0),
         MaxPlus(6.0),
     ];
-    let mut c_data = [MaxPlus::<f64>::zero(); 3];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2, 3], &[1, 2, 4], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[3], &[1], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2, 3], MemoryOrder::ColumnMajor).unwrap();
+    let mut c =
+        Tensor::from_slice(&[MaxPlus::<f64>::zero(); 3], &[3], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Trace {
         modes_a: vec![0, 1, 2],
@@ -992,13 +1028,14 @@ fn maxplus_trace_partial_3d() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view],
+        &[&a],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
     // Off-diagonal values are 10, but those are not summed in trace
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 8.0); // max(1, 8)
     assert_eq!(c_data[1].0, 5.0); // max(2, 5)
     assert_eq!(c_data[2].0, 6.0); // max(3, 6)
@@ -1023,11 +1060,14 @@ fn maxplus_anti_trace_scalar_to_diag() {
     let mut ctx = CpuContext::new(1);
 
     let in_data = [MaxPlus(5.0)];
-    let mut out_data = [MaxPlus::<f64>::zero(); 4]; // 2x2
 
-    let in_view = strided_view::StridedView::new(&in_data, &[], &[], 0).unwrap();
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[2, 2], &[1, 2], 0).unwrap();
+    let input = Tensor::from_slice(&in_data, &[], MemoryOrder::ColumnMajor).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::AntiTrace {
         modes_a: vec![],
@@ -1045,9 +1085,9 @@ fn maxplus_anti_trace_scalar_to_diag() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&in_view],
+        &[&input],
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap();
 
@@ -1056,6 +1096,7 @@ fn maxplus_anti_trace_scalar_to_diag() {
     // Actually anti-trace adds val to each diagonal position:
     // out[d,d] += alpha * input for d in 0..diag_dim
     // After scale_output with beta=0, all entries are -inf, then add 5.0 to diag
+    let out_data = output.buffer().as_slice().unwrap();
     assert_eq!(out_data[0].0, 5.0); // [0,0] diagonal
     assert_eq!(out_data[1].0, f64::NEG_INFINITY); // [1,0] off-diagonal
     assert_eq!(out_data[2].0, f64::NEG_INFINITY); // [0,1] off-diagonal
@@ -1091,11 +1132,15 @@ fn maxplus_matmul_2x2_f32() {
         MaxPlus(2.0_f32),
         MaxPlus(0.0_f32),
     ];
-    let mut c_data = [MaxPlus::<f32>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let b_view = strided_view::StridedView::new(&b_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MaxPlus::<f32>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -1114,12 +1159,13 @@ fn maxplus_matmul_2x2_f32() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view, &b_view],
+        &[&a, &b],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 4.0_f32);
     assert_eq!(c_data[1].0, 5.0_f32);
     assert_eq!(c_data[2].0, 3.0_f32);
@@ -1151,11 +1197,15 @@ fn minplus_matmul_2x2_f32() {
         MinPlus(2.0_f32),
         MinPlus(6.0_f32),
     ];
-    let mut c_data = [MinPlus::<f32>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let b_view = strided_view::StridedView::new(&b_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MinPlus::<f32>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -1174,12 +1224,13 @@ fn minplus_matmul_2x2_f32() {
         &mut ctx,
         &plan,
         MinPlus::one(),
-        &[&a_view, &b_view],
+        &[&a, &b],
         MinPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 4.0_f32);
     assert_eq!(c_data[1].0, 5.0_f32);
     assert_eq!(c_data[2].0, 3.0_f32);
@@ -1211,11 +1262,15 @@ fn maxmul_matmul_2x2_f32() {
         MaxMul(0.1_f32),
         MaxMul(0.6_f32),
     ];
-    let mut c_data = [MaxMul::<f32>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let b_view = strided_view::StridedView::new(&b_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MaxMul::<f32>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -1233,12 +1288,13 @@ fn maxmul_matmul_2x2_f32() {
         &mut ctx,
         &plan,
         MaxMul::one(),
-        &[&a_view, &b_view],
+        &[&a, &b],
         MaxMul::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert!((c_data[0].0 - 0.40_f32).abs() < 1e-6);
     assert!((c_data[1].0 - 0.36_f32).abs() < 1e-6);
     assert!((c_data[2].0 - 0.18_f32).abs() < 1e-6);
@@ -1275,11 +1331,11 @@ fn maxplus_matmul_accumulate_with_beta() {
 
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
     let b_data = [MaxPlus(0.0), MaxPlus(1.0), MaxPlus(2.0), MaxPlus(0.0)];
-    let mut c_data = [MaxPlus(10.0), MaxPlus(0.0), MaxPlus(0.0), MaxPlus(10.0)]; // col-major
+    let c_init = [MaxPlus(10.0), MaxPlus(0.0), MaxPlus(0.0), MaxPlus(10.0)]; // col-major
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let b_view = strided_view::StridedView::new(&b_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(&c_init, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -1298,13 +1354,14 @@ fn maxplus_matmul_accumulate_with_beta() {
         &mut ctx,
         &plan,
         MaxPlus(2.0), // alpha
-        &[&a_view, &b_view],
+        &[&a, &b],
         MaxPlus(1.0), // beta (non-zero: accumulate)
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
     // col-major: [C[0,0], C[1,0], C[0,1], C[1,1]]
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 11.0); // max(6, 11) = 11
     assert_eq!(c_data[1].0, 7.0); // max(7, 1) = 7
     assert_eq!(c_data[2].0, 5.0); // max(5, 1) = 5
@@ -1330,11 +1387,14 @@ fn maxplus_anti_diag_vector_to_matrix() {
     let mut ctx = CpuContext::new(1);
 
     let in_data = [MaxPlus(5.0), MaxPlus(3.0)];
-    let mut out_data = [MaxPlus::<f64>::zero(); 4]; // 2x2
 
-    let in_view = strided_view::StridedView::new(&in_data, &[2], &[1], 0).unwrap();
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[2, 2], &[1, 2], 0).unwrap();
+    let input = Tensor::from_slice(&in_data, &[2], MemoryOrder::ColumnMajor).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::AntiDiag {
         modes_a: vec![0],
@@ -1352,13 +1412,14 @@ fn maxplus_anti_diag_vector_to_matrix() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&in_view],
+        &[&input],
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap();
 
     // col-major: [M[0,0], M[1,0], M[0,1], M[1,1]]
+    let out_data = output.buffer().as_slice().unwrap();
     assert_eq!(out_data[0].0, 5.0); // [0,0] = input[0]
     assert_eq!(out_data[1].0, f64::NEG_INFINITY); // [1,0] off-diag
     assert_eq!(out_data[2].0, f64::NEG_INFINITY); // [0,1] off-diag
@@ -1387,7 +1448,7 @@ fn maxplus_make_contiguous() {
     // MakeContiguous should copy this into a fresh [3,2] contiguous buffer.
     let mut ctx = CpuContext::new(1);
 
-    let a_data = [
+    let a_data = vec![
         MaxPlus(1.0),
         MaxPlus(4.0),
         MaxPlus(2.0),
@@ -1395,12 +1456,15 @@ fn maxplus_make_contiguous() {
         MaxPlus(3.0),
         MaxPlus(6.0),
     ];
-    let mut out_data = [MaxPlus::<f64>::zero(); 6];
 
     // Transposed view: shape [3,2], strides [2,1] — non-contiguous
-    let a_view = strided_view::StridedView::new(&a_data, &[3, 2], &[2, 1], 0).unwrap();
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[3, 2], &[1, 3], 0).unwrap();
+    let a = Tensor::from_vec(a_data, &[3, 2], &[2, 1], 0).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 6],
+        &[3, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::MakeContiguous;
     let plan =
@@ -1414,13 +1478,14 @@ fn maxplus_make_contiguous() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view],
+        &[&a],
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap();
 
     // Output in col-major [3,2]: [1, 2, 3, 4, 5, 6]
+    let out_data = output.buffer().as_slice().unwrap();
     assert_eq!(out_data[0].0, 1.0);
     assert_eq!(out_data[1].0, 2.0);
     assert_eq!(out_data[2].0, 3.0);
@@ -1448,11 +1513,14 @@ fn maxplus_anti_trace_vec_to_3d() {
     let mut ctx = CpuContext::new(1);
 
     let in_data = [MaxPlus(10.0), MaxPlus(20.0), MaxPlus(30.0)];
-    let mut out_data = [MaxPlus::<f64>::zero(); 12]; // 2×2×3
 
-    let in_view = strided_view::StridedView::new(&in_data, &[3], &[1], 0).unwrap();
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[2, 2, 3], &[1, 2, 4], 0).unwrap();
+    let input = Tensor::from_slice(&in_data, &[3], MemoryOrder::ColumnMajor).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 12],
+        &[2, 2, 3],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::AntiTrace {
         modes_a: vec![2],       // free axis: mode 2 (k dimension)
@@ -1470,14 +1538,15 @@ fn maxplus_anti_trace_vec_to_3d() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&in_view],
+        &[&input],
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap();
 
     // col-major [2,2,3], strides [1,2,4]:
     // index(i,j,k) = i + 2*j + 4*k
+    let out_data = output.buffer().as_slice().unwrap();
     let get = |i: usize, j: usize, k: usize| out_data[i + 2 * j + 4 * k].0;
 
     // Diagonal entries: output[d,d,k] = input[k]
@@ -1514,10 +1583,10 @@ fn maxplus_permute_with_alpha_beta() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
-    let mut c_data = [MaxPlus(5.0), MaxPlus(0.0), MaxPlus(0.0), MaxPlus(5.0)];
+    let c_init = [MaxPlus(5.0), MaxPlus(0.0), MaxPlus(0.0), MaxPlus(5.0)];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(&c_init, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1],
@@ -1534,15 +1603,16 @@ fn maxplus_permute_with_alpha_beta() {
         &mut ctx,
         &plan,
         MaxPlus(10.0), // alpha
-        &[&a_view],
+        &[&a],
         MaxPlus(0.0), // beta (non-zero: accumulate)
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
     // alpha * permuted = 10 + [1, 3, 2, 4] = [11, 13, 12, 14]
     // beta * old = 0 + [5, 0, 0, 5] = [5, 0, 0, 5]
     // result = max(alpha*permuted, beta*old)
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 11.0); // max(11, 5)
     assert_eq!(c_data[1].0, 13.0); // max(13, 0)
     assert_eq!(c_data[2].0, 12.0); // max(12, 0)
@@ -1566,10 +1636,10 @@ fn maxplus_make_contiguous_with_alpha_beta() {
     let mut ctx = CpuContext::new(1);
 
     let in_data = [MaxPlus(10.0), MaxPlus(20.0)];
-    let mut out_data = [MaxPlus(0.0), MaxPlus(0.0)];
+    let out_init = [MaxPlus(0.0), MaxPlus(0.0)];
 
-    let in_view = strided_view::StridedView::new(&in_data, &[2], &[1], 0).unwrap();
-    let mut out_view = strided_view::StridedViewMut::new(&mut out_data, &[2], &[1], 0).unwrap();
+    let input = Tensor::from_slice(&in_data, &[2], MemoryOrder::ColumnMajor).unwrap();
+    let mut output = Tensor::from_slice(&out_init, &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::MakeContiguous;
     let plan =
@@ -1583,12 +1653,13 @@ fn maxplus_make_contiguous_with_alpha_beta() {
         &mut ctx,
         &plan,
         MaxPlus(1.0), // alpha
-        &[&in_view],
+        &[&input],
         MaxPlus(5.0), // beta (non-zero)
-        &mut out_view,
+        &mut output,
     )
     .unwrap();
 
+    let out_data = output.buffer().as_slice().unwrap();
     assert_eq!(out_data[0].0, 11.0); // max(1+10, 5+0) = max(11, 5)
     assert_eq!(out_data[1].0, 21.0); // max(1+20, 5+0) = max(21, 5)
 }
@@ -1610,10 +1681,10 @@ fn maxplus_reduce_with_beta_accumulate() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
-    let mut c_data = [MaxPlus(100.0), MaxPlus(100.0)]; // pre-filled
+    let c_init = [MaxPlus(100.0), MaxPlus(100.0)]; // pre-filled
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2], &[1], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(&c_init, &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
@@ -1631,15 +1702,16 @@ fn maxplus_reduce_with_beta_accumulate() {
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha = one
-        &[&a_view],
+        &[&a],
         MaxPlus(0.0), // beta = one
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
     // alpha*reduce = 0+[3,4] = [3,4]
     // beta*old = 0+[100,100] = [100,100]
     // result = max([3,4], [100,100]) = [100, 100]
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 100.0);
     assert_eq!(c_data[1].0, 100.0);
 }
@@ -1662,10 +1734,10 @@ fn maxplus_trace_with_beta_accumulate() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxPlus(10.0), MaxPlus(2.0), MaxPlus(4.0), MaxPlus(8.0)];
-    let mut c_data = [MaxPlus(20.0)]; // pre-filled scalar
+    let c_init = [MaxPlus(20.0)]; // pre-filled scalar
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[], &[], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(&c_init, &[], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Trace {
         modes_a: vec![0, 1],
@@ -1683,12 +1755,13 @@ fn maxplus_trace_with_beta_accumulate() {
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha
-        &[&a_view],
+        &[&a],
         MaxPlus(0.0), // beta
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 20.0); // max(0+10, 0+20) = 20
 }
 
@@ -1706,10 +1779,10 @@ fn minplus_reduce_column_min() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MinPlus(5.0), MinPlus(2.0), MinPlus(1.0), MinPlus(8.0)];
-    let mut c_data = [MinPlus::<f64>::zero(); 2];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2], &[1], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c =
+        Tensor::from_slice(&[MinPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
@@ -1727,12 +1800,13 @@ fn minplus_reduce_column_min() {
         &mut ctx,
         &plan,
         MinPlus::one(),
-        &[&a_view],
+        &[&a],
         MinPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 1.0); // min(5, 1)
     assert_eq!(c_data[1].0, 2.0); // min(2, 8)
 }
@@ -1746,10 +1820,14 @@ fn maxmul_permute_transpose() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxMul(0.5), MaxMul(0.2), MaxMul(0.3), MaxMul(0.9)];
-    let mut c_data = [MaxMul::<f64>::zero(); 4];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c = Tensor::from_slice(
+        &[MaxMul::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     let desc = PrimDescriptor::Permute {
         modes_a: vec![0, 1],
@@ -1765,13 +1843,14 @@ fn maxmul_permute_transpose() {
         &mut ctx,
         &plan,
         MaxMul::one(),
-        &[&a_view],
+        &[&a],
         MaxMul::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
 
     // Transposed col-major: [0.5, 0.3, 0.2, 0.9]
+    let c_data = c.buffer().as_slice().unwrap();
     assert!((c_data[0].0 - 0.5).abs() < 1e-15);
     assert!((c_data[1].0 - 0.3).abs() < 1e-15);
     assert!((c_data[2].0 - 0.2).abs() < 1e-15);
@@ -1801,11 +1880,10 @@ fn maxplus_anti_trace_accumulate_beta() {
     let mut ctx = CpuContext::new(1);
 
     let in_data = [MaxPlus(5.0)];
-    let mut out_data = [MaxPlus(2.0), MaxPlus(4.0), MaxPlus(3.0), MaxPlus(6.0)];
+    let out_init = [MaxPlus(2.0), MaxPlus(4.0), MaxPlus(3.0), MaxPlus(6.0)];
 
-    let in_view = strided_view::StridedView::new(&in_data, &[], &[], 0).unwrap();
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[2, 2], &[1, 2], 0).unwrap();
+    let input = Tensor::from_slice(&in_data, &[], MemoryOrder::ColumnMajor).unwrap();
+    let mut output = Tensor::from_slice(&out_init, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::AntiTrace {
         modes_a: vec![],
@@ -1823,15 +1901,16 @@ fn maxplus_anti_trace_accumulate_beta() {
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha
-        &[&in_view],
+        &[&input],
         MaxPlus(10.0), // beta != 0, != 1
-        &mut out_view,
+        &mut output,
     )
     .unwrap();
 
     // scale_output: beta * old = 10 + [2,4,3,6] = [12,14,13,16]
     // Then diag += alpha * input = 0 + 5 = 5
     // [0,0] = max(12, 5) = 12; [1,0] = 14; [0,1] = 13; [1,1] = max(16, 5) = 16
+    let out_data = output.buffer().as_slice().unwrap();
     assert_eq!(out_data[0].0, 12.0);
     assert_eq!(out_data[1].0, 14.0);
     assert_eq!(out_data[2].0, 13.0);
@@ -1853,10 +1932,10 @@ fn tropical_reduce_max_op_returns_error() {
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxPlus(1.0), MaxPlus(2.0)];
-    let mut c_data = [MaxPlus::<f64>::zero()];
 
-    let a_view = strided_view::StridedView::new(&a_data, &[2], &[1], 0).unwrap();
-    let mut c_view = strided_view::StridedViewMut::new(&mut c_data, &[], &[], 0).unwrap();
+    let a = Tensor::from_slice(&a_data, &[2], MemoryOrder::ColumnMajor).unwrap();
+    let mut c =
+        Tensor::from_slice(&[MaxPlus::<f64>::zero()], &[], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0],
@@ -1886,9 +1965,9 @@ fn tropical_reduce_max_op_returns_error() {
         &mut ctx,
         &plan_max,
         MaxPlus::one(),
-        &[&a_view],
+        &[&a],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -1898,11 +1977,12 @@ fn tropical_reduce_max_op_returns_error() {
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view],
+        &[&a],
         MaxPlus::zero(),
-        &mut c_view,
+        &mut c,
     )
     .unwrap();
+    let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 2.0);
 }
 
@@ -1968,20 +2048,22 @@ fn tropical_execute_gemm_wrong_arity_returns_error() {
         )
         .unwrap();
 
-    let a_data = [MaxPlus(1.0_f64); 4];
-    let a_view = strided_view::StridedView::new(&a_data, &[2, 2], &[1, 2], 0).unwrap();
-    let mut out_data = [MaxPlus::<f64>::zero(); 4];
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[2, 2], &[1, 2], 0).unwrap();
+    let a = Tensor::from_slice(&[MaxPlus(1.0_f64); 4], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
     // Pass 1 input instead of 2
     let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MaxPlus::one(),
-        &[&a_view], // wrong: need 2
+        &[&a], // wrong: need 2
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -2006,17 +2088,17 @@ fn tropical_execute_reduce_wrong_arity_returns_error() {
         )
         .unwrap();
 
-    let mut out_data = [MaxPlus::<f64>::zero(); 2];
-    let mut out_view = strided_view::StridedViewMut::new(&mut out_data, &[2], &[1], 0).unwrap();
+    let mut output =
+        Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let no_inputs: [&strided_view::StridedView<MaxPlus<f64>>; 0] = [];
+    let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
     let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MaxPlus::one(),
         &no_inputs,
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -2041,17 +2123,17 @@ fn tropical_execute_trace_wrong_arity_returns_error() {
         )
         .unwrap();
 
-    let mut out_data = [MaxPlus::<f64>::zero()];
-    let mut out_view = strided_view::StridedViewMut::new(&mut out_data, &[], &[], 0).unwrap();
+    let mut output =
+        Tensor::from_slice(&[MaxPlus::<f64>::zero()], &[], MemoryOrder::ColumnMajor).unwrap();
 
-    let no_inputs: [&strided_view::StridedView<MaxPlus<f64>>; 0] = [];
+    let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
     let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MaxPlus::one(),
         &no_inputs,
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -2076,18 +2158,21 @@ fn tropical_execute_anti_trace_wrong_arity_returns_error() {
         )
         .unwrap();
 
-    let mut out_data = [MaxPlus::<f64>::zero(); 4];
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[2, 2], &[1, 2], 0).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
-    let no_inputs: [&strided_view::StridedView<MaxPlus<f64>>; 0] = [];
+    let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
     let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MaxPlus::one(),
         &no_inputs,
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -2112,18 +2197,21 @@ fn tropical_execute_anti_diag_wrong_arity_returns_error() {
         )
         .unwrap();
 
-    let mut out_data = [MaxPlus::<f64>::zero(); 4];
-    let mut out_view =
-        strided_view::StridedViewMut::new(&mut out_data, &[2, 2], &[1, 2], 0).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
-    let no_inputs: [&strided_view::StridedView<MaxPlus<f64>>; 0] = [];
+    let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
     let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MaxPlus::one(),
         &no_inputs,
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -2144,17 +2232,17 @@ fn tropical_execute_make_contiguous_wrong_arity_returns_error() {
         )
         .unwrap();
 
-    let mut out_data = [MaxPlus::<f64>::zero(); 2];
-    let mut out_view = strided_view::StridedViewMut::new(&mut out_data, &[2], &[1], 0).unwrap();
+    let mut output =
+        Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let no_inputs: [&strided_view::StridedView<MaxPlus<f64>>; 0] = [];
+    let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
     let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MaxPlus::one(),
         &no_inputs,
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));
@@ -2472,17 +2560,21 @@ fn tropical_execute_wrong_input_arity_returns_error() {
         )
         .unwrap();
 
-    let mut out = [MaxPlus::<f64>::zero(); 4];
-    let mut out_view = strided_view::StridedViewMut::new(&mut out, &[2, 2], &[1, 2], 0).unwrap();
+    let mut output = Tensor::from_slice(
+        &[MaxPlus::<f64>::zero(); 4],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
 
-    let no_inputs: [&strided_view::StridedView<MaxPlus<f64>>; 0] = [];
+    let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
     let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra>>::execute(
         &mut ctx,
         &plan,
         MaxPlus::one(),
         &no_inputs,
         MaxPlus::zero(),
-        &mut out_view,
+        &mut output,
     )
     .unwrap_err();
     assert!(matches!(err, Error::InvalidArgument(_)));

@@ -14,14 +14,38 @@
 use std::collections::HashSet;
 use std::marker::PhantomData;
 
-use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
+use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_prims::{CpuBackend, CpuContext, Extension, PrimDescriptor, ReduceOp, TensorPrims};
+use tenferro_tensor::Tensor;
 use tropical_gemm::{TropicalMaxMul, TropicalMaxPlus, TropicalMinPlus, TropicalSemiring};
 
 use crate::algebra::{MaxMulAlgebra, MaxPlusAlgebra, MinPlusAlgebra};
 use crate::scalar::{MaxMul, MaxPlus, MinPlus};
+
+/// Convert a CPU tensor to an immutable strided view.
+fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
+    let data = t
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| Error::DeviceError("GPU tensor passed to CPU backend".into()))?;
+    StridedView::new(data, t.dims(), t.strides(), t.offset())
+        .map_err(|e| Error::StrideError(format!("{e}")))
+}
+
+/// Convert a CPU tensor to a mutable strided view.
+fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_, T>> {
+    let dims = t.dims().to_vec();
+    let strides = t.strides().to_vec();
+    let offset = t.offset();
+    let data = t
+        .buffer_mut()
+        .as_mut_slice()
+        .ok_or_else(|| Error::DeviceError("GPU tensor passed to CPU backend".into()))?;
+    StridedViewMut::new(data, &dims, &strides, offset)
+        .map_err(|e| Error::StrideError(format!("{e}")))
+}
 
 /// Execution plan for tropical primitive operations on CPU.
 ///
@@ -45,7 +69,7 @@ use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 /// ).unwrap();
 /// ```
 #[derive(Debug)]
-pub enum TropicalPlan<T: ScalarBase> {
+pub enum TropicalPlan<T: Scalar> {
     /// Plan for batched GEMM under tropical algebra.
     BatchedGemm {
         /// Batch dimension sizes.
@@ -148,7 +172,7 @@ fn mode_position(modes: &[u32], label: u32) -> Result<usize> {
 }
 
 /// Scale all elements of the output by `beta`, or zero them if `beta == 0`.
-fn scale_output<T: ScalarBase>(output: &mut StridedViewMut<T>, beta: T) {
+fn scale_output<T: Scalar>(output: &mut StridedViewMut<T>, beta: T) {
     let dims = output.dims().to_vec();
     if beta == T::zero() {
         for_each_index(&dims, |idx| {
@@ -171,7 +195,7 @@ fn scale_output<T: ScalarBase>(output: &mut StridedViewMut<T>, beta: T) {
 /// Maps tenferro's tropical scalar types to tropical-gemm's types and calls
 /// `tropical_matmul_strided_batched` for SIMD-accelerated computation.
 /// Generic over the inner scalar type (f32 or f64).
-trait TropicalGemmDispatch: ScalarBase {
+trait TropicalGemmDispatch: Scalar {
     /// The inner floating-point type (f32 or f64).
     type Inner: Copy + Default;
     /// Extract the inner scalar value.
@@ -240,7 +264,7 @@ impl_tropical_gemm_dispatch!(MaxMul, f32, TropicalMaxMul<f32>);
 ///
 /// Extracts data into row-major contiguous buffers, calls tropical-gemm,
 /// and writes results back with alpha/beta scaling.
-fn execute_batched_gemm_optimized<T: ScalarBase + TropicalGemmDispatch>(
+fn execute_batched_gemm_optimized<T: Scalar + TropicalGemmDispatch>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -309,7 +333,7 @@ fn execute_batched_gemm_optimized<T: ScalarBase + TropicalGemmDispatch>(
 }
 
 /// Fallback loop-based tropical GEMM for types without SIMD dispatch.
-fn execute_batched_gemm_fallback<T: ScalarBase>(
+fn execute_batched_gemm_fallback<T: Scalar>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -356,7 +380,7 @@ fn execute_batched_gemm_fallback<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_reduce_sum<T: ScalarBase>(
+fn execute_reduce_sum<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -398,7 +422,7 @@ fn execute_reduce_sum<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_trace<T: ScalarBase>(
+fn execute_trace<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -459,7 +483,7 @@ fn execute_trace<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_permute<T: ScalarBase>(
+fn execute_permute<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -487,7 +511,7 @@ fn execute_permute<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_anti_trace<T: ScalarBase>(
+fn execute_anti_trace<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -544,7 +568,7 @@ fn execute_anti_trace<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_anti_diag<T: ScalarBase>(
+fn execute_anti_diag<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -640,10 +664,7 @@ fn ensure_pair_labels_unique(paired: &[(u32, u32)], name: &str) -> Result<()> {
     Ok(())
 }
 
-fn tropical_plan<T: ScalarBase>(
-    desc: &PrimDescriptor,
-    shapes: &[&[usize]],
-) -> Result<TropicalPlan<T>> {
+fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Result<TropicalPlan<T>> {
     match desc {
         PrimDescriptor::BatchedGemm {
             batch_dims,
@@ -1040,7 +1061,7 @@ fn tropical_plan<T: ScalarBase>(
 }
 
 /// Execute tropical operations using the fallback loop-based GEMM.
-fn tropical_execute<T: ScalarBase>(
+fn tropical_execute<T: Scalar>(
     plan: &TropicalPlan<T>,
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -1143,7 +1164,7 @@ fn tropical_execute<T: ScalarBase>(
     }
 }
 
-fn execute_make_contiguous<T: ScalarBase>(
+fn execute_make_contiguous<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -1204,7 +1225,7 @@ macro_rules! try_simd_dispatch {
 }
 
 /// Execute tropical operations with SIMD-optimized GEMM for MaxPlus<f64/f32>.
-fn tropical_execute_maxplus<T: ScalarBase>(
+fn tropical_execute_maxplus<T: Scalar>(
     plan: &TropicalPlan<T>,
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -1253,7 +1274,7 @@ fn tropical_execute_maxplus<T: ScalarBase>(
 }
 
 /// Execute tropical operations with SIMD-optimized GEMM for MinPlus<f64/f32>.
-fn tropical_execute_minplus<T: ScalarBase>(
+fn tropical_execute_minplus<T: Scalar>(
     plan: &TropicalPlan<T>,
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -1302,7 +1323,7 @@ fn tropical_execute_minplus<T: ScalarBase>(
 }
 
 /// Execute tropical operations with SIMD-optimized GEMM for MaxMul<f64/f32>.
-fn tropical_execute_maxmul<T: ScalarBase>(
+fn tropical_execute_maxmul<T: Scalar>(
     plan: &TropicalPlan<T>,
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -1351,10 +1372,10 @@ fn tropical_execute_maxmul<T: ScalarBase>(
 }
 
 impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
-    type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Plan<T: Scalar> = TropicalPlan<T>;
     type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(
+    fn plan<T: Scalar>(
         _ctx: &mut CpuContext,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
@@ -1362,18 +1383,24 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
         tropical_plan(desc, shapes)
     }
 
-    fn execute<T: ScalarBase>(
+    fn execute<T: Scalar>(
         _ctx: &mut CpuContext,
         plan: &TropicalPlan<T>,
         alpha: T,
-        inputs: &[&StridedView<T>],
+        inputs: &[&Tensor<T>],
         beta: T,
-        output: &mut StridedViewMut<T>,
+        output: &mut Tensor<T>,
     ) -> Result<()> {
-        tropical_execute_maxplus(plan, alpha, inputs, beta, output)
+        let views: Vec<StridedView<T>> = inputs
+            .iter()
+            .map(|t| tensor_to_view(t))
+            .collect::<Result<Vec<_>>>()?;
+        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
+        let mut out_view = tensor_to_view_mut(output)?;
+        tropical_execute_maxplus(plan, alpha, &view_refs, beta, &mut out_view)
     }
 
-    fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
+    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
         false
     }
 }
@@ -1383,10 +1410,10 @@ impl TensorPrims<MaxPlusAlgebra> for CpuBackend {
 // ===========================================================================
 
 impl TensorPrims<MinPlusAlgebra> for CpuBackend {
-    type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Plan<T: Scalar> = TropicalPlan<T>;
     type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(
+    fn plan<T: Scalar>(
         _ctx: &mut CpuContext,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
@@ -1394,18 +1421,24 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
         tropical_plan(desc, shapes)
     }
 
-    fn execute<T: ScalarBase>(
+    fn execute<T: Scalar>(
         _ctx: &mut CpuContext,
         plan: &TropicalPlan<T>,
         alpha: T,
-        inputs: &[&StridedView<T>],
+        inputs: &[&Tensor<T>],
         beta: T,
-        output: &mut StridedViewMut<T>,
+        output: &mut Tensor<T>,
     ) -> Result<()> {
-        tropical_execute_minplus(plan, alpha, inputs, beta, output)
+        let views: Vec<StridedView<T>> = inputs
+            .iter()
+            .map(|t| tensor_to_view(t))
+            .collect::<Result<Vec<_>>>()?;
+        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
+        let mut out_view = tensor_to_view_mut(output)?;
+        tropical_execute_minplus(plan, alpha, &view_refs, beta, &mut out_view)
     }
 
-    fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
+    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
         false
     }
 }
@@ -1415,10 +1448,10 @@ impl TensorPrims<MinPlusAlgebra> for CpuBackend {
 // ===========================================================================
 
 impl TensorPrims<MaxMulAlgebra> for CpuBackend {
-    type Plan<T: ScalarBase> = TropicalPlan<T>;
+    type Plan<T: Scalar> = TropicalPlan<T>;
     type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(
+    fn plan<T: Scalar>(
         _ctx: &mut CpuContext,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
@@ -1426,18 +1459,24 @@ impl TensorPrims<MaxMulAlgebra> for CpuBackend {
         tropical_plan(desc, shapes)
     }
 
-    fn execute<T: ScalarBase>(
+    fn execute<T: Scalar>(
         _ctx: &mut CpuContext,
         plan: &TropicalPlan<T>,
         alpha: T,
-        inputs: &[&StridedView<T>],
+        inputs: &[&Tensor<T>],
         beta: T,
-        output: &mut StridedViewMut<T>,
+        output: &mut Tensor<T>,
     ) -> Result<()> {
-        tropical_execute_maxmul(plan, alpha, inputs, beta, output)
+        let views: Vec<StridedView<T>> = inputs
+            .iter()
+            .map(|t| tensor_to_view(t))
+            .collect::<Result<Vec<_>>>()?;
+        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
+        let mut out_view = tensor_to_view_mut(output)?;
+        tropical_execute_maxmul(plan, alpha, &view_refs, beta, &mut out_view)
     }
 
-    fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
+    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
         false
     }
 }

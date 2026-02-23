@@ -3,7 +3,7 @@
 //! This crate provides the minimal algebra foundation:
 //!
 //! - [`Scalar`]: Minimum requirements for tensor element types
-//!   (`Copy + Send + Sync + Add + Mul + Zero + One + PartialEq`).
+//!   (equivalent to [`ScalarBase`](strided_traits::ScalarBase) from strided-traits).
 //! - [`Conjugate`]: Complex conjugation (identity for real types).
 //! - [`HasAlgebra`]: Maps a scalar type `T` to its default algebra `Alg`.
 //!   Enables automatic inference: `Tensor<f64>` → `Standard<f64>`,
@@ -45,6 +45,9 @@ use num_complex::{Complex32, Complex64};
 /// All standard numeric types (`f32`, `f64`, `Complex32`, `Complex64`)
 /// satisfy this trait automatically via the blanket implementation.
 ///
+/// `Scalar` is a supertrait of [`ScalarBase`](strided_traits::ScalarBase),
+/// ensuring that any `Scalar` type can be used with strided-rs operations.
+///
 /// # Examples
 ///
 /// ```
@@ -54,29 +57,9 @@ use num_complex::{Complex32, Complex64};
 /// needs_scalar::<f64>();
 /// needs_scalar::<f32>();
 /// ```
-pub trait Scalar:
-    Copy
-    + Send
-    + Sync
-    + std::ops::Add<Output = Self>
-    + std::ops::Mul<Output = Self>
-    + num_traits::Zero
-    + num_traits::One
-    + PartialEq
-{
-}
+pub trait Scalar: strided_traits::ScalarBase {}
 
-impl<T> Scalar for T where
-    T: Copy
-        + Send
-        + Sync
-        + std::ops::Add<Output = Self>
-        + std::ops::Mul<Output = Self>
-        + num_traits::Zero
-        + num_traits::One
-        + PartialEq
-{
-}
+impl<T: strided_traits::ScalarBase> Scalar for T {}
 
 /// Complex conjugation for tensor element types.
 ///

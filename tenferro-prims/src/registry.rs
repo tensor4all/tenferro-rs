@@ -1,7 +1,13 @@
 use tenferro_device::{Error, Result};
 
 use crate::cpu::CpuBackend;
-use crate::gpu_stubs::{CudaBackend, RocmBackend};
+
+#[cfg(feature = "cuda")]
+use crate::cuda::CudaBackend;
+#[cfg(not(feature = "cuda"))]
+use crate::gpu_stubs::CudaBackend;
+
+use crate::gpu_stubs::RocmBackend;
 
 // ===========================================================================
 // Backend Registry
@@ -46,14 +52,28 @@ impl BackendRegistry {
 
     /// Load the cuTENSOR library from the given path.
     ///
-    /// **Status: Not yet implemented.** Always returns
+    /// When the `cuda` feature is enabled, delegates to
+    /// [`CudaBackend::load`] which initializes cudarc and populates
+    /// the cuTENSOR vtable. Without the `cuda` feature, always returns
     /// `Err(DeviceError)`.
     ///
-    /// When implemented, the caller (Julia, Python, or standalone Rust)
-    /// will provide the path to the shared library. No auto-search.
+    /// The caller (Julia, Python, or standalone Rust) provides the path
+    /// to the shared library. No auto-search.
+    #[cfg(feature = "cuda")]
+    pub fn load_cutensor(&mut self, path: &str) -> Result<()> {
+        let (backend, _ctx) = CudaBackend::load(path)?;
+        self.cuda = Some(backend);
+        Ok(())
+    }
+
+    /// Load the cuTENSOR library from the given path.
+    ///
+    /// **Status: Not available.** The `cuda` feature is not enabled.
+    /// Rebuild with `--features cuda` to enable cuTENSOR support.
+    #[cfg(not(feature = "cuda"))]
     pub fn load_cutensor(&mut self, _path: &str) -> Result<()> {
         Err(Error::DeviceError(
-            "cuTENSOR runtime loading not yet implemented".into(),
+            "cuTENSOR runtime loading not available: rebuild with --features cuda".into(),
         ))
     }
 

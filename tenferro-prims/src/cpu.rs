@@ -2,10 +2,10 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 
 use num_complex::{Complex32, Complex64};
-use strided_traits::ScalarBase;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
+use tenferro_tensor::Tensor;
 
 use crate::{
     for_each_index, mode_position, unflatten_index, validate_execute_inputs, validate_rank,
@@ -13,12 +13,35 @@ use crate::{
     TensorPrims, UnaryOp,
 };
 
+/// Convert a CPU tensor to an immutable strided view.
+fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
+    let data = t
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| Error::DeviceError("GPU tensor passed to CPU backend".into()))?;
+    StridedView::new(data, t.dims(), t.strides(), t.offset())
+        .map_err(|e| Error::StrideError(format!("{e}")))
+}
+
+/// Convert a CPU tensor to a mutable strided view.
+fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_, T>> {
+    let dims = t.dims().to_vec();
+    let strides = t.strides().to_vec();
+    let offset = t.offset();
+    let data = t
+        .buffer_mut()
+        .as_mut_slice()
+        .ok_or_else(|| Error::DeviceError("GPU tensor passed to CPU backend".into()))?;
+    StridedViewMut::new(data, &dims, &strides, offset)
+        .map_err(|e| Error::StrideError(format!("{e}")))
+}
+
 /// CPU plan — concrete enum, no type erasure.
 ///
 /// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
 /// [`CpuBackend::execute`](TensorPrims::execute).
 #[derive(Debug, Clone)]
-pub enum CpuPlan<T: ScalarBase> {
+pub enum CpuPlan<T: Scalar> {
     /// Plan for batched GEMM.
     BatchedGemm {
         /// Batch dimension sizes.
@@ -212,7 +235,7 @@ impl CpuBackend {
     /// This is the internal plan construction logic, factored out of
     /// [`TensorPrims::plan`] so that the trait method can wrap it with
     /// cache lookup/insert.
-    fn build_plan<T: ScalarBase>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Result<CpuPlan<T>> {
+    fn build_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Result<CpuPlan<T>> {
         match desc {
             PrimDescriptor::BatchedGemm {
                 batch_dims,
@@ -438,7 +461,7 @@ impl CpuBackend {
 // CPU execute helpers for each operation
 // ===========================================================================
 
-fn execute_permute<T: ScalarBase>(
+fn execute_permute<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -467,7 +490,7 @@ fn execute_permute<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_make_contiguous<T: ScalarBase>(
+fn execute_make_contiguous<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -489,7 +512,7 @@ fn execute_make_contiguous<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_batched_gemm<T: ScalarBase>(
+fn execute_batched_gemm<T: Scalar>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -536,7 +559,7 @@ fn execute_batched_gemm<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_reduce_sum<T: ScalarBase>(
+fn execute_reduce_sum<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -577,7 +600,7 @@ fn execute_reduce_sum<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_trace<T: ScalarBase>(
+fn execute_trace<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -613,7 +636,7 @@ fn execute_trace<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_anti_trace<T: ScalarBase>(
+fn execute_anti_trace<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -648,7 +671,7 @@ fn execute_anti_trace<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_anti_diag<T: ScalarBase>(
+fn execute_anti_diag<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -682,7 +705,7 @@ fn execute_anti_diag<T: ScalarBase>(
     Ok(())
 }
 
-fn execute_elementwise_mul<T: ScalarBase>(
+fn execute_elementwise_mul<T: Scalar>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -703,7 +726,7 @@ fn execute_elementwise_mul<T: ScalarBase>(
 }
 
 /// Apply a unary function element-wise: C = alpha * f(A) + beta * C.
-fn execute_unary_map<T: ScalarBase>(
+fn execute_unary_map<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -724,11 +747,11 @@ fn execute_unary_map<T: ScalarBase>(
 
 /// Execute element-wise unary operation with type-based dispatch.
 ///
-/// Since `ScalarBase` does not provide `Neg`, `Div`, or floating-point ops,
+/// Since `Scalar` does not provide `Neg`, `Div`, or floating-point ops,
 /// we dispatch to concrete type implementations (f32, f64, Complex32, Complex64)
 /// at runtime using `TypeId`. This keeps the `TensorPrims` trait generic while
 /// supporting all standard unary operations on the CPU backend.
-fn execute_elementwise_unary<T: ScalarBase>(
+fn execute_elementwise_unary<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
     beta: T,
@@ -893,7 +916,7 @@ fn execute_elementwise_unary<T: ScalarBase>(
     }
 }
 
-fn execute_contract<T: ScalarBase>(
+fn execute_contract<T: Scalar>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -968,10 +991,10 @@ fn execute_contract<T: ScalarBase>(
 // ===========================================================================
 
 impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
-    type Plan<T: ScalarBase> = CpuPlan<T>;
+    type Plan<T: Scalar> = CpuPlan<T>;
     type Context = CpuContext;
 
-    fn plan<T: ScalarBase>(
+    fn plan<T: Scalar>(
         ctx: &mut CpuContext,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
@@ -989,23 +1012,31 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
         Ok(plan)
     }
 
-    fn execute<T: ScalarBase>(
+    fn execute<T: Scalar>(
         _ctx: &mut CpuContext,
         plan: &CpuPlan<T>,
         alpha: T,
-        inputs: &[&StridedView<T>],
+        inputs: &[&Tensor<T>],
         beta: T,
-        output: &mut StridedViewMut<T>,
+        output: &mut Tensor<T>,
     ) -> Result<()> {
+        // Convert Tensor inputs to StridedView for internal dispatch
+        let views: Vec<StridedView<T>> = inputs
+            .iter()
+            .map(|t| tensor_to_view(t))
+            .collect::<Result<Vec<_>>>()?;
+        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
+        let mut out_view = tensor_to_view_mut(output)?;
+
         match plan {
             CpuPlan::Permute { perm, .. } => {
                 validate_execute_inputs(inputs, 1, "Permute")?;
-                execute_permute(alpha, inputs[0], beta, output, perm)
+                execute_permute(alpha, view_refs[0], beta, &mut out_view, perm)
             }
 
             CpuPlan::MakeContiguous { .. } => {
                 validate_execute_inputs(inputs, 1, "MakeContiguous")?;
-                execute_make_contiguous(alpha, inputs[0], beta, output)
+                execute_make_contiguous(alpha, view_refs[0], beta, &mut out_view)
             }
 
             CpuPlan::BatchedGemm {
@@ -1016,7 +1047,16 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 ..
             } => {
                 validate_execute_inputs(inputs, 2, "BatchedGemm")?;
-                execute_batched_gemm(alpha, inputs, beta, output, batch_dims, *m, *n, *k)
+                execute_batched_gemm(
+                    alpha,
+                    &view_refs,
+                    beta,
+                    &mut out_view,
+                    batch_dims,
+                    *m,
+                    *n,
+                    *k,
+                )
             }
 
             CpuPlan::Reduce {
@@ -1025,11 +1065,10 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 validate_execute_inputs(inputs, 1, "Reduce")?;
                 match op {
                     ReduceOp::Sum => {
-                        execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes)
+                        execute_reduce_sum(alpha, view_refs[0], beta, &mut out_view, reduced_axes)
                     }
                     ReduceOp::Max | ReduceOp::Min => Err(Error::InvalidArgument(
-                        "Max/Min reduction requires PartialOrd, not available via ScalarBase"
-                            .into(),
+                        "Max/Min reduction requires PartialOrd, not available via Scalar".into(),
                     )),
                 }
             }
@@ -1040,7 +1079,14 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 ..
             } => {
                 validate_execute_inputs(inputs, 1, "Trace")?;
-                execute_trace(alpha, inputs[0], beta, output, paired_axes, free_axes)
+                execute_trace(
+                    alpha,
+                    view_refs[0],
+                    beta,
+                    &mut out_view,
+                    paired_axes,
+                    free_axes,
+                )
             }
 
             CpuPlan::AntiTrace {
@@ -1049,7 +1095,14 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 ..
             } => {
                 validate_execute_inputs(inputs, 1, "AntiTrace")?;
-                execute_anti_trace(alpha, inputs[0], beta, output, paired_axes, free_axes)
+                execute_anti_trace(
+                    alpha,
+                    view_refs[0],
+                    beta,
+                    &mut out_view,
+                    paired_axes,
+                    free_axes,
+                )
             }
 
             CpuPlan::AntiDiag {
@@ -1058,17 +1111,24 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 ..
             } => {
                 validate_execute_inputs(inputs, 1, "AntiDiag")?;
-                execute_anti_diag(alpha, inputs[0], beta, output, paired_axes, free_axes)
+                execute_anti_diag(
+                    alpha,
+                    view_refs[0],
+                    beta,
+                    &mut out_view,
+                    paired_axes,
+                    free_axes,
+                )
             }
 
             CpuPlan::ElementwiseUnary { op, .. } => {
                 validate_execute_inputs(inputs, 1, "ElementwiseUnary")?;
-                execute_elementwise_unary(alpha, inputs[0], beta, output, op)
+                execute_elementwise_unary(alpha, view_refs[0], beta, &mut out_view, op)
             }
 
             CpuPlan::ElementwiseMul { .. } => {
                 validate_execute_inputs(inputs, 2, "ElementwiseMul")?;
-                execute_elementwise_mul(alpha, inputs, beta, output)
+                execute_elementwise_mul(alpha, &view_refs, beta, &mut out_view)
             }
 
             CpuPlan::Contract {
@@ -1078,19 +1138,27 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 ..
             } => {
                 validate_execute_inputs(inputs, 2, "Contract")?;
-                execute_contract(alpha, inputs, beta, output, modes_a, modes_b, modes_c)
+                execute_contract(
+                    alpha,
+                    &view_refs,
+                    beta,
+                    &mut out_view,
+                    modes_a,
+                    modes_b,
+                    modes_c,
+                )
             }
         }
     }
 
-    fn has_extension_for<T: ScalarBase>(_ext: Extension) -> bool {
+    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
         // CPU backend supports both Contract and ElementwiseMul
         true
     }
 }
 
 /// Scale all elements of the output by `beta`, or zero them if `beta == 0`.
-fn scale_output<T: ScalarBase>(output: &mut StridedViewMut<T>, beta: T) {
+fn scale_output<T: Scalar>(output: &mut StridedViewMut<T>, beta: T) {
     let dims = output.dims().to_vec();
     if beta == T::zero() {
         for_each_index(&dims, |idx| {

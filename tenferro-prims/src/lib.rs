@@ -85,20 +85,45 @@
 //! ```
 
 mod cpu;
-mod gpu_stubs;
 mod registry;
 
+// CUDA backend: real implementation when `cuda` feature is enabled,
+// otherwise stub types that return errors.
+#[cfg(feature = "cuda")]
+mod cuda;
+#[cfg(feature = "cuda")]
+mod cuda_ffi;
+
+mod gpu_stubs;
+
 pub use cpu::*;
-pub use gpu_stubs::*;
+
+#[cfg(feature = "cuda")]
+pub use cuda::*;
+#[cfg(feature = "cuda")]
+pub use cuda_ffi::*;
+
+#[cfg(not(feature = "cuda"))]
+pub use gpu_stubs::CudaBackend;
+#[cfg(not(feature = "cuda"))]
+pub use gpu_stubs::CudaContext;
+#[cfg(not(feature = "cuda"))]
+pub use gpu_stubs::CudaPlan;
+
+// ROCm stubs are always from gpu_stubs (no real ROCm backend yet)
+pub use gpu_stubs::RocmBackend;
+pub use gpu_stubs::RocmContext;
+pub use gpu_stubs::RocmPlan;
+
 pub use registry::*;
 
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use strided_traits::ScalarBase;
-use strided_view::{StridedView, StridedViewMut};
+use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
+use tenferro_tensor::Tensor;
 
 /// Reduction operation kind.
 ///
@@ -366,7 +391,7 @@ pub enum PrimDescriptor {
 /// ```
 pub trait TensorPrims<Alg> {
     /// Backend-specific plan type (no type erasure).
-    type Plan<T: ScalarBase>;
+    type Plan<T: Scalar>;
 
     /// Backend-specific execution context.
     ///
@@ -380,30 +405,33 @@ pub trait TensorPrims<Alg> {
     /// The plan pre-computes kernel selection and workspace sizes.
     /// `shapes` contains the shape of each tensor involved in the operation
     /// (inputs first, then output).
-    fn plan<T: ScalarBase>(
+    fn plan<T: Scalar>(
         ctx: &mut Self::Context,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
     ) -> Result<Self::Plan<T>>;
 
-    /// Execute a plan with the given scaling factors and tensor views.
+    /// Execute a plan with the given tensors and scaling factors.
     ///
     /// Follows the BLAS/cuTENSOR pattern:
     /// `output = alpha * op(inputs) + beta * output`
-    fn execute<T: ScalarBase>(
+    ///
+    /// Operations receive `Tensor<T>` directly (PyTorch-aligned). CPU backends
+    /// convert to strided views internally; GPU backends extract device pointers.
+    fn execute<T: Scalar>(
         ctx: &mut Self::Context,
         plan: &Self::Plan<T>,
         alpha: T,
-        inputs: &[&StridedView<T>],
+        inputs: &[&Tensor<T>],
         beta: T,
-        output: &mut StridedViewMut<T>,
+        output: &mut Tensor<T>,
     ) -> Result<()>;
 
     /// Query whether an extended operation is available for scalar type `T`.
     ///
     /// Returns `true` if the backend supports the given extended operation
     /// for the specified scalar type.
-    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool;
+    fn has_extension_for<T: Scalar>(ext: Extension) -> bool;
 }
 
 // ===========================================================================
@@ -615,8 +643,8 @@ pub(crate) fn validate_shape_eq(
 }
 
 /// Validate the number of input operands for execute.
-pub(crate) fn validate_execute_inputs<T: ScalarBase>(
-    inputs: &[&StridedView<T>],
+pub(crate) fn validate_execute_inputs<T: Scalar>(
+    inputs: &[&Tensor<T>],
     expected: usize,
     op_name: &str,
 ) -> Result<()> {
