@@ -7,8 +7,8 @@
 //!
 //! ## Key insight
 //!
-//! The forward pass operates on tropical scalars (`Tensor<MaxPlus<f64>>`), but
-//! the backward pass produces standard real gradients (`Tensor<f64>`). This is
+//! The forward pass operates on tropical scalars (`Tensor<MaxPlus<T>>`), but
+//! the backward pass produces standard real gradients (`Tensor<T>`). This is
 //! because the subgradient of `max(a, b)` w.r.t. `a` is `1` if `a >= b` and
 //! `0` otherwise -- a standard real-valued quantity.
 //!
@@ -18,7 +18,7 @@
 //!   winner indices in an [`ArgmaxTracker`](crate::ArgmaxTracker)
 //! - [`tropical_einsum_rrule`]: standalone reverse-mode rule (pullback)
 //! - [`TropicalEinsumReverseRule`]: implements
-//!   [`ReverseRule<Tensor<f64>>`](chainrules::ReverseRule) for tape integration
+//!   [`ReverseRule<Tensor<T::Inner>>`](chainrules::ReverseRule) for tape integration
 //! - [`tracked_tropical_einsum`]: tape-aware tracked einsum for tropical ops
 //!
 //! ## Backward rules by semiring
@@ -57,7 +57,7 @@
 //!     &[1.0, 1.0, 1.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor,
 //! ).unwrap();
 //!
-//! let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra, CpuBackend>(
+//! let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, CpuBackend>(
 //!     &mut ctx, "ij,jk->ik", &[&a, &b], &grad_c,
 //! ).unwrap();
 //! // grads[0] is dA (Tensor<f64>), grads[1] is dB (Tensor<f64>)
@@ -123,68 +123,64 @@ pub trait TropicalScalar: Scalar {
         -> Self::Inner;
 }
 
-// MaxPlus<f64>: tropical mul = ordinary +, so backward is identity
-impl TropicalScalar for crate::MaxPlus<f64> {
-    type Inner = f64;
+/// Macro for additive tropical semirings (MaxPlus, MinPlus) where
+/// tropical mul = ordinary addition, so backward is identity.
+macro_rules! impl_tropical_scalar_additive {
+    ($wrapper:ident, $float:ty) => {
+        impl TropicalScalar for crate::$wrapper<$float> {
+            type Inner = $float;
 
-    fn inner(&self) -> f64 {
-        self.0
-    }
+            fn inner(&self) -> $float {
+                self.0
+            }
 
-    fn from_inner(v: f64) -> Self {
-        crate::MaxPlus(v)
-    }
+            fn from_inner(v: $float) -> Self {
+                crate::$wrapper(v)
+            }
 
-    fn mul_backward_a(_a: f64, _b: f64, dout: f64) -> f64 {
-        dout
-    }
+            fn mul_backward_a(_a: $float, _b: $float, dout: $float) -> $float {
+                dout
+            }
 
-    fn mul_backward_b(_a: f64, _b: f64, dout: f64) -> f64 {
-        dout
-    }
+            fn mul_backward_b(_a: $float, _b: $float, dout: $float) -> $float {
+                dout
+            }
+        }
+    };
 }
 
-// MinPlus<f64>: tropical mul = ordinary +, so backward is identity
-impl TropicalScalar for crate::MinPlus<f64> {
-    type Inner = f64;
+/// Macro for multiplicative tropical semirings (MaxMul) where
+/// tropical mul = ordinary multiplication, so backward uses product rule.
+macro_rules! impl_tropical_scalar_multiplicative {
+    ($wrapper:ident, $float:ty) => {
+        impl TropicalScalar for crate::$wrapper<$float> {
+            type Inner = $float;
 
-    fn inner(&self) -> f64 {
-        self.0
-    }
+            fn inner(&self) -> $float {
+                self.0
+            }
 
-    fn from_inner(v: f64) -> Self {
-        crate::MinPlus(v)
-    }
+            fn from_inner(v: $float) -> Self {
+                crate::$wrapper(v)
+            }
 
-    fn mul_backward_a(_a: f64, _b: f64, dout: f64) -> f64 {
-        dout
-    }
+            fn mul_backward_a(_a: $float, b: $float, dout: $float) -> $float {
+                dout * b
+            }
 
-    fn mul_backward_b(_a: f64, _b: f64, dout: f64) -> f64 {
-        dout
-    }
+            fn mul_backward_b(a: $float, _b: $float, dout: $float) -> $float {
+                dout * a
+            }
+        }
+    };
 }
 
-// MaxMul<f64>: tropical mul = ordinary *, so backward uses product rule
-impl TropicalScalar for crate::MaxMul<f64> {
-    type Inner = f64;
-
-    fn inner(&self) -> f64 {
-        self.0
-    }
-
-    fn from_inner(v: f64) -> Self {
-        crate::MaxMul(v)
-    }
-
-    fn mul_backward_a(_a: f64, b: f64, dout: f64) -> f64 {
-        dout * b
-    }
-
-    fn mul_backward_b(a: f64, _b: f64, dout: f64) -> f64 {
-        dout * a
-    }
-}
+impl_tropical_scalar_additive!(MaxPlus, f32);
+impl_tropical_scalar_additive!(MaxPlus, f64);
+impl_tropical_scalar_additive!(MinPlus, f32);
+impl_tropical_scalar_additive!(MinPlus, f64);
+impl_tropical_scalar_multiplicative!(MaxMul, f32);
+impl_tropical_scalar_multiplicative!(MaxMul, f64);
 
 /// Compute column-major flat index for a given multi-dimensional index.
 fn col_major_flat_index(shape: &[usize], idx: &[usize]) -> usize {
@@ -242,7 +238,7 @@ fn col_major_flat_index(shape: &[usize], idx: &[usize]) -> usize {
 ///     &[1.0, 1.0, 1.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor,
 /// ).unwrap();
 ///
-/// let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra, CpuBackend>(
+/// let grads = tropical_einsum_rrule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, CpuBackend>(
 ///     &mut ctx, "ij,jk->ik", &[&a, &b], &grad_c,
 /// ).unwrap();
 /// assert_eq!(grads.len(), 2);
@@ -546,9 +542,9 @@ fn tropical_einsum_backward<T: TropicalScalar>(
 /// This rule stores the tropical primal tensors and the argmax tracker from
 /// the forward pass. The pullback computes standard real gradients.
 ///
-/// Note: The `ReverseRule` is parameterized by `Tensor<Inner>` (e.g.,
-/// `Tensor<f64>`), not `Tensor<MaxPlus<f64>>`, because gradients live in
-/// standard reals.
+/// Note: The `ReverseRule` is parameterized by `Tensor<T::Inner>` (e.g.,
+/// `Tensor<f64>` or `Tensor<f32>`), not `Tensor<MaxPlus<T>>`, because
+/// gradients live in standard reals.
 ///
 /// # Examples
 ///
@@ -632,7 +628,7 @@ where
 /// let a = tape.leaf(a_data);
 /// let b = tape.leaf(b_data);
 ///
-/// let c = tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra, CpuBackend>(
+/// let c = tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, CpuBackend>(
 ///     "ij,jk->ik", &[&a, &b],
 /// ).unwrap();
 ///
