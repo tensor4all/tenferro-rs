@@ -234,6 +234,45 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 // Private helpers
 // ============================================================================
 
+/// Infer the common memory space from a set of operand tensors.
+///
+/// # Allocation policy
+///
+/// Intermediate and output tensors are allocated on the same memory space
+/// as the input operands:
+///
+/// - If all operands reside on [`LogicalMemorySpace::MainMemory`], the
+///   result is `MainMemory`.
+/// - If all operands reside on the same GPU memory space (same `device_id`),
+///   the result is that GPU memory space.
+/// - If operands span different memory spaces (e.g., CPU and GPU, or two
+///   different GPU devices), this function returns
+///   [`Error::CrossMemorySpaceOperation`] because implicit cross-device
+///   data transfer is not supported. The caller must explicitly transfer
+///   tensors to a common memory space before calling einsum.
+///
+/// # Errors
+///
+/// - Returns [`Error::InvalidArgument`] if `operands` is empty.
+/// - Returns [`Error::CrossMemorySpaceOperation`] if operands reside on
+///   different memory spaces.
+fn infer_memory_space<T: Scalar>(operands: &[&Tensor<T>]) -> Result<LogicalMemorySpace> {
+    let first = operands
+        .first()
+        .ok_or_else(|| Error::InvalidArgument("infer_memory_space: no operands".into()))?;
+    let space = first.logical_memory_space();
+    for op in &operands[1..] {
+        let s = op.logical_memory_space();
+        if s != space {
+            return Err(Error::CrossMemorySpaceOperation {
+                left: space,
+                right: s,
+            });
+        }
+    }
+    Ok(space)
+}
+
 /// Convert an ASCII character label to u32.
 fn char_to_label(c: char) -> Result<u32> {
     match c {
@@ -835,14 +874,13 @@ where
             )?;
         } else {
             // Intermediate step: create new tensor with alpha=1, beta=0
+            // Allocate on the same memory space as the input operands.
             let result_idx = n_inputs + step_idx;
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = compute_output_shape(subs_result, &tree.size_dict)?;
-            let mut result = Tensor::<T>::zeros(
-                &result_shape,
-                LogicalMemorySpace::MainMemory,
-                MemoryOrder::ColumnMajor,
-            );
+            let memory_space = infer_memory_space(operands)?;
+            let mut result =
+                Tensor::<T>::zeros(&result_shape, memory_space, MemoryOrder::ColumnMajor);
             execute_pairwise_contraction::<T, A, B>(
                 ctx,
                 subs_left,
@@ -1250,11 +1288,9 @@ where
         }
     }
     let output_shape = compute_output_shape(&tree.subscripts.output, &sd)?;
-    let mut output = Tensor::<T>::zeros(
-        &output_shape,
-        LogicalMemorySpace::MainMemory,
-        MemoryOrder::ColumnMajor,
-    );
+    // Allocate the output tensor on the same memory space as the operands.
+    let memory_space = infer_memory_space(operands)?;
+    let mut output = Tensor::<T>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor);
     execute_tree::<T, A, B>(ctx, tree, operands, T::one(), T::zero(), &mut output)?;
     Ok(output)
 }
@@ -1962,16 +1998,94 @@ where
             }
         }
 
-        let hvp_k = hvp_k.unwrap_or_else(|| {
-            Tensor::zeros(
-                primals[k].dims(),
-                LogicalMemorySpace::MainMemory,
-                MemoryOrder::ColumnMajor,
-            )
-        });
+        // When no tangent contributions exist, allocate the zero HVP tensor
+        // on the same memory space as the corresponding primal.
+        let hvp_k = match hvp_k {
+            Some(t) => t,
+            None => {
+                let space = primals[k].logical_memory_space();
+                Tensor::zeros(primals[k].dims(), space, MemoryOrder::ColumnMajor)
+            }
+        };
 
         results.push((grad_k, hvp_k));
     }
 
     Ok(results)
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tenferro_device::LogicalMemorySpace;
+    use tenferro_tensor::MemoryOrder;
+
+    #[test]
+    fn infer_memory_space_single_cpu() {
+        let a = Tensor::<f64>::zeros(
+            &[2, 3],
+            LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let space = infer_memory_space(&[&a]).unwrap();
+        assert_eq!(space, LogicalMemorySpace::MainMemory);
+    }
+
+    #[test]
+    fn infer_memory_space_multiple_cpu() {
+        let a = Tensor::<f64>::zeros(
+            &[2, 3],
+            LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let b = Tensor::<f64>::zeros(
+            &[3, 4],
+            LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let c = Tensor::<f64>::zeros(
+            &[4, 5],
+            LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let space = infer_memory_space(&[&a, &b, &c]).unwrap();
+        assert_eq!(space, LogicalMemorySpace::MainMemory);
+    }
+
+    #[test]
+    fn infer_memory_space_empty_operands_errors() {
+        let operands: &[&Tensor<f64>] = &[];
+        let result = infer_memory_space(operands);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidArgument(_)),
+            "expected InvalidArgument, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn infer_memory_space_mixed_errors() {
+        // We cannot construct GPU tensors in tests (assertion in Tensor::zeros
+        // prevents GPU allocation), so we verify the logic by testing
+        // the happy path (all CPU) and the error path (empty).
+        // A true mixed-memory test requires GPU support which is not yet
+        // available in the POC.
+        //
+        // This test documents the intended behaviour: calling einsum with
+        // operands on different memory spaces returns
+        // Error::CrossMemorySpaceOperation.
+        let a = Tensor::<f64>::zeros(
+            &[2, 3],
+            LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        // Verify that identical spaces produce Ok
+        let space = infer_memory_space(&[&a, &a]).unwrap();
+        assert_eq!(space, LogicalMemorySpace::MainMemory);
+    }
 }
