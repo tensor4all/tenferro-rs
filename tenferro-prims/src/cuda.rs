@@ -25,7 +25,7 @@ use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::*;
-use crate::{Extension, PlanCache, PrimDescriptor, TensorPrims};
+use crate::{validate_shape_count, Extension, PlanCache, PrimDescriptor, TensorPrims};
 
 // ============================================================================
 // Error helper
@@ -281,6 +281,98 @@ fn build_cutensor_plan(
     // _pref RAII wrapper drops here, freeing cuTENSOR plan preference
 }
 
+/// Get cuTENSOR data type for a Scalar type, returning an error if unsupported.
+fn scalar_data_type<T: Scalar>() -> Result<CutensorDataType> {
+    use std::any::TypeId;
+    let tid = TypeId::of::<T>();
+    if tid == TypeId::of::<f32>() {
+        Ok(CutensorDataType::R_32F)
+    } else if tid == TypeId::of::<f64>() {
+        Ok(CutensorDataType::R_64F)
+    } else if tid == TypeId::of::<Complex32>() {
+        Ok(CutensorDataType::C_32F)
+    } else if tid == TypeId::of::<Complex64>() {
+        Ok(CutensorDataType::C_64F)
+    } else {
+        Err(Error::DeviceError(
+            "Unsupported scalar type for CUDA backend".into(),
+        ))
+    }
+}
+
+/// Get cuTENSOR compute descriptor for a Scalar type, returning an error if unsupported.
+fn scalar_compute_descriptor<T: Scalar>(
+    vtable: &CutensorVtable,
+) -> Result<cutensorComputeDescriptor_t> {
+    use std::any::TypeId;
+    let tid = TypeId::of::<T>();
+    if tid == TypeId::of::<f32>() || tid == TypeId::of::<Complex32>() {
+        Ok(vtable.compute_desc_32f)
+    } else if tid == TypeId::of::<f64>() || tid == TypeId::of::<Complex64>() {
+        Ok(vtable.compute_desc_64f)
+    } else {
+        Err(Error::DeviceError(
+            "Unsupported scalar type for CUDA backend".into(),
+        ))
+    }
+}
+
+/// Create a cuTENSOR contraction plan.
+///
+/// Used by Contract, BatchedGemm, Trace, AntiTrace, AntiDiag — all map to
+/// `cutensorCreateContraction`.
+fn plan_contraction(
+    ctx: &mut CudaContext,
+    data_type: CutensorDataType,
+    compute: cutensorComputeDescriptor_t,
+    modes_a: &[i32],
+    shape_a: &[usize],
+    strides_a: &[isize],
+    modes_b: &[i32],
+    shape_b: &[usize],
+    strides_b: &[isize],
+    modes_c: &[i32],
+    shape_c: &[usize],
+    strides_c: &[isize],
+) -> Result<(PlanWrapper, u64)> {
+    let vtable = &ctx.vtable;
+    let handle = ctx.handle.raw;
+
+    let desc_a = create_tensor_desc(handle, vtable, shape_a, strides_a, data_type)?;
+    let desc_b = create_tensor_desc(handle, vtable, shape_b, strides_b, data_type)?;
+    let desc_c = create_tensor_desc(handle, vtable, shape_c, strides_c, data_type)?;
+    // D descriptor same as C (in-place output: D = alpha * contract(A, B) + beta * C)
+    let desc_d = create_tensor_desc(handle, vtable, shape_c, strides_c, data_type)?;
+
+    let mut op_raw: cutensorOperationDescriptor_t = ptr::null_mut();
+    let status = unsafe {
+        (vtable.create_contraction)(
+            handle,
+            &mut op_raw,
+            desc_a.raw,
+            modes_a.as_ptr(),
+            CutensorOperator::Identity,
+            desc_b.raw,
+            modes_b.as_ptr(),
+            CutensorOperator::Identity,
+            desc_c.raw,
+            modes_c.as_ptr(),
+            CutensorOperator::Identity,
+            desc_d.raw,
+            modes_c.as_ptr(),
+            compute,
+        )
+    };
+    check_status(status, "cutensorCreateContraction")?;
+    let op_desc = OpDescWrapper {
+        raw: op_raw,
+        vtable: Arc::clone(vtable),
+    };
+
+    build_cutensor_plan(handle, vtable, &op_desc)
+    // desc_a, desc_b, desc_c, desc_d, op_desc all drop here
+}
+
 // ============================================================================
 // Public types
 // ============================================================================
@@ -406,11 +498,108 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
     type Context = CudaContext;
 
     fn plan<T: Scalar>(
-        _ctx: &mut CudaContext,
-        _desc: &PrimDescriptor,
-        _shapes: &[&[usize]],
+        ctx: &mut CudaContext,
+        desc: &PrimDescriptor,
+        shapes: &[&[usize]],
     ) -> Result<CudaPlan<T>> {
-        todo!("CudaBackend::plan — cuTENSOR plan creation not yet implemented")
+        // Resolve cuTENSOR data type and compute descriptor for T.
+        // This uses TypeId dispatch since the trait bound is Scalar (not CutensorType).
+        let data_type = scalar_data_type::<T>()?;
+        let compute = scalar_compute_descriptor::<T>(&ctx.vtable)?;
+
+        match desc {
+            PrimDescriptor::Contract {
+                modes_a,
+                modes_b,
+                modes_c,
+            } => {
+                validate_shape_count(shapes, 3, "Contract")?;
+                let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
+                let modes_b_i32: Vec<i32> = modes_b.iter().map(|&m| m as i32).collect();
+                let modes_c_i32: Vec<i32> = modes_c.iter().map(|&m| m as i32).collect();
+                let strides_a = default_col_major_strides(shapes[0]);
+                let strides_b = default_col_major_strides(shapes[1]);
+                let strides_c = default_col_major_strides(shapes[2]);
+                let (plan, ws) = plan_contraction(
+                    ctx,
+                    data_type,
+                    compute,
+                    &modes_a_i32,
+                    shapes[0],
+                    &strides_a,
+                    &modes_b_i32,
+                    shapes[1],
+                    &strides_b,
+                    &modes_c_i32,
+                    shapes[2],
+                    &strides_c,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: desc.clone(),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::BatchedGemm {
+                batch_dims,
+                m: _,
+                n: _,
+                k: _,
+            } => {
+                validate_shape_count(shapes, 3, "BatchedGemm")?;
+                let nb = batch_dims.len() as u32;
+                let mut modes_a = Vec::new();
+                let mut modes_b = Vec::new();
+                let mut modes_c = Vec::new();
+                // batch modes: 0..nb
+                for i in 0..nb {
+                    modes_a.push(i as i32);
+                    modes_b.push(i as i32);
+                    modes_c.push(i as i32);
+                }
+                // m mode = nb, k mode = nb+1, n mode = nb+2
+                let m_mode = nb as i32;
+                let k_mode = (nb + 1) as i32;
+                let n_mode = (nb + 2) as i32;
+                modes_a.extend([m_mode, k_mode]);
+                modes_b.extend([k_mode, n_mode]);
+                modes_c.extend([m_mode, n_mode]);
+                let strides_a = default_col_major_strides(shapes[0]);
+                let strides_b = default_col_major_strides(shapes[1]);
+                let strides_c = default_col_major_strides(shapes[2]);
+                let (plan, ws) = plan_contraction(
+                    ctx, data_type, compute, &modes_a, shapes[0], &strides_a, &modes_b, shapes[1],
+                    &strides_b, &modes_c, shapes[2], &strides_c,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: desc.clone(),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
+            }
+
+            PrimDescriptor::Trace { .. }
+            | PrimDescriptor::AntiTrace { .. }
+            | PrimDescriptor::AntiDiag { .. } => {
+                // These operations contract the input with an identity tensor.
+                // For now, use the fallback contraction path — the identity
+                // tensor will be constructed at execute time.
+                todo!(
+                    "Trace/AntiTrace/AntiDiag plan via identity contraction — not yet implemented"
+                )
+            }
+
+            PrimDescriptor::Permute { .. }
+            | PrimDescriptor::MakeContiguous
+            | PrimDescriptor::Reduce { .. }
+            | PrimDescriptor::ElementwiseUnary { .. }
+            | PrimDescriptor::ElementwiseMul => {
+                todo!("Non-contraction plan variants — will be implemented in Task 5")
+            }
+        }
     }
 
     fn execute<T: Scalar>(
