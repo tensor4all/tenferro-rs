@@ -9,7 +9,7 @@
 //! | [`MinPlus<T>`] | min | + | +∞ | 0 |
 //! | [`MaxMul<T>`] | max | × | 0 | 1 |
 //!
-//! All arithmetic bodies use `todo!()` (POC skeleton).
+//! All arithmetic operations are fully implemented.
 
 use std::fmt;
 use std::ops;
@@ -21,17 +21,19 @@ use std::ops;
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_tropical::MaxPlus;
 ///
 /// let a = MaxPlus(3.0_f64);
 /// let b = MaxPlus(5.0_f64);
 ///
 /// // Tropical addition = max
-/// let c = a + b;   // MaxPlus(5.0)
+/// let c = a + b;
+/// assert_eq!(c, MaxPlus(5.0));
 ///
 /// // Tropical multiplication = ordinary addition
-/// let d = a * b;   // MaxPlus(8.0)
+/// let d = a * b;
+/// assert_eq!(d, MaxPlus(8.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
@@ -43,17 +45,19 @@ pub struct MaxPlus<T>(pub T);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_tropical::MinPlus;
 ///
 /// let a = MinPlus(3.0_f64);
 /// let b = MinPlus(5.0_f64);
 ///
 /// // Tropical addition = min
-/// let c = a + b;   // MinPlus(3.0)
+/// let c = a + b;
+/// assert_eq!(c, MinPlus(3.0));
 ///
 /// // Tropical multiplication = ordinary addition
-/// let d = a * b;   // MinPlus(8.0)
+/// let d = a * b;
+/// assert_eq!(d, MinPlus(8.0));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
@@ -66,17 +70,19 @@ pub struct MinPlus<T>(pub T);
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_tropical::MaxMul;
 ///
 /// let a = MaxMul(0.3_f64);
 /// let b = MaxMul(0.7_f64);
 ///
 /// // Tropical addition = max
-/// let c = a + b;   // MaxMul(0.7)
+/// let c = a + b;
+/// assert_eq!(c, MaxMul(0.7));
 ///
 /// // Tropical multiplication = ordinary multiplication
-/// let d = a * b;   // MaxMul(0.21)
+/// let d = a * b;
+/// assert!((d.0 - 0.21).abs() < 1e-15);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
