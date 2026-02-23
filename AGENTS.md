@@ -49,6 +49,10 @@ When writing ASCII flow diagrams or box diagrams in documentation or design docs
 
 Use **workspace dependencies** for libraries shared across multiple crates. Define the dependency once in the workspace `Cargo.toml` under `[workspace.dependencies]`, then reference it with `dep.workspace = true` in each crate's `Cargo.toml`.
 
+## Git Worktree Rules
+
+When using git worktrees for feature development, **always branch from the latest `main`** before starting implementation. Run `git fetch origin && git checkout -b <branch-name> origin/main` to ensure the branch is up-to-date. Never branch from a stale local state or from another feature branch unless explicitly intended.
+
 ## Pre-Push / PR Checklist
 
 Before pushing or creating a pull request, **all** of the following must pass:
