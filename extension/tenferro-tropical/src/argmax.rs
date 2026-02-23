@@ -16,14 +16,15 @@
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_tropical::ArgmaxTracker;
 ///
-/// // Create a tracker for a 3×5 output
+/// // Create a tracker for a 3x5 output
 /// let tracker = ArgmaxTracker::new(&[3, 5]);
 ///
 /// // After forward pass, query the winner index for output element (1, 2)
 /// let k_winner = tracker.winner_index(&[1, 2]);
+/// assert_eq!(k_winner, 0); // initialized to 0
 /// ```
 pub struct ArgmaxTracker {
     /// Shape of the output tensor.
@@ -40,7 +41,7 @@ impl ArgmaxTracker {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tropical::ArgmaxTracker;
     ///
     /// let tracker = ArgmaxTracker::new(&[3, 5]);
@@ -73,11 +74,12 @@ impl ArgmaxTracker {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```
     /// use tenferro_tropical::ArgmaxTracker;
     ///
     /// let tracker = ArgmaxTracker::new(&[3, 5]);
     /// let k = tracker.winner_index(&[1, 2]);
+    /// assert_eq!(k, 0); // initialized to 0
     /// ```
     pub fn winner_index(&self, position: &[usize]) -> usize {
         // Column-major linear index

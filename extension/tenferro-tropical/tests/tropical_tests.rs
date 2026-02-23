@@ -1,6 +1,4 @@
 //! Tests for tenferro-tropical: scalar types, algebra, argmax, and TensorPrims.
-//!
-//! TDD approach: tests written before implementation.
 
 use num_traits::{One, Zero};
 use tenferro_tensor::{MemoryOrder, Tensor};
