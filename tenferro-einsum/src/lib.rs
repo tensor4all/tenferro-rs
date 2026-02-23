@@ -1233,7 +1233,18 @@ where
     B: TensorPrims<A>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    einsum_with_subscripts::<T, A, B>(ctx, &subs, operands, size_dict)
+    let mut output = einsum_with_subscripts::<T, A, B>(ctx, &subs, operands, size_dict)?;
+
+    // Auto-propagate forward-mode tangents
+    if operands.iter().any(|t| t.has_fw_grad()) {
+        let tangents: Vec<Option<&Tensor<T>>> = operands.iter().map(|t| t.fw_grad()).collect();
+        // einsum_frule_impl calls einsum_with_subscripts (not einsum), so no recursion
+        if let Ok(output_tangent) = einsum_frule_impl::<T, A, B>(ctx, &subs, operands, &tangents) {
+            output.set_fw_grad(output_tangent);
+        }
+    }
+
+    Ok(output)
 }
 
 /// Execute einsum with pre-built [`Subscripts`].
@@ -1835,6 +1846,39 @@ where
 ///
 /// let dc = einsum_frule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
+/// Internal frule implementation with pre-parsed subscripts.
+fn einsum_frule_impl<T, A, B>(
+    ctx: &mut B::Context,
+    subs: &Subscripts,
+    primals: &[&Tensor<T>],
+    tangents: &[Option<&Tensor<T>>],
+) -> Result<Tensor<T>>
+where
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    let n = primals.len();
+
+    // dC = sum_k einsum(subs, [A0, ..., dAk, ..., An]) for each k with tangent
+    let mut result: Option<Tensor<T>> = None;
+
+    for k in 0..n {
+        if let Some(tangent_k) = tangents[k] {
+            let mut ops: Vec<&Tensor<T>> = primals.to_vec();
+            ops[k] = tangent_k;
+
+            let term = einsum_with_subscripts::<T, A, B>(ctx, subs, &ops, None)?;
+
+            result = Some(match result {
+                None => term,
+                Some(existing) => Tensor::<T>::accumulate_tangent(existing, &term),
+            });
+        }
+    }
+
+    result.ok_or_else(|| Error::InvalidArgument("no tangents provided".into()))
+}
+
 pub fn einsum_frule<T, A, B>(
     ctx: &mut B::Context,
     subscripts: &str,
@@ -1846,27 +1890,7 @@ where
     B: TensorPrims<A>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    let n = primals.len();
-
-    // dC = sum_k einsum(subs, [A0, ..., dAk, ..., An]) for each k with tangent
-    let mut result: Option<Tensor<T>> = None;
-
-    for k in 0..n {
-        if let Some(tangent_k) = tangents[k] {
-            // Replace operand k with its tangent
-            let mut ops: Vec<&Tensor<T>> = primals.to_vec();
-            ops[k] = tangent_k;
-
-            let term = einsum_with_subscripts::<T, A, B>(ctx, &subs, &ops, None)?;
-
-            result = Some(match result {
-                None => term,
-                Some(existing) => Tensor::<T>::accumulate_tangent(existing, &term),
-            });
-        }
-    }
-
-    result.ok_or_else(|| Error::InvalidArgument("no tangents provided".into()))
+    einsum_frule_impl::<T, A, B>(ctx, &subs, primals, tangents)
 }
 
 /// Local HVP rule for einsum without building a global tape.

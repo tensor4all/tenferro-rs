@@ -1636,3 +1636,57 @@ fn einsum_error_non_square_trace() {
         result.as_ref().err()
     );
 }
+
+// ============================================================================
+// Forward-mode tangent auto-propagation
+// ============================================================================
+
+#[test]
+fn einsum_auto_propagates_fw_grad() {
+    let mut ctx = CpuContext::new(1);
+
+    // A = [[1, 3], [2, 4]], B = [[5, 7], [6, 8]] (col-major)
+    let mut a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    // Set tangent on a only: dA = ones
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    a.set_fw_grad(da.clone());
+
+    // C = einsum("ij,jk->ik", A, B)
+    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+
+    // C should have fw_grad = einsum_frule result
+    assert!(c.has_fw_grad(), "output should carry fw_grad");
+
+    // Compare with explicit frule
+    let expected =
+        einsum_frule::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None])
+            .unwrap();
+
+    let cg = c.fw_grad().unwrap();
+    let cg_data = cg.buffer().as_slice().unwrap();
+    let exp_data = expected.buffer().as_slice().unwrap();
+    for i in 0..4 {
+        assert!(
+            (cg_data[i] - exp_data[i]).abs() < 1e-10,
+            "fw_grad[{i}] = {}, expected {}",
+            cg_data[i],
+            exp_data[i]
+        );
+    }
+}
+
+#[test]
+fn einsum_no_fw_grad_unchanged() {
+    let mut ctx = CpuContext::new(1);
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    assert!(
+        !c.has_fw_grad(),
+        "output should NOT carry fw_grad when inputs have none"
+    );
+}
