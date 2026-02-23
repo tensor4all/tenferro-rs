@@ -746,8 +746,10 @@ fn einsum_wrong_operand_count() {
 #[test]
 fn tracked_einsum_matmul_pullback() {
     use chainrules::Tape;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    let mut ctx = CpuContext::new(1);
+    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 
     // Create tape and leaf tensors
     let tape = Tape::<Tensor<f64>>::new();
@@ -767,11 +769,11 @@ fn tracked_einsum_matmul_pullback() {
     let b_id = b.node_id().expect("leaf should have node_id");
 
     // C = A @ B  (tracked)
-    let c = tracked_einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b])
+    let c = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b])
         .expect("tracked_einsum should succeed");
 
     // loss = sum_{ij} C_{ij}^2  via "ij,ij->"
-    let loss = tracked_einsum::<f64, S, CpuBackend>(&mut ctx, "ij,ij->", &[&c, &c])
+    let loss = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c])
         .expect("tracked_einsum for loss should succeed");
 
     // Pullback
@@ -805,11 +807,16 @@ fn tracked_einsum_matmul_pullback() {
 
     // Numerical verification: d(loss)/dA = 2 * C @ B^T
     // C = A @ B
-    let c_val = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_data, &b_data], None)
-        .expect("einsum for C");
+    let c_val = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ij,jk->ik",
+        &[&a_data, &b_data],
+        None,
+    )
+    .expect("einsum for C");
     // grad_C = 2 * C (since loss = sum C_{ik}^2)
     let two_c = einsum::<f64, S, CpuBackend>(
-        &mut ctx,
+        &mut ctx.borrow_mut(),
         "ij,->ij",
         &[
             &c_val,
@@ -819,11 +826,13 @@ fn tracked_einsum_matmul_pullback() {
     )
     .expect("scale by 2");
     // grad_A = grad_C @ B^T = einsum("ik,jk->ij", [2*C, B])
-    let expected_ga = einsum::<f64, S, CpuBackend>(&mut ctx, "ik,jk->ij", &[&two_c, &b_data], None)
-        .expect("expected grad_A");
+    let expected_ga =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
+            .expect("expected grad_A");
     // grad_B = A^T @ grad_C = einsum("ij,ik->jk", [A, 2*C])
-    let expected_gb = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,ik->jk", &[&a_data, &two_c], None)
-        .expect("expected grad_B");
+    let expected_gb =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,ik->jk", &[&a_data, &two_c], None)
+            .expect("expected grad_B");
 
     for i in 0..2 {
         for j in 0..3 {
@@ -850,8 +859,10 @@ fn tracked_einsum_matmul_pullback() {
 #[test]
 fn tracked_einsum_rejects_mixed_tapes() {
     use chainrules::Tape;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
-    let mut ctx = CpuContext::new(1);
+    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 
     let tape1 = Tape::<Tensor<f64>>::new();
     let tape2 = Tape::<Tensor<f64>>::new();
@@ -862,7 +873,7 @@ fn tracked_einsum_rejects_mixed_tapes() {
     let a = tape1.leaf(a_data);
     let b = tape2.leaf(b_data);
 
-    let result = tracked_einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b]);
+    let result = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]);
     assert!(result.is_err(), "expected error for mixed-tape operands");
 }
 
@@ -1635,4 +1646,161 @@ fn einsum_error_non_square_trace() {
         "expected ShapeMismatch for non-square trace, got: {:?}",
         result.as_ref().err()
     );
+}
+
+// ============================================================================
+// Forward-mode tangent auto-propagation and HVP
+// ============================================================================
+
+#[test]
+fn einsum_auto_propagates_fw_grad() {
+    let mut ctx = CpuContext::new(1);
+
+    // A = [[1, 3], [2, 4]], B = [[5, 7], [6, 8]] (col-major)
+    let mut a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    // Set tangent on a only: dA = ones
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    a.set_fw_grad(da.clone());
+
+    // C = einsum("ij,jk->ik", A, B)
+    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+
+    // C should have fw_grad = einsum_frule result
+    assert!(c.has_fw_grad(), "output should carry fw_grad");
+
+    // Compare with explicit frule
+    let expected =
+        einsum_frule::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None])
+            .unwrap();
+
+    let cg = c.fw_grad().unwrap();
+    let cg_data = cg.buffer().as_slice().unwrap();
+    let exp_data = expected.buffer().as_slice().unwrap();
+    for i in 0..4 {
+        assert!(
+            (cg_data[i] - exp_data[i]).abs() < 1e-10,
+            "fw_grad[{i}] = {}, expected {}",
+            cg_data[i],
+            exp_data[i]
+        );
+    }
+}
+
+#[test]
+fn einsum_no_fw_grad_unchanged() {
+    let mut ctx = CpuContext::new(1);
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    assert!(
+        !c.has_fw_grad(),
+        "output should NOT carry fw_grad when inputs have none"
+    );
+}
+
+/// HVP via jvp(grad(f)) composition.
+///
+/// f(A) = sum(A @ B) = einsum("ij,jk->ik", A, B) then einsum("ij->", C)
+/// grad_A = ones_{ik} @ B^T_{kj} = einsum("ik,jk->ij", ones, B)
+/// HVP in direction dA: d(grad_A)/dt = einsum("ik,jk->ij", zeros, B) = 0
+///   (loss cotangent ones has no tangent, B has no tangent)
+///
+/// But the forward pass C = A@B, dC = dA@B, and loss = sum(C), dloss = sum(dC).
+/// The pullback sees cotangent = ones (no fw_grad) and primals [A, B] where A has fw_grad.
+/// Reverse einsum for grad_A: einsum("ik,jk->ij", cot, B). Neither cot nor B has fw_grad.
+/// So grad_A should NOT have fw_grad. This is correct: the HVP of a linear function is 0.
+///
+/// For a more interesting case, use loss = sum(C^2) where C = A @ B:
+/// grad_A = 2*C @ B^T, and d(grad_A)/dt = 2*(dA@B)@B^T
+#[test]
+fn hvp_via_fw_grad_composition() {
+    use chainrules::Tape;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+
+    // A = [[1, 3], [2, 4]] (col-major), B = [[5, 7], [6, 8]] (col-major)
+    let mut a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    // Tangent direction: dA = ones
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    a_data.set_fw_grad(da);
+
+    let tape = Tape::<Tensor<f64>>::new();
+    let a = tape.leaf(a_data.clone());
+    let b = tape.leaf(b_data.clone());
+    let a_id = a.node_id().unwrap();
+
+    // loss = sum_{ij} C_{ij}^2 where C = A @ B
+    let c = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
+
+    let grads = tape.pullback(&loss).unwrap();
+    let ga = grads.get(a_id).unwrap();
+
+    // grad_A should match 2*C @ B^T
+    let c_val = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ij,jk->ik",
+        &[&a_data, &b_data],
+        None,
+    )
+    .unwrap();
+    let two = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+    let two_c =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&c_val, &two], None)
+            .unwrap();
+    let expected_ga =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
+            .unwrap();
+
+    // Verify grad_A primal
+    let ga_data = ga.buffer().as_slice().unwrap();
+    let exp_data = expected_ga.buffer().as_slice().unwrap();
+    for i in 0..4 {
+        assert!(
+            (ga_data[i] - exp_data[i]).abs() < 1e-10,
+            "grad_A[{i}] = {}, expected {}",
+            ga_data[i],
+            exp_data[i]
+        );
+    }
+
+    // HVP: d(grad_A)/dt = 2*(dA@B)@B^T where dA = ones
+    // dA@B = ones @ B = einsum("ij,jk->ik", ones, B)
+    let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da_b =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,jk->ik", &[&ones, &b_data], None)
+            .unwrap();
+    // 2*(dA@B)@B^T = einsum("ik,jk->ij", 2*dA_B, B)
+    let two_da_b =
+        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&da_b, &two], None)
+            .unwrap();
+    let expected_hvp = einsum::<f64, S, CpuBackend>(
+        &mut ctx.borrow_mut(),
+        "ik,jk->ij",
+        &[&two_da_b, &b_data],
+        None,
+    )
+    .unwrap();
+
+    // grad_A should carry fw_grad = HVP
+    assert!(ga.has_fw_grad(), "gradient should carry fw_grad for HVP");
+    let hvp = ga.fw_grad().unwrap();
+    let hvp_data = hvp.buffer().as_slice().unwrap();
+    let exp_hvp_data = expected_hvp.buffer().as_slice().unwrap();
+    for i in 0..4 {
+        assert!(
+            (hvp_data[i] - exp_hvp_data[i]).abs() < 1e-10,
+            "hvp[{i}] = {}, expected {}",
+            hvp_data[i],
+            exp_hvp_data[i]
+        );
+    }
 }

@@ -847,3 +847,110 @@ fn accumulate_tangent_with_zero() {
     let data = result.buffer().as_slice().unwrap();
     assert_eq!(data, &[1.0, 2.0, 3.0]);
 }
+
+// ============================================================================
+// Forward-mode tangent (fw_grad)
+// ============================================================================
+
+#[test]
+fn fw_grad_default_none() {
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    assert!(!t.has_fw_grad());
+    assert!(t.fw_grad().is_none());
+}
+
+#[test]
+fn fw_grad_set_and_get() {
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    t.set_fw_grad(grad);
+    assert!(t.has_fw_grad());
+    assert_eq!(t.fw_grad().unwrap().dims(), &[2, 3]);
+}
+
+#[test]
+fn fw_grad_detach() {
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    t.set_fw_grad(grad);
+    let detached = t.detach_fw_grad();
+    assert!(detached.is_some());
+    assert!(!t.has_fw_grad());
+    assert_eq!(detached.unwrap().dims(), &[2, 3]);
+}
+
+#[test]
+fn fw_grad_clone_preserves() {
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    t.set_fw_grad(grad);
+    let cloned = t.clone();
+    assert!(cloned.has_fw_grad());
+    assert_eq!(cloned.fw_grad().unwrap().dims(), &[2, 3]);
+}
+
+#[test]
+fn fw_grad_view_ops_strip() {
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    t.set_fw_grad(Tensor::<f64>::ones(&[2, 3], MEM, COL));
+
+    // View operations strip fw_grad in Phase 1
+    let permuted = t.permute(&[1, 0]).unwrap();
+    assert!(!permuted.has_fw_grad());
+
+    let reshaped = t.reshape(&[6]).unwrap();
+    assert!(!reshaped.has_fw_grad());
+}
+
+#[test]
+fn accumulate_tangent_propagates_fw_grad() {
+    use chainrules_core::Differentiable;
+
+    let mut a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+    let mut b = Tensor::<f64>::from_slice(&[4.0, 5.0, 6.0], &[3], COL).unwrap();
+    a.set_fw_grad(Tensor::<f64>::from_slice(&[0.1, 0.2, 0.3], &[3], COL).unwrap());
+    b.set_fw_grad(Tensor::<f64>::from_slice(&[0.4, 0.5, 0.6], &[3], COL).unwrap());
+
+    let result = Tensor::<f64>::accumulate_tangent(a, &b);
+
+    // Primal: [5.0, 7.0, 9.0]
+    let r_data = result.buffer().as_slice().unwrap();
+    assert!((r_data[0] - 5.0).abs() < 1e-10);
+    assert!((r_data[1] - 7.0).abs() < 1e-10);
+    assert!((r_data[2] - 9.0).abs() < 1e-10);
+
+    // fw_grad: [0.5, 0.7, 0.9]
+    assert!(result.has_fw_grad());
+    let fg = result.fw_grad().unwrap();
+    let fg_data = fg.buffer().as_slice().unwrap();
+    assert!((fg_data[0] - 0.5).abs() < 1e-10);
+    assert!((fg_data[1] - 0.7).abs() < 1e-10);
+    assert!((fg_data[2] - 0.9).abs() < 1e-10);
+}
+
+#[test]
+fn accumulate_tangent_one_has_fw_grad() {
+    use chainrules_core::Differentiable;
+
+    let mut a = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], COL).unwrap();
+    a.set_fw_grad(Tensor::<f64>::from_slice(&[0.1, 0.2], &[2], COL).unwrap());
+
+    let result = Tensor::<f64>::accumulate_tangent(a, &b);
+    assert!(result.has_fw_grad());
+    let fg = result.fw_grad().unwrap();
+    let fg_data = fg.buffer().as_slice().unwrap();
+    assert!((fg_data[0] - 0.1).abs() < 1e-10);
+    assert!((fg_data[1] - 0.2).abs() < 1e-10);
+}
+
+#[test]
+fn accumulate_tangent_no_fw_grad() {
+    use chainrules_core::Differentiable;
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], COL).unwrap();
+
+    let result = Tensor::<f64>::accumulate_tangent(a, &b);
+    assert!(!result.has_fw_grad());
+}

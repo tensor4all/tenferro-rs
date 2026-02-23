@@ -220,7 +220,10 @@
 //! // a.set_preferred_compute_device(None);
 //! ```
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
+use std::rc::Rc;
 
 use chainrules::{AdResult, Differentiable, DualTensor, NodeId, ReverseRule, TrackedTensor};
 use strided_traits::ScalarBase;
@@ -1233,7 +1236,18 @@ where
     B: TensorPrims<A>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    einsum_with_subscripts::<T, A, B>(ctx, &subs, operands, size_dict)
+    let mut output = einsum_with_subscripts::<T, A, B>(ctx, &subs, operands, size_dict)?;
+
+    // Auto-propagate forward-mode tangents
+    if operands.iter().any(|t| t.has_fw_grad()) {
+        let tangents: Vec<Option<&Tensor<T>>> = operands.iter().map(|t| t.fw_grad()).collect();
+        // einsum_frule_impl calls einsum_with_subscripts (not einsum), so no recursion
+        if let Ok(output_tangent) = einsum_frule_impl::<T, A, B>(ctx, &subs, operands, &tangents) {
+            output.set_fw_grad(output_tangent);
+        }
+    }
+
+    Ok(output)
 }
 
 /// Execute einsum with pre-built [`Subscripts`].
@@ -1549,39 +1563,46 @@ where
 // Automatic differentiation support
 // ============================================================================
 
-/// ReverseRule for einsum — stores subscripts and primal tensors for pullback.
-struct EinsumReverseRule<T: Scalar>
+/// ReverseRule for einsum — stores subscripts, primal tensors, and shared
+/// backend context for backend-optimized pullback.
+struct EinsumReverseRule<T, A, B>
 where
+    T: Scalar,
+    B: TensorPrims<A>,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
+    ctx: Rc<RefCell<B::Context>>,
     subscripts: Subscripts,
     primals: Vec<Tensor<T>>,
     input_node_ids: Vec<Option<NodeId>>,
-    size_dict: HashMap<u32, usize>,
+    _phantom: PhantomData<A>,
 }
 
-impl<T: Scalar> ReverseRule<Tensor<T>> for EinsumReverseRule<T>
+impl<T, A, B> ReverseRule<Tensor<T>> for EinsumReverseRule<T, A, B>
 where
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
     fn pullback(&self, cotangent: &Tensor<T>) -> AdResult<Vec<(NodeId, Tensor<T>)>> {
         let n = self.primals.len();
         let mut results = Vec::new();
+        let mut ctx = self.ctx.borrow_mut();
 
         for k in 0..n {
             let node_id = match self.input_node_ids[k] {
                 Some(id) => id,
-                None => continue, // No gradient needed for this input
+                None => continue,
             };
 
-            // Build reverse einsum: grad_Ak = einsum(reverse_subs, [cotangent, A_others...])
+            // Build reverse einsum subscripts
             let mut rev_inputs_subs = vec![self.subscripts.output.clone()];
-            let mut rev_operands: Vec<Tensor<T>> = vec![cotangent.clone()];
+            let mut rev_operands: Vec<&Tensor<T>> = vec![cotangent];
 
             for (i, primal) in self.primals.iter().enumerate() {
                 if i != k {
                     rev_inputs_subs.push(self.subscripts.inputs[i].clone());
-                    rev_operands.push(primal.clone());
+                    rev_operands.push(primal);
                 }
             }
 
@@ -1590,8 +1611,21 @@ where
                 output: self.subscripts.inputs[k].clone(),
             };
 
-            let grad = manual_einsum(&rev_subs, &rev_operands, &self.size_dict)
-                .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+            // Use backend-optimized einsum
+            let mut grad =
+                einsum_with_subscripts::<T, A, B>(&mut *ctx, &rev_subs, &rev_operands, None)
+                    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+
+            // Propagate fw_grad from operands through the reverse einsum
+            if rev_operands.iter().any(|t| t.has_fw_grad()) {
+                let tangents: Vec<Option<&Tensor<T>>> =
+                    rev_operands.iter().map(|t| t.fw_grad()).collect();
+                if let Ok(grad_tangent) =
+                    einsum_frule_impl::<T, A, B>(&mut *ctx, &rev_subs, &rev_operands, &tangents)
+                {
+                    grad.set_fw_grad(grad_tangent);
+                }
+            }
 
             results.push((node_id, grad));
         }
@@ -1610,14 +1644,20 @@ where
 /// on the reverse-mode tape so that [`chainrules::Tape::pullback`] can
 /// compute gradients through it.
 ///
+/// The context is wrapped in `Rc<RefCell<>>` so the pullback rule can
+/// reuse the same backend context for computing gradients.
+///
 /// # Examples
 ///
 /// ```ignore
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
 /// use chainrules::Tape;
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
+/// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 /// let tape = Tape::<Tensor<f64>>::new();
 /// let a = tape.leaf(Tensor::ones(
 ///     &[2, 3],
@@ -1629,20 +1669,20 @@ where
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
 /// ));
-/// let c = tracked_einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b]).unwrap();
-/// let loss = tracked_einsum::<_, _, CpuBackend>(&mut ctx, "ij,ij->", &[&c, &c]).unwrap();
+/// let c = tracked_einsum::<_, _, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+/// let loss = tracked_einsum::<_, _, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 /// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
 ///
-pub fn tracked_einsum<T, A, B>(
-    ctx: &mut B::Context,
+pub fn tracked_einsum<T, A: 'static, B>(
+    ctx: Rc<RefCell<B::Context>>,
     subscripts: &str,
     operands: &[&TrackedTensor<Tensor<T>>],
 ) -> AdResult<TrackedTensor<Tensor<T>>>
 where
     T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    B: TensorPrims<A> + 'static,
     Tensor<T>: Differentiable<Tangent = Tensor<T>>,
 {
     let subs = Subscripts::parse(subscripts)
@@ -1650,12 +1690,7 @@ where
 
     // Extract primals and run forward einsum
     let primals: Vec<&Tensor<T>> = operands.iter().map(|op| op.value()).collect();
-    let output = einsum::<T, A, B>(ctx, subscripts, &primals, None)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
-
-    // Build size dict from primal shapes
-    let shapes: Vec<&[usize]> = primals.iter().map(|t| t.dims()).collect();
-    let size_dict = build_size_dict(&subs, &shapes, None)
+    let output = einsum::<T, A, B>(&mut *ctx.borrow_mut(), subscripts, &primals, None)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     // Check if any operand requires gradients
@@ -1684,11 +1719,12 @@ where
         }
     }
 
-    let rule = EinsumReverseRule {
+    let rule = EinsumReverseRule::<T, A, B> {
+        ctx: ctx.clone(),
         subscripts: subs,
         primals: primals.iter().map(|&t| t.clone()).collect(),
         input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
-        size_dict,
+        _phantom: PhantomData,
     };
 
     // Record the operation on the tape so pullback can compute gradients
@@ -1835,6 +1871,39 @@ where
 ///
 /// let dc = einsum_frule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
+/// Internal frule implementation with pre-parsed subscripts.
+fn einsum_frule_impl<T, A, B>(
+    ctx: &mut B::Context,
+    subs: &Subscripts,
+    primals: &[&Tensor<T>],
+    tangents: &[Option<&Tensor<T>>],
+) -> Result<Tensor<T>>
+where
+    T: ScalarBase + Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    let n = primals.len();
+
+    // dC = sum_k einsum(subs, [A0, ..., dAk, ..., An]) for each k with tangent
+    let mut result: Option<Tensor<T>> = None;
+
+    for k in 0..n {
+        if let Some(tangent_k) = tangents[k] {
+            let mut ops: Vec<&Tensor<T>> = primals.to_vec();
+            ops[k] = tangent_k;
+
+            let term = einsum_with_subscripts::<T, A, B>(ctx, subs, &ops, None)?;
+
+            result = Some(match result {
+                None => term,
+                Some(existing) => Tensor::<T>::accumulate_tangent(existing, &term),
+            });
+        }
+    }
+
+    result.ok_or_else(|| Error::InvalidArgument("no tangents provided".into()))
+}
+
 pub fn einsum_frule<T, A, B>(
     ctx: &mut B::Context,
     subscripts: &str,
@@ -1846,27 +1915,7 @@ where
     B: TensorPrims<A>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    let n = primals.len();
-
-    // dC = sum_k einsum(subs, [A0, ..., dAk, ..., An]) for each k with tangent
-    let mut result: Option<Tensor<T>> = None;
-
-    for k in 0..n {
-        if let Some(tangent_k) = tangents[k] {
-            // Replace operand k with its tangent
-            let mut ops: Vec<&Tensor<T>> = primals.to_vec();
-            ops[k] = tangent_k;
-
-            let term = einsum_with_subscripts::<T, A, B>(ctx, &subs, &ops, None)?;
-
-            result = Some(match result {
-                None => term,
-                Some(existing) => Tensor::<T>::accumulate_tangent(existing, &term),
-            });
-        }
-    }
-
-    result.ok_or_else(|| Error::InvalidArgument("no tangents provided".into()))
+    einsum_frule_impl::<T, A, B>(ctx, &subs, primals, tangents)
 }
 
 /// Local HVP rule for einsum without building a global tape.
