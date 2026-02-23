@@ -880,6 +880,7 @@ impl CpuBackend {
             PrimDescriptor::ElementwiseUnary { op } => {
                 // ElementwiseUnary expects 2 shapes: A (input), C (output)
                 validate_shape_count(shapes, 2, "ElementwiseUnary")?;
+                validate_shape_eq(shapes[1], shapes[0], "ElementwiseUnary output")?;
                 Ok(CpuPlan::ElementwiseUnary {
                     op: *op,
                     _marker: PhantomData,
@@ -919,6 +920,8 @@ impl CpuBackend {
             PrimDescriptor::ElementwiseMul => {
                 // ElementwiseMul expects 3 shapes: A, B, C
                 validate_shape_count(shapes, 3, "ElementwiseMul")?;
+                validate_shape_eq(shapes[1], shapes[0], "ElementwiseMul input B")?;
+                validate_shape_eq(shapes[2], shapes[0], "ElementwiseMul output C")?;
                 Ok(CpuPlan::ElementwiseMul {
                     _marker: PhantomData,
                 })
@@ -927,6 +930,7 @@ impl CpuBackend {
             PrimDescriptor::MakeContiguous => {
                 // MakeContiguous expects 2 shapes: A (input), C (output)
                 validate_shape_count(shapes, 2, "MakeContiguous")?;
+                validate_shape_eq(shapes[1], shapes[0], "MakeContiguous output")?;
                 Ok(CpuPlan::MakeContiguous {
                     _marker: PhantomData,
                 })
@@ -1350,11 +1354,27 @@ fn execute_elementwise_unary<T: ScalarBase>(
 ) -> Result<()> {
     match op {
         UnaryOp::Conj => {
-            // Conj through ScalarBase is identity (no imaginary part accessible).
-            // For complex types dispatched via Standard<Complex64>, the impl
-            // also passes through here — but ScalarBase-level Conj is always
-            // identity. True complex conjugation is handled by resolve_conj().
-            execute_make_contiguous(alpha, input, beta, output)
+            let tid = TypeId::of::<T>();
+            if tid == TypeId::of::<f64>() || tid == TypeId::of::<f32>() {
+                // Real types: conjugation is identity
+                execute_make_contiguous(alpha, input, beta, output)
+            } else if tid == TypeId::of::<Complex64>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex64) };
+                    let r = x.conj();
+                    unsafe { *(&r as *const Complex64 as *const T) }
+                })
+            } else if tid == TypeId::of::<Complex32>() {
+                execute_unary_map(alpha, input, beta, output, |v| {
+                    let x = unsafe { *(&v as *const T as *const Complex32) };
+                    let r = x.conj();
+                    unsafe { *(&r as *const Complex32 as *const T) }
+                })
+            } else {
+                Err(Error::InvalidArgument(format!(
+                    "Conj not supported for this scalar type"
+                )))
+            }
         }
         UnaryOp::Negate => {
             let tid = TypeId::of::<T>();

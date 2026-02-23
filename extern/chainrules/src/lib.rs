@@ -164,6 +164,23 @@ impl<V: Differentiable> Tape<V> {
         }
     }
 
+    /// Returns `true` if `self` and `other` are the same tape (same backing store).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::Tape;
+    ///
+    /// let t1 = Tape::<f64>::new();
+    /// let t2 = Tape::<f64>::new();
+    /// let t1_clone = t1.clone();
+    /// assert!(!t1.same_tape(&t2));
+    /// assert!(t1.same_tape(&t1_clone));
+    /// ```
+    pub fn same_tape(&self, other: &Tape<V>) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     /// Creates a leaf value requiring gradient on this tape.
     ///
     /// The returned [`TrackedTensor`] is connected to this tape and

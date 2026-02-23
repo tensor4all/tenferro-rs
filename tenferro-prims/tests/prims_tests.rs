@@ -734,6 +734,74 @@ fn elementwise_unary_conj_identity() {
 }
 
 // ============================================================================
+// ElementwiseUnary -- Conj for complex types
+// ============================================================================
+
+#[test]
+fn elementwise_unary_conj_complex64() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex64::new(idx[0] as f64 + 1.0, idx[0] as f64 + 2.0)
+    });
+    let mut c = StridedArray::<Complex64>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &[&a.view()],
+        Complex64::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = Complex64::new(i as f64 + 1.0, -(i as f64 + 2.0));
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+#[test]
+fn elementwise_unary_conj_complex32() {
+    use num_complex::Complex32;
+
+    let mut ctx = CpuContext::new(1);
+    let a = StridedArray::from_fn_col_major(&[3], |idx| {
+        Complex32::new(idx[0] as f32 + 1.0, idx[0] as f32 + 2.0)
+    });
+    let mut c = StridedArray::<Complex32>::col_major(&[3]);
+
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
+    cpu_execute(
+        &mut ctx,
+        &plan,
+        Complex32::new(1.0, 0.0),
+        &[&a.view()],
+        Complex32::new(0.0, 0.0),
+        &mut c.view_mut(),
+    )
+    .unwrap();
+
+    for i in 0..3 {
+        let expected = Complex32::new(i as f32 + 1.0, -(i as f32 + 2.0));
+        assert!(
+            (c.view().get(&[i]) - expected).norm() < 1e-5,
+            "C[{i}] = {}, expected {expected}",
+            c.view().get(&[i])
+        );
+    }
+}
+
+// ============================================================================
 // ElementwiseUnary -- Negate
 // ============================================================================
 
@@ -1746,6 +1814,69 @@ fn plan_make_contiguous_wrong_shape_count() {
     // 0 shapes instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[]);
     assert!(result.is_err(), "expected error for wrong shape count");
+}
+
+#[test]
+fn plan_elementwise_unary_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    // Same rank but different dimensions: input [3,4] vs output [3,5]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5]]);
+    assert!(result.is_err(), "expected error for shape mismatch");
+}
+
+#[test]
+fn plan_elementwise_unary_rank_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    // Different ranks: input [3,4] vs output [3,4,2]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4, 2]]);
+    assert!(result.is_err(), "expected error for rank mismatch");
+}
+
+#[test]
+fn plan_elementwise_mul_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    // A=[3,4], B=[3,4], C=[3,5] — C dimension mismatch
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 5]]);
+    assert!(result.is_err(), "expected error for shape mismatch");
+}
+
+#[test]
+fn plan_elementwise_mul_rank_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    // A=[3,4], B=[3,4], C=[3] — rank mismatch
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3]]);
+    assert!(result.is_err(), "expected error for rank mismatch");
+}
+
+#[test]
+fn plan_elementwise_mul_b_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::ElementwiseMul;
+    // A=[3,4], B=[3,5], C=[3,4] — B dimension mismatch
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5], &[3, 4]]);
+    assert!(result.is_err(), "expected error for B shape mismatch");
+}
+
+#[test]
+fn plan_make_contiguous_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::MakeContiguous;
+    // input [3,4] vs output [3,5]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5]]);
+    assert!(result.is_err(), "expected error for shape mismatch");
+}
+
+#[test]
+fn plan_make_contiguous_rank_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::MakeContiguous;
+    // input [3,4] vs output [12]
+    let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[12]]);
+    assert!(result.is_err(), "expected error for rank mismatch");
 }
 
 #[test]
