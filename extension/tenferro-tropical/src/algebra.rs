@@ -6,182 +6,117 @@
 //!
 //! | Algebra marker | Scalar wrapper | ⊕ | ⊗ |
 //! |----------------|---------------|---|---|
-//! | [`MaxPlusAlgebra`] | [`MaxPlus<T>`](crate::MaxPlus) | max | + |
-//! | [`MinPlusAlgebra`] | [`MinPlus<T>`](crate::MinPlus) | min | + |
-//! | [`MaxMulAlgebra`] | [`MaxMul<T>`](crate::MaxMul) | max | × |
+//! | [`MaxPlusAlgebra<T>`] | [`MaxPlus<T>`](crate::MaxPlus) | max | + |
+//! | [`MinPlusAlgebra<T>`] | [`MinPlus<T>`](crate::MinPlus) | min | + |
+//! | [`MaxMulAlgebra<T>`] | [`MaxMul<T>`](crate::MaxMul) | max | × |
+
+use std::marker::PhantomData;
 
 use tenferro_algebra::{HasAlgebra, Semiring};
 
 use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 
-/// Algebra marker for the max-plus tropical semiring (⊕ = max, ⊗ = +).
+/// Generates a tropical algebra marker struct with HasAlgebra and Semiring impls.
 ///
-/// Used as the algebra parameter `Alg` in
-/// [`TensorPrims<MaxPlusAlgebra>`](tenferro_prims::TensorPrims).
+/// For each invocation, this creates:
+/// - A generic zero-sized marker struct `$marker<T>`
+/// - `HasAlgebra` impls mapping `$wrapper<f32>` and `$wrapper<f64>` to the marker
+/// - `Semiring` impls for `$marker<f32>` and `$marker<f64>`
 ///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_tropical::MaxPlusAlgebra;
-/// use tenferro_prims::{CpuBackend, TensorPrims};
-///
-/// // Check extension support
-/// let has_contract = CpuBackend::has_extension_for::<f64>(
-///     tenferro_prims::Extension::Contract,
-/// );
-/// ```
-pub struct MaxPlusAlgebra;
+/// The `$add_fn` and `$mul_fn` closures define the semiring operations and must
+/// be valid for both f32 and f64.
+macro_rules! define_tropical_algebra {
+    (
+        $(#[$meta:meta])*
+        $marker:ident, $wrapper:ident,
+        zero_f32: $z32:expr, one_f32: $o32:expr,
+        zero_f64: $z64:expr, one_f64: $o64:expr
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy)]
+        pub struct $marker<T>(PhantomData<T>);
 
-/// Algebra marker for the min-plus tropical semiring (⊕ = min, ⊗ = +).
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_tropical::MinPlusAlgebra;
-/// use tenferro_prims::{CpuBackend, TensorPrims};
-///
-/// let has_contract = CpuBackend::has_extension_for::<f64>(
-///     tenferro_prims::Extension::Contract,
-/// );
-/// ```
-pub struct MinPlusAlgebra;
+        impl HasAlgebra for $wrapper<f32> {
+            type Algebra = $marker<f32>;
+        }
 
-/// Algebra marker for the max-times tropical semiring (⊕ = max, ⊗ = ×).
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_tropical::MaxMulAlgebra;
-/// use tenferro_prims::{CpuBackend, TensorPrims};
-///
-/// let has_contract = CpuBackend::has_extension_for::<f64>(
-///     tenferro_prims::Extension::Contract,
-/// );
-/// ```
-pub struct MaxMulAlgebra;
+        impl HasAlgebra for $wrapper<f64> {
+            type Algebra = $marker<f64>;
+        }
 
-// ---------------------------------------------------------------------------
-// HasAlgebra: scalar → algebra mapping
-// ---------------------------------------------------------------------------
+        impl Semiring for $marker<f32> {
+            type Scalar = $wrapper<f32>;
 
-impl HasAlgebra for MaxPlus<f32> {
-    type Algebra = MaxPlusAlgebra;
+            fn zero() -> Self::Scalar { $z32 }
+            fn one() -> Self::Scalar { $o32 }
+            fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar { a + b }
+            fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar { a * b }
+        }
+
+        impl Semiring for $marker<f64> {
+            type Scalar = $wrapper<f64>;
+
+            fn zero() -> Self::Scalar { $z64 }
+            fn one() -> Self::Scalar { $o64 }
+            fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar { a + b }
+            fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar { a * b }
+        }
+    };
 }
 
-impl HasAlgebra for MaxPlus<f64> {
-    type Algebra = MaxPlusAlgebra;
-}
+define_tropical_algebra!(
+    /// Algebra marker for the max-plus tropical semiring (⊕ = max, ⊗ = +).
+    ///
+    /// Generic over the inner scalar type `T` (typically `f32` or `f64`).
+    /// Used as the algebra parameter `Alg` in
+    /// [`TensorPrims<MaxPlusAlgebra<T>>`](tenferro_prims::TensorPrims).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_algebra::Semiring;
+    /// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+    ///
+    /// let z = <MaxPlusAlgebra<f64> as Semiring>::zero();
+    /// assert_eq!(z, MaxPlus(f64::NEG_INFINITY));
+    /// let z32 = <MaxPlusAlgebra<f32> as Semiring>::zero();
+    /// assert_eq!(z32, MaxPlus(f32::NEG_INFINITY));
+    /// ```
+    MaxPlusAlgebra, MaxPlus,
+    zero_f32: MaxPlus(f32::NEG_INFINITY), one_f32: MaxPlus(0.0f32),
+    zero_f64: MaxPlus(f64::NEG_INFINITY), one_f64: MaxPlus(0.0f64)
+);
 
-impl HasAlgebra for MinPlus<f32> {
-    type Algebra = MinPlusAlgebra;
-}
+define_tropical_algebra!(
+    /// Algebra marker for the min-plus tropical semiring (⊕ = min, ⊗ = +).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_algebra::Semiring;
+    /// use tenferro_tropical::{MinPlus, MinPlusAlgebra};
+    ///
+    /// let z = <MinPlusAlgebra<f64> as Semiring>::zero();
+    /// assert_eq!(z, MinPlus(f64::INFINITY));
+    /// ```
+    MinPlusAlgebra, MinPlus,
+    zero_f32: MinPlus(f32::INFINITY), one_f32: MinPlus(0.0f32),
+    zero_f64: MinPlus(f64::INFINITY), one_f64: MinPlus(0.0f64)
+);
 
-impl HasAlgebra for MinPlus<f64> {
-    type Algebra = MinPlusAlgebra;
-}
-
-impl HasAlgebra for MaxMul<f32> {
-    type Algebra = MaxMulAlgebra;
-}
-
-impl HasAlgebra for MaxMul<f64> {
-    type Algebra = MaxMulAlgebra;
-}
-
-// ---------------------------------------------------------------------------
-// Semiring implementations
-//
-// The Semiring trait uses an associated type `type Scalar`, so each algebra
-// marker can only implement Semiring once (Rust does not allow two impls with
-// different associated types for the same struct). We choose f64 as the
-// canonical Semiring scalar for constant queries (zero/one/add/mul).
-//
-// f32 is fully supported at the TensorPrims level: plan() and execute() are
-// generic over `T: Scalar`, so MaxPlus<f32>, MinPlus<f32>, and MaxMul<f32>
-// work correctly through the standard operator overloads (Add/Mul/Zero/One
-// on the scalar wrappers). The Semiring trait is primarily used for querying
-// algebraic constants and is not in the critical TensorPrims execution path.
-//
-// If f32-specific Semiring constants are needed in the future, the options
-// are: (a) create separate algebra markers (MaxPlusF32Algebra, etc.), or
-// (b) make the Semiring trait generic (Semiring<T>). Both require changes
-// to tenferro-algebra and are deferred until a concrete use case arises.
-// ---------------------------------------------------------------------------
-
-/// Max-plus semiring over `MaxPlus<f64>`.
-///
-/// - `zero()` = MaxPlus(−∞)
-/// - `one()` = MaxPlus(0.0)
-/// - `add(a, b)` = max(a, b)
-/// - `mul(a, b)` = a + b (ordinary addition)
-impl Semiring for MaxPlusAlgebra {
-    type Scalar = MaxPlus<f64>;
-
-    fn zero() -> Self::Scalar {
-        MaxPlus(f64::NEG_INFINITY)
-    }
-
-    fn one() -> Self::Scalar {
-        MaxPlus(0.0)
-    }
-
-    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
-        a + b // max
-    }
-
-    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
-        a * b // ordinary +
-    }
-}
-
-/// Min-plus semiring over `MinPlus<f64>`.
-///
-/// - `zero()` = MinPlus(+∞)
-/// - `one()` = MinPlus(0.0)
-/// - `add(a, b)` = min(a, b)
-/// - `mul(a, b)` = a + b (ordinary addition)
-impl Semiring for MinPlusAlgebra {
-    type Scalar = MinPlus<f64>;
-
-    fn zero() -> Self::Scalar {
-        MinPlus(f64::INFINITY)
-    }
-
-    fn one() -> Self::Scalar {
-        MinPlus(0.0)
-    }
-
-    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
-        a + b // min
-    }
-
-    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
-        a * b // ordinary +
-    }
-}
-
-/// Max-times semiring over `MaxMul<f64>`.
-///
-/// - `zero()` = MaxMul(0.0)
-/// - `one()` = MaxMul(1.0)
-/// - `add(a, b)` = max(a, b)
-/// - `mul(a, b)` = a × b (ordinary multiplication)
-impl Semiring for MaxMulAlgebra {
-    type Scalar = MaxMul<f64>;
-
-    fn zero() -> Self::Scalar {
-        MaxMul(0.0)
-    }
-
-    fn one() -> Self::Scalar {
-        MaxMul(1.0)
-    }
-
-    fn add(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
-        a + b // max
-    }
-
-    fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar {
-        a * b // ordinary *
-    }
-}
+define_tropical_algebra!(
+    /// Algebra marker for the max-times tropical semiring (⊕ = max, ⊗ = ×).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_algebra::Semiring;
+    /// use tenferro_tropical::{MaxMul, MaxMulAlgebra};
+    ///
+    /// let z = <MaxMulAlgebra<f64> as Semiring>::zero();
+    /// assert_eq!(z, MaxMul(0.0f64));
+    /// ```
+    MaxMulAlgebra, MaxMul,
+    zero_f32: MaxMul(0.0f32), one_f32: MaxMul(1.0f32),
+    zero_f64: MaxMul(0.0f64), one_f64: MaxMul(1.0f64)
+);
