@@ -121,7 +121,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::hash::Hash;
 
-use tenferro_algebra::Scalar;
+use tenferro_algebra::{Algebra, Scalar};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
@@ -194,7 +194,7 @@ pub enum UnaryOp {
 /// use tenferro_prims::{CpuBackend, TensorPrims, Extension};
 ///
 /// // Check if element-wise multiplication is available for f64
-/// let available = CpuBackend::has_extension_for::<f64>(Extension::ElementwiseMul);
+/// let available = <CpuBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::ElementwiseMul);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Extension {
@@ -329,7 +329,7 @@ pub enum PrimDescriptor {
     /// strategy). Maps to `cutensorContract` on GPU backends
     /// (not yet implemented).
     ///
-    /// Available when `has_extension_for::<T>(Extension::Contract)` returns true.
+    /// Available when `has_extension_for(Extension::Contract)` returns true.
     Contract {
         /// Mode labels for input tensor A.
         modes_a: Vec<u32>,
@@ -341,7 +341,7 @@ pub enum PrimDescriptor {
 
     /// Element-wise multiplication of two tensors.
     ///
-    /// Available when `has_extension_for::<T>(Extension::ElementwiseMul)` returns true.
+    /// Available when `has_extension_for(Extension::ElementwiseMul)` returns true.
     ElementwiseMul,
 
     // ====================================================================
@@ -386,12 +386,12 @@ pub enum PrimDescriptor {
 /// let desc = PrimDescriptor::BatchedGemm {
 ///     batch_dims: vec![], m: 3, n: 5, k: 4,
 /// };
-/// let plan = CpuBackend::plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-/// CpuBackend::execute(&mut ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+/// let plan = <CpuBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
+/// <CpuBackend as TensorPrims<Standard<f64>>>::execute(&mut ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
 /// ```
-pub trait TensorPrims<Alg> {
-    /// Backend-specific plan type (no type erasure).
-    type Plan<T: Scalar>;
+pub trait TensorPrims<Alg: Algebra> {
+    /// Backend-specific plan type.
+    type Plan;
 
     /// Backend-specific execution context.
     ///
@@ -405,33 +405,34 @@ pub trait TensorPrims<Alg> {
     /// The plan pre-computes kernel selection and workspace sizes.
     /// `shapes` contains the shape of each tensor involved in the operation
     /// (inputs first, then output).
-    fn plan<T: Scalar>(
+    fn plan(
         ctx: &mut Self::Context,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
-    ) -> Result<Self::Plan<T>>;
+    ) -> Result<Self::Plan>;
 
     /// Execute a plan with the given tensors and scaling factors.
     ///
     /// Follows the BLAS/cuTENSOR pattern:
     /// `output = alpha * op(inputs) + beta * output`
     ///
-    /// Operations receive `Tensor<T>` directly (PyTorch-aligned). CPU backends
-    /// convert to strided views internally; GPU backends extract device pointers.
-    fn execute<T: Scalar>(
+    /// Operations receive `Tensor<Alg::Scalar>` directly (PyTorch-aligned).
+    /// CPU backends convert to strided views internally; GPU backends
+    /// extract device pointers.
+    fn execute(
         ctx: &mut Self::Context,
-        plan: &Self::Plan<T>,
-        alpha: T,
-        inputs: &[&Tensor<T>],
-        beta: T,
-        output: &mut Tensor<T>,
+        plan: &Self::Plan,
+        alpha: Alg::Scalar,
+        inputs: &[&Tensor<Alg::Scalar>],
+        beta: Alg::Scalar,
+        output: &mut Tensor<Alg::Scalar>,
     ) -> Result<()>;
 
-    /// Query whether an extended operation is available for scalar type `T`.
+    /// Query whether an extended operation is available for this algebra.
     ///
     /// Returns `true` if the backend supports the given extended operation
-    /// for the specified scalar type.
-    fn has_extension_for<T: Scalar>(ext: Extension) -> bool;
+    /// for the algebra's scalar type.
+    fn has_extension_for(ext: Extension) -> bool;
 }
 
 // ===========================================================================

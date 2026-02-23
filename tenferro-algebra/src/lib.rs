@@ -9,8 +9,8 @@
 //!   Enables automatic inference: `Tensor<f64>` → `Standard<f64>`,
 //!   `Tensor<MaxPlus<f64>>` → `MaxPlusAlgebra<f64>` (in external crate).
 //!   This is UX sugar — the core model is `Alg::Scalar`-centric.
-//! - [`Semiring`]: Defines zero, one, add, mul for algebra-generic operations.
-//!   The algebra type `Alg` carries its scalar type via `Alg::Scalar`.
+//! - [`Algebra`]: Associates an algebra marker with its scalar type (`Alg::Scalar`).
+//! - [`Semiring`]: Extends `Algebra` with zero, one, add, mul for algebra-generic operations.
 //! - [`Standard<T>`](Standard): Typed standard arithmetic algebra (add = `+`, mul = `*`).
 //!
 //! # Extensibility
@@ -161,6 +161,27 @@ impl HasAlgebra for Complex64 {
     type Algebra = Standard<Complex64>;
 }
 
+/// Associates an algebra marker with its scalar type.
+///
+/// This is the minimal trait required by [`TensorPrims`] — it provides
+/// the scalar type without requiring semiring operations.
+///
+/// [`Semiring`] extends `Algebra` with zero/one/add/mul.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_algebra::{Algebra, Standard};
+///
+/// fn needs_algebra<A: Algebra>() {}
+/// needs_algebra::<Standard<f64>>();
+/// needs_algebra::<Standard<f32>>();
+/// ```
+pub trait Algebra {
+    /// The scalar element type for tensors under this algebra.
+    type Scalar: Scalar;
+}
+
 /// Semiring trait for algebra-generic operations.
 ///
 /// The algebra type `Alg` carries its scalar type via `Alg::Scalar`. This
@@ -182,10 +203,7 @@ impl HasAlgebra for Complex64 {
 ///
 /// Tropical (MaxPlus) semiring (in external crate):
 /// - `zero() = -∞`, `one() = 0`, `add = max`, `mul = +`
-pub trait Semiring {
-    /// The scalar type for this semiring.
-    type Scalar: Scalar;
-
+pub trait Semiring: Algebra {
     /// Additive identity element.
     fn zero() -> Self::Scalar;
 
@@ -197,6 +215,10 @@ pub trait Semiring {
 
     /// Semiring multiplication.
     fn mul(a: Self::Scalar, b: Self::Scalar) -> Self::Scalar;
+}
+
+impl<T: Scalar> Algebra for Standard<T> {
+    type Scalar = T;
 }
 
 /// Standard arithmetic implements `Semiring` with `+` and `*`.
@@ -212,8 +234,6 @@ pub trait Semiring {
 /// assert_eq!(o, 1.0);
 /// ```
 impl<T: Scalar> Semiring for Standard<T> {
-    type Scalar = T;
-
     fn zero() -> T {
         T::zero()
     }

@@ -381,7 +381,7 @@ fn tracked_maxplus_matmul_pullback() {
     let ones_tracked = chainrules::TrackedTensor::new(ones);
 
     let ctx = Rc::new(RefCell::new(ctx()));
-    let loss = tracked_einsum::<f64, tenferro_algebra::Standard<f64>, tenferro_prims::CpuBackend>(
+    let loss = tracked_einsum::<tenferro_algebra::Standard<f64>, tenferro_prims::CpuBackend>(
         ctx.clone(),
         "ik,ik->",
         &[&c, &ones_tracked],

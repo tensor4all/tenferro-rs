@@ -1075,7 +1075,7 @@ pub unsafe extern "C" fn tfe_einsum_f64(
             .collect::<Result<Vec<_>, _>>()?;
 
         let mut ctx = CpuContext::new(1);
-        einsum::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, None)
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, None)
             .map(|t| tensor_to_handle(t))
             .map_err(|e| map_device_error(&e))
     }));
@@ -1146,7 +1146,7 @@ pub unsafe extern "C" fn tfe_einsum_rrule_f64(
         let cot = handle_to_ref(cotangent);
 
         let mut ctx = CpuContext::new(1);
-        let grads = einsum_rrule::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, cot)
+        let grads = einsum_rrule::<Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, cot)
             .map_err(|e| map_device_error(&e))?;
 
         let out_slice = std::slice::from_raw_parts_mut(grads_out, num_operands);
@@ -1225,7 +1225,7 @@ pub unsafe extern "C" fn tfe_einsum_frule_f64(
             .collect();
 
         let mut ctx = CpuContext::new(1);
-        einsum_frule::<f64, Standard<f64>, CpuBackend>(&mut ctx, subs, &primal_refs, &tangent_refs)
+        einsum_frule::<Standard<f64>, CpuBackend>(&mut ctx, subs, &primal_refs, &tangent_refs)
             .map(|t| tensor_to_handle(t))
             .map_err(|e| map_device_error(&e))
     }));

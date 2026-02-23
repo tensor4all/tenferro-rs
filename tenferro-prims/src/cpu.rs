@@ -991,20 +991,20 @@ fn execute_contract<T: Scalar>(
 // ===========================================================================
 
 impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
-    type Plan<T: Scalar> = CpuPlan<T>;
+    type Plan = CpuPlan<S>;
     type Context = CpuContext;
 
-    fn plan<T: Scalar>(
+    fn plan(
         ctx: &mut CpuContext,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
-    ) -> Result<CpuPlan<T>> {
+    ) -> Result<CpuPlan<S>> {
         // Check cache first
-        if let Some(cached) = ctx.plan_cache.get::<CpuPlan<T>>(desc, shapes) {
+        if let Some(cached) = ctx.plan_cache.get::<CpuPlan<S>>(desc, shapes) {
             return Ok(cached);
         }
 
-        let plan = Self::build_plan::<T>(desc, shapes)?;
+        let plan = Self::build_plan::<S>(desc, shapes)?;
 
         // Store in cache for future reuse
         ctx.plan_cache.insert(desc, shapes, plan.clone());
@@ -1012,20 +1012,20 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
         Ok(plan)
     }
 
-    fn execute<T: Scalar>(
+    fn execute(
         _ctx: &mut CpuContext,
-        plan: &CpuPlan<T>,
-        alpha: T,
-        inputs: &[&Tensor<T>],
-        beta: T,
-        output: &mut Tensor<T>,
+        plan: &CpuPlan<S>,
+        alpha: S,
+        inputs: &[&Tensor<S>],
+        beta: S,
+        output: &mut Tensor<S>,
     ) -> Result<()> {
         // Convert Tensor inputs to StridedView for internal dispatch
-        let views: Vec<StridedView<T>> = inputs
+        let views: Vec<StridedView<S>> = inputs
             .iter()
             .map(|t| tensor_to_view(t))
             .collect::<Result<Vec<_>>>()?;
-        let view_refs: Vec<&StridedView<T>> = views.iter().collect();
+        let view_refs: Vec<&StridedView<S>> = views.iter().collect();
         let mut out_view = tensor_to_view_mut(output)?;
 
         match plan {
@@ -1151,7 +1151,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
         }
     }
 
-    fn has_extension_for<T: Scalar>(_ext: Extension) -> bool {
+    fn has_extension_for(_ext: Extension) -> bool {
         // CPU backend supports both Contract and ElementwiseMul
         true
     }

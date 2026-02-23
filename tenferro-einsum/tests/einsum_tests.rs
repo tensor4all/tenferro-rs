@@ -123,7 +123,7 @@ fn contraction_tree_single_tensor() {
     )
     .unwrap();
     let mut ctx = CpuContext::new(1);
-    let result = einsum_with_plan::<f64, S, CpuBackend>(&mut ctx, &tree, &[&a], None).unwrap();
+    let result = einsum_with_plan::<S, CpuBackend>(&mut ctx, &tree, &[&a], None).unwrap();
     assert_eq!(result.dims(), &[4, 3]);
 }
 
@@ -141,7 +141,7 @@ fn contraction_tree_two_tensors() {
     )
     .unwrap();
     let mut ctx = CpuContext::new(1);
-    let c = einsum_with_plan::<f64, S, CpuBackend>(&mut ctx, &tree, &[&a, &b], None).unwrap();
+    let c = einsum_with_plan::<S, CpuBackend>(&mut ctx, &tree, &[&a, &b], None).unwrap();
     assert_eq!(c.dims(), &[2, 4]);
 }
 
@@ -171,8 +171,7 @@ fn contraction_tree_from_pairs() {
     )
     .unwrap();
     let mut ctx = CpuContext::new(1);
-    let d = einsum_with_plan::<f64, S, CpuBackend>(&mut ctx, &tree, &[&a, &b, &c_tensor], None)
-        .unwrap();
+    let d = einsum_with_plan::<S, CpuBackend>(&mut ctx, &tree, &[&a, &b, &c_tensor], None).unwrap();
     assert_eq!(d.dims(), &[2, 5]);
 }
 
@@ -185,7 +184,7 @@ fn einsum_identity() {
     let mut ctx = CpuContext::new(1);
     // a[ij] -> a[ij] (identity copy)
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
-    let b = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->ij", &[&a], None).unwrap();
+    let b = einsum::<S, CpuBackend>(&mut ctx, "ij->ij", &[&a], None).unwrap();
     assert_eq!(b.dims(), &[2, 3]);
     for i in 0..2 {
         for j in 0..3 {
@@ -198,7 +197,7 @@ fn einsum_identity() {
 fn einsum_transpose() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
-    let b = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->ji", &[&a], None).unwrap();
+    let b = einsum::<S, CpuBackend>(&mut ctx, "ij->ji", &[&a], None).unwrap();
     assert_eq!(b.dims(), &[3, 2]);
     for i in 0..2 {
         for j in 0..3 {
@@ -212,7 +211,7 @@ fn einsum_sum_reduce() {
     let mut ctx = CpuContext::new(1);
     // Sum over j: result_i = sum_j a_{ij}
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
-    let b = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->i", &[&a], None).unwrap();
+    let b = einsum::<S, CpuBackend>(&mut ctx, "ij->i", &[&a], None).unwrap();
     assert_eq!(b.dims(), &[2]);
     // a is column-major: a[0,0]=1, a[1,0]=2, a[0,1]=3, a[1,1]=4, a[0,2]=5, a[1,2]=6
     // b[0] = a[0,0] + a[0,1] + a[0,2] = 1+3+5 = 9
@@ -226,7 +225,7 @@ fn einsum_full_contraction() {
     let mut ctx = CpuContext::new(1);
     // Sum all elements: scalar = sum_{ij} a_{ij}
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
-    let b = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->", &[&a], None).unwrap();
+    let b = einsum::<S, CpuBackend>(&mut ctx, "ij->", &[&a], None).unwrap();
     assert!(b.dims().is_empty());
     assert!((scalar_val(&b) - 21.0).abs() < 1e-10);
 }
@@ -237,7 +236,7 @@ fn einsum_trace() {
     // tr(A) = sum_i a_{ii}
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     // column-major: a[0,0]=1, a[1,0]=2, a[0,1]=3, a[1,1]=4
-    let tr = einsum::<f64, S, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+    let tr = einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
     assert!(tr.dims().is_empty());
     assert!((scalar_val(&tr) - 5.0).abs() < 1e-10); // 1 + 4 = 5
 }
@@ -250,7 +249,7 @@ fn einsum_diagonal_extraction() {
         .unwrap();
     // column-major: a[0,0]=1, a[1,0]=2, a[2,0]=3, a[0,1]=4, a[1,1]=5, a[2,1]=6,
     //               a[0,2]=7, a[1,2]=8, a[2,2]=9
-    let d = einsum::<f64, S, CpuBackend>(&mut ctx, "ii->i", &[&a], None).unwrap();
+    let d = einsum::<S, CpuBackend>(&mut ctx, "ii->i", &[&a], None).unwrap();
     assert_eq!(d.dims(), &[3]);
     assert!((get(&d, &[0]) - 1.0).abs() < 1e-10);
     assert!((get(&d, &[1]) - 5.0).abs() < 1e-10);
@@ -262,7 +261,7 @@ fn einsum_diagonal_embedding() {
     let mut ctx = CpuContext::new(1);
     // Diagonal embedding: v_i -> diag(v)_{ii}
     let v = Tensor::<f64>::from_slice(&[2.0, 3.0, 5.0], &[3], COL).unwrap();
-    let d = einsum::<f64, S, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
+    let d = einsum::<S, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
     assert_eq!(d.dims(), &[3, 3]);
     for i in 0..3 {
         for j in 0..3 {
@@ -293,7 +292,7 @@ fn einsum_matmul() {
         COL,
     )
     .unwrap();
-    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
     assert_eq!(c.dims(), &[2, 4]);
 
     // Verify against manual computation
@@ -317,7 +316,7 @@ fn einsum_outer_product() {
     let mut ctx = CpuContext::new(1);
     let u = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
     let v = Tensor::<f64>::from_slice(&[3.0, 4.0, 5.0], &[3], COL).unwrap();
-    let m = einsum::<f64, S, CpuBackend>(&mut ctx, "i,j->ij", &[&u, &v], None).unwrap();
+    let m = einsum::<S, CpuBackend>(&mut ctx, "i,j->ij", &[&u, &v], None).unwrap();
     assert_eq!(m.dims(), &[2, 3]);
 
     for i in 0..2 {
@@ -337,7 +336,7 @@ fn einsum_dot_product() {
     let mut ctx = CpuContext::new(1);
     let u = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
     let v = Tensor::<f64>::from_slice(&[4.0, 5.0, 6.0], &[3], COL).unwrap();
-    let d = einsum::<f64, S, CpuBackend>(&mut ctx, "i,i->", &[&u, &v], None).unwrap();
+    let d = einsum::<S, CpuBackend>(&mut ctx, "i,i->", &[&u, &v], None).unwrap();
     assert!(d.dims().is_empty());
     // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
     assert!((scalar_val(&d) - 32.0).abs() < 1e-10);
@@ -349,7 +348,7 @@ fn einsum_matvec() {
     // y = A @ x
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
     let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
-    let y = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,j->i", &[&a, &x], None).unwrap();
+    let y = einsum::<S, CpuBackend>(&mut ctx, "ij,j->i", &[&a, &x], None).unwrap();
     assert_eq!(y.dims(), &[2]);
 
     for i in 0..2 {
@@ -371,7 +370,7 @@ fn einsum_elementwise_mul() {
     // Hadamard product: C_{ij} = A_{ij} * B_{ij}
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,ij->ij", &[&a, &b], None).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ij,ij->ij", &[&a, &b], None).unwrap();
     assert_eq!(c.dims(), &[2, 2]);
 
     for i in 0..2 {
@@ -397,14 +396,14 @@ fn einsum_three_matrices() {
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
     let c = Tensor::<f64>::from_slice(&[9.0, 10.0, 11.0, 12.0], &[2, 2], COL).unwrap();
-    let d = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
+    let d = einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
     assert_eq!(d.dims(), &[2, 2]);
 
     // Verify: D = A @ B @ C
     // First compute AB
-    let ab = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let ab = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
     // Then ABC
-    let abc = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
+    let abc = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
 
     for i in 0..2 {
         for j in 0..2 {
@@ -435,7 +434,7 @@ fn einsum_with_subscripts_matmul() {
         COL,
     )
     .unwrap();
-    let c = einsum_with_subscripts::<f64, S, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
+    let c = einsum_with_subscripts::<S, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
     assert_eq!(c.dims(), &[2, 4]);
 }
 
@@ -451,7 +450,7 @@ fn einsum_owned_matmul() {
         COL,
     )
     .unwrap();
-    let c = einsum_owned::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", vec![a, b], None).unwrap();
+    let c = einsum_owned::<S, CpuBackend>(&mut ctx, "ij,jk->ik", vec![a, b], None).unwrap();
     assert_eq!(c.dims(), &[2, 4]);
 }
 
@@ -463,8 +462,7 @@ fn einsum_into_overwrite() {
     let mut c = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
 
     // C = 1.0 * (A @ B) + 0.0 * C
-    einsum_into::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c, None)
-        .unwrap();
+    einsum_into::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c, None).unwrap();
 
     for i in 0..2 {
         for k in 0..2 {
@@ -489,8 +487,7 @@ fn einsum_into_accumulate() {
     let mut c = Tensor::<f64>::ones(&[2, 2], MEM, COL);
 
     // C = 2.0 * (A @ B) + 3.0 * C
-    einsum_into::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 2.0, 3.0, &mut c, None)
-        .unwrap();
+    einsum_into::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 2.0, 3.0, &mut c, None).unwrap();
 
     for i in 0..2 {
         for k in 0..2 {
@@ -530,7 +527,7 @@ fn einsum_reuses_cached_plans() {
     .unwrap();
 
     // First call: populates cache
-    let c1 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let c1 = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
     let cache_size_after_first = ctx.plan_cache_mut().len();
     assert!(
         cache_size_after_first > 0,
@@ -538,7 +535,7 @@ fn einsum_reuses_cached_plans() {
     );
 
     // Second call with same shapes: cache should not grow
-    let c2 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let c2 = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
     let cache_size_after_second = ctx.plan_cache_mut().len();
     assert_eq!(
         cache_size_after_first, cache_size_after_second,
@@ -571,7 +568,7 @@ fn einsum_different_shapes_miss_cache() {
         COL,
     )
     .unwrap();
-    let _c1 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a1, &b1], None).unwrap();
+    let _c1 = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a1, &b1], None).unwrap();
     let cache_size_1 = ctx.plan_cache_mut().len();
 
     // 3x2 @ 2x5 (different shapes)
@@ -582,7 +579,7 @@ fn einsum_different_shapes_miss_cache() {
         COL,
     )
     .unwrap();
-    let _c2 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a2, &b2], None).unwrap();
+    let _c2 = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a2, &b2], None).unwrap();
     let cache_size_2 = ctx.plan_cache_mut().len();
 
     assert!(
@@ -609,8 +606,7 @@ fn einsum_rrule_matmul() {
     .unwrap();
     let grad_c = Tensor::<f64>::ones(&[2, 4], MEM, COL);
 
-    let grads =
-        einsum_rrule::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c).unwrap();
     assert_eq!(grads.len(), 2);
 
     // grad_A = grad_C @ B^T: shape [2,4] x [4,3] = [2,3]
@@ -619,8 +615,7 @@ fn einsum_rrule_matmul() {
     assert_eq!(grads[1].dims(), &[3, 4]);
 
     // Verify grad_A = einsum("ik,jk->ij", [grad_c, b]) = grad_c @ b^T
-    let expected_ga =
-        einsum::<f64, S, CpuBackend>(&mut ctx, "ik,jk->ij", &[&grad_c, &b], None).unwrap();
+    let expected_ga = einsum::<S, CpuBackend>(&mut ctx, "ik,jk->ij", &[&grad_c, &b], None).unwrap();
     for i in 0..2 {
         for j in 0..3 {
             assert!(
@@ -631,8 +626,7 @@ fn einsum_rrule_matmul() {
     }
 
     // Verify grad_B = einsum("ij,ik->jk", [a, grad_c]) = a^T @ grad_c
-    let expected_gb =
-        einsum::<f64, S, CpuBackend>(&mut ctx, "ij,ik->jk", &[&a, &grad_c], None).unwrap();
+    let expected_gb = einsum::<S, CpuBackend>(&mut ctx, "ij,ik->jk", &[&a, &grad_c], None).unwrap();
     for i in 0..3 {
         for j in 0..4 {
             assert!(
@@ -658,13 +652,12 @@ fn einsum_frule_matmul() {
     let da = Tensor::<f64>::ones(&[2, 3], MEM, COL);
 
     // dC = einsum("ij,jk->ik", [dA, B]) since only A has a tangent
-    let dc =
-        einsum_frule::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None])
-            .unwrap();
+    let dc = einsum_frule::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None])
+        .unwrap();
     assert_eq!(dc.dims(), &[2, 4]);
 
     // Verify: dC = dA @ B
-    let expected = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&da, &b], None).unwrap();
+    let expected = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&da, &b], None).unwrap();
     for i in 0..2 {
         for k in 0..4 {
             assert!(
@@ -684,17 +677,13 @@ fn einsum_frule_both_tangents() {
     let db = Tensor::<f64>::ones(&[2, 2], MEM, COL);
 
     // dC = dA @ B + A @ dB
-    let dc = einsum_frule::<f64, S, CpuBackend>(
-        &mut ctx,
-        "ij,jk->ik",
-        &[&a, &b],
-        &[Some(&da), Some(&db)],
-    )
-    .unwrap();
+    let dc =
+        einsum_frule::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), Some(&db)])
+            .unwrap();
     assert_eq!(dc.dims(), &[2, 2]);
 
-    let term1 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&da, &b], None).unwrap();
-    let term2 = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &db], None).unwrap();
+    let term1 = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&da, &b], None).unwrap();
+    let term2 = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &db], None).unwrap();
 
     for i in 0..2 {
         for k in 0..2 {
@@ -718,7 +707,7 @@ fn einsum_shape_mismatch() {
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     // j=3 in A but j=2 in B -> shape mismatch
-    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None);
+    let result = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None);
     assert!(
         matches!(result, Err(tenferro_device::Error::ShapeMismatch { .. })),
         "expected ShapeMismatch, got: {:?}",
@@ -731,7 +720,7 @@ fn einsum_wrong_operand_count() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     // Subscripts say 2 inputs but only 1 provided
-    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a], None);
+    let result = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a], None);
     assert!(
         matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
         "expected InvalidArgument for wrong operand count, got: {:?}",
@@ -769,11 +758,11 @@ fn tracked_einsum_matmul_pullback() {
     let b_id = b.node_id().expect("leaf should have node_id");
 
     // C = A @ B  (tracked)
-    let c = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b])
+    let c = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b])
         .expect("tracked_einsum should succeed");
 
     // loss = sum_{ij} C_{ij}^2  via "ij,ij->"
-    let loss = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c])
+    let loss = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c])
         .expect("tracked_einsum for loss should succeed");
 
     // Pullback
@@ -807,7 +796,7 @@ fn tracked_einsum_matmul_pullback() {
 
     // Numerical verification: d(loss)/dA = 2 * C @ B^T
     // C = A @ B
-    let c_val = einsum::<f64, S, CpuBackend>(
+    let c_val = einsum::<S, CpuBackend>(
         &mut ctx.borrow_mut(),
         "ij,jk->ik",
         &[&a_data, &b_data],
@@ -815,7 +804,7 @@ fn tracked_einsum_matmul_pullback() {
     )
     .expect("einsum for C");
     // grad_C = 2 * C (since loss = sum C_{ik}^2)
-    let two_c = einsum::<f64, S, CpuBackend>(
+    let two_c = einsum::<S, CpuBackend>(
         &mut ctx.borrow_mut(),
         "ij,->ij",
         &[
@@ -827,11 +816,11 @@ fn tracked_einsum_matmul_pullback() {
     .expect("scale by 2");
     // grad_A = grad_C @ B^T = einsum("ik,jk->ij", [2*C, B])
     let expected_ga =
-        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
+        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
             .expect("expected grad_A");
     // grad_B = A^T @ grad_C = einsum("ij,ik->jk", [A, 2*C])
     let expected_gb =
-        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,ik->jk", &[&a_data, &two_c], None)
+        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,ik->jk", &[&a_data, &two_c], None)
             .expect("expected grad_B");
 
     for i in 0..2 {
@@ -873,7 +862,7 @@ fn tracked_einsum_rejects_mixed_tapes() {
     let a = tape1.leaf(a_data);
     let b = tape2.leaf(b_data);
 
-    let result = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]);
+    let result = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]);
     assert!(result.is_err(), "expected error for mixed-tape operands");
 }
 
@@ -1005,7 +994,7 @@ macro_rules! typed_einsum_tests {
                 let a = make_tensor(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
                 });
-                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->ij", &[&a], None).unwrap();
+                let b = einsum::<TS, CpuBackend>(&mut ctx, "ij->ij", &[&a], None).unwrap();
                 assert_eq!(b.dims(), &[2, 3]);
                 for i in 0..2 {
                     for j in 0..3 {
@@ -1020,7 +1009,7 @@ macro_rules! typed_einsum_tests {
                 let a = make_tensor(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
                 });
-                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->ji", &[&a], None).unwrap();
+                let b = einsum::<TS, CpuBackend>(&mut ctx, "ij->ji", &[&a], None).unwrap();
                 assert_eq!(b.dims(), &[3, 2]);
                 for i in 0..2 {
                     for j in 0..3 {
@@ -1035,7 +1024,7 @@ macro_rules! typed_einsum_tests {
                 let a = make_tensor(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
                 });
-                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->i", &[&a], None).unwrap();
+                let b = einsum::<TS, CpuBackend>(&mut ctx, "ij->i", &[&a], None).unwrap();
                 assert_eq!(b.dims(), &[2]);
                 for i in 0..2 {
                     let mut expected = <$T as TestScalar>::from_f64(0.0);
@@ -1058,7 +1047,7 @@ macro_rules! typed_einsum_tests {
                 let a = make_tensor(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 3 + idx[1] + 1)
                 });
-                let b = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij->", &[&a], None).unwrap();
+                let b = einsum::<TS, CpuBackend>(&mut ctx, "ij->", &[&a], None).unwrap();
                 assert!(b.dims().is_empty());
                 // sum of 1..6 = 21
                 let expected = <$T as TestScalar>::from_f64(21.0);
@@ -1079,7 +1068,7 @@ macro_rules! typed_einsum_tests {
                 });
                 // a[0,0]=1, a[0,1]=2, a[1,0]=3, a[1,1]=4
                 // trace = a[0,0] + a[1,1] = 1 + 4 = 5
-                let tr = einsum::<$T, TS, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+                let tr = einsum::<TS, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
                 assert!(tr.dims().is_empty());
                 let expected = get_t(&a, &[0, 0]) + get_t(&a, &[1, 1]);
                 assert!(
@@ -1099,8 +1088,7 @@ macro_rules! typed_einsum_tests {
                 let b = make_tensor(&[3, 4], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 4 + idx[1] + 1)
                 });
-                let c =
-                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+                let c = einsum::<TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
                 assert_eq!(c.dims(), &[2, 4]);
 
                 for i in 0..2 {
@@ -1125,7 +1113,7 @@ macro_rules! typed_einsum_tests {
                 let mut ctx = CpuContext::new(1);
                 let u = make_tensor(&[2], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
                 let v = make_tensor(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 3));
-                let m = einsum::<$T, TS, CpuBackend>(&mut ctx, "i,j->ij", &[&u, &v], None).unwrap();
+                let m = einsum::<TS, CpuBackend>(&mut ctx, "i,j->ij", &[&u, &v], None).unwrap();
                 assert_eq!(m.dims(), &[2, 3]);
 
                 for i in 0..2 {
@@ -1146,7 +1134,7 @@ macro_rules! typed_einsum_tests {
                 let mut ctx = CpuContext::new(1);
                 let u = make_tensor(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
                 let v = make_tensor(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 4));
-                let d = einsum::<$T, TS, CpuBackend>(&mut ctx, "i,i->", &[&u, &v], None).unwrap();
+                let d = einsum::<TS, CpuBackend>(&mut ctx, "i,i->", &[&u, &v], None).unwrap();
                 assert!(d.dims().is_empty());
                 // u = [1,2,3], v = [4,5,6], dot = 4+10+18 = 32
                 let expected = <$T as TestScalar>::from_f64(32.0);
@@ -1167,8 +1155,7 @@ macro_rules! typed_einsum_tests {
                 let b = make_tensor(&[2, 2], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 5)
                 });
-                let c =
-                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,ij->ij", &[&a, &b], None).unwrap();
+                let c = einsum::<TS, CpuBackend>(&mut ctx, "ij,ij->ij", &[&a, &b], None).unwrap();
                 assert_eq!(c.dims(), &[2, 2]);
 
                 for i in 0..2 {
@@ -1196,15 +1183,14 @@ macro_rules! typed_einsum_tests {
                 let c = make_tensor(&[2, 2], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 9)
                 });
-                let d = einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None)
+                let d = einsum::<TS, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None)
                     .unwrap();
                 assert_eq!(d.dims(), &[2, 2]);
 
                 // Verify: D = A @ B @ C
-                let ab =
-                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+                let ab = einsum::<TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
                 let abc =
-                    einsum::<$T, TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
+                    einsum::<TS, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
 
                 for i in 0..2 {
                     for j in 0..2 {
@@ -1293,7 +1279,7 @@ fn einsum_self_contraction_trace() {
     // 2x3x2 tensor
     let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
     let t = Tensor::<f64>::from_slice(&data, &[2, 3, 2], COL).unwrap();
-    let v = einsum::<f64, S, CpuBackend>(&mut ctx, "ijk->j", &[&t], None).unwrap();
+    let v = einsum::<S, CpuBackend>(&mut ctx, "ijk->j", &[&t], None).unwrap();
     assert_eq!(v.dims(), &[3]);
 
     // Manual verification: sum over i and k
@@ -1319,7 +1305,7 @@ fn einsum_partial_trace_with_free_index() {
     let mut ctx = CpuContext::new(1);
     let data: Vec<f64> = (1..=12).map(|x| x as f64).collect();
     let t = Tensor::<f64>::from_slice(&data, &[2, 2, 3], COL).unwrap();
-    let v = einsum::<f64, S, CpuBackend>(&mut ctx, "iij->j", &[&t], None).unwrap();
+    let v = einsum::<S, CpuBackend>(&mut ctx, "iij->j", &[&t], None).unwrap();
     assert_eq!(v.dims(), &[3]);
 
     // Manual: v[j] = sum_i T[i,i,j]
@@ -1343,7 +1329,7 @@ fn einsum_trace_rank3_to_vector() {
     let mut ctx = CpuContext::new(1);
     let data: Vec<f64> = (1..=18).map(|x| x as f64).collect();
     let t = Tensor::<f64>::from_slice(&data, &[3, 2, 3], COL).unwrap();
-    let v = einsum::<f64, S, CpuBackend>(&mut ctx, "iji->j", &[&t], None).unwrap();
+    let v = einsum::<S, CpuBackend>(&mut ctx, "iji->j", &[&t], None).unwrap();
     assert_eq!(v.dims(), &[2]);
 
     // Manual: v[j] = sum_i T[i,j,i]
@@ -1366,7 +1352,7 @@ fn einsum_three_way_repeated_label_trace() {
     let mut ctx = CpuContext::new(1);
     let data: Vec<f64> = (1..=27).map(|x| x as f64).collect();
     let t = Tensor::<f64>::from_slice(&data, &[3, 3, 3], COL).unwrap();
-    let s = einsum::<f64, S, CpuBackend>(&mut ctx, "iii->", &[&t], None).unwrap();
+    let s = einsum::<S, CpuBackend>(&mut ctx, "iii->", &[&t], None).unwrap();
     assert!(s.dims().is_empty());
 
     // Manual: sum_i T[i,i,i]
@@ -1388,7 +1374,7 @@ fn einsum_batched_dot_product() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[7.0, 8.0, 9.0, 10.0, 11.0, 12.0], &[3, 2], COL).unwrap();
-    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "bi,bi->b", &[&a, &b], None).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "bi,bi->b", &[&a, &b], None).unwrap();
     assert_eq!(c.dims(), &[3]);
 
     // Manual: c[b] = sum_i A[b,i] * B[b,i]
@@ -1426,12 +1412,12 @@ fn einsum_size_dict_explicit_shapes() {
     let b = Tensor::<f64>::from_slice(&b_data, &[3, 5], COL).unwrap();
     let c = Tensor::<f64>::from_slice(&c_data, &[5, 4], COL).unwrap();
 
-    let d = einsum_with_plan::<f64, S, CpuBackend>(&mut ctx, &tree, &[&a, &b, &c], None).unwrap();
+    let d = einsum_with_plan::<S, CpuBackend>(&mut ctx, &tree, &[&a, &b, &c], None).unwrap();
     assert_eq!(d.dims(), &[2, 4]);
 
     // Verify via sequential pairwise
-    let ab = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
-    let abc = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
+    let ab = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let abc = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&ab, &c], None).unwrap();
 
     for i in 0..2 {
         for j in 0..4 {
@@ -1452,7 +1438,7 @@ fn einsum_size_dict_output_only_label() {
     // This verifies the size-dict handles output-only repeated labels correctly.
     let mut ctx = CpuContext::new(1);
     let v = Tensor::<f64>::from_slice(&[7.0, 8.0, 9.0, 10.0], &[4], COL).unwrap();
-    let d = einsum::<f64, S, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
+    let d = einsum::<S, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
     assert_eq!(d.dims(), &[4, 4]);
 
     for i in 0..4 {
@@ -1526,7 +1512,7 @@ fn einsum_complex_diagonal_extraction() {
         .map(|x| Complex64::new(x as f64, -(x as f64)))
         .collect();
     let a = Tensor::<Complex64>::from_slice(&data, &[3, 3], COL).unwrap();
-    let d = einsum::<Complex64, CS, CpuBackend>(&mut ctx, "ii->i", &[&a], None).unwrap();
+    let d = einsum::<CS, CpuBackend>(&mut ctx, "ii->i", &[&a], None).unwrap();
     assert_eq!(d.dims(), &[3]);
 
     // Column-major 3x3: a[i,j] at offset i + 3*j
@@ -1558,7 +1544,7 @@ fn einsum_complex_diagonal_embedding() {
         Complex64::new(5.0, 0.5),
     ];
     let v = Tensor::<Complex64>::from_slice(&data, &[3], COL).unwrap();
-    let d = einsum::<Complex64, CS, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
+    let d = einsum::<CS, CpuBackend>(&mut ctx, "i->ii", &[&v], None).unwrap();
     assert_eq!(d.dims(), &[3, 3]);
 
     for i in 0..3 {
@@ -1587,7 +1573,7 @@ fn einsum_complex_trace() {
         .map(|x| Complex64::new(x as f64, 0.5 * x as f64))
         .collect();
     let a = Tensor::<Complex64>::from_slice(&data, &[2, 2], COL).unwrap();
-    let tr = einsum::<Complex64, CS, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+    let tr = einsum::<CS, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
     assert!(tr.dims().is_empty());
 
     // Column-major 2x2: a[0,0] + a[1,1]
@@ -1610,7 +1596,7 @@ fn einsum_error_rank_mismatch() {
     // Subscripts say "ij" (rank 2) but tensor is rank 1
     let mut ctx = CpuContext::new(1);
     let v = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
-    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->i", &[&v], None);
+    let result = einsum::<S, CpuBackend>(&mut ctx, "ij->i", &[&v], None);
     assert!(result.is_err(), "should fail for rank mismatch");
 }
 
@@ -1619,7 +1605,7 @@ fn einsum_error_empty_inputs() {
     // No input tensors
     let mut ctx = CpuContext::new(1);
     let empty: &[&Tensor<f64>] = &[];
-    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "->", empty, None);
+    let result = einsum::<S, CpuBackend>(&mut ctx, "->", empty, None);
     assert!(result.is_err(), "should fail for empty inputs");
 }
 
@@ -1628,7 +1614,7 @@ fn einsum_error_output_label_not_in_input() {
     // Output references label 'k' which is not in any input
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
-    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ij->ik", &[&a], None);
+    let result = einsum::<S, CpuBackend>(&mut ctx, "ij->ik", &[&a], None);
     assert!(
         result.is_err(),
         "should fail when output label not in input"
@@ -1640,7 +1626,7 @@ fn einsum_error_non_square_trace() {
     // Trace "ii->" but matrix is 2x3 (non-square), so label 'i' has conflicting sizes
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
-    let result = einsum::<f64, S, CpuBackend>(&mut ctx, "ii->", &[&a], None);
+    let result = einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&a], None);
     assert!(
         matches!(result, Err(tenferro_device::Error::ShapeMismatch { .. })),
         "expected ShapeMismatch for non-square trace, got: {:?}",
@@ -1665,14 +1651,14 @@ fn einsum_auto_propagates_fw_grad() {
     a.set_fw_grad(da.clone());
 
     // C = einsum("ij,jk->ik", A, B)
-    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 
     // C should have fw_grad = einsum_frule result
     assert!(c.has_fw_grad(), "output should carry fw_grad");
 
     // Compare with explicit frule
     let expected =
-        einsum_frule::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None])
+        einsum_frule::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None])
             .unwrap();
 
     let cg = c.fw_grad().unwrap();
@@ -1695,7 +1681,7 @@ fn einsum_no_fw_grad_unchanged() {
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
 
-    let c = einsum::<f64, S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
     assert!(
         !c.has_fw_grad(),
         "output should NOT carry fw_grad when inputs have none"
@@ -1738,14 +1724,14 @@ fn hvp_via_fw_grad_composition() {
     let a_id = a.node_id().unwrap();
 
     // loss = sum_{ij} C_{ij}^2 where C = A @ B
-    let c = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
-    let loss = tracked_einsum::<f64, S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
+    let c = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 
     let grads = tape.pullback(&loss).unwrap();
     let ga = grads.get(a_id).unwrap();
 
     // grad_A should match 2*C @ B^T
-    let c_val = einsum::<f64, S, CpuBackend>(
+    let c_val = einsum::<S, CpuBackend>(
         &mut ctx.borrow_mut(),
         "ij,jk->ik",
         &[&a_data, &b_data],
@@ -1754,10 +1740,9 @@ fn hvp_via_fw_grad_composition() {
     .unwrap();
     let two = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
     let two_c =
-        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&c_val, &two], None)
-            .unwrap();
+        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&c_val, &two], None).unwrap();
     let expected_ga =
-        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
+        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
             .unwrap();
 
     // Verify grad_A primal
@@ -1775,14 +1760,12 @@ fn hvp_via_fw_grad_composition() {
     // HVP: d(grad_A)/dt = 2*(dA@B)@B^T where dA = ones
     // dA@B = ones @ B = einsum("ij,jk->ik", ones, B)
     let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL);
-    let da_b =
-        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,jk->ik", &[&ones, &b_data], None)
-            .unwrap();
+    let da_b = einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,jk->ik", &[&ones, &b_data], None)
+        .unwrap();
     // 2*(dA@B)@B^T = einsum("ik,jk->ij", 2*dA_B, B)
     let two_da_b =
-        einsum::<f64, S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&da_b, &two], None)
-            .unwrap();
-    let expected_hvp = einsum::<f64, S, CpuBackend>(
+        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&da_b, &two], None).unwrap();
+    let expected_hvp = einsum::<S, CpuBackend>(
         &mut ctx.borrow_mut(),
         "ik,jk->ij",
         &[&two_da_b, &b_data],
