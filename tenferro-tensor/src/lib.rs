@@ -70,37 +70,31 @@
 //! // No data is copied; stride along axis 1 is set to 0
 //! ```
 //!
-//! ## TensorView — borrowed, zero-copy views
+//! ## Zero-Copy View Operations
 //!
-//! [`TensorView`] is the borrowed counterpart to [`Tensor`], following the
-//! `String` / `&str` pattern. View operations modify only metadata
-//! (dims, strides, offset) and never copy data.
+//! View operations on [`Tensor`] share the underlying data buffer via `Arc`
+//! and only modify metadata (dims, strides, offset). No data is copied.
 //!
 //! ```ignore
-//! // tensor_view() borrows the tensor — no data copy
-//! let tv = m.tensor_view();
-//! assert_eq!(tv.dims(), m.dims());
-//!
 //! // permute: reorder dimensions (zero-copy, strides reordered)
-//! let tv_t = tv.permute(&[1, 0]).unwrap();
-//! assert_eq!(tv_t.dims(), &[3, 2]);
+//! let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+//! let transposed = t.permute(&[1, 0]).unwrap();
+//! assert_eq!(transposed.dims(), &[3, 2]);
 //!
 //! // broadcast: expand size-1 dims (zero-copy, stride set to 0)
 //! let col = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3, 1],
 //!     MemoryOrder::ColumnMajor).unwrap();
-//! let col_tv = col.tensor_view();
-//! let expanded = col_tv.broadcast(&[3, 4]).unwrap();
+//! let expanded = col.broadcast(&[3, 4]).unwrap();
 //! assert_eq!(expanded.dims(), &[3, 4]);
 //!
-//! // diagonal: extract diagonal view (zero-copy, strides merged)
+//! // diagonal: extract diagonal (zero-copy, strides merged)
 //! let sq = Tensor::<f64>::zeros(&[4, 4],
 //!     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-//! let sq_tv = sq.tensor_view();
-//! let diag = sq_tv.diagonal(&[(0, 1)]).unwrap();
+//! let diag = sq.diagonal(&[(0, 1)]).unwrap();
 //! assert_eq!(diag.dims(), &[4]);
 //!
-//! // to_tensor() / contiguous(): materialize a view into owned Tensor
-//! let owned = tv_t.to_tensor(MemoryOrder::ColumnMajor);
+//! // contiguous(): materialize into a contiguous Tensor
+//! let owned = transposed.contiguous(MemoryOrder::ColumnMajor);
 //! ```
 
 use std::sync::Arc;
@@ -667,508 +661,6 @@ pub struct Tensor<T: Scalar> {
     conjugated: bool,
 }
 
-/// Borrowed tensor view, lifetime-tied to the source [`Tensor`].
-///
-/// `TensorView` is the borrowed counterpart to [`Tensor`], following the
-/// `String`/`&str` pattern. It references the source tensor's data buffer
-/// without copying.
-///
-/// ## Public vs. internal views
-///
-/// Public API methods ([`Tensor::tensor_view`], etc.) call
-/// [`Tensor::wait`] before constructing a view, so the returned
-/// `TensorView` always has `event = None` — data is ready to read.
-///
-/// The crate-internal `as_operand_view()` skips the wait and
-/// propagates the pending event, allowing accelerator operations to chain
-/// without CPU synchronization.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_tensor::Tensor;
-///
-/// let t = Tensor::<f64>::zeros(&[2, 3]);
-/// let view = t.tensor_view();
-/// assert_eq!(view.ndim(), 2);
-/// ```
-pub struct TensorView<'a, T: Scalar> {
-    data: &'a DataBuffer<T>,
-    dims: Vec<usize>,
-    strides: Vec<isize>,
-    offset: isize,
-    /// The logical memory space where the source tensor's data resides.
-    logical_memory_space: LogicalMemorySpace,
-    /// Optional preferred compute device override from the source tensor.
-    preferred_compute_device: Option<ComputeDevice>,
-    /// Pending event from the source tensor. Always `None` in public API.
-    event: Option<&'a CompletionEvent>,
-    /// Lazy conjugation flag from the source tensor.
-    conjugated: bool,
-}
-
-impl<'a, T: Scalar> TensorView<'a, T> {
-    /// Returns the shape (size of each dimension).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{Tensor, MemoryOrder};
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let t = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let view = t.tensor_view();
-    /// assert_eq!(view.dims(), &[3, 4]);
-    /// ```
-    pub fn dims(&self) -> &[usize] {
-        &self.dims
-    }
-
-    /// Returns the strides (in units of `T`).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// let strides = view.strides();
-    /// ```
-    pub fn strides(&self) -> &[isize] {
-        &self.strides
-    }
-
-    /// Returns the number of dimensions (rank).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// assert_eq!(view.ndim(), 2);
-    /// ```
-    pub fn ndim(&self) -> usize {
-        self.dims.len()
-    }
-
-    /// Returns the logical memory space where the source tensor's data resides.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let view = tensor.tensor_view();
-    /// assert_eq!(view.logical_memory_space(), LogicalMemorySpace::MainMemory);
-    /// ```
-    pub fn logical_memory_space(&self) -> LogicalMemorySpace {
-        self.logical_memory_space
-    }
-
-    /// Returns the preferred compute device override, if set.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// assert!(view.preferred_compute_device().is_none());
-    /// ```
-    pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
-        self.preferred_compute_device
-    }
-
-    /// Returns a reference to the underlying data buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// let buf = view.buffer();
-    /// ```
-    pub fn buffer(&self) -> &DataBuffer<T> {
-        self.data
-    }
-
-    /// Returns the element offset into the data buffer.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// assert_eq!(view.offset(), 0);
-    /// ```
-    pub fn offset(&self) -> isize {
-        self.offset
-    }
-
-    /// Returns `true` if the source tensor is logically conjugated (lazy).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// assert!(!view.is_conjugated());
-    /// ```
-    pub fn is_conjugated(&self) -> bool {
-        self.conjugated
-    }
-
-    // ========================================================================
-    // View operations (zero-copy)
-    // ========================================================================
-
-    /// Permute (reorder) the dimensions of this view.
-    ///
-    /// Returns a new `TensorView` with reordered dims and strides (zero-copy).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `perm` is not a valid permutation of `0..ndim()`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view(); // shape [3, 4]
-    /// let transposed = view.permute(&[1, 0]).unwrap(); // shape [4, 3]
-    /// ```
-    pub fn permute(&self, perm: &[usize]) -> Result<TensorView<'a, T>> {
-        let ndim = self.ndim();
-        if perm.len() != ndim {
-            return Err(Error::InvalidArgument(format!(
-                "permutation length {} doesn't match ndim {}",
-                perm.len(),
-                ndim
-            )));
-        }
-        let mut seen = vec![false; ndim];
-        for &p in perm {
-            if p >= ndim {
-                return Err(Error::InvalidArgument(format!(
-                    "permutation index {p} out of range for ndim {ndim}"
-                )));
-            }
-            if seen[p] {
-                return Err(Error::InvalidArgument(format!(
-                    "duplicate index {p} in permutation"
-                )));
-            }
-            seen[p] = true;
-        }
-        let new_dims: Vec<usize> = perm.iter().map(|&p| self.dims[p]).collect();
-        let new_strides: Vec<isize> = perm.iter().map(|&p| self.strides[p]).collect();
-        Ok(TensorView {
-            data: self.data,
-            dims: new_dims,
-            strides: new_strides,
-            offset: self.offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: self.event,
-            conjugated: self.conjugated,
-        })
-    }
-
-    /// Broadcast this view to a larger shape.
-    ///
-    /// Dimensions of size 1 are expanded to the target size (zero-copy
-    /// via stride 0).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `target_dims` is incompatible with the current shape.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view(); // shape [1, 4]
-    /// let expanded = view.broadcast(&[3, 4]).unwrap(); // shape [3, 4]
-    /// ```
-    pub fn broadcast(&self, target_dims: &[usize]) -> Result<TensorView<'a, T>> {
-        let ndim = self.ndim();
-        if target_dims.len() != ndim {
-            return Err(Error::InvalidArgument(format!(
-                "target dims length {} doesn't match ndim {}",
-                target_dims.len(),
-                ndim
-            )));
-        }
-        let mut new_strides = self.strides.clone();
-        for i in 0..ndim {
-            if self.dims[i] == target_dims[i] {
-                // keep stride
-            } else if self.dims[i] == 1 {
-                new_strides[i] = 0;
-            } else {
-                return Err(Error::ShapeMismatch {
-                    expected: self.dims.to_vec(),
-                    got: target_dims.to_vec(),
-                });
-            }
-        }
-        Ok(TensorView {
-            data: self.data,
-            dims: target_dims.to_vec(),
-            strides: new_strides,
-            offset: self.offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: self.event,
-            conjugated: self.conjugated,
-        })
-    }
-
-    /// Extract a diagonal view by merging pairs of axes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any axis is out of range or paired dimensions
-    /// have different sizes.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view(); // shape [3, 3]
-    /// let diag = view.diagonal(&[(0, 1)]).unwrap(); // shape [3]
-    /// ```
-    pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<TensorView<'a, T>> {
-        let ndim = self.ndim();
-        let mut used = vec![false; ndim];
-        let mut diag_dims = Vec::new();
-        let mut diag_strides = Vec::new();
-
-        for &(i, j) in axes {
-            if i >= ndim || j >= ndim {
-                return Err(Error::InvalidArgument(format!(
-                    "axis out of range: ({i}, {j}) for tensor with {ndim} dimensions"
-                )));
-            }
-            if i == j {
-                return Err(Error::InvalidArgument(format!(
-                    "diagonal axes must be distinct, got ({i}, {j})"
-                )));
-            }
-            if used[i] || used[j] {
-                return Err(Error::InvalidArgument(format!(
-                    "axis {i} or {j} used in multiple diagonal pairs"
-                )));
-            }
-            if self.dims[i] != self.dims[j] {
-                return Err(Error::ShapeMismatch {
-                    expected: vec![self.dims[i]],
-                    got: vec![self.dims[j]],
-                });
-            }
-            used[i] = true;
-            used[j] = true;
-            diag_dims.push(self.dims[i]);
-            diag_strides.push(self.strides[i] + self.strides[j]);
-        }
-
-        let mut new_dims = Vec::new();
-        let mut new_strides = Vec::new();
-        for k in 0..ndim {
-            if !used[k] {
-                new_dims.push(self.dims[k]);
-                new_strides.push(self.strides[k]);
-            }
-        }
-        new_dims.extend_from_slice(&diag_dims);
-        new_strides.extend_from_slice(&diag_strides);
-
-        Ok(TensorView {
-            data: self.data,
-            dims: new_dims,
-            strides: new_strides,
-            offset: self.offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: self.event,
-            conjugated: self.conjugated,
-        })
-    }
-
-    /// Select a single index along a dimension, removing that dimension.
-    ///
-    /// Returns a view with `ndim() - 1` dimensions. Zero-copy: adjusts
-    /// offset and removes the selected dimension from dims/strides.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `dim >= ndim()` or `index >= dims()[dim]`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{Tensor, MemoryOrder};
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let a = Tensor::<f64>::zeros(&[3, 4, 10],
-    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let tv = a.tensor_view();
-    /// // Select batch index 5 → view of shape [3, 4]
-    /// let mat = tv.select(2, 5).unwrap();
-    /// assert_eq!(mat.dims(), &[3, 4]);
-    /// ```
-    pub fn select(&self, dim: usize, index: usize) -> Result<TensorView<'a, T>> {
-        let ndim = self.ndim();
-        if dim >= ndim {
-            return Err(Error::InvalidArgument(format!(
-                "dim {dim} out of range for tensor with {ndim} dimensions"
-            )));
-        }
-        if index >= self.dims[dim] {
-            return Err(Error::InvalidArgument(format!(
-                "index {index} out of range for dimension {dim} with size {}",
-                self.dims[dim]
-            )));
-        }
-        let new_offset = self.offset + index as isize * self.strides[dim];
-        let mut new_dims = self.dims.clone();
-        let mut new_strides = self.strides.clone();
-        new_dims.remove(dim);
-        new_strides.remove(dim);
-        Ok(TensorView {
-            data: self.data,
-            dims: new_dims,
-            strides: new_strides,
-            offset: new_offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: self.event,
-            conjugated: self.conjugated,
-        })
-    }
-
-    /// Narrow (slice) a dimension to a sub-range.
-    ///
-    /// Returns a view with the same number of dimensions, but
-    /// `dims()[dim]` reduced to `length`. Zero-copy: only offset and
-    /// dim size change.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `dim >= ndim()` or `start + length > dims()[dim]`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{Tensor, MemoryOrder};
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let a = Tensor::<f64>::zeros(&[3, 10],
-    ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let tv = a.tensor_view();
-    /// // Take columns 2..5 → view of shape [3, 3]
-    /// let sub = tv.narrow(1, 2, 3).unwrap();
-    /// assert_eq!(sub.dims(), &[3, 3]);
-    /// ```
-    pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<TensorView<'a, T>> {
-        let ndim = self.ndim();
-        if dim >= ndim {
-            return Err(Error::InvalidArgument(format!(
-                "dim {dim} out of range for tensor with {ndim} dimensions"
-            )));
-        }
-        if start + length > self.dims[dim] {
-            return Err(Error::InvalidArgument(format!(
-                "narrow range {}..{} out of bounds for dimension {dim} with size {}",
-                start,
-                start + length,
-                self.dims[dim]
-            )));
-        }
-        let new_offset = self.offset + start as isize * self.strides[dim];
-        let mut new_dims = self.dims.clone();
-        new_dims[dim] = length;
-        Ok(TensorView {
-            data: self.data,
-            dims: new_dims,
-            strides: self.strides.clone(),
-            offset: new_offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: self.event,
-            conjugated: self.conjugated,
-        })
-    }
-
-    // ========================================================================
-    // Materialize (copy data into a new owned Tensor)
-    // ========================================================================
-
-    /// Copy this view into an owned [`Tensor`].
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// let owned = view.to_tensor(MemoryOrder::ColumnMajor);
-    /// ```
-    pub fn to_tensor(&self, order: MemoryOrder) -> Tensor<T> {
-        self.contiguous(order)
-    }
-
-    /// Return a contiguous copy of this view's data.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// let contig = view.contiguous(MemoryOrder::ColumnMajor);
-    /// ```
-    pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
-        let n_elements: usize = self.dims.iter().product();
-        let dst_strides = compute_contiguous_strides(&self.dims, order);
-        let mut data = vec![T::zero(); n_elements];
-        if n_elements > 0 {
-            let src = self
-                .data
-                .as_slice()
-                .expect("CPU-only: TensorView::contiguous");
-            copy_strided(
-                src,
-                &self.dims,
-                &self.strides,
-                self.offset,
-                &mut data,
-                &dst_strides,
-            );
-        }
-        Tensor {
-            buffer: DataBuffer::from_vec(data),
-            dims: self.dims.clone(),
-            strides: dst_strides,
-            offset: 0,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: None,
-            conjugated: self.conjugated,
-        }
-    }
-
-    /// Return a view with the conjugated flag toggled (lazy, zero-cost).
-    ///
-    /// Does not copy data. The conjugation is applied by backends
-    /// when this view is used in operations.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let view = tensor.tensor_view();
-    /// let conjugated = view.conj();
-    /// assert!(conjugated.is_conjugated());
-    /// ```
-    pub fn conj(&self) -> TensorView<'a, T> {
-        TensorView {
-            data: self.data,
-            dims: self.dims.clone(),
-            strides: self.strides.clone(),
-            offset: self.offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: self.event,
-            conjugated: !self.conjugated,
-        }
-    }
-}
-
 /// Synchronization event for asynchronous accelerator operations.
 ///
 /// Tracks completion of asynchronous operations on accelerator devices,
@@ -1661,53 +1153,6 @@ impl<T: Scalar> Tensor<T> {
     // View operations (zero-copy, public API waits if pending)
     // ========================================================================
 
-    /// Returns a [`TensorView`] for data inspection.
-    ///
-    /// Waits for any pending accelerator computation before returning.
-    /// The returned view has `event = None` (data is ready to read).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{Tensor, MemoryOrder};
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
-    /// let view = t.tensor_view();
-    /// assert_eq!(view.ndim(), 2);
-    /// ```
-    pub fn tensor_view(&self) -> TensorView<'_, T> {
-        self.wait();
-        TensorView {
-            data: &self.buffer,
-            dims: self.dims.clone(),
-            strides: self.strides.clone(),
-            offset: self.offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: None,
-            conjugated: self.conjugated,
-        }
-    }
-
-    /// Returns a non-blocking [`TensorView`] that propagates the
-    /// pending event (if any) from the source tensor.
-    ///
-    /// This is an internal API used by `einsum` and other accelerator
-    /// operations to chain computations without CPU synchronization.
-    pub(crate) fn as_operand_view(&self) -> TensorView<'_, T> {
-        TensorView {
-            data: &self.buffer,
-            dims: self.dims.clone(),
-            strides: self.strides.clone(),
-            offset: self.offset,
-            logical_memory_space: self.logical_memory_space,
-            preferred_compute_device: self.preferred_compute_device,
-            event: self.event.as_ref(),
-            conjugated: self.conjugated,
-        }
-    }
-
     /// Permute (reorder) the dimensions of the tensor.
     ///
     /// This is a zero-copy operation that only modifies dims and strides.
@@ -1729,13 +1174,35 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn permute(&self, perm: &[usize]) -> Result<Tensor<T>> {
         self.wait();
-        let view = self.tensor_view();
-        let pv = view.permute(perm)?;
+        let ndim = self.ndim();
+        if perm.len() != ndim {
+            return Err(Error::InvalidArgument(format!(
+                "permutation length {} doesn't match ndim {}",
+                perm.len(),
+                ndim
+            )));
+        }
+        let mut seen = vec![false; ndim];
+        for &p in perm {
+            if p >= ndim {
+                return Err(Error::InvalidArgument(format!(
+                    "permutation index {p} out of range for ndim {ndim}"
+                )));
+            }
+            if seen[p] {
+                return Err(Error::InvalidArgument(format!(
+                    "duplicate index {p} in permutation"
+                )));
+            }
+            seen[p] = true;
+        }
+        let new_dims: Vec<usize> = perm.iter().map(|&p| self.dims[p]).collect();
+        let new_strides: Vec<isize> = perm.iter().map(|&p| self.strides[p]).collect();
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: pv.dims,
-            strides: pv.strides,
-            offset: pv.offset,
+            dims: new_dims,
+            strides: new_strides,
+            offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
             event: None,
@@ -1764,13 +1231,32 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn broadcast(&self, target_dims: &[usize]) -> Result<Tensor<T>> {
         self.wait();
-        let view = self.tensor_view();
-        let bv = view.broadcast(target_dims)?;
+        let ndim = self.ndim();
+        if target_dims.len() != ndim {
+            return Err(Error::InvalidArgument(format!(
+                "target dims length {} doesn't match ndim {}",
+                target_dims.len(),
+                ndim
+            )));
+        }
+        let mut new_strides = self.strides.clone();
+        for i in 0..ndim {
+            if self.dims[i] == target_dims[i] {
+                // keep stride
+            } else if self.dims[i] == 1 {
+                new_strides[i] = 0;
+            } else {
+                return Err(Error::ShapeMismatch {
+                    expected: self.dims.to_vec(),
+                    got: target_dims.to_vec(),
+                });
+            }
+        }
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: bv.dims,
-            strides: bv.strides,
-            offset: bv.offset,
+            dims: target_dims.to_vec(),
+            strides: new_strides,
+            offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
             event: None,
@@ -1801,13 +1287,55 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>> {
         self.wait();
-        let view = self.tensor_view();
-        let dv = view.diagonal(axes)?;
+        let ndim = self.ndim();
+        let mut used = vec![false; ndim];
+        let mut diag_dims = Vec::new();
+        let mut diag_strides = Vec::new();
+
+        for &(i, j) in axes {
+            if i >= ndim || j >= ndim {
+                return Err(Error::InvalidArgument(format!(
+                    "axis out of range: ({i}, {j}) for tensor with {ndim} dimensions"
+                )));
+            }
+            if i == j {
+                return Err(Error::InvalidArgument(format!(
+                    "diagonal axes must be distinct, got ({i}, {j})"
+                )));
+            }
+            if used[i] || used[j] {
+                return Err(Error::InvalidArgument(format!(
+                    "axis {i} or {j} used in multiple diagonal pairs"
+                )));
+            }
+            if self.dims[i] != self.dims[j] {
+                return Err(Error::ShapeMismatch {
+                    expected: vec![self.dims[i]],
+                    got: vec![self.dims[j]],
+                });
+            }
+            used[i] = true;
+            used[j] = true;
+            diag_dims.push(self.dims[i]);
+            diag_strides.push(self.strides[i] + self.strides[j]);
+        }
+
+        let mut new_dims = Vec::new();
+        let mut new_strides = Vec::new();
+        for k in 0..ndim {
+            if !used[k] {
+                new_dims.push(self.dims[k]);
+                new_strides.push(self.strides[k]);
+            }
+        }
+        new_dims.extend_from_slice(&diag_dims);
+        new_strides.extend_from_slice(&diag_strides);
+
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: dv.dims,
-            strides: dv.strides,
-            offset: dv.offset,
+            dims: new_dims,
+            strides: new_strides,
+            offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
             event: None,
@@ -1892,13 +1420,28 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn select(&self, dim: usize, index: usize) -> Result<Tensor<T>> {
         self.wait();
-        let view = self.tensor_view();
-        let sv = view.select(dim, index)?;
+        let ndim = self.ndim();
+        if dim >= ndim {
+            return Err(Error::InvalidArgument(format!(
+                "dim {dim} out of range for tensor with {ndim} dimensions"
+            )));
+        }
+        if index >= self.dims[dim] {
+            return Err(Error::InvalidArgument(format!(
+                "index {index} out of range for dimension {dim} with size {}",
+                self.dims[dim]
+            )));
+        }
+        let new_offset = self.offset + index as isize * self.strides[dim];
+        let mut new_dims = self.dims.clone();
+        let mut new_strides = self.strides.clone();
+        new_dims.remove(dim);
+        new_strides.remove(dim);
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: sv.dims,
-            strides: sv.strides,
-            offset: sv.offset,
+            dims: new_dims,
+            strides: new_strides,
+            offset: new_offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
             event: None,
@@ -1930,13 +1473,28 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Tensor<T>> {
         self.wait();
-        let view = self.tensor_view();
-        let nv = view.narrow(dim, start, length)?;
+        let ndim = self.ndim();
+        if dim >= ndim {
+            return Err(Error::InvalidArgument(format!(
+                "dim {dim} out of range for tensor with {ndim} dimensions"
+            )));
+        }
+        if start + length > self.dims[dim] {
+            return Err(Error::InvalidArgument(format!(
+                "narrow range {}..{} out of bounds for dimension {dim} with size {}",
+                start,
+                start + length,
+                self.dims[dim]
+            )));
+        }
+        let new_offset = self.offset + start as isize * self.strides[dim];
+        let mut new_dims = self.dims.clone();
+        new_dims[dim] = length;
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: nv.dims,
-            strides: nv.strides,
-            offset: nv.offset,
+            dims: new_dims,
+            strides: self.strides.clone(),
+            offset: new_offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
             event: None,
@@ -1968,8 +1526,30 @@ impl<T: Scalar> Tensor<T> {
         if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
             return self.clone();
         }
-        let view = self.tensor_view();
-        view.contiguous(order)
+        let n_elements: usize = self.dims.iter().product();
+        let dst_strides = compute_contiguous_strides(&self.dims, order);
+        let mut data = vec![T::zero(); n_elements];
+        if n_elements > 0 {
+            let src = self.buffer.as_slice().expect("CPU-only: contiguous");
+            copy_strided(
+                src,
+                &self.dims,
+                &self.strides,
+                self.offset,
+                &mut data,
+                &dst_strides,
+            );
+        }
+        Tensor {
+            buffer: DataBuffer::from_vec(data),
+            dims: self.dims.clone(),
+            strides: dst_strides,
+            offset: 0,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+        }
     }
 
     /// Consume this tensor and return a contiguous version.
