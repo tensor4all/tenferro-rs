@@ -793,3 +793,82 @@ fn tracked_no_grad_returns_plain_tensor() {
     assert_eq!(c_data[2], 11.0); // max(1+7, 3+8) = 11
     assert_eq!(c_data[3], 12.0); // max(2+7, 4+8) = 12
 }
+
+// ============================================================================
+// f32 backward test
+// ============================================================================
+
+#[test]
+fn maxplus_f32_matmul_backward() {
+    let mut ctx = ctx();
+
+    // A = [[1, 3],    (column-major: [1, 2, 3, 4])
+    //      [2, 4]]
+    let a = Tensor::<MaxPlus<f32>>::from_slice(
+        &[
+            MaxPlus(1.0f32),
+            MaxPlus(2.0f32),
+            MaxPlus(3.0f32),
+            MaxPlus(4.0f32),
+        ],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+
+    // B = [[5, 7],    (column-major: [5, 6, 7, 8])
+    //      [6, 8]]
+    let b = Tensor::<MaxPlus<f32>>::from_slice(
+        &[
+            MaxPlus(5.0f32),
+            MaxPlus(6.0f32),
+            MaxPlus(7.0f32),
+            MaxPlus(8.0f32),
+        ],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+
+    // C[i,k] = max_j(A[i,j] + B[j,k])
+    // C[0,0] = max(1+5, 3+6) = max(6, 9) = 9    -> winner j=1
+    // C[1,0] = max(2+5, 4+6) = max(7, 10) = 10   -> winner j=1
+    // C[0,1] = max(1+7, 3+8) = max(8, 11) = 11   -> winner j=1
+    // C[1,1] = max(2+7, 4+8) = max(9, 12) = 12   -> winner j=1
+
+    // Cotangent: all ones
+    let grad_c =
+        Tensor::<f32>::from_slice(&[1.0f32, 1.0, 1.0, 1.0], &[2, 2], COL).unwrap();
+
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f32>,
+        MaxPlusAlgebra<f32>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c)
+    .unwrap();
+
+    assert_eq!(grads.len(), 2);
+    let da = grads[0].buffer().as_slice().unwrap();
+    let db = grads[1].buffer().as_slice().unwrap();
+
+    // All winners are j=1 (second row of A, second column of B in col-major).
+    // For MaxPlus: backward through + is identity, so dA[i,j*] += dC[i,k], dB[j*,k] += dC[i,k].
+    // dA[0,0] = 0 (never winner), dA[1,0] = 0
+    // dA[0,1] = dC[0,0]+dC[0,1] = 2, dA[1,1] = dC[1,0]+dC[1,1] = 2
+    // col-major dA: [dA[0,0], dA[1,0], dA[0,1], dA[1,1]] = [0, 0, 2, 2]
+    assert_eq!(da[0], 0.0f32);
+    assert_eq!(da[1], 0.0f32);
+    assert_eq!(da[2], 2.0f32);
+    assert_eq!(da[3], 2.0f32);
+
+    // dB[0,0] = 0, dB[1,0] = 0 (j=0 never won)
+    // dB[0,1] = 0, dB[1,1] = 0
+    // Wait: j=1 won for all outputs. So:
+    // dB[j*=1,k=0] += dC[0,0] + dC[1,0] = 2
+    // dB[j*=1,k=1] += dC[0,1] + dC[1,1] = 2
+    // col-major dB: [dB[0,0], dB[1,0], dB[0,1], dB[1,1]] = [0, 2, 0, 2]
+    assert_eq!(db[0], 0.0f32);
+    assert_eq!(db[1], 2.0f32);
+    assert_eq!(db[2], 0.0f32);
+    assert_eq!(db[3], 2.0f32);
+}

@@ -409,6 +409,64 @@ fn semiring_maxmul() {
 }
 
 // ============================================================================
+// f32 Semiring tests
+// ============================================================================
+
+#[test]
+fn semiring_maxplus_f32() {
+    use tenferro_algebra::Semiring;
+    use tenferro_tropical::MaxPlusAlgebra;
+
+    let z = MaxPlusAlgebra::<f32>::zero();
+    let o = MaxPlusAlgebra::<f32>::one();
+    assert_eq!(z, MaxPlus(f32::NEG_INFINITY));
+    assert_eq!(o, MaxPlus(0.0f32));
+
+    let a = MaxPlus(1.0f32);
+    let b = MaxPlus(2.0f32);
+    let sum = MaxPlusAlgebra::<f32>::add(a, b);
+    assert_eq!(sum, MaxPlus(2.0f32)); // max(1, 2) = 2
+    let prod = MaxPlusAlgebra::<f32>::mul(a, b);
+    assert_eq!(prod, MaxPlus(3.0f32)); // 1 + 2 = 3
+}
+
+#[test]
+fn semiring_minplus_f32() {
+    use tenferro_algebra::Semiring;
+    use tenferro_tropical::MinPlusAlgebra;
+
+    let z = MinPlusAlgebra::<f32>::zero();
+    let o = MinPlusAlgebra::<f32>::one();
+    assert_eq!(z, MinPlus(f32::INFINITY));
+    assert_eq!(o, MinPlus(0.0f32));
+
+    let a = MinPlus(3.0f32);
+    let b = MinPlus(5.0f32);
+    let sum = MinPlusAlgebra::<f32>::add(a, b);
+    assert_eq!(sum, MinPlus(3.0f32)); // min(3, 5) = 3
+    let prod = MinPlusAlgebra::<f32>::mul(a, b);
+    assert_eq!(prod, MinPlus(8.0f32)); // 3 + 5 = 8
+}
+
+#[test]
+fn semiring_maxmul_f32() {
+    use tenferro_algebra::Semiring;
+    use tenferro_tropical::MaxMulAlgebra;
+
+    let z = MaxMulAlgebra::<f32>::zero();
+    let o = MaxMulAlgebra::<f32>::one();
+    assert_eq!(z, MaxMul(0.0f32));
+    assert_eq!(o, MaxMul(1.0f32));
+
+    let a = MaxMul(0.3f32);
+    let b = MaxMul(0.7f32);
+    let sum = MaxMulAlgebra::<f32>::add(a, b);
+    assert_eq!(sum.0, 0.7f32); // max(0.3, 0.7) = 0.7
+    let prod = MaxMulAlgebra::<f32>::mul(a, b);
+    assert!((prod.0 - 0.21f32).abs() < 1e-6); // 0.3 * 0.7 = 0.21
+}
+
+// ============================================================================
 // ScalarBase / Scalar trait satisfaction tests
 // ============================================================================
 
