@@ -3076,6 +3076,97 @@ macro_rules! typed_prims_tests {
                     );
                 }
             }
+
+            #[test]
+            fn anti_trace_multi_component() {
+                // scalar -> [3,3,4,4], paired=[(0,1),(2,3)]
+                // Two components: {0,1} dim=3, {2,3} dim=4
+                // C[i,j,k,l] = A[] for all i==j AND k==l, else 0
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(7.0));
+                let mut c = tensor_zeros::<$T>(&[3, 3, 4, 4]);
+
+                let desc = PrimDescriptor::AntiTrace {
+                    modes_a: vec![],
+                    modes_c: vec![0, 1, 2, 3],
+                    paired: vec![(0, 1), (2, 3)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[], &[3, 3, 4, 4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..3 {
+                    for j in 0..3 {
+                        for k in 0..4 {
+                            for l in 0..4 {
+                                let expected = if i == j && k == l {
+                                    <$T as TestScalar>::from_f64(7.0)
+                                } else {
+                                    <$T as TestScalar>::from_f64(0.0)
+                                };
+                                assert!(
+                                    <$T as TestScalar>::approx_eq(
+                                        tensor_get(&c, &[i, j, k, l]),
+                                        expected
+                                    ),
+                                    "C[{i},{j},{k},{l}] = {:?}, expected {:?}",
+                                    tensor_get(&c, &[i, j, k, l]),
+                                    expected,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            #[test]
+            fn anti_diag_generative_scalar_to_diagonal() {
+                // scalar -> [4,4], no input axes, paired=[(0,1)]
+                // Generative component: must loop over dim=4
+                // C[i,j] = A[] if i==j, else 0
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(3.0));
+                let mut c = tensor_zeros::<$T>(&[4, 4]);
+
+                let desc = PrimDescriptor::AntiDiag {
+                    modes_a: vec![],
+                    modes_c: vec![0, 1],
+                    paired: vec![(0, 1)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[], &[4, 4]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                for i in 0..4 {
+                    for j in 0..4 {
+                        let expected = if i == j {
+                            <$T as TestScalar>::from_f64(3.0)
+                        } else {
+                            <$T as TestScalar>::from_f64(0.0)
+                        };
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                        );
+                    }
+                }
+            }
         }
     };
 }
