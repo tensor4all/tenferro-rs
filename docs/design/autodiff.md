@@ -1,6 +1,6 @@
 # Automatic Differentiation
 
-For detailed mathematical derivations of AD rules, see [AD Formula Notes](../AD/index.md).
+For detailed mathematical derivations of AD rules, see [AD Formula Notes](../AD/README.md).
 
 **Complex gradient convention:** All AD formula notes use the Wirtinger
 (CR-calculus) convention for complex-valued tensors. VJP formulas produce
@@ -118,7 +118,7 @@ against libtorch's AD formulas led to a minimal design.
 
 | Addition | Rationale |
 |----------|-----------|
-| `UnaryOp` enum (`Negate`, `Reciprocal`, `Abs`, `Sqrt`) | SVD/eigen rrule requires F-matrix: `F_ij = 1/(σ_j² − σ_i²)`, needing `Reciprocal`. `Sqrt` for matrix square root. |
+| `UnaryOp` enum (`Negate`, `Reciprocal`, `Abs`, `Sqrt`) | SVD/eigen rrule requires F-matrix: $F_{ij} = 1/(\sigma_j^2 - \sigma_i^2)$, needing `Reciprocal`. `Sqrt` for matrix square root. |
 | `PrimDescriptor::ElementwiseUnary { op }` | Maps to `cutensorElementwiseTrinary` (unary case) on GPU. |
 
 `Square` (x²) deliberately omitted — expressible as `ElementwiseMul(x, x)`.
@@ -129,7 +129,7 @@ against libtorch's AD formulas led to a minimal design.
 |----------|-----------|
 | `Tensor::select(dim, index)` | Zero-copy view for batch-dimension manipulation in AD rules. |
 | `Tensor::narrow(dim, start, length)` | Zero-copy slicing. Required for matrix block extraction. |
-| `Tensor::eye(n, memory_space, order)` | Identity matrix. Required by SVD rrule projector: `(I − U·Uᵀ)`. |
+| `Tensor::eye(n, memory_space, order)` | Identity matrix. Required by SVD rrule projector: $(I - U \cdot U^\mathsf{T})$. |
 | `Tensor::tril(diagonal)` / `triu(diagonal)` | Triangular extraction. Required by QR/LU rrule. |
 
 **Excluded (with rationale):**
@@ -176,7 +176,7 @@ not create tapes or tracked tensors.
 AD must remain algebra-aware:
 
 - **Standard arithmetic** (`Standard<T>`): direct rrule/frule formulas over
-  `+/*`. The algebra type `A = Standard<T>` determines which primitive
+  $+/\times$. The algebra type `A = Standard<T>` determines which primitive
   operations are available (e.g., cuTENSOR-backed `TensorPrims<Standard<T>>`).
 - **Tropical algebra** (`tenferro-tropical`): requires algebra-specific state
   during the backward pass. For max-plus/min-plus einsum, the rrule must track

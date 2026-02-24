@@ -371,8 +371,8 @@ transformations (`diag`, `repeat`) at the Tensor layer.
 
 | Pattern | Expected semantics | Lowering |
 |--------|---------------------|----------|
-| `ii->` | `sum_i A[i,i]` | `Trace(paired=[(0,1)])` |
-| `iijj->` | `sum_{i,j} A[i,i,j,j]` | `Trace` with two independent components |
+| `ii->` | $\sum_i A_{ii}$ | `Trace(paired=[(0,1)])` |
+| `iijj->` | $\sum_{i,j} A_{iijj}$ | `Trace` with two independent components |
 | `ii->i` | diagonal extraction | `diag([(0,1)])` |
 | `iij->j` | partial trace | `diag([(0,1)])` then `Reduce` |
 | `i->ii` | vector to diagonal matrix | `AntiDiag(paired=[(0,1)])` |
@@ -499,18 +499,23 @@ matching the non-AD einsum functions.
 
 Each forward operation has a clean adjoint:
 
-```
-Forward:  C[i,k] = einsum("ij,jk->ik", A, B)
-         = batched_gemm(A[i,j], B[j,k])
+**Matrix multiply** (`"ij,jk->ik"`):
 
-Backward: ∂A[i,j] = batched_gemm(∂C[i,k], B^T[k,j])
-          ∂B[j,k] = batched_gemm(A^T[j,i], ∂C[i,k])
+Forward: $C_{ik} = \operatorname{batched\_gemm}(A_{ij},\; B_{jk})$
 
-Forward:  y[j] = einsum("iij->j", A)
-         = reduce(diag(A, [(0,1)]), axis=0)
+Backward:
 
-Backward: ∂A = anti_diag(repeat(∂y, i_dim), [(0,1)])
-```
+$$\bar{A}_{ij} = \operatorname{batched\_gemm}(\bar{C}_{ik},\; B^\top_{kj})$$
+
+$$\bar{B}_{jk} = \operatorname{batched\_gemm}(A^\top_{ji},\; \bar{C}_{ik})$$
+
+**Partial trace** (`"iij->j"`):
+
+Forward: $y_j = \operatorname{reduce}(\operatorname{diag}(A, [(0,1)]),\; \text{axis}=0)$
+
+Backward:
+
+$$\bar{A} = \operatorname{anti\_diag}(\operatorname{repeat}(\bar{y},\; i_{\text{dim}}),\; [(0,1)])$$
 
 Both VJP and JVP go through `TensorPrims` primitives, working on CPU and
 GPU uniformly (once GPU backends are available).

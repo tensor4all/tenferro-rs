@@ -66,11 +66,11 @@ The core operations form adjoint pairs, enabling clean VJP/JVP rules:
 
 | Forward | Backward (adjoint) | Description |
 |---------|-------------------|-------------|
-| `trace(A)` | `anti_trace(∂y)` | Scatter-add gradient to diagonal |
-| `diag(A)` | `anti_diag(∂y)` | Write gradient to diagonal positions |
-| `reduce(A, dim)` | `repeat(∂y, dim)` | Broadcast gradient |
-| `permute(A, p)` | `permute(∂y, p⁻¹)` | Inverse permutation |
-| `batched_gemm(A, B)` | Leibniz rule | `∂A = gemm(∂C, B^T)`, `∂B = gemm(A^T, ∂C)` |
+| $\operatorname{trace}(A)$ | $\operatorname{anti\_trace}(\bar{y})$ | Scatter-add gradient to diagonal |
+| $\operatorname{diag}(A)$ | $\operatorname{anti\_diag}(\bar{y})$ | Write gradient to diagonal positions |
+| $\operatorname{reduce}(A, \text{dim})$ | $\operatorname{repeat}(\bar{y}, \text{dim})$ | Broadcast gradient |
+| $\operatorname{permute}(A, p)$ | $\operatorname{permute}(\bar{y}, p^{-1})$ | Inverse permutation |
+| $\operatorname{batched\_gemm}(A, B)$ | Leibniz rule | $\bar{A} = \operatorname{gemm}(\bar{C}, B^\top)$, $\bar{B} = \operatorname{gemm}(A^\top, \bar{C})$ |
 
 ---
 
@@ -83,47 +83,49 @@ output/input axes encoded in `paired`.
 
 Given a rank-`r` tensor, build an undirected graph:
 
-- Vertices: axis positions `V = {0, ..., r-1}`
+- Vertices: axis positions $V = \{0, \ldots, r-1\}$
 - Edges: each pair `(a, b)` in `paired`
 
 Connected components define independent diagonal indices. Let components be
-`C_0, ..., C_{q-1}` with axis-to-component map `comp(axis)`.
+$C_0, \ldots, C_{q-1}$ with axis-to-component map $\operatorname{comp}(\text{axis})$.
 
-For each component `C_t`, all member axes must have the same dimension:
+For each component $C_t$, all member axes must have the same dimension:
 
-`dim[a] = dim[b]` for all `a, b in C_t`
+$\dim(a) = \dim(b)$ for all $a, b \in C_t$
 
-This gives an independent diagonal index `d_t in [0, D_t)` per component.
+This gives an independent diagonal index $d_t \in [0, D_t)$ per component.
 
 ### Trace
 
 `Trace` contracts paired axes and sums over each component index:
 
-`Y[f] = sum_{d_0,...,d_{q-1}} X[j(f, d)]`
+$$Y[f] = \sum_{d_0,\ldots,d_{q-1}} X[j(f, d)]$$
 
-where `j(f, d)` is built by:
+where $j(f, d)$ is built by:
 
-- free axis `a`: copy value from output index `f`
-- paired axis `a`: `j_a = d_{comp(a)}`
+- free axis $a$: copy value from output index $f$
+- paired axis $a$: $j_a = d_{\operatorname{comp}(a)}$
 
-This is the key generalization from "single `d`" to "one `d_t` per component".
+This is the key generalization from "single $d$" to "one $d_t$ per component".
 It is required for cases like `iijj->`:
 
-`sum_{i,j} X[i, i, j, j]`
+$$\sum_{i,j} X[i, i, j, j]$$
 
-not `sum_d X[d, d, d, d]`.
+not $\sum_d X[d, d, d, d]$.
 
 ### AntiTrace (Adjoint of Trace)
 
 `AntiTrace` scatters a cotangent back to all constrained diagonal positions:
 
-`Z[j] = G[pi(j)] * prod_{(a,b) in paired} delta(j_a, j_b)`
+Here $\pi(j)$ denotes the projection that extracts the free-axis components from the full index vector $j$ (i.e., drops all paired-axis positions).
+
+$$Z[j] = G[\pi(j)] \cdot \prod_{(a,b) \in \text{paired}} \delta(j_a, j_b)$$
 
 Equivalent loop form:
 
-`for each free index f:`
-`  for each component index tuple d:`
-`    Z[j(f, d)] += G[f]`
+For each free index $f$:
+:   For each component index tuple $d$:
+    :   $Z[j(f, d)] \mathrel{+}= G[f]$
 
 with alpha/beta scaling in the standard `execute` contract.
 
@@ -131,18 +133,16 @@ with alpha/beta scaling in the standard `execute` contract.
 
 `AntiDiag` writes cotangents to constrained output positions:
 
-`Z[j] = sum_i G[i]`
-`       * prod_u delta(j_{phi(u)}, i_u)`
-`       * prod_{(a,b) in paired} delta(j_a, j_b)`
+$$Z[j] = \sum_i G[i] \cdot \prod_u \delta(j_{\varphi(u)}, i_u) \cdot \prod_{(a,b) \in \text{paired}} \delta(j_a, j_b)$$
 
-`phi(u)` maps each input axis `u` to its output axis in `modes_c`.
+$\varphi(u)$ maps each input axis $u$ to its output axis in `modes_c`.
 
 Two component classes appear in practice:
 
 - Anchored component: at least one axis comes from `modes_a`; value is fixed by
-  the corresponding `i_u`
+  the corresponding $i_u$
 - Generative component: no axis from `modes_a`; must be looped independently
-  over `d_t in [0, D_t)`
+  over $d_t \in [0, D_t)$
 
 Generative components are required for scalar-to-diagonal patterns such as
 `->ii` and `->iii`.
