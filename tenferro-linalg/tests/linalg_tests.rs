@@ -28,6 +28,271 @@ fn tensor_data(t: &Tensor<f64>) -> Vec<f64> {
 }
 
 // ============================================================================
+// FD verification utilities
+// ============================================================================
+
+/// Compute numerical Jacobian for a matrix->matrix function.
+/// For each input element, perturbs by +/-eps and computes central difference.
+/// Returns one Tensor per input element (Jacobian column).
+fn fd_gradient_matrix(
+    f: impl Fn(&Tensor<f64>) -> Tensor<f64>,
+    a: &Tensor<f64>,
+    eps: f64,
+) -> Vec<Tensor<f64>> {
+    let n = a.dims().iter().product::<usize>();
+    let a_data = tensor_data(a);
+    let mut grads = Vec::with_capacity(n);
+    for idx in 0..n {
+        let mut plus = a_data.clone();
+        let mut minus = a_data.clone();
+        plus[idx] += eps;
+        minus[idx] -= eps;
+        let f_plus = f(&make_tensor(plus, a.dims()));
+        let f_minus = f(&make_tensor(minus, a.dims()));
+        let fp = tensor_data(&f_plus);
+        let fm = tensor_data(&f_minus);
+        let grad: Vec<f64> = fp
+            .iter()
+            .zip(&fm)
+            .map(|(p, m)| (p - m) / (2.0 * eps))
+            .collect();
+        grads.push(make_tensor(grad, f_plus.dims()));
+    }
+    grads
+}
+
+/// Check that analytic rrule gradient matches FD gradient via VJP contract.
+///
+/// The VJP contract: <cotangent, J*v> = <J^T*cotangent, v> for all v.
+/// We check: analytic_grad = sum_k cotangent[k] * df_k/da[ij].
+fn check_rrule_fd<F, G>(forward: F, rrule: G, a: &Tensor<f64>, eps: f64, atol: f64)
+where
+    F: Fn(&Tensor<f64>) -> Tensor<f64>,
+    G: Fn(&Tensor<f64>, &Tensor<f64>) -> Tensor<f64>,
+{
+    let output = forward(a);
+    let out_size: usize = output.dims().iter().product();
+    // Deterministic "random" cotangent
+    let cotangent_data: Vec<f64> = (0..out_size)
+        .map(|i| ((i * 7 + 3) % 11) as f64 / 5.0 - 1.0)
+        .collect();
+    let cotangent = make_tensor(cotangent_data.clone(), output.dims());
+
+    let analytic_grad = rrule(a, &cotangent);
+    let analytic = tensor_data(&analytic_grad);
+
+    // FD: sum_k cotangent[k] * df_k/da[ij]
+    let fd_jac = fd_gradient_matrix(&forward, a, eps);
+    let a_size: usize = a.dims().iter().product();
+    let mut fd_grad = vec![0.0; a_size];
+    for ij in 0..a_size {
+        let jac_col = tensor_data(&fd_jac[ij]);
+        for k in 0..out_size {
+            fd_grad[ij] += cotangent_data[k] * jac_col[k];
+        }
+    }
+
+    let max_err = analytic
+        .iter()
+        .zip(&fd_grad)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < atol,
+        "rrule FD check failed: max_err={max_err} > atol={atol}"
+    );
+}
+
+/// Check that analytic frule tangent matches FD directional derivative.
+fn check_frule_fd<F, G>(forward: F, frule: G, a: &Tensor<f64>, eps: f64, atol: f64)
+where
+    F: Fn(&Tensor<f64>) -> Tensor<f64>,
+    G: Fn(&Tensor<f64>, &Tensor<f64>) -> Tensor<f64>,
+{
+    let a_size: usize = a.dims().iter().product();
+    // Deterministic "random" tangent direction
+    let tangent_data: Vec<f64> = (0..a_size)
+        .map(|i| ((i * 13 + 5) % 17) as f64 / 8.0 - 1.0)
+        .collect();
+    let tangent = make_tensor(tangent_data.clone(), a.dims());
+
+    let analytic_out = frule(a, &tangent);
+    let analytic = tensor_data(&analytic_out);
+
+    // FD: (f(A + eps*dA) - f(A - eps*dA)) / (2*eps)
+    let a_data = tensor_data(a);
+    let plus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a + eps * da)
+        .collect();
+    let minus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a - eps * da)
+        .collect();
+    let f_plus = forward(&make_tensor(plus, a.dims()));
+    let f_minus = forward(&make_tensor(minus, a.dims()));
+    let fp = tensor_data(&f_plus);
+    let fm = tensor_data(&f_minus);
+    let fd: Vec<f64> = fp
+        .iter()
+        .zip(&fm)
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic
+        .iter()
+        .zip(&fd)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < atol,
+        "frule FD check failed: max_err={max_err} > atol={atol}"
+    );
+}
+
+/// Create a well-conditioned n x n test matrix with distinct eigenvalues.
+/// Uses deterministic construction: a + a^T + n*I (symmetric positive definite).
+fn make_well_conditioned_matrix(n: usize) -> Tensor<f64> {
+    let mut data = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let val = ((i * 7 + j * 13 + 3) % 19) as f64 / 10.0 - 0.9;
+            data[i + j * n] = val;
+        }
+    }
+    // Symmetrize: A = A + A^T
+    let mut sym = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            sym[i + j * n] = data[i + j * n] + data[j + i * n];
+        }
+    }
+    // Add n*I to ensure positive definite
+    for i in 0..n {
+        sym[i + i * n] += n as f64;
+    }
+    make_tensor(sym, &[n, n])
+}
+
+/// Create a general (non-symmetric) well-conditioned n x n test matrix.
+fn make_general_test_matrix(n: usize) -> Tensor<f64> {
+    let mut data = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let val = ((i * 7 + j * 13 + 3) % 19) as f64 / 10.0 - 0.9;
+            data[i + j * n] = val;
+        }
+    }
+    // Add n*I to ensure invertibility
+    for i in 0..n {
+        data[i + i * n] += n as f64;
+    }
+    make_tensor(data, &[n, n])
+}
+
+// ============================================================================
+// FD helpers smoke test
+// ============================================================================
+
+#[test]
+fn fd_helpers_smoke_test() {
+    // Test with matrix transpose (f(A) = A^T)
+    // Jacobian of transpose is a permutation matrix
+    // rrule: grad of A^T w.r.t. cotangent is cotangent^T
+    // frule: tangent of A^T w.r.t. dA is dA^T
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+    let transpose_fn = |x: &Tensor<f64>| {
+        // Manual transpose for 2x3 -> 3x2
+        let d = tensor_data(x);
+        // Input is 2x3 col-major: d[i + j*2] for i in 0..2, j in 0..3
+        // Output is 3x2 col-major: o[j + i*3] for i in 0..2, j in 0..3
+        let mut out = vec![0.0; 6];
+        for i in 0..2 {
+            for j in 0..3 {
+                out[j + i * 3] = d[i + j * 2];
+            }
+        }
+        make_tensor(out, &[3, 2])
+    };
+
+    // frule: d(A^T) should be (dA)^T
+    check_frule_fd(
+        &transpose_fn,
+        |_x, dx| {
+            let dd = tensor_data(dx);
+            let mut out = vec![0.0; 6];
+            for i in 0..2 {
+                for j in 0..3 {
+                    out[j + i * 3] = dd[i + j * 2];
+                }
+            }
+            make_tensor(out, &[3, 2])
+        },
+        &a,
+        1e-6,
+        1e-8,
+    );
+
+    // rrule: grad w.r.t. A given cotangent on A^T is cotangent^T
+    check_rrule_fd(
+        &transpose_fn,
+        |_x, co| {
+            let cd = tensor_data(co);
+            // cotangent is 3x2, output grad is 2x3
+            let mut out = vec![0.0; 6];
+            for i in 0..3 {
+                for j in 0..2 {
+                    out[j + i * 2] = cd[i + j * 3];
+                }
+            }
+            make_tensor(out, &[2, 3])
+        },
+        &a,
+        1e-6,
+        1e-8,
+    );
+}
+
+#[test]
+fn fd_helpers_well_conditioned_matrix() {
+    // Verify that make_well_conditioned_matrix produces a symmetric positive definite matrix.
+    let a = make_well_conditioned_matrix(3);
+    let d = tensor_data(&a);
+    // Check symmetry: a[i,j] == a[j,i]
+    for i in 0..3 {
+        for j in 0..3 {
+            assert!(
+                (d[i + j * 3] - d[j + i * 3]).abs() < 1e-15,
+                "not symmetric at ({i},{j})"
+            );
+        }
+    }
+    // Check positive diagonal (necessary but not sufficient for PD)
+    for i in 0..3 {
+        assert!(d[i + i * 3] > 0.0, "diagonal not positive at ({i},{i})");
+    }
+}
+
+#[test]
+fn fd_helpers_general_test_matrix() {
+    // Verify that make_general_test_matrix produces a non-singular matrix
+    // by checking that the diagonal dominance condition holds.
+    let a = make_general_test_matrix(3);
+    let d = tensor_data(&a);
+    for i in 0..3 {
+        let diag = d[i + i * 3].abs();
+        let off_sum: f64 = (0..3).filter(|&j| j != i).map(|j| d[i + j * 3].abs()).sum();
+        assert!(
+            diag > off_sum,
+            "not diagonally dominant at row {i}: diag={diag}, off_sum={off_sum}"
+        );
+    }
+}
+
+// ============================================================================
 // SVD tests
 // ============================================================================
 
