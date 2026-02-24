@@ -1,6 +1,10 @@
 project:
   type: website
   output-dir: ../target/docs-site/design
+  render:
+    - index.md
+    - design/**/*.md
+    - AD/**/*.md
 
 format:
   html:

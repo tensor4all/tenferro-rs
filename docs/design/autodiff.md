@@ -1,6 +1,6 @@
 # Automatic Differentiation
 
-For detailed mathematical derivations of AD rules, see [AD Formula Notes](../AD/README.md).
+For detailed mathematical derivations of AD rules, see [AD Formula Notes](../AD/index.md).
 
 **Complex gradient convention:** All AD formula notes use the Wirtinger
 (CR-calculus) convention for complex-valued tensors. VJP formulas produce

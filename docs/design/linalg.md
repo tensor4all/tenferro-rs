@@ -184,7 +184,7 @@ which backend primitives are dispatched during the AD formulas, see
 [algebra.md](./algebra.md).
 
 For the step-by-step mathematical derivations of each rule, see the
-[AD Formula Notes](../AD/README.md).
+[AD Formula Notes](../AD/index.md).
 
 ### Cotangent Types
 
