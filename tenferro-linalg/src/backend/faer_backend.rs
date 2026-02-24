@@ -1369,6 +1369,270 @@ mod tests {
     }
 
     // ========================================================================
+    // f64 error path tests (cover slice-length validation in real backend)
+    // ========================================================================
+
+    #[test]
+    fn faer_backend_thin_svd_f64_invalid_u() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0]; // 2x2
+        let mut u = [0.0_f64; 1]; // too short (need 4)
+        let mut s = [0.0_f64; 2];
+        let mut vt = [0.0_f64; 4];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_f64_invalid_s() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut u = [0.0_f64; 4];
+        let mut s = [0.0_f64; 1]; // too short (need 2)
+        let mut vt = [0.0_f64; 4];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_f64_invalid_vt() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut u = [0.0_f64; 4];
+        let mut s = [0.0_f64; 2];
+        let mut vt = [0.0_f64; 1]; // too short (need 4)
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_qr_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short for 2x2
+        let mut q = [0.0_f64; 4];
+        let mut r = [0.0_f64; 4];
+        assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+    }
+
+    #[test]
+    fn faer_backend_qr_f64_invalid_q() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut q = [0.0_f64; 1]; // too short
+        let mut r = [0.0_f64; 4];
+        assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+    }
+
+    #[test]
+    fn faer_backend_qr_f64_invalid_r() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut q = [0.0_f64; 4];
+        let mut r = [0.0_f64; 1]; // too short
+        assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short
+        let mut perm = [0usize; 2];
+        let mut l = [0.0_f64; 4];
+        let mut u_out = [0.0_f64; 4];
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_f64_invalid_perm() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut perm = [0usize; 1]; // too short
+        let mut l = [0.0_f64; 4];
+        let mut u_out = [0.0_f64; 4];
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_f64_invalid_l() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut perm = [0usize; 2];
+        let mut l = [0.0_f64; 1]; // too short
+        let mut u_out = [0.0_f64; 4];
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_f64_invalid_u() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut perm = [0usize; 2];
+        let mut l = [0.0_f64; 4];
+        let mut u_out = [0.0_f64; 1]; // too short
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_cholesky_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short for n=2
+        let mut l = [0.0_f64; 4];
+        assert!(backend.cholesky(&a, 2, &mut l).is_err());
+    }
+
+    #[test]
+    fn faer_backend_cholesky_f64_invalid_l() {
+        let mut backend = FaerBackend::new();
+        let a = [4.0_f64, 0.0, 0.0, 4.0]; // SPD
+        let mut l = [0.0_f64; 1]; // too short
+        assert!(backend.cholesky(&a, 2, &mut l).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short for n=2
+        let mut values = [0.0_f64; 2];
+        let mut vectors = [0.0_f64; 4];
+        assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_f64_invalid_values() {
+        let mut backend = FaerBackend::new();
+        let a = [2.0_f64, 1.0, 1.0, 2.0]; // 2x2 symmetric
+        let mut values = [0.0_f64; 1]; // too short
+        let mut vectors = [0.0_f64; 4];
+        assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_f64_invalid_vectors() {
+        let mut backend = FaerBackend::new();
+        let a = [2.0_f64, 1.0, 1.0, 2.0];
+        let mut values = [0.0_f64; 2];
+        let mut vectors = [0.0_f64; 1]; // too short
+        assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_mat_mul_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short for 2x2
+        let b = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut c = [0.0_f64; 4];
+        assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+    }
+
+    #[test]
+    fn faer_backend_mat_mul_f64_invalid_b() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let b = [1.0_f64]; // too short
+        let mut c = [0.0_f64; 4];
+        assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+    }
+
+    #[test]
+    fn faer_backend_mat_mul_f64_invalid_c() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let b = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut c = [0.0_f64; 1]; // too short
+        assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short
+        let b = [1.0_f64, 0.0];
+        let mut x = [0.0_f64; 2];
+        assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_f64_invalid_b() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let b = [1.0_f64]; // too short
+        let mut x = [0.0_f64; 2];
+        assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_f64_invalid_x() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let b = [1.0_f64, 0.0];
+        let mut x = [0.0_f64]; // too short
+        assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_tri_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short
+        let b = [1.0_f64, 0.0];
+        let mut x = [0.0_f64; 2];
+        assert!(backend
+            .solve_triangular(&a, &b, 2, 1, true, &mut x)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_tri_f64_invalid_b() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let b = [1.0_f64]; // too short
+        let mut x = [0.0_f64; 2];
+        assert!(backend
+            .solve_triangular(&a, &b, 2, 1, true, &mut x)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_tri_f64_invalid_x() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let b = [1.0_f64, 0.0];
+        let mut x = [0.0_f64]; // too short
+        assert!(backend
+            .solve_triangular(&a, &b, 2, 1, true, &mut x)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_f64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64]; // too short
+        let mut values_ri = [0.0_f64; 4];
+        let mut vectors_ri = [0.0_f64; 8];
+        assert!(backend
+            .eig_general(&a, 2, &mut values_ri, &mut vectors_ri)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_f64_invalid_values() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut values_ri = [0.0_f64; 1]; // too short (need 2*2=4)
+        let mut vectors_ri = [0.0_f64; 8];
+        assert!(backend
+            .eig_general(&a, 2, &mut values_ri, &mut vectors_ri)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_f64_invalid_vectors() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0_f64, 0.0, 0.0, 1.0];
+        let mut values_ri = [0.0_f64; 4];
+        let mut vectors_ri = [0.0_f64; 1]; // too short (need 2*2*2=8)
+        assert!(backend
+            .eig_general(&a, 2, &mut values_ri, &mut vectors_ri)
+            .is_err());
+    }
+
+    // ========================================================================
     // Complex64 backend tests
     // ========================================================================
 

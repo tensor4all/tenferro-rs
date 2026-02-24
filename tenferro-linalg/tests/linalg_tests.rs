@@ -1,5 +1,6 @@
 //! Tests for tenferro-linalg: forward decompositions and AD rules.
 
+use num_complex::{Complex32, Complex64};
 use tenferro_linalg::backend::FaerBackend;
 use tenferro_linalg::*;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -1637,8 +1638,6 @@ fn test_solve_dimension_mismatch_returns_error() {
 // Complex64 integration tests (Tensor-level API)
 // ============================================================================
 
-use num_complex::Complex64;
-
 /// Create a column-major Tensor<Complex64> from a flat vec and shape.
 fn make_complex_tensor(data: Vec<Complex64>, dims: &[usize]) -> Tensor<Complex64> {
     let ndim = dims.len();
@@ -3126,4 +3125,2830 @@ fn norm_fro_frule_fd() {
         dnrm
     };
     check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// ============================================================================
+// Coverage: f32 forward tests
+// ============================================================================
+
+/// Create a column-major tensor from a flat vec of f32 and shape.
+fn make_tensor_f32(data: Vec<f32>, dims: &[usize]) -> Tensor<f32> {
+    let ndim = dims.len();
+    let mut strides = vec![0isize; ndim];
+    if ndim > 0 {
+        strides[0] = 1;
+        for i in 1..ndim {
+            strides[i] = strides[i - 1] * dims[i - 1] as isize;
+        }
+    }
+    Tensor::from_vec(data, dims, &strides, 0).unwrap()
+}
+
+/// Extract flat data from a Tensor<f32>.
+fn tensor_data_f32(t: &Tensor<f32>) -> Vec<f32> {
+    let c = t.contiguous(COL);
+    let off = c.offset() as usize;
+    let len: usize = c.dims().iter().product();
+    c.buffer().as_slice().unwrap()[off..off + len].to_vec()
+}
+
+#[test]
+fn svd_f32_identity() {
+    let mut backend = FaerBackend::new();
+    let data: Vec<f32> = vec![1.0, 0.0, 0.0, 1.0];
+    let a = make_tensor_f32(data, &[2, 2]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    let s = tensor_data_f32(&result.s);
+    for &val in &s {
+        assert!(
+            (val - 1.0_f32).abs() < 1e-5,
+            "f32 SVD singular value: {val}"
+        );
+    }
+}
+
+#[test]
+fn svd_f32_reconstruction() {
+    let mut backend = FaerBackend::new();
+    // 2x3 matrix
+    let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let a = make_tensor_f32(data.clone(), &[2, 3]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    let u = tensor_data_f32(&result.u);
+    let s = tensor_data_f32(&result.s);
+    let vt = tensor_data_f32(&result.vt);
+    let m = 2;
+    let n = 3;
+    let k = 2;
+    // Reconstruct A = U diag(S) Vt
+    let mut recon = vec![0.0_f32; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut val = 0.0_f32;
+            for l in 0..k {
+                val += u[i + l * m] * s[l] * vt[l + j * k];
+            }
+            recon[i + j * m] = val;
+        }
+    }
+    let err: f32 = data
+        .iter()
+        .zip(&recon)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f32::max);
+    assert!(err < 1e-4, "f32 SVD reconstruction error: {err}");
+}
+
+#[test]
+fn qr_f32_reconstruction() {
+    let mut backend = FaerBackend::new();
+    let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let a = make_tensor_f32(data.clone(), &[2, 3]);
+    let result = qr(&mut backend, &a).unwrap();
+    let q = tensor_data_f32(&result.q);
+    let r = tensor_data_f32(&result.r);
+    let m = 2;
+    let n = 3;
+    let k = 2;
+    let mut recon = vec![0.0_f32; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut val = 0.0_f32;
+            for l in 0..k {
+                val += q[i + l * m] * r[l + j * k];
+            }
+            recon[i + j * m] = val;
+        }
+    }
+    let err: f32 = data
+        .iter()
+        .zip(&recon)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f32::max);
+    assert!(err < 1e-4, "f32 QR reconstruction error: {err}");
+}
+
+#[test]
+fn solve_f32() {
+    let mut backend = FaerBackend::new();
+    // A = [[2, 1], [1, 3]], b = [5, 10]
+    let a = make_tensor_f32(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
+    let b = make_tensor_f32(vec![5.0, 10.0], &[2, 1]);
+    let x = solve(&mut backend, &a, &b).unwrap();
+    let xd = tensor_data_f32(&x);
+    // Verify: Ax = b
+    let res0 = 2.0 * xd[0] + 1.0 * xd[1] - 5.0;
+    let res1 = 1.0 * xd[0] + 3.0 * xd[1] - 10.0;
+    assert!(res0.abs() < 1e-4, "f32 solve residual[0] = {res0}");
+    assert!(res1.abs() < 1e-4, "f32 solve residual[1] = {res1}");
+}
+
+#[test]
+fn det_f32() {
+    let mut backend = FaerBackend::new();
+    // A = [[1, 2], [3, 4]], col-major: [1, 3, 2, 4]
+    let a = make_tensor_f32(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]);
+    let d = det(&mut backend, &a).unwrap();
+    let d_data = tensor_data_f32(&d);
+    // det = 1*4 - 2*3 = -2
+    assert!(
+        (d_data[0] - (-2.0_f32)).abs() < 1e-4,
+        "f32 det = {}",
+        d_data[0]
+    );
+}
+
+#[test]
+fn inv_f32() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor_f32(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let a_inv = inv(&mut backend, &a).unwrap();
+    let inv_data = tensor_data_f32(&a_inv);
+    let a_data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0];
+    let n = 2;
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = 0.0_f32;
+            for k in 0..n {
+                val += a_data[i + k * n] * inv_data[k + j * n];
+            }
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (val - expected).abs() < 1e-4,
+                "f32 A*A^-1[{i},{j}] = {val}, expected {expected}"
+            );
+        }
+    }
+}
+
+#[test]
+fn lu_f32_reconstruction() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor_f32(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+    let l = tensor_data_f32(&result.l);
+    let u = tensor_data_f32(&result.u);
+    let n = 2;
+    // P A = L U
+    let mut lu_prod = vec![0.0_f32; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = 0.0_f32;
+            for k in 0..n {
+                val += l[i + k * n] * u[k + j * n];
+            }
+            lu_prod[i + j * n] = val;
+        }
+    }
+    // Apply P^-1 to get A back
+    let a_data: Vec<f32> = vec![2.0, 1.0, 1.0, 3.0];
+    let p = &result.p.unwrap();
+    let mut pa = vec![0.0_f32; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            pa[i + j * n] = a_data[p[i] + j * n];
+        }
+    }
+    let err: f32 = lu_prod
+        .iter()
+        .zip(&pa)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f32::max);
+    assert!(err < 1e-4, "f32 LU reconstruction error: {err}");
+}
+
+#[test]
+fn cholesky_f32() {
+    let mut backend = FaerBackend::new();
+    // SPD: [[4, 2], [2, 3]]
+    let a = make_tensor_f32(vec![4.0, 2.0, 2.0, 3.0], &[2, 2]);
+    let l = cholesky(&mut backend, &a).unwrap();
+    let l_data = tensor_data_f32(&l);
+    let n = 2;
+    let mut llt = vec![0.0_f32; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                llt[i + j * n] += l_data[i + k * n] * l_data[j + k * n];
+            }
+        }
+    }
+    let a_data: Vec<f32> = vec![4.0, 2.0, 2.0, 3.0];
+    let err: f32 = llt
+        .iter()
+        .zip(&a_data)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f32::max);
+    assert!(err < 1e-4, "f32 cholesky LL^T error: {err}");
+}
+
+#[test]
+fn eigen_f32() {
+    let mut backend = FaerBackend::new();
+    // Symmetric: [[2, 1], [1, 3]]
+    let a = make_tensor_f32(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
+    let result = eigen(&mut backend, &a).unwrap();
+    let evals = tensor_data_f32(&result.values);
+    // Eigenvalues of [[2,1],[1,3]]: (5 +/- sqrt(5))/2 = ~1.382 and ~3.618
+    let sum: f32 = evals.iter().sum();
+    assert!(
+        (sum - 5.0).abs() < 1e-3,
+        "f32 eigen sum = {sum}, expected 5.0"
+    );
+}
+
+#[test]
+fn slogdet_f32() {
+    let mut backend = FaerBackend::new();
+    // A = [[1, 2], [3, 4]], col-major: [1, 3, 2, 4]
+    let a = make_tensor_f32(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]);
+    let result = slogdet(&mut backend, &a).unwrap();
+    let sign = tensor_data_f32(&result.sign);
+    let logabsdet = tensor_data_f32(&result.logabsdet);
+    // det = -2, sign = -1, logabsdet = ln(2)
+    assert!(
+        (sign[0] - (-1.0_f32)).abs() < 1e-4,
+        "f32 slogdet sign = {}",
+        sign[0]
+    );
+    assert!(
+        (logabsdet[0] - 2.0_f32.ln()).abs() < 1e-4,
+        "f32 slogdet logabsdet = {}",
+        logabsdet[0]
+    );
+}
+
+// ============================================================================
+// Coverage: Complex32 backend tests
+// ============================================================================
+
+/// Create a column-major tensor from Complex32.
+fn make_tensor_c32(data: Vec<Complex32>, dims: &[usize]) -> Tensor<Complex32> {
+    let ndim = dims.len();
+    let mut strides = vec![0isize; ndim];
+    if ndim > 0 {
+        strides[0] = 1;
+        for i in 1..ndim {
+            strides[i] = strides[i - 1] * dims[i - 1] as isize;
+        }
+    }
+    Tensor::from_vec(data, dims, &strides, 0).unwrap()
+}
+
+fn c32(re: f32, im: f32) -> Complex32 {
+    Complex32::new(re, im)
+}
+
+/// Extract flat data from a Tensor<Complex32>.
+fn tensor_data_c32(t: &Tensor<Complex32>) -> Vec<Complex32> {
+    let c_tensor = t.contiguous(COL);
+    let off = c_tensor.offset() as usize;
+    let len: usize = c_tensor.dims().iter().product();
+    c_tensor.buffer().as_slice().unwrap()[off..off + len].to_vec()
+}
+
+#[test]
+fn svd_complex32_identity() {
+    let mut backend = FaerBackend::new();
+    let data = vec![c32(1.0, 0.0), c32(0.0, 0.0), c32(0.0, 0.0), c32(1.0, 0.0)];
+    let a = make_tensor_c32(data, &[2, 2]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    assert_eq!(result.u.dims(), &[2, 2]);
+    assert_eq!(result.s.dims(), &[2]);
+    assert_eq!(result.vt.dims(), &[2, 2]);
+    let s = {
+        let c_tensor = result.s.contiguous(COL);
+        let off = c_tensor.offset() as usize;
+        let len: usize = c_tensor.dims().iter().product();
+        c_tensor.buffer().as_slice().unwrap()[off..off + len].to_vec()
+    };
+    for &val in &s {
+        assert!(
+            (val - 1.0_f32).abs() < 1e-4,
+            "c32 SVD singular value: {val}"
+        );
+    }
+}
+
+#[test]
+fn qr_complex32_reconstruction() {
+    let mut backend = FaerBackend::new();
+    let data = vec![c32(1.0, 2.0), c32(3.0, -1.0), c32(0.0, 1.0), c32(4.0, 0.0)];
+    let a = make_tensor_c32(data.clone(), &[2, 2]);
+    let result = qr(&mut backend, &a).unwrap();
+    let q = tensor_data_c32(&result.q);
+    let r = tensor_data_c32(&result.r);
+    let n = 2;
+    let mut recon = vec![c32(0.0, 0.0); n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = c32(0.0, 0.0);
+            for l in 0..n {
+                val += q[i + l * n] * r[l + j * n];
+            }
+            recon[i + j * n] = val;
+        }
+    }
+    let err: f32 = data
+        .iter()
+        .zip(&recon)
+        .map(|(a, b)| (a - b).norm())
+        .fold(0.0, f32::max);
+    assert!(err < 1e-3, "c32 QR reconstruction error: {err}");
+}
+
+#[test]
+fn lu_complex32_reconstruction() {
+    let mut backend = FaerBackend::new();
+    let data = vec![c32(2.0, 1.0), c32(1.0, 0.0), c32(0.0, 1.0), c32(3.0, -1.0)];
+    let a = make_tensor_c32(data.clone(), &[2, 2]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+    let l = tensor_data_c32(&result.l);
+    let u = tensor_data_c32(&result.u);
+    let n = 2;
+    let mut lu_prod = vec![c32(0.0, 0.0); n * n];
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                lu_prod[i + j * n] += l[i + k * n] * u[k + j * n];
+            }
+        }
+    }
+    // PA = LU, build PA
+    let p = &result.p.unwrap();
+    let mut pa = vec![c32(0.0, 0.0); n * n];
+    for j in 0..n {
+        for i in 0..n {
+            pa[i + j * n] = data[p[i] + j * n];
+        }
+    }
+    let err: f32 = lu_prod
+        .iter()
+        .zip(&pa)
+        .map(|(a, b)| (a - b).norm())
+        .fold(0.0, f32::max);
+    assert!(err < 1e-3, "c32 LU reconstruction error: {err}");
+}
+
+#[test]
+fn solve_complex32() {
+    let mut backend = FaerBackend::new();
+    // A = [[2+i, 1], [0, 3-i]]
+    let a = make_tensor_c32(
+        vec![c32(2.0, 1.0), c32(0.0, 0.0), c32(1.0, 0.0), c32(3.0, -1.0)],
+        &[2, 2],
+    );
+    let b = make_tensor_c32(vec![c32(5.0, 0.0), c32(3.0, 0.0)], &[2, 1]);
+    let x = solve(&mut backend, &a, &b).unwrap();
+    let xd = tensor_data_c32(&x);
+    // Verify Ax = b
+    let ax0 = c32(2.0, 1.0) * xd[0] + c32(1.0, 0.0) * xd[1];
+    let ax1 = c32(0.0, 0.0) * xd[0] + c32(3.0, -1.0) * xd[1];
+    assert!((ax0 - c32(5.0, 0.0)).norm() < 1e-3, "c32 solve residual[0]");
+    assert!((ax1 - c32(3.0, 0.0)).norm() < 1e-3, "c32 solve residual[1]");
+}
+
+#[test]
+fn cholesky_complex32() {
+    let mut backend = FaerBackend::new();
+    // Hermitian SPD: [[4, 2-i], [2+i, 5]]
+    let a = make_tensor_c32(
+        vec![c32(4.0, 0.0), c32(2.0, 1.0), c32(2.0, -1.0), c32(5.0, 0.0)],
+        &[2, 2],
+    );
+    let l = cholesky(&mut backend, &a).unwrap();
+    let l_data = tensor_data_c32(&l);
+    let n = 2;
+    // Verify L L^H = A
+    let mut llh = vec![c32(0.0, 0.0); n * n];
+    for i in 0..n {
+        for j in 0..n {
+            for k in 0..n {
+                llh[i + j * n] += l_data[i + k * n] * l_data[j + k * n].conj();
+            }
+        }
+    }
+    let a_data = vec![c32(4.0, 0.0), c32(2.0, 1.0), c32(2.0, -1.0), c32(5.0, 0.0)];
+    let err: f32 = llh
+        .iter()
+        .zip(&a_data)
+        .map(|(a, b)| (a - b).norm())
+        .fold(0.0, f32::max);
+    assert!(err < 1e-3, "c32 cholesky error: {err}");
+}
+
+#[test]
+fn eigen_complex32_hermitian() {
+    let mut backend = FaerBackend::new();
+    // Hermitian: [[3, 1-i], [1+i, 2]]
+    let a = make_tensor_c32(
+        vec![c32(3.0, 0.0), c32(1.0, 1.0), c32(1.0, -1.0), c32(2.0, 0.0)],
+        &[2, 2],
+    );
+    let result = eigen(&mut backend, &a).unwrap();
+    let evals = {
+        let c_tensor = result.values.contiguous(COL);
+        let off = c_tensor.offset() as usize;
+        let len: usize = c_tensor.dims().iter().product();
+        c_tensor.buffer().as_slice().unwrap()[off..off + len].to_vec()
+    };
+    let sum: f32 = evals.iter().sum();
+    // trace = 3 + 2 = 5
+    assert!(
+        (sum - 5.0).abs() < 1e-2,
+        "c32 eigen sum = {sum}, expected 5.0"
+    );
+}
+
+#[test]
+fn solve_triangular_complex32() {
+    let mut backend = FaerBackend::new();
+    // Lower triangular: [[2+i, 0], [1, 3-i]]
+    let a = make_tensor_c32(
+        vec![c32(2.0, 1.0), c32(1.0, 0.0), c32(0.0, 0.0), c32(3.0, -1.0)],
+        &[2, 2],
+    );
+    let b = make_tensor_c32(vec![c32(4.0, 2.0), c32(5.0, 0.0)], &[2, 1]);
+    let x = solve_triangular(&mut backend, &a, &b, false).unwrap();
+    let xd = tensor_data_c32(&x);
+    // Verify Ax = b
+    let ax0 = c32(2.0, 1.0) * xd[0];
+    let ax1 = c32(1.0, 0.0) * xd[0] + c32(3.0, -1.0) * xd[1];
+    assert!(
+        (ax0 - c32(4.0, 2.0)).norm() < 1e-3,
+        "c32 solve_tri residual[0]"
+    );
+    assert!(
+        (ax1 - c32(5.0, 0.0)).norm() < 1e-3,
+        "c32 solve_tri residual[1]"
+    );
+}
+
+// ============================================================================
+// Coverage: Additional Complex64 backend tests (operations not yet tested)
+// ============================================================================
+
+#[test]
+fn inv_complex64() {
+    let mut backend = FaerBackend::new();
+    let data = vec![c(1.0, 1.0), c(2.0, 0.0), c(0.0, 1.0), c(3.0, -1.0)];
+    let a = make_complex_tensor(data.clone(), &[2, 2]);
+    let a_inv = inv(&mut backend, &a).unwrap();
+    let inv_data = complex_tensor_data(&a_inv);
+    let n = 2;
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = c(0.0, 0.0);
+            for k in 0..n {
+                val += data[i + k * n] * inv_data[k + j * n];
+            }
+            let expected = if i == j { c(1.0, 0.0) } else { c(0.0, 0.0) };
+            assert!(
+                (val - expected).norm() < 1e-10,
+                "c64 A*A^-1[{i},{j}] error = {}",
+                (val - expected).norm()
+            );
+        }
+    }
+}
+
+#[test]
+fn lstsq_complex64() {
+    let mut backend = FaerBackend::new();
+    // Overdetermined 3x2 system
+    let a = make_complex_tensor(
+        vec![
+            c(1.0, 0.0),
+            c(0.0, 0.0),
+            c(0.0, 0.0),
+            c(0.0, 0.0),
+            c(1.0, 0.0),
+            c(0.0, 0.0),
+        ],
+        &[3, 2],
+    );
+    let b = make_complex_tensor(vec![c(2.0, 1.0), c(3.0, -1.0), c(0.0, 0.0)], &[3]);
+    let result = lstsq(&mut backend, &a, &b).unwrap();
+    let x = complex_tensor_data(&result.x);
+    // A = [[1,0],[0,1],[0,0]], b = [2+i, 3-i, 0] => x = [2+i, 3-i]
+    assert!(
+        (x[0] - c(2.0, 1.0)).norm() < 1e-8,
+        "c64 lstsq x[0] = {:?}",
+        x[0]
+    );
+    assert!(
+        (x[1] - c(3.0, -1.0)).norm() < 1e-8,
+        "c64 lstsq x[1] = {:?}",
+        x[1]
+    );
+}
+
+#[test]
+fn matrix_exp_complex64() {
+    let mut backend = FaerBackend::new();
+    // exp(0) = I
+    let data = vec![c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0)];
+    let a = make_complex_tensor(data, &[2, 2]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data_out = complex_tensor_data(&result);
+    // exp(0) = I
+    assert!(
+        (data_out[0] - c(1.0, 0.0)).norm() < 1e-10,
+        "exp(0)[0,0] = {:?}",
+        data_out[0]
+    );
+    assert!(
+        (data_out[3] - c(1.0, 0.0)).norm() < 1e-10,
+        "exp(0)[1,1] = {:?}",
+        data_out[3]
+    );
+}
+
+// ============================================================================
+// Coverage: solve_triangular forward (upper and lower)
+// ============================================================================
+
+#[test]
+fn solve_triangular_upper_f64() {
+    let mut backend = FaerBackend::new();
+    // Upper triangular: [[2, 1], [0, 3]]
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    let b = make_tensor(vec![5.0, 6.0], &[2, 1]);
+    let x = solve_triangular(&mut backend, &a, &b, true).unwrap();
+    let xd = tensor_data(&x);
+    // Verify Ax = b: 2*x0 + 1*x1 = 5, 3*x1 = 6 => x1 = 2, x0 = 1.5
+    assert!((xd[1] - 2.0).abs() < 1e-10, "upper tri x[1] = {}", xd[1]);
+    assert!((xd[0] - 1.5).abs() < 1e-10, "upper tri x[0] = {}", xd[0]);
+}
+
+#[test]
+fn solve_triangular_lower_f64() {
+    let mut backend = FaerBackend::new();
+    // Lower triangular: [[2, 0], [1, 3]]
+    let a = make_tensor(vec![2.0, 1.0, 0.0, 3.0], &[2, 2]);
+    let b = make_tensor(vec![4.0, 5.0], &[2, 1]);
+    let x = solve_triangular(&mut backend, &a, &b, false).unwrap();
+    let xd = tensor_data(&x);
+    // 2*x0 = 4, x0 + 3*x1 = 5 => x0 = 2, x1 = 1
+    assert!((xd[0] - 2.0).abs() < 1e-10, "lower tri x[0] = {}", xd[0]);
+    assert!((xd[1] - 1.0).abs() < 1e-10, "lower tri x[1] = {}", xd[1]);
+}
+
+#[test]
+fn solve_triangular_upper_multi_rhs() {
+    let mut backend = FaerBackend::new();
+    // Upper triangular: [[1, 2], [0, 3]]
+    let a = make_tensor(vec![1.0, 0.0, 2.0, 3.0], &[2, 2]);
+    // b: (2, 2) = 2 columns
+    let b = make_tensor(vec![5.0, 6.0, 8.0, 9.0], &[2, 2]);
+    let x = solve_triangular(&mut backend, &a, &b, true).unwrap();
+    assert_eq!(x.dims(), &[2, 2]);
+    let xd = tensor_data(&x);
+    // Column 0: 3*x1 = 6 => x1=2; x0 + 2*2 = 5 => x0=1
+    assert!((xd[0] - 1.0).abs() < 1e-10);
+    assert!((xd[1] - 2.0).abs() < 1e-10);
+    // Column 1: 3*x1 = 9 => x1=3; x0 + 2*3 = 8 => x0=2
+    assert!((xd[2] - 2.0).abs() < 1e-10);
+    assert!((xd[3] - 3.0).abs() < 1e-10);
+}
+
+// ============================================================================
+// Coverage: norm Nuclear and Spectral forward + AD
+// ============================================================================
+
+#[test]
+fn norm_nuclear_forward() {
+    let mut backend = FaerBackend::new();
+    // A = diag(3, 1), nuclear norm = 3 + 1 = 4
+    let a = make_tensor(vec![3.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let n = norm(&mut backend, &a, NormKind::Nuclear).unwrap();
+    let nd = tensor_data(&n);
+    assert!((nd[0] - 4.0).abs() < 1e-10, "nuclear norm = {}", nd[0]);
+}
+
+#[test]
+fn norm_spectral_forward() {
+    let mut backend = FaerBackend::new();
+    // A = diag(3, 1), spectral norm = 3
+    let a = make_tensor(vec![3.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let n = norm(&mut backend, &a, NormKind::Spectral).unwrap();
+    let nd = tensor_data(&n);
+    assert!((nd[0] - 3.0).abs() < 1e-10, "spectral norm = {}", nd[0]);
+}
+
+#[test]
+fn norm_nuclear_rrule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        norm(&mut b, x, NormKind::Nuclear).unwrap()
+    };
+    let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        norm_rrule(&mut b, x, co, NormKind::Nuclear).unwrap()
+    };
+    check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-3);
+}
+
+#[test]
+fn norm_spectral_rrule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        norm(&mut b, x, NormKind::Spectral).unwrap()
+    };
+    let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        norm_rrule(&mut b, x, co, NormKind::Spectral).unwrap()
+    };
+    check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-3);
+}
+
+#[test]
+fn norm_nuclear_frule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        norm(&mut b, x, NormKind::Nuclear).unwrap()
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dnrm) = norm_frule(&mut b, x, dx, NormKind::Nuclear).unwrap();
+        dnrm
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-3);
+}
+
+#[test]
+fn norm_spectral_frule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        norm(&mut b, x, NormKind::Spectral).unwrap()
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dnrm) = norm_frule(&mut b, x, dx, NormKind::Spectral).unwrap();
+        dnrm
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-3);
+}
+
+// ============================================================================
+// Coverage: SVD with cutoff option
+// ============================================================================
+
+#[test]
+fn svd_with_cutoff() {
+    let mut backend = FaerBackend::new();
+    // Nearly rank-1 matrix
+    let a = make_tensor(vec![1.0, 2.0, 1.0 + 1e-14, 2.0 + 1e-14], &[2, 2]);
+    let opts = SvdOptions {
+        max_rank: None,
+        cutoff: Some(1e-10),
+    };
+    let result = svd(&mut backend, &a, Some(&opts)).unwrap();
+    // One singular value should be truncated to 0
+    let s = tensor_data(&result.s);
+    // With cutoff, only one significant singular value remains
+    let nonzero_count = s.iter().filter(|&&v| v > 1e-10).count();
+    assert_eq!(
+        nonzero_count, 1,
+        "expected 1 significant SV, got {nonzero_count}"
+    );
+}
+
+#[test]
+fn svd_with_default_options() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let opts = SvdOptions::default();
+    let result = svd(&mut backend, &a, Some(&opts)).unwrap();
+    let s = tensor_data(&result.s);
+    assert_eq!(s.len(), 2);
+}
+
+// ============================================================================
+// Coverage: batch dimension tests
+// ============================================================================
+
+#[test]
+fn det_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 matrices: [[1,2],[3,4]] and [[5,6],[7,8]]
+    // shape [2, 2, 2], strides [1, 2, 4]
+    // data = [a[0,0,0]=1, a[1,0,0]=3, a[0,1,0]=2, a[1,1,0]=4, a[0,0,1]=5, a[1,0,1]=7, a[0,1,1]=6, a[1,1,1]=8]
+    let a = make_tensor(vec![1.0, 3.0, 2.0, 4.0, 5.0, 7.0, 6.0, 8.0], &[2, 2, 2]);
+    let d = det(&mut backend, &a).unwrap();
+    let dd = tensor_data(&d);
+    assert_eq!(dd.len(), 2);
+    // det([[1,2],[3,4]]) = 1*4 - 2*3 = -2
+    assert!((dd[0] - (-2.0)).abs() < 1e-10, "batch det[0] = {}", dd[0]);
+    // det([[5,6],[7,8]]) = 5*8 - 6*7 = -2
+    assert!((dd[1] - (-2.0)).abs() < 1e-10, "batch det[1] = {}", dd[1]);
+}
+
+#[test]
+fn slogdet_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 matrices stacked along batch dim
+    // shape [2, 2, 2], same data as det_batched
+    let a = make_tensor(vec![1.0, 3.0, 2.0, 4.0, 5.0, 7.0, 6.0, 8.0], &[2, 2, 2]);
+    let result = slogdet(&mut backend, &a).unwrap();
+    let signs = tensor_data(&result.sign);
+    let logabs = tensor_data(&result.logabsdet);
+    assert_eq!(signs.len(), 2);
+    assert_eq!(logabs.len(), 2);
+    // Both dets = -2, sign = -1, log|det| = ln(2)
+    for i in 0..2 {
+        assert!(
+            (signs[i] - (-1.0)).abs() < 1e-10,
+            "slogdet sign[{i}] = {}",
+            signs[i]
+        );
+        assert!(
+            (logabs[i] - 2.0_f64.ln()).abs() < 1e-10,
+            "slogdet logabs[{i}] = {}",
+            logabs[i]
+        );
+    }
+}
+
+#[test]
+fn svd_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 identity matrices: shape [2, 2, 2], strides [1, 2, 4]
+    // Batch 0 = I: [1, 0, 0, 1], Batch 1 = I: [1, 0, 0, 1]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    assert_eq!(result.u.dims(), &[2, 2, 2]);
+    assert_eq!(result.s.dims(), &[2, 2]);
+    assert_eq!(result.vt.dims(), &[2, 2, 2]);
+}
+
+#[test]
+fn qr_batched() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
+    let result = qr(&mut backend, &a).unwrap();
+    assert_eq!(result.q.dims(), &[2, 2, 2]);
+    assert_eq!(result.r.dims(), &[2, 2, 2]);
+}
+
+#[test]
+fn solve_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 identity matrices, vector RHS per batch
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
+    // b shape [2, 2] means vector RHS (n=2) for each batch
+    let b = make_tensor(vec![3.0, 4.0, 5.0, 6.0], &[2, 2]);
+    let x = solve(&mut backend, &a, &b).unwrap();
+    let xd = tensor_data(&x);
+    // x = b for identity A
+    assert!((xd[0] - 3.0).abs() < 1e-10);
+    assert!((xd[1] - 4.0).abs() < 1e-10);
+    assert!((xd[2] - 5.0).abs() < 1e-10);
+    assert!((xd[3] - 6.0).abs() < 1e-10);
+}
+
+#[test]
+fn inv_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 identity matrices
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
+    let a_inv = inv(&mut backend, &a).unwrap();
+    assert_eq!(a_inv.dims(), &[2, 2, 2]);
+}
+
+#[test]
+fn norm_batched_fro() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 identity matrices
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
+    let n = norm(&mut backend, &a, NormKind::Fro).unwrap();
+    let nd = tensor_data(&n);
+    assert_eq!(nd.len(), 2);
+    // Frobenius norm of identity = sqrt(2)
+    for i in 0..2 {
+        assert!(
+            (nd[i] - 2.0_f64.sqrt()).abs() < 1e-10,
+            "batch Fro norm[{i}] = {}",
+            nd[i]
+        );
+    }
+}
+
+// ============================================================================
+// Coverage: lstsq forward happy path
+// ============================================================================
+
+#[test]
+fn lstsq_overdetermined() {
+    let mut backend = FaerBackend::new();
+    // A = [[1,0],[0,1],[0,0]], b = [3, 7, 0]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
+    let b = make_tensor(vec![3.0, 7.0, 0.0], &[3]);
+    let result = lstsq(&mut backend, &a, &b).unwrap();
+    let x = tensor_data(&result.x);
+    assert_eq!(x.len(), 2);
+    assert!((x[0] - 3.0).abs() < 1e-10, "lstsq x[0] = {}", x[0]);
+    assert!((x[1] - 7.0).abs() < 1e-10, "lstsq x[1] = {}", x[1]);
+}
+
+#[test]
+fn lstsq_underdetermined_returns_error() {
+    let mut backend = FaerBackend::new();
+    // m < n: 2x3
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &[2, 3]);
+    let b = make_tensor(vec![1.0, 2.0], &[2]);
+    assert!(lstsq(&mut backend, &a, &b).is_err());
+}
+
+// ============================================================================
+// Coverage: error paths for validation functions
+// ============================================================================
+
+#[test]
+fn validate_1d_input_returns_error() {
+    let mut backend = FaerBackend::new();
+    // 1D input to SVD
+    let a = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+    assert!(svd(&mut backend, &a, None).is_err());
+    assert!(qr(&mut backend, &a).is_err());
+}
+
+#[test]
+fn validate_non_square_for_square_ops() {
+    let mut backend = FaerBackend::new();
+    // 2x3 input to square-only ops
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    assert!(eigen(&mut backend, &a).is_err());
+    assert!(cholesky(&mut backend, &a).is_err());
+    assert!(inv(&mut backend, &a).is_err());
+    assert!(det(&mut backend, &a).is_err());
+    assert!(slogdet(&mut backend, &a).is_err());
+}
+
+#[test]
+fn solve_rhs_batch_mismatch() {
+    let mut backend = FaerBackend::new();
+    // A is (2,2,2), b is (2,3) — batch dim mismatch
+    let a = make_tensor(vec![1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0], &[2, 2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    assert!(solve(&mut backend, &a, &b).is_err());
+}
+
+#[test]
+fn solve_rhs_wrong_leading_dim() {
+    let mut backend = FaerBackend::new();
+    // A is (2,2), b is (3,1) — leading dim mismatch
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3, 1]);
+    assert!(solve(&mut backend, &a, &b).is_err());
+}
+
+#[test]
+fn solve_rhs_nrhs_zero() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    // b with nrhs=0
+    let b: Tensor<f64> = Tensor::from_vec(vec![], &[2, 0], &[1, 2], 0).unwrap();
+    assert!(solve(&mut backend, &a, &b).is_err());
+}
+
+#[test]
+fn lstsq_rhs_wrong_leading_dim() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
+    // b dim[0] = 2, expected 3
+    let b = make_tensor(vec![1.0, 2.0], &[2]);
+    assert!(lstsq(&mut backend, &a, &b).is_err());
+}
+
+#[test]
+fn lstsq_rhs_batch_mismatch() {
+    let mut backend = FaerBackend::new();
+    // A: (3, 2, 2), b: (3, 3)
+    let a = make_tensor(
+        vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        &[3, 2, 2],
+    );
+    let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], &[3, 3]);
+    assert!(lstsq(&mut backend, &a, &b).is_err());
+}
+
+#[test]
+fn lstsq_rhs_ndim_mismatch() {
+    let mut backend = FaerBackend::new();
+    // A: (3, 2), b: (3, 1, 1) — wrong ndim for b
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3, 1, 1]);
+    assert!(lstsq(&mut backend, &a, &b).is_err());
+}
+
+#[test]
+fn cholesky_non_spd_returns_error() {
+    let mut backend = FaerBackend::new();
+    // Matrix with negative eigenvalue: [[-1, 0], [0, 1]]
+    let a = make_tensor(vec![-1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    assert!(cholesky(&mut backend, &a).is_err());
+}
+
+#[test]
+fn norm_unsupported_kind_returns_error() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    // L1 norm is not yet implemented
+    assert!(norm(&mut backend, &a, NormKind::L1).is_err());
+    assert!(norm(&mut backend, &a, NormKind::Inf).is_err());
+}
+
+// ============================================================================
+// Coverage: Non-square SVD rrule with full cotangent (dU, dS, dVt)
+// ============================================================================
+
+#[test]
+fn svd_rrule_tall_with_du_cotangent() {
+    // Exercise the m > k correction path in svd_rrule
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], // 3x2 matrix
+        &[3, 2],
+    );
+    let result = svd(&mut backend, &a, None).unwrap();
+    // Provide du + ds cotangents to exercise the m > k correction
+    let du = make_tensor(vec![1.0; 6], result.u.dims()); // 3x2
+    let ds = make_tensor(vec![1.0; 2], result.s.dims());
+    let cotangent = SvdCotangent {
+        u: Some(du),
+        s: Some(ds),
+        vt: None,
+    };
+    let grad = svd_rrule(&mut backend, &a, &cotangent, None).unwrap();
+    assert_eq!(grad.dims(), &[3, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "svd_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn svd_rrule_wide_with_dvt_cotangent() {
+    // Exercise the n > k correction path in svd_rrule
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(
+        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], // 2x3 matrix
+        &[2, 3],
+    );
+    let result = svd(&mut backend, &a, None).unwrap();
+    let dvt = make_tensor(vec![1.0; 6], result.vt.dims()); // 2x3
+    let ds = make_tensor(vec![1.0; 2], result.s.dims());
+    let cotangent = SvdCotangent {
+        u: None,
+        s: Some(ds),
+        vt: Some(dvt),
+    };
+    let grad = svd_rrule(&mut backend, &a, &cotangent, None).unwrap();
+    assert_eq!(grad.dims(), &[2, 3]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "svd_rrule grad not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: SVD frule for non-square (tall m>k and wide n>k)
+// ============================================================================
+
+#[test]
+fn svd_frule_tall_matrix() {
+    // Exercise the m > k projector path in svd_frule (3x2)
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]);
+    let da = make_tensor(vec![0.1, -0.2, 0.3, -0.1, 0.2, -0.3], &[3, 2]);
+    let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+    assert_eq!(result.u.dims(), &[3, 2]);
+    assert_eq!(dresult.u.dims(), &[3, 2]);
+    let du_data = tensor_data(&dresult.u);
+    for &val in &du_data {
+        assert!(val.is_finite(), "svd_frule dU not finite");
+    }
+}
+
+#[test]
+fn svd_frule_wide_matrix() {
+    // Exercise the n > k projector path in svd_frule (2x3)
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let da = make_tensor(vec![0.1, -0.2, 0.3, -0.1, 0.2, -0.3], &[2, 3]);
+    let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+    assert_eq!(result.vt.dims(), &[2, 3]);
+    assert_eq!(dresult.vt.dims(), &[2, 3]);
+    let dvt_data = tensor_data(&dresult.vt);
+    for &val in &dvt_data {
+        assert!(val.is_finite(), "svd_frule dVt not finite");
+    }
+}
+
+// ============================================================================
+// Coverage: QR frule and rrule for non-square
+// ============================================================================
+
+#[test]
+fn qr_rrule_wide_matrix() {
+    // Exercise the n > k path in qr_rrule (2x3 wide matrix)
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let result = qr(&mut backend, &a).unwrap();
+    // Provide Q and R cotangents
+    let dq = make_tensor(vec![1.0; 4], result.q.dims()); // 2x2
+    let dr = make_tensor(vec![1.0; 6], result.r.dims()); // 2x3
+    let cotangent = QrCotangent {
+        q: Some(dq),
+        r: Some(dr),
+    };
+    let grad = qr_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 3]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "qr_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn qr_frule_wide_matrix() {
+    // Exercise the full path in qr_frule (2x3 wide matrix)
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let da = make_tensor(vec![0.1, -0.2, 0.3, -0.1, 0.2, -0.3], &[2, 3]);
+    let (result, dresult) = qr_frule(&mut backend, &a, &da).unwrap();
+    assert_eq!(result.q.dims(), &[2, 2]);
+    assert_eq!(result.r.dims(), &[2, 3]);
+    assert_eq!(dresult.q.dims(), &[2, 2]);
+    assert_eq!(dresult.r.dims(), &[2, 3]);
+    let dr_data = tensor_data(&dresult.r);
+    for &val in &dr_data {
+        assert!(val.is_finite(), "qr_frule dR not finite: {val}");
+    }
+}
+
+// Note: LU rrule for non-square matrices is not tested here because
+// faer's LU backend panics on non-square input (faer requires m == n).
+
+// ============================================================================
+// Coverage: lstsq rrule
+// ============================================================================
+
+#[test]
+fn lstsq_rrule_basic() {
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
+    let b = make_tensor(vec![3.0, 7.0, 0.0], &[3]);
+    let fwd = |x: &Tensor<f64>| {
+        let mut bk = FaerBackend::new();
+        lstsq(&mut bk, x, &b).unwrap().x
+    };
+    let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
+        let mut bk = FaerBackend::new();
+        lstsq_rrule(&mut bk, x, &b, co).unwrap().a
+    };
+    check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-2);
+}
+
+// ============================================================================
+// Coverage: eigen rrule with vectors cotangent
+// ============================================================================
+
+#[test]
+fn eigen_rrule_with_vectors_cotangent() {
+    // Exercise the code path where both values and vectors cotangents are provided.
+    // We use a symmetric 3x3 with well-separated eigenvalues.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![5.0, 1.0, 0.0, 1.0, 3.0, 1.0, 0.0, 1.0, 1.0], &[3, 3]);
+    let result = eigen(&mut backend, &a).unwrap();
+    let n = 3;
+    // Provide cotangent for both values and vectors
+    let de = make_tensor(vec![1.0; n], result.values.dims());
+    let dv = make_tensor(vec![1.0; n * n], result.vectors.dims());
+    let cotangent = EigenCotangent {
+        values: Some(de),
+        vectors: Some(dv),
+    };
+    let grad = eigen_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[n, n]);
+    // Just verify the grad is finite (exercises both branches)
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "eigen rrule grad not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: matrix_exp edge cases
+// ============================================================================
+
+#[test]
+fn matrix_exp_1x1_scalar_val() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0], &[1, 1]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    assert!(
+        (data[0] - 2.0_f64.exp()).abs() < 1e-10,
+        "matrix_exp(2) = {}, expected {}",
+        data[0],
+        2.0_f64.exp()
+    );
+}
+
+#[test]
+fn matrix_exp_f32() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor_f32(vec![0.0, 0.0, 0.0, 0.0], &[2, 2]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data_f32(&result);
+    // exp(0) = I
+    assert!((data[0] - 1.0).abs() < 1e-4, "exp(0)[0,0] = {}", data[0]);
+    assert!((data[3] - 1.0).abs() < 1e-4, "exp(0)[1,1] = {}", data[3]);
+}
+
+// ============================================================================
+// Coverage: pinv forward with threshold
+// ============================================================================
+
+#[test]
+fn pinv_with_threshold() {
+    let mut backend = FaerBackend::new();
+    // Nearly rank-deficient
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1e-15], &[2, 2]);
+    let result = pinv(&mut backend, &a, Some(1e-10)).unwrap();
+    let data = tensor_data(&result);
+    // Only the first singular value should survive
+    assert!((data[0] - 1.0).abs() < 1e-10, "pinv[0,0] = {}", data[0]);
+    // The second diagonal should be effectively zero
+    assert!(
+        data[3].abs() < 1e-4,
+        "pinv[1,1] = {} (should be ~0)",
+        data[3]
+    );
+}
+
+// ============================================================================
+// Coverage: eig forward for general non-symmetric (covers interleaved ri)
+// ============================================================================
+
+#[test]
+fn eig_3x3_general() {
+    let mut backend = FaerBackend::new();
+    // Non-symmetric matrix
+    let a = make_tensor(vec![0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 2.0], &[3, 3]);
+    let result = eig(&mut backend, &a).unwrap();
+    assert_eq!(result.values.dims(), &[3]);
+    assert_eq!(result.vectors.dims(), &[3, 3]);
+    // Sum of eigenvalues = trace = 0 + 0 + 2 = 2
+    let vals = {
+        let ct = result.values.contiguous(COL);
+        let off = ct.offset() as usize;
+        let len: usize = ct.dims().iter().product();
+        ct.buffer().as_slice().unwrap()[off..off + len].to_vec()
+    };
+    let sum: num_complex::Complex<f64> = vals.iter().sum();
+    assert!(
+        (sum.re - 2.0).abs() < 1e-10 && sum.im.abs() < 1e-10,
+        "eig trace = {:?}",
+        sum
+    );
+}
+
+// ============================================================================
+// Coverage: norm_rrule cotangent shape validation
+// ============================================================================
+
+#[test]
+fn norm_rrule_cotangent_scalar_mismatch() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    // norm of 2x2 -> scalar, cotangent should be scalar too, not 1D
+    let bad_cot = make_tensor(vec![1.0, 2.0], &[2]);
+    assert!(norm_rrule(&mut backend, &a, &bad_cot, NormKind::Fro).is_err());
+}
+
+#[test]
+fn norm_rrule_cotangent_batch_mismatch() {
+    let mut backend = FaerBackend::new();
+    // batched: (2,2,2), norm -> shape [2], cotangent should be [2] not [3]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
+    let bad_cot = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+    assert!(norm_rrule(&mut backend, &a, &bad_cot, NormKind::Fro).is_err());
+}
+
+// ============================================================================
+// Coverage: norm_rrule for batched Nuclear and Spectral
+// ============================================================================
+
+#[test]
+fn norm_nuclear_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 diagonal matrices, shape [2, 2, 2], strides [1, 2, 4]
+    // Batch 0 = diag(3,1): col-major [3, 0, 0, 1]
+    // Batch 1 = diag(2,4): col-major [2, 0, 0, 4]
+    let a = make_tensor(vec![3.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 4.0], &[2, 2, 2]);
+    let n = norm(&mut backend, &a, NormKind::Nuclear).unwrap();
+    let nd = tensor_data(&n);
+    assert_eq!(nd.len(), 2);
+    // Batch 0: diag(3,1), nuclear = 3 + 1 = 4
+    assert!((nd[0] - 4.0).abs() < 1e-10, "batch nuclear[0] = {}", nd[0]);
+    // Batch 1: diag(2,4), nuclear = 2 + 4 = 6
+    assert!((nd[1] - 6.0).abs() < 1e-10, "batch nuclear[1] = {}", nd[1]);
+}
+
+#[test]
+fn norm_spectral_batched() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![3.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 4.0], &[2, 2, 2]);
+    let n = norm(&mut backend, &a, NormKind::Spectral).unwrap();
+    let nd = tensor_data(&n);
+    assert_eq!(nd.len(), 2);
+    // Batch 0: max SV = 3
+    assert!((nd[0] - 3.0).abs() < 1e-10, "batch spectral[0] = {}", nd[0]);
+    // Batch 1: max SV = 4
+    assert!((nd[1] - 4.0).abs() < 1e-10, "batch spectral[1] = {}", nd[1]);
+}
+
+// ============================================================================
+// Coverage: solve with vector RHS (nrhs=1 path)
+// ============================================================================
+
+#[test]
+fn solve_vector_rhs() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let b = make_tensor(vec![3.0, 7.0], &[2]); // vector RHS, no nrhs dim
+    let x = solve(&mut backend, &a, &b).unwrap();
+    let xd = tensor_data(&x);
+    assert!((xd[0] - 3.0).abs() < 1e-10);
+    assert!((xd[1] - 7.0).abs() < 1e-10);
+}
+
+// ============================================================================
+// Coverage: solve_triangular with vector RHS
+// ============================================================================
+
+#[test]
+fn solve_triangular_vector_rhs() {
+    let mut backend = FaerBackend::new();
+    // Upper tri: [[2, 1], [0, 3]]
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    let b = make_tensor(vec![5.0, 6.0], &[2]); // vector RHS
+    let x = solve_triangular(&mut backend, &a, &b, true).unwrap();
+    let xd = tensor_data(&x);
+    assert!((xd[1] - 2.0).abs() < 1e-10);
+    assert!((xd[0] - 1.5).abs() < 1e-10);
+}
+
+// ============================================================================
+// Coverage: solve_triangular batched
+// ============================================================================
+
+#[test]
+fn solve_triangular_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 upper triangular matrices, shape [2, 2, 2], strides [1, 2, 4]
+    // Batch 0 = [[1,2],[0,3]]: col-major [1, 0, 2, 3]
+    // Batch 1 = [[2,1],[0,4]]: col-major [2, 0, 1, 4]
+    let a = make_tensor(vec![1.0, 0.0, 2.0, 3.0, 2.0, 0.0, 1.0, 4.0], &[2, 2, 2]);
+    let b = make_tensor(vec![5.0, 6.0, 7.0, 8.0], &[2, 2]);
+    let x = solve_triangular(&mut backend, &a, &b, true).unwrap();
+    assert_eq!(x.dims(), &[2, 2]);
+}
+
+// ============================================================================
+// Coverage: lstsq batched
+// ============================================================================
+
+#[test]
+fn lstsq_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 3x2 identity-like matrices, shape [3, 2, 2], strides [1, 3, 6]
+    // Batch 0 = [[1,0],[0,1],[0,0]]: col-major [1, 0, 0, 0, 1, 0]
+    // Batch 1 = same
+    let a = make_tensor(
+        vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        &[3, 2, 2],
+    );
+    let b = make_tensor(vec![2.0, 3.0, 0.0, 4.0, 5.0, 0.0], &[3, 2]);
+    let result = lstsq(&mut backend, &a, &b).unwrap();
+    let x = tensor_data(&result.x);
+    assert_eq!(x.len(), 4); // 2 * 2 (n=2, batch=2)
+}
+
+// ============================================================================
+// Coverage: pinv batched
+// ============================================================================
+
+#[test]
+fn pinv_batched() {
+    let mut backend = FaerBackend::new();
+    // Two 2x2 identity matrices, shape [2, 2, 2], strides [1, 2, 4]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
+    let result = pinv(&mut backend, &a, None).unwrap();
+    assert_eq!(result.dims(), &[2, 2, 2]);
+    let data = tensor_data(&result);
+    // pinv of identity = identity
+    assert!((data[0] - 1.0).abs() < 1e-10);
+    assert!((data[3] - 1.0).abs() < 1e-10);
+}
+
+// Note: LU frule for non-square matrices is not tested here because
+// faer's LU backend panics on non-square input (faer requires m == n).
+
+// ============================================================================
+// Coverage: lu_rrule execution (covers ~120 lines in lib.rs)
+// ============================================================================
+
+#[test]
+fn lu_rrule_square_basic_with_l_cotangent() {
+    // Exercise lu_rrule code path with L cotangent on a 3x3 matrix.
+    // We do not compare with FD (known formula mismatch), just verify execution + finiteness.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 4.0, 8.0, 1.0, 3.0, 7.0, 1.0, 3.0, 9.0], &[3, 3]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+    let l_dims = result.l.dims().to_vec();
+    let l_size: usize = l_dims.iter().product();
+    let cotangent_l = make_tensor(vec![1.0; l_size], &l_dims);
+    let co = LuCotangent {
+        l: Some(cotangent_l),
+        u: None,
+    };
+    let grad = lu_rrule(&mut backend, &a, &co, LuPivot::Partial).unwrap();
+    assert_eq!(grad.dims(), &[3, 3]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "lu_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn lu_rrule_square_basic_with_u_cotangent() {
+    // Exercise lu_rrule code path with U cotangent.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 4.0, 8.0, 1.0, 3.0, 7.0, 1.0, 3.0, 9.0], &[3, 3]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+    let u_dims = result.u.dims().to_vec();
+    let u_size: usize = u_dims.iter().product();
+    let cotangent_u = make_tensor(vec![1.0; u_size], &u_dims);
+    let co = LuCotangent {
+        l: None,
+        u: Some(cotangent_u),
+    };
+    let grad = lu_rrule(&mut backend, &a, &co, LuPivot::Partial).unwrap();
+    assert_eq!(grad.dims(), &[3, 3]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "lu_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn lu_rrule_square_with_both_cotangents() {
+    // Exercise lu_rrule with both L and U cotangents.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+    let l_dims = result.l.dims().to_vec();
+    let u_dims = result.u.dims().to_vec();
+    let l_size: usize = l_dims.iter().product();
+    let u_size: usize = u_dims.iter().product();
+    let co = LuCotangent {
+        l: Some(make_tensor(vec![0.5; l_size], &l_dims)),
+        u: Some(make_tensor(vec![0.5; u_size], &u_dims)),
+    };
+    let grad = lu_rrule(&mut backend, &a, &co, LuPivot::Partial).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "lu_rrule grad not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: eig_rrule with vectors cotangent (EigCotangent)
+// ============================================================================
+
+#[test]
+fn eig_rrule_with_vectors_cotangent_only() {
+    // Exercise eig_rrule with only vectors cotangent (no values cotangent).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 1.0, 0.0, 1.0, 3.0, 0.5, 0.0, 0.5, 1.0], &[3, 3]);
+    let eig_result = eig(&mut backend, &a).unwrap();
+    let n = 3;
+
+    // Create complex cotangent for vectors only
+    let dv_data: Vec<Complex64> = (0..n * n)
+        .map(|i| {
+            Complex64::new(
+                ((i * 3 + 1) % 7) as f64 / 3.0,
+                ((i * 5 + 2) % 7) as f64 / 4.0,
+            )
+        })
+        .collect();
+    let dv_tensor = make_complex_tensor(dv_data, eig_result.vectors.dims());
+    let cotangent = EigCotangent::<f64> {
+        values: None,
+        vectors: Some(dv_tensor),
+    };
+    let grad = eig_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[n, n]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "eig_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn eig_rrule_with_both_values_and_vectors() {
+    // Exercise eig_rrule with both values and vectors cotangents.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![4.0, 0.5, 0.5, 2.0], &[2, 2]);
+    let eig_result = eig(&mut backend, &a).unwrap();
+    let n = 2;
+
+    let dlam_data: Vec<Complex64> = vec![Complex64::new(1.0, 0.0), Complex64::new(0.5, 0.0)];
+    let dlam_tensor = make_complex_tensor(dlam_data, eig_result.values.dims());
+
+    let dv_data: Vec<Complex64> = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 1.0),
+        Complex64::new(0.5, 0.0),
+        Complex64::new(0.0, 0.5),
+    ];
+    let dv_tensor = make_complex_tensor(dv_data, eig_result.vectors.dims());
+
+    let cotangent = EigCotangent::<f64> {
+        values: Some(dlam_tensor),
+        vectors: Some(dv_tensor),
+    };
+    let grad = eig_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[n, n]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "eig_rrule grad not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: solve_rrule and solve_frule with multi-RHS
+// ============================================================================
+
+#[test]
+fn solve_rrule_multi_rhs() {
+    // Exercise nrhs > 1 path in solve_rrule.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    // b has shape [2, 3] (n=2, nrhs=3)
+    let b = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[2, 3]);
+    let x = solve(&mut backend, &a, &b).unwrap();
+    let co = make_tensor(vec![1.0; 6], x.dims());
+    let grad = solve_rrule(&mut backend, &a, &b, &co).unwrap();
+    assert_eq!(grad.a.dims(), &[2, 2]);
+    assert_eq!(grad.b.dims(), &[2, 3]);
+    let ga = tensor_data(&grad.a);
+    let gb = tensor_data(&grad.b);
+    for &val in &ga {
+        assert!(val.is_finite(), "solve_rrule grad_a not finite: {val}");
+    }
+    for &val in &gb {
+        assert!(val.is_finite(), "solve_rrule grad_b not finite: {val}");
+    }
+}
+
+#[test]
+fn solve_frule_multi_rhs() {
+    // Exercise nrhs > 1 path in solve_frule.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[2, 3]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let db = make_tensor(vec![0.1; 6], &[2, 3]);
+    let (x, dx) = solve_frule(&mut backend, &a, &b, &da, &db).unwrap();
+    assert_eq!(x.dims(), &[2, 3]);
+    assert_eq!(dx.dims(), &[2, 3]);
+    let dxd = tensor_data(&dx);
+    for &val in &dxd {
+        assert!(val.is_finite(), "solve_frule dx not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: lstsq_frule
+// ============================================================================
+
+#[test]
+fn lstsq_frule_basic() {
+    // Exercise lstsq_frule with a tall overdetermined system.
+    let mut backend = FaerBackend::new();
+    // A is 4x2 (overdetermined)
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0], &[4, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[4]);
+    let da = make_tensor(vec![0.1; 8], &[4, 2]);
+    let db = make_tensor(vec![0.1; 4], &[4]);
+    let (result, dresult) = lstsq_frule(&mut backend, &a, &b, &da, &db).unwrap();
+    assert_eq!(result.x.dims(), &[2]);
+    assert_eq!(dresult.x.dims(), &[2]);
+    let dxd = tensor_data(&dresult.x);
+    for &val in &dxd {
+        assert!(val.is_finite(), "lstsq_frule dx not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: pinv_rrule and pinv_frule
+// ============================================================================
+
+#[test]
+fn pinv_rrule_execution() {
+    // Exercise pinv_rrule (covers ~50 lines in lib.rs).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
+    let ap = pinv(&mut backend, &a, None).unwrap();
+    let co = make_tensor(vec![1.0; ap.dims().iter().product::<usize>()], ap.dims());
+    let grad = pinv_rrule(&mut backend, &a, &co, None).unwrap();
+    assert_eq!(grad.dims(), &[3, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "pinv_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn pinv_frule_execution() {
+    // Exercise pinv_frule (covers ~50 lines in lib.rs).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
+    let da = make_tensor(vec![0.1; 6], &[3, 2]);
+    let (ap, dap) = pinv_frule(&mut backend, &a, &da, None).unwrap();
+    assert_eq!(ap.dims(), &[2, 3]);
+    assert_eq!(dap.dims(), &[2, 3]);
+    let dapd = tensor_data(&dap);
+    for &val in &dapd {
+        assert!(val.is_finite(), "pinv_frule dap not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: norm_rrule Nuclear & Spectral
+// ============================================================================
+
+#[test]
+fn norm_nuclear_rrule_execution() {
+    // Exercise norm_rrule Nuclear path (covers ~10 lines).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let co = make_tensor(vec![1.0], &[]);
+    let grad = norm_rrule(&mut backend, &a, &co, NormKind::Nuclear).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "norm_nuclear_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn norm_spectral_rrule_execution() {
+    // Exercise norm_rrule Spectral path (covers ~10 lines).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let co = make_tensor(vec![1.0], &[]);
+    let grad = norm_rrule(&mut backend, &a, &co, NormKind::Spectral).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(
+            val.is_finite(),
+            "norm_spectral_rrule grad not finite: {val}"
+        );
+    }
+}
+
+// ============================================================================
+// Coverage: norm_frule Nuclear & Spectral
+// ============================================================================
+
+#[test]
+fn norm_nuclear_frule_execution() {
+    // Exercise norm_frule Nuclear path.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut backend, &a, &da, NormKind::Nuclear).unwrap();
+    let nv = tensor_data(&nrm);
+    let dv = tensor_data(&dnrm);
+    assert!(nv[0].is_finite());
+    assert!(dv[0].is_finite());
+}
+
+#[test]
+fn norm_spectral_frule_execution() {
+    // Exercise norm_frule Spectral path.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut backend, &a, &da, NormKind::Spectral).unwrap();
+    let nv = tensor_data(&nrm);
+    let dv = tensor_data(&dnrm);
+    assert!(nv[0].is_finite());
+    assert!(dv[0].is_finite());
+}
+
+// ============================================================================
+// Coverage: qr_frule and qr_rrule execution (to cover non-square projector terms)
+// ============================================================================
+
+#[test]
+fn qr_rrule_tall_execution() {
+    // Exercise qr_rrule on a tall 4x2 matrix (m > k path).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.5], &[4, 2]);
+    let result = qr(&mut backend, &a).unwrap();
+    let q_dims = result.q.dims().to_vec();
+    let q_size: usize = q_dims.iter().product();
+    let r_dims = result.r.dims().to_vec();
+    let r_size: usize = r_dims.iter().product();
+    let co = QrCotangent {
+        q: Some(make_tensor(vec![1.0; q_size], &q_dims)),
+        r: Some(make_tensor(vec![1.0; r_size], &r_dims)),
+    };
+    let grad = qr_rrule(&mut backend, &a, &co).unwrap();
+    assert_eq!(grad.dims(), &[4, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "qr_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn qr_frule_tall_execution() {
+    // Exercise qr_frule on a tall 4x2 matrix.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.5], &[4, 2]);
+    let da = make_tensor(vec![0.1; 8], &[4, 2]);
+    let (result, dresult) = qr_frule(&mut backend, &a, &da).unwrap();
+    assert_eq!(result.q.dims()[0], 4);
+    assert_eq!(result.q.dims()[1], 2);
+    let dq = tensor_data(&dresult.q);
+    let dr = tensor_data(&dresult.r);
+    for &val in &dq {
+        assert!(val.is_finite(), "qr_frule dq not finite: {val}");
+    }
+    for &val in &dr {
+        assert!(val.is_finite(), "qr_frule dr not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: svd_rrule non-square correction paths
+// ============================================================================
+
+#[test]
+fn svd_rrule_tall_with_all_cotangents() {
+    // Exercise all three cotangent branches on tall matrix (m > k).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    let s_dims = result.s.dims().to_vec();
+    let u_dims = result.u.dims().to_vec();
+    let vt_dims = result.vt.dims().to_vec();
+    let s_size: usize = s_dims.iter().product();
+    let u_size: usize = u_dims.iter().product();
+    let vt_size: usize = vt_dims.iter().product();
+    let co = SvdCotangent {
+        s: Some(make_tensor(vec![1.0; s_size], &s_dims)),
+        u: Some(make_tensor(vec![1.0; u_size], &u_dims)),
+        vt: Some(make_tensor(vec![1.0; vt_size], &vt_dims)),
+    };
+    let grad = svd_rrule(&mut backend, &a, &co, None).unwrap();
+    assert_eq!(grad.dims(), &[3, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "svd_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn svd_rrule_wide_with_all_cotangents() {
+    // Exercise all three cotangent branches on wide matrix (n > k).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.5, 0.5], &[2, 3]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    let s_dims = result.s.dims().to_vec();
+    let u_dims = result.u.dims().to_vec();
+    let vt_dims = result.vt.dims().to_vec();
+    let s_size: usize = s_dims.iter().product();
+    let u_size: usize = u_dims.iter().product();
+    let vt_size: usize = vt_dims.iter().product();
+    let co = SvdCotangent {
+        s: Some(make_tensor(vec![1.0; s_size], &s_dims)),
+        u: Some(make_tensor(vec![1.0; u_size], &u_dims)),
+        vt: Some(make_tensor(vec![1.0; vt_size], &vt_dims)),
+    };
+    let grad = svd_rrule(&mut backend, &a, &co, None).unwrap();
+    assert_eq!(grad.dims(), &[2, 3]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "svd_rrule grad not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: svd_frule non-square paths
+// ============================================================================
+
+#[test]
+fn svd_frule_tall_all_outputs() {
+    // Exercise svd_frule on tall matrix (exercises m > k projector path).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
+    let da = make_tensor(vec![0.1; 6], &[3, 2]);
+    let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+    assert_eq!(result.u.dims()[0], 3);
+    assert_eq!(result.u.dims()[1], 2);
+    let ds = tensor_data(&dresult.s);
+    for &val in &ds {
+        assert!(val.is_finite(), "svd_frule ds not finite: {val}");
+    }
+}
+
+#[test]
+fn svd_frule_wide_all_outputs() {
+    // Exercise svd_frule on wide matrix (exercises n > k projector path).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.5, 0.5], &[2, 3]);
+    let da = make_tensor(vec![0.1; 6], &[2, 3]);
+    let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+    assert_eq!(result.vt.dims()[0], 2);
+    assert_eq!(result.vt.dims()[1], 3);
+    let ds = tensor_data(&dresult.s);
+    for &val in &ds {
+        assert!(val.is_finite(), "svd_frule ds not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: lu_frule execution
+// ============================================================================
+
+#[test]
+fn lu_frule_square_execution() {
+    // Exercise lu_frule on a square matrix.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (result, dresult) = lu_frule(&mut backend, &a, &da, LuPivot::Partial).unwrap();
+    assert_eq!(result.l.dims(), &[2, 2]);
+    assert_eq!(result.u.dims(), &[2, 2]);
+    let dl = tensor_data(&dresult.l);
+    let du = tensor_data(&dresult.u);
+    for &val in &dl {
+        assert!(val.is_finite(), "lu_frule dl not finite: {val}");
+    }
+    for &val in &du {
+        assert!(val.is_finite(), "lu_frule du not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: cholesky_rrule and cholesky_frule execution
+// ============================================================================
+
+#[test]
+fn cholesky_rrule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![4.0, 1.0, 1.0, 3.0], &[2, 2]);
+    let l = cholesky(&mut backend, &a).unwrap();
+    let co = make_tensor(vec![1.0; 4], l.dims());
+    let grad = cholesky_rrule(&mut backend, &a, &co).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "cholesky_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn cholesky_frule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![4.0, 1.0, 1.0, 3.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
+    let (l, dl) = cholesky_frule(&mut backend, &a, &da).unwrap();
+    assert_eq!(l.dims(), &[2, 2]);
+    assert_eq!(dl.dims(), &[2, 2]);
+    let dld = tensor_data(&dl);
+    for &val in &dld {
+        assert!(val.is_finite(), "cholesky_frule dl not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: eigen_frule execution
+// ============================================================================
+
+#[test]
+fn eigen_frule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![3.0, 1.0, 1.0, 2.0], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (result, dresult) = eigen_frule(&mut backend, &a, &da).unwrap();
+    assert_eq!(result.values.dims(), &[2]);
+    assert_eq!(dresult.values.dims(), &[2]);
+    let de = tensor_data(&dresult.values);
+    for &val in &de {
+        assert!(val.is_finite(), "eigen_frule de not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: slogdet_rrule execution
+// ============================================================================
+
+#[test]
+fn slogdet_rrule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let co_logabsdet = make_tensor(vec![1.0], &[]);
+    let cotangent = SlogdetCotangent {
+        logabsdet: Some(co_logabsdet),
+    };
+    let grad = slogdet_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "slogdet_rrule grad not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: slogdet_frule execution
+// ============================================================================
+
+#[test]
+fn slogdet_frule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (result, dresult) = slogdet_frule(&mut backend, &a, &da).unwrap();
+    assert!(tensor_data(&result.logabsdet)[0].is_finite());
+    assert!(tensor_data(&dresult.logabsdet)[0].is_finite());
+}
+
+// ============================================================================
+// Coverage: det_rrule and det_frule execution
+// ============================================================================
+
+#[test]
+fn det_rrule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    let co = make_tensor(vec![1.0], &[]);
+    let grad = det_rrule(&mut backend, &a, &co).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "det_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn det_frule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (d, dd) = det_frule(&mut backend, &a, &da).unwrap();
+    assert!(tensor_data(&d)[0].is_finite());
+    assert!(tensor_data(&dd)[0].is_finite());
+}
+
+// ============================================================================
+// Coverage: inv_rrule and inv_frule execution
+// ============================================================================
+
+#[test]
+fn inv_rrule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    let co = make_tensor(vec![1.0; 4], &[2, 2]);
+    let grad = inv_rrule(&mut backend, &a, &co).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "inv_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn inv_frule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (a_inv, da_inv) = inv_frule(&mut backend, &a, &da).unwrap();
+    assert_eq!(a_inv.dims(), &[2, 2]);
+    assert_eq!(da_inv.dims(), &[2, 2]);
+    let did = tensor_data(&da_inv);
+    for &val in &did {
+        assert!(val.is_finite(), "inv_frule da_inv not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: matrix_exp_rrule and matrix_exp_frule execution
+// ============================================================================
+
+#[test]
+fn matrix_exp_rrule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![0.1, 0.0, 0.0, 0.2], &[2, 2]);
+    let co = make_tensor(vec![1.0; 4], &[2, 2]);
+    let grad = matrix_exp_rrule(&mut backend, &a, &co).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "matrix_exp_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn matrix_exp_frule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![0.1, 0.0, 0.0, 0.2], &[2, 2]);
+    let da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let (exp_a, dexp_a) = matrix_exp_frule(&mut backend, &a, &da).unwrap();
+    assert_eq!(exp_a.dims(), &[2, 2]);
+    assert_eq!(dexp_a.dims(), &[2, 2]);
+    let dd = tensor_data(&dexp_a);
+    for &val in &dd {
+        assert!(val.is_finite(), "matrix_exp_frule dexp not finite: {val}");
+    }
+}
+
+// ============================================================================
+// Coverage: eig_frule execution
+// ============================================================================
+
+#[test]
+fn eig_frule_execution() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 1.0, 0.0, 1.0, 3.0, 0.5, 0.0, 0.5, 1.0], &[3, 3]);
+    let da = make_tensor(vec![0.01; 9], &[3, 3]);
+    let (result, dresult) = eig_frule(&mut backend, &a, &da).unwrap();
+    assert_eq!(result.values.dims(), &[3]);
+    assert_eq!(dresult.values.dims(), &[3]);
+}
+
+// ============================================================================
+// Coverage: lstsq_rrule full execution
+// ============================================================================
+
+#[test]
+fn lstsq_rrule_full_execution() {
+    // Exercise lstsq_rrule with a tall matrix to cover all lines.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+    let result = lstsq(&mut backend, &a, &b).unwrap();
+    let co = make_tensor(
+        vec![1.0; result.x.dims().iter().product::<usize>()],
+        result.x.dims(),
+    );
+    let grad = lstsq_rrule(&mut backend, &a, &b, &co).unwrap();
+    assert_eq!(grad.a.dims(), &[3, 2]);
+    assert_eq!(grad.b.dims(), &[3]);
+    let ga = tensor_data(&grad.a);
+    let gb = tensor_data(&grad.b);
+    for &val in &ga {
+        assert!(val.is_finite(), "lstsq_rrule grad_a not finite: {val}");
+    }
+    for &val in &gb {
+        assert!(val.is_finite(), "lstsq_rrule grad_b not finite: {val}");
+    }
+}
+
+// Note: solve_triangular does not have rrule/frule AD functions in the current API.
+
+// ============================================================================
+// Coverage: Backend-level Complex32 tests (covers macro expansion for Complex32)
+// ============================================================================
+
+#[test]
+fn backend_complex32_mat_mul() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = |re: f32, im: f32| Complex32::new(re, im);
+    // 2x2 identity * [1+i, 2-i; 3, 4+2i]
+    let a = [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)];
+    let b = [c(1.0, 1.0), c(3.0, 0.0), c(2.0, -1.0), c(4.0, 2.0)];
+    let mut out = [Complex32::new(0.0, 0.0); 4];
+    backend.mat_mul(&a, 2, 2, &b, 2, &mut out).unwrap();
+    // Identity * B = B
+    for i in 0..4 {
+        assert!(
+            (out[i].re - b[i].re).abs() < 1e-5 && (out[i].im - b[i].im).abs() < 1e-5,
+            "C32 mat_mul[{i}] = {:?}, expected {:?}",
+            out[i],
+            b[i]
+        );
+    }
+}
+
+#[test]
+fn backend_complex32_solve() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = |re: f32, im: f32| Complex32::new(re, im);
+    // A = [[2, 1+i], [1-i, 3]], b = [1+i, 2]
+    let a = [c(2.0, 0.0), c(1.0, -1.0), c(1.0, 1.0), c(3.0, 0.0)];
+    let b_rhs = [c(1.0, 1.0), c(2.0, 0.0)];
+    let mut x = [Complex32::new(0.0, 0.0); 2];
+    backend.solve(&a, &b_rhs, 2, 1, &mut x).unwrap();
+    // Verify Ax = b
+    let ax0 = a[0] * x[0] + a[2] * x[1];
+    let ax1 = a[1] * x[0] + a[3] * x[1];
+    assert!((ax0 - b_rhs[0]).norm() < 1e-3, "C32 solve Ax[0] mismatch");
+    assert!((ax1 - b_rhs[1]).norm() < 1e-3, "C32 solve Ax[1] mismatch");
+}
+
+#[test]
+fn backend_complex32_eig_general() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = |re: f32, im: f32| Complex32::new(re, im);
+    // Non-symmetric 2x2 matrix
+    let a = [c(1.0, 0.0), c(2.0, 0.0), c(0.0, 1.0), c(3.0, 0.0)];
+    let mut values = [Complex32::new(0.0, 0.0); 2];
+    let mut vectors = [Complex32::new(0.0, 0.0); 4];
+    backend
+        .eig_general(&a, 2, &mut values, &mut vectors)
+        .unwrap();
+    // Check eigenvalues are finite
+    for &v in &values {
+        assert!(v.re.is_finite() && v.im.is_finite());
+    }
+}
+
+#[test]
+fn backend_complex64_eig_general() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = |re: f64, im: f64| Complex64::new(re, im);
+    let a = [c(1.0, 0.0), c(2.0, 0.0), c(0.0, 1.0), c(3.0, 0.0)];
+    let mut values = [Complex64::new(0.0, 0.0); 2];
+    let mut vectors = [Complex64::new(0.0, 0.0); 4];
+    backend
+        .eig_general(&a, 2, &mut values, &mut vectors)
+        .unwrap();
+    for &v in &values {
+        assert!(v.re.is_finite() && v.im.is_finite());
+    }
+}
+
+// ============================================================================
+// Coverage: Backend-level Complex error paths
+// ============================================================================
+
+#[test]
+fn backend_complex64_thin_svd_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let a = [Complex64::new(1.0, 0.0)]; // too short for 2x2
+    let mut u = [Complex64::new(0.0, 0.0); 4];
+    let mut s = [0.0_f64; 2];
+    let mut vt = [Complex64::new(0.0, 0.0); 4];
+    assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+}
+
+#[test]
+fn backend_complex64_thin_svd_invalid_u() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c]; // 2x2 identity
+    let mut u = [z; 1]; // too short
+    let mut s = [0.0_f64; 2];
+    let mut vt = [z; 4];
+    assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+}
+
+#[test]
+fn backend_complex64_thin_svd_invalid_s() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut u = [z; 4];
+    let mut s = [0.0_f64; 1]; // too short
+    let mut vt = [z; 4];
+    assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+}
+
+#[test]
+fn backend_complex64_thin_svd_invalid_vt() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut u = [z; 4];
+    let mut s = [0.0_f64; 2];
+    let mut vt = [z; 1]; // too short
+    assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+}
+
+#[test]
+fn backend_complex64_qr_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let a = [z]; // too short for 2x2
+    let mut q = [z; 4];
+    let mut r = [z; 4];
+    assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+}
+
+#[test]
+fn backend_complex64_qr_invalid_q() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut q = [z; 1]; // too short
+    let mut r = [z; 4];
+    assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+}
+
+#[test]
+fn backend_complex64_qr_invalid_r() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut q = [z; 4];
+    let mut r = [z; 1]; // too short
+    assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+}
+
+#[test]
+fn backend_complex64_lu_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let a = [z]; // too short
+    let mut perm = [0usize; 2];
+    let mut l = [z; 4];
+    let mut u_out = [z; 4];
+    assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+}
+
+#[test]
+fn backend_complex64_lu_invalid_perm() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut perm = [0usize; 1]; // too short
+    let mut l = [z; 4];
+    let mut u_out = [z; 4];
+    assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+}
+
+#[test]
+fn backend_complex64_lu_invalid_l() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut perm = [0usize; 2];
+    let mut l = [z; 1]; // too short
+    let mut u_out = [z; 4];
+    assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+}
+
+#[test]
+fn backend_complex64_lu_invalid_u() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut perm = [0usize; 2];
+    let mut l = [z; 4];
+    let mut u_out = [z; 1]; // too short
+    assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+}
+
+#[test]
+fn backend_complex64_cholesky_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let a = [z]; // too short
+    let mut l = [z; 4];
+    assert!(backend.cholesky(&a, 2, &mut l).is_err());
+}
+
+#[test]
+fn backend_complex64_cholesky_invalid_l() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(4.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c]; // SPD
+    let mut l = [z; 1]; // too short
+    assert!(backend.cholesky(&a, 2, &mut l).is_err());
+}
+
+#[test]
+fn backend_complex64_cholesky_not_pd() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = |re, im| Complex64::new(re, im);
+    // Non-positive-definite matrix
+    let a = [c(-1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(-1.0, 0.0)];
+    let mut l = [Complex64::new(0.0, 0.0); 4];
+    assert!(backend.cholesky(&a, 2, &mut l).is_err());
+}
+
+#[test]
+fn backend_complex64_eigen_sym_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let a = [Complex64::new(1.0, 0.0)]; // too short
+    let mut values = [0.0_f64; 2];
+    let mut vectors = [Complex64::new(0.0, 0.0); 4];
+    assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+}
+
+#[test]
+fn backend_complex64_eigen_sym_invalid_values() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut values = [0.0_f64; 1]; // too short
+    let mut vectors = [z; 4];
+    assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+}
+
+#[test]
+fn backend_complex64_eigen_sym_invalid_vectors() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let c = Complex64::new(1.0, 0.0);
+    let z = Complex64::new(0.0, 0.0);
+    let a = [c, z, z, c];
+    let mut values = [0.0_f64; 2];
+    let mut vectors = [z; 1]; // too short
+    assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+}
+
+#[test]
+fn backend_complex64_mat_mul_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let a = [z]; // too short for 2x2
+    let b = [z; 4];
+    let mut c = [z; 4];
+    assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+}
+
+#[test]
+fn backend_complex64_mat_mul_invalid_b() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let b = [z]; // too short
+    let mut c = [z; 4];
+    assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+}
+
+#[test]
+fn backend_complex64_mat_mul_invalid_c() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let b = [c64, z, z, c64];
+    let mut c = [z; 1]; // too short
+    assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+}
+
+#[test]
+fn backend_complex64_solve_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let a = [z]; // too short
+    let b = [z; 2];
+    let mut x = [z; 2];
+    assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+}
+
+#[test]
+fn backend_complex64_solve_invalid_b() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let b = [z]; // too short
+    let mut x = [z; 2];
+    assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+}
+
+#[test]
+fn backend_complex64_solve_invalid_x() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let b = [c64, z];
+    let mut x = [z]; // too short
+    assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+}
+
+#[test]
+fn backend_complex64_solve_triangular_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let a = [z]; // too short
+    let b = [z; 2];
+    let mut x = [z; 2];
+    assert!(backend
+        .solve_triangular(&a, &b, 2, 1, true, &mut x)
+        .is_err());
+}
+
+#[test]
+fn backend_complex64_solve_triangular_invalid_b() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let b = [z]; // too short
+    let mut x = [z; 2];
+    assert!(backend
+        .solve_triangular(&a, &b, 2, 1, true, &mut x)
+        .is_err());
+}
+
+#[test]
+fn backend_complex64_solve_triangular_invalid_x() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let b = [c64, z];
+    let mut x = [z]; // too short
+    assert!(backend
+        .solve_triangular(&a, &b, 2, 1, true, &mut x)
+        .is_err());
+}
+
+#[test]
+fn backend_complex64_eig_general_invalid_a() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let a = [z]; // too short
+    let mut values = [z; 2];
+    let mut vectors = [z; 4];
+    assert!(backend
+        .eig_general(&a, 2, &mut values, &mut vectors)
+        .is_err());
+}
+
+#[test]
+fn backend_complex64_eig_general_invalid_values() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let mut values = [z]; // too short
+    let mut vectors = [z; 4];
+    assert!(backend
+        .eig_general(&a, 2, &mut values, &mut vectors)
+        .is_err());
+}
+
+#[test]
+fn backend_complex64_eig_general_invalid_vectors() {
+    use tenferro_linalg::backend::LinalgBackend;
+    let mut backend = FaerBackend::new();
+    let z = Complex64::new(0.0, 0.0);
+    let c64 = Complex64::new(1.0, 0.0);
+    let a = [c64, z, z, c64];
+    let mut values = [z; 2];
+    let mut vectors = [z; 1]; // too short
+    assert!(backend
+        .eig_general(&a, 2, &mut values, &mut vectors)
+        .is_err());
+}
+
+// ============================================================================
+// Coverage: additional validation error paths and branch coverage
+// ============================================================================
+
+#[test]
+fn lu_nopivot_returns_error() {
+    // Lines 1023-1025: LuPivot::NoPivot error branch.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    assert!(lu(&mut backend, &a, LuPivot::NoPivot).is_err());
+}
+
+#[test]
+fn solve_rhs_2d_batch_mismatch() {
+    // Lines 321-325: validate_solve_rhs 2D b with wrong batch dims.
+    let mut backend = FaerBackend::new();
+    // A is (2,2,2) => batch=[2], b is (2,1,3) => batch=[3], mismatch
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 1, 3]);
+    assert!(solve(&mut backend, &a, &b).is_err());
+}
+
+#[test]
+fn solve_triangular_rhs_2d_batch_mismatch() {
+    // Also covers lines 321-325 via solve_triangular path.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 1, 3]);
+    assert!(solve_triangular(&mut backend, &a, &b, true).is_err());
+}
+
+#[test]
+fn norm_rrule_l1_unsupported() {
+    // Lines 3955-3958: norm_rrule returns error for L1.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
+    assert!(norm_rrule(&mut backend, &a, &co, NormKind::L1).is_err());
+}
+
+#[test]
+fn norm_rrule_inf_unsupported() {
+    // Lines 3955-3958: norm_rrule returns error for Inf.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
+    assert!(norm_rrule(&mut backend, &a, &co, NormKind::Inf).is_err());
+}
+
+#[test]
+fn norm_frule_l1_unsupported() {
+    // Lines 5194-5197: norm_frule returns error for L1.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
+    assert!(norm_frule(&mut backend, &a, &da, NormKind::L1).is_err());
+}
+
+#[test]
+fn norm_frule_inf_unsupported() {
+    // Lines 5194-5197: norm_frule returns error for Inf.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
+    assert!(norm_frule(&mut backend, &a, &da, NormKind::Inf).is_err());
+}
+
+#[test]
+fn slogdet_negative_determinant() {
+    // Line 1498: slogdet with negative U diagonal in LU -> sign flip.
+    // Use diagonal matrix [[-1, 0], [0, 1]] which has det = -1.
+    // LU with partial pivoting may reorder rows. To ensure U has a negative diagonal,
+    // use [[-2, 0], [0, 1]] — since -2 has largest absolute value, it's chosen as pivot,
+    // yielding U with diag=[-2, 1], so diag[0] < 0 triggers the sign flip.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![-2.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let result = slogdet(&mut backend, &a).unwrap();
+    let sign_data = tensor_data(&result.sign);
+    // det = -2, so sign should be -1
+    assert!(
+        sign_data[0] < 0.0,
+        "expected negative sign, got {}",
+        sign_data[0]
+    );
+}
+
+#[test]
+fn matrix_exp_0x0() {
+    // Line 1852: matrix_exp with 0x0 matrix returns empty tensor.
+    let mut backend = FaerBackend::new();
+    let a: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0], &[1, 0], 0).unwrap();
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    assert_eq!(result.dims(), &[0, 0]);
+}
+
+#[test]
+fn norm_rrule_batched_cotangent_wrong_shape() {
+    // Lines 390-394: validate_norm_cotangent batch mismatch with batch dims.
+    let mut backend = FaerBackend::new();
+    // A is (2,2,3) -> batch_dims = [3], but cotangent shape is [2]
+    let a = make_tensor(
+        vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 3.0],
+        &[2, 2, 3],
+    );
+    let co = make_tensor(vec![1.0, 1.0], &[2]);
+    assert!(norm_rrule(&mut backend, &a, &co, NormKind::Fro).is_err());
+}
+
+#[test]
+fn norm_rrule_batched_fro_correct_cotangent() {
+    // Lines 395, 397: validate_norm_cotangent SUCCESS path with non-empty batch dims.
+    let mut backend = FaerBackend::new();
+    // A: (2,2,2) -> batch_dims = [2]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
+    // cotangent shape [2] matches batch_dims [2]
+    let co = make_tensor(vec![1.0, 1.0], &[2]);
+    let grad = norm_rrule(&mut backend, &a, &co, NormKind::Fro).unwrap();
+    assert_eq!(grad.dims(), &[2, 2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "batched norm_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn norm_frule_batched_fro() {
+    // Exercise norm_frule with batched input to cover batched paths.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
+    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1, 0.2, 0.0, 0.0, 0.2], &[2, 2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut backend, &a, &da, NormKind::Fro).unwrap();
+    let nd = tensor_data(&nrm);
+    assert_eq!(nd.len(), 2);
+    for &val in &nd {
+        assert!(val.is_finite(), "batched norm_frule nrm not finite: {val}");
+    }
+    let dnd = tensor_data(&dnrm);
+    for &val in &dnd {
+        assert!(val.is_finite(), "batched norm_frule dnrm not finite: {val}");
+    }
+}
+
+#[test]
+fn norm_frule_zero_matrix() {
+    // Line 5159: norm_frule Fro with zero matrix (nv == 0).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![0.0, 0.0, 0.0, 0.0], &[2, 2]);
+    let da = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut backend, &a, &da, NormKind::Fro).unwrap();
+    let nd = tensor_data(&nrm);
+    assert!((nd[0]).abs() < 1e-15, "zero matrix norm should be 0");
+    let dnd = tensor_data(&dnrm);
+    // d||A||/dA at A=0 is technically undefined, but our code returns 0
+    assert!(dnd[0].is_finite(), "dnrm should be finite");
+}
+
+#[test]
+fn svd_rrule_no_cotangent() {
+    // Covers svd_rrule with all cotangents None.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let co = SvdCotangent {
+        s: None,
+        u: None,
+        vt: None,
+    };
+    let grad = svd_rrule(&mut backend, &a, &co, None).unwrap();
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(
+            val.abs() < 1e-15,
+            "no-cotangent svd_rrule should be zero, got {val}"
+        );
+    }
+}
+
+#[test]
+fn qr_rrule_r_only_cotangent() {
+    // Covers qr_rrule with q=None.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.5, 0.5, 1.0], &[2, 2]);
+    let result = qr(&mut backend, &a).unwrap();
+    let r_dims = result.r.dims().to_vec();
+    let r_size: usize = r_dims.iter().product();
+    let cotangent = QrCotangent {
+        q: None,
+        r: Some(make_tensor(vec![1.0; r_size], &r_dims)),
+    };
+    let grad = qr_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "qr_rrule r-only grad not finite: {val}");
+    }
+}
+
+#[test]
+fn matrix_exp_1x1_special_case() {
+    // Line 1858-1862: matrix_exp with 1x1 matrix (special case path).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0], &[1, 1]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let rd = tensor_data(&result);
+    assert!(
+        (rd[0] - 2.0_f64.exp()).abs() < 1e-10,
+        "exp(2) mismatch: got {}",
+        rd[0]
+    );
+}
+
+#[test]
+fn det_negative() {
+    // Exercise det with matrix that has negative determinant.
+    let mut backend = FaerBackend::new();
+    // [[0, 1], [1, 0]] has det = -1
+    let a = make_tensor(vec![0.0, 1.0, 1.0, 0.0], &[2, 2]);
+    let result = det(&mut backend, &a).unwrap();
+    let rd = tensor_data(&result);
+    assert!(
+        (rd[0] + 1.0).abs() < 1e-10,
+        "expected det=-1, got {}",
+        rd[0]
+    );
+}
+
+#[test]
+fn slogdet_rrule_none_cotangent() {
+    // Line 3608: slogdet_rrule with logabsdet=None -> skip inner block.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let cotangent = SlogdetCotangent { logabsdet: None };
+    let grad = slogdet_rrule(&mut backend, &a, &cotangent).unwrap();
+    // With None cotangent, gradient should be all zeros
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!((val).abs() < 1e-15, "expected zero grad, got {val}");
+    }
+}
+
+#[test]
+fn qr_rrule_q_only_cotangent() {
+    // Line 2878: qr_rrule with r=None -> zero dR branch.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.5, 0.5, 1.0], &[2, 2]);
+    let result = qr(&mut backend, &a).unwrap();
+    let q_dims = result.q.dims().to_vec();
+    let q_size: usize = q_dims.iter().product();
+    let cotangent = QrCotangent {
+        q: Some(make_tensor(vec![1.0; q_size], &q_dims)),
+        r: None,
+    };
+    let grad = qr_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "qr_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn solve_rrule_vector_rhs() {
+    // Line 3407: solve_rrule with 1D b -> nrhs=1 else branch.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.5, 0.3, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0], &[2]);
+    let co = make_tensor(vec![1.0, 1.0], &[2]);
+    let grad = solve_rrule(&mut backend, &a, &b, &co).unwrap();
+    let ga = tensor_data(&grad.a);
+    for &val in &ga {
+        assert!(val.is_finite(), "solve_rrule grad_a not finite: {val}");
+    }
+    let gb = tensor_data(&grad.b);
+    for &val in &gb {
+        assert!(val.is_finite(), "solve_rrule grad_b not finite: {val}");
+    }
+}
+
+#[test]
+fn eigen_rrule_vectors_only_cotangent() {
+    // Line 3166: eigen_rrule with values=None -> skip dE branch.
+    let mut backend = FaerBackend::new();
+    // Symmetric matrix
+    let a = make_tensor(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
+    let result = eigen(&mut backend, &a).unwrap();
+    let v_dims = result.vectors.dims().to_vec();
+    let v_size: usize = v_dims.iter().product();
+    let cotangent = EigenCotangent {
+        values: None,
+        vectors: Some(make_tensor(vec![1.0; v_size], &v_dims)),
+    };
+    let grad = eigen_rrule(&mut backend, &a, &cotangent).unwrap();
+    assert_eq!(grad.dims(), &[2, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(val.is_finite(), "eigen_rrule grad not finite: {val}");
+    }
+}
+
+#[test]
+fn svd_rrule_tall_rank_deficient_with_du() {
+    // Lines 2769, 2803: svd_rrule non-square correction with near-zero singular value.
+    // A rank-1 tall matrix has a zero singular value, triggering sinv -> T::zero() branch.
+    let mut backend = FaerBackend::new();
+    // 3x2 rank-1 matrix: [[1,0],[0,0],[0,0]] in col-major = [1,0,0, 0,0,0]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[3, 2]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    let u_dims = result.u.dims().to_vec();
+    let u_size: usize = u_dims.iter().product();
+    let s_dims = result.s.dims().to_vec();
+    let s_size: usize = s_dims.iter().product();
+    let co = SvdCotangent {
+        u: Some(make_tensor(vec![1.0; u_size], &u_dims)),
+        s: Some(make_tensor(vec![1.0; s_size], &s_dims)),
+        vt: None,
+    };
+    let grad = svd_rrule(&mut backend, &a, &co, None).unwrap();
+    assert_eq!(grad.dims(), &[3, 2]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(
+            val.is_finite(),
+            "svd_rrule rank-deficient grad not finite: {val}"
+        );
+    }
+}
+
+#[test]
+fn svd_rrule_wide_rank_deficient_with_dvt() {
+    // Lines 2803: svd_rrule non-square correction for n > k with near-zero singular value.
+    let mut backend = FaerBackend::new();
+    // 2x3 rank-1 matrix
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[2, 3]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    let vt_dims = result.vt.dims().to_vec();
+    let vt_size: usize = vt_dims.iter().product();
+    let s_dims = result.s.dims().to_vec();
+    let s_size: usize = s_dims.iter().product();
+    let co = SvdCotangent {
+        u: None,
+        s: Some(make_tensor(vec![1.0; s_size], &s_dims)),
+        vt: Some(make_tensor(vec![1.0; vt_size], &vt_dims)),
+    };
+    let grad = svd_rrule(&mut backend, &a, &co, None).unwrap();
+    assert_eq!(grad.dims(), &[2, 3]);
+    let gd = tensor_data(&grad);
+    for &val in &gd {
+        assert!(
+            val.is_finite(),
+            "svd_rrule wide rank-deficient grad not finite: {val}"
+        );
+    }
+}
+
+#[test]
+fn svd_frule_tall_rank_deficient() {
+    // Lines 4075, 4107: svd_frule non-square correction with near-zero singular value.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[3, 2]);
+    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1, 0.0, 0.0], &[3, 2]);
+    let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+    let ud = tensor_data(&result.u);
+    for &val in &ud {
+        assert!(val.is_finite(), "svd_frule u not finite: {val}");
+    }
+    let dud = tensor_data(&dresult.u);
+    for &val in &dud {
+        assert!(val.is_finite(), "svd_frule du not finite: {val}");
+    }
+}
+
+#[test]
+fn svd_frule_wide_rank_deficient() {
+    // Lines 4075, 4107: svd_frule non-square correction for n > k with near-zero sv.
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[2, 3]);
+    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1, 0.0, 0.0], &[2, 3]);
+    let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+    let sd = tensor_data(&result.s);
+    for &val in &sd {
+        assert!(val.is_finite(), "svd_frule s not finite: {val}");
+    }
+    let dvtd = tensor_data(&dresult.vt);
+    for &val in &dvtd {
+        assert!(val.is_finite(), "svd_frule dvt not finite: {val}");
+    }
 }

@@ -13,7 +13,7 @@
     "extension/tenferro-tropical/src/prims.rs": 80,
     "tenferro-capi/src/lib.rs": 65,
     "tenferro-einsum/src/lib.rs": 65,
-    "tenferro-linalg/src/lib.rs": 30,
-    "tenferro-linalg/src/backend/faer_backend.rs": 70
+    "tenferro-linalg/src/lib.rs": 95,
+    "tenferro-linalg/src/backend/faer_backend.rs": 97
   }
 }
