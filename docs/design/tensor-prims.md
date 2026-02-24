@@ -74,6 +74,92 @@ The core operations form adjoint pairs, enabling clean VJP/JVP rules:
 
 ---
 
+## Formal Semantics for Paired-Axis Operations
+
+`Trace`, `AntiTrace`, and `AntiDiag` are defined by equality constraints over
+output/input axes encoded in `paired`.
+
+### Constraint Graph and Components
+
+Given a rank-`r` tensor, build an undirected graph:
+
+- Vertices: axis positions `V = {0, ..., r-1}`
+- Edges: each pair `(a, b)` in `paired`
+
+Connected components define independent diagonal indices. Let components be
+`C_0, ..., C_{q-1}` with axis-to-component map `comp(axis)`.
+
+For each component `C_t`, all member axes must have the same dimension:
+
+`dim[a] = dim[b]` for all `a, b in C_t`
+
+This gives an independent diagonal index `d_t in [0, D_t)` per component.
+
+### Trace
+
+`Trace` contracts paired axes and sums over each component index:
+
+`Y[f] = sum_{d_0,...,d_{q-1}} X[j(f, d)]`
+
+where `j(f, d)` is built by:
+
+- free axis `a`: copy value from output index `f`
+- paired axis `a`: `j_a = d_{comp(a)}`
+
+This is the key generalization from "single `d`" to "one `d_t` per component".
+It is required for cases like `iijj->`:
+
+`sum_{i,j} X[i, i, j, j]`
+
+not `sum_d X[d, d, d, d]`.
+
+### AntiTrace (Adjoint of Trace)
+
+`AntiTrace` scatters a cotangent back to all constrained diagonal positions:
+
+`Z[j] = G[pi(j)] * prod_{(a,b) in paired} delta(j_a, j_b)`
+
+Equivalent loop form:
+
+`for each free index f:`
+`  for each component index tuple d:`
+`    Z[j(f, d)] += G[f]`
+
+with alpha/beta scaling in the standard `execute` contract.
+
+### AntiDiag (Adjoint of Diagonal Extraction)
+
+`AntiDiag` writes cotangents to constrained output positions:
+
+`Z[j] = sum_i G[i]`
+`       * prod_u delta(j_{phi(u)}, i_u)`
+`       * prod_{(a,b) in paired} delta(j_a, j_b)`
+
+`phi(u)` maps each input axis `u` to its output axis in `modes_c`.
+
+Two component classes appear in practice:
+
+- Anchored component: at least one axis comes from `modes_a`; value is fixed by
+  the corresponding `i_u`
+- Generative component: no axis from `modes_a`; must be looped independently
+  over `d_t in [0, D_t)`
+
+Generative components are required for scalar-to-diagonal patterns such as
+`->ii` and `->iii`.
+
+### Plan-Time Metadata (Recommended)
+
+To keep execution loops simple, precompute in `plan`:
+
+- `axis_to_comp: Vec<Option<usize>>`
+- `comp_dims: Vec<usize>`
+- component class (`anchored` vs `generative`) for `AntiDiag`
+
+Then `execute_*` can iterate over a Cartesian product of `comp_dims` instead of
+assuming a single shared diagonal loop variable.
+
+---
+
 ## Key Types
 
 ```rust

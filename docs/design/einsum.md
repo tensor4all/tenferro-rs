@@ -342,6 +342,58 @@ the `permute_view + MakeContiguous + BatchedGemm` pipeline.
 | `i→ii` (embed diagonal) | `anti_diag(A, [(0,1)])` |
 | `ij→i` (sum axis) | `reduce(A, axis=1, ReduceOp::Sum)` |
 
+### Systematic Unary Lowering with TensorPrims
+
+To support trace and generative output patterns uniformly, unary lowering should
+follow a fixed classification and rewrite pipeline.
+
+1. Parse one-input subscripts and build `size_dict` (including optional user
+   sizes for labels not present in input).
+2. Count input/output occurrences per label.
+3. Classify labels:
+   - `extract_labels`: repeated in input and present in output
+   - `trace_labels`: repeated in input and absent from output
+   - `generative_labels`: absent from input and present in output
+   - `duplicate_output_labels`: repeated in output
+4. Lower in stages:
+   - `diag` (Tensor view op) for `extract_labels`
+   - `trace` (`PrimDescriptor::Trace`) for `trace_labels`
+   - `reduce` (`PrimDescriptor::Reduce`) for non-output residual labels
+   - `permute` (`PrimDescriptor::Permute`) to canonical output order
+   - `repeat` (Tensor broadcast) for non-duplicate generative labels
+   - `anti_diag` / `anti_trace` for output duplication and scalar-to-diagonal
+     materialization
+
+This keeps TensorPrims usage explicit while preserving zero-copy
+transformations (`diag`, `repeat`) at the Tensor layer.
+
+### Pattern-to-Primitive Mapping
+
+| Pattern | Expected semantics | Lowering |
+|--------|---------------------|----------|
+| `ii->` | `sum_i A[i,i]` | `Trace(paired=[(0,1)])` |
+| `iijj->` | `sum_{i,j} A[i,i,j,j]` | `Trace` with two independent components |
+| `ii->i` | diagonal extraction | `diag([(0,1)])` |
+| `iij->j` | partial trace | `diag([(0,1)])` then `Reduce` |
+| `i->ii` | vector to diagonal matrix | `AntiDiag(paired=[(0,1)])` |
+| `->ii` | scalar to identity-like diagonal | scalar input + generative diagonal via `AntiTrace`/`AntiDiag` with unanchored component |
+| `->iii` | scalar to superdiagonal 3-tensor | scalar input + one 3-axis equality component |
+
+### End-to-End Unary Flow
+
+```
+subscripts + operand + optional size_dict
+    -> classify labels (extract / trace / generative / duplicate)
+    -> normalize with Tensor view ops (diag, repeat where applicable)
+    -> execute prim plans (Trace, Reduce, Permute, AntiDiag, AntiTrace)
+    -> final tensor with requested output label multiplicities
+```
+
+The critical requirement is that `Trace`, `AntiTrace`, and `AntiDiag` execute
+one loop variable per equality-component, not one global diagonal index.
+Without that, multi-pair trace (`iijj->`) and generative diagonal (`->ii`,
+`->iii`) are under-specified.
+
 ---
 
 ## Algebra Dispatch
