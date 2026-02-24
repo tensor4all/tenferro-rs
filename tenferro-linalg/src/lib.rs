@@ -1716,6 +1716,9 @@ pub fn pinv<
 
 /// Compute the matrix exponential `exp(A)` of a square matrix.
 ///
+/// Uses the scaling-and-squaring method with Pad\u{e9}\[13/13\] approximation
+/// (Al-Mohy & Higham, 2010), following the PyTorch approach.
+///
 /// Input shape: `(n, n, *)`.
 ///
 /// # Examples
@@ -1729,15 +1732,233 @@ pub fn pinv<
 /// let mut backend = FaerBackend::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// assert!(matrix_exp(&mut backend, &a).is_err());
+/// let exp_a = matrix_exp(&mut backend, &a).unwrap();
+/// // exp(0) = I
 /// ```
 pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
 ) -> Result<Tensor<T>> {
-    Err(Error::InvalidArgument(
-        "matrix_exp not yet implemented".into(),
-    ))
+    let (n, batch_dims) = validate_square(tensor)?;
+    let input = ensure_col_major(tensor);
+    let data = extract_slice(&input)?;
+    let offset = input.offset() as usize;
+    let bc = batch_count(batch_dims);
+    let mat_size = n * n;
+
+    let mut result_data = vec![T::zero(); mat_size * bc];
+
+    for b in 0..bc {
+        let start = offset + b * mat_size;
+        let a_slice = &data[start..start + mat_size];
+        let exp_a = matrix_exp_single(backend, a_slice, n)?;
+        result_data[b * mat_size..(b + 1) * mat_size].copy_from_slice(&exp_a);
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    tensor_from_data(result_data, &dims)
+}
+
+// ============================================================================
+// matrix_exp helpers (private)
+// ============================================================================
+
+/// Pad\u{e9}\[13/13\] coefficients b\[0\]..b\[13\] (integer values as f64).
+const PADE13_COEFFS: [f64; 14] = [
+    64764752532480000.0,
+    32382376266240000.0,
+    7771770303897600.0,
+    1187353796428800.0,
+    129060195264000.0,
+    10559470521600.0,
+    670442572800.0,
+    33522128640.0,
+    1323241920.0,
+    40840800.0,
+    960960.0,
+    16380.0,
+    182.0,
+    1.0,
+];
+
+/// Theta threshold for order-13 Pad\u{e9} (f64).
+const THETA_13: f64 = 5.371920351148152;
+
+/// Compute the matrix 1-norm (max column sum of absolute values).
+///
+/// `a` is stored column-major as a flat slice of length `n*n`.
+fn matrix_1_norm<T: LinalgScalar>(a: &[T], n: usize) -> T::Real {
+    let mut max_col_sum = <T::Real as num_traits::Zero>::zero();
+    for j in 0..n {
+        let mut col_sum = <T::Real as num_traits::Zero>::zero();
+        for i in 0..n {
+            col_sum = col_sum + a[i + j * n].abs_real();
+        }
+        if col_sum > max_col_sum {
+            max_col_sum = col_sum;
+        }
+    }
+    max_col_sum
+}
+
+/// Multiply two n x n column-major matrices using the backend.
+fn backend_mat_mul_nn<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
+    backend: &mut B,
+    a: &[T],
+    b: &[T],
+    n: usize,
+) -> Result<Vec<T>> {
+    let mut c = vec![T::zero(); n * n];
+    backend.mat_mul(a, n, n, b, n, &mut c)?;
+    Ok(c)
+}
+
+/// Compute `result = alpha * a + beta * b` element-wise for flat slices.
+fn mat_linear_combine<T: LinalgScalar>(alpha: T, a: &[T], beta: T, b: &[T], result: &mut [T]) {
+    for i in 0..result.len() {
+        result[i] = alpha * a[i] + beta * b[i];
+    }
+}
+
+/// Build an n x n identity matrix in column-major flat layout.
+fn identity_matrix<T: LinalgScalar>(n: usize) -> Vec<T> {
+    let mut eye = vec![T::zero(); n * n];
+    for i in 0..n {
+        eye[i + i * n] = T::one();
+    }
+    eye
+}
+
+/// Scale a flat matrix slice by a scalar, returning a new vector.
+fn mat_scale<T: LinalgScalar>(a: &[T], s: T) -> Vec<T> {
+    a.iter().map(|&x| x * s).collect()
+}
+
+/// Add two flat matrix slices element-wise, returning a new vector.
+fn mat_add<T: LinalgScalar>(a: &[T], b: &[T]) -> Vec<T> {
+    a.iter().zip(b.iter()).map(|(&x, &y)| x + y).collect()
+}
+
+/// Compute matrix exponential of a single n x n column-major matrix.
+///
+/// Uses scaling-and-squaring with Pad\u{e9}\[13/13\] approximation.
+fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
+    backend: &mut B,
+    a: &[T],
+    n: usize,
+) -> Result<Vec<T>> {
+    // Special case: 0x0 matrix
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Special case: 1x1 matrix
+    if n == 1 {
+        let a_f64: f64 = num_traits::NumCast::from(a[0]).unwrap_or(0.0);
+        let exp_val = a_f64.exp();
+        let result_val = T::from(exp_val).ok_or_else(|| {
+            Error::InvalidArgument("cannot convert exp result to target type".into())
+        })?;
+        return Ok(vec![result_val]);
+    }
+
+    // 1. Compute ||A||_1
+    let norm_a = matrix_1_norm(a, n);
+    let norm_f64: f64 = num_traits::NumCast::from(norm_a).unwrap_or(0.0);
+
+    // 2. Determine scaling factor s
+    let s: usize = if norm_f64 <= THETA_13 {
+        0
+    } else {
+        (norm_f64 / THETA_13).log2().ceil().max(0.0) as usize
+    };
+
+    // 3. Scale A: a_scaled = A / 2^s
+    let scale_denom = (1u64 << s.min(63)) as f64;
+    let scale_inv = T::from(1.0 / scale_denom).ok_or_else(|| {
+        Error::InvalidArgument("cannot convert scale factor to target type".into())
+    })?;
+    let a_scaled = mat_scale(a, scale_inv);
+
+    // 4. Compute matrix powers: A2, A4, A6
+    let a2 = backend_mat_mul_nn(backend, &a_scaled, &a_scaled, n)?;
+    let a4 = backend_mat_mul_nn(backend, &a2, &a2, n)?;
+    let a6 = backend_mat_mul_nn(backend, &a4, &a2, n)?;
+
+    // Convert Pade coefficients to type T
+    let b: Vec<T> = PADE13_COEFFS
+        .iter()
+        .map(|&c| {
+            T::from(c).ok_or_else(|| {
+                Error::InvalidArgument("cannot convert Pade coefficient to target type".into())
+            })
+        })
+        .collect::<Result<Vec<T>>>()?;
+
+    let eye = identity_matrix::<T>(n);
+    let nn = n * n;
+
+    // 5. Compute U and V for Pade[13/13]:
+    //
+    //   inner_u = b[13]*A6 + b[11]*A4 + b[9]*A2
+    //   U = A * (A6 * inner_u + b[7]*A6 + b[5]*A4 + b[3]*A2 + b[1]*I)
+    //
+    //   inner_v = b[12]*A6 + b[10]*A4 + b[8]*A2
+    //   V = A6 * inner_v + b[6]*A6 + b[4]*A4 + b[2]*A2 + b[0]*I
+
+    // Compute inner_u = b[13]*A6 + b[11]*A4 + b[9]*A2
+    let mut inner_u = vec![T::zero(); nn];
+    for i in 0..nn {
+        inner_u[i] = b[13] * a6[i] + b[11] * a4[i] + b[9] * a2[i];
+    }
+
+    // a6_inner_u = A6 * inner_u
+    let a6_inner_u = backend_mat_mul_nn(backend, &a6, &inner_u, n)?;
+
+    // u_inner = a6_inner_u + b[7]*A6 + b[5]*A4 + b[3]*A2 + b[1]*I
+    let mut u_inner = vec![T::zero(); nn];
+    for i in 0..nn {
+        u_inner[i] = a6_inner_u[i] + b[7] * a6[i] + b[5] * a4[i] + b[3] * a2[i] + b[1] * eye[i];
+    }
+
+    // U = A_scaled * u_inner
+    let u = backend_mat_mul_nn(backend, &a_scaled, &u_inner, n)?;
+
+    // Compute inner_v = b[12]*A6 + b[10]*A4 + b[8]*A2
+    let mut inner_v = vec![T::zero(); nn];
+    for i in 0..nn {
+        inner_v[i] = b[12] * a6[i] + b[10] * a4[i] + b[8] * a2[i];
+    }
+
+    // a6_inner_v = A6 * inner_v
+    let a6_inner_v = backend_mat_mul_nn(backend, &a6, &inner_v, n)?;
+
+    // V = a6_inner_v + b[6]*A6 + b[4]*A4 + b[2]*A2 + b[0]*I
+    let mut v = vec![T::zero(); nn];
+    for i in 0..nn {
+        v[i] = a6_inner_v[i] + b[6] * a6[i] + b[4] * a4[i] + b[2] * a2[i] + b[0] * eye[i];
+    }
+
+    // 6. Solve (-U + V) * X = (U + V)  =>  X = exp(A_scaled)
+    let neg_one = T::from(-1.0)
+        .ok_or_else(|| Error::InvalidArgument("cannot convert -1 to target type".into()))?;
+    // lhs = V - U = -U + V
+    let mut lhs = vec![T::zero(); nn];
+    mat_linear_combine(neg_one, &u, T::one(), &v, &mut lhs);
+
+    // rhs = U + V
+    let rhs = mat_add(&u, &v);
+
+    // Solve lhs * X = rhs  (nrhs = n for matrix RHS)
+    let mut result = vec![T::zero(); nn];
+    backend.solve(&lhs, &rhs, n, n, &mut result)?;
+
+    // 7. Repeated squaring: result = result^(2^s)
+    for _ in 0..s {
+        result = backend_mat_mul_nn(backend, &result, &result, n)?;
+    }
+
+    Ok(result)
 }
 
 /// Solve a triangular linear system `A x = b`.

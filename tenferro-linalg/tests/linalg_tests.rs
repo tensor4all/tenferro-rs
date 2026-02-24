@@ -856,14 +856,185 @@ fn eig_frule_finite_difference() {
 }
 
 // ============================================================================
-// Matrix exp should return error
+// Matrix exp tests
 // ============================================================================
 
 #[test]
-fn matrix_exp_returns_error() {
+fn matrix_exp_identity_succeeds() {
+    // Previously this returned an error; now it should succeed.
     let mut backend = FaerBackend::new();
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    assert!(matrix_exp(&mut backend, &a).is_err());
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    // exp(diag(1,1)) = diag(e, e)
+    let e = 1.0_f64.exp();
+    assert!((data[0] - e).abs() < 1e-10);
+    assert!(data[1].abs() < 1e-10);
+    assert!(data[2].abs() < 1e-10);
+    assert!((data[3] - e).abs() < 1e-10);
+}
+
+#[test]
+fn matrix_exp_zero_is_identity() {
+    // exp(0) = I
+    let mut backend = FaerBackend::new();
+    let zeros = make_tensor(vec![0.0; 9], &[3, 3]);
+    let result = matrix_exp(&mut backend, &zeros).unwrap();
+    let data = tensor_data(&result);
+    for i in 0..3 {
+        for j in 0..3 {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (data[i + j * 3] - expected).abs() < 1e-10,
+                "exp(0)[{i},{j}] = {}, expected {expected}",
+                data[i + j * 3]
+            );
+        }
+    }
+}
+
+#[test]
+fn matrix_exp_diagonal() {
+    // exp(diag(a,b)) = diag(exp(a), exp(b))
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 2.0], &[2, 2]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    assert!(
+        (data[0] - 1.0_f64.exp()).abs() < 1e-10,
+        "exp(diag(1,2))[0,0] = {}, expected {}",
+        data[0],
+        1.0_f64.exp()
+    );
+    assert!(
+        (data[3] - 2.0_f64.exp()).abs() < 1e-10,
+        "exp(diag(1,2))[1,1] = {}, expected {}",
+        data[3],
+        2.0_f64.exp()
+    );
+    assert!(data[1].abs() < 1e-10);
+    assert!(data[2].abs() < 1e-10);
+}
+
+#[test]
+fn matrix_exp_nilpotent() {
+    // For nilpotent matrix [[0,1],[0,0]], exp = [[1,1],[0,1]]
+    // Column-major: [0,0, 1,0] for [[0,1],[0,0]]
+    // col 0: (0,0), col 1: (1,0)  => A[0,0]=0, A[1,0]=0, A[0,1]=1, A[1,1]=0
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![0.0, 0.0, 1.0, 0.0], &[2, 2]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    // exp([[0,1],[0,0]]) = [[1,1],[0,1]]
+    // col-major: [1, 0, 1, 1]
+    assert!(
+        (data[0] - 1.0).abs() < 1e-10,
+        "[0,0] = {}, expected 1",
+        data[0]
+    );
+    assert!(data[1].abs() < 1e-10, "[1,0] = {}, expected 0", data[1]);
+    assert!(
+        (data[2] - 1.0).abs() < 1e-10,
+        "[0,1] = {}, expected 1",
+        data[2]
+    );
+    assert!(
+        (data[3] - 1.0).abs() < 1e-10,
+        "[1,1] = {}, expected 1",
+        data[3]
+    );
+}
+
+#[test]
+fn matrix_exp_large_norm() {
+    // Test with matrix that requires scaling (large entries)
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![10.0, 0.0, 0.0, 10.0], &[2, 2]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    let exp10 = 10.0_f64.exp();
+    assert!(
+        (data[0] - exp10).abs() / exp10 < 1e-10,
+        "exp(diag(10,10))[0,0] relative error = {}",
+        (data[0] - exp10).abs() / exp10
+    );
+    assert!(
+        (data[3] - exp10).abs() / exp10 < 1e-10,
+        "exp(diag(10,10))[1,1] relative error = {}",
+        (data[3] - exp10).abs() / exp10
+    );
+    assert!(data[1].abs() < 1e-6);
+    assert!(data[2].abs() < 1e-6);
+}
+
+#[test]
+fn matrix_exp_1x1() {
+    // 1x1 special case
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![3.0], &[1, 1]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    assert!(
+        (data[0] - 3.0_f64.exp()).abs() < 1e-10,
+        "exp([3]) = {}, expected {}",
+        data[0],
+        3.0_f64.exp()
+    );
+}
+
+#[test]
+fn matrix_exp_batched() {
+    // Batched: two 2x2 matrices
+    let mut backend = FaerBackend::new();
+    // batch 0: diag(1, 0), batch 1: diag(0, 2)
+    // col-major with batch dim: [1,0, 0,0,  0,0, 0,2]
+    let a = make_tensor(
+        vec![
+            1.0, 0.0, 0.0, 0.0, // batch 0: diag(1, 0)
+            0.0, 0.0, 0.0, 2.0, // batch 1: diag(0, 2)
+        ],
+        &[2, 2, 2],
+    );
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    // batch 0: exp(diag(1,0)) = diag(e, 1)
+    assert!((data[0] - 1.0_f64.exp()).abs() < 1e-10);
+    assert!(data[1].abs() < 1e-10);
+    assert!(data[2].abs() < 1e-10);
+    assert!((data[3] - 1.0).abs() < 1e-10);
+    // batch 1: exp(diag(0,2)) = diag(1, e^2)
+    assert!((data[4] - 1.0).abs() < 1e-10);
+    assert!(data[5].abs() < 1e-10);
+    assert!(data[6].abs() < 1e-10);
+    assert!((data[7] - 2.0_f64.exp()).abs() < 1e-10);
+}
+
+#[test]
+fn matrix_exp_dense_2x2() {
+    // Test with a non-diagonal 2x2 matrix.
+    // A = [[0, -pi/2], [pi/2, 0]]  (rotation generator)
+    // exp(A) = [[cos(pi/2), -sin(pi/2)], [sin(pi/2), cos(pi/2)]] = [[0, -1], [1, 0]]
+    //
+    // Column-major: A = [0, pi/2, -pi/2, 0]
+    let pi_2 = std::f64::consts::FRAC_PI_2;
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![0.0, pi_2, -pi_2, 0.0], &[2, 2]);
+    let result = matrix_exp(&mut backend, &a).unwrap();
+    let data = tensor_data(&result);
+    // exp(A) col-major: [cos(pi/2), sin(pi/2), -sin(pi/2), cos(pi/2)]
+    //                  = [0, 1, -1, 0]
+    assert!(data[0].abs() < 1e-10, "[0,0] = {}, expected 0", data[0]);
+    assert!(
+        (data[1] - 1.0).abs() < 1e-10,
+        "[1,0] = {}, expected 1",
+        data[1]
+    );
+    assert!(
+        (data[2] - (-1.0)).abs() < 1e-10,
+        "[0,1] = {}, expected -1",
+        data[2]
+    );
+    assert!(data[3].abs() < 1e-10, "[1,1] = {}, expected 0", data[3]);
 }
 
 #[test]
