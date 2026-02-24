@@ -2126,3 +2126,125 @@ fn einsum_input_output_repeated_ii_to_ii() {
         }
     }
 }
+
+// ============================================================================
+// NestedEinsum parsing
+// ============================================================================
+
+#[test]
+fn nested_parse_flat_no_parens() {
+    // Without parentheses, produces a single root node with all leaves
+    let nested = tenferro_einsum::NestedEinsum::parse("ij,jk->ik").unwrap();
+    match &nested {
+        tenferro_einsum::NestedEinsum::Node {
+            subscripts,
+            children,
+        } => {
+            assert_eq!(children.len(), 2);
+            assert_eq!(
+                subscripts.output,
+                tenferro_einsum::Subscripts::parse("ij,jk->ik")
+                    .unwrap()
+                    .output
+            );
+            // Children are leaves
+            assert!(matches!(
+                children[0],
+                tenferro_einsum::NestedEinsum::Leaf(0)
+            ));
+            assert!(matches!(
+                children[1],
+                tenferro_einsum::NestedEinsum::Leaf(1)
+            ));
+        }
+        _ => panic!("expected Node"),
+    }
+}
+
+#[test]
+fn nested_parse_simple_group() {
+    // (ij,jk),kl->il
+    // Root: two children, first is a Node (group), second is Leaf(2)
+    let nested = tenferro_einsum::NestedEinsum::parse("(ij,jk),kl->il").unwrap();
+    match &nested {
+        tenferro_einsum::NestedEinsum::Node {
+            subscripts,
+            children,
+        } => {
+            assert_eq!(children.len(), 2);
+            // Root output is "il"
+            let i = 8u32; // 'i' - 'a'
+            let l = 11u32; // 'l' - 'a'
+            assert_eq!(subscripts.output, vec![i, l]);
+            // First child is a Node (the group)
+            match &children[0] {
+                tenferro_einsum::NestedEinsum::Node {
+                    subscripts: inner_subs,
+                    children: inner_children,
+                } => {
+                    assert_eq!(inner_children.len(), 2);
+                    assert!(matches!(
+                        inner_children[0],
+                        tenferro_einsum::NestedEinsum::Leaf(0)
+                    ));
+                    assert!(matches!(
+                        inner_children[1],
+                        tenferro_einsum::NestedEinsum::Leaf(1)
+                    ));
+                    // Inner output should contain labels needed outside: i and k
+                    // i appears in final output, k appears in sibling kl
+                    let k = 10u32;
+                    assert!(inner_subs.output.contains(&i));
+                    assert!(inner_subs.output.contains(&k));
+                }
+                _ => panic!("expected inner Node"),
+            }
+            // Second child is Leaf(2)
+            assert!(matches!(
+                children[1],
+                tenferro_einsum::NestedEinsum::Leaf(2)
+            ));
+        }
+        _ => panic!("expected Node"),
+    }
+}
+
+#[test]
+fn nested_parse_deeply_nested() {
+    // ((ij,jk),kl),lm->im
+    let nested = tenferro_einsum::NestedEinsum::parse("((ij,jk),kl),lm->im").unwrap();
+    // Should have depth 3: root -> group -> group -> leaves
+    match &nested {
+        tenferro_einsum::NestedEinsum::Node { children, .. } => {
+            assert_eq!(children.len(), 2); // outer group + lm
+            match &children[0] {
+                tenferro_einsum::NestedEinsum::Node { children: mid, .. } => {
+                    assert_eq!(mid.len(), 2); // inner group + kl
+                    match &mid[0] {
+                        tenferro_einsum::NestedEinsum::Node {
+                            children: inner, ..
+                        } => {
+                            assert_eq!(inner.len(), 2); // ij + jk
+                            assert!(matches!(inner[0], tenferro_einsum::NestedEinsum::Leaf(0)));
+                            assert!(matches!(inner[1], tenferro_einsum::NestedEinsum::Leaf(1)));
+                        }
+                        _ => panic!("expected inner Node"),
+                    }
+                    assert!(matches!(mid[1], tenferro_einsum::NestedEinsum::Leaf(2)));
+                }
+                _ => panic!("expected mid Node"),
+            }
+            assert!(matches!(
+                children[1],
+                tenferro_einsum::NestedEinsum::Leaf(3)
+            ));
+        }
+        _ => panic!("expected Node"),
+    }
+}
+
+#[test]
+fn nested_parse_error_mismatched_parens() {
+    assert!(tenferro_einsum::NestedEinsum::parse("(ij,jk->ik").is_err());
+    assert!(tenferro_einsum::NestedEinsum::parse("ij),jk->ik").is_err());
+}
