@@ -22,7 +22,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [AD Formula Notes](../AD/README.md) | Mathematical derivations for SVD, QR, LU, and other rrule/frule formulas |
+| [AD Formula Notes](../AD/index.md) | Mathematical derivations for SVD, QR, LU, and other rrule/frule formulas |
 
 ## Reference
 
@@ -40,4 +40,4 @@
 
 ## Implementation Plans
 
-See [`../plans/`](../plans/) for dated implementation plans and design decisions.
+See [Implementation Plans](https://github.com/tensor4all/tenferro-rs/tree/main/docs/plans) for dated implementation plans and design decisions.

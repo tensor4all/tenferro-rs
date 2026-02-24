@@ -54,10 +54,10 @@ when the caller wants to control exactly where memory copies occur.
 
 | Function | Input shape | Result type | Description |
 |----------|-------------|-------------|-------------|
-| `svd` | `(m, n, *)` | `SvdResult { u, s, vt }` | `A = U diag(S) Vt`, optional truncation via `SvdOptions` |
-| `qr` | `(m, n, *)` | `QrResult { q, r }` | `A = QR`, thin QR |
-| `lu` | `(m, n, *)` | `LuResult { p, l, u }` | `A = PLU`, with `LuPivot` strategy (`NoPivot` currently returns error) |
-| `cholesky` | `(n, n, *)` | `Tensor<T>` | `A = LLᴴ`, returns lower triangular L |
+| `svd` | `(m, n, *)` | `SvdResult { u, s, vt }` | $A = U \operatorname{diag}(S) V^\top$, optional truncation via `SvdOptions` |
+| `qr` | `(m, n, *)` | `QrResult { q, r }` | $A = QR$, thin QR |
+| `lu` | `(m, n, *)` | `LuResult { p, l, u }` | $A = PLU$, with `LuPivot` strategy (`NoPivot` currently returns error) |
+| `cholesky` | `(n, n, *)` | `Tensor<T>` | $A = LL^\dagger$, returns lower triangular L |
 | `eigen` | `(n, n, *)` | `EigenResult { values, vectors }` | Symmetric/Hermitian eigendecomposition (validated) |
 | `eig` | `(n, n, *)` | `EigenResult { values, vectors }` | General (non-symmetric) eigendecomposition (currently returns error) |
 
@@ -65,7 +65,7 @@ when the caller wants to control exactly where memory copies occur.
 
 | Function | Inputs | Output | Description |
 |----------|--------|--------|-------------|
-| `solve` | `A: (n,n,*)`, `b: (n,*)` or `(n,k,*)` | `Tensor<T>` | General square system `Ax = b` |
+| `solve` | `A: (n,n,*)`, `b: (n,*)` or `(n,k,*)` | `Tensor<T>` | General square system $Ax = b$ |
 | `solve_triangular` | `A: (n,n,*)`, `b: (n,*)` or `(n,k,*)`, `upper: bool` | `Tensor<T>` | Triangular system |
 | `lstsq` | `A: (m,n,*)`, `b: (m,*)` | `LstsqResult { x, residual }` | Least squares `argmin \|\|Ax-b\|\|²` (m >= n), vector RHS in current implementation |
 
@@ -184,7 +184,7 @@ which backend primitives are dispatched during the AD formulas, see
 [algebra.md](./algebra.md).
 
 For the step-by-step mathematical derivations of each rule, see the
-[AD Formula Notes](../AD/README.md).
+[AD Formula Notes](../AD/index.md).
 
 ### Cotangent Types
 
@@ -282,13 +282,13 @@ same type for both.
 ElementwiseMul, ElementwiseUnary, Permute, AntiTrace) plus tensor-level
 additions (eye, tril/triu).
 
-**inv rrule**: `dA = -A⁻ᴴ cotangent A⁻ᴴ`
+**inv rrule**: $\bar{A} = -A^{-\mathsf{H}} \bar{C}\, A^{-\mathsf{H}}$
 
-**det rrule**: `dA = det(A) cotangent A⁻ᵀ`
+**det rrule**: $\bar{A} = \det(A)\, \bar{c}\, A^{-\top}$
 
-**slogdet rrule**: `dA = cotangent_logabsdet A⁻ᵀ`
+**slogdet rrule**: $\bar{A} = \bar{s}\, A^{-\top}$
 
-**solve rrule** (Ax = b): `db = A⁻ᵀ cotangent`, `dA = -db xᵀ`
+**solve rrule** ($Ax = b$): $\bar{b} = A^{-\top} \bar{x}$, $\bar{A} = -\bar{b}\, x^\top$
 
 ---
 

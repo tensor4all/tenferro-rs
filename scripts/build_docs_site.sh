@@ -8,14 +8,14 @@ API_DIR="$OUT_DIR/api"
 rm -rf "$OUT_DIR"
 mkdir -p "$API_DIR"
 
-echo "[1/4] Building rustdoc"
+echo "[1/5] Building rustdoc"
 rm -rf "$ROOT_DIR/target/doc"
 cargo doc --workspace --no-deps
 
-echo "[2/4] Copying rustdoc output"
+echo "[2/5] Copying rustdoc output"
 cp -a "$ROOT_DIR/target/doc/." "$API_DIR/"
 
-echo "[3/4] Generating dependency graph and API index"
+echo "[3/5] Generating dependency graph and API index"
 if command -v dot >/dev/null 2>&1; then
   python3 "$ROOT_DIR/scripts/gen_dep_graph.py" --root-dir "$ROOT_DIR" \
     | dot -Tsvg > "$API_DIR/dep_graph.svg"
@@ -80,7 +80,18 @@ HEADER
 FOOTER
 } >"$API_DIR/index.html"
 
-echo "[4/4] Generating site top page"
+echo "[4/5] Rendering design docs with Quarto"
+if command -v quarto >/dev/null 2>&1; then
+  quarto render "$ROOT_DIR/docs"
+else
+  echo "  Warning: quarto not found; design docs site skipped."
+  if [ "${CI:-}" = "true" ]; then
+    echo "  quarto is required in CI to render design docs."
+    exit 1
+  fi
+fi
+
+echo "[5/5] Generating site top page"
 cat <<'TOPPAGE' >"$OUT_DIR/index.html"
 <!doctype html>
 <html lang="en">
@@ -165,9 +176,9 @@ cat <<'TOPPAGE' >"$OUT_DIR/index.html"
           <a href="./api/index.html">Open API index</a>
         </section>
         <section class="card">
-          <h2>Detailed Design (MD)</h2>
-          <p>Canonical design document on GitHub.</p>
-          <a href="https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/README.md">Open design documents</a>
+          <h2>Design Documents</h2>
+          <p>Architecture and design docs with rendered math.</p>
+          <a href="./design/">Open design documents</a>
         </section>
       </div>
     </main>

@@ -9,7 +9,7 @@ and automatic differentiation.
 in place; most function bodies use `todo!()`. The purpose of this phase is to
 validate the API design before writing implementations.
 
-See the [design documents](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/README.md)
+See the [design documents](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/index.md)
 for architecture, API design, and future phase plans.
 
 ## Workspace Architecture
