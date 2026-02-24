@@ -701,9 +701,125 @@ where
         let plan = Backend::plan(ctx, &desc, &shapes)?;
         Backend::execute(ctx, &plan, alpha, &[input], beta, output)
     } else {
-        Err(Error::InvalidArgument(
-            "simultaneous repeated labels in both input and output not yet supported".into(),
-        ))
+        // Both input and output have repeated labels — pipeline decomposition.
+        //
+        // Strategy:
+        //   Stage 1: Diagonal extraction — for labels repeated in input AND present in output
+        //   Stage 2: Trace/Reduce — for labels still repeated in input (not in output)
+        //   Stage 3+4: Delegate — remaining unique-input to unique/repeated-output
+        //
+        // Each stage delegates to a recursive call that hits a DIFFERENT branch.
+
+        let output_unique_set: HashSet<u32> = subs_c.iter().copied().collect();
+
+        // Labels repeated in input that also appear in the output → diagonal extraction
+        let diag_extract_labels: Vec<u32> = repeated_labels
+            .iter()
+            .filter(|l| output_unique_set.contains(l))
+            .copied()
+            .collect();
+
+        let mut current = input.clone();
+        let mut current_subs: Vec<u32> = subs_a.to_vec();
+
+        // Stage 1: Diagonal extraction
+        if !diag_extract_labels.is_empty() {
+            let mut axis_pairs = Vec::new();
+            for &l in &diag_extract_labels {
+                let positions: Vec<usize> = current_subs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &s)| s == l)
+                    .map(|(i, _)| i)
+                    .collect();
+                for pair in positions.windows(2) {
+                    axis_pairs.push((pair[0], pair[1]));
+                }
+            }
+            current = current.diagonal(&axis_pairs)?;
+
+            // Rebuild subscripts: unused positions first, then one copy per diagonal label
+            let mut used = vec![false; current_subs.len()];
+            for &(a, b) in &axis_pairs {
+                used[a] = true;
+                used[b] = true;
+            }
+            let mut new_subs = Vec::new();
+            for (i, &l) in current_subs.iter().enumerate() {
+                if !used[i] {
+                    new_subs.push(l);
+                }
+            }
+            for &l in &diag_extract_labels {
+                new_subs.push(l);
+            }
+            current_subs = new_subs;
+        }
+
+        // Stage 2: Trace/Reduce for labels remaining in input but not in output.
+        // After diagonal extraction, some labels may still appear repeated in
+        // current_subs (those that were repeated in input but absent from output).
+        let output_label_set: HashSet<u32> = subs_c.iter().copied().collect();
+        let labels_not_in_output: Vec<u32> = {
+            let mut seen = HashSet::new();
+            current_subs
+                .iter()
+                .filter(|l| !output_label_set.contains(l))
+                .filter(|l| seen.insert(**l))
+                .copied()
+                .collect()
+        };
+
+        if !labels_not_in_output.is_empty() {
+            // Intermediate subscripts: keep only labels that appear in output
+            let inter_subs: Vec<u32> = current_subs
+                .iter()
+                .filter(|l| output_label_set.contains(l))
+                .copied()
+                .collect();
+            // Compute intermediate shape from current tensor's dimensions
+            let inter_shape: Vec<usize> = inter_subs
+                .iter()
+                .map(|l| {
+                    let pos = current_subs.iter().position(|s| s == l).ok_or_else(|| {
+                        Error::InvalidArgument(format!(
+                            "label {l} not found in current subscripts during pipeline decomposition"
+                        ))
+                    })?;
+                    Ok(current.dims()[pos])
+                })
+                .collect::<Result<_>>()?;
+            let mut intermediate = Tensor::<Alg::Scalar>::zeros(
+                &inter_shape,
+                output.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            // Recursive call for trace/reduce: current_subs → inter_subs
+            // inter_subs has no repeated labels, so this hits a different branch.
+            execute_single_tensor_einsum::<Alg, Backend>(
+                ctx,
+                &current_subs,
+                &inter_subs,
+                &current,
+                Alg::Scalar::one(),
+                Alg::Scalar::zero(),
+                &mut intermediate,
+            )?;
+            current = intermediate;
+            current_subs = inter_subs;
+        }
+
+        // Stage 3+4: Now current_subs has unique labels. Recursive call handles
+        // permute + AntiDiag for repeated output labels (or just permute/identity).
+        execute_single_tensor_einsum::<Alg, Backend>(
+            ctx,
+            &current_subs,
+            subs_c,
+            &current,
+            alpha,
+            beta,
+            output,
+        )
     }
 }
 
