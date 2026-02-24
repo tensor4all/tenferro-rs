@@ -642,6 +642,220 @@ fn eig_batched_2x2() {
 }
 
 // ============================================================================
+// eig AD tests (rrule and frule)
+// ============================================================================
+
+#[test]
+fn eig_rrule_diagonal_values_only() {
+    // For diagonal matrix, eigenvalues are the diagonal entries.
+    // With cotangent for eigenvalues = [1, 1], the gradient should be I (identity).
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let cotangent = EigCotangent {
+        values: Some(make_complex_tensor(
+            vec![Complex64::new(1.0, 0.0), Complex64::new(1.0, 0.0)],
+            &[2],
+        )),
+        vectors: None,
+    };
+    let grad = eig_rrule(&mut backend, &a, &cotangent).unwrap();
+    let grad_data = tensor_data(&grad);
+    assert_eq!(grad_data.len(), 4);
+    // Gradient w.r.t. eigenvalues with unit cotangent should be diagonal = 1
+    // and off-diagonal = 0 (for diagonal input)
+    assert!(
+        (grad_data[0] - 1.0).abs() < 1e-8,
+        "grad[0,0] should be 1.0, got {}",
+        grad_data[0]
+    );
+    assert!(
+        (grad_data[3] - 1.0).abs() < 1e-8,
+        "grad[1,1] should be 1.0, got {}",
+        grad_data[3]
+    );
+    assert!(
+        grad_data[1].abs() < 1e-8,
+        "grad[1,0] should be 0.0, got {}",
+        grad_data[1]
+    );
+    assert!(
+        grad_data[2].abs() < 1e-8,
+        "grad[0,1] should be 0.0, got {}",
+        grad_data[2]
+    );
+}
+
+#[test]
+fn eig_rrule_no_cotangent() {
+    // With no cotangents, gradient should be zero
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let cotangent = EigCotangent::<f64> {
+        values: None,
+        vectors: None,
+    };
+    let grad = eig_rrule(&mut backend, &a, &cotangent).unwrap();
+    let grad_data = tensor_data(&grad);
+    for (i, &v) in grad_data.iter().enumerate() {
+        assert!(
+            v.abs() < 1e-12,
+            "grad[{i}] should be 0.0 with no cotangent, got {v}"
+        );
+    }
+}
+
+#[test]
+fn eig_rrule_finite_difference() {
+    // Verify eig_rrule against finite differences for a 3x3 matrix
+    let mut backend = FaerBackend::new();
+    // Upper triangular with distinct eigenvalues 1, 2, 3
+    let a_data = vec![1.0, 0.0, 0.0, 0.5, 2.0, 0.0, 0.3, 0.7, 3.0];
+    let a = make_tensor(a_data.clone(), &[3, 3]);
+
+    // Use cotangent for eigenvalues only (simpler to verify)
+    let cotangent = EigCotangent {
+        values: Some(make_complex_tensor(
+            vec![
+                Complex64::new(1.0, 0.0),
+                Complex64::new(0.5, 0.0),
+                Complex64::new(-1.0, 0.0),
+            ],
+            &[3],
+        )),
+        vectors: None,
+    };
+    let grad = eig_rrule(&mut backend, &a, &cotangent).unwrap();
+    let grad_data = tensor_data(&grad);
+
+    // Finite difference: perturb each element and check eigenvalue change
+    let eps = 1e-6;
+    let dlam = [1.0, 0.5, -1.0]; // cotangent values (real)
+
+    for idx in 0..9 {
+        let mut a_plus = a_data.clone();
+        a_plus[idx] += eps;
+        let a_p = make_tensor(a_plus, &[3, 3]);
+        let r_p = eig(&mut backend, &a_p).unwrap();
+        let vals_p = tensor_data_complex(&r_p.values);
+
+        let mut a_minus = a_data.clone();
+        a_minus[idx] -= eps;
+        let a_m = make_tensor(a_minus, &[3, 3]);
+        let r_m = eig(&mut backend, &a_m).unwrap();
+        let vals_m = tensor_data_complex(&r_m.values);
+
+        // Sort eigenvalues by real part for consistent ordering
+        let mut vp: Vec<Complex64> = vals_p;
+        let mut vm: Vec<Complex64> = vals_m;
+        vp.sort_by(|a, b| a.re.partial_cmp(&b.re).unwrap());
+        vm.sort_by(|a, b| a.re.partial_cmp(&b.re).unwrap());
+
+        // f = sum_k dlam_k * real(lambda_k), so df/dA_ij = sum_k dlam_k * d(Re(lam_k))/dA_ij
+        let mut fd_grad = 0.0;
+        for k in 0..3 {
+            let d_lam_k = (vp[k].re - vm[k].re) / (2.0 * eps);
+            fd_grad += dlam[k] * d_lam_k;
+        }
+
+        assert!(
+            (grad_data[idx] - fd_grad).abs() < 1e-4,
+            "eig_rrule FD mismatch at idx {idx}: analytic={}, fd={}",
+            grad_data[idx],
+            fd_grad,
+        );
+    }
+}
+
+#[test]
+fn eig_frule_diagonal() {
+    // For diagonal matrix, tangent eigenvalues should match tangent diagonal entries
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.2], &[2, 2]);
+    let (result, tangent) = eig_frule(&mut backend, &a, &da).unwrap();
+
+    // Primal eigenvalues should be 2 and 3 (in some order)
+    let vals = tensor_data_complex(&result.values);
+    let mut reals: Vec<f64> = vals.iter().map(|c| c.re).collect();
+    reals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert!((reals[0] - 2.0).abs() < 1e-10, "eigenvalue 0: {}", reals[0]);
+    assert!((reals[1] - 3.0).abs() < 1e-10, "eigenvalue 1: {}", reals[1]);
+
+    // Tangent eigenvalues: for diagonal A with dA also diagonal,
+    // the tangent eigenvalues should be the diagonal of dA
+    let dvals = tensor_data_complex(&tangent.values);
+    let mut d_reals: Vec<(f64, f64)> = vals
+        .iter()
+        .zip(dvals.iter())
+        .map(|(v, dv)| (v.re, dv.re))
+        .collect();
+    d_reals.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    // eigenvalue 2.0 should have tangent 0.1, eigenvalue 3.0 should have tangent 0.2
+    assert!(
+        (d_reals[0].1 - 0.1).abs() < 1e-10,
+        "dlambda for eigenvalue 2.0 should be 0.1, got {}",
+        d_reals[0].1
+    );
+    assert!(
+        (d_reals[1].1 - 0.2).abs() < 1e-10,
+        "dlambda for eigenvalue 3.0 should be 0.2, got {}",
+        d_reals[1].1
+    );
+}
+
+#[test]
+fn eig_frule_finite_difference() {
+    // Verify eig_frule against finite differences for a 3x3 matrix
+    let mut backend = FaerBackend::new();
+    let a_data = vec![1.0, 0.0, 0.0, 0.5, 2.0, 0.0, 0.3, 0.7, 3.0];
+    let da_data = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
+    let a = make_tensor(a_data.clone(), &[3, 3]);
+    let da = make_tensor(da_data.clone(), &[3, 3]);
+    let (_result, tangent) = eig_frule(&mut backend, &a, &da).unwrap();
+    let dvals = tensor_data_complex(&tangent.values);
+
+    // Finite difference
+    let eps = 1e-7;
+    let mut a_plus_data = vec![0.0; 9];
+    let mut a_minus_data = vec![0.0; 9];
+    for i in 0..9 {
+        a_plus_data[i] = a_data[i] + eps * da_data[i];
+        a_minus_data[i] = a_data[i] - eps * da_data[i];
+    }
+    let a_plus = make_tensor(a_plus_data, &[3, 3]);
+    let a_minus = make_tensor(a_minus_data, &[3, 3]);
+    let r_plus = eig(&mut backend, &a_plus).unwrap();
+    let r_minus = eig(&mut backend, &a_minus).unwrap();
+    let vals_p = tensor_data_complex(&r_plus.values);
+    let vals_m = tensor_data_complex(&r_minus.values);
+
+    // Sort by real part for consistent ordering
+    let mut vp: Vec<Complex64> = vals_p;
+    let mut vm: Vec<Complex64> = vals_m;
+    let mut dv_sorted: Vec<(f64, Complex64)> = {
+        let result2 = eig(&mut backend, &a).unwrap();
+        let vals = tensor_data_complex(&result2.values);
+        vals.iter()
+            .zip(dvals.iter())
+            .map(|(v, dv)| (v.re, *dv))
+            .collect()
+    };
+    vp.sort_by(|a, b| a.re.partial_cmp(&b.re).unwrap());
+    vm.sort_by(|a, b| a.re.partial_cmp(&b.re).unwrap());
+    dv_sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+    for k in 0..3 {
+        let fd_dlam = (vp[k] - vm[k]) / (2.0 * eps);
+        let analytic = dv_sorted[k].1;
+        let diff = (analytic - fd_dlam).norm();
+        assert!(
+            diff < 1e-4,
+            "eig_frule FD mismatch at eigenvalue {k}: analytic={analytic}, fd={fd_dlam}, diff={diff}",
+        );
+    }
+}
+
+// ============================================================================
 // Matrix exp should return error
 // ============================================================================
 

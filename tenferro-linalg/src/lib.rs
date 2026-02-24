@@ -2030,6 +2030,27 @@ pub struct EigenCotangent<T: Scalar> {
     pub vectors: Option<Tensor<T>>,
 }
 
+/// Cotangent (adjoint) for general eigendecomposition outputs.
+///
+/// Unlike [`EigenCotangent`] (used for symmetric `eigen`), this cotangent
+/// carries complex-valued tensors because `eig()` returns complex
+/// eigenvalues and eigenvectors even for real inputs.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::EigCotangent;
+/// use num_complex::Complex64;
+///
+/// let cotangent = EigCotangent::<f64> { values: None, vectors: None };
+/// ```
+pub struct EigCotangent<R: LinalgScalar<Real = R> + num_traits::Float> {
+    /// Cotangent for eigenvalues. Shape: `(n, *)`. Complex-valued.
+    pub values: Option<Tensor<num_complex::Complex<R>>>,
+    /// Cotangent for eigenvectors. Shape: `(n, n, *)`. Complex-valued.
+    pub vectors: Option<Tensor<num_complex::Complex<R>>>,
+}
+
 /// Cotangent (adjoint) for slogdet outputs.
 ///
 /// Note: `sign` is piecewise constant and not differentiable.
@@ -2154,6 +2175,111 @@ fn phi<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
     let half: T = scalar_from(0.5).map_err(to_ad_err)?;
     for i in 0..n {
         result[i + i * n] = result[i + i * n] * half;
+    }
+    Ok(result)
+}
+
+// ============================================================================
+// Complex matrix helpers for eig AD rules
+// ============================================================================
+
+/// Complex type alias parameterized by real scalar.
+type Cx<R> = num_complex::Complex<R>;
+
+/// Extract data slice from a Tensor whose element type implements `Scalar`
+/// (but not necessarily `LinalgScalar`). Used for `Tensor<Complex<R>>` in eig AD.
+fn extract_data_scalar<T: Scalar>(tensor: &Tensor<T>) -> AdResult<Vec<T>> {
+    let t = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let offset = t.offset() as usize;
+    let slice = t.buffer().as_slice().ok_or_else(|| {
+        chainrules_core::AutodiffError::InvalidArgument(
+            "tensor buffer is not a contiguous CPU slice".into(),
+        )
+    })?;
+    let total_len: usize = tensor.dims().iter().product();
+    Ok(slice[offset..offset + total_len].to_vec())
+}
+
+/// Complex matrix multiply: C = A * B  (all n*n, column-major flat slices).
+fn complex_mat_mul_nn<R>(a: &[Cx<R>], b: &[Cx<R>], n: usize) -> Vec<Cx<R>>
+where
+    R: num_traits::Float + num_traits::NumCast,
+{
+    let zero = Cx::new(R::zero(), R::zero());
+    let mut c = vec![zero; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let mut sum = zero;
+            for k in 0..n {
+                sum = sum + a[i + k * n] * b[k + j * n];
+            }
+            c[i + j * n] = sum;
+        }
+    }
+    c
+}
+
+/// Conjugate transpose of n*n complex matrix (column-major).
+fn complex_conj_transpose<R>(a: &[Cx<R>], n: usize) -> Vec<Cx<R>>
+where
+    R: num_traits::Float + num_traits::NumCast,
+{
+    let zero = Cx::new(R::zero(), R::zero());
+    let mut result = vec![zero; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            result[i + j * n] = a[j + i * n].conj();
+        }
+    }
+    result
+}
+
+/// Solve A X = B for X, where A and B are n*n complex matrices.
+///
+/// Converts the complex n*n system to a real 2n*2n system and
+/// delegates to `backend.solve()`.
+fn complex_solve_nn<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
+    backend: &mut B,
+    a: &[Cx<T>],
+    b: &[Cx<T>],
+    n: usize,
+) -> AdResult<Vec<Cx<T>>> {
+    let nn = 2 * n;
+    let mut a_real = vec![T::zero(); nn * nn];
+    let mut b_real = vec![T::zero(); nn * nn];
+
+    for j in 0..n {
+        for i in 0..n {
+            let aij = a[i + j * n];
+            // Top-left: Re(A)
+            a_real[i + j * nn] = aij.re;
+            // Top-right: -Im(A)
+            a_real[i + (j + n) * nn] = T::zero() - aij.im;
+            // Bottom-left: Im(A)
+            a_real[(i + n) + j * nn] = aij.im;
+            // Bottom-right: Re(A)
+            a_real[(i + n) + (j + n) * nn] = aij.re;
+
+            let bij = b[i + j * n];
+            b_real[i + j * nn] = bij.re;
+            b_real[(i + n) + j * nn] = bij.im;
+        }
+    }
+
+    let mut x_real = vec![T::zero(); nn * nn];
+    backend
+        .solve(&a_real, &b_real, nn, nn, &mut x_real)
+        .map_err(to_ad_err)?;
+
+    let zero = Cx::new(T::zero(), T::zero());
+    let mut result = vec![zero; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            result[i + j * n] = Cx::new(x_real[i + j * nn], x_real[(i + n) + j * nn]);
+        }
     }
     Ok(result)
 }
@@ -3267,20 +3393,28 @@ pub fn slogdet_rrule<
 
 /// Reverse-mode AD rule for general eigendecomposition (VJP / pullback).
 ///
+/// Given eigendecomposition `A V = V diag(lambda)`, computes the gradient
+/// of the input `A` from complex-valued cotangents for eigenvalues and
+/// eigenvectors using the Mike Giles formulas.
+///
+/// The cotangent uses [`EigCotangent`] with complex-valued tensors
+/// because `eig()` returns complex output even for real inputs.
+///
 /// # Examples
 ///
-/// ```no_run
-/// use tenferro_linalg::{eig_rrule, EigenCotangent};
+/// ```
+/// use tenferro_linalg::{eig_rrule, EigCotangent};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
+/// use num_complex::Complex64;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut backend = FaerBackend::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let cotangent = EigenCotangent {
-///     values: Some(Tensor::ones(&[3], mem, col)),
+/// let cotangent = EigCotangent::<f64> {
+///     values: None,
 ///     vectors: None,
 /// };
 /// let grad_a = eig_rrule(&mut backend, &a, &cotangent).unwrap();
@@ -3289,14 +3423,72 @@ pub fn eig_rrule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _cotangent: &EigenCotangent<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    cotangent: &EigCotangent<T>,
 ) -> AdResult<Tensor<T>> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "general eigendecomposition AD requires complex output; use eigen_rrule for symmetric matrices".into(),
-    })
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    // Compute eigendecomposition
+    let eig_result = eig(backend, tensor).map_err(to_ad_err)?;
+    let val_data = extract_data_scalar(&eig_result.values)?;
+    let vec_data = extract_data_scalar(&eig_result.vectors)?;
+
+    let zero_c = Cx::new(T::zero(), T::zero());
+    let one_c = Cx::new(T::one(), T::zero());
+
+    let mut grad_data = vec![T::zero(); n * n * bc];
+
+    for b in 0..bc {
+        let lambda = &val_data[b * n..(b + 1) * n];
+        let v = &vec_data[b * n * n..(b + 1) * n * n];
+
+        // Compute F matrix: F[i,j] = 1/(lambda_j - lambda_i) for i != j, 0 on diagonal
+        let mut f_mat = vec![zero_c; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                if i != j {
+                    let diff = lambda[j] - lambda[i];
+                    f_mat[i + j * n] = one_c / diff;
+                }
+            }
+        }
+
+        // V^H (conjugate transpose of V)
+        let vh = complex_conj_transpose(v, n);
+
+        // Build M_bar = diag(d_bar_lambda) + F .* (V^H d_bar_V)
+        let mut m_bar = vec![zero_c; n * n];
+
+        if let Some(ref dv_bar) = cotangent.vectors {
+            let dv_bar_data = extract_data_scalar(dv_bar)?;
+            let dv_bar_b = &dv_bar_data[b * n * n..(b + 1) * n * n];
+            let vh_dv = complex_mat_mul_nn(&vh, dv_bar_b, n);
+            for k in 0..n * n {
+                m_bar[k] = f_mat[k] * vh_dv[k];
+            }
+        }
+
+        if let Some(ref dlam) = cotangent.values {
+            let dlam_data = extract_data_scalar(dlam)?;
+            for i in 0..n {
+                m_bar[i + i * n] = m_bar[i + i * n] + dlam_data[b * n + i];
+            }
+        }
+
+        // d_bar_A = V^{-H} M_bar V^H = solve(V^H, M_bar @ V^H)
+        let m_vh = complex_mat_mul_nn(&m_bar, &vh, n);
+        let da_complex = complex_solve_nn(backend, &vh, &m_vh, n)?;
+
+        // Take real part (since input A was real)
+        for k in 0..n * n {
+            grad_data[b * n * n + k] = da_complex[k].re;
+        }
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    tensor_from_data(grad_data, &dims).map_err(to_ad_err)
 }
 
 /// Reverse-mode AD rule for pseudoinverse (VJP / pullback).
@@ -4389,9 +4581,16 @@ pub fn slogdet_frule<
 
 /// Forward-mode AD rule for general eigendecomposition (JVP / pushforward).
 ///
+/// Given eigendecomposition `A V = V diag(lambda)`, computes the tangents
+/// of eigenvalues and eigenvectors from a real tangent `dA` using the
+/// Mike Giles formulas.
+///
+/// Returns `(primal, tangent)` where both are [`EigResult`] with complex
+/// eigenvalues and eigenvectors.
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use tenferro_linalg::eig_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4408,14 +4607,73 @@ pub fn eig_frule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _tangent: &Tensor<T>,
-) -> AdResult<(EigenResult<T>, EigenResult<T>)> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "general eigendecomposition AD requires complex output; use eigen_frule for symmetric matrices".into(),
-    })
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    tangent: &Tensor<T>,
+) -> AdResult<(EigResult<T>, EigResult<T>)> {
+    // Forward pass
+    let eig_result = eig(backend, tensor).map_err(to_ad_err)?;
+
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    let val_data = extract_data_scalar(&eig_result.values)?;
+    let vec_data = extract_data_scalar(&eig_result.vectors)?;
+    let (tang_data, _) = extract_data(tangent)?;
+
+    let zero_c = Cx::new(T::zero(), T::zero());
+    let one_c = Cx::new(T::one(), T::zero());
+
+    let mut dval_data = vec![zero_c; n * bc];
+    let mut dvec_data = vec![zero_c; n * n * bc];
+
+    for b in 0..bc {
+        let lambda = &val_data[b * n..(b + 1) * n];
+        let v = &vec_data[b * n * n..(b + 1) * n * n];
+        let da = &tang_data[b * n * n..(b + 1) * n * n];
+
+        // Convert real dA to complex
+        let da_complex: Vec<Cx<T>> = da.iter().map(|&x| Cx::new(x, T::zero())).collect();
+
+        // W = V^{-1} dA V = solve(V, dA_c @ V)
+        let da_v = complex_mat_mul_nn(&da_complex, v, n);
+        let w = complex_solve_nn(backend, v, &da_v, n)?;
+
+        // d_lambda = diag(W)
+        for i in 0..n {
+            dval_data[b * n + i] = w[i + i * n];
+        }
+
+        // F matrix: F[i,j] = 1/(lambda_j - lambda_i) for i != j, 0 on diagonal
+        let mut f_mat = vec![zero_c; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                if i != j {
+                    let diff = lambda[j] - lambda[i];
+                    f_mat[i + j * n] = one_c / diff;
+                }
+            }
+        }
+
+        // dV = V * (F .* W)
+        let mut fw = vec![zero_c; n * n];
+        for k in 0..n * n {
+            fw[k] = f_mat[k] * w[k];
+        }
+        let dv = complex_mat_mul_nn(v, &fw, n);
+        dvec_data[b * n * n..(b + 1) * n * n].copy_from_slice(&dv);
+    }
+
+    // Build tangent EigResult
+    let val_dims = output_dims(&[n], batch_dims);
+    let vec_dims = output_dims(&[n, n], batch_dims);
+
+    let d_result = EigResult {
+        values: tensor_from_data_scalar(dval_data, &val_dims).map_err(to_ad_err)?,
+        vectors: tensor_from_data_scalar(dvec_data, &vec_dims).map_err(to_ad_err)?,
+    };
+
+    Ok((eig_result, d_result))
 }
 
 /// Forward-mode AD rule for pseudoinverse (JVP / pushforward).
