@@ -1,0 +1,56 @@
+project:
+  type: website
+  output-dir: ../target/docs-site/design
+
+format:
+  html:
+    theme: flatly
+    toc: true
+    code-overflow: wrap
+    html-math-method: katex
+
+website:
+  title: "tenferro-rs Design Docs"
+  sidebar:
+    - title: "Core Design"
+      contents:
+        - design/index.md
+        - design/architecture.md
+        - design/device.md
+        - design/tensor.md
+        - design/algebra.md
+        - design/tensor-prims.md
+        - design/contraction-pipeline.md
+        - design/einsum.md
+        - design/einsum-cpu-porting-notes.md
+        - design/gpu-backend-design.md
+        - design/inplace-indexing.md
+        - design/autodiff.md
+        - design/linalg.md
+        - design/capi.md
+        - design/capi-error-handling.md
+        - design/testing.md
+    - title: "AD Formula Notes"
+      contents:
+        - AD/index.md
+        - AD/svd.md
+        - AD/qr.md
+        - AD/lu.md
+        - AD/cholesky.md
+        - AD/eigen.md
+        - AD/eig.md
+        - AD/inv.md
+        - AD/det.md
+        - AD/solve.md
+        - AD/lstsq.md
+        - AD/pinv.md
+        - AD/matrix_exp.md
+        - AD/norm.md
+    - title: "Reference"
+      contents:
+        - design/reference/libtorch.md
+        - design/reference/itensor-ecosystem.md
+        - design/reference/einsum-algorithm-comparison.md
+    - title: "Integrations"
+      contents:
+        - design/integrations/burn.md
