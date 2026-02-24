@@ -1512,7 +1512,6 @@ fn einsum_reduce_first_axis() {
 }
 
 #[test]
-#[ignore = "opteinsum parity target: multi-pair trace value differs in current backend"]
 fn einsum_multi_pair_trace_iijj() {
     // Ported pattern from strided-opteinsum: "iijj->"
     let mut ctx = CpuContext::new(1);
@@ -1693,7 +1692,6 @@ fn einsum_size_dict_output_only_label() {
 }
 
 #[test]
-#[ignore = "opteinsum parity target: scalar -> repeated-output embedding not yet aligned"]
 fn einsum_size_dict_scalar_to_diagonal_and_superdiagonal() {
     // Ported patterns from strided-opteinsum: "->ii", "->iii"
     let mut ctx = CpuContext::new(1);
@@ -2070,5 +2068,61 @@ fn hvp_via_fw_grad_composition() {
             hvp_data[i],
             exp_hvp_data[i]
         );
+    }
+}
+
+// ============================================================================
+// einsum: input+output repeated labels (pipeline decomposition)
+// ============================================================================
+
+#[test]
+fn einsum_input_output_repeated_iij_to_jj() {
+    // iij->jj : trace over i, then embed j diagonally
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (0..18).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[3, 3, 2], COL).unwrap();
+
+    let y = einsum::<S, CpuBackend>(&mut ctx, "iij->jj", &[&a], None).unwrap();
+    assert_eq!(y.dims(), &[2, 2]);
+
+    for j1 in 0..2 {
+        for j2 in 0..2 {
+            let expected = if j1 == j2 {
+                let mut s = 0.0;
+                for i in 0..3 {
+                    s += get(&a, &[i, i, j1]);
+                }
+                s
+            } else {
+                0.0
+            };
+            assert!(
+                (get(&y, &[j1, j2]) - expected).abs() < 1e-10,
+                "y[{j1},{j2}] = {}, expected {expected}",
+                get(&y, &[j1, j2])
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_input_output_repeated_ii_to_ii() {
+    // ii->ii : extract diagonal, then embed back
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (0..9).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[3, 3], COL).unwrap();
+
+    let y = einsum::<S, CpuBackend>(&mut ctx, "ii->ii", &[&a], None).unwrap();
+    assert_eq!(y.dims(), &[3, 3]);
+
+    for i in 0..3 {
+        for j in 0..3 {
+            let expected = if i == j { get(&a, &[i, i]) } else { 0.0 };
+            assert!(
+                (get(&y, &[i, j]) - expected).abs() < 1e-10,
+                "y[{i},{j}] = {}, expected {expected}",
+                get(&y, &[i, j])
+            );
+        }
     }
 }

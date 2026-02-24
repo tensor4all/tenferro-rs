@@ -36,6 +36,71 @@ fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_,
         .map_err(|e| Error::StrideError(format!("{e}")))
 }
 
+/// Compute connected components from a list of paired axis positions using union-find.
+///
+/// Returns `(components, comp_dims)` where:
+/// - `components[i]` = sorted list of all axis positions in the i-th component
+/// - `comp_dims[i]` = the shared dimension of the i-th component (looked up from `shape`)
+fn compute_paired_components(
+    paired_axes: &[(usize, usize)],
+    shape: &[usize],
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    use std::collections::HashMap;
+
+    if paired_axes.is_empty() {
+        return (vec![], vec![]);
+    }
+
+    // Collect all axes that appear in paired_axes
+    let mut all_axes: Vec<usize> = Vec::new();
+    for &(ax1, ax2) in paired_axes {
+        all_axes.push(ax1);
+        all_axes.push(ax2);
+    }
+    all_axes.sort();
+    all_axes.dedup();
+
+    // Union-find: parent map
+    let mut parent: HashMap<usize, usize> = all_axes.iter().map(|&ax| (ax, ax)).collect();
+
+    fn find(parent: &mut HashMap<usize, usize>, x: usize) -> usize {
+        let p = parent[&x];
+        if p != x {
+            let root = find(parent, p);
+            parent.insert(x, root);
+            root
+        } else {
+            x
+        }
+    }
+
+    // Union each pair
+    for &(ax1, ax2) in paired_axes {
+        let r1 = find(&mut parent, ax1);
+        let r2 = find(&mut parent, ax2);
+        if r1 != r2 {
+            // Union: make smaller root the parent (deterministic)
+            let (lo, hi) = if r1 < r2 { (r1, r2) } else { (r2, r1) };
+            parent.insert(hi, lo);
+        }
+    }
+
+    // Group by root
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &ax in &all_axes {
+        let root = find(&mut parent, ax);
+        groups.entry(root).or_default().push(ax);
+    }
+
+    // Sort components by their minimum axis for determinism
+    let mut components: Vec<Vec<usize>> = groups.into_values().collect();
+    components.sort_by_key(|c| c[0]);
+
+    let comp_dims: Vec<usize> = components.iter().map(|c| shape[c[0]]).collect();
+
+    (components, comp_dims)
+}
+
 /// CPU plan — concrete enum, no type erasure.
 ///
 /// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
@@ -64,10 +129,13 @@ pub enum CpuPlan<T: Scalar> {
     },
     /// Plan for trace.
     Trace {
-        /// Paired axis positions in input tensor.
-        paired_axes: Vec<(usize, usize)>,
         /// Output axis positions mapping.
         free_axes: Vec<usize>,
+        /// Connected components of paired axes (union-find groups).
+        /// Each inner Vec contains all axis positions in one component.
+        components: Vec<Vec<usize>>,
+        /// Dimension of each component (all axes in a component share the same dim).
+        comp_dims: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for permutation.
@@ -82,6 +150,10 @@ pub enum CpuPlan<T: Scalar> {
         paired_axes: Vec<(usize, usize)>,
         /// Input axis positions mapping.
         free_axes: Vec<usize>,
+        /// Connected components of paired axes (union-find groups).
+        components: Vec<Vec<usize>>,
+        /// Dimension of each component.
+        comp_dims: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for anti-diag (AD backward).
@@ -90,6 +162,12 @@ pub enum CpuPlan<T: Scalar> {
         paired_axes: Vec<(usize, usize)>,
         /// Input axis positions mapping.
         free_axes: Vec<usize>,
+        /// Connected components of paired axes (union-find groups).
+        components: Vec<Vec<usize>>,
+        /// Dimension of each component.
+        comp_dims: Vec<usize>,
+        /// Indices of generative components (no overlap with free axes).
+        generative_comps: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for element-wise unary operation.
@@ -311,9 +389,11 @@ impl CpuBackend {
                     .iter()
                     .map(|m| mode_position(modes_a, *m))
                     .collect::<Result<_>>()?;
+                let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[0]);
                 Ok(CpuPlan::Trace {
-                    paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
                     _marker: PhantomData,
                 })
             }
@@ -362,9 +442,12 @@ impl CpuBackend {
                     .iter()
                     .map(|m| mode_position(modes_c, *m))
                     .collect::<Result<_>>()?;
+                let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[1]);
                 Ok(CpuPlan::AntiTrace {
                     paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
                     _marker: PhantomData,
                 })
             }
@@ -388,9 +471,22 @@ impl CpuBackend {
                     .iter()
                     .map(|m| mode_position(modes_c, *m))
                     .collect::<Result<_>>()?;
+                let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[1]);
+                // Generative components: those whose axes have no overlap with free_axes
+                let free_ax_set: std::collections::HashSet<usize> =
+                    free_axes.iter().copied().collect();
+                let generative_comps: Vec<usize> = components
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, comp)| comp.iter().all(|ax| !free_ax_set.contains(ax)))
+                    .map(|(i, _)| i)
+                    .collect();
                 Ok(CpuPlan::AntiDiag {
                     paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
+                    generative_comps,
                     _marker: PhantomData,
                 })
             }
@@ -605,26 +701,45 @@ fn execute_trace<T: Scalar>(
     input: &StridedView<T>,
     beta: T,
     output: &mut StridedViewMut<T>,
-    paired_axes: &[(usize, usize)],
+    components: &[Vec<usize>],
+    comp_dims: &[usize],
     free_axes: &[usize],
 ) -> Result<()> {
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
-    // All paired axes must have the same dimension
-    let diag_dim = in_dims[paired_axes[0].0];
+    let n_comps = comp_dims.len();
 
     for_each_index(&out_dims, |out_idx| {
         let mut sum = T::zero();
-        for d in 0..diag_dim {
+        // Odometer over component dimensions (Cartesian product)
+        let mut comp_idx = vec![0usize; n_comps];
+        loop {
             let mut in_idx = vec![0; in_dims.len()];
             for (out_pos, &in_ax) in free_axes.iter().enumerate() {
                 in_idx[in_ax] = out_idx[out_pos];
             }
-            for &(ax1, ax2) in paired_axes {
-                in_idx[ax1] = d;
-                in_idx[ax2] = d;
+            for (t, comp) in components.iter().enumerate() {
+                for &ax in comp {
+                    in_idx[ax] = comp_idx[t];
+                }
             }
             sum = sum + input.get(&in_idx);
+
+            // Increment odometer
+            let mut carry = true;
+            for t in 0..n_comps {
+                if carry {
+                    comp_idx[t] += 1;
+                    if comp_idx[t] < comp_dims[t] {
+                        carry = false;
+                    } else {
+                        comp_idx[t] = 0;
+                    }
+                }
+            }
+            if carry {
+                break;
+            }
         }
         let old = if beta == T::zero() {
             T::zero()
@@ -641,7 +756,8 @@ fn execute_anti_trace<T: Scalar>(
     input: &StridedView<T>,
     beta: T,
     output: &mut StridedViewMut<T>,
-    paired_axes: &[(usize, usize)],
+    components: &[Vec<usize>],
+    comp_dims: &[usize],
     free_axes: &[usize],
 ) -> Result<()> {
     // AntiTrace: C = alpha * antitrace(A) + beta * C
@@ -650,22 +766,42 @@ fn execute_anti_trace<T: Scalar>(
 
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
-    let diag_dim = out_dims[paired_axes[0].0];
+    let n_comps = comp_dims.len();
 
     // For each input element, scatter to all diagonal positions in output
+    // using Cartesian product over component dimensions.
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
-        for d in 0..diag_dim {
+        // Odometer over component dimensions (Cartesian product)
+        let mut comp_idx = vec![0usize; n_comps];
+        loop {
             let mut out_idx = vec![0; out_dims.len()];
             for (in_pos, &out_ax) in free_axes.iter().enumerate() {
                 out_idx[out_ax] = in_idx[in_pos];
             }
-            for &(ax1, ax2) in paired_axes {
-                out_idx[ax1] = d;
-                out_idx[ax2] = d;
+            for (t, comp) in components.iter().enumerate() {
+                for &ax in comp {
+                    out_idx[ax] = comp_idx[t];
+                }
             }
             let old = output.get(&out_idx);
             output.set(&out_idx, old + val);
+
+            // Increment odometer
+            let mut carry = true;
+            for t in 0..n_comps {
+                if carry {
+                    comp_idx[t] += 1;
+                    if comp_idx[t] < comp_dims[t] {
+                        carry = false;
+                    } else {
+                        comp_idx[t] = 0;
+                    }
+                }
+            }
+            if carry {
+                break;
+            }
         }
     });
     Ok(())
@@ -676,31 +812,68 @@ fn execute_anti_diag<T: Scalar>(
     input: &StridedView<T>,
     beta: T,
     output: &mut StridedViewMut<T>,
-    paired_axes: &[(usize, usize)],
+    components: &[Vec<usize>],
+    comp_dims: &[usize],
     free_axes: &[usize],
+    generative_comps: &[usize],
 ) -> Result<()> {
     // AntiDiag: write input values to diagonal positions in output.
-    // This is the AD backward of diagonal extraction ("ii->i"):
-    // for each input element input[k], write to output[..., k, ..., k, ...]
-    // where the paired axes both get the value determined by the free axis.
+    // Anchored components: at least one axis overlaps with free_axes, constraint propagated.
+    // Generative components: no axis overlaps with free_axes, need own loop.
     scale_output(output, beta);
 
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
 
+    let gen_dims: Vec<usize> = generative_comps.iter().map(|&c| comp_dims[c]).collect();
+
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
-        let mut out_idx = vec![0; out_dims.len()];
-        // Set free axes from input indices
-        for (in_pos, &out_ax) in free_axes.iter().enumerate() {
-            out_idx[out_ax] = in_idx[in_pos];
+        // Odometer over generative component dimensions
+        let mut gen_idx = vec![0usize; generative_comps.len()];
+        loop {
+            let mut out_idx = vec![0; out_dims.len()];
+            // Set free axes from input
+            for (in_pos, &out_ax) in free_axes.iter().enumerate() {
+                out_idx[out_ax] = in_idx[in_pos];
+            }
+            // Set component axes
+            for (t, comp) in components.iter().enumerate() {
+                if let Some(gi) = generative_comps.iter().position(|&c| c == t) {
+                    // Generative: use gen_idx
+                    for &ax in comp {
+                        out_idx[ax] = gen_idx[gi];
+                    }
+                } else {
+                    // Anchored: propagate from the first axis (already set by free_axes)
+                    let anchor_val = out_idx[comp[0]];
+                    for &ax in &comp[1..] {
+                        out_idx[ax] = anchor_val;
+                    }
+                }
+            }
+            let old = output.get(&out_idx);
+            output.set(&out_idx, old + val);
+
+            if gen_dims.is_empty() {
+                break;
+            }
+            // Increment odometer for generative components
+            let mut carry = true;
+            for g in 0..gen_dims.len() {
+                if carry {
+                    gen_idx[g] += 1;
+                    if gen_idx[g] < gen_dims[g] {
+                        carry = false;
+                    } else {
+                        gen_idx[g] = 0;
+                    }
+                }
+            }
+            if carry {
+                break;
+            }
         }
-        // Propagate paired constraint: second axis copies first axis value
-        for &(ax1, ax2) in paired_axes {
-            out_idx[ax2] = out_idx[ax1];
-        }
-        let old = output.get(&out_idx);
-        output.set(&out_idx, old + val);
     });
     Ok(())
 }
@@ -1074,7 +1247,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
             }
 
             CpuPlan::Trace {
-                paired_axes,
+                components,
+                comp_dims,
                 free_axes,
                 ..
             } => {
@@ -1084,14 +1258,16 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     view_refs[0],
                     beta,
                     &mut out_view,
-                    paired_axes,
+                    components,
+                    comp_dims,
                     free_axes,
                 )
             }
 
             CpuPlan::AntiTrace {
-                paired_axes,
                 free_axes,
+                components,
+                comp_dims,
                 ..
             } => {
                 validate_execute_inputs(inputs, 1, "AntiTrace")?;
@@ -1100,14 +1276,17 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     view_refs[0],
                     beta,
                     &mut out_view,
-                    paired_axes,
+                    components,
+                    comp_dims,
                     free_axes,
                 )
             }
 
             CpuPlan::AntiDiag {
-                paired_axes,
                 free_axes,
+                components,
+                comp_dims,
+                generative_comps,
                 ..
             } => {
                 validate_execute_inputs(inputs, 1, "AntiDiag")?;
@@ -1116,8 +1295,10 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     view_refs[0],
                     beta,
                     &mut out_view,
-                    paired_axes,
+                    components,
+                    comp_dims,
                     free_axes,
+                    generative_comps,
                 )
             }
 
