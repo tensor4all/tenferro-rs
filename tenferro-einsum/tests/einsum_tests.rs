@@ -1227,12 +1227,23 @@ typed_einsum_tests!(typed_complex64, num_complex::Complex64);
 //       einsum_three_way_repeated_label_trace
 //     - Batched dot product ("bi,bi->b"):
 //       einsum_batched_dot_product
+//     - Additional diagonal-extract variants ("ijj->i", "ijj->ij", "jii->j"):
+//       einsum_diag_extract_reduce_ijj_to_i
+//       einsum_diag_extract_no_reduce_ijj_to_ij
+//       einsum_diag_extract_permuted_jii_to_j
 //
 // [x] Size-dict dependent cases
 //     - Explicit size hints via Subscripts::new + ContractionTree::optimize:
 //       einsum_size_dict_explicit_shapes
 //     - Size-dict for output-only label (diagonal embedding with computed
 //       shapes): einsum_size_dict_output_only_label
+//
+// [x] Additional binary/N-ary numeric patterns from strided-opteinsum
+//     - Batched matmul ("bij,bjk->bik"): einsum_batched_matmul
+//     - Transposed-RHS contraction ("ij,kj->ik"): einsum_transposed_rhs_contraction
+//     - Reduction over first axis ("ij->j"): einsum_reduce_first_axis
+//     - Scalar/vector product family (",k->k", "i,->i", ",->"):
+//       einsum_scalar_vector_products
 //
 // [x] Unicode label parsing
 //     - Parser rejects non-ASCII labels: parse_unicode_label_rejected
@@ -1257,6 +1268,9 @@ typed_einsum_tests!(typed_complex64, num_complex::Complex64);
 // [ ] Known limitations (not testable with current implementation)
 //     - Unicode labels: parser only accepts a-z, A-Z (verified via error tests)
 //     - Implicit output: parser requires explicit "->" separator
+//     - Scalar generative repeated-output embeddings from size_dict
+//       ("->ii", "->iii"): tracked as ignored parity tests
+//     - Multi-pair trace parity ("iijj->"): tracked as ignored parity test
 //     - Multi-trace with independent pairs of different dimensions
 //       ("ijij->" where dim(i) != dim(j)): trace backend uses a single
 //       diagonal loop, so all paired axes must share the same dimension
@@ -1391,6 +1405,231 @@ fn einsum_batched_dot_product() {
     }
 }
 
+#[test]
+fn einsum_batched_matmul() {
+    // Ported pattern from strided-opteinsum: "bij,bjk->bik"
+    let mut ctx = CpuContext::new(1);
+
+    // batch=2, each is 2x2
+    let a = Tensor::<f64>::from_slice(
+        &[
+            1.0, 0.0, 0.0, 1.0, // batch 0: I
+            2.0, 0.0, 0.0, 2.0, // batch 1: 2I
+        ],
+        &[2, 2, 2],
+        COL,
+    )
+    .unwrap();
+    let b = Tensor::<f64>::from_slice(
+        &[
+            1.0, 2.0, 3.0, 4.0, // batch 0
+            5.0, 6.0, 7.0, 8.0, // batch 1
+        ],
+        &[2, 2, 2],
+        COL,
+    )
+    .unwrap();
+
+    let c = einsum::<S, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
+    assert_eq!(c.dims(), &[2, 2, 2]);
+
+    for batch in 0..2 {
+        for i in 0..2 {
+            for k in 0..2 {
+                let mut expected = 0.0;
+                for j in 0..2 {
+                    expected += get(&a, &[batch, i, j]) * get(&b, &[batch, j, k]);
+                }
+                assert!(
+                    (get(&c, &[batch, i, k]) - expected).abs() < 1e-10,
+                    "c[{batch},{i},{k}] = {}, expected {expected}",
+                    get(&c, &[batch, i, k])
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn einsum_transposed_rhs_contraction() {
+    // Ported pattern from strided-opteinsum differential set: "ij,kj->ik"
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(
+        &[
+            7.0, 8.0, 9.0, // row k=0 over j
+            10.0, 11.0, 12.0, // row k=1 over j
+        ],
+        &[2, 3],
+        COL,
+    )
+    .unwrap();
+
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ij,kj->ik", &[&a, &b], None).unwrap();
+    assert_eq!(c.dims(), &[2, 2]);
+
+    for i in 0..2 {
+        for k in 0..2 {
+            let mut expected = 0.0;
+            for j in 0..3 {
+                expected += get(&a, &[i, j]) * get(&b, &[k, j]);
+            }
+            assert!(
+                (get(&c, &[i, k]) - expected).abs() < 1e-10,
+                "c[{i},{k}] = {}, expected {expected}",
+                get(&c, &[i, k])
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_reduce_first_axis() {
+    // Ported pattern from strided-opteinsum: "ij->j"
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(
+        &[
+            0.0, 1.0, 2.0, 3.0, // row 0
+            4.0, 5.0, 6.0, 7.0, // row 1
+            8.0, 9.0, 10.0, 11.0, // row 2
+        ],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+
+    let y = einsum::<S, CpuBackend>(&mut ctx, "ij->j", &[&a], None).unwrap();
+    assert_eq!(y.dims(), &[4]);
+
+    for j in 0..4 {
+        let expected = get(&a, &[0, j]) + get(&a, &[1, j]) + get(&a, &[2, j]);
+        assert!(
+            (get(&y, &[j]) - expected).abs() < 1e-10,
+            "y[{j}] = {}, expected {expected}",
+            get(&y, &[j])
+        );
+    }
+}
+
+#[test]
+#[ignore = "opteinsum parity target: multi-pair trace value differs in current backend"]
+fn einsum_multi_pair_trace_iijj() {
+    // Ported pattern from strided-opteinsum: "iijj->"
+    let mut ctx = CpuContext::new(1);
+    let n = 3;
+    let total = n * n * n * n;
+    let data: Vec<f64> = (0..total).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[n, n, n, n], COL).unwrap();
+
+    let s = einsum::<S, CpuBackend>(&mut ctx, "iijj->", &[&a], None).unwrap();
+    assert!(s.dims().is_empty());
+
+    let mut expected = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            expected += get(&a, &[i, i, j, j]);
+        }
+    }
+    assert!(
+        (scalar_val(&s) - expected).abs() < 1e-10,
+        "trace = {}, expected {expected}",
+        scalar_val(&s)
+    );
+}
+
+#[test]
+fn einsum_diag_extract_reduce_ijj_to_i() {
+    // Ported pattern from strided-opteinsum: "ijj->i"
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (0..18).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[2, 3, 3], COL).unwrap();
+
+    let y = einsum::<S, CpuBackend>(&mut ctx, "ijj->i", &[&a], None).unwrap();
+    assert_eq!(y.dims(), &[2]);
+
+    for i in 0..2 {
+        let mut expected = 0.0;
+        for j in 0..3 {
+            expected += get(&a, &[i, j, j]);
+        }
+        assert!(
+            (get(&y, &[i]) - expected).abs() < 1e-10,
+            "y[{i}] = {}, expected {expected}",
+            get(&y, &[i])
+        );
+    }
+}
+
+#[test]
+fn einsum_diag_extract_no_reduce_ijj_to_ij() {
+    // Ported pattern from strided-opteinsum: "ijj->ij"
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (0..18).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[2, 3, 3], COL).unwrap();
+
+    let y = einsum::<S, CpuBackend>(&mut ctx, "ijj->ij", &[&a], None).unwrap();
+    assert_eq!(y.dims(), &[2, 3]);
+
+    for i in 0..2 {
+        for j in 0..3 {
+            let expected = get(&a, &[i, j, j]);
+            assert!(
+                (get(&y, &[i, j]) - expected).abs() < 1e-10,
+                "y[{i},{j}] = {}, expected {expected}",
+                get(&y, &[i, j])
+            );
+        }
+    }
+}
+
+#[test]
+fn einsum_diag_extract_permuted_jii_to_j() {
+    // Ported pattern from strided-opteinsum: "jii->j"
+    let mut ctx = CpuContext::new(1);
+    let data: Vec<f64> = (0..12).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&data, &[3, 2, 2], COL).unwrap();
+
+    let y = einsum::<S, CpuBackend>(&mut ctx, "jii->j", &[&a], None).unwrap();
+    assert_eq!(y.dims(), &[3]);
+
+    for j in 0..3 {
+        let expected = get(&a, &[j, 0, 0]) + get(&a, &[j, 1, 1]);
+        assert!(
+            (get(&y, &[j]) - expected).abs() < 1e-10,
+            "y[{j}] = {}, expected {expected}",
+            get(&y, &[j])
+        );
+    }
+}
+
+#[test]
+fn einsum_scalar_vector_products() {
+    // Ported patterns from strided-opteinsum: ",k->k", "i,->i", ",->"
+    let mut ctx = CpuContext::new(1);
+    let three = Tensor::<f64>::from_slice(&[3.0], &[], COL).unwrap();
+    let two = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+    let v4 = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4], COL).unwrap();
+    let v3 = Tensor::<f64>::from_slice(&[10.0, 20.0, 30.0], &[3], COL).unwrap();
+    let seven = Tensor::<f64>::from_slice(&[7.0], &[], COL).unwrap();
+
+    let a = einsum::<S, CpuBackend>(&mut ctx, ",k->k", &[&three, &v4], None).unwrap();
+    assert_eq!(a.dims(), &[4]);
+    assert!((get(&a, &[0]) - 3.0).abs() < 1e-10);
+    assert!((get(&a, &[1]) - 6.0).abs() < 1e-10);
+    assert!((get(&a, &[2]) - 9.0).abs() < 1e-10);
+    assert!((get(&a, &[3]) - 12.0).abs() < 1e-10);
+
+    let b = einsum::<S, CpuBackend>(&mut ctx, "i,->i", &[&v3, &two], None).unwrap();
+    assert_eq!(b.dims(), &[3]);
+    assert!((get(&b, &[0]) - 20.0).abs() < 1e-10);
+    assert!((get(&b, &[1]) - 40.0).abs() < 1e-10);
+    assert!((get(&b, &[2]) - 60.0).abs() < 1e-10);
+
+    let c = einsum::<S, CpuBackend>(&mut ctx, ",->", &[&three, &seven], None).unwrap();
+    assert!(c.dims().is_empty());
+    assert!((scalar_val(&c) - 21.0).abs() < 1e-10);
+}
+
 // ============================================================================
 // Size-dict dependent cases
 // ============================================================================
@@ -1449,6 +1688,52 @@ fn einsum_size_dict_output_only_label() {
                 "d[{i},{j}] = {}, expected {expected}",
                 get(&d, &[i, j])
             );
+        }
+    }
+}
+
+#[test]
+#[ignore = "opteinsum parity target: scalar -> repeated-output embedding not yet aligned"]
+fn einsum_size_dict_scalar_to_diagonal_and_superdiagonal() {
+    // Ported patterns from strided-opteinsum: "->ii", "->iii"
+    let mut ctx = CpuContext::new(1);
+    let scalar1 = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
+    let scalar2 = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+
+    // "->ii" with i=4
+    let subs_ii = Subscripts::new(&[&[]], &[0, 0]);
+    let sd_ii = std::collections::HashMap::from([(0_u32, 4_usize)]);
+    let d2 = einsum_with_subscripts::<S, CpuBackend>(&mut ctx, &subs_ii, &[&scalar1], Some(&sd_ii))
+        .unwrap();
+    assert_eq!(d2.dims(), &[4, 4]);
+    for i in 0..4 {
+        for j in 0..4 {
+            let expected = if i == j { 1.0 } else { 0.0 };
+            assert!(
+                (get(&d2, &[i, j]) - expected).abs() < 1e-10,
+                "d2[{i},{j}] = {}, expected {expected}",
+                get(&d2, &[i, j])
+            );
+        }
+    }
+
+    // "->iii" with i=3
+    let subs_iii = Subscripts::new(&[&[]], &[0, 0, 0]);
+    let sd_iii = std::collections::HashMap::from([(0_u32, 3_usize)]);
+    let d3 =
+        einsum_with_subscripts::<S, CpuBackend>(&mut ctx, &subs_iii, &[&scalar2], Some(&sd_iii))
+            .unwrap();
+    assert_eq!(d3.dims(), &[3, 3, 3]);
+    for i in 0..3 {
+        for j in 0..3 {
+            for k in 0..3 {
+                let expected = if i == j && j == k { 2.0 } else { 0.0 };
+                assert!(
+                    (get(&d3, &[i, j, k]) - expected).abs() < 1e-10,
+                    "d3[{i},{j},{k}] = {}, expected {expected}",
+                    get(&d3, &[i, j, k])
+                );
+            }
         }
     }
 }
