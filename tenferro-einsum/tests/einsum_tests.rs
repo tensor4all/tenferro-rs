@@ -2248,3 +2248,94 @@ fn nested_parse_error_mismatched_parens() {
     assert!(tenferro_einsum::NestedEinsum::parse("(ij,jk->ik").is_err());
     assert!(tenferro_einsum::NestedEinsum::parse("ij),jk->ik").is_err());
 }
+
+// ============================================================================
+// NestedEinsum execution
+// ============================================================================
+
+#[test]
+fn nested_einsum_simple_group() {
+    // (ij,jk),kl->il should produce same result as ij,jk,kl->il
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+    let c =
+        Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[4, 2], COL).unwrap();
+
+    let flat = einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
+    let nested = einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a, &b, &c], None).unwrap();
+
+    assert_eq!(flat.dims(), nested.dims());
+    let flat_data = flat.buffer().as_slice().unwrap();
+    let nested_data = nested.buffer().as_slice().unwrap();
+    for (f, n) in flat_data.iter().zip(nested_data.iter()) {
+        assert!((f - n).abs() < 1e-10, "flat={f}, nested={n}");
+    }
+}
+
+#[test]
+fn nested_einsum_deeply_nested() {
+    // ((ij,jk),kl),lm->im
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 2.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[3.0, 0.0, 0.0, 3.0], &[2, 2], COL).unwrap();
+    let d = Tensor::<f64>::from_slice(&[4.0, 0.0, 0.0, 4.0], &[2, 2], COL).unwrap();
+
+    let flat =
+        einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl,lm->im", &[&a, &b, &c, &d], None).unwrap();
+    let nested =
+        einsum::<S, CpuBackend>(&mut ctx, "((ij,jk),kl),lm->im", &[&a, &b, &c, &d], None).unwrap();
+
+    assert_eq!(flat.dims(), nested.dims());
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                (get(&flat, &[i, j]) - get(&nested, &[i, j])).abs() < 1e-10,
+                "mismatch at [{i},{j}]"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_einsum_nary_group() {
+    // (ij,jk,kl)->il — three operands in one group
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+
+    let flat = einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
+    let nested = einsum::<S, CpuBackend>(&mut ctx, "(ij,jk,kl)->il", &[&a, &b, &c], None).unwrap();
+
+    assert_eq!(flat.dims(), nested.dims());
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                (get(&flat, &[i, j]) - get(&nested, &[i, j])).abs() < 1e-10,
+                "mismatch at [{i},{j}]"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_einsum_single_operand_group() {
+    // (ij)->ij — trivial single-operand group is identity
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+
+    let result = einsum::<S, CpuBackend>(&mut ctx, "(ij)->ij", &[&a], None).unwrap();
+    assert_eq!(result.dims(), &[2, 2]);
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!((get(&result, &[i, j]) - get(&a, &[i, j])).abs() < 1e-10);
+        }
+    }
+}
