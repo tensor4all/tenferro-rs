@@ -485,6 +485,15 @@ fn tensor_from_data<T: LinalgScalar>(data: Vec<T>, dims: &[usize]) -> Result<Ten
     Tensor::from_vec(data, dims, &strides, 0)
 }
 
+/// Create a Tensor from raw column-major data with the given dims.
+///
+/// Like [`tensor_from_data`] but only requires `Scalar`, so it works for
+/// `Complex<R>` types that are not `LinalgScalar`.
+fn tensor_from_data_scalar<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>> {
+    let strides = backend::col_major_strides(dims);
+    Tensor::from_vec(data, dims, &strides, 0)
+}
+
 // ============================================================================
 // Result types
 // ============================================================================
@@ -668,6 +677,39 @@ pub struct EigenResult<T: Scalar, R: Scalar = T> {
     pub values: Tensor<R>,
     /// Right eigenvectors (columns). Shape: `(n, n, *)`.
     pub vectors: Tensor<T>,
+}
+
+/// Result of general eigendecomposition (always complex-valued).
+///
+/// Unlike [`EigenResult`] (which is for symmetric/Hermitian matrices with real eigenvalues),
+/// this type always returns complex eigenvalues and eigenvectors, since a general
+/// (non-symmetric) real matrix can have complex eigenvalues.
+///
+/// For an input of shape `(n, n, *)`:
+///
+/// - `values`: shape `(n, *)` — complex eigenvalues
+/// - `vectors`: shape `(n, n, *)` — complex right eigenvectors (columns)
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::{eig, EigResult};
+/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let mut backend = FaerBackend::new();
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let result: EigResult<f64> = eig(&mut backend, &a).unwrap();
+/// assert_eq!(result.values.dims(), &[3]);
+/// assert_eq!(result.vectors.dims(), &[3, 3]);
+/// ```
+pub struct EigResult<R: LinalgScalar<Real = R> + num_traits::Float> {
+    /// Complex eigenvalues. Shape: `(n, *)`.
+    pub values: Tensor<num_complex::Complex<R>>,
+    /// Complex right eigenvectors (columns). Shape: `(n, n, *)`.
+    pub vectors: Tensor<num_complex::Complex<R>>,
 }
 
 /// Sign-and-log-determinant result: `det(A) = sign * exp(logabsdet)`.
@@ -1503,9 +1545,13 @@ pub fn slogdet<
 ///
 /// Unlike [`eigen`] (which requires Hermitian/symmetric input and returns
 /// real eigenvalues), this function handles general matrices. Eigenvalues
-/// may be complex even for real input.
+/// and eigenvectors are always returned as complex, since a general real
+/// matrix can have complex eigenvalue pairs.
 ///
 /// Input shape: `(n, n, *)`.
+///
+/// Returns [`EigResult`] with complex eigenvalues (shape `(n, *)`) and
+/// complex right eigenvectors (shape `(n, n, *)`).
 ///
 /// # Examples
 ///
@@ -1518,18 +1564,65 @@ pub fn slogdet<
 /// let mut backend = FaerBackend::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// assert!(eig(&mut backend, &a).is_err());
+/// let result = eig(&mut backend, &a).unwrap();
+/// assert_eq!(result.values.dims(), &[3]);
+/// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
-pub fn eig<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-) -> Result<EigenResult<T, B::Real>> {
-    // General (non-symmetric) eigendecomposition requires complex output.
-    // Deferred until complex type support is added.
-    Err(Error::InvalidArgument(
-        "general eigendecomposition (eig) not yet implemented; use eigen() for symmetric matrices"
-            .into(),
-    ))
+///
+/// # Errors
+///
+/// Returns an error if the input has fewer than 2 dimensions or the first
+/// two dimensions are not equal.
+pub fn eig<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
+    backend: &mut B,
+    tensor: &Tensor<T>,
+) -> Result<EigResult<T>> {
+    let (n, batch_dims) = validate_square(tensor)?;
+    let input = ensure_col_major(tensor);
+    let data = extract_slice(&input)?;
+    let offset = input.offset() as usize;
+    let bc = batch_count(batch_dims);
+    let mat_size = n * n;
+
+    type C<R> = num_complex::Complex<R>;
+
+    let zero_c = C::new(T::zero(), T::zero());
+    let mut val_data: Vec<C<T>> = vec![zero_c; n * bc];
+    let mut vec_data: Vec<C<T>> = vec![zero_c; n * n * bc];
+
+    // Temporary interleaved buffers for backend output.
+    // For real T, the backend writes [re0, im0, re1, im1, ...].
+    let mut values_ri = vec![T::zero(); 2 * n];
+    let mut vectors_ri = vec![T::zero(); 2 * n * n];
+
+    for b in 0..bc {
+        let start = offset + b * mat_size;
+        let batch_data = &data[start..start + mat_size];
+
+        backend.eig_general(batch_data, n, &mut values_ri, &mut vectors_ri)?;
+
+        // Convert interleaved [re, im, re, im, ...] to Complex<T>
+        let val_out = &mut val_data[b * n..(b + 1) * n];
+        for i in 0..n {
+            val_out[i] = C::new(values_ri[2 * i], values_ri[2 * i + 1]);
+        }
+
+        let vec_out = &mut vec_data[b * n * n..(b + 1) * n * n];
+        for k in 0..n * n {
+            vec_out[k] = C::new(vectors_ri[2 * k], vectors_ri[2 * k + 1]);
+        }
+    }
+
+    let val_dims = output_dims(&[n], batch_dims);
+    let vec_dims = output_dims(&[n, n], batch_dims);
+
+    Ok(EigResult {
+        values: tensor_from_data_scalar(val_data, &val_dims)?,
+        vectors: tensor_from_data_scalar(vec_data, &vec_dims)?,
+    })
 }
 
 /// Compute the Moore-Penrose pseudoinverse of a matrix.

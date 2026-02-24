@@ -505,14 +505,140 @@ fn pinv_square_invertible() {
 }
 
 // ============================================================================
-// Eig (non-symmetric) should return error
+// Eig (general, non-symmetric) tests
 // ============================================================================
 
+/// Extract flat data from a complex Tensor.
+fn tensor_data_complex(t: &Tensor<num_complex::Complex64>) -> Vec<num_complex::Complex64> {
+    let c = t.contiguous(COL);
+    let off = c.offset() as usize;
+    let len: usize = c.dims().iter().product();
+    c.buffer().as_slice().unwrap()[off..off + len].to_vec()
+}
+
 #[test]
-fn eig_returns_error() {
+fn eig_2x2_identity() {
     let mut backend = FaerBackend::new();
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    assert!(eig(&mut backend, &a).is_err());
+    let result = eig(&mut backend, &a).unwrap();
+    assert_eq!(result.values.dims(), &[2]);
+    assert_eq!(result.vectors.dims(), &[2, 2]);
+    // Identity has eigenvalues 1.0 + 0i
+    let vals = tensor_data_complex(&result.values);
+    for v in &vals {
+        assert!((v.re - 1.0).abs() < 1e-10, "expected re=1.0, got {}", v.re);
+        assert!(v.im.abs() < 1e-10, "expected im=0.0, got {}", v.im);
+    }
+}
+
+#[test]
+fn eig_2x2_real_eigenvalues() {
+    // Diagonal matrix: eigenvalues are diagonal entries
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
+    let result = eig(&mut backend, &a).unwrap();
+    let vals = tensor_data_complex(&result.values);
+    let mut reals: Vec<f64> = vals.iter().map(|c| c.re).collect();
+    reals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert!(
+        (reals[0] - 2.0).abs() < 1e-10,
+        "expected 2.0, got {}",
+        reals[0]
+    );
+    assert!(
+        (reals[1] - 3.0).abs() < 1e-10,
+        "expected 3.0, got {}",
+        reals[1]
+    );
+    // Imaginary parts should be zero
+    for v in &vals {
+        assert!(v.im.abs() < 1e-10, "expected im=0.0, got {}", v.im);
+    }
+}
+
+#[test]
+fn eig_2x2_complex_eigenvalues() {
+    // [[0, -1], [1, 0]] has eigenvalues +/- i
+    // Column-major: [0, 1, -1, 0]
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![0.0, 1.0, -1.0, 0.0], &[2, 2]);
+    let result = eig(&mut backend, &a).unwrap();
+    let vals = tensor_data_complex(&result.values);
+    let mut imags: Vec<f64> = vals.iter().map(|c| c.im).collect();
+    imags.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert!(
+        (imags[0] - (-1.0)).abs() < 1e-10,
+        "expected -1.0, got {}",
+        imags[0]
+    );
+    assert!(
+        (imags[1] - 1.0).abs() < 1e-10,
+        "expected 1.0, got {}",
+        imags[1]
+    );
+    // Real parts should be zero
+    for v in &vals {
+        assert!(v.re.abs() < 1e-10, "expected re=0.0, got {}", v.re);
+    }
+}
+
+#[test]
+fn eig_3x3_reconstruction() {
+    // Verify A * V = V * diag(lambda) for a 3x3 matrix
+    let mut backend = FaerBackend::new();
+    // Upper triangular with known eigenvalues 1, 2, 3
+    // Column-major: col0=[1,0,0], col1=[1,2,0], col2=[0,1,3]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 1.0, 3.0], &[3, 3]);
+    let result = eig(&mut backend, &a).unwrap();
+    let vals = tensor_data_complex(&result.values);
+    let vecs = tensor_data_complex(&result.vectors);
+    let n = 3;
+
+    // Check A * V = V * diag(lambda)
+    // A is real, V and lambda are complex
+    let a_data = tensor_data(&a);
+    for j in 0..n {
+        // Compute A * v_j (column j of V)
+        for i in 0..n {
+            let mut av = num_complex::Complex64::new(0.0, 0.0);
+            for k in 0..n {
+                let a_ik = num_complex::Complex64::new(a_data[i + k * n], 0.0);
+                av += a_ik * vecs[k + j * n];
+            }
+            // Compare with lambda_j * v_j[i]
+            let lv = vals[j] * vecs[i + j * n];
+            let diff = (av - lv).norm();
+            assert!(
+                diff < 1e-10,
+                "A*V != V*diag(lambda) at ({i},{j}): diff={diff}"
+            );
+        }
+    }
+}
+
+#[test]
+fn eig_batched_2x2() {
+    // Batched: shape [2, 2, 2] — two 2x2 matrices
+    let mut backend = FaerBackend::new();
+    // batch 0: [[1, 0], [0, 2]] => eigenvalues 1, 2
+    // batch 1: [[3, 0], [0, 4]] => eigenvalues 3, 4
+    // Column-major for [2,2,2]: [1,0, 0,2, 3,0, 0,4]
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 4.0], &[2, 2, 2]);
+    let result = eig(&mut backend, &a).unwrap();
+    assert_eq!(result.values.dims(), &[2, 2]);
+    assert_eq!(result.vectors.dims(), &[2, 2, 2]);
+
+    let vals = tensor_data_complex(&result.values);
+    // vals layout for [2, 2]: batch-0 eigenvalues then batch-1 eigenvalues
+    // In col-major [n=2, bc=2], stride=[1, 2]: vals[0],vals[1] = batch0, vals[2],vals[3] = batch1
+    let mut batch0: Vec<f64> = vals[0..2].iter().map(|c| c.re).collect();
+    let mut batch1: Vec<f64> = vals[2..4].iter().map(|c| c.re).collect();
+    batch0.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    batch1.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert!((batch0[0] - 1.0).abs() < 1e-10);
+    assert!((batch0[1] - 2.0).abs() < 1e-10);
+    assert!((batch1[0] - 3.0).abs() < 1e-10);
+    assert!((batch1[1] - 4.0).abs() < 1e-10);
 }
 
 // ============================================================================
