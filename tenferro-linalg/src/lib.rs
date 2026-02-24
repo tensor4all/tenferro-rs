@@ -1,5 +1,8 @@
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
+//! CPU decompositions and solvers are fully implemented via the
+//! [`faer`](https://crates.io/crates/faer) backend. GPU backends are planned.
+//!
 //! This crate provides SVD, QR, LU, eigendecomposition, Cholesky, least squares,
 //! linear solve, matrix inverse, determinant, pseudoinverse, matrix exponential,
 //! triangular solve, and norms for tensors

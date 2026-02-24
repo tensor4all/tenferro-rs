@@ -1,5 +1,11 @@
 //! Backend abstraction for linear algebra operations.
 //!
+//! Currently only the CPU backend ([`FaerBackend`]) is available.
+//! GPU backends (cuSOLVER, hipSOLVER) are planned but not yet implemented.
+//!
+//! To add a GPU backend, implement [`LinalgBackend<T>`] for your backend type
+//! and gate it behind a cargo feature (e.g., `#[cfg(feature = "cuda")]`).
+//!
 //! This module defines the [`LinalgBackend`] trait, which provides a
 //! backend-agnostic interface for matrix decompositions and solvers.
 //! Implementations write results into caller-provided output buffers
