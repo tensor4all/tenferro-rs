@@ -714,7 +714,7 @@ fn maxplus_rectangular_matmul_backward() {
 // ============================================================================
 
 #[test]
-fn rrule_rejects_single_operand() {
+fn rrule_accepts_single_operand() {
     let mut ctx = ctx();
 
     let a = Tensor::<MaxPlus<f64>>::from_slice(&[MaxPlus(1.0), MaxPlus(2.0)], &[2], COL).unwrap();
@@ -725,7 +725,7 @@ fn rrule_rejects_single_operand() {
         MaxPlusAlgebra<f64>,
         tenferro_prims::CpuBackend,
     >(&mut ctx, "i->", &[&a], &grad);
-    assert!(result.is_err());
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -746,7 +746,7 @@ fn rrule_rejects_three_operands() {
 }
 
 #[test]
-fn tracked_rejects_single_operand() {
+fn tracked_accepts_single_operand() {
     let tape = Tape::<Tensor<f64>>::new();
     let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
     let a = tape.leaf(a_data);
@@ -756,7 +756,7 @@ fn tracked_rejects_single_operand() {
         MaxPlusAlgebra<f64>,
         tenferro_prims::CpuBackend,
     >("i->", &[&a]);
-    assert!(result.is_err());
+    assert!(result.is_ok());
 }
 
 #[test]
@@ -864,4 +864,171 @@ fn maxplus_f32_matmul_backward() {
     assert_eq!(db[1], 2.0f32);
     assert_eq!(db[2], 0.0f32);
     assert_eq!(db[3], 2.0f32);
+}
+
+// ============================================================================
+// Unary tropical backward tests
+// ============================================================================
+
+#[test]
+fn maxplus_unary_trace_backward() {
+    // ii-> : max of diagonal elements
+    let mut ctx = ctx();
+    // A = [[1, 3],    (col-major: [1, 2, 3, 4])
+    //      [2, 4]]
+    // Diagonal: A[0,0]=1, A[1,1]=4. MaxPlus sum = max(1, 4) = 4
+    // Winner: (i=1) → flat index k=1 in contracted dim (size 2)
+    let a = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let grad = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
+
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ii->", &[&a], &grad)
+    .unwrap();
+
+    assert_eq!(grads.len(), 1);
+    let da = grads[0].buffer().as_slice().unwrap();
+    // Only the winner diagonal element (1,1) = flat index 3 gets gradient
+    assert_eq!(da[0], 0.0); // A[0,0]
+    assert_eq!(da[1], 0.0); // A[1,0]
+    assert_eq!(da[2], 0.0); // A[0,1]
+    assert_eq!(da[3], 1.0); // A[1,1] — winner
+}
+
+#[test]
+fn maxplus_unary_full_contraction_backward() {
+    // ij-> : max of all elements
+    let mut ctx = ctx();
+    // A = [[1, 5],    (col-major: [1, 4, 5, 2])
+    //      [4, 2]]
+    // A[0,0]=1, A[1,0]=4, A[0,1]=5, A[1,1]=2
+    // Max = 5 at A[0,1] = flat index 2
+    let a = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(1.0), MaxPlus(4.0), MaxPlus(5.0), MaxPlus(2.0)],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let grad = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
+
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij->", &[&a], &grad)
+    .unwrap();
+
+    assert_eq!(grads.len(), 1);
+    let da = grads[0].buffer().as_slice().unwrap();
+    // Winner is A[0,1] = 5.0 at flat index 2
+    assert_eq!(da[0], 0.0); // A[0,0]
+    assert_eq!(da[1], 0.0); // A[1,0]
+    assert_eq!(da[2], 1.0); // A[0,1] — winner
+    assert_eq!(da[3], 0.0); // A[1,1]
+}
+
+#[test]
+fn maxplus_unary_row_max_backward() {
+    // ij->i : max over j for each i (row-wise max)
+    let mut ctx = ctx();
+    // A = [[1, 5],    (col-major: [1, 4, 5, 2])
+    //      [4, 2]]
+    // Row 0 (i=0): max(A[0,0]=1, A[0,1]=5) = 5, winner j=1
+    // Row 1 (i=1): max(A[1,0]=4, A[1,1]=2) = 4, winner j=0
+    let a = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(1.0), MaxPlus(4.0), MaxPlus(5.0), MaxPlus(2.0)],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let grad = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
+
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij->i", &[&a], &grad)
+    .unwrap();
+
+    assert_eq!(grads.len(), 1);
+    let da = grads[0].buffer().as_slice().unwrap();
+    // dA[0,0] = 0 (j=0 didn't win for i=0)
+    // dA[1,0] = 1 (j=0 won for i=1)
+    // dA[0,1] = 1 (j=1 won for i=0)
+    // dA[1,1] = 0 (j=1 didn't win for i=1)
+    assert_eq!(da[0], 0.0); // A[0,0]
+    assert_eq!(da[1], 1.0); // A[1,0]
+    assert_eq!(da[2], 1.0); // A[0,1]
+    assert_eq!(da[3], 0.0); // A[1,1]
+}
+
+#[test]
+fn maxplus_unary_col_max_backward() {
+    // ij->j : max over i for each j (column-wise max)
+    let mut ctx = ctx();
+    // A = [[1, 5],    (col-major: [1, 4, 5, 2])
+    //      [4, 2]]
+    // Col 0 (j=0): max(A[0,0]=1, A[1,0]=4) = 4, winner i=1
+    // Col 1 (j=1): max(A[0,1]=5, A[1,1]=2) = 5, winner i=0
+    let a = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(1.0), MaxPlus(4.0), MaxPlus(5.0), MaxPlus(2.0)],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let grad = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
+
+    let grads = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij->j", &[&a], &grad)
+    .unwrap();
+
+    assert_eq!(grads.len(), 1);
+    let da = grads[0].buffer().as_slice().unwrap();
+    // dA[0,0] = 0 (i=0 didn't win for j=0)
+    // dA[1,0] = 1 (i=1 won for j=0)
+    // dA[0,1] = 1 (i=0 won for j=1)
+    // dA[1,1] = 0 (i=1 didn't win for j=1)
+    assert_eq!(da[0], 0.0); // A[0,0]
+    assert_eq!(da[1], 1.0); // A[1,0]
+    assert_eq!(da[2], 1.0); // A[0,1]
+    assert_eq!(da[3], 0.0); // A[1,1]
+}
+
+#[test]
+fn tracked_maxplus_unary_full_contraction_pullback() {
+    let tape = Tape::<Tensor<f64>>::new();
+    // A = [[1, 5],    (col-major: [1, 4, 5, 2])
+    //      [4, 2]]
+    let a_data = Tensor::<f64>::from_slice(&[1.0, 4.0, 5.0, 2.0], &[2, 2], COL).unwrap();
+    let a = tape.leaf(a_data);
+
+    // ij-> : max of all = 5
+    let c =
+        tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(
+            "ij->",
+            &[&a],
+        )
+        .unwrap();
+
+    assert_eq!(c.value().buffer().as_slice().unwrap()[0], 5.0);
+
+    let grads = tape.pullback(&c).unwrap();
+    let ga = grads.get(a.node_id().unwrap()).unwrap();
+    let ga_data = ga.buffer().as_slice().unwrap();
+
+    // Winner is A[0,1] = 5.0, flat index 2
+    assert_eq!(ga_data[0], 0.0);
+    assert_eq!(ga_data[1], 0.0);
+    assert_eq!(ga_data[2], 1.0); // winner
+    assert_eq!(ga_data[3], 0.0);
 }

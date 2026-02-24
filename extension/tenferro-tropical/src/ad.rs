@@ -202,9 +202,9 @@ fn col_major_flat_index(shape: &[usize], idx: &[usize]) -> usize {
 /// Given a tropical einsum operation and a cotangent (in standard reals),
 /// computes gradients for each input operand (also in standard reals).
 ///
-/// Currently supports binary contractions (2 operands) that decompose into
-/// batched GEMM. For operations without contraction indices (permute, trace),
-/// the gradient routing is straightforward.
+/// Currently supports unary (1 operand) and binary (2 operand) contractions.
+/// Unary patterns include trace (`ii->`), full contraction (`ij->`),
+/// and partial reduction (`ij->i`, `ij->j`).
 ///
 /// # Arguments
 ///
@@ -256,120 +256,77 @@ where
 {
     let subs = Subscripts::parse(subscripts)?;
 
-    if operands.len() != 2 {
+    if operands.is_empty() || operands.len() > 2 {
         return Err(Error::InvalidArgument(
-            "tropical_einsum_rrule currently supports exactly 2 operands".into(),
+            "tropical_einsum_rrule supports 1 or 2 operands".into(),
         ));
     }
 
-    // Analyze subscripts to identify contraction structure
-    // For "ij,jk->ik": inputs = [[i,j], [j,k]], output = [i,k]
-    // Contracted indices: those in inputs but not in output
-    // Batch indices: those in all inputs and output
-    // Free indices of A: those in A and output but not in B (m-like)
-    // Free indices of B: those in B and output but not in A (n-like)
-
-    let input_modes_a = &subs.inputs[0];
-    let input_modes_b = &subs.inputs[1];
-    let output_modes = &subs.output;
-
-    // Find contraction indices (in both inputs but not output)
-    let contracted: Vec<u32> = input_modes_a
-        .iter()
-        .filter(|m| input_modes_b.contains(m) && !output_modes.contains(m))
-        .copied()
-        .collect();
-
-    // Find batch indices (in both inputs AND output)
-    let batch: Vec<u32> = input_modes_a
-        .iter()
-        .filter(|m| input_modes_b.contains(m) && output_modes.contains(m))
-        .copied()
-        .collect();
-
-    // Find free-A indices (in A and output, not in B)
-    let free_a: Vec<u32> = input_modes_a
-        .iter()
-        .filter(|m| !input_modes_b.contains(m) && output_modes.contains(m))
-        .copied()
-        .collect();
-
-    // Find free-B indices (in B and output, not in A)
-    let free_b: Vec<u32> = input_modes_b
-        .iter()
-        .filter(|m| !input_modes_a.contains(m) && output_modes.contains(m))
-        .copied()
-        .collect();
-
-    let a = operands[0];
-    let b = operands[1];
+    // Contracted: labels in any input but not in output
+    let contracted: Vec<u32> = {
+        let all_input_labels: std::collections::HashSet<u32> = subs
+            .inputs
+            .iter()
+            .flat_map(|inp| inp.iter())
+            .copied()
+            .collect();
+        all_input_labels
+            .into_iter()
+            .filter(|m| !subs.output.contains(m))
+            .collect()
+    };
 
     // Run forward with argmax tracking
-    let (_output, tracker) =
-        tropical_einsum_forward_with_argmax(a, b, &subs, &batch, &free_a, &free_b, &contracted)?;
+    let (_output, tracker) = tropical_forward_with_argmax(operands, &subs, &contracted)?;
 
-    // Now compute backward using the tracker
-    let (da, db) = tropical_einsum_backward(
-        a,
-        b,
-        cotangent,
-        &tracker,
-        &subs,
-        &batch,
-        &free_a,
-        &free_b,
-        &contracted,
-    )?;
-
-    Ok(vec![da, db])
+    // Compute backward using the tracker
+    tropical_backward(operands, cotangent, &tracker, &subs, &contracted)
 }
 
-/// Forward pass for tropical binary einsum with argmax tracking.
+/// Forward pass for tropical N-ary einsum with argmax tracking.
 ///
 /// Handles arbitrary subscript patterns by iterating over output indices
-/// and contracted indices according to the subscript structure.
-fn tropical_einsum_forward_with_argmax<T: TropicalScalar>(
-    a: &Tensor<T>,
-    b: &Tensor<T>,
+/// and contracted indices according to the subscript structure. Supports
+/// 1 or more operands.
+fn tropical_forward_with_argmax<T: TropicalScalar>(
+    operands: &[&Tensor<T>],
     subs: &Subscripts,
-    _batch: &[u32],
-    _free_a: &[u32],
-    _free_b: &[u32],
     contracted: &[u32],
 ) -> Result<(Tensor<T>, ArgmaxTracker)> {
-    let input_modes_a = &subs.inputs[0];
-    let input_modes_b = &subs.inputs[1];
     let output_modes = &subs.output;
 
-    let a_view = crate::prims::tensor_to_view(a)?;
-    let b_view = crate::prims::tensor_to_view(b)?;
+    let views: Vec<_> = operands
+        .iter()
+        .map(|op| crate::prims::tensor_to_view(*op))
+        .collect::<Result<_>>()?;
 
-    // Build output shape from output modes
+    // Build output shape: resolve each output mode from the first operand that has it
     let output_shape: Vec<usize> = output_modes
         .iter()
         .map(|m| {
-            // Find this mode in A or B
-            if let Some(pos) = input_modes_a.iter().position(|x| x == m) {
-                Ok(a.dims()[pos])
-            } else if let Some(pos) = input_modes_b.iter().position(|x| x == m) {
-                Ok(b.dims()[pos])
-            } else {
-                Err(Error::InvalidArgument(format!(
-                    "output mode {m} not found in inputs"
-                )))
+            for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
+                if let Some(pos) = input_modes.iter().position(|x| x == m) {
+                    return Ok(operands[op_idx].dims()[pos]);
+                }
             }
+            Err(Error::InvalidArgument(format!(
+                "output mode {m} not found in inputs"
+            )))
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Build contracted dimension sizes
+    // Build contracted dimension sizes from the first operand that has each label
     let contracted_dims: Vec<usize> = contracted
         .iter()
         .map(|m| {
-            let pos = input_modes_a
-                .iter()
-                .position(|x| x == m)
-                .ok_or_else(|| Error::InvalidArgument(format!("contracted mode {m} not in A")))?;
-            Ok(a.dims()[pos])
+            for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
+                if let Some(pos) = input_modes.iter().position(|x| x == m) {
+                    return Ok(operands[op_idx].dims()[pos]);
+                }
+            }
+            Err(Error::InvalidArgument(format!(
+                "contracted mode {m} not in any operand"
+            )))
         })
         .collect::<Result<Vec<_>>>()?;
     let contracted_total: usize = contracted_dims.iter().product::<usize>().max(1);
@@ -378,9 +335,7 @@ fn tropical_einsum_forward_with_argmax<T: TropicalScalar>(
     let mut output_data = vec![T::zero(); total_output];
     let mut tracker = ArgmaxTracker::new(&output_shape);
 
-    // Iterate over output indices
     for_each_index(&output_shape, |out_idx| {
-        // Build a map from mode label to index value based on output indices
         let mut mode_values: std::collections::HashMap<u32, usize> =
             std::collections::HashMap::new();
         for (pos, &m) in output_modes.iter().enumerate() {
@@ -390,7 +345,6 @@ fn tropical_einsum_forward_with_argmax<T: TropicalScalar>(
         let mut best = T::zero();
         let mut best_k = 0_usize;
 
-        // Iterate over contracted dimensions
         for k_flat in 0..contracted_total {
             let k_idx = if contracted_dims.is_empty() {
                 vec![]
@@ -398,27 +352,21 @@ fn tropical_einsum_forward_with_argmax<T: TropicalScalar>(
                 unflatten_index(k_flat, &contracted_dims)
             };
 
-            // Set contracted indices
             for (c_pos, &c_mode) in contracted.iter().enumerate() {
                 mode_values.insert(c_mode, k_idx[c_pos]);
             }
 
-            // Build A index from mode map
-            let a_idx: Vec<usize> = input_modes_a
-                .iter()
-                .map(|m| *mode_values.get(m).unwrap_or(&0))
-                .collect();
+            // Compute product of all operands at resolved indices
+            let mut product = T::one();
+            for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
+                let idx: Vec<usize> = input_modes
+                    .iter()
+                    .map(|m| *mode_values.get(m).unwrap_or(&0))
+                    .collect();
+                product = product * views[op_idx].get(&idx);
+            }
 
-            // Build B index from mode map
-            let b_idx: Vec<usize> = input_modes_b
-                .iter()
-                .map(|m| *mode_values.get(m).unwrap_or(&0))
-                .collect();
-
-            let product = a_view.get(&a_idx) * b_view.get(&b_idx);
             let new_sum = best + product;
-
-            // Detect if this element won the tropical addition
             if k_flat == 0 || product.inner() == new_sum.inner() {
                 best_k = k_flat;
             }
@@ -432,22 +380,104 @@ fn tropical_einsum_forward_with_argmax<T: TropicalScalar>(
 
     let output = Tensor::<T>::from_slice(&output_data, &output_shape, MemoryOrder::ColumnMajor)
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
-
     Ok((output, tracker))
 }
 
-/// Backward pass for tropical binary einsum using argmax routing.
-fn tropical_einsum_backward<T: TropicalScalar>(
-    a: &Tensor<T>,
-    b: &Tensor<T>,
+/// Backward pass dispatcher for tropical N-ary einsum using argmax routing.
+///
+/// Dispatches to unary or binary backward based on operand count.
+fn tropical_backward<T: TropicalScalar>(
+    operands: &[&Tensor<T>],
     cotangent: &Tensor<T::Inner>,
     tracker: &ArgmaxTracker,
     subs: &Subscripts,
-    _batch: &[u32],
-    _free_a: &[u32],
-    _free_b: &[u32],
     contracted: &[u32],
-) -> Result<(Tensor<T::Inner>, Tensor<T::Inner>)> {
+) -> Result<Vec<Tensor<T::Inner>>> {
+    match operands.len() {
+        1 => tropical_backward_unary(operands[0], cotangent, tracker, subs, contracted),
+        2 => tropical_backward_binary(operands, cotangent, tracker, subs, contracted),
+        n => Err(Error::InvalidArgument(format!(
+            "tropical backward supports 1 or 2 operands, got {n}"
+        ))),
+    }
+}
+
+/// Backward pass for unary tropical einsum.
+///
+/// For a unary contraction, the gradient simply scatters the cotangent to the
+/// winning input position. There is no tropical multiplication to differentiate
+/// through (the product of a single operand is the operand itself).
+fn tropical_backward_unary<T: TropicalScalar>(
+    operand: &Tensor<T>,
+    cotangent: &Tensor<T::Inner>,
+    tracker: &ArgmaxTracker,
+    subs: &Subscripts,
+    contracted: &[u32],
+) -> Result<Vec<Tensor<T::Inner>>> {
+    let input_modes = &subs.inputs[0];
+    let output_modes = &subs.output;
+    let output_shape = tracker.output_shape();
+
+    let cot_view = crate::prims::tensor_to_view(cotangent)?;
+
+    let contracted_dims: Vec<usize> = contracted
+        .iter()
+        .map(|m| {
+            let pos = input_modes.iter().position(|x| x == m).ok_or_else(|| {
+                Error::InvalidArgument(format!("contracted mode {m} not in input"))
+            })?;
+            Ok(operand.dims()[pos])
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut grad_data = vec![T::Inner::zero(); operand.len()];
+
+    for_each_index(output_shape, |out_idx| {
+        let mut mode_values: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
+        for (pos, &m) in output_modes.iter().enumerate() {
+            mode_values.insert(m, out_idx[pos]);
+        }
+
+        let dout = cot_view.get(out_idx);
+
+        let out_flat = col_major_flat_index(output_shape, out_idx);
+        let k_winner = tracker.indices()[out_flat];
+
+        let k_idx = if contracted_dims.is_empty() {
+            vec![]
+        } else {
+            unflatten_index(k_winner, &contracted_dims)
+        };
+
+        for (c_pos, &c_mode) in contracted.iter().enumerate() {
+            mode_values.insert(c_mode, k_idx[c_pos]);
+        }
+
+        let input_idx: Vec<usize> = input_modes
+            .iter()
+            .map(|m| *mode_values.get(m).unwrap_or(&0))
+            .collect();
+
+        let input_flat = col_major_flat_index(operand.dims(), &input_idx);
+        grad_data[input_flat] += dout;
+    });
+
+    let grad = Tensor::<T::Inner>::from_slice(&grad_data, operand.dims(), MemoryOrder::ColumnMajor)
+        .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
+    Ok(vec![grad])
+}
+
+/// Backward pass for binary tropical einsum using argmax routing.
+fn tropical_backward_binary<T: TropicalScalar>(
+    operands: &[&Tensor<T>],
+    cotangent: &Tensor<T::Inner>,
+    tracker: &ArgmaxTracker,
+    subs: &Subscripts,
+    contracted: &[u32],
+) -> Result<Vec<Tensor<T::Inner>>> {
+    let a = operands[0];
+    let b = operands[1];
     let input_modes_a = &subs.inputs[0];
     let input_modes_b = &subs.inputs[1];
     let output_modes = &subs.output;
@@ -458,25 +488,24 @@ fn tropical_einsum_backward<T: TropicalScalar>(
 
     let output_shape = tracker.output_shape();
 
-    // Build contracted dimension sizes
     let contracted_dims: Vec<usize> = contracted
         .iter()
         .map(|m| {
-            let pos = input_modes_a
-                .iter()
-                .position(|x| x == m)
-                .ok_or_else(|| Error::InvalidArgument(format!("contracted mode {m} not in A")))?;
-            Ok(a.dims()[pos])
+            for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
+                if let Some(pos) = input_modes.iter().position(|x| x == m) {
+                    return Ok(operands[op_idx].dims()[pos]);
+                }
+            }
+            Err(Error::InvalidArgument(format!(
+                "contracted mode {m} not in any operand"
+            )))
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // Initialize gradient buffers
     let mut da_data = vec![T::Inner::zero(); a.len()];
     let mut db_data = vec![T::Inner::zero(); b.len()];
 
-    // Iterate over output elements
     for_each_index(output_shape, |out_idx| {
-        // Build mode value map from output indices
         let mut mode_values: std::collections::HashMap<u32, usize> =
             std::collections::HashMap::new();
         for (pos, &m) in output_modes.iter().enumerate() {
@@ -485,23 +514,19 @@ fn tropical_einsum_backward<T: TropicalScalar>(
 
         let dout = cot_view.get(out_idx);
 
-        // Get winner index from tracker
         let out_flat = col_major_flat_index(output_shape, out_idx);
         let k_winner = tracker.indices()[out_flat];
 
-        // Decode winner's contracted indices
         let k_idx = if contracted_dims.is_empty() {
             vec![]
         } else {
             unflatten_index(k_winner, &contracted_dims)
         };
 
-        // Set contracted indices to winner values
         for (c_pos, &c_mode) in contracted.iter().enumerate() {
             mode_values.insert(c_mode, k_idx[c_pos]);
         }
 
-        // Build A and B indices for the winner
         let a_idx: Vec<usize> = input_modes_a
             .iter()
             .map(|m| *mode_values.get(m).unwrap_or(&0))
@@ -514,11 +539,9 @@ fn tropical_einsum_backward<T: TropicalScalar>(
         let a_val = a_view.get(&a_idx).inner();
         let b_val = b_view.get(&b_idx).inner();
 
-        // Backward through tropical multiplication
         let da_contrib = T::mul_backward_a(a_val, b_val, dout);
         let db_contrib = T::mul_backward_b(a_val, b_val, dout);
 
-        // Accumulate into gradients
         let a_flat = col_major_flat_index(a.dims(), &a_idx);
         let b_flat = col_major_flat_index(b.dims(), &b_idx);
 
@@ -531,7 +554,7 @@ fn tropical_einsum_backward<T: TropicalScalar>(
     let db = Tensor::<T::Inner>::from_slice(&db_data, b.dims(), MemoryOrder::ColumnMajor)
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
 
-    Ok((da, db))
+    Ok(vec![da, db])
 }
 
 // ============================================================================
@@ -560,9 +583,6 @@ pub struct TropicalEinsumReverseRule<T: TropicalScalar> {
     primals: Vec<Tensor<T>>,
     tracker: ArgmaxTracker,
     input_node_ids: Vec<Option<NodeId>>,
-    batch: Vec<u32>,
-    free_a: Vec<u32>,
-    free_b: Vec<u32>,
     contracted: Vec<u32>,
 }
 
@@ -573,25 +593,21 @@ where
     Tensor<T::Inner>: Differentiable<Tangent = Tensor<T::Inner>>,
 {
     fn pullback(&self, cotangent: &Tensor<T::Inner>) -> AdResult<Vec<(NodeId, Tensor<T::Inner>)>> {
-        let (da, db) = tropical_einsum_backward(
-            &self.primals[0],
-            &self.primals[1],
+        let primal_refs: Vec<&Tensor<T>> = self.primals.iter().collect();
+        let grads = tropical_backward(
+            &primal_refs,
             cotangent,
             &self.tracker,
             &self.subscripts,
-            &self.batch,
-            &self.free_a,
-            &self.free_b,
             &self.contracted,
         )
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
         let mut results = Vec::new();
-        if let Some(id) = self.input_node_ids[0] {
-            results.push((id, da));
-        }
-        if let Some(id) = self.input_node_ids[1] {
-            results.push((id, db));
+        for (i, grad) in grads.into_iter().enumerate() {
+            if let Some(id) = self.input_node_ids[i] {
+                results.push((id, grad));
+            }
         }
         Ok(results)
     }
@@ -607,6 +623,10 @@ where
 /// returns a tracked tensor whose value is the output's inner values
 /// (standard reals). The reverse-mode rule routes gradients only to
 /// the winning elements.
+///
+/// Currently supports unary (1 operand) and binary (2 operand) contractions.
+/// Unary patterns include trace (`ii->`), full contraction (`ij->`),
+/// and partial reduction (`ij->i`, `ij->j`).
 ///
 /// The input `TrackedTensor` values wrap `Tensor<Inner>` (standard reals),
 /// which are internally promoted to tropical scalars for the forward pass.
@@ -646,61 +666,42 @@ where
     Backend: TensorPrims<Alg>,
     Tensor<T::Inner>: Differentiable<Tangent = Tensor<T::Inner>>,
 {
-    if operands.len() != 2 {
+    if operands.is_empty() || operands.len() > 2 {
         return Err(chainrules::AutodiffError::InvalidArgument(
-            "tracked_tropical_einsum currently supports exactly 2 operands".into(),
+            "tracked_tropical_einsum supports 1 or 2 operands".into(),
         ));
     }
 
     let subs = Subscripts::parse(subscripts)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
-    let input_modes_a = &subs.inputs[0];
-    let input_modes_b = &subs.inputs[1];
-    let output_modes = &subs.output;
+    // Contracted: labels in any input but not in output
+    let contracted: Vec<u32> = {
+        let all_input_labels: std::collections::HashSet<u32> = subs
+            .inputs
+            .iter()
+            .flat_map(|inp| inp.iter())
+            .copied()
+            .collect();
+        all_input_labels
+            .into_iter()
+            .filter(|m| !subs.output.contains(m))
+            .collect()
+    };
 
-    // Analyze subscripts
-    let contracted: Vec<u32> = input_modes_a
+    // Promote all operands to tropical scalars
+    let tropical_operands: Vec<Tensor<T>> = operands
         .iter()
-        .filter(|m| input_modes_b.contains(m) && !output_modes.contains(m))
-        .copied()
-        .collect();
-    let batch: Vec<u32> = input_modes_a
-        .iter()
-        .filter(|m| input_modes_b.contains(m) && output_modes.contains(m))
-        .copied()
-        .collect();
-    let free_a: Vec<u32> = input_modes_a
-        .iter()
-        .filter(|m| !input_modes_b.contains(m) && output_modes.contains(m))
-        .copied()
-        .collect();
-    let free_b: Vec<u32> = input_modes_b
-        .iter()
-        .filter(|m| !input_modes_a.contains(m) && output_modes.contains(m))
-        .copied()
-        .collect();
-
-    // Promote inner values to tropical scalars
-    let a_inner = operands[0].value();
-    let b_inner = operands[1].value();
-
-    let a_tropical = promote_to_tropical::<T>(a_inner)
+        .map(|op| promote_to_tropical::<T>(op.value()))
+        .collect::<std::result::Result<_, _>>()
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
-    let b_tropical = promote_to_tropical::<T>(b_inner)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+
+    let tropical_refs: Vec<&Tensor<T>> = tropical_operands.iter().collect();
 
     // Run forward with argmax tracking
-    let (output_tropical, tracker) = tropical_einsum_forward_with_argmax(
-        &a_tropical,
-        &b_tropical,
-        &subs,
-        &batch,
-        &free_a,
-        &free_b,
-        &contracted,
-    )
-    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+    let (output_tropical, tracker) =
+        tropical_forward_with_argmax(&tropical_refs, &subs, &contracted)
+            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     // Extract inner values from tropical output
     let output_inner = extract_inner::<T>(&output_tropical)
@@ -733,12 +734,9 @@ where
 
     let rule = TropicalEinsumReverseRule::<T> {
         subscripts: subs,
-        primals: vec![a_tropical, b_tropical],
+        primals: tropical_operands,
         tracker,
         input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
-        batch,
-        free_a,
-        free_b,
         contracted,
     };
 
