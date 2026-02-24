@@ -2126,3 +2126,258 @@ fn einsum_input_output_repeated_ii_to_ii() {
         }
     }
 }
+
+// ============================================================================
+// NestedEinsum parsing
+// ============================================================================
+
+#[test]
+fn nested_parse_flat_no_parens() {
+    // Without parentheses, produces a single root node with all leaves
+    let nested = tenferro_einsum::NestedEinsum::parse("ij,jk->ik").unwrap();
+    match &nested {
+        tenferro_einsum::NestedEinsum::Node {
+            subscripts,
+            children,
+        } => {
+            assert_eq!(children.len(), 2);
+            assert_eq!(
+                subscripts.output,
+                tenferro_einsum::Subscripts::parse("ij,jk->ik")
+                    .unwrap()
+                    .output
+            );
+            // Children are leaves
+            assert!(matches!(
+                children[0],
+                tenferro_einsum::NestedEinsum::Leaf(0)
+            ));
+            assert!(matches!(
+                children[1],
+                tenferro_einsum::NestedEinsum::Leaf(1)
+            ));
+        }
+        _ => panic!("expected Node"),
+    }
+}
+
+#[test]
+fn nested_parse_simple_group() {
+    // (ij,jk),kl->il
+    // Root: two children, first is a Node (group), second is Leaf(2)
+    let nested = tenferro_einsum::NestedEinsum::parse("(ij,jk),kl->il").unwrap();
+    match &nested {
+        tenferro_einsum::NestedEinsum::Node {
+            subscripts,
+            children,
+        } => {
+            assert_eq!(children.len(), 2);
+            // Root output is "il"
+            let i = 8u32; // 'i' - 'a'
+            let l = 11u32; // 'l' - 'a'
+            assert_eq!(subscripts.output, vec![i, l]);
+            // First child is a Node (the group)
+            match &children[0] {
+                tenferro_einsum::NestedEinsum::Node {
+                    subscripts: inner_subs,
+                    children: inner_children,
+                } => {
+                    assert_eq!(inner_children.len(), 2);
+                    assert!(matches!(
+                        inner_children[0],
+                        tenferro_einsum::NestedEinsum::Leaf(0)
+                    ));
+                    assert!(matches!(
+                        inner_children[1],
+                        tenferro_einsum::NestedEinsum::Leaf(1)
+                    ));
+                    // Inner output should contain labels needed outside: i and k
+                    // i appears in final output, k appears in sibling kl
+                    let k = 10u32;
+                    assert!(inner_subs.output.contains(&i));
+                    assert!(inner_subs.output.contains(&k));
+                }
+                _ => panic!("expected inner Node"),
+            }
+            // Second child is Leaf(2)
+            assert!(matches!(
+                children[1],
+                tenferro_einsum::NestedEinsum::Leaf(2)
+            ));
+        }
+        _ => panic!("expected Node"),
+    }
+}
+
+#[test]
+fn nested_parse_deeply_nested() {
+    // ((ij,jk),kl),lm->im
+    let nested = tenferro_einsum::NestedEinsum::parse("((ij,jk),kl),lm->im").unwrap();
+    // Should have depth 3: root -> group -> group -> leaves
+    match &nested {
+        tenferro_einsum::NestedEinsum::Node { children, .. } => {
+            assert_eq!(children.len(), 2); // outer group + lm
+            match &children[0] {
+                tenferro_einsum::NestedEinsum::Node { children: mid, .. } => {
+                    assert_eq!(mid.len(), 2); // inner group + kl
+                    match &mid[0] {
+                        tenferro_einsum::NestedEinsum::Node {
+                            children: inner, ..
+                        } => {
+                            assert_eq!(inner.len(), 2); // ij + jk
+                            assert!(matches!(inner[0], tenferro_einsum::NestedEinsum::Leaf(0)));
+                            assert!(matches!(inner[1], tenferro_einsum::NestedEinsum::Leaf(1)));
+                        }
+                        _ => panic!("expected inner Node"),
+                    }
+                    assert!(matches!(mid[1], tenferro_einsum::NestedEinsum::Leaf(2)));
+                }
+                _ => panic!("expected mid Node"),
+            }
+            assert!(matches!(
+                children[1],
+                tenferro_einsum::NestedEinsum::Leaf(3)
+            ));
+        }
+        _ => panic!("expected Node"),
+    }
+}
+
+#[test]
+fn nested_parse_error_mismatched_parens() {
+    assert!(tenferro_einsum::NestedEinsum::parse("(ij,jk->ik").is_err());
+    assert!(tenferro_einsum::NestedEinsum::parse("ij),jk->ik").is_err());
+}
+
+// ============================================================================
+// NestedEinsum execution
+// ============================================================================
+
+#[test]
+fn nested_einsum_simple_group() {
+    // (ij,jk),kl->il should produce same result as ij,jk,kl->il
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+    let c =
+        Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[4, 2], COL).unwrap();
+
+    let flat = einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
+    let nested = einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a, &b, &c], None).unwrap();
+
+    assert_eq!(flat.dims(), nested.dims());
+    let flat_data = flat.buffer().as_slice().unwrap();
+    let nested_data = nested.buffer().as_slice().unwrap();
+    for (f, n) in flat_data.iter().zip(nested_data.iter()) {
+        assert!((f - n).abs() < 1e-10, "flat={f}, nested={n}");
+    }
+}
+
+#[test]
+fn nested_einsum_deeply_nested() {
+    // ((ij,jk),kl),lm->im
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 2.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[3.0, 0.0, 0.0, 3.0], &[2, 2], COL).unwrap();
+    let d = Tensor::<f64>::from_slice(&[4.0, 0.0, 0.0, 4.0], &[2, 2], COL).unwrap();
+
+    let flat =
+        einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl,lm->im", &[&a, &b, &c, &d], None).unwrap();
+    let nested =
+        einsum::<S, CpuBackend>(&mut ctx, "((ij,jk),kl),lm->im", &[&a, &b, &c, &d], None).unwrap();
+
+    assert_eq!(flat.dims(), nested.dims());
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                (get(&flat, &[i, j]) - get(&nested, &[i, j])).abs() < 1e-10,
+                "mismatch at [{i},{j}]"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_einsum_nary_group() {
+    // (ij,jk,kl)->il — three operands in one group
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+
+    let flat = einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
+    let nested = einsum::<S, CpuBackend>(&mut ctx, "(ij,jk,kl)->il", &[&a, &b, &c], None).unwrap();
+
+    assert_eq!(flat.dims(), nested.dims());
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                (get(&flat, &[i, j]) - get(&nested, &[i, j])).abs() < 1e-10,
+                "mismatch at [{i},{j}]"
+            );
+        }
+    }
+}
+
+#[test]
+fn nested_einsum_single_operand_group() {
+    // (ij)->ij — trivial single-operand group is identity
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+
+    let result = einsum::<S, CpuBackend>(&mut ctx, "(ij)->ij", &[&a], None).unwrap();
+    assert_eq!(result.dims(), &[2, 2]);
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!((get(&result, &[i, j]) - get(&a, &[i, j])).abs() < 1e-10);
+        }
+    }
+}
+
+// ============================================================================
+// Bug-fix regression tests
+// ============================================================================
+
+#[test]
+fn nested_einsum_extra_operands_error() {
+    // Fix: "(ij)->ij" with 2 operands must error, not silently ignore the second
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let result = einsum::<S, CpuBackend>(&mut ctx, "(ij)->ij", &[&a, &b], None);
+    assert!(result.is_err(), "should error on extra operands");
+}
+
+#[test]
+fn nested_einsum_fewer_operands_error() {
+    // "(ij,jk),kl->il" with only 2 operands must error
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let result = einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a, &b], None);
+    assert!(
+        result.is_err(),
+        "should error on fewer operands than leaves"
+    );
+}
+
+#[test]
+fn subscripts_parse_unmatched_close_paren() {
+    // "ij),jk->ik" must error in Subscripts::parse
+    let result = Subscripts::parse("ij),jk->ik");
+    assert!(result.is_err(), "unmatched ')' should be rejected");
+}
+
+#[test]
+fn subscripts_parse_unmatched_open_paren() {
+    let result = Subscripts::parse("(ij,jk->ik");
+    assert!(result.is_err(), "unmatched '(' should be rejected");
+}
