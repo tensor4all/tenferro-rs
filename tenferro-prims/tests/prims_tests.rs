@@ -2131,6 +2131,48 @@ macro_rules! typed_prims_tests {
             }
 
             #[test]
+            fn trace_multi_component_iijj() {
+                // iijj-> : two independent paired components
+                // Component 0: axes {0,1} dim=3, Component 1: axes {2,3} dim=4
+                // Y = sum_{i,j} A[i,i,j,j]
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_from_fn(&[3, 3, 4, 4], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2] + idx[3])
+                });
+                let mut c = tensor_zeros::<$T>(&[]);
+
+                let desc = PrimDescriptor::Trace {
+                    modes_a: vec![0, 1, 2, 3],
+                    modes_c: vec![],
+                    paired: vec![(0, 1), (2, 3)],
+                };
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 3, 4, 4], &[]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(1.0),
+                    &[&a],
+                    <$T as TestScalar>::from_f64(0.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                let mut expected = <$T as TestScalar>::from_f64(0.0);
+                for i in 0..3usize {
+                    for j in 0..4usize {
+                        expected = expected + tensor_get(&a, &[i, i, j, j]);
+                    }
+                }
+                assert!(
+                    <$T as TestScalar>::approx_eq(tensor_get(&c, &[]), expected),
+                    "trace = {:?}, expected {:?}, diff = {}",
+                    tensor_get(&c, &[]),
+                    expected,
+                    <$T as TestScalar>::diff_norm(tensor_get(&c, &[]), expected)
+                );
+            }
+
+            #[test]
             fn elementwise_mul_2d() {
                 let mut ctx = CpuContext::new(1);
                 let a = tensor_from_fn(&[3, 4], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));

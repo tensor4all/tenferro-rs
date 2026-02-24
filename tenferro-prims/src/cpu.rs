@@ -36,6 +36,71 @@ fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_,
         .map_err(|e| Error::StrideError(format!("{e}")))
 }
 
+/// Compute connected components from a list of paired axis positions using union-find.
+///
+/// Returns `(components, comp_dims)` where:
+/// - `components[i]` = sorted list of all axis positions in the i-th component
+/// - `comp_dims[i]` = the shared dimension of the i-th component (looked up from `shape`)
+fn compute_paired_components(
+    paired_axes: &[(usize, usize)],
+    shape: &[usize],
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    use std::collections::HashMap;
+
+    if paired_axes.is_empty() {
+        return (vec![], vec![]);
+    }
+
+    // Collect all axes that appear in paired_axes
+    let mut all_axes: Vec<usize> = Vec::new();
+    for &(ax1, ax2) in paired_axes {
+        all_axes.push(ax1);
+        all_axes.push(ax2);
+    }
+    all_axes.sort();
+    all_axes.dedup();
+
+    // Union-find: parent map
+    let mut parent: HashMap<usize, usize> = all_axes.iter().map(|&ax| (ax, ax)).collect();
+
+    fn find(parent: &mut HashMap<usize, usize>, x: usize) -> usize {
+        let p = parent[&x];
+        if p != x {
+            let root = find(parent, p);
+            parent.insert(x, root);
+            root
+        } else {
+            x
+        }
+    }
+
+    // Union each pair
+    for &(ax1, ax2) in paired_axes {
+        let r1 = find(&mut parent, ax1);
+        let r2 = find(&mut parent, ax2);
+        if r1 != r2 {
+            // Union: make smaller root the parent (deterministic)
+            let (lo, hi) = if r1 < r2 { (r1, r2) } else { (r2, r1) };
+            parent.insert(hi, lo);
+        }
+    }
+
+    // Group by root
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &ax in &all_axes {
+        let root = find(&mut parent, ax);
+        groups.entry(root).or_default().push(ax);
+    }
+
+    // Sort components by their minimum axis for determinism
+    let mut components: Vec<Vec<usize>> = groups.into_values().collect();
+    components.sort_by_key(|c| c[0]);
+
+    let comp_dims: Vec<usize> = components.iter().map(|c| shape[c[0]]).collect();
+
+    (components, comp_dims)
+}
+
 /// CPU plan — concrete enum, no type erasure.
 ///
 /// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
@@ -68,6 +133,11 @@ pub enum CpuPlan<T: Scalar> {
         paired_axes: Vec<(usize, usize)>,
         /// Output axis positions mapping.
         free_axes: Vec<usize>,
+        /// Connected components of paired axes (union-find groups).
+        /// Each inner Vec contains all axis positions in one component.
+        components: Vec<Vec<usize>>,
+        /// Dimension of each component (all axes in a component share the same dim).
+        comp_dims: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for permutation.
@@ -82,6 +152,10 @@ pub enum CpuPlan<T: Scalar> {
         paired_axes: Vec<(usize, usize)>,
         /// Input axis positions mapping.
         free_axes: Vec<usize>,
+        /// Connected components of paired axes (union-find groups).
+        components: Vec<Vec<usize>>,
+        /// Dimension of each component.
+        comp_dims: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for anti-diag (AD backward).
@@ -90,6 +164,10 @@ pub enum CpuPlan<T: Scalar> {
         paired_axes: Vec<(usize, usize)>,
         /// Input axis positions mapping.
         free_axes: Vec<usize>,
+        /// Connected components of paired axes (union-find groups).
+        components: Vec<Vec<usize>>,
+        /// Dimension of each component.
+        comp_dims: Vec<usize>,
         _marker: PhantomData<T>,
     },
     /// Plan for element-wise unary operation.
@@ -311,9 +389,12 @@ impl CpuBackend {
                     .iter()
                     .map(|m| mode_position(modes_a, *m))
                     .collect::<Result<_>>()?;
+                let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[0]);
                 Ok(CpuPlan::Trace {
                     paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
                     _marker: PhantomData,
                 })
             }
@@ -362,9 +443,12 @@ impl CpuBackend {
                     .iter()
                     .map(|m| mode_position(modes_c, *m))
                     .collect::<Result<_>>()?;
+                let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[1]);
                 Ok(CpuPlan::AntiTrace {
                     paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
                     _marker: PhantomData,
                 })
             }
@@ -388,9 +472,12 @@ impl CpuBackend {
                     .iter()
                     .map(|m| mode_position(modes_c, *m))
                     .collect::<Result<_>>()?;
+                let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[1]);
                 Ok(CpuPlan::AntiDiag {
                     paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
                     _marker: PhantomData,
                 })
             }
@@ -605,26 +692,45 @@ fn execute_trace<T: Scalar>(
     input: &StridedView<T>,
     beta: T,
     output: &mut StridedViewMut<T>,
-    paired_axes: &[(usize, usize)],
+    components: &[Vec<usize>],
+    comp_dims: &[usize],
     free_axes: &[usize],
 ) -> Result<()> {
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
-    // All paired axes must have the same dimension
-    let diag_dim = in_dims[paired_axes[0].0];
+    let n_comps = comp_dims.len();
 
     for_each_index(&out_dims, |out_idx| {
         let mut sum = T::zero();
-        for d in 0..diag_dim {
+        // Odometer over component dimensions (Cartesian product)
+        let mut comp_idx = vec![0usize; n_comps];
+        loop {
             let mut in_idx = vec![0; in_dims.len()];
             for (out_pos, &in_ax) in free_axes.iter().enumerate() {
                 in_idx[in_ax] = out_idx[out_pos];
             }
-            for &(ax1, ax2) in paired_axes {
-                in_idx[ax1] = d;
-                in_idx[ax2] = d;
+            for (t, comp) in components.iter().enumerate() {
+                for &ax in comp {
+                    in_idx[ax] = comp_idx[t];
+                }
             }
             sum = sum + input.get(&in_idx);
+
+            // Increment odometer
+            let mut carry = true;
+            for t in 0..n_comps {
+                if carry {
+                    comp_idx[t] += 1;
+                    if comp_idx[t] < comp_dims[t] {
+                        carry = false;
+                    } else {
+                        comp_idx[t] = 0;
+                    }
+                }
+            }
+            if carry {
+                break;
+            }
         }
         let old = if beta == T::zero() {
             T::zero()
@@ -643,6 +749,8 @@ fn execute_anti_trace<T: Scalar>(
     output: &mut StridedViewMut<T>,
     paired_axes: &[(usize, usize)],
     free_axes: &[usize],
+    _components: &[Vec<usize>],
+    _comp_dims: &[usize],
 ) -> Result<()> {
     // AntiTrace: C = alpha * antitrace(A) + beta * C
     // First scale output by beta (since diagonal positions may be written multiple times)
@@ -650,6 +758,7 @@ fn execute_anti_trace<T: Scalar>(
 
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
+    // TODO(Task 2): use components/comp_dims for multi-component support
     let diag_dim = out_dims[paired_axes[0].0];
 
     // For each input element, scatter to all diagonal positions in output
@@ -678,11 +787,14 @@ fn execute_anti_diag<T: Scalar>(
     output: &mut StridedViewMut<T>,
     paired_axes: &[(usize, usize)],
     free_axes: &[usize],
+    _components: &[Vec<usize>],
+    _comp_dims: &[usize],
 ) -> Result<()> {
     // AntiDiag: write input values to diagonal positions in output.
     // This is the AD backward of diagonal extraction ("ii->i"):
     // for each input element input[k], write to output[..., k, ..., k, ...]
     // where the paired axes both get the value determined by the free axis.
+    // TODO(Task 2): use components/comp_dims for multi-component support
     scale_output(output, beta);
 
     let in_dims = input.dims().to_vec();
@@ -1074,7 +1186,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
             }
 
             CpuPlan::Trace {
-                paired_axes,
+                components,
+                comp_dims,
                 free_axes,
                 ..
             } => {
@@ -1084,7 +1197,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     view_refs[0],
                     beta,
                     &mut out_view,
-                    paired_axes,
+                    components,
+                    comp_dims,
                     free_axes,
                 )
             }
@@ -1092,6 +1206,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
             CpuPlan::AntiTrace {
                 paired_axes,
                 free_axes,
+                components,
+                comp_dims,
                 ..
             } => {
                 validate_execute_inputs(inputs, 1, "AntiTrace")?;
@@ -1102,12 +1218,16 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     &mut out_view,
                     paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
                 )
             }
 
             CpuPlan::AntiDiag {
                 paired_axes,
                 free_axes,
+                components,
+                comp_dims,
                 ..
             } => {
                 validate_execute_inputs(inputs, 1, "AntiDiag")?;
@@ -1118,6 +1238,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     &mut out_view,
                     paired_axes,
                     free_axes,
+                    components,
+                    comp_dims,
                 )
             }
 
