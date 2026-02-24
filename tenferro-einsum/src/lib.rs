@@ -2614,7 +2614,7 @@ where
             ops[k] = tangent_k;
 
             let term = if let Some(nested) = nested {
-                execute_nested_inner::<Alg, Backend>(ctx, nested, &ops, None)?
+                execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?
             } else {
                 einsum_with_subscripts::<Alg, Backend>(ctx, subs, &ops, None)?
             };

@@ -2421,6 +2421,20 @@ fn nested_einsum_propagates_fw_grad() {
 }
 
 #[test]
+fn einsum_frule_parenthesized_operand_count_mismatch() {
+    // Must return Err, not panic, when operand count doesn't match leaf count
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+
+    // "(ij,jk),kl->il" expects 3 operands, but only 2 given
+    let result =
+        einsum_frule::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a, &b], &[Some(&da), None]);
+    assert!(result.is_err(), "should error on operand count mismatch");
+}
+
+#[test]
 fn einsum_frule_parenthesized() {
     // einsum_frule with parenthesized subscripts must produce same result as flat
     let mut ctx = CpuContext::new(1);
