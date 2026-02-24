@@ -1430,6 +1430,28 @@ impl Subscripts {
             .map(char_to_label)
             .collect::<Result<_>>()?;
 
+        // Validate balanced parentheses before stripping
+        let mut depth: i32 = 0;
+        for c in inputs_str.chars() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return Err(Error::InvalidArgument(format!(
+                            "unmatched ')' in einsum notation: {notation}"
+                        )));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            return Err(Error::InvalidArgument(format!(
+                "unmatched '(' in einsum notation: {notation}"
+            )));
+        }
+
         // Strip parentheses and parse input labels
         let clean_inputs = inputs_str.replace(['(', ')'], "");
         let inputs: Vec<Vec<u32>> = clean_inputs
@@ -1888,6 +1910,8 @@ where
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: TensorPrims<Alg>,
 {
+    // Subscripts::parse strips parentheses, giving the flat form needed
+    // by both the flat execution path and the frule tangent propagation.
     let subs = Subscripts::parse(subscripts)?;
     let nested = if subscripts.contains('(') {
         Some(NestedEinsum::parse(subscripts)?)
