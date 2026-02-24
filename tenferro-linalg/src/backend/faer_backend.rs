@@ -461,6 +461,67 @@ macro_rules! impl_linalg_backend {
 
                 Ok(())
             }
+
+            fn eig_general(
+                &mut self,
+                a: &[$ty],
+                n: usize,
+                values_ri: &mut [$ty],
+                vectors_ri: &mut [$ty],
+            ) -> Result<()> {
+                use faer::complex_native::c64;
+
+                if a.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eig_general: input slice length {} < n*n = {}",
+                        a.len(),
+                        n * n
+                    )));
+                }
+                if values_ri.len() < 2 * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eig_general: values_ri slice length {} < 2*n = {}",
+                        values_ri.len(),
+                        2 * n
+                    )));
+                }
+                if vectors_ri.len() < 2 * n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eig_general: vectors_ri slice length {} < 2*n*n = {}",
+                        vectors_ri.len(),
+                        2 * n * n
+                    )));
+                }
+
+                // Convert real input to complex for faer eigendecomposition
+                let a_complex: Vec<c64> = a[..n * n]
+                    .iter()
+                    .map(|&v| c64::new(v as f64, 0.0))
+                    .collect();
+                let mat = faer::mat::from_column_major_slice(&a_complex, n, n);
+                let eig = mat.eigendecomposition::<c64>();
+
+                let s_col = eig.s().column_vector();
+                let u_ref = eig.u();
+
+                // Write eigenvalues as interleaved [re, im, re, im, ...]
+                for i in 0..n {
+                    let val = s_col.read(i);
+                    values_ri[2 * i] = val.re as $ty;
+                    values_ri[2 * i + 1] = val.im as $ty;
+                }
+
+                // Write eigenvectors as interleaved column-major
+                for j in 0..n {
+                    for i in 0..n {
+                        let val = u_ref[(i, j)];
+                        vectors_ri[2 * (i + j * n)] = val.re as $ty;
+                        vectors_ri[2 * (i + j * n) + 1] = val.im as $ty;
+                    }
+                }
+
+                Ok(())
+            }
         }
     };
 }
@@ -916,6 +977,67 @@ macro_rules! impl_complex_linalg_backend {
                             }
                             x_col[i] = sum / a[i + i * n];
                         }
+                    }
+                }
+
+                Ok(())
+            }
+
+            fn eig_general(
+                &mut self,
+                a: &[$complex_ty],
+                n: usize,
+                values_ri: &mut [$complex_ty],
+                vectors_ri: &mut [$complex_ty],
+            ) -> Result<()> {
+                use faer::complex_native::c64;
+
+                // For complex T, each element already holds re+im, so
+                // values_ri has length n (not 2*n) and vectors_ri has length n*n.
+                if a.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eig_general: input slice length {} < n*n = {}",
+                        a.len(),
+                        n * n
+                    )));
+                }
+                if values_ri.len() < n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eig_general: values_ri slice length {} < n = {}",
+                        values_ri.len(),
+                        n
+                    )));
+                }
+                if vectors_ri.len() < n * n {
+                    return Err(Error::InvalidArgument(format!(
+                        "eig_general: vectors_ri slice length {} < n*n = {}",
+                        vectors_ri.len(),
+                        n * n
+                    )));
+                }
+
+                // Always convert to c64 for eigendecomposition (works for both
+                // Complex64 and Complex32 input, avoiding potential c32 limitations)
+                let a_c64: Vec<c64> = a[..n * n]
+                    .iter()
+                    .map(|c| c64::new(c.re as f64, c.im as f64))
+                    .collect();
+                let mat = faer::mat::from_column_major_slice(&a_c64, n, n);
+                let eig = mat.eigendecomposition::<c64>();
+
+                let s_col = eig.s().column_vector();
+                let u_ref = eig.u();
+
+                for i in 0..n {
+                    let val = s_col.read(i);
+                    values_ri[i] = <$complex_ty>::new(val.re as $real_ty, val.im as $real_ty);
+                }
+
+                for j in 0..n {
+                    for i in 0..n {
+                        let val = u_ref[(i, j)];
+                        vectors_ri[i + j * n] =
+                            <$complex_ty>::new(val.re as $real_ty, val.im as $real_ty);
                     }
                 }
 

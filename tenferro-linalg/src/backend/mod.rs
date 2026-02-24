@@ -160,6 +160,26 @@ pub trait LinalgBackend<T: Copy + 'static> {
         upper: bool,
         x: &mut [T],
     ) -> Result<()>;
+
+    /// General (non-symmetric) eigendecomposition: `A V = V diag(lambda)`.
+    ///
+    /// Eigenvalues and eigenvectors are always complex-valued.
+    /// Output slices hold interleaved real/imaginary pairs: `[re0, im0, re1, im1, ...]`.
+    /// For real input `T`, each eigenvalue uses 2 floats.
+    ///
+    /// - `a`: input matrix, column-major `n x n`
+    /// - `values_ri`: length `2*n` (interleaved re/im pairs)
+    /// - `vectors_ri`: length `2*n*n` (interleaved re/im pairs, column-major)
+    ///
+    /// For complex `T` (e.g., `Complex64`), each element already holds re+im,
+    /// so `values_ri` has length `n` and `vectors_ri` has length `n*n`.
+    fn eig_general(
+        &mut self,
+        a: &[T],
+        n: usize,
+        values_ri: &mut [T],
+        vectors_ri: &mut [T],
+    ) -> Result<()>;
 }
 
 /// Compute column-major strides for given dimensions.
