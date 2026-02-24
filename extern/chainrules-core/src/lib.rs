@@ -233,17 +233,39 @@ pub enum SavePolicy {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// Custom reverse rule for scalar multiplication `output = a * b`:
+///
+/// ```
 /// use chainrules_core::{ReverseRule, Differentiable, AdResult, NodeId};
 ///
-/// struct MyRule;
-/// impl<V: Differentiable> ReverseRule<V> for MyRule {
-///     fn pullback(&self, cotangent: &V::Tangent)
-///         -> AdResult<Vec<(NodeId, V::Tangent)>> {
-///         todo!()
-///     }
-///     fn inputs(&self) -> Vec<NodeId> { vec![] }
+/// struct ScalarMulRule {
+///     a: f64,
+///     b: f64,
+///     a_node: NodeId,
+///     b_node: NodeId,
 /// }
+///
+/// impl ReverseRule<f64> for ScalarMulRule {
+///     fn pullback(&self, cotangent: &f64) -> AdResult<Vec<(NodeId, f64)>> {
+///         // d(a*b)/da = b, d(a*b)/db = a
+///         let da = cotangent * self.b;
+///         let db = cotangent * self.a;
+///         Ok(vec![(self.a_node, da), (self.b_node, db)])
+///     }
+///
+///     fn inputs(&self) -> Vec<NodeId> {
+///         vec![self.a_node, self.b_node]
+///     }
+/// }
+///
+/// // Verify: for a=3, b=5, cotangent=1 → da=5, db=3
+/// let rule = ScalarMulRule {
+///     a: 3.0, b: 5.0,
+///     a_node: NodeId::new(0), b_node: NodeId::new(1),
+/// };
+/// let grads = rule.pullback(&1.0).unwrap();
+/// assert_eq!(grads[0], (NodeId::new(0), 5.0)); // da = cotangent * b
+/// assert_eq!(grads[1], (NodeId::new(1), 3.0)); // db = cotangent * a
 /// ```
 pub trait ReverseRule<V: Differentiable> {
     /// Computes input cotangents from an output cotangent (pullback).
@@ -288,16 +310,33 @@ pub trait ReverseRule<V: Differentiable> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// Custom forward rule for scalar multiplication `output = a * b`:
+///
+/// ```
 /// use chainrules_core::{ForwardRule, Differentiable, AdResult};
 ///
-/// struct MyFrule;
-/// impl<V: Differentiable> ForwardRule<V> for MyFrule {
-///     fn pushforward(&self, tangents: &[Option<&V::Tangent>])
-///         -> AdResult<V::Tangent> {
-///         todo!()
+/// struct ScalarMulFrule {
+///     a: f64,
+///     b: f64,
+/// }
+///
+/// impl ForwardRule<f64> for ScalarMulFrule {
+///     fn pushforward(&self, tangents: &[Option<&f64>]) -> AdResult<f64> {
+///         // d(a*b) = da*b + a*db
+///         let da = tangents.get(0).and_then(|t| *t).copied().unwrap_or(0.0);
+///         let db = tangents.get(1).and_then(|t| *t).copied().unwrap_or(0.0);
+///         Ok(da * self.b + self.a * db)
 ///     }
 /// }
+///
+/// // Verify: for a=3, b=5, da=1, db=0 → d(a*b) = 1*5 + 3*0 = 5
+/// let rule = ScalarMulFrule { a: 3.0, b: 5.0 };
+/// let result = rule.pushforward(&[Some(&1.0), Some(&0.0)]).unwrap();
+/// assert_eq!(result, 5.0);
+///
+/// // Both tangents active: da=1, db=1 → d(a*b) = 1*5 + 3*1 = 8
+/// let result = rule.pushforward(&[Some(&1.0), Some(&1.0)]).unwrap();
+/// assert_eq!(result, 8.0);
 /// ```
 pub trait ForwardRule<V: Differentiable> {
     /// Computes output tangent from input tangents (pushforward).
