@@ -2381,3 +2381,41 @@ fn subscripts_parse_unmatched_open_paren() {
     let result = Subscripts::parse("(ij,jk->ik");
     assert!(result.is_err(), "unmatched '(' should be rejected");
 }
+
+#[test]
+fn nested_einsum_propagates_fw_grad() {
+    // Parenthesized path must propagate fw_grad just like the flat path
+    let mut ctx = CpuContext::new(1);
+
+    let mut a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+
+    // Set tangent on a only
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    a.set_fw_grad(da.clone());
+
+    // Parenthesized: (ij,jk),kl->il
+    let result = einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a, &b, &c], None).unwrap();
+    assert!(
+        result.has_fw_grad(),
+        "parenthesized einsum should propagate fw_grad"
+    );
+
+    // Compare with flat path
+    let flat = einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
+    assert!(flat.has_fw_grad());
+
+    let nested_grad = result.fw_grad().unwrap();
+    let flat_grad = flat.fw_grad().unwrap();
+    let ng = nested_grad.buffer().as_slice().unwrap();
+    let fg = flat_grad.buffer().as_slice().unwrap();
+    for i in 0..ng.len() {
+        assert!(
+            (ng[i] - fg[i]).abs() < 1e-10,
+            "fw_grad[{i}]: nested={}, flat={}",
+            ng[i],
+            fg[i]
+        );
+    }
+}

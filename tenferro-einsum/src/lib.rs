@@ -286,6 +286,44 @@ fn char_to_label(c: char) -> Result<u32> {
     }
 }
 
+/// Split einsum notation on `->` and validate balanced parentheses.
+///
+/// Returns `(lhs, rhs)` where `lhs` is the input side and `rhs` is the output side.
+fn split_and_validate_notation(notation: &str) -> Result<(&str, &str)> {
+    let parts: Vec<&str> = notation.split("->").collect();
+    if parts.len() != 2 {
+        return Err(Error::InvalidArgument(format!(
+            "einsum notation must contain exactly one '->', got: {notation}"
+        )));
+    }
+    let lhs = parts[0];
+    let rhs = parts[1];
+
+    // Validate balanced parentheses in lhs
+    let mut depth: i32 = 0;
+    for c in lhs.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return Err(Error::InvalidArgument(format!(
+                        "unmatched ')' in einsum notation: {notation}"
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return Err(Error::InvalidArgument(format!(
+            "unmatched '(' in einsum notation: {notation}"
+        )));
+    }
+
+    Ok((lhs, rhs))
+}
+
 /// Build a label → size mapping from subscripts and input shapes.
 fn build_size_dict(
     subscripts: &Subscripts,
@@ -1385,42 +1423,12 @@ impl Subscripts {
     ///
     /// Returns an error if the notation is malformed.
     pub fn parse(notation: &str) -> Result<Self> {
-        let parts: Vec<&str> = notation.split("->").collect();
-        if parts.len() != 2 {
-            return Err(Error::InvalidArgument(format!(
-                "einsum notation must contain exactly one '->', got: {notation}"
-            )));
-        }
-        let inputs_str = parts[0];
-        let output_str = parts[1];
+        let (inputs_str, output_str) = split_and_validate_notation(notation)?;
 
-        // Parse output labels
         let output: Vec<u32> = output_str
             .chars()
             .map(char_to_label)
             .collect::<Result<_>>()?;
-
-        // Validate balanced parentheses before stripping
-        let mut depth: i32 = 0;
-        for c in inputs_str.chars() {
-            match c {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth < 0 {
-                        return Err(Error::InvalidArgument(format!(
-                            "unmatched ')' in einsum notation: {notation}"
-                        )));
-                    }
-                }
-                _ => {}
-            }
-        }
-        if depth != 0 {
-            return Err(Error::InvalidArgument(format!(
-                "unmatched '(' in einsum notation: {notation}"
-            )));
-        }
 
         // Strip parentheses and parse input labels
         let clean_inputs = inputs_str.replace(['(', ')'], "");
@@ -1509,38 +1517,8 @@ impl NestedEinsum {
     /// Returns an error if parentheses are mismatched or the notation is
     /// otherwise malformed.
     pub fn parse(notation: &str) -> Result<Self> {
-        let parts: Vec<&str> = notation.split("->").collect();
-        if parts.len() != 2 {
-            return Err(Error::InvalidArgument(format!(
-                "einsum notation must contain exactly one '->', got: {notation}"
-            )));
-        }
-        let lhs = parts[0];
-        let output_str = parts[1];
+        let (lhs, output_str) = split_and_validate_notation(notation)?;
 
-        // Validate balanced parentheses in lhs
-        let mut depth: i32 = 0;
-        for c in lhs.chars() {
-            match c {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth < 0 {
-                        return Err(Error::InvalidArgument(format!(
-                            "unmatched ')' in einsum notation: {notation}"
-                        )));
-                    }
-                }
-                _ => {}
-            }
-        }
-        if depth != 0 {
-            return Err(Error::InvalidArgument(format!(
-                "unmatched '(' in einsum notation: {notation}"
-            )));
-        }
-
-        // Parse final output labels
         let output: Vec<u32> = output_str
             .chars()
             .map(char_to_label)
