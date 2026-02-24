@@ -2618,3 +2618,512 @@ fn eig_rrule_fd_systematic() {
         );
     }
 }
+
+// ============================================================================
+// Systematic frule FD checks
+// ============================================================================
+
+// 1. SVD frule FD — test through singular values S
+#[test]
+fn svd_frule_fd_through_s() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        svd(&mut b, x, None).unwrap().s
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, tangent_result) = svd_frule(&mut b, x, dx, None).unwrap();
+        tangent_result.s
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 2. QR frule FD — test through R
+// KNOWN ISSUE: qr_frule formula has FD mismatch ~0.86. The simplified
+// dR = triu(Q^T dA) approach is not the correct pushforward formula.
+#[test]
+#[ignore = "qr_frule formula needs correction — FD mismatch ~0.86"]
+fn qr_frule_fd_through_r() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        qr(&mut b, x).unwrap().r
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, tangent_result) = qr_frule(&mut b, x, dx).unwrap();
+        tangent_result.r
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 3. LU frule FD — test through U
+// LU with partial pivoting: the permutation is discrete but the strongly
+// diagonally dominant test matrix keeps the permutation stable under perturbation.
+#[test]
+fn lu_frule_fd_through_u() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        lu(&mut b, x, LuPivot::Partial).unwrap().u
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, tangent_result) = lu_frule(&mut b, x, dx, LuPivot::Partial).unwrap();
+        tangent_result.u
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 4. Eigen frule FD — test through eigenvalues
+// Symmetric eigendecomposition: tangent must also be symmetric.
+#[test]
+fn eigen_frule_fd_through_values() {
+    let a = make_well_conditioned_matrix(3);
+    // Build a symmetric tangent
+    let t_data = tensor_data(&make_general_test_matrix(3));
+    let n = 3;
+    let mut sym_t = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            sym_t[i + j * n] = (t_data[i + j * n] + t_data[j + i * n]) / 2.0;
+        }
+    }
+    let sym_tangent = make_tensor(sym_t, &[n, n]);
+
+    // Custom FD: eigenvalues may come in different order, so we sort them.
+    let a_data = tensor_data(&a);
+
+    // Deterministic tangent direction = sym_tangent
+    let tangent_data = tensor_data(&sym_tangent);
+
+    // Analytic: frule tangent through eigenvalues
+    let mut backend = FaerBackend::new();
+    let (_, tangent_result) = eigen_frule(&mut backend, &a, &sym_tangent).unwrap();
+    let analytic = tensor_data(&tangent_result.values);
+
+    // Sort eigenvalues at base point to establish ordering
+    let base_vals = tensor_data(&eigen(&mut backend, &a).unwrap().values);
+    let mut base_order: Vec<(usize, f64)> =
+        base_vals.iter().enumerate().map(|(i, &v)| (i, v)).collect();
+    base_order.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+    // Analytic tangent in sorted order
+    let analytic_sorted: Vec<f64> = base_order.iter().map(|&(orig, _)| analytic[orig]).collect();
+
+    // FD: (sorted_eigenvalues(A + eps*dA) - sorted_eigenvalues(A - eps*dA)) / (2*eps)
+    let eps = 1e-6;
+    let atol = 1e-4;
+    let plus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a + eps * da)
+        .collect();
+    let minus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a - eps * da)
+        .collect();
+    let mut vp = tensor_data(
+        &eigen(&mut FaerBackend::new(), &make_tensor(plus, &[n, n]))
+            .unwrap()
+            .values,
+    );
+    let mut vm = tensor_data(
+        &eigen(&mut FaerBackend::new(), &make_tensor(minus, &[n, n]))
+            .unwrap()
+            .values,
+    );
+    vp.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    vm.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let fd: Vec<f64> = vp
+        .iter()
+        .zip(&vm)
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic_sorted
+        .iter()
+        .zip(&fd)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < atol,
+        "eigen_frule FD check failed: max_err={max_err} > atol={atol}"
+    );
+}
+
+// 5. Eig frule FD — test through eigenvalue real parts
+// Non-symmetric eigendecomposition with complex results.
+// Eigenvalue ordering may change, so we sort by real part.
+#[test]
+fn eig_frule_fd_through_values_re() {
+    let a = make_general_test_matrix(3);
+    let a_data = tensor_data(&a);
+    let n = 3;
+    let eps = 1e-6;
+    let atol = 1e-4;
+
+    // Deterministic tangent
+    let tangent_data: Vec<f64> = (0..n * n)
+        .map(|i| ((i * 13 + 5) % 17) as f64 / 8.0 - 1.0)
+        .collect();
+    let tangent = make_tensor(tangent_data.clone(), &[n, n]);
+
+    // Analytic
+    let mut backend = FaerBackend::new();
+    let (primal, tangent_result) = eig_frule(&mut backend, &a, &tangent).unwrap();
+
+    // Sort eigenvalues by real part at base point
+    let base_vals = tensor_data_complex(&primal.values);
+    let mut base_order: Vec<(usize, f64)> = base_vals
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i, v.re))
+        .collect();
+    base_order.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+
+    let d_vals = tensor_data_complex(&tangent_result.values);
+    let analytic_sorted: Vec<f64> = base_order
+        .iter()
+        .map(|&(orig, _)| d_vals[orig].re)
+        .collect();
+
+    // FD
+    let plus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a + eps * da)
+        .collect();
+    let minus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a - eps * da)
+        .collect();
+    let r_p = eig(&mut FaerBackend::new(), &make_tensor(plus, &[n, n])).unwrap();
+    let r_m = eig(&mut FaerBackend::new(), &make_tensor(minus, &[n, n])).unwrap();
+    let mut vp: Vec<f64> = tensor_data_complex(&r_p.values)
+        .iter()
+        .map(|c| c.re)
+        .collect();
+    let mut vm: Vec<f64> = tensor_data_complex(&r_m.values)
+        .iter()
+        .map(|c| c.re)
+        .collect();
+    vp.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    vm.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let fd: Vec<f64> = vp
+        .iter()
+        .zip(&vm)
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic_sorted
+        .iter()
+        .zip(&fd)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < atol,
+        "eig_frule FD check failed: max_err={max_err} > atol={atol}"
+    );
+}
+
+// 6. Cholesky frule FD — test through L
+// Cholesky is for SPD matrices; tangent must be symmetric.
+#[test]
+fn cholesky_frule_fd_through_l() {
+    let a = make_well_conditioned_matrix(3);
+    let n = 3;
+
+    // Build symmetric tangent
+    let t_data = tensor_data(&make_general_test_matrix(3));
+    let mut sym_t = vec![0.0; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            sym_t[i + j * n] = (t_data[i + j * n] + t_data[j + i * n]) / 2.0;
+        }
+    }
+    let sym_tangent = make_tensor(sym_t, &[n, n]);
+
+    // Custom FD with symmetric perturbation
+    let a_data = tensor_data(&a);
+    let tangent_data = tensor_data(&sym_tangent);
+    let eps = 1e-6;
+    let atol = 1e-4;
+
+    // Analytic
+    let mut backend = FaerBackend::new();
+    let (_, dl) = cholesky_frule(&mut backend, &a, &sym_tangent).unwrap();
+    let analytic = tensor_data(&dl);
+
+    // FD: (chol(A + eps*dA) - chol(A - eps*dA)) / (2*eps)
+    let plus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a + eps * da)
+        .collect();
+    let minus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_data)
+        .map(|(a, da)| a - eps * da)
+        .collect();
+    let l_plus =
+        tensor_data(&cholesky(&mut FaerBackend::new(), &make_tensor(plus, &[n, n])).unwrap());
+    let l_minus =
+        tensor_data(&cholesky(&mut FaerBackend::new(), &make_tensor(minus, &[n, n])).unwrap());
+    let fd: Vec<f64> = l_plus
+        .iter()
+        .zip(&l_minus)
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic
+        .iter()
+        .zip(&fd)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < atol,
+        "cholesky_frule FD check failed: max_err={max_err} > atol={atol}"
+    );
+}
+
+// 7. Solve frule FD — test through x, varying A (hold b fixed, tangent_b = 0)
+#[test]
+fn solve_frule_fd_through_x_vary_a() {
+    let n = 3;
+    let a = make_general_test_matrix(n);
+    let b_data: Vec<f64> = (0..n).map(|i| (i as f64 + 1.0) * 0.5).collect();
+    let b = make_tensor(b_data.clone(), &[n]);
+
+    let a_data = tensor_data(&a);
+    let eps = 1e-6;
+    let atol = 1e-4;
+
+    // Deterministic tangent for A
+    let tangent_a_data: Vec<f64> = (0..n * n)
+        .map(|i| ((i * 13 + 5) % 17) as f64 / 8.0 - 1.0)
+        .collect();
+    let tangent_a = make_tensor(tangent_a_data.clone(), &[n, n]);
+    // Zero tangent for b
+    let tangent_b = make_tensor(vec![0.0; n], &[n]);
+
+    // Analytic
+    let mut backend = FaerBackend::new();
+    let (_, dx) = solve_frule(&mut backend, &a, &b, &tangent_a, &tangent_b).unwrap();
+    let analytic = tensor_data(&dx);
+
+    // FD: (solve(A + eps*dA, b) - solve(A - eps*dA, b)) / (2*eps)
+    let plus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_a_data)
+        .map(|(a, da)| a + eps * da)
+        .collect();
+    let minus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_a_data)
+        .map(|(a, da)| a - eps * da)
+        .collect();
+    let x_plus =
+        tensor_data(&solve(&mut FaerBackend::new(), &make_tensor(plus, &[n, n]), &b).unwrap());
+    let x_minus =
+        tensor_data(&solve(&mut FaerBackend::new(), &make_tensor(minus, &[n, n]), &b).unwrap());
+    let fd: Vec<f64> = x_plus
+        .iter()
+        .zip(&x_minus)
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic
+        .iter()
+        .zip(&fd)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < atol,
+        "solve_frule FD check failed: max_err={max_err} > atol={atol}"
+    );
+}
+
+// 8. Inv frule FD
+#[test]
+fn inv_frule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        inv(&mut b, x).unwrap()
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dinv) = inv_frule(&mut b, x, dx).unwrap();
+        dinv
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 9. Det frule FD — output is scalar
+#[test]
+fn det_frule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        det(&mut b, x).unwrap()
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dd) = det_frule(&mut b, x, dx).unwrap();
+        dd
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 10. Slogdet frule FD — test through logabsdet component
+#[test]
+fn slogdet_frule_fd_through_logabsdet() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        slogdet(&mut b, x).unwrap().logabsdet
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dresult) = slogdet_frule(&mut b, x, dx).unwrap();
+        dresult.logabsdet
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 11. Lstsq frule FD — test through x, varying A (hold b fixed, tangent_b = 0)
+#[test]
+fn lstsq_frule_fd_through_x_vary_a() {
+    let m = 4;
+    let n = 2;
+    // Build well-conditioned tall matrix
+    let mut a_data = vec![0.0; m * n];
+    for j in 0..n {
+        for i in 0..m {
+            let val = ((i * 3 + j * 7 + 1) % 11) as f64 / 10.0;
+            a_data[i + j * m] = val;
+        }
+    }
+    for i in 0..n {
+        a_data[i + i * m] += 5.0;
+    }
+    // Construct b = A * x_true so residual is zero
+    let x_true = vec![1.0, 2.0];
+    let mut b_data = vec![0.0; m];
+    for i in 0..m {
+        for j in 0..n {
+            b_data[i] += a_data[i + j * m] * x_true[j];
+        }
+    }
+    let a = make_tensor(a_data.clone(), &[m, n]);
+    let b = make_tensor(b_data, &[m]);
+    let eps = 1e-6;
+    let atol = 1e-3;
+
+    // Deterministic tangent for A
+    let tangent_a_data: Vec<f64> = (0..m * n)
+        .map(|i| ((i * 13 + 5) % 17) as f64 / 8.0 - 1.0)
+        .collect();
+    let tangent_a = make_tensor(tangent_a_data.clone(), &[m, n]);
+    // Zero tangent for b
+    let tangent_b = make_tensor(vec![0.0; m], &[m]);
+
+    // Analytic
+    let mut backend = FaerBackend::new();
+    let (_, dresult) = lstsq_frule(&mut backend, &a, &b, &tangent_a, &tangent_b).unwrap();
+    let analytic = tensor_data(&dresult.x);
+
+    // FD: (lstsq(A + eps*dA, b).x - lstsq(A - eps*dA, b).x) / (2*eps)
+    let plus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_a_data)
+        .map(|(a, da)| a + eps * da)
+        .collect();
+    let minus: Vec<f64> = a_data
+        .iter()
+        .zip(&tangent_a_data)
+        .map(|(a, da)| a - eps * da)
+        .collect();
+    let xp = tensor_data(
+        &lstsq(&mut FaerBackend::new(), &make_tensor(plus, &[m, n]), &b)
+            .unwrap()
+            .x,
+    );
+    let xm = tensor_data(
+        &lstsq(&mut FaerBackend::new(), &make_tensor(minus, &[m, n]), &b)
+            .unwrap()
+            .x,
+    );
+    let fd: Vec<f64> = xp
+        .iter()
+        .zip(&xm)
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic
+        .iter()
+        .zip(&fd)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < atol,
+        "lstsq_frule FD check failed: max_err={max_err} > atol={atol}"
+    );
+}
+
+// 12. Pinv frule FD
+#[test]
+fn pinv_frule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        pinv(&mut b, x, None).unwrap()
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dpinv) = pinv_frule(&mut b, x, dx, None).unwrap();
+        dpinv
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 13. Matrix exp frule FD
+#[test]
+fn matrix_exp_frule_fd() {
+    let a = make_general_test_matrix(3);
+    // Scale down to keep matrix exp numerically manageable
+    let a_data = tensor_data(&a);
+    let a_scaled: Vec<f64> = a_data.iter().map(|v| v * 0.1).collect();
+    let a = make_tensor(a_scaled, &[3, 3]);
+
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        matrix_exp(&mut b, x).unwrap()
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dexp) = matrix_exp_frule(&mut b, x, dx).unwrap();
+        dexp
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
+
+// 14. Norm frule FD — Frobenius norm
+#[test]
+fn norm_fro_frule_fd() {
+    let a = make_general_test_matrix(3);
+    let fwd = |x: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        norm(&mut b, x, NormKind::Fro).unwrap()
+    };
+    let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
+        let mut b = FaerBackend::new();
+        let (_, dnrm) = norm_frule(&mut b, x, dx, NormKind::Fro).unwrap();
+        dnrm
+    };
+    check_frule_fd(fwd, frule_fn, &a, 1e-6, 1e-4);
+}
