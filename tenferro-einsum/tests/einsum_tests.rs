@@ -1512,7 +1512,6 @@ fn einsum_reduce_first_axis() {
 }
 
 #[test]
-#[ignore = "opteinsum parity target: multi-pair trace value differs in current backend"]
 fn einsum_multi_pair_trace_iijj() {
     // Ported pattern from strided-opteinsum: "iijj->"
     let mut ctx = CpuContext::new(1);
@@ -1693,7 +1692,6 @@ fn einsum_size_dict_output_only_label() {
 }
 
 #[test]
-#[ignore = "opteinsum parity target: scalar -> repeated-output embedding not yet aligned"]
 fn einsum_size_dict_scalar_to_diagonal_and_superdiagonal() {
     // Ported patterns from strided-opteinsum: "->ii", "->iii"
     let mut ctx = CpuContext::new(1);
