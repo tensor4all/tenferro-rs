@@ -1673,3 +1673,116 @@ fn test_solve_triangular_complex64() {
     let err = complex_max_err(&ax, &b_data);
     assert!(err < 1e-10, "solve_triangular residual: {err}");
 }
+
+// ============================================================================
+// matrix_exp AD tests
+// ============================================================================
+
+#[test]
+fn matrix_exp_frule_zero() {
+    // d(exp(0))/dt at tangent dA should be dA itself (since Frechet derivative of exp at zero
+    // is the identity map)
+    let mut backend = FaerBackend::new();
+    let zeros = make_tensor(vec![0.0; 4], &[2, 2]);
+    let da = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let (result, tangent) = matrix_exp_frule(&mut backend, &zeros, &da).unwrap();
+    // exp(0) = I
+    let r = tensor_data(&result);
+    assert!((r[0] - 1.0).abs() < 1e-10);
+    assert!((r[3] - 1.0).abs() < 1e-10);
+    // d(exp(0)) * dA = dA (Frechet derivative of exp at zero is the identity map)
+    let t = tensor_data(&tangent);
+    assert!((t[0] - 1.0).abs() < 1e-10);
+    assert!((t[1] - 2.0).abs() < 1e-10);
+    assert!((t[2] - 3.0).abs() < 1e-10);
+    assert!((t[3] - 4.0).abs() < 1e-10);
+}
+
+#[test]
+fn matrix_exp_rrule_zero() {
+    // At A=0, the rrule should pass through the cotangent unchanged
+    let mut backend = FaerBackend::new();
+    let zeros = make_tensor(vec![0.0; 4], &[2, 2]);
+    let co = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let grad = matrix_exp_rrule(&mut backend, &zeros, &co).unwrap();
+    let g = tensor_data(&grad);
+    assert!((g[0] - 1.0).abs() < 1e-10);
+    assert!((g[1] - 2.0).abs() < 1e-10);
+    assert!((g[2] - 3.0).abs() < 1e-10);
+    assert!((g[3] - 4.0).abs() < 1e-10);
+}
+
+#[test]
+fn matrix_exp_frule_finite_difference() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![0.5, 0.1, -0.2, 0.3], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.05, -0.03, 0.07], &[2, 2]);
+    let eps = 1e-6;
+
+    let (_, analytic_tangent) = matrix_exp_frule(&mut backend, &a, &da).unwrap();
+    let t = tensor_data(&analytic_tangent);
+
+    // FD: (exp(A + eps*dA) - exp(A - eps*dA)) / (2*eps)
+    let a_data = tensor_data(&a);
+    let da_data = tensor_data(&da);
+    let plus: Vec<f64> = a_data
+        .iter()
+        .zip(&da_data)
+        .map(|(a, d)| a + eps * d)
+        .collect();
+    let minus: Vec<f64> = a_data
+        .iter()
+        .zip(&da_data)
+        .map(|(a, d)| a - eps * d)
+        .collect();
+    let exp_plus = matrix_exp(&mut backend, &make_tensor(plus, &[2, 2])).unwrap();
+    let exp_minus = matrix_exp(&mut backend, &make_tensor(minus, &[2, 2])).unwrap();
+    let fp = tensor_data(&exp_plus);
+    let fm = tensor_data(&exp_minus);
+
+    for i in 0..4 {
+        let fd = (fp[i] - fm[i]) / (2.0 * eps);
+        assert!(
+            (t[i] - fd).abs() < 1e-4,
+            "frule FD mismatch at {i}: analytic={}, fd={fd}",
+            t[i]
+        );
+    }
+}
+
+#[test]
+fn matrix_exp_rrule_finite_difference() {
+    // Verify rrule via FD: for each entry (i,j) of A, perturb A[i,j] by eps and compute
+    // (f(A+eps*E_ij) - f(A-eps*E_ij)) / (2*eps), then dot with cotangent.
+    let mut backend = FaerBackend::new();
+    let a_vec = vec![0.5, 0.1, -0.2, 0.3];
+    let a = make_tensor(a_vec.clone(), &[2, 2]);
+    let co_vec = vec![1.0, -0.5, 0.3, 0.8];
+    let co = make_tensor(co_vec.clone(), &[2, 2]);
+    let eps = 1e-6;
+
+    let grad = matrix_exp_rrule(&mut backend, &a, &co).unwrap();
+    let g = tensor_data(&grad);
+
+    // For each (i,j), compute grad[i,j] via FD
+    for idx in 0..4 {
+        let mut plus = a_vec.clone();
+        let mut minus = a_vec.clone();
+        plus[idx] += eps;
+        minus[idx] -= eps;
+        let exp_plus = matrix_exp(&mut backend, &make_tensor(plus, &[2, 2])).unwrap();
+        let exp_minus = matrix_exp(&mut backend, &make_tensor(minus, &[2, 2])).unwrap();
+        let fp = tensor_data(&exp_plus);
+        let fm = tensor_data(&exp_minus);
+        // grad[idx] = sum_k cotangent[k] * d(exp(A))[k] / dA[idx]
+        let mut fd_grad = 0.0;
+        for k in 0..4 {
+            fd_grad += co_vec[k] * (fp[k] - fm[k]) / (2.0 * eps);
+        }
+        assert!(
+            (g[idx] - fd_grad).abs() < 1e-4,
+            "rrule FD mismatch at {idx}: analytic={}, fd={fd_grad}",
+            g[idx]
+        );
+    }
+}

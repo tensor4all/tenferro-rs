@@ -3798,9 +3798,17 @@ pub fn pinv_rrule<
 
 /// Reverse-mode AD rule for matrix exponential (VJP / pullback).
 ///
+/// Computes the gradient of the input given a cotangent for `exp(A)`.
+/// Uses the auxiliary 2n x 2n matrix trick (PyTorch approach):
+///
+/// ```text
+/// M = [[A^T, cotangent], [0, A^T]]
+/// grad_A = top-right n×n block of exp(M)
+/// ```
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use tenferro_linalg::matrix_exp_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3817,14 +3825,52 @@ pub fn matrix_exp_rrule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _cotangent: &Tensor<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "matrix exponential AD not yet implemented".into(),
-    })
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    let (a_data, _) = extract_data(tensor)?;
+    let (co_data, _) = extract_data(cotangent)?;
+
+    let nn = 2 * n;
+    let mut grad_data = vec![T::zero(); n * n * bc];
+
+    for b in 0..bc {
+        let a = &a_data[b * n * n..(b + 1) * n * n];
+        let co = &co_data[b * n * n..(b + 1) * n * n];
+
+        // Build 2n×2n auxiliary matrix M = [[A^T, cotangent], [0, A^T]]
+        let mut m = vec![T::zero(); nn * nn];
+        for j in 0..n {
+            for i in 0..n {
+                // A^T: transpose of A — a^T[i,j] = a[j,i] = a[j + i*n]
+                let a_t_ij = a[j + i * n];
+                // Top-left: A^T
+                m[i + j * nn] = a_t_ij;
+                // Top-right: cotangent
+                m[i + (j + n) * nn] = co[i + j * n];
+                // Bottom-right: A^T
+                m[(i + n) + (j + n) * nn] = a_t_ij;
+                // Bottom-left: already zero
+            }
+        }
+
+        // Compute exp(M)
+        let exp_m = matrix_exp_single(backend, &m, nn).map_err(to_ad_err)?;
+
+        // Extract top-right block → gradient d̄A
+        for j in 0..n {
+            for i in 0..n {
+                grad_data[b * n * n + i + j * n] = exp_m[i + (j + n) * nn];
+            }
+        }
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    tensor_from_data(grad_data, &dims).map_err(to_ad_err)
 }
 
 /// Reverse-mode AD rule for norm (VJP / pullback).
@@ -4977,9 +5023,18 @@ pub fn pinv_frule<
 
 /// Forward-mode AD rule for matrix exponential (JVP / pushforward).
 ///
+/// Computes `exp(A)` and the Frechet derivative `d(exp(A))` in the direction `dA`.
+/// Uses the auxiliary 2n x 2n matrix trick (PyTorch approach):
+///
+/// ```text
+/// M = [[A, dA], [0, A]]
+/// exp(A)    = top-left  n×n block of exp(M)
+/// d(exp(A)) = top-right n×n block of exp(M)
+/// ```
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use tenferro_linalg::matrix_exp_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4996,14 +5051,60 @@ pub fn matrix_exp_frule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _tangent: &Tensor<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "matrix exponential AD not yet implemented".into(),
-    })
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    let (a_data, _) = extract_data(tensor)?;
+    let (da_data, _) = extract_data(tangent)?;
+
+    let nn = 2 * n;
+    let mut result_data = vec![T::zero(); n * n * bc];
+    let mut tangent_data = vec![T::zero(); n * n * bc];
+
+    for b in 0..bc {
+        let a = &a_data[b * n * n..(b + 1) * n * n];
+        let da = &da_data[b * n * n..(b + 1) * n * n];
+
+        // Build 2n×2n auxiliary matrix M = [[A, dA], [0, A]]
+        let mut m = vec![T::zero(); nn * nn];
+        for j in 0..n {
+            for i in 0..n {
+                // Top-left: A
+                m[i + j * nn] = a[i + j * n];
+                // Top-right: dA
+                m[i + (j + n) * nn] = da[i + j * n];
+                // Bottom-right: A
+                m[(i + n) + (j + n) * nn] = a[i + j * n];
+                // Bottom-left: already zero
+            }
+        }
+
+        // Compute exp(M) — call matrix_exp_single with the 2n×2n matrix
+        let exp_m = matrix_exp_single(backend, &m, nn).map_err(to_ad_err)?;
+
+        // Extract top-left block → exp(A)
+        for j in 0..n {
+            for i in 0..n {
+                result_data[b * n * n + i + j * n] = exp_m[i + j * nn];
+            }
+        }
+
+        // Extract top-right block → d(exp(A))
+        for j in 0..n {
+            for i in 0..n {
+                tangent_data[b * n * n + i + j * n] = exp_m[i + (j + n) * nn];
+            }
+        }
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    let result = tensor_from_data(result_data, &dims).map_err(to_ad_err)?;
+    let tang = tensor_from_data(tangent_data, &dims).map_err(to_ad_err)?;
+    Ok((result, tang))
 }
 
 /// Forward-mode AD rule for norm (JVP / pushforward).
