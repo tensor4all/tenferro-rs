@@ -2339,3 +2339,45 @@ fn nested_einsum_single_operand_group() {
         }
     }
 }
+
+// ============================================================================
+// Bug-fix regression tests
+// ============================================================================
+
+#[test]
+fn nested_einsum_extra_operands_error() {
+    // Fix: "(ij)->ij" with 2 operands must error, not silently ignore the second
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let result = einsum::<S, CpuBackend>(&mut ctx, "(ij)->ij", &[&a, &b], None);
+    assert!(result.is_err(), "should error on extra operands");
+}
+
+#[test]
+fn nested_einsum_fewer_operands_error() {
+    // "(ij,jk),kl->il" with only 2 operands must error
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+
+    let result = einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a, &b], None);
+    assert!(
+        result.is_err(),
+        "should error on fewer operands than leaves"
+    );
+}
+
+#[test]
+fn subscripts_parse_unmatched_close_paren() {
+    // "ij),jk->ik" must error in Subscripts::parse
+    let result = Subscripts::parse("ij),jk->ik");
+    assert!(result.is_err(), "unmatched ')' should be rejected");
+}
+
+#[test]
+fn subscripts_parse_unmatched_open_paren() {
+    let result = Subscripts::parse("(ij,jk->ik");
+    assert!(result.is_err(), "unmatched '(' should be rejected");
+}

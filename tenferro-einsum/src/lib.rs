@@ -1274,24 +1274,38 @@ where
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: TensorPrims<Alg>,
 {
+    // Validate operand count at the top level
+    let n_leaves = nested.count_leaves();
+    if operands.len() != n_leaves {
+        return Err(Error::InvalidArgument(format!(
+            "NestedEinsum expects {n_leaves} operands, got {}",
+            operands.len()
+        )));
+    }
+    execute_nested_inner::<Alg, Backend>(ctx, nested, operands, size_dict)
+}
+
+/// Recursive inner implementation (no operand count check — done by caller).
+fn execute_nested_inner<Alg, Backend>(
+    ctx: &mut Backend::Context,
+    nested: &NestedEinsum,
+    operands: &[&Tensor<Alg::Scalar>],
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<Alg::Scalar>>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
     match nested {
-        NestedEinsum::Leaf(idx) => {
-            if *idx >= operands.len() {
-                return Err(Error::InvalidArgument(format!(
-                    "NestedEinsum leaf index {idx} out of bounds (have {} operands)",
-                    operands.len()
-                )));
-            }
-            Ok(operands[*idx].clone())
-        }
+        NestedEinsum::Leaf(idx) => Ok(operands[*idx].clone()),
         NestedEinsum::Node {
             subscripts,
             children,
         } => {
-            // Recursively execute each child
             let intermediates: Vec<Tensor<Alg::Scalar>> = children
                 .iter()
-                .map(|child| execute_nested::<Alg, Backend>(ctx, child, operands, size_dict))
+                .map(|child| execute_nested_inner::<Alg, Backend>(ctx, child, operands, size_dict))
                 .collect::<Result<_>>()?;
 
             let refs: Vec<&Tensor<Alg::Scalar>> = intermediates.iter().collect();
@@ -1386,6 +1400,28 @@ impl Subscripts {
             .map(char_to_label)
             .collect::<Result<_>>()?;
 
+        // Validate balanced parentheses before stripping
+        let mut depth: i32 = 0;
+        for c in inputs_str.chars() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return Err(Error::InvalidArgument(format!(
+                            "unmatched ')' in einsum notation: {notation}"
+                        )));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if depth != 0 {
+            return Err(Error::InvalidArgument(format!(
+                "unmatched '(' in einsum notation: {notation}"
+            )));
+        }
+
         // Strip parentheses and parse input labels
         let clean_inputs = inputs_str.replace(['(', ')'], "");
         let inputs: Vec<Vec<u32>> = clean_inputs
@@ -1440,6 +1476,14 @@ pub enum NestedEinsum {
 }
 
 impl NestedEinsum {
+    /// Count the total number of leaf operands in the tree.
+    pub fn count_leaves(&self) -> usize {
+        match self {
+            Self::Leaf(_) => 1,
+            Self::Node { children, .. } => children.iter().map(|c| c.count_leaves()).sum(),
+        }
+    }
+
     /// Parse parenthesized einsum notation into a recursive tree.
     ///
     /// Notation follows the standard `"inputs->output"` format with optional
@@ -1866,19 +1910,19 @@ where
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: TensorPrims<Alg>,
 {
-    if subscripts.contains('(') {
-        return execute_nested::<Alg, Backend>(
-            ctx,
-            &NestedEinsum::parse(subscripts)?,
-            operands,
-            size_dict,
-        );
-    }
-
+    // Subscripts::parse strips parentheses, giving the flat form needed
+    // by both the flat execution path and the frule tangent propagation.
     let subs = Subscripts::parse(subscripts)?;
-    let mut output = einsum_with_subscripts::<Alg, Backend>(ctx, &subs, operands, size_dict)?;
 
-    // Auto-propagate forward-mode tangents
+    let mut output = if subscripts.contains('(') {
+        execute_nested::<Alg, Backend>(ctx, &NestedEinsum::parse(subscripts)?, operands, size_dict)?
+    } else {
+        einsum_with_subscripts::<Alg, Backend>(ctx, &subs, operands, size_dict)?
+    };
+
+    // Auto-propagate forward-mode tangents.
+    // The frule is linear, so contraction order does not affect the derivative;
+    // using the flat Subscripts is correct for both paths.
     if operands.iter().any(|t| t.has_fw_grad()) {
         let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
             operands.iter().map(|t| t.fw_grad()).collect();
