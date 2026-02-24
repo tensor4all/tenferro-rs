@@ -40,6 +40,35 @@ stride tricks** handled at the `Tensor<T>` level, not in `TensorPrims`.
 
 ---
 
+## Execute Contract
+
+**All `TensorPrims` operations are eager.** Every `execute()` call writes the
+result into the caller-provided `output` tensor according to:
+
+$$\texttt{output} \leftarrow \alpha \cdot \operatorname{op}(\texttt{inputs}) + \beta \cdot \texttt{output}$$
+
+This matches the cuTENSOR/BLAS convention. There are no lazy or view-returning
+primitives in `TensorPrims`; even `Permute` physically copies data into the
+output buffer. Operations that are pure view manipulations (`diag`, `repeat`,
+`StridedView::permute`) live outside `TensorPrims` at the `Tensor<T>` level.
+
+The einsum decomposition flow makes this distinction explicit:
+
+```
+diag → trace/reduce → permute_view → make_contiguous → batched_gemm
+         (view)                          (eager prims)
+```
+
+Here `permute_view` is a zero-copy stride reordering on `Tensor<T>`.
+The subsequent `make_contiguous` and `batched_gemm` are `TensorPrims`
+operations that allocate and write output buffers.
+
+`PrimDescriptor::Permute` combines both steps (reorder + copy) into a single
+eager operation for use cases where a physically permuted output tensor is
+needed independently of a GEMM.
+
+---
+
 ## Operation Categories
 
 | Tier | Operation | cuTENSOR | hipTensor | CPU (strided-rs) |
@@ -225,6 +254,11 @@ pub trait TensorPrims<Alg: Algebra> {
     ) -> Result<Self::Plan>;
 
     /// Execute a plan (cuTENSOR: plan → execute).
+    ///
+    /// Semantics: `output = alpha * op(inputs) + beta * output`.
+    ///
+    /// All operations are **eager**: they write into the provided `output`
+    /// tensor. There are no lazy/view-returning primitives in this trait.
     ///
     /// Operations receive `Tensor<Alg::Scalar>` directly (PyTorch-aligned).
     /// CPU backends convert to strided views internally; GPU backends
