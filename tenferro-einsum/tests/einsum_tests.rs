@@ -7,7 +7,7 @@
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{
-    einsum, einsum_frule, einsum_into, einsum_owned, einsum_rrule, einsum_with_plan,
+    dual_einsum, einsum, einsum_frule, einsum_into, einsum_owned, einsum_rrule, einsum_with_plan,
     einsum_with_subscripts, tracked_einsum, ContractionTree, Subscripts,
 };
 use tenferro_prims::{CpuBackend, CpuContext};
@@ -2416,6 +2416,173 @@ fn nested_einsum_propagates_fw_grad() {
             "fw_grad[{i}]: nested={}, flat={}",
             ng[i],
             fg[i]
+        );
+    }
+}
+
+#[test]
+fn einsum_frule_parenthesized() {
+    // einsum_frule with parenthesized subscripts must produce same result as flat
+    let mut ctx = CpuContext::new(1);
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+
+    let nested_tangent = einsum_frule::<S, CpuBackend>(
+        &mut ctx,
+        "(ij,jk),kl->il",
+        &[&a, &b, &c],
+        &[Some(&da), None, None],
+    )
+    .unwrap();
+
+    let flat_tangent = einsum_frule::<S, CpuBackend>(
+        &mut ctx,
+        "ij,jk,kl->il",
+        &[&a, &b, &c],
+        &[Some(&da), None, None],
+    )
+    .unwrap();
+
+    let ns = nested_tangent.buffer().as_slice().unwrap();
+    let fs = flat_tangent.buffer().as_slice().unwrap();
+    for i in 0..ns.len() {
+        assert!(
+            (ns[i] - fs[i]).abs() < 1e-10,
+            "frule tangent[{i}]: nested={}, flat={}",
+            ns[i],
+            fs[i]
+        );
+    }
+}
+
+#[test]
+fn einsum_into_parenthesized() {
+    // einsum_into with parenthesized subscripts must produce same result as flat
+    let mut ctx = CpuContext::new(1);
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+
+    // Test overwrite: output = 1.0 * einsum + 0.0 * output
+    let mut nested_out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+    einsum_into::<S, CpuBackend>(
+        &mut ctx,
+        "(ij,jk),kl->il",
+        &[&a, &b, &c],
+        1.0,
+        0.0,
+        &mut nested_out,
+        None,
+    )
+    .unwrap();
+
+    let mut flat_out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+    einsum_into::<S, CpuBackend>(
+        &mut ctx,
+        "ij,jk,kl->il",
+        &[&a, &b, &c],
+        1.0,
+        0.0,
+        &mut flat_out,
+        None,
+    )
+    .unwrap();
+
+    let ns = nested_out.buffer().as_slice().unwrap();
+    let fs = flat_out.buffer().as_slice().unwrap();
+    for i in 0..ns.len() {
+        assert!(
+            (ns[i] - fs[i]).abs() < 1e-10,
+            "einsum_into[{i}]: nested={}, flat={}",
+            ns[i],
+            fs[i]
+        );
+    }
+
+    // Test accumulate: output = 2.0 * einsum + 1.0 * output
+    let mut accum_out = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    einsum_into::<S, CpuBackend>(
+        &mut ctx,
+        "(ij,jk),kl->il",
+        &[&a, &b, &c],
+        2.0,
+        1.0,
+        &mut accum_out,
+        None,
+    )
+    .unwrap();
+
+    let as_ = accum_out.buffer().as_slice().unwrap();
+    // Expected: 2 * nested_result + 1 (all ones)
+    for i in 0..as_.len() {
+        let expected = 2.0 * ns[i] + 1.0;
+        assert!(
+            (as_[i] - expected).abs() < 1e-10,
+            "einsum_into accumulate[{i}]: got={}, expected={}",
+            as_[i],
+            expected
+        );
+    }
+}
+
+#[test]
+fn dual_einsum_parenthesized() {
+    use chainrules::DualTensor;
+    // dual_einsum with parenthesized subscripts must produce same tangent as flat
+    let mut ctx = CpuContext::new(1);
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+
+    let a_dual = DualTensor::with_tangent(a.clone(), da.clone()).unwrap();
+    let b_dual = DualTensor::new(b.clone());
+    let c_dual = DualTensor::new(c.clone());
+
+    let nested_result =
+        dual_einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a_dual, &b_dual, &c_dual])
+            .unwrap();
+
+    let a_dual2 = DualTensor::with_tangent(a, da).unwrap();
+    let b_dual2 = DualTensor::new(b);
+    let c_dual2 = DualTensor::new(c);
+
+    let flat_result =
+        dual_einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a_dual2, &b_dual2, &c_dual2])
+            .unwrap();
+
+    // Primals must match
+    let np = nested_result.primal().buffer().as_slice().unwrap();
+    let fp = flat_result.primal().buffer().as_slice().unwrap();
+    for i in 0..np.len() {
+        assert!(
+            (np[i] - fp[i]).abs() < 1e-10,
+            "dual primal[{i}]: nested={}, flat={}",
+            np[i],
+            fp[i]
+        );
+    }
+
+    // Tangents must match
+    let nt = nested_result
+        .tangent()
+        .unwrap()
+        .buffer()
+        .as_slice()
+        .unwrap();
+    let ft = flat_result.tangent().unwrap().buffer().as_slice().unwrap();
+    for i in 0..nt.len() {
+        assert!(
+            (nt[i] - ft[i]).abs() < 1e-10,
+            "dual tangent[{i}]: nested={}, flat={}",
+            nt[i],
+            ft[i]
         );
     }
 }

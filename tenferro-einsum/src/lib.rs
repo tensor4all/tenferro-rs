@@ -1888,24 +1888,25 @@ where
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: TensorPrims<Alg>,
 {
-    // Subscripts::parse strips parentheses, giving the flat form needed
-    // by both the flat execution path and the frule tangent propagation.
     let subs = Subscripts::parse(subscripts)?;
+    let nested = if subscripts.contains('(') {
+        Some(NestedEinsum::parse(subscripts)?)
+    } else {
+        None
+    };
 
-    let mut output = if subscripts.contains('(') {
-        execute_nested::<Alg, Backend>(ctx, &NestedEinsum::parse(subscripts)?, operands, size_dict)?
+    let mut output = if let Some(ref nested) = nested {
+        execute_nested::<Alg, Backend>(ctx, nested, operands, size_dict)?
     } else {
         einsum_with_subscripts::<Alg, Backend>(ctx, &subs, operands, size_dict)?
     };
 
-    // Auto-propagate forward-mode tangents.
-    // The frule is linear, so contraction order does not affect the derivative;
-    // using the flat Subscripts is correct for both paths.
+    // Auto-propagate forward-mode tangents, respecting contraction order.
     if operands.iter().any(|t| t.has_fw_grad()) {
         let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
             operands.iter().map(|t| t.fw_grad()).collect();
         if let Ok(output_tangent) =
-            einsum_frule_impl::<Alg, Backend>(ctx, &subs, operands, &tangents)
+            einsum_frule_impl::<Alg, Backend>(ctx, &subs, nested.as_ref(), operands, &tangents)
         {
             output.set_fw_grad(output_tangent);
         }
@@ -2139,9 +2140,28 @@ where
     Backend: TensorPrims<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    einsum_with_subscripts_into::<Alg, Backend>(
-        ctx, &subs, operands, alpha, beta, output, size_dict,
-    )
+    if subscripts.contains('(') {
+        let nested = NestedEinsum::parse(subscripts)?;
+        let result = execute_nested::<Alg, Backend>(ctx, &nested, operands, size_dict)?;
+        // Apply output = alpha * result + beta * output via identity einsum
+        let identity_subs = Subscripts {
+            inputs: vec![subs.output.clone()],
+            output: subs.output,
+        };
+        einsum_with_subscripts_into::<Alg, Backend>(
+            ctx,
+            &identity_subs,
+            &[&result],
+            alpha,
+            beta,
+            output,
+            size_dict,
+        )
+    } else {
+        einsum_with_subscripts_into::<Alg, Backend>(
+            ctx, &subs, operands, alpha, beta, output, size_dict,
+        )
+    }
 }
 
 /// Execute einsum with pre-built [`Subscripts`], accumulating into an existing output.
@@ -2310,6 +2330,7 @@ where
                 if let Ok(grad_tangent) = einsum_frule_impl::<Alg, Backend>(
                     &mut *ctx,
                     &rev_subs,
+                    None, // reverse subscripts are flat by construction
                     &rev_operands,
                     &tangents,
                 ) {
@@ -2566,9 +2587,14 @@ where
 /// let dc = einsum_frule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
 /// ```
 /// Internal frule implementation with pre-parsed subscripts.
+///
+/// When `nested` is `Some`, each frule term is computed via the nested tree
+/// (respecting parenthesized contraction order). Otherwise the flat
+/// `Subscripts` path is used.
 fn einsum_frule_impl<Alg, Backend>(
     ctx: &mut Backend::Context,
     subs: &Subscripts,
+    nested: Option<&NestedEinsum>,
     primals: &[&Tensor<Alg::Scalar>],
     tangents: &[Option<&Tensor<Alg::Scalar>>],
 ) -> Result<Tensor<Alg::Scalar>>
@@ -2587,7 +2613,11 @@ where
             let mut ops: Vec<&Tensor<Alg::Scalar>> = primals.to_vec();
             ops[k] = tangent_k;
 
-            let term = einsum_with_subscripts::<Alg, Backend>(ctx, subs, &ops, None)?;
+            let term = if let Some(nested) = nested {
+                execute_nested_inner::<Alg, Backend>(ctx, nested, &ops, None)?
+            } else {
+                einsum_with_subscripts::<Alg, Backend>(ctx, subs, &ops, None)?
+            };
 
             result = Some(match result {
                 None => term,
@@ -2611,7 +2641,12 @@ where
     Backend: TensorPrims<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
-    einsum_frule_impl::<Alg, Backend>(ctx, &subs, primals, tangents)
+    let nested = if subscripts.contains('(') {
+        Some(NestedEinsum::parse(subscripts)?)
+    } else {
+        None
+    };
+    einsum_frule_impl::<Alg, Backend>(ctx, &subs, nested.as_ref(), primals, tangents)
 }
 
 /// Local HVP rule for einsum without building a global tape.
