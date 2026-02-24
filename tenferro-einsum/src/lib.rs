@@ -4,8 +4,8 @@
 //! values. It supports:
 //!
 //! - **String notation**: `"ij,jk->ik"` (NumPy/PyTorch compatible)
-//! - **Parenthesized notation**: `"ij,(jk,kl)->il"` is accepted but
-//!   grouping is currently ignored (optimizer picks order)
+//! - **Parenthesized notation**: `"ij,(jk,kl)->il"` respects user-specified
+//!   contraction order via [`NestedEinsum`] (OMEinsum.jl-compatible)
 //! - **Integer label notation**: omeinsum-rs compatible, using `u32` labels
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
@@ -1356,10 +1356,9 @@ impl Subscripts {
     /// Input tensors are separated by commas, and `->` separates inputs
     /// from the output.
     ///
-    /// Parentheses can be used to specify contraction order explicitly.
-    /// Grouped operands are contracted first, enabling manual control
-    /// over the pairwise contraction sequence without using
-    /// [`ContractionTree::from_pairs`].
+    /// Parentheses in the notation are accepted but stripped during parsing.
+    /// To respect parenthesized contraction order, use [`NestedEinsum::parse`]
+    /// or pass the parenthesized string directly to [`einsum`].
     ///
     /// # Examples
     ///
@@ -1867,16 +1866,20 @@ where
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: TensorPrims<Alg>,
 {
-    let mut output = if subscripts.contains('(') {
-        execute_nested::<Alg, Backend>(ctx, &NestedEinsum::parse(subscripts)?, operands, size_dict)?
-    } else {
-        let subs = Subscripts::parse(subscripts)?;
-        einsum_with_subscripts::<Alg, Backend>(ctx, &subs, operands, size_dict)?
-    };
+    if subscripts.contains('(') {
+        return execute_nested::<Alg, Backend>(
+            ctx,
+            &NestedEinsum::parse(subscripts)?,
+            operands,
+            size_dict,
+        );
+    }
 
-    // Auto-propagate forward-mode tangents (flat path only)
-    if !subscripts.contains('(') && operands.iter().any(|t| t.has_fw_grad()) {
-        let subs = Subscripts::parse(subscripts)?;
+    let subs = Subscripts::parse(subscripts)?;
+    let mut output = einsum_with_subscripts::<Alg, Backend>(ctx, &subs, operands, size_dict)?;
+
+    // Auto-propagate forward-mode tangents
+    if operands.iter().any(|t| t.has_fw_grad()) {
         let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
             operands.iter().map(|t| t.fw_grad()).collect();
         if let Ok(output_tangent) =
