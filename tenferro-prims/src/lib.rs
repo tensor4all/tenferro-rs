@@ -23,6 +23,17 @@
 //! - [`Contract`](PrimDescriptor::Contract): Fused permute + GEMM contraction (maps to `cutensorContract`)
 //! - [`ElementwiseMul`](PrimDescriptor::ElementwiseMul): Element-wise multiplication
 //!
+//! # CPU GEMM backend selection
+//!
+//! `BatchedGemm` on [`CpuBackend`] is feature-selectable:
+//! - `gemm-faer` (default): pure-Rust faer matmul backend
+//! - `gemm-openblas`: CBLAS/OpenBLAS backend via `cblas-sys`
+//! - neither feature: portable naive fallback (slow, correctness-only)
+//!
+//! To switch to OpenBLAS:
+//! `cargo test -p tenferro-prims --no-default-features --features gemm-openblas`
+//! (requires system CBLAS/OpenBLAS development libraries)
+//!
 //! # Algebra parameterization
 //!
 //! [`TensorPrims<Alg>`] is parameterized by algebra `Alg` (e.g.,

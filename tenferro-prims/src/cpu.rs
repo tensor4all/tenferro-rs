@@ -608,7 +608,7 @@ fn execute_make_contiguous<T: Scalar>(
     Ok(())
 }
 
-fn execute_batched_gemm<T: Scalar>(
+fn execute_batched_gemm_naive<T: Scalar>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -653,6 +653,341 @@ fn execute_batched_gemm<T: Scalar>(
         }
     }
     Ok(())
+}
+
+fn execute_batched_gemm_f64(
+    alpha: f64,
+    inputs: &[&StridedView<f64>],
+    beta: f64,
+    output: &mut StridedViewMut<f64>,
+    batch_dims: &[usize],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let a = inputs[0];
+    let b = inputs[1];
+    let batch_size: usize = if batch_dims.is_empty() {
+        1
+    } else {
+        batch_dims.iter().product()
+    };
+
+    let mut a_mat = vec![0.0_f64; m * k];
+    let mut b_mat = vec![0.0_f64; k * n];
+    let mut c_mat = vec![0.0_f64; m * n];
+    let mut idx = Vec::with_capacity(batch_dims.len() + 2);
+
+    for batch_flat in 0..batch_size {
+        let batch_idx = unflatten_index(batch_flat, batch_dims);
+
+        for kk in 0..k {
+            for i in 0..m {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(i);
+                idx.push(kk);
+                a_mat[i + kk * m] = a.get(&idx);
+            }
+        }
+        for j in 0..n {
+            for kk in 0..k {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(kk);
+                idx.push(j);
+                b_mat[kk + j * k] = b.get(&idx);
+            }
+        }
+        for j in 0..n {
+            for i in 0..m {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(i);
+                idx.push(j);
+                c_mat[i + j * m] = output.get(&idx);
+            }
+        }
+
+        gemm_f64(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k)?;
+
+        for j in 0..n {
+            for i in 0..m {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(i);
+                idx.push(j);
+                output.set(&idx, c_mat[i + j * m]);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn execute_batched_gemm_f32(
+    alpha: f32,
+    inputs: &[&StridedView<f32>],
+    beta: f32,
+    output: &mut StridedViewMut<f32>,
+    batch_dims: &[usize],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let a = inputs[0];
+    let b = inputs[1];
+    let batch_size: usize = if batch_dims.is_empty() {
+        1
+    } else {
+        batch_dims.iter().product()
+    };
+
+    let mut a_mat = vec![0.0_f32; m * k];
+    let mut b_mat = vec![0.0_f32; k * n];
+    let mut c_mat = vec![0.0_f32; m * n];
+    let mut idx = Vec::with_capacity(batch_dims.len() + 2);
+
+    for batch_flat in 0..batch_size {
+        let batch_idx = unflatten_index(batch_flat, batch_dims);
+
+        for kk in 0..k {
+            for i in 0..m {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(i);
+                idx.push(kk);
+                a_mat[i + kk * m] = a.get(&idx);
+            }
+        }
+        for j in 0..n {
+            for kk in 0..k {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(kk);
+                idx.push(j);
+                b_mat[kk + j * k] = b.get(&idx);
+            }
+        }
+        for j in 0..n {
+            for i in 0..m {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(i);
+                idx.push(j);
+                c_mat[i + j * m] = output.get(&idx);
+            }
+        }
+
+        gemm_f32(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k)?;
+
+        for j in 0..n {
+            for i in 0..m {
+                idx.clear();
+                idx.extend_from_slice(&batch_idx);
+                idx.push(i);
+                idx.push(j);
+                output.set(&idx, c_mat[i + j * m]);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "gemm-faer")]
+fn gemm_f64(
+    alpha: f64,
+    a: &[f64],
+    b: &[f64],
+    beta: f64,
+    c: &mut [f64],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let a_mat = faer::mat::from_column_major_slice(a, m, k);
+    let b_mat = faer::mat::from_column_major_slice(b, k, n);
+    let prod = &a_mat * &b_mat;
+    for j in 0..n {
+        for i in 0..m {
+            let p = prod[(i, j)];
+            c[i + j * m] = alpha * p + beta * c[i + j * m];
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+fn gemm_f64(
+    alpha: f64,
+    a: &[f64],
+    b: &[f64],
+    beta: f64,
+    c: &mut [f64],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let m_i32 = i32::try_from(m).map_err(|_| Error::InvalidArgument("m too large".into()))?;
+    let n_i32 = i32::try_from(n).map_err(|_| Error::InvalidArgument("n too large".into()))?;
+    let k_i32 = i32::try_from(k).map_err(|_| Error::InvalidArgument("k too large".into()))?;
+    unsafe {
+        cblas_sys::cblas_dgemm(
+            cblas_sys::CBLAS_LAYOUT::CblasColMajor,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            m_i32,
+            n_i32,
+            k_i32,
+            alpha,
+            a.as_ptr(),
+            m_i32,
+            b.as_ptr(),
+            k_i32,
+            beta,
+            c.as_mut_ptr(),
+            m_i32,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(all(not(feature = "gemm-faer"), not(feature = "gemm-openblas")))]
+fn gemm_f64(
+    alpha: f64,
+    a: &[f64],
+    b: &[f64],
+    beta: f64,
+    c: &mut [f64],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    for j in 0..n {
+        for i in 0..m {
+            let mut sum = 0.0_f64;
+            for p in 0..k {
+                sum += a[i + p * m] * b[p + j * k];
+            }
+            c[i + j * m] = alpha * sum + beta * c[i + j * m];
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "gemm-faer")]
+fn gemm_f32(
+    alpha: f32,
+    a: &[f32],
+    b: &[f32],
+    beta: f32,
+    c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let a_mat = faer::mat::from_column_major_slice(a, m, k);
+    let b_mat = faer::mat::from_column_major_slice(b, k, n);
+    let prod = &a_mat * &b_mat;
+    for j in 0..n {
+        for i in 0..m {
+            let p = prod[(i, j)];
+            c[i + j * m] = alpha * p + beta * c[i + j * m];
+        }
+    }
+    Ok(())
+}
+
+#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+fn gemm_f32(
+    alpha: f32,
+    a: &[f32],
+    b: &[f32],
+    beta: f32,
+    c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let m_i32 = i32::try_from(m).map_err(|_| Error::InvalidArgument("m too large".into()))?;
+    let n_i32 = i32::try_from(n).map_err(|_| Error::InvalidArgument("n too large".into()))?;
+    let k_i32 = i32::try_from(k).map_err(|_| Error::InvalidArgument("k too large".into()))?;
+    unsafe {
+        cblas_sys::cblas_sgemm(
+            cblas_sys::CBLAS_LAYOUT::CblasColMajor,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            m_i32,
+            n_i32,
+            k_i32,
+            alpha,
+            a.as_ptr(),
+            m_i32,
+            b.as_ptr(),
+            k_i32,
+            beta,
+            c.as_mut_ptr(),
+            m_i32,
+        );
+    }
+    Ok(())
+}
+
+#[cfg(all(not(feature = "gemm-faer"), not(feature = "gemm-openblas")))]
+fn gemm_f32(
+    alpha: f32,
+    a: &[f32],
+    b: &[f32],
+    beta: f32,
+    c: &mut [f32],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    for j in 0..n {
+        for i in 0..m {
+            let mut sum = 0.0_f32;
+            for p in 0..k {
+                sum += a[i + p * m] * b[p + j * k];
+            }
+            c[i + j * m] = alpha * sum + beta * c[i + j * m];
+        }
+    }
+    Ok(())
+}
+
+fn execute_batched_gemm<T: Scalar + 'static>(
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    batch_dims: &[usize],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let tid = TypeId::of::<T>();
+
+    if tid == TypeId::of::<f64>() {
+        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f64>) };
+        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f64>) };
+        let out = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f64>) };
+        let alpha = unsafe { *(&alpha as *const T as *const f64) };
+        let beta = unsafe { *(&beta as *const T as *const f64) };
+        return execute_batched_gemm_f64(alpha, &[a, b], beta, out, batch_dims, m, n, k);
+    }
+
+    if tid == TypeId::of::<f32>() {
+        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f32>) };
+        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f32>) };
+        let out = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f32>) };
+        let alpha = unsafe { *(&alpha as *const T as *const f32) };
+        let beta = unsafe { *(&beta as *const T as *const f32) };
+        return execute_batched_gemm_f32(alpha, &[a, b], beta, out, batch_dims, m, n, k);
+    }
+
+    execute_batched_gemm_naive(alpha, inputs, beta, output, batch_dims, m, n, k)
 }
 
 fn execute_reduce_sum<T: Scalar>(

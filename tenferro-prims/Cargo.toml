@@ -8,8 +8,10 @@ publish.workspace = true
 description = "Tensor primitive operations (TensorPrims trait) for the tenferro workspace."
 
 [features]
-default = []
+default = ["gemm-faer"]
 cuda = ["dep:cudarc"]
+gemm-faer = ["dep:faer"]
+gemm-openblas = ["dep:cblas-sys"]
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
@@ -21,6 +23,8 @@ strided-perm.workspace = true
 rayon = "1.10"
 libloading.workspace = true
 num-complex.workspace = true
+faer = { workspace = true, optional = true }
+cblas-sys = { version = "0.1", optional = true }
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "dynamic-loading", "cuda-12060"] }
 
 [dev-dependencies]
