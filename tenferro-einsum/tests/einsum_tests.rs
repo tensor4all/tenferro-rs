@@ -44,16 +44,16 @@ fn get(t: &Tensor<f64>, idx: &[usize]) -> f64 {
 fn parse_matmul() {
     let subs = Subscripts::parse("ij,jk->ik").unwrap();
     assert_eq!(subs.inputs.len(), 2);
-    assert_eq!(subs.inputs[0], vec![8, 9]); // i=8, j=9
-    assert_eq!(subs.inputs[1], vec![9, 10]); // j=9, k=10
-    assert_eq!(subs.output, vec![8, 10]); // i=8, k=10
+    assert_eq!(subs.inputs[0], vec!['i' as u32, 'j' as u32]);
+    assert_eq!(subs.inputs[1], vec!['j' as u32, 'k' as u32]);
+    assert_eq!(subs.output, vec!['i' as u32, 'k' as u32]);
 }
 
 #[test]
 fn parse_trace() {
     let subs = Subscripts::parse("ii->").unwrap();
     assert_eq!(subs.inputs.len(), 1);
-    assert_eq!(subs.inputs[0], vec![8, 8]); // i=8 repeated
+    assert_eq!(subs.inputs[0], vec!['i' as u32, 'i' as u32]);
     assert!(subs.output.is_empty());
 }
 
@@ -62,18 +62,18 @@ fn parse_with_parentheses() {
     let subs = Subscripts::parse("ij,(jk,kl)->il").unwrap();
     assert_eq!(subs.inputs.len(), 3);
     // Parentheses stripped, labels parsed correctly
-    assert_eq!(subs.inputs[0], vec![8, 9]); // ij
-    assert_eq!(subs.inputs[1], vec![9, 10]); // jk
-    assert_eq!(subs.inputs[2], vec![10, 11]); // kl
-    assert_eq!(subs.output, vec![8, 11]); // il
+    assert_eq!(subs.inputs[0], vec!['i' as u32, 'j' as u32]);
+    assert_eq!(subs.inputs[1], vec!['j' as u32, 'k' as u32]);
+    assert_eq!(subs.inputs[2], vec!['k' as u32, 'l' as u32]);
+    assert_eq!(subs.output, vec!['i' as u32, 'l' as u32]);
 }
 
 #[test]
 fn parse_uppercase() {
     let subs = Subscripts::parse("AB,BC->AC").unwrap();
-    assert_eq!(subs.inputs[0], vec![26, 27]); // A=26, B=27
-    assert_eq!(subs.inputs[1], vec![27, 28]); // B=27, C=28
-    assert_eq!(subs.output, vec![26, 28]); // A=26, C=28
+    assert_eq!(subs.inputs[0], vec!['A' as u32, 'B' as u32]);
+    assert_eq!(subs.inputs[1], vec!['B' as u32, 'C' as u32]);
+    assert_eq!(subs.output, vec!['A' as u32, 'C' as u32]);
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn parse_invalid_no_arrow() {
 fn parse_invalid_char() {
     assert!(
         matches!(
-            Subscripts::parse("i1,1j->ij"),
+            Subscripts::parse("i+,+j->ij"),
             Err(tenferro_device::Error::InvalidArgument(ref msg)) if msg.contains("invalid")
         ),
         "expected InvalidArgument for invalid character"
@@ -1246,8 +1246,8 @@ typed_einsum_tests!(typed_complex64, num_complex::Complex64);
 //       einsum_scalar_vector_products
 //
 // [x] Unicode label parsing
-//     - Parser rejects non-ASCII labels: parse_unicode_label_rejected
-//     - Only a-z, A-Z accepted: parse_various_invalid_chars
+//     - Parser accepts Unicode labels: parse_unicode_labels_accepted
+//     - Parser rejects separators/symbols: parse_various_invalid_chars
 //
 // [x] Complex-diagonal cases
 //     - Diagonal extraction with Complex64 data:
@@ -1266,7 +1266,6 @@ typed_einsum_tests!(typed_complex64, num_complex::Complex64);
 //       einsum_error_non_square_trace
 //
 // [ ] Known limitations (not testable with current implementation)
-//     - Unicode labels: parser only accepts a-z, A-Z (verified via error tests)
 //     - Implicit output: parser requires explicit "->" separator
 //     - Scalar generative repeated-output embeddings from size_dict
 //       ("->ii", "->iii"): tracked as ignored parity tests
@@ -1737,40 +1736,45 @@ fn einsum_size_dict_scalar_to_diagonal_and_superdiagonal() {
 }
 
 // ============================================================================
-// Unicode label parsing (error paths)
+// Unicode label parsing
 // ============================================================================
 
 #[test]
-fn parse_unicode_label_rejected() {
-    // The parser only accepts a-z and A-Z. Unicode characters should produce
-    // a clear error.
-    let result = Subscripts::parse("\u{03B1}\u{03B2},\u{03B2}\u{03B3}->\u{03B1}\u{03B3}");
+fn parse_unicode_labels_accepted() {
+    // Greek labels
+    let greek = Subscripts::parse("\u{03B1}\u{03B2},\u{03B2}\u{03B3}->\u{03B1}\u{03B3}");
     assert!(
-        result.is_err(),
-        "unicode labels should be rejected, got: {:?}",
-        result
+        greek.is_ok(),
+        "unicode Greek labels should parse: {greek:?}"
     );
-    match result {
-        Err(tenferro_device::Error::InvalidArgument(msg)) => {
-            assert!(
-                msg.contains("invalid"),
-                "error message should mention 'invalid', got: {msg}"
-            );
-        }
-        other => panic!("expected InvalidArgument, got: {other:?}"),
-    }
+
+    // Benchmark-like labels: digit + accented + Icelandic eth
+    let benchmark_like = Subscripts::parse("0Á,Áð,ðÂ->0Â");
+    assert!(
+        benchmark_like.is_ok(),
+        "benchmark-like Unicode labels should parse: {benchmark_like:?}"
+    );
 }
 
 #[test]
 fn parse_various_invalid_chars() {
-    // Verify several categories of invalid characters produce errors.
-    let invalid_cases = [
+    // Digits and Unicode letters are accepted.
+    let accepted_cases = [
         ("0i,ij->0j", "digit"),
-        ("i+,+j->ij", "plus sign"),
-        ("i ,j ->ij", "space"),
         ("i\u{00E9},\u{00E9}j->ij", "accented char"),
         ("i\u{4E2D},\u{4E2D}j->ij", "CJK char"),
     ];
+    for (notation, desc) in &accepted_cases {
+        let result = Subscripts::parse(notation);
+        assert!(
+            result.is_ok(),
+            "should accept {desc} in notation '{notation}', got: {:?}",
+            result
+        );
+    }
+
+    // Separators/symbols must still be rejected.
+    let invalid_cases = [("i+,+j->ij", "plus sign"), ("i ,j ->ij", "space")];
     for (notation, desc) in &invalid_cases {
         let result = Subscripts::parse(notation);
         assert!(
@@ -2173,8 +2177,8 @@ fn nested_parse_simple_group() {
         } => {
             assert_eq!(children.len(), 2);
             // Root output is "il"
-            let i = 8u32; // 'i' - 'a'
-            let l = 11u32; // 'l' - 'a'
+            let i = 'i' as u32;
+            let l = 'l' as u32;
             assert_eq!(subscripts.output, vec![i, l]);
             // First child is a Node (the group)
             match &children[0] {
@@ -2193,7 +2197,7 @@ fn nested_parse_simple_group() {
                     ));
                     // Inner output should contain labels needed outside: i and k
                     // i appears in final output, k appears in sibling kl
-                    let k = 10u32;
+                    let k = 'k' as u32;
                     assert!(inner_subs.output.contains(&i));
                     assert!(inner_subs.output.contains(&k));
                 }
