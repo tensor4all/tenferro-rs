@@ -14,6 +14,36 @@ A general-purpose tensor computation library in Rust with CPU/GPU support.
 
 Built on top of [strided-rs](https://github.com/tensor4all/strided-rs) for cache-optimized strided array operations.
 
+### Influences
+
+The API and internal architecture are strongly influenced by
+[PyTorch / libtorch](https://github.com/pytorch/pytorch):
+
+- **Tensor type** — `Tensor<T>` with reference-counted storage and zero-copy
+  view operations (permute, broadcast, diagonal, narrow, select) mirrors
+  `at::Tensor` / `c10::Storage`.
+- **Plan-based execution** — The `TensorPrims<A>` describe-plan-execute
+  protocol follows the cuTENSOR / BLAS pattern used by PyTorch's GPU backend.
+- **Automatic differentiation** — Tape-based reverse mode (VJP) and
+  dual-number forward mode (JVP) follow PyTorch's autograd and `torch.func`
+  design, factored into standalone `chainrules-core` / `chainrules` crates
+  (inspired by Julia's
+  [ChainRulesCore.jl](https://github.com/JuliaDiff/ChainRulesCore.jl)).
+- **Einsum** — Ported from Julia's
+  [OMEinsum.jl](https://github.com/under-Peter/OMEinsum.jl); string notation
+  (`"ij,jk->ik"`) is compatible with `torch.einsum`, with N-ary contraction
+  tree optimization.
+- **Linear algebra** — `tenferro-linalg` mirrors `torch.linalg` (SVD, QR, LU,
+  eigen, Cholesky, solve) with differentiable decompositions.
+
+Key differences from PyTorch: column-major default layout with `(m, n, *)`
+batch convention, compile-time generics (`Tensor<T>`) instead of runtime dtype
+dispatch, and algebra parameterization (`TensorPrims<A>`) enabling custom
+semirings (e.g., tropical).
+
+For a detailed feature-by-feature mapping, see
+[`docs/design/reference/libtorch.md`](docs/design/reference/libtorch.md).
+
 ## Design
 
 See [`docs/design/`](docs/design/) for architecture and design documents, including:
