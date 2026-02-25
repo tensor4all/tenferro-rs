@@ -1,6 +1,9 @@
+use std::alloc::{self, Layout};
 use std::any::TypeId;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
+use std::ptr::NonNull;
 
 use num_complex::{Complex32, Complex64};
 use strided_perm::try_fuse_group;
@@ -212,13 +215,160 @@ pub enum CpuPlan<T: Scalar> {
 pub struct CpuContext {
     pool: rayon::ThreadPool,
     plan_cache: PlanCache,
-    scratch: CpuScratchPool,
+    scratch: ScratchPool,
 }
 
+/// Alignment for all scratch allocations (cache-line / AVX-512).
+const SCRATCH_ALIGN: usize = 64;
+
+/// Raw byte buffer stored in the pool. Does NOT impl Drop — the pool
+/// handles deallocation in its own Drop impl.
+struct RawBuf {
+    ptr: NonNull<u8>,
+    cap_bytes: usize,
+}
+
+// SAFETY: The underlying allocation is exclusively owned; sending across
+// threads is safe as long as no aliased references exist.
+unsafe impl Send for RawBuf {}
+
+/// Typed scratch buffer obtained from [`ScratchPool`].
+///
+/// Dereferences to `&[T]` / `&mut [T]`. On the normal path the caller
+/// returns the buffer to the pool via [`ScratchPool::put`]; if dropped
+/// without returning (e.g. during a panic), Drop deallocates the raw
+/// memory so there is no leak.
+pub(crate) struct ScratchBuf<T> {
+    ptr: NonNull<u8>,
+    cap_bytes: usize,
+    len: usize,
+    _marker: PhantomData<T>,
+}
+
+impl<T> ScratchBuf<T> {
+    /// Extract the raw buffer, consuming self **without** running Drop.
+    fn into_raw(self) -> RawBuf {
+        let raw = RawBuf {
+            ptr: self.ptr,
+            cap_bytes: self.cap_bytes,
+        };
+        std::mem::forget(self);
+        raw
+    }
+}
+
+impl<T> Deref for ScratchBuf<T> {
+    type Target = [T];
+    fn deref(&self) -> &[T] {
+        if self.len == 0 {
+            return &[];
+        }
+        // SAFETY: ptr is SCRATCH_ALIGN-aligned (>= align_of::<T>()),
+        // and len elements fit within cap_bytes.
+        unsafe { std::slice::from_raw_parts(self.ptr.as_ptr() as *const T, self.len) }
+    }
+}
+
+impl<T> DerefMut for ScratchBuf<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        if self.len == 0 {
+            return &mut [];
+        }
+        unsafe { std::slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut T, self.len) }
+    }
+}
+
+impl<T> Drop for ScratchBuf<T> {
+    fn drop(&mut self) {
+        if self.cap_bytes > 0 {
+            // SAFETY: ptr was allocated with Layout(cap_bytes, SCRATCH_ALIGN).
+            let layout = Layout::from_size_align(self.cap_bytes, SCRATCH_ALIGN)
+                .expect("invalid scratch layout in drop");
+            unsafe { alloc::dealloc(self.ptr.as_ptr(), layout) };
+        }
+    }
+}
+
+/// Type-independent byte-level scratch pool. Buffers are keyed by byte
+/// capacity so an f64 allocation can be reused for f32 or vice-versa.
 #[derive(Default)]
-struct CpuScratchPool {
-    f64_pool: BTreeMap<usize, Vec<Vec<f64>>>,
-    f32_pool: BTreeMap<usize, Vec<Vec<f32>>>,
+struct ScratchPool {
+    pool: BTreeMap<usize, Vec<RawBuf>>,
+}
+
+impl ScratchPool {
+    /// Obtain a scratch buffer holding at least `len` elements of `T`.
+    /// Contents are **uninitialized**; callers must overwrite before reading.
+    fn take<T>(&mut self, len: usize) -> ScratchBuf<T> {
+        debug_assert!(
+            SCRATCH_ALIGN >= std::mem::align_of::<T>(),
+            "SCRATCH_ALIGN ({SCRATCH_ALIGN}) < align_of::<T> ({})",
+            std::mem::align_of::<T>(),
+        );
+        let needed = len
+            .checked_mul(std::mem::size_of::<T>())
+            .expect("scratch size overflow");
+        let raw = self
+            .pool
+            .range(needed..)
+            .next()
+            .map(|(&k, _)| k)
+            .and_then(|k| {
+                let bucket = self.pool.get_mut(&k)?;
+                let buf = bucket.pop()?;
+                if bucket.is_empty() {
+                    self.pool.remove(&k);
+                }
+                Some(buf)
+            });
+        let (ptr, cap_bytes) = match raw {
+            Some(buf) => (buf.ptr, buf.cap_bytes),
+            None => {
+                if needed == 0 {
+                    return ScratchBuf {
+                        ptr: NonNull::dangling(),
+                        cap_bytes: 0,
+                        len: 0,
+                        _marker: PhantomData,
+                    };
+                }
+                let layout =
+                    Layout::from_size_align(needed, SCRATCH_ALIGN).expect("invalid scratch layout");
+                // SAFETY: layout has non-zero size.
+                let ptr = unsafe { alloc::alloc(layout) };
+                let ptr = NonNull::new(ptr).expect("scratch allocation failed");
+                (ptr, needed)
+            }
+        };
+        ScratchBuf {
+            ptr,
+            cap_bytes,
+            len,
+            _marker: PhantomData,
+        }
+    }
+
+    /// Return a scratch buffer to the pool for later reuse.
+    fn put<T>(&mut self, buf: ScratchBuf<T>) {
+        let raw = buf.into_raw();
+        if raw.cap_bytes == 0 {
+            return;
+        }
+        self.pool.entry(raw.cap_bytes).or_default().push(raw);
+    }
+}
+
+impl Drop for ScratchPool {
+    fn drop(&mut self) {
+        for (_, bufs) in std::mem::take(&mut self.pool) {
+            for buf in bufs {
+                let layout = Layout::from_size_align(buf.cap_bytes, SCRATCH_ALIGN)
+                    .expect("invalid scratch layout in pool drop");
+                // SAFETY: each RawBuf was allocated with this layout.
+                unsafe { alloc::dealloc(buf.ptr.as_ptr(), layout) };
+            }
+        }
+    }
 }
 
 impl CpuContext {
@@ -231,7 +381,7 @@ impl CpuContext {
         Self {
             pool,
             plan_cache: PlanCache::new(),
-            scratch: CpuScratchPool::default(),
+            scratch: ScratchPool::default(),
         }
     }
 
@@ -250,70 +400,12 @@ impl CpuContext {
         &mut self.plan_cache
     }
 
-    fn take_f64_scratch(&mut self, len: usize) -> Vec<f64> {
-        let key = self.scratch.f64_pool.range(len..).next().map(|(&k, _)| k);
-        let mut buf = if let Some(k) = key {
-            let entry = self
-                .scratch
-                .f64_pool
-                .get_mut(&k)
-                .expect("scratch pool key disappeared");
-            let v = entry.pop().expect("scratch pool bucket empty");
-            if entry.is_empty() {
-                self.scratch.f64_pool.remove(&k);
-            }
-            v
-        } else {
-            Vec::with_capacity(len)
-        };
-        if buf.capacity() < len {
-            buf.reserve(len - buf.capacity());
-        }
-        // SAFETY: callers overwrite all elements before reading.
-        unsafe { buf.set_len(len) };
-        buf
+    fn take_scratch<T>(&mut self, len: usize) -> ScratchBuf<T> {
+        self.scratch.take(len)
     }
 
-    fn put_f64_scratch(&mut self, mut buf: Vec<f64>) {
-        let cap = buf.capacity();
-        if cap == 0 {
-            return;
-        }
-        buf.clear();
-        self.scratch.f64_pool.entry(cap).or_default().push(buf);
-    }
-
-    fn take_f32_scratch(&mut self, len: usize) -> Vec<f32> {
-        let key = self.scratch.f32_pool.range(len..).next().map(|(&k, _)| k);
-        let mut buf = if let Some(k) = key {
-            let entry = self
-                .scratch
-                .f32_pool
-                .get_mut(&k)
-                .expect("scratch pool key disappeared");
-            let v = entry.pop().expect("scratch pool bucket empty");
-            if entry.is_empty() {
-                self.scratch.f32_pool.remove(&k);
-            }
-            v
-        } else {
-            Vec::with_capacity(len)
-        };
-        if buf.capacity() < len {
-            buf.reserve(len - buf.capacity());
-        }
-        // SAFETY: callers overwrite all elements before reading.
-        unsafe { buf.set_len(len) };
-        buf
-    }
-
-    fn put_f32_scratch(&mut self, mut buf: Vec<f32>) {
-        let cap = buf.capacity();
-        if cap == 0 {
-            return;
-        }
-        buf.clear();
-        self.scratch.f32_pool.entry(cap).or_default().push(buf);
+    fn put_scratch<T>(&mut self, buf: ScratchBuf<T>) {
+        self.scratch.put(buf);
     }
 }
 
@@ -778,9 +870,9 @@ fn execute_batched_gemm_f64(
         return gemm_f64(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
     }
 
-    let mut a_mat = ctx.take_f64_scratch(m * k);
-    let mut b_mat = ctx.take_f64_scratch(k * n);
-    let mut c_mat = ctx.take_f64_scratch(m * n);
+    let mut a_mat = ctx.take_scratch::<f64>(m * k);
+    let mut b_mat = ctx.take_scratch::<f64>(k * n);
+    let mut c_mat = ctx.take_scratch::<f64>(m * n);
 
     let mut idx = vec![0usize; nb];
     let mut a_off = 0isize;
@@ -905,9 +997,9 @@ fn execute_batched_gemm_f64(
         }
     }
 
-    ctx.put_f64_scratch(a_mat);
-    ctx.put_f64_scratch(b_mat);
-    ctx.put_f64_scratch(c_mat);
+    ctx.put_scratch(a_mat);
+    ctx.put_scratch(b_mat);
+    ctx.put_scratch(c_mat);
     result
 }
 
@@ -957,9 +1049,9 @@ fn execute_batched_gemm_f32(
         return gemm_f32(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
     }
 
-    let mut a_mat = ctx.take_f32_scratch(m * k);
-    let mut b_mat = ctx.take_f32_scratch(k * n);
-    let mut c_mat = ctx.take_f32_scratch(m * n);
+    let mut a_mat = ctx.take_scratch::<f32>(m * k);
+    let mut b_mat = ctx.take_scratch::<f32>(k * n);
+    let mut c_mat = ctx.take_scratch::<f32>(m * n);
 
     let mut idx = vec![0usize; nb];
     let mut a_off = 0isize;
@@ -1084,9 +1176,9 @@ fn execute_batched_gemm_f32(
         }
     }
 
-    ctx.put_f32_scratch(a_mat);
-    ctx.put_f32_scratch(b_mat);
-    ctx.put_f32_scratch(c_mat);
+    ctx.put_scratch(a_mat);
+    ctx.put_scratch(b_mat);
+    ctx.put_scratch(c_mat);
     result
 }
 
@@ -2639,4 +2731,75 @@ fn scale_output<T: Scalar>(output: &mut StridedViewMut<T>, beta: T) {
         });
     }
     // If beta == 1, output is unchanged (identity scaling).
+}
+
+#[cfg(test)]
+mod scratch_pool_tests {
+    use super::*;
+
+    #[test]
+    fn take_put_roundtrip_f64() {
+        let mut pool = ScratchPool::default();
+        let mut buf = pool.take::<f64>(100);
+        assert_eq!(buf.len(), 100);
+        for i in 0..100 {
+            buf[i] = i as f64;
+        }
+        assert_eq!(buf[42], 42.0);
+        pool.put(buf);
+
+        // Second take should reuse the same allocation.
+        let buf2 = pool.take::<f64>(100);
+        assert_eq!(buf2.len(), 100);
+        pool.put(buf2);
+        assert!(pool.pool.values().map(|v| v.len()).sum::<usize>() == 1);
+    }
+
+    #[test]
+    fn cross_type_reuse() {
+        let mut pool = ScratchPool::default();
+        // Allocate 1000 f64s = 8000 bytes.
+        let buf = pool.take::<f64>(1000);
+        let cap = buf.cap_bytes;
+        assert!(cap >= 8000);
+        pool.put(buf);
+
+        // Take 2000 f32s = 8000 bytes — should reuse the same buffer.
+        let buf2 = pool.take::<f32>(2000);
+        assert_eq!(buf2.cap_bytes, cap);
+        assert_eq!(buf2.len(), 2000);
+        pool.put(buf2);
+    }
+
+    #[test]
+    fn larger_buffer_reused_for_smaller_request() {
+        let mut pool = ScratchPool::default();
+        let buf = pool.take::<f64>(1000);
+        pool.put(buf);
+        // Request fewer elements — pool returns the existing (larger) buffer.
+        let buf2 = pool.take::<f64>(500);
+        assert!(buf2.cap_bytes >= 8000);
+        assert_eq!(buf2.len(), 500);
+        pool.put(buf2);
+    }
+
+    #[test]
+    fn zero_length_take() {
+        let mut pool = ScratchPool::default();
+        let buf = pool.take::<f64>(0);
+        assert_eq!(buf.len(), 0);
+        assert_eq!(buf.cap_bytes, 0);
+        pool.put(buf);
+        // Pool should not store zero-capacity buffers.
+        assert!(pool.pool.is_empty());
+    }
+
+    #[test]
+    fn drop_without_put_does_not_leak() {
+        let mut pool = ScratchPool::default();
+        let buf = pool.take::<f64>(1024);
+        // Drop without returning to pool — ScratchBuf::drop deallocates.
+        drop(buf);
+        assert!(pool.pool.is_empty());
+    }
 }
