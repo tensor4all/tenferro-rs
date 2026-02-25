@@ -220,6 +220,7 @@
 //! // a.set_preferred_compute_device(None);
 //! ```
 
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -231,6 +232,104 @@ use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{Extension, PrimDescriptor, ReduceOp, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
+
+// ============================================================================
+// Thread-local buffer pool
+// ============================================================================
+
+thread_local! {
+    static BUFFER_POOL: RefCell<HashMap<TypeId, Box<dyn Any>>>
+        = RefCell::new(HashMap::new());
+}
+
+const MAX_POOL_PER_TYPE: usize = 16;
+const MAX_POOLED_BYTES: usize = 64 * 1024 * 1024; // 64 MB
+
+fn take_from_pool<T: Copy + 'static>(len: usize) -> Vec<T> {
+    BUFFER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        let vecs = pool
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(Vec::<Vec<T>>::new()))
+            .downcast_mut::<Vec<Vec<T>>>()
+            .unwrap();
+
+        let best_idx = vecs
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.capacity() >= len)
+            .min_by_key(|(_, v)| v.capacity())
+            .map(|(i, _)| i);
+
+        let mut data = best_idx
+            .map(|i| vecs.swap_remove(i))
+            .unwrap_or_else(|| Vec::with_capacity(len));
+        if data.capacity() < len {
+            data.reserve(len - data.capacity());
+        }
+        // Safety: len <= capacity; contents will be overwritten by the
+        // backend (beta=0 means the output buffer is fully written).
+        unsafe { data.set_len(len) };
+        data
+    })
+}
+
+fn return_to_pool<T: Copy + 'static>(mut data: Vec<T>) {
+    let bytes = data.capacity().saturating_mul(std::mem::size_of::<T>());
+    if bytes == 0 || bytes > MAX_POOLED_BYTES {
+        return;
+    }
+    data.clear();
+    BUFFER_POOL.with(|pool| {
+        let mut pool = pool.borrow_mut();
+        let vecs = pool
+            .entry(TypeId::of::<T>())
+            .or_insert_with(|| Box::new(Vec::<Vec<T>>::new()))
+            .downcast_mut::<Vec<Vec<T>>>()
+            .unwrap();
+        if vecs.len() >= MAX_POOL_PER_TYPE {
+            if let Some((min_i, min_cap)) = vecs
+                .iter()
+                .enumerate()
+                .map(|(i, v)| (i, v.capacity()))
+                .min_by_key(|(_, c)| *c)
+            {
+                if min_cap < data.capacity() {
+                    vecs.swap_remove(min_i);
+                    vecs.push(data);
+                }
+            }
+        } else {
+            vecs.push(data);
+        }
+    });
+}
+
+/// Allocate a column-major tensor from the thread-local pool, or fresh if too large.
+fn alloc_tensor_pooled<T: Scalar>(dims: &[usize], memory_space: LogicalMemorySpace) -> Tensor<T> {
+    let numel = dims.iter().product::<usize>().max(1);
+    let bytes = numel.saturating_mul(std::mem::size_of::<T>());
+    if bytes > MAX_POOLED_BYTES {
+        return Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor);
+    }
+    let data = take_from_pool::<T>(numel);
+    // Column-major strides: [1, d0, d0*d1, ...]
+    let mut strides = Vec::with_capacity(dims.len());
+    let mut s = 1isize;
+    for &d in dims {
+        strides.push(s);
+        s *= d as isize;
+    }
+    Tensor::from_vec(data, dims, &strides, 0)
+        .unwrap_or_else(|_| Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor))
+}
+
+/// Return a tensor's buffer to the thread-local pool (no-op if shared or GPU).
+fn return_tensor_to_pool<T: Scalar>(tensor: Tensor<T>) {
+    if let Some(data) = tensor.try_into_data_vec() {
+        return_to_pool(data);
+    }
+}
 
 // ============================================================================
 // Private helpers
@@ -831,11 +930,8 @@ where
                     Ok(current.dims()[pos])
                 })
                 .collect::<Result<_>>()?;
-            let mut intermediate = Tensor::<Alg::Scalar>::zeros(
-                &inter_shape,
-                output.logical_memory_space(),
-                MemoryOrder::ColumnMajor,
-            );
+            let mut intermediate =
+                alloc_tensor_pooled::<Alg::Scalar>(&inter_shape, output.logical_memory_space());
             // Recursive call for trace/reduce: current_subs → inter_subs
             // inter_subs has no repeated labels, so this hits a different branch.
             execute_single_tensor_einsum::<Alg, Backend>(
@@ -1149,8 +1245,7 @@ where
 
     // --- Step 4: BatchedGemm → temp ---
     let memory_space = a.logical_memory_space();
-    let mut temp =
-        Tensor::<A::Scalar>::zeros(&c_gemm_shape, memory_space, MemoryOrder::ColumnMajor);
+    let mut temp = alloc_tensor_pooled::<A::Scalar>(&c_gemm_shape, memory_space);
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: batch_sizes.clone(),
@@ -1259,8 +1354,7 @@ where
         })
         .collect();
     let memory_space = tensor.logical_memory_space();
-    let mut reduced =
-        Tensor::<A::Scalar>::zeros(&out_shape, memory_space, MemoryOrder::ColumnMajor);
+    let mut reduced = alloc_tensor_pooled::<A::Scalar>(&out_shape, memory_space);
 
     let desc = PrimDescriptor::Reduce {
         modes_a: subs_self.to_vec(),
@@ -1283,8 +1377,9 @@ where
 
 /// Permute a tensor to a target mode order and ensure contiguous layout.
 ///
-/// If `current_subs == target_subs`, returns a contiguous copy (MakeContiguous)
-/// if needed. Otherwise, permutes to the target order, then makes contiguous.
+/// Uses `Tensor::permute` (zero-copy view) first; copies to a pooled buffer
+/// only when the result is non-contiguous. Falls back to MakeContiguous when
+/// `current_subs == target_subs`.
 fn permute_or_copy<A, B>(
     ctx: &mut B::Context,
     tensor: &Tensor<A::Scalar>,
@@ -1301,38 +1396,37 @@ where
         return make_contiguous_if_needed::<A, B>(ctx, tensor);
     }
 
-    // Compute target shape from the permutation
+    // Build axis permutation: where does each target label come from?
     let label_to_pos: HashMap<u32, usize> = current_subs
         .iter()
         .enumerate()
         .map(|(i, &l)| (l, i))
         .collect();
-    let target_shape: Vec<usize> = target_subs
-        .iter()
-        .map(|l| tensor.dims()[label_to_pos[l]])
-        .collect();
+    let perm: Vec<usize> = target_subs.iter().map(|l| label_to_pos[l]).collect();
 
-    // Permute via prim
+    // Zero-copy view permute
+    let view = tensor.permute(&perm)?;
+
+    // If the view happens to be contiguous, return it directly (zero allocation)
+    if view.is_contiguous() {
+        return Ok(view);
+    }
+
+    // Otherwise copy to a contiguous pooled buffer
     let memory_space = tensor.logical_memory_space();
-    let mut permuted =
-        Tensor::<A::Scalar>::zeros(&target_shape, memory_space, MemoryOrder::ColumnMajor);
-    let desc = PrimDescriptor::Permute {
-        modes_a: current_subs.to_vec(),
-        modes_b: target_subs.to_vec(),
-    };
-    let shapes = [tensor.dims(), permuted.dims()];
+    let mut contiguous = alloc_tensor_pooled::<A::Scalar>(view.dims(), memory_space);
+    let desc = PrimDescriptor::MakeContiguous;
+    let shapes = [view.dims(), contiguous.dims()];
     let plan = B::plan(ctx, &desc, &shapes)?;
     B::execute(
         ctx,
         &plan,
         A::Scalar::one(),
-        &[tensor],
+        &[&view],
         A::Scalar::zero(),
-        &mut permuted,
+        &mut contiguous,
     )?;
-
-    // The result is already contiguous (freshly allocated)
-    Ok(permuted)
+    Ok(contiguous)
 }
 
 /// Ensure a tensor is contiguous, copying if necessary.
@@ -1349,8 +1443,7 @@ where
         return Ok(tensor.clone());
     }
     let memory_space = tensor.logical_memory_space();
-    let mut result =
-        Tensor::<A::Scalar>::zeros(tensor.dims(), memory_space, MemoryOrder::ColumnMajor);
+    let mut result = alloc_tensor_pooled::<A::Scalar>(tensor.dims(), memory_space);
     let desc = PrimDescriptor::MakeContiguous;
     let shapes = [tensor.dims(), result.dims()];
     let plan = B::plan(ctx, &desc, &shapes)?;
@@ -1470,10 +1563,9 @@ where
     }
 
     // Multi-tensor case: follow the contraction tree.
-    // Keep intermediates by logical index and recycle freed buffers by shape.
+    // Keep intermediates by logical index; freed buffers go back to the thread-local pool.
     let memory_space = infer_memory_space(operands)?;
     let mut intermediates: HashMap<usize, Tensor<Alg::Scalar>> = HashMap::new();
-    let mut reuse_pool: HashMap<Vec<usize>, Vec<Tensor<Alg::Scalar>>> = HashMap::new();
 
     // Count remaining uses for each operand/index in the contraction schedule.
     let mut use_counts = vec![0usize; n_inputs + tree.steps.len()];
@@ -1526,16 +1618,7 @@ where
             let result_idx = n_inputs + step_idx;
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = compute_output_shape(subs_result, &tree.size_dict)?;
-            let mut result = reuse_pool
-                .get_mut(&result_shape)
-                .and_then(|bufs| bufs.pop())
-                .unwrap_or_else(|| {
-                    Tensor::<Alg::Scalar>::zeros(
-                        &result_shape,
-                        memory_space,
-                        MemoryOrder::ColumnMajor,
-                    )
-                });
+            let mut result = alloc_tensor_pooled::<Alg::Scalar>(&result_shape, memory_space);
             execute_pairwise_contraction::<Alg, Backend>(
                 ctx,
                 subs_left,
@@ -1560,7 +1643,7 @@ where
             use_counts[*idx] = use_counts[*idx].saturating_sub(1);
             if *idx >= n_inputs && use_counts[*idx] == 0 {
                 if let Some(t) = intermediates.remove(idx) {
-                    reuse_pool.entry(t.dims().to_vec()).or_default().push(t);
+                    return_tensor_to_pool(t);
                 }
             }
         }
