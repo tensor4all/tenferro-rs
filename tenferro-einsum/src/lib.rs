@@ -275,11 +275,13 @@ fn infer_memory_space<T: Scalar>(operands: &[&Tensor<T>]) -> Result<LogicalMemor
     Ok(space)
 }
 
-/// Convert an ASCII character label to u32.
+/// Convert a notation label character to internal `u32`.
+///
+/// Any Unicode alphanumeric character is accepted and mapped to its
+/// Unicode scalar value (`char as u32`).
 fn char_to_label(c: char) -> Result<u32> {
     match c {
-        'a'..='z' => Ok((c as u32) - ('a' as u32)),
-        'A'..='Z' => Ok((c as u32) - ('A' as u32) + 26),
+        _ if c.is_alphanumeric() => Ok(c as u32),
         _ => Err(Error::InvalidArgument(format!(
             "invalid einsum label character: '{c}'"
         ))),
@@ -1404,7 +1406,8 @@ impl Subscripts {
 
     /// Parse subscripts from NumPy/PyTorch-style string notation.
     ///
-    /// Each character (`a`–`z`, `A`–`Z`) represents a dimension label.
+    /// Each Unicode alphanumeric character represents a dimension label.
+    /// Labels are mapped to integer IDs via Unicode scalar values (`char as u32`).
     /// Input tensors are separated by commas, and `->` separates inputs
     /// from the output.
     ///
