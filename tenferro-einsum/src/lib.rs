@@ -277,15 +277,17 @@ fn infer_memory_space<T: Scalar>(operands: &[&Tensor<T>]) -> Result<LogicalMemor
 
 /// Convert a notation label character to internal `u32`.
 ///
-/// Any Unicode alphanumeric character is accepted and mapped to its
-/// Unicode scalar value (`char as u32`).
+/// Any Unicode scalar except control characters is accepted and mapped to
+/// its scalar value (`char as u32`). This enables einsum benchmark instances
+/// that use characters like `×`, `ë`, `ð` as index labels.
 fn char_to_label(c: char) -> Result<u32> {
-    match c {
-        _ if c.is_alphanumeric() => Ok(c as u32),
-        _ => Err(Error::InvalidArgument(format!(
-            "invalid einsum label character: '{c}'"
-        ))),
+    if c.is_control() {
+        return Err(Error::InvalidArgument(format!(
+            "invalid einsum label character: control character U+{:04X}",
+            c as u32
+        )));
     }
+    Ok(c as u32)
 }
 
 /// Split einsum notation on `->` and validate balanced parentheses.
