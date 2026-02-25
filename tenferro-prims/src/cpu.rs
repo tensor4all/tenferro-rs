@@ -1,4 +1,5 @@
 use std::any::TypeId;
+use std::collections::BTreeMap;
 use std::marker::PhantomData;
 
 use num_complex::{Complex32, Complex64};
@@ -211,6 +212,13 @@ pub enum CpuPlan<T: Scalar> {
 pub struct CpuContext {
     pool: rayon::ThreadPool,
     plan_cache: PlanCache,
+    scratch: CpuScratchPool,
+}
+
+#[derive(Default)]
+struct CpuScratchPool {
+    f64_pool: BTreeMap<usize, Vec<Vec<f64>>>,
+    f32_pool: BTreeMap<usize, Vec<Vec<f32>>>,
 }
 
 impl CpuContext {
@@ -223,6 +231,7 @@ impl CpuContext {
         Self {
             pool,
             plan_cache: PlanCache::new(),
+            scratch: CpuScratchPool::default(),
         }
     }
 
@@ -239,6 +248,72 @@ impl CpuContext {
     /// Returns a mutable reference to the plan cache.
     pub fn plan_cache_mut(&mut self) -> &mut PlanCache {
         &mut self.plan_cache
+    }
+
+    fn take_f64_scratch(&mut self, len: usize) -> Vec<f64> {
+        let key = self.scratch.f64_pool.range(len..).next().map(|(&k, _)| k);
+        let mut buf = if let Some(k) = key {
+            let entry = self
+                .scratch
+                .f64_pool
+                .get_mut(&k)
+                .expect("scratch pool key disappeared");
+            let v = entry.pop().expect("scratch pool bucket empty");
+            if entry.is_empty() {
+                self.scratch.f64_pool.remove(&k);
+            }
+            v
+        } else {
+            Vec::with_capacity(len)
+        };
+        if buf.capacity() < len {
+            buf.reserve(len - buf.capacity());
+        }
+        // SAFETY: callers overwrite all elements before reading.
+        unsafe { buf.set_len(len) };
+        buf
+    }
+
+    fn put_f64_scratch(&mut self, mut buf: Vec<f64>) {
+        let cap = buf.capacity();
+        if cap == 0 {
+            return;
+        }
+        buf.clear();
+        self.scratch.f64_pool.entry(cap).or_default().push(buf);
+    }
+
+    fn take_f32_scratch(&mut self, len: usize) -> Vec<f32> {
+        let key = self.scratch.f32_pool.range(len..).next().map(|(&k, _)| k);
+        let mut buf = if let Some(k) = key {
+            let entry = self
+                .scratch
+                .f32_pool
+                .get_mut(&k)
+                .expect("scratch pool key disappeared");
+            let v = entry.pop().expect("scratch pool bucket empty");
+            if entry.is_empty() {
+                self.scratch.f32_pool.remove(&k);
+            }
+            v
+        } else {
+            Vec::with_capacity(len)
+        };
+        if buf.capacity() < len {
+            buf.reserve(len - buf.capacity());
+        }
+        // SAFETY: callers overwrite all elements before reading.
+        unsafe { buf.set_len(len) };
+        buf
+    }
+
+    fn put_f32_scratch(&mut self, mut buf: Vec<f32>) {
+        let cap = buf.capacity();
+        if cap == 0 {
+            return;
+        }
+        buf.clear();
+        self.scratch.f32_pool.entry(cap).or_default().push(buf);
     }
 }
 
@@ -657,6 +732,7 @@ fn execute_batched_gemm_naive<T: Scalar>(
 }
 
 fn execute_batched_gemm_f64(
+    ctx: &mut CpuContext,
     alpha: f64,
     inputs: &[&StridedView<f64>],
     beta: f64,
@@ -668,9 +744,6 @@ fn execute_batched_gemm_f64(
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
-    let mut a_mat = vec![0.0_f64; m * k];
-    let mut b_mat = vec![0.0_f64; k * n];
-    let mut c_mat = vec![0.0_f64; m * n];
     let nb = batch_dims.len();
     let a_strides = a.strides();
     let b_strides = b.strides();
@@ -689,11 +762,81 @@ fn execute_batched_gemm_f64(
     let b_ptr = b.ptr();
     let c_ptr = output.as_mut_ptr();
 
+    // Fast path: single GEMM on contiguous [m,k] x [k,n] -> [m,n].
+    // Avoids pack/unpack and scratch traffic for common binary cases.
+    if nb == 0
+        && a_row == 1
+        && a_col == m as isize
+        && b_row == 1
+        && b_col == k as isize
+        && c_row == 1
+        && c_col == m as isize
+    {
+        let a_mat = unsafe { std::slice::from_raw_parts(a_ptr, m * k) };
+        let b_mat = unsafe { std::slice::from_raw_parts(b_ptr, k * n) };
+        let c_mat = unsafe { std::slice::from_raw_parts_mut(c_ptr, m * n) };
+        return gemm_f64(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
+    }
+
+    let mut a_mat = ctx.take_f64_scratch(m * k);
+    let mut b_mat = ctx.take_f64_scratch(k * n);
+    let mut c_mat = ctx.take_f64_scratch(m * n);
+
     let mut idx = vec![0usize; nb];
     let mut a_off = 0isize;
     let mut b_off = 0isize;
     let mut c_off = 0isize;
 
+    // Fast path: outer-product case (k=1), avoids GEMM/pack entirely.
+    if k == 1 {
+        loop {
+            for i in 0..m {
+                let a_val = unsafe { *a_ptr.offset(a_off + i as isize * a_row) };
+                for j in 0..n {
+                    let b_val = unsafe { *b_ptr.offset(b_off + j as isize * b_col) };
+                    let dst_off = c_off + i as isize * c_row + j as isize * c_col;
+                    let prod = alpha * a_val * b_val;
+                    unsafe {
+                        if beta == 0.0 {
+                            *c_ptr.offset(dst_off) = prod;
+                        } else {
+                            *c_ptr.offset(dst_off) = prod + beta * *c_ptr.offset(dst_off);
+                        }
+                    }
+                }
+            }
+
+            if nb == 0 {
+                break;
+            }
+
+            let mut carried_all = true;
+            for ax in 0..nb {
+                let dim = batch_dims[ax];
+                let next = idx[ax] + 1;
+                if next < dim {
+                    idx[ax] = next;
+                    a_off += a_batch[ax];
+                    b_off += b_batch[ax];
+                    c_off += c_batch[ax];
+                    carried_all = false;
+                    break;
+                } else {
+                    idx[ax] = 0;
+                    let back = (dim as isize - 1).max(0);
+                    a_off -= back * a_batch[ax];
+                    b_off -= back * b_batch[ax];
+                    c_off -= back * c_batch[ax];
+                }
+            }
+            if carried_all {
+                break;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut result = Ok(());
     loop {
         for kk in 0..k {
             for i in 0..m {
@@ -720,7 +863,10 @@ fn execute_batched_gemm_f64(
             }
         }
 
-        gemm_f64(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k)?;
+        if let Err(e) = gemm_f64(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
+            result = Err(e);
+            break;
+        }
 
         for j in 0..n {
             for i in 0..m {
@@ -759,10 +905,14 @@ fn execute_batched_gemm_f64(
         }
     }
 
-    Ok(())
+    ctx.put_f64_scratch(a_mat);
+    ctx.put_f64_scratch(b_mat);
+    ctx.put_f64_scratch(c_mat);
+    result
 }
 
 fn execute_batched_gemm_f32(
+    ctx: &mut CpuContext,
     alpha: f32,
     inputs: &[&StridedView<f32>],
     beta: f32,
@@ -774,9 +924,6 @@ fn execute_batched_gemm_f32(
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
-    let mut a_mat = vec![0.0_f32; m * k];
-    let mut b_mat = vec![0.0_f32; k * n];
-    let mut c_mat = vec![0.0_f32; m * n];
     let nb = batch_dims.len();
     let a_strides = a.strides();
     let b_strides = b.strides();
@@ -795,11 +942,80 @@ fn execute_batched_gemm_f32(
     let b_ptr = b.ptr();
     let c_ptr = output.as_mut_ptr();
 
+    // Fast path: single GEMM on contiguous [m,k] x [k,n] -> [m,n].
+    if nb == 0
+        && a_row == 1
+        && a_col == m as isize
+        && b_row == 1
+        && b_col == k as isize
+        && c_row == 1
+        && c_col == m as isize
+    {
+        let a_mat = unsafe { std::slice::from_raw_parts(a_ptr, m * k) };
+        let b_mat = unsafe { std::slice::from_raw_parts(b_ptr, k * n) };
+        let c_mat = unsafe { std::slice::from_raw_parts_mut(c_ptr, m * n) };
+        return gemm_f32(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
+    }
+
+    let mut a_mat = ctx.take_f32_scratch(m * k);
+    let mut b_mat = ctx.take_f32_scratch(k * n);
+    let mut c_mat = ctx.take_f32_scratch(m * n);
+
     let mut idx = vec![0usize; nb];
     let mut a_off = 0isize;
     let mut b_off = 0isize;
     let mut c_off = 0isize;
 
+    // Fast path: outer-product case (k=1), avoids GEMM/pack entirely.
+    if k == 1 {
+        loop {
+            for i in 0..m {
+                let a_val = unsafe { *a_ptr.offset(a_off + i as isize * a_row) };
+                for j in 0..n {
+                    let b_val = unsafe { *b_ptr.offset(b_off + j as isize * b_col) };
+                    let dst_off = c_off + i as isize * c_row + j as isize * c_col;
+                    let prod = alpha * a_val * b_val;
+                    unsafe {
+                        if beta == 0.0 {
+                            *c_ptr.offset(dst_off) = prod;
+                        } else {
+                            *c_ptr.offset(dst_off) = prod + beta * *c_ptr.offset(dst_off);
+                        }
+                    }
+                }
+            }
+
+            if nb == 0 {
+                break;
+            }
+
+            let mut carried_all = true;
+            for ax in 0..nb {
+                let dim = batch_dims[ax];
+                let next = idx[ax] + 1;
+                if next < dim {
+                    idx[ax] = next;
+                    a_off += a_batch[ax];
+                    b_off += b_batch[ax];
+                    c_off += c_batch[ax];
+                    carried_all = false;
+                    break;
+                } else {
+                    idx[ax] = 0;
+                    let back = (dim as isize - 1).max(0);
+                    a_off -= back * a_batch[ax];
+                    b_off -= back * b_batch[ax];
+                    c_off -= back * c_batch[ax];
+                }
+            }
+            if carried_all {
+                break;
+            }
+        }
+        return Ok(());
+    }
+
+    let mut result = Ok(());
     loop {
         for kk in 0..k {
             for i in 0..m {
@@ -826,7 +1042,10 @@ fn execute_batched_gemm_f32(
             }
         }
 
-        gemm_f32(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k)?;
+        if let Err(e) = gemm_f32(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
+            result = Err(e);
+            break;
+        }
 
         for j in 0..n {
             for i in 0..m {
@@ -865,7 +1084,10 @@ fn execute_batched_gemm_f32(
         }
     }
 
-    Ok(())
+    ctx.put_f32_scratch(a_mat);
+    ctx.put_f32_scratch(b_mat);
+    ctx.put_f32_scratch(c_mat);
+    result
 }
 
 #[cfg(feature = "gemm-faer")]
@@ -1031,6 +1253,7 @@ fn gemm_f32(
 }
 
 fn execute_batched_gemm<T: Scalar + 'static>(
+    ctx: &mut CpuContext,
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -1048,7 +1271,7 @@ fn execute_batched_gemm<T: Scalar + 'static>(
         let out = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f64>) };
         let alpha = unsafe { *(&alpha as *const T as *const f64) };
         let beta = unsafe { *(&beta as *const T as *const f64) };
-        return execute_batched_gemm_f64(alpha, &[a, b], beta, out, batch_dims, m, n, k);
+        return execute_batched_gemm_f64(ctx, alpha, &[a, b], beta, out, batch_dims, m, n, k);
     }
 
     if tid == TypeId::of::<f32>() {
@@ -1057,7 +1280,7 @@ fn execute_batched_gemm<T: Scalar + 'static>(
         let out = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f32>) };
         let alpha = unsafe { *(&alpha as *const T as *const f32) };
         let beta = unsafe { *(&beta as *const T as *const f32) };
-        return execute_batched_gemm_f32(alpha, &[a, b], beta, out, batch_dims, m, n, k);
+        return execute_batched_gemm_f32(ctx, alpha, &[a, b], beta, out, batch_dims, m, n, k);
     }
 
     execute_batched_gemm_naive(alpha, inputs, beta, output, batch_dims, m, n, k)
@@ -1295,6 +1518,149 @@ fn execute_elementwise_mul<T: Scalar>(
     let a = inputs[0];
     let b = inputs[1];
     let dims = output.dims().to_vec();
+
+    let is_col_major_contiguous = |strides: &[isize], dims: &[usize]| -> bool {
+        if strides.len() != dims.len() {
+            return false;
+        }
+        let mut expect = 1isize;
+        for (&s, &d) in strides.iter().zip(dims.iter()) {
+            if s != expect {
+                return false;
+            }
+            expect = expect.saturating_mul(d as isize);
+        }
+        true
+    };
+    let numel: usize = dims.iter().product();
+
+    if is_col_major_contiguous(a.strides(), &dims)
+        && is_col_major_contiguous(b.strides(), &dims)
+        && is_col_major_contiguous(output.strides(), &dims)
+    {
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = output.as_mut_ptr();
+        if beta == T::zero() {
+            for i in 0..numel {
+                unsafe {
+                    *c_ptr.add(i) = alpha * (*a_ptr.add(i) * *b_ptr.add(i));
+                }
+            }
+        } else {
+            for i in 0..numel {
+                unsafe {
+                    *c_ptr.add(i) = alpha * (*a_ptr.add(i) * *b_ptr.add(i)) + beta * *c_ptr.add(i);
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // Rank-2 outer-product specialization for broadcasted inputs:
+    // a: [m,1], b: [1,n] (or swapped ownership of the non-broadcast axis),
+    // output: [m,n] contiguous col-major.
+    if dims.len() == 2
+        && is_col_major_contiguous(output.strides(), &dims)
+        && a.strides().len() == 2
+        && b.strides().len() == 2
+        && a.strides().iter().all(|&s| s >= 0)
+        && b.strides().iter().all(|&s| s >= 0)
+    {
+        let m = dims[0];
+        let n = dims[1];
+        let a_s0 = a.strides()[0];
+        let a_s1 = a.strides()[1];
+        let b_s0 = b.strides()[0];
+        let b_s1 = b.strides()[1];
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = output.as_mut_ptr();
+
+        let a_i_axis = if a_s1 == 0 {
+            Some(a_s0)
+        } else if a_s0 == 0 {
+            Some(a_s1)
+        } else {
+            None
+        };
+        let b_j_axis = if b_s0 == 0 {
+            Some(b_s1)
+        } else if b_s1 == 0 {
+            Some(b_s0)
+        } else {
+            None
+        };
+
+        if let (Some(a_i_stride), Some(b_j_stride)) = (a_i_axis, b_j_axis) {
+            for j in 0..n {
+                let b_val = unsafe { *b_ptr.offset(j as isize * b_j_stride) };
+                for i in 0..m {
+                    let a_val = unsafe { *a_ptr.offset(i as isize * a_i_stride) };
+                    let out_idx = i + j * m;
+                    let val = alpha * (a_val * b_val);
+                    unsafe {
+                        if beta == T::zero() {
+                            *c_ptr.add(out_idx) = val;
+                        } else {
+                            *c_ptr.add(out_idx) = val + beta * *c_ptr.add(out_idx);
+                        }
+                    }
+                }
+            }
+            return Ok(());
+        }
+    }
+
+    // Fast path for broadcast-heavy cases (e.g. outer products):
+    // when output is contiguous col-major, run a linear output loop while
+    // advancing source offsets with an odometer. This avoids per-element
+    // index allocations and repeated bounds/stride decoding in get/set.
+    let rank = dims.len();
+    if is_col_major_contiguous(output.strides(), &dims)
+        && a.strides().len() == rank
+        && b.strides().len() == rank
+        && a.strides().iter().all(|&s| s >= 0)
+        && b.strides().iter().all(|&s| s >= 0)
+    {
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = output.as_mut_ptr();
+        let a_strides = a.strides();
+        let b_strides = b.strides();
+        let mut idx = vec![0usize; rank];
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+
+        for linear in 0..numel {
+            let val = unsafe { alpha * (*a_ptr.offset(a_off) * *b_ptr.offset(b_off)) };
+            unsafe {
+                if beta == T::zero() {
+                    *c_ptr.add(linear) = val;
+                } else {
+                    *c_ptr.add(linear) = val + beta * *c_ptr.add(linear);
+                }
+            }
+
+            if rank == 0 || linear + 1 == numel {
+                continue;
+            }
+
+            for ax in 0..rank {
+                idx[ax] += 1;
+                a_off += a_strides[ax];
+                b_off += b_strides[ax];
+                if idx[ax] < dims[ax] {
+                    break;
+                }
+                idx[ax] = 0;
+                a_off -= a_strides[ax] * dims[ax] as isize;
+                b_off -= b_strides[ax] * dims[ax] as isize;
+            }
+        }
+        return Ok(());
+    }
+
     for_each_index(&dims, |idx| {
         let val = alpha * (a.get(idx) * b.get(idx));
         if beta == T::zero() {
@@ -2079,7 +2445,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     }
 
     fn execute(
-        _ctx: &mut CpuContext,
+        ctx: &mut CpuContext,
         plan: &CpuPlan<S>,
         alpha: S,
         inputs: &[&Tensor<S>],
@@ -2114,6 +2480,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
             } => {
                 validate_execute_inputs(inputs, 2, "BatchedGemm")?;
                 execute_batched_gemm(
+                    ctx,
                     alpha,
                     &view_refs,
                     beta,
