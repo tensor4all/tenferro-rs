@@ -1104,10 +1104,20 @@ fn gemm_f64(
     let a_mat = faer::mat::from_column_major_slice(a, m, k);
     let b_mat = faer::mat::from_column_major_slice(b, k, n);
     let prod = &a_mat * &b_mat;
-    for j in 0..n {
-        for i in 0..m {
-            let p = prod[(i, j)];
-            c[i + j * m] = alpha * p + beta * c[i + j * m];
+    // When beta==0, skip reading from c to match the BLAS contract:
+    // "if beta is zero, C need not be set on input". This avoids
+    // propagating NaN from uninitialized pool buffers (0.0 * NaN = NaN).
+    if beta == 0.0 {
+        for j in 0..n {
+            for i in 0..m {
+                c[i + j * m] = alpha * prod[(i, j)];
+            }
+        }
+    } else {
+        for j in 0..n {
+            for i in 0..m {
+                c[i + j * m] = alpha * prod[(i, j)] + beta * c[i + j * m];
+            }
         }
     }
     Ok(())
@@ -1159,13 +1169,18 @@ fn gemm_f64(
     n: usize,
     k: usize,
 ) -> Result<()> {
+    // See gemm_f64 (gemm-faer) comment on beta==0 BLAS contract.
     for j in 0..n {
         for i in 0..m {
             let mut sum = 0.0_f64;
             for p in 0..k {
                 sum += a[i + p * m] * b[p + j * k];
             }
-            c[i + j * m] = alpha * sum + beta * c[i + j * m];
+            if beta == 0.0 {
+                c[i + j * m] = alpha * sum;
+            } else {
+                c[i + j * m] = alpha * sum + beta * c[i + j * m];
+            }
         }
     }
     Ok(())
@@ -1185,10 +1200,18 @@ fn gemm_f32(
     let a_mat = faer::mat::from_column_major_slice(a, m, k);
     let b_mat = faer::mat::from_column_major_slice(b, k, n);
     let prod = &a_mat * &b_mat;
-    for j in 0..n {
-        for i in 0..m {
-            let p = prod[(i, j)];
-            c[i + j * m] = alpha * p + beta * c[i + j * m];
+    // See gemm_f64 (gemm-faer) comment on beta==0 BLAS contract.
+    if beta == 0.0 {
+        for j in 0..n {
+            for i in 0..m {
+                c[i + j * m] = alpha * prod[(i, j)];
+            }
+        }
+    } else {
+        for j in 0..n {
+            for i in 0..m {
+                c[i + j * m] = alpha * prod[(i, j)] + beta * c[i + j * m];
+            }
         }
     }
     Ok(())
@@ -1240,13 +1263,18 @@ fn gemm_f32(
     n: usize,
     k: usize,
 ) -> Result<()> {
+    // See gemm_f64 (gemm-faer) comment on beta==0 BLAS contract.
     for j in 0..n {
         for i in 0..m {
             let mut sum = 0.0_f32;
             for p in 0..k {
                 sum += a[i + p * m] * b[p + j * k];
             }
-            c[i + j * m] = alpha * sum + beta * c[i + j * m];
+            if beta == 0.0 {
+                c[i + j * m] = alpha * sum;
+            } else {
+                c[i + j * m] = alpha * sum + beta * c[i + j * m];
+            }
         }
     }
     Ok(())
