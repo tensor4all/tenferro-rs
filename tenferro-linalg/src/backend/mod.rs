@@ -1,5 +1,11 @@
 //! Backend abstraction for linear algebra operations.
 //!
+//! Currently only the CPU backend ([`FaerBackend`]) is available.
+//! GPU backends (cuSOLVER, hipSOLVER) are planned but not yet implemented.
+//!
+//! To add a GPU backend, implement [`LinalgBackend<T>`] for your backend type
+//! and gate it behind a cargo feature (e.g., `#[cfg(feature = "cuda")]`).
+//!
 //! This module defines the [`LinalgBackend`] trait, which provides a
 //! backend-agnostic interface for matrix decompositions and solvers.
 //! Implementations write results into caller-provided output buffers
@@ -153,6 +159,26 @@ pub trait LinalgBackend<T: Copy + 'static> {
         nrhs: usize,
         upper: bool,
         x: &mut [T],
+    ) -> Result<()>;
+
+    /// General (non-symmetric) eigendecomposition: `A V = V diag(lambda)`.
+    ///
+    /// Eigenvalues and eigenvectors are always complex-valued.
+    /// Output slices hold interleaved real/imaginary pairs: `[re0, im0, re1, im1, ...]`.
+    /// For real input `T`, each eigenvalue uses 2 floats.
+    ///
+    /// - `a`: input matrix, column-major `n x n`
+    /// - `values_ri`: length `2*n` (interleaved re/im pairs)
+    /// - `vectors_ri`: length `2*n*n` (interleaved re/im pairs, column-major)
+    ///
+    /// For complex `T` (e.g., `Complex64`), each element already holds re+im,
+    /// so `values_ri` has length `n` and `vectors_ri` has length `n*n`.
+    fn eig_general(
+        &mut self,
+        a: &[T],
+        n: usize,
+        values_ri: &mut [T],
+        vectors_ri: &mut [T],
     ) -> Result<()>;
 }
 

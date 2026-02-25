@@ -2,6 +2,10 @@
 
 Batched matrix decompositions and solvers with stateless AD rules.
 
+**Implementation status**: CPU backend fully implemented via
+[faer](https://crates.io/crates/faer). GPU backends (cuSOLVER/hipTensor) are
+planned but not yet implemented.
+
 ---
 
 ## Position in Workspace Architecture
@@ -56,10 +60,10 @@ when the caller wants to control exactly where memory copies occur.
 |----------|-------------|-------------|-------------|
 | `svd` | `(m, n, *)` | `SvdResult { u, s, vt }` | $A = U \operatorname{diag}(S) V^\top$, optional truncation via `SvdOptions` |
 | `qr` | `(m, n, *)` | `QrResult { q, r }` | $A = QR$, thin QR |
-| `lu` | `(m, n, *)` | `LuResult { p, l, u }` | $A = PLU$, with `LuPivot` strategy (`NoPivot` currently returns error) |
+| `lu` | `(m, n, *)` | `LuResult { p, l, u }` | $A = PLU$, with `LuPivot` strategy |
 | `cholesky` | `(n, n, *)` | `Tensor<T>` | $A = LL^\dagger$, returns lower triangular L |
 | `eigen` | `(n, n, *)` | `EigenResult { values, vectors }` | Symmetric/Hermitian eigendecomposition (validated) |
-| `eig` | `(n, n, *)` | `EigenResult { values, vectors }` | General (non-symmetric) eigendecomposition (currently returns error) |
+| `eig` | `(n, n, *)` | `EigResult { values, vectors }` | General (non-symmetric) eigendecomposition; output is always `Complex<T>` |
 
 ### Solvers
 
@@ -77,15 +81,17 @@ when the caller wants to control exactly where memory copies occur.
 | `det` | `(n, n, *)` | `Tensor<T>` shape `(*)` | Determinant |
 | `slogdet` | `(n, n, *)` | `SlogdetResult { sign, logabsdet }` | Numerically stable log-determinant |
 | `pinv` | `(m, n, *)` | `Tensor<T>` | Moore-Penrose pseudoinverse (SVD-based) |
-| `matrix_exp` | `(n, n, *)` | `Tensor<T>` | Matrix exponential exp(A) (currently returns error) |
+| `matrix_exp` | `(n, n, *)` | `Tensor<T>` | Matrix exponential via Pade[13/13] scaling-and-squaring |
 | `norm` | `(m, n, *)` | `Tensor<T>` shape `(*)` | Matrix norm (`Fro`, `Nuclear`, `Spectral`) |
 
-### Current Availability Notes
+### Notes
 
-- `lu(..., LuPivot::NoPivot)` currently returns `Error::InvalidArgument`.
-- `eig(...)` currently returns `Error::InvalidArgument` (complex-valued path deferred).
-- `matrix_exp(...)` currently returns `Error::InvalidArgument`.
-- `norm(...)` currently implements `Fro`, `Nuclear`, and `Spectral` only.
+- `lu(..., LuPivot::NoPivot)` returns `Error::InvalidArgument` (not implemented).
+- `eig()` always returns `EigResult` with `Complex<T>` eigenvalues and eigenvectors,
+  even for real input. This avoids branching on whether eigenvalues happen to be real.
+- `norm(...)` implements `Fro`, `Nuclear`, and `Spectral` only; other variants
+  return `Error::InvalidArgument`.
+- `solve_triangular` has no AD rules (forward-only utility).
 
 ---
 
@@ -114,6 +120,13 @@ pub struct LuResult<T: Scalar> {
 pub struct EigenResult<T: Scalar> {
     pub values: Tensor<T>,   // (n, *)
     pub vectors: Tensor<T>,  // (n, n, *)
+}
+
+/// General (non-symmetric) eigendecomposition.
+/// Output is always Complex<T>, even for real input T.
+pub struct EigResult<R: LinalgScalar + Float> {
+    pub values: Tensor<Complex<R>>,   // (n, *)
+    pub vectors: Tensor<Complex<R>>,  // (n, n, *)
 }
 
 pub struct SlogdetResult<T: Scalar> {
@@ -185,6 +198,13 @@ which backend primitives are dispatched during the AD formulas, see
 
 For the step-by-step mathematical derivations of each rule, see the
 [AD Formula Notes](../AD/index.md).
+
+**Status**: All 14 rrule and 14 frule functions are implemented. AD formulas
+are sourced from PyTorch's autograd formulas and Mathieu (2019). Each rule
+is verified by finite-difference (FD) checks (see the Testing section below).
+
+`solve_triangular` is the only forward function without AD rules; it is used
+as a utility within other AD formulas.
 
 ### Cotangent Types
 
@@ -297,14 +317,21 @@ additions (eye, tril/triu).
 ```
 tenferro-linalg functions
     │
-    ├── CPU: matricize → faer (dsyev/dgesdd/dgeqrf/dgetrf/dpotrf) → unmatricize
+    ├── CPU (implemented): matricize → faer → unmatricize
+    │     faer provides: SVD, QR, LU, Cholesky, eigen (symmetric + general),
+    │     solve, lstsq, triangular solve, and LU-based det/inv
     │
-    └── GPU: matricize → cuSOLVER (Xgesvd/Xgeqrf/Xgetrf/Xpotrf) → unmatricize
+    └── GPU (planned): matricize → cuSOLVER → unmatricize
 ```
 
+The `LinalgBackend<T>` trait abstracts the backend. `FaerBackend` is the
+sole concrete implementation. It maps each operation to faer's thin-matrix
+API, handles column-major layout, and converts between `Tensor<T>` data
+slices and faer's `MatRef`/`MatMut`.
+
 The linalg crate calls `tenferro-prims` operations for its AD formulas
-(BatchedGemm, ElementwiseMul, etc.) but calls external LAPACK/cuSOLVER
-directly for the forward decompositions (not through TensorPrims).
+(BatchedGemm, ElementwiseMul, etc.) but calls the backend directly for
+forward decompositions (not through TensorPrims).
 
 ---
 
@@ -380,3 +407,50 @@ This reduces drift between discussion threads and technical decisions.
    (BatchedGemm, ElementwiseMul, ElementwiseUnary, Permute, AntiTrace).
    The `UnaryOp` enum (`Reciprocal`, `Sqrt`, etc.) was added to
    tenferro-prims specifically for linalg AD needs.
+
+---
+
+## Testing
+
+### Forward operations
+
+All forward operations are tested via **reconstruction and property checks**
+rather than comparing decomposition outputs directly (LAPACK/faer do not
+guarantee sign/phase conventions). See [testing.md](./testing.md) for the
+per-operation reconstruction identities.
+
+### AD: Finite-Difference Verification
+
+All rrule and frule functions are verified against central finite differences:
+
+```
+FD tangent:  df/dx_i ≈ (f(x + eps*e_i) - f(x - eps*e_i)) / (2*eps)
+```
+
+Parameters: `eps = 1e-6`, `atol = 1e-4`.
+
+Test utilities (`check_rrule_fd`, `check_frule_fd`) live alongside the test
+file and compare the analytic AD output element-wise against the FD
+approximation.
+
+### Known FD discrepancies
+
+Three AD rules have FD mismatches that are tracked as `#[ignore]` tests:
+
+| Rule | Max error | Root cause |
+|------|-----------|------------|
+| `lu_rrule` | ~0.1 | Formula discrepancy with discrete permutation |
+| `lstsq_rrule` | ~0.09 | Simplified formula omits residual correction term |
+| `qr_frule` | ~0.86 | Simplified `dR = triu(Q^T dA)` is not the correct pushforward |
+
+These are implementation gaps, not fundamental limitations. Correct formulas
+exist in the literature (PyTorch, JAX) and will be ported in follow-up work.
+
+### Coverage thresholds
+
+Enforced via `scripts/check-coverage.py` with per-file thresholds:
+
+| File | Threshold |
+|------|-----------|
+| `tenferro-linalg/src/lib.rs` | 95% |
+| `tenferro-linalg/src/backend/faer_backend.rs` | 97% |

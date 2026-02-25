@@ -232,10 +232,11 @@ Reference: [GiggleLiu/BackwardsLinalg.jl](https://github.com/GiggleLiu/Backwards
 
 Here `H` and `op` are random Hermitian (or symmetric) matrices, generated independently of the test input `A`.
 
-**Known gaps** (to be addressed in tenferro-rs):
+**Known gaps:**
 
-- Degenerate singular/eigenvalues (stress test for `η` regularization)
-- frule (JVP) — BackwardsLinalg.jl only covers rrule
+- Degenerate singular/eigenvalues (stress test for regularization)
+- Three AD rules have FD mismatches: `lu_rrule`, `lstsq_rrule`, `qr_frule`
+  (see [linalg.md](./linalg.md) Testing section for details)
 
 ---
 
@@ -305,30 +306,37 @@ fn tropical_frule_returns_mode_not_supported() {
 
 ### Linalg AD
 
-| Operation | rrule | frule | hvp | Tropical-specific | Notes |
-|-----------|-------|-------|-----|-------------------|-------|
-| SVD | planned | planned | — | — | Finite-diff gradient check per cotangent branch |
-| QR | planned | planned | — | — | Joint dQ+dR; phase freedom handled by reconstruction |
-| LU | planned | planned | — | — | dL, dU, joint dL+dU branches |
-| Eigen (symmetric) | planned | planned | — | — | dE only, dU only |
-| Cholesky | planned | planned | — | — | |
-| `solve` / `lstsq` | planned | planned | — | — | dA and db branches isolated |
-| `inv` | planned | planned | — | — | |
-| `det` / `slogdet` | planned | planned | — | — | |
-| `pinv` | planned | — | — | — | SVD-based; frule deferred |
-| `matrix_exp` | planned | — | — | — | Complex frule; deferred |
-| `norm` | planned | planned | — | — | Fro and L2 norms first |
+All 14 rrule and 14 frule functions are implemented and tested with
+finite-difference verification. AD formulas sourced from PyTorch autograd
+and Mathieu (2019).
+
+| Operation | rrule | frule | FD status | Notes |
+|-----------|-------|-------|-----------|-------|
+| SVD | done | done | pass | Per-cotangent-branch FD checks (dU, dS, dVt) |
+| QR | done | done | rrule pass, frule **ignored** | `qr_frule` formula mismatch ~0.86 |
+| LU | done | done | rrule **ignored**, frule pass | `lu_rrule` formula mismatch ~0.1 |
+| Eigen (symmetric) | done | done | pass | dE only, dU only |
+| Eig (general) | done | done | pass | Complex output |
+| Cholesky | done | done | pass | |
+| `solve` | done | done | pass | dA and db branches |
+| `lstsq` | done | done | rrule **ignored**, frule pass | `lstsq_rrule` formula mismatch ~0.09 |
+| `inv` | done | done | pass | |
+| `det` | done | done | pass | |
+| `slogdet` | done | done | pass | |
+| `pinv` | done | done | pass | SVD-based |
+| `matrix_exp` | done | done | pass | Pade[13/13] scaling-and-squaring |
+| `norm` | done | done | pass | Fro, Nuclear, Spectral |
+| `solve_triangular` | — | — | — | Forward-only utility, no AD rules |
 
 Notes:
-- hvp for linalg operations is not planned in the POC phase. Second-order
-  differentiation through linalg (e.g., SVD Hessians) is mathematically
-  complex and deferred.
-- All linalg AD tests use the finite-difference gradient check method
-  documented above (ported from BackwardsLinalg.jl). frule tests additionally
-  verify the JVP–VJP consistency identity: `⟨cotangent, frule(tangent)⟩ = ⟨rrule(cotangent), tangent⟩`.
+- hvp for linalg operations is not planned. Second-order differentiation
+  through linalg (e.g., SVD Hessians) is mathematically complex and deferred.
+- All linalg AD tests use central finite-difference verification
+  (`eps = 1e-6`, `atol = 1e-4`). Three rules have known FD discrepancies
+  and are marked `#[ignore]` in the test suite.
 - `tenferro-linalg` AD rules depend only on `chainrules-core` (not the full
-  `chainrules` engine); test infrastructure must not require a tape to call
-  `svd_rrule` etc. directly.
+  `chainrules` engine); test infrastructure calls `svd_rrule` etc. directly
+  without requiring a tape.
 
 ---
 

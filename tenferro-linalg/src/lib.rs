@@ -1,5 +1,8 @@
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
+//! CPU decompositions and solvers are fully implemented via the
+//! [`faer`](https://crates.io/crates/faer) backend. GPU backends are planned.
+//!
 //! This crate provides SVD, QR, LU, eigendecomposition, Cholesky, least squares,
 //! linear solve, matrix inverse, determinant, pseudoinverse, matrix exponential,
 //! triangular solve, and norms for tensors
@@ -482,6 +485,15 @@ fn tensor_from_data<T: LinalgScalar>(data: Vec<T>, dims: &[usize]) -> Result<Ten
     Tensor::from_vec(data, dims, &strides, 0)
 }
 
+/// Create a Tensor from raw column-major data with the given dims.
+///
+/// Like [`tensor_from_data`] but only requires `Scalar`, so it works for
+/// `Complex<R>` types that are not `LinalgScalar`.
+fn tensor_from_data_scalar<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>> {
+    let strides = backend::col_major_strides(dims);
+    Tensor::from_vec(data, dims, &strides, 0)
+}
+
 // ============================================================================
 // Result types
 // ============================================================================
@@ -665,6 +677,39 @@ pub struct EigenResult<T: Scalar, R: Scalar = T> {
     pub values: Tensor<R>,
     /// Right eigenvectors (columns). Shape: `(n, n, *)`.
     pub vectors: Tensor<T>,
+}
+
+/// Result of general eigendecomposition (always complex-valued).
+///
+/// Unlike [`EigenResult`] (which is for symmetric/Hermitian matrices with real eigenvalues),
+/// this type always returns complex eigenvalues and eigenvectors, since a general
+/// (non-symmetric) real matrix can have complex eigenvalues.
+///
+/// For an input of shape `(n, n, *)`:
+///
+/// - `values`: shape `(n, *)` — complex eigenvalues
+/// - `vectors`: shape `(n, n, *)` — complex right eigenvectors (columns)
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::{eig, EigResult};
+/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+/// use tenferro_device::LogicalMemorySpace;
+///
+/// let mut backend = FaerBackend::new();
+/// let a = Tensor::<f64>::zeros(&[3, 3],
+///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let result: EigResult<f64> = eig(&mut backend, &a).unwrap();
+/// assert_eq!(result.values.dims(), &[3]);
+/// assert_eq!(result.vectors.dims(), &[3, 3]);
+/// ```
+pub struct EigResult<R: LinalgScalar<Real = R> + num_traits::Float> {
+    /// Complex eigenvalues. Shape: `(n, *)`.
+    pub values: Tensor<num_complex::Complex<R>>,
+    /// Complex right eigenvectors (columns). Shape: `(n, n, *)`.
+    pub vectors: Tensor<num_complex::Complex<R>>,
 }
 
 /// Sign-and-log-determinant result: `det(A) = sign * exp(logabsdet)`.
@@ -1500,9 +1545,13 @@ pub fn slogdet<
 ///
 /// Unlike [`eigen`] (which requires Hermitian/symmetric input and returns
 /// real eigenvalues), this function handles general matrices. Eigenvalues
-/// may be complex even for real input.
+/// and eigenvectors are always returned as complex, since a general real
+/// matrix can have complex eigenvalue pairs.
 ///
 /// Input shape: `(n, n, *)`.
+///
+/// Returns [`EigResult`] with complex eigenvalues (shape `(n, *)`) and
+/// complex right eigenvectors (shape `(n, n, *)`).
 ///
 /// # Examples
 ///
@@ -1515,18 +1564,65 @@ pub fn slogdet<
 /// let mut backend = FaerBackend::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// assert!(eig(&mut backend, &a).is_err());
+/// let result = eig(&mut backend, &a).unwrap();
+/// assert_eq!(result.values.dims(), &[3]);
+/// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
-pub fn eig<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-) -> Result<EigenResult<T, B::Real>> {
-    // General (non-symmetric) eigendecomposition requires complex output.
-    // Deferred until complex type support is added.
-    Err(Error::InvalidArgument(
-        "general eigendecomposition (eig) not yet implemented; use eigen() for symmetric matrices"
-            .into(),
-    ))
+///
+/// # Errors
+///
+/// Returns an error if the input has fewer than 2 dimensions or the first
+/// two dimensions are not equal.
+pub fn eig<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
+    backend: &mut B,
+    tensor: &Tensor<T>,
+) -> Result<EigResult<T>> {
+    let (n, batch_dims) = validate_square(tensor)?;
+    let input = ensure_col_major(tensor);
+    let data = extract_slice(&input)?;
+    let offset = input.offset() as usize;
+    let bc = batch_count(batch_dims);
+    let mat_size = n * n;
+
+    type C<R> = num_complex::Complex<R>;
+
+    let zero_c = C::new(T::zero(), T::zero());
+    let mut val_data: Vec<C<T>> = vec![zero_c; n * bc];
+    let mut vec_data: Vec<C<T>> = vec![zero_c; n * n * bc];
+
+    // Temporary interleaved buffers for backend output.
+    // For real T, the backend writes [re0, im0, re1, im1, ...].
+    let mut values_ri = vec![T::zero(); 2 * n];
+    let mut vectors_ri = vec![T::zero(); 2 * n * n];
+
+    for b in 0..bc {
+        let start = offset + b * mat_size;
+        let batch_data = &data[start..start + mat_size];
+
+        backend.eig_general(batch_data, n, &mut values_ri, &mut vectors_ri)?;
+
+        // Convert interleaved [re, im, re, im, ...] to Complex<T>
+        let val_out = &mut val_data[b * n..(b + 1) * n];
+        for i in 0..n {
+            val_out[i] = C::new(values_ri[2 * i], values_ri[2 * i + 1]);
+        }
+
+        let vec_out = &mut vec_data[b * n * n..(b + 1) * n * n];
+        for k in 0..n * n {
+            vec_out[k] = C::new(vectors_ri[2 * k], vectors_ri[2 * k + 1]);
+        }
+    }
+
+    let val_dims = output_dims(&[n], batch_dims);
+    let vec_dims = output_dims(&[n, n], batch_dims);
+
+    Ok(EigResult {
+        values: tensor_from_data_scalar(val_data, &val_dims)?,
+        vectors: tensor_from_data_scalar(vec_data, &vec_dims)?,
+    })
 }
 
 /// Compute the Moore-Penrose pseudoinverse of a matrix.
@@ -1620,6 +1716,9 @@ pub fn pinv<
 
 /// Compute the matrix exponential `exp(A)` of a square matrix.
 ///
+/// Uses the scaling-and-squaring method with Pad\u{e9}\[13/13\] approximation
+/// (Al-Mohy & Higham, 2010), following the PyTorch approach.
+///
 /// Input shape: `(n, n, *)`.
 ///
 /// # Examples
@@ -1633,15 +1732,233 @@ pub fn pinv<
 /// let mut backend = FaerBackend::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// assert!(matrix_exp(&mut backend, &a).is_err());
+/// let exp_a = matrix_exp(&mut backend, &a).unwrap();
+/// // exp(0) = I
 /// ```
 pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
 ) -> Result<Tensor<T>> {
-    Err(Error::InvalidArgument(
-        "matrix_exp not yet implemented".into(),
-    ))
+    let (n, batch_dims) = validate_square(tensor)?;
+    let input = ensure_col_major(tensor);
+    let data = extract_slice(&input)?;
+    let offset = input.offset() as usize;
+    let bc = batch_count(batch_dims);
+    let mat_size = n * n;
+
+    let mut result_data = vec![T::zero(); mat_size * bc];
+
+    for b in 0..bc {
+        let start = offset + b * mat_size;
+        let a_slice = &data[start..start + mat_size];
+        let exp_a = matrix_exp_single(backend, a_slice, n)?;
+        result_data[b * mat_size..(b + 1) * mat_size].copy_from_slice(&exp_a);
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    tensor_from_data(result_data, &dims)
+}
+
+// ============================================================================
+// matrix_exp helpers (private)
+// ============================================================================
+
+/// Pad\u{e9}\[13/13\] coefficients b\[0\]..b\[13\] (integer values as f64).
+const PADE13_COEFFS: [f64; 14] = [
+    64764752532480000.0,
+    32382376266240000.0,
+    7771770303897600.0,
+    1187353796428800.0,
+    129060195264000.0,
+    10559470521600.0,
+    670442572800.0,
+    33522128640.0,
+    1323241920.0,
+    40840800.0,
+    960960.0,
+    16380.0,
+    182.0,
+    1.0,
+];
+
+/// Theta threshold for order-13 Pad\u{e9} (f64).
+const THETA_13: f64 = 5.371920351148152;
+
+/// Compute the matrix 1-norm (max column sum of absolute values).
+///
+/// `a` is stored column-major as a flat slice of length `n*n`.
+fn matrix_1_norm<T: LinalgScalar>(a: &[T], n: usize) -> T::Real {
+    let mut max_col_sum = <T::Real as num_traits::Zero>::zero();
+    for j in 0..n {
+        let mut col_sum = <T::Real as num_traits::Zero>::zero();
+        for i in 0..n {
+            col_sum = col_sum + a[i + j * n].abs_real();
+        }
+        if col_sum > max_col_sum {
+            max_col_sum = col_sum;
+        }
+    }
+    max_col_sum
+}
+
+/// Multiply two n x n column-major matrices using the backend.
+fn backend_mat_mul_nn<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
+    backend: &mut B,
+    a: &[T],
+    b: &[T],
+    n: usize,
+) -> Result<Vec<T>> {
+    let mut c = vec![T::zero(); n * n];
+    backend.mat_mul(a, n, n, b, n, &mut c)?;
+    Ok(c)
+}
+
+/// Compute `result = alpha * a + beta * b` element-wise for flat slices.
+fn mat_linear_combine<T: LinalgScalar>(alpha: T, a: &[T], beta: T, b: &[T], result: &mut [T]) {
+    for i in 0..result.len() {
+        result[i] = alpha * a[i] + beta * b[i];
+    }
+}
+
+/// Build an n x n identity matrix in column-major flat layout.
+fn identity_matrix<T: LinalgScalar>(n: usize) -> Vec<T> {
+    let mut eye = vec![T::zero(); n * n];
+    for i in 0..n {
+        eye[i + i * n] = T::one();
+    }
+    eye
+}
+
+/// Scale a flat matrix slice by a scalar, returning a new vector.
+fn mat_scale<T: LinalgScalar>(a: &[T], s: T) -> Vec<T> {
+    a.iter().map(|&x| x * s).collect()
+}
+
+/// Add two flat matrix slices element-wise, returning a new vector.
+fn mat_add<T: LinalgScalar>(a: &[T], b: &[T]) -> Vec<T> {
+    a.iter().zip(b.iter()).map(|(&x, &y)| x + y).collect()
+}
+
+/// Compute matrix exponential of a single n x n column-major matrix.
+///
+/// Uses scaling-and-squaring with Pad\u{e9}\[13/13\] approximation.
+fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
+    backend: &mut B,
+    a: &[T],
+    n: usize,
+) -> Result<Vec<T>> {
+    // Special case: 0x0 matrix
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Special case: 1x1 matrix
+    if n == 1 {
+        let a_f64: f64 = num_traits::NumCast::from(a[0]).unwrap_or(0.0);
+        let exp_val = a_f64.exp();
+        let result_val = T::from(exp_val).ok_or_else(|| {
+            Error::InvalidArgument("cannot convert exp result to target type".into())
+        })?;
+        return Ok(vec![result_val]);
+    }
+
+    // 1. Compute ||A||_1
+    let norm_a = matrix_1_norm(a, n);
+    let norm_f64: f64 = num_traits::NumCast::from(norm_a).unwrap_or(0.0);
+
+    // 2. Determine scaling factor s
+    let s: usize = if norm_f64 <= THETA_13 {
+        0
+    } else {
+        (norm_f64 / THETA_13).log2().ceil().max(0.0) as usize
+    };
+
+    // 3. Scale A: a_scaled = A / 2^s
+    let scale_denom = (1u64 << s.min(63)) as f64;
+    let scale_inv = T::from(1.0 / scale_denom).ok_or_else(|| {
+        Error::InvalidArgument("cannot convert scale factor to target type".into())
+    })?;
+    let a_scaled = mat_scale(a, scale_inv);
+
+    // 4. Compute matrix powers: A2, A4, A6
+    let a2 = backend_mat_mul_nn(backend, &a_scaled, &a_scaled, n)?;
+    let a4 = backend_mat_mul_nn(backend, &a2, &a2, n)?;
+    let a6 = backend_mat_mul_nn(backend, &a4, &a2, n)?;
+
+    // Convert Pade coefficients to type T
+    let b: Vec<T> = PADE13_COEFFS
+        .iter()
+        .map(|&c| {
+            T::from(c).ok_or_else(|| {
+                Error::InvalidArgument("cannot convert Pade coefficient to target type".into())
+            })
+        })
+        .collect::<Result<Vec<T>>>()?;
+
+    let eye = identity_matrix::<T>(n);
+    let nn = n * n;
+
+    // 5. Compute U and V for Pade[13/13]:
+    //
+    //   inner_u = b[13]*A6 + b[11]*A4 + b[9]*A2
+    //   U = A * (A6 * inner_u + b[7]*A6 + b[5]*A4 + b[3]*A2 + b[1]*I)
+    //
+    //   inner_v = b[12]*A6 + b[10]*A4 + b[8]*A2
+    //   V = A6 * inner_v + b[6]*A6 + b[4]*A4 + b[2]*A2 + b[0]*I
+
+    // Compute inner_u = b[13]*A6 + b[11]*A4 + b[9]*A2
+    let mut inner_u = vec![T::zero(); nn];
+    for i in 0..nn {
+        inner_u[i] = b[13] * a6[i] + b[11] * a4[i] + b[9] * a2[i];
+    }
+
+    // a6_inner_u = A6 * inner_u
+    let a6_inner_u = backend_mat_mul_nn(backend, &a6, &inner_u, n)?;
+
+    // u_inner = a6_inner_u + b[7]*A6 + b[5]*A4 + b[3]*A2 + b[1]*I
+    let mut u_inner = vec![T::zero(); nn];
+    for i in 0..nn {
+        u_inner[i] = a6_inner_u[i] + b[7] * a6[i] + b[5] * a4[i] + b[3] * a2[i] + b[1] * eye[i];
+    }
+
+    // U = A_scaled * u_inner
+    let u = backend_mat_mul_nn(backend, &a_scaled, &u_inner, n)?;
+
+    // Compute inner_v = b[12]*A6 + b[10]*A4 + b[8]*A2
+    let mut inner_v = vec![T::zero(); nn];
+    for i in 0..nn {
+        inner_v[i] = b[12] * a6[i] + b[10] * a4[i] + b[8] * a2[i];
+    }
+
+    // a6_inner_v = A6 * inner_v
+    let a6_inner_v = backend_mat_mul_nn(backend, &a6, &inner_v, n)?;
+
+    // V = a6_inner_v + b[6]*A6 + b[4]*A4 + b[2]*A2 + b[0]*I
+    let mut v = vec![T::zero(); nn];
+    for i in 0..nn {
+        v[i] = a6_inner_v[i] + b[6] * a6[i] + b[4] * a4[i] + b[2] * a2[i] + b[0] * eye[i];
+    }
+
+    // 6. Solve (-U + V) * X = (U + V)  =>  X = exp(A_scaled)
+    let neg_one = T::from(-1.0)
+        .ok_or_else(|| Error::InvalidArgument("cannot convert -1 to target type".into()))?;
+    // lhs = V - U = -U + V
+    let mut lhs = vec![T::zero(); nn];
+    mat_linear_combine(neg_one, &u, T::one(), &v, &mut lhs);
+
+    // rhs = U + V
+    let rhs = mat_add(&u, &v);
+
+    // Solve lhs * X = rhs  (nrhs = n for matrix RHS)
+    let mut result = vec![T::zero(); nn];
+    backend.solve(&lhs, &rhs, n, n, &mut result)?;
+
+    // 7. Repeated squaring: result = result^(2^s)
+    for _ in 0..s {
+        result = backend_mat_mul_nn(backend, &result, &result, n)?;
+    }
+
+    Ok(result)
 }
 
 /// Solve a triangular linear system `A x = b`.
@@ -1934,6 +2251,27 @@ pub struct EigenCotangent<T: Scalar> {
     pub vectors: Option<Tensor<T>>,
 }
 
+/// Cotangent (adjoint) for general eigendecomposition outputs.
+///
+/// Unlike [`EigenCotangent`] (used for symmetric `eigen`), this cotangent
+/// carries complex-valued tensors because `eig()` returns complex
+/// eigenvalues and eigenvectors even for real inputs.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::EigCotangent;
+/// use num_complex::Complex64;
+///
+/// let cotangent = EigCotangent::<f64> { values: None, vectors: None };
+/// ```
+pub struct EigCotangent<R: LinalgScalar<Real = R> + num_traits::Float> {
+    /// Cotangent for eigenvalues. Shape: `(n, *)`. Complex-valued.
+    pub values: Option<Tensor<num_complex::Complex<R>>>,
+    /// Cotangent for eigenvectors. Shape: `(n, n, *)`. Complex-valued.
+    pub vectors: Option<Tensor<num_complex::Complex<R>>>,
+}
+
 /// Cotangent (adjoint) for slogdet outputs.
 ///
 /// Note: `sign` is piecewise constant and not differentiable.
@@ -2058,6 +2396,111 @@ fn phi<T: LinalgScalar>(data: &[T], n: usize) -> AdResult<Vec<T>> {
     let half: T = scalar_from(0.5).map_err(to_ad_err)?;
     for i in 0..n {
         result[i + i * n] = result[i + i * n] * half;
+    }
+    Ok(result)
+}
+
+// ============================================================================
+// Complex matrix helpers for eig AD rules
+// ============================================================================
+
+/// Complex type alias parameterized by real scalar.
+type Cx<R> = num_complex::Complex<R>;
+
+/// Extract data slice from a Tensor whose element type implements `Scalar`
+/// (but not necessarily `LinalgScalar`). Used for `Tensor<Complex<R>>` in eig AD.
+fn extract_data_scalar<T: Scalar>(tensor: &Tensor<T>) -> AdResult<Vec<T>> {
+    let t = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let offset = t.offset() as usize;
+    let slice = t.buffer().as_slice().ok_or_else(|| {
+        chainrules_core::AutodiffError::InvalidArgument(
+            "tensor buffer is not a contiguous CPU slice".into(),
+        )
+    })?;
+    let total_len: usize = tensor.dims().iter().product();
+    Ok(slice[offset..offset + total_len].to_vec())
+}
+
+/// Complex matrix multiply: C = A * B  (all n*n, column-major flat slices).
+fn complex_mat_mul_nn<R>(a: &[Cx<R>], b: &[Cx<R>], n: usize) -> Vec<Cx<R>>
+where
+    R: num_traits::Float + num_traits::NumCast,
+{
+    let zero = Cx::new(R::zero(), R::zero());
+    let mut c = vec![zero; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            let mut sum = zero;
+            for k in 0..n {
+                sum = sum + a[i + k * n] * b[k + j * n];
+            }
+            c[i + j * n] = sum;
+        }
+    }
+    c
+}
+
+/// Conjugate transpose of n*n complex matrix (column-major).
+fn complex_conj_transpose<R>(a: &[Cx<R>], n: usize) -> Vec<Cx<R>>
+where
+    R: num_traits::Float + num_traits::NumCast,
+{
+    let zero = Cx::new(R::zero(), R::zero());
+    let mut result = vec![zero; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            result[i + j * n] = a[j + i * n].conj();
+        }
+    }
+    result
+}
+
+/// Solve A X = B for X, where A and B are n*n complex matrices.
+///
+/// Converts the complex n*n system to a real 2n*2n system and
+/// delegates to `backend.solve()`.
+fn complex_solve_nn<
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    B: backend::LinalgBackend<T, Real = T>,
+>(
+    backend: &mut B,
+    a: &[Cx<T>],
+    b: &[Cx<T>],
+    n: usize,
+) -> AdResult<Vec<Cx<T>>> {
+    let nn = 2 * n;
+    let mut a_real = vec![T::zero(); nn * nn];
+    let mut b_real = vec![T::zero(); nn * nn];
+
+    for j in 0..n {
+        for i in 0..n {
+            let aij = a[i + j * n];
+            // Top-left: Re(A)
+            a_real[i + j * nn] = aij.re;
+            // Top-right: -Im(A)
+            a_real[i + (j + n) * nn] = T::zero() - aij.im;
+            // Bottom-left: Im(A)
+            a_real[(i + n) + j * nn] = aij.im;
+            // Bottom-right: Re(A)
+            a_real[(i + n) + (j + n) * nn] = aij.re;
+
+            let bij = b[i + j * n];
+            b_real[i + j * nn] = bij.re;
+            b_real[(i + n) + j * nn] = bij.im;
+        }
+    }
+
+    let mut x_real = vec![T::zero(); nn * nn];
+    backend
+        .solve(&a_real, &b_real, nn, nn, &mut x_real)
+        .map_err(to_ad_err)?;
+
+    let zero = Cx::new(T::zero(), T::zero());
+    let mut result = vec![zero; n * n];
+    for j in 0..n {
+        for i in 0..n {
+            result[i + j * n] = Cx::new(x_real[i + j * nn], x_real[(i + n) + j * nn]);
+        }
     }
     Ok(result)
 }
@@ -3171,20 +3614,28 @@ pub fn slogdet_rrule<
 
 /// Reverse-mode AD rule for general eigendecomposition (VJP / pullback).
 ///
+/// Given eigendecomposition `A V = V diag(lambda)`, computes the gradient
+/// of the input `A` from complex-valued cotangents for eigenvalues and
+/// eigenvectors using the Mike Giles formulas.
+///
+/// The cotangent uses [`EigCotangent`] with complex-valued tensors
+/// because `eig()` returns complex output even for real inputs.
+///
 /// # Examples
 ///
-/// ```no_run
-/// use tenferro_linalg::{eig_rrule, EigenCotangent};
+/// ```
+/// use tenferro_linalg::{eig_rrule, EigCotangent};
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
+/// use num_complex::Complex64;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut backend = FaerBackend::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let cotangent = EigenCotangent {
-///     values: Some(Tensor::ones(&[3], mem, col)),
+/// let cotangent = EigCotangent::<f64> {
+///     values: None,
 ///     vectors: None,
 /// };
 /// let grad_a = eig_rrule(&mut backend, &a, &cotangent).unwrap();
@@ -3193,14 +3644,72 @@ pub fn eig_rrule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _cotangent: &EigenCotangent<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    cotangent: &EigCotangent<T>,
 ) -> AdResult<Tensor<T>> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "general eigendecomposition AD requires complex output; use eigen_rrule for symmetric matrices".into(),
-    })
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    // Compute eigendecomposition
+    let eig_result = eig(backend, tensor).map_err(to_ad_err)?;
+    let val_data = extract_data_scalar(&eig_result.values)?;
+    let vec_data = extract_data_scalar(&eig_result.vectors)?;
+
+    let zero_c = Cx::new(T::zero(), T::zero());
+    let one_c = Cx::new(T::one(), T::zero());
+
+    let mut grad_data = vec![T::zero(); n * n * bc];
+
+    for b in 0..bc {
+        let lambda = &val_data[b * n..(b + 1) * n];
+        let v = &vec_data[b * n * n..(b + 1) * n * n];
+
+        // Compute F matrix: F[i,j] = 1/(lambda_j - lambda_i) for i != j, 0 on diagonal
+        let mut f_mat = vec![zero_c; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                if i != j {
+                    let diff = lambda[j] - lambda[i];
+                    f_mat[i + j * n] = one_c / diff;
+                }
+            }
+        }
+
+        // V^H (conjugate transpose of V)
+        let vh = complex_conj_transpose(v, n);
+
+        // Build M_bar = diag(d_bar_lambda) + F .* (V^H d_bar_V)
+        let mut m_bar = vec![zero_c; n * n];
+
+        if let Some(ref dv_bar) = cotangent.vectors {
+            let dv_bar_data = extract_data_scalar(dv_bar)?;
+            let dv_bar_b = &dv_bar_data[b * n * n..(b + 1) * n * n];
+            let vh_dv = complex_mat_mul_nn(&vh, dv_bar_b, n);
+            for k in 0..n * n {
+                m_bar[k] = f_mat[k] * vh_dv[k];
+            }
+        }
+
+        if let Some(ref dlam) = cotangent.values {
+            let dlam_data = extract_data_scalar(dlam)?;
+            for i in 0..n {
+                m_bar[i + i * n] = m_bar[i + i * n] + dlam_data[b * n + i];
+            }
+        }
+
+        // d_bar_A = V^{-H} M_bar V^H = solve(V^H, M_bar @ V^H)
+        let m_vh = complex_mat_mul_nn(&m_bar, &vh, n);
+        let da_complex = complex_solve_nn(backend, &vh, &m_vh, n)?;
+
+        // Take real part (since input A was real)
+        for k in 0..n * n {
+            grad_data[b * n * n + k] = da_complex[k].re;
+        }
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    tensor_from_data(grad_data, &dims).map_err(to_ad_err)
 }
 
 /// Reverse-mode AD rule for pseudoinverse (VJP / pullback).
@@ -3289,9 +3798,17 @@ pub fn pinv_rrule<
 
 /// Reverse-mode AD rule for matrix exponential (VJP / pullback).
 ///
+/// Computes the gradient of the input given a cotangent for `exp(A)`.
+/// Uses the auxiliary 2n x 2n matrix trick (PyTorch approach):
+///
+/// ```text
+/// M = [[A^T, cotangent], [0, A^T]]
+/// grad_A = top-right n×n block of exp(M)
+/// ```
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use tenferro_linalg::matrix_exp_rrule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -3308,14 +3825,52 @@ pub fn matrix_exp_rrule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _cotangent: &Tensor<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "matrix exponential AD not yet implemented".into(),
-    })
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    let (a_data, _) = extract_data(tensor)?;
+    let (co_data, _) = extract_data(cotangent)?;
+
+    let nn = 2 * n;
+    let mut grad_data = vec![T::zero(); n * n * bc];
+
+    for b in 0..bc {
+        let a = &a_data[b * n * n..(b + 1) * n * n];
+        let co = &co_data[b * n * n..(b + 1) * n * n];
+
+        // Build 2n×2n auxiliary matrix M = [[A^T, cotangent], [0, A^T]]
+        let mut m = vec![T::zero(); nn * nn];
+        for j in 0..n {
+            for i in 0..n {
+                // A^T: transpose of A — a^T[i,j] = a[j,i] = a[j + i*n]
+                let a_t_ij = a[j + i * n];
+                // Top-left: A^T
+                m[i + j * nn] = a_t_ij;
+                // Top-right: cotangent
+                m[i + (j + n) * nn] = co[i + j * n];
+                // Bottom-right: A^T
+                m[(i + n) + (j + n) * nn] = a_t_ij;
+                // Bottom-left: already zero
+            }
+        }
+
+        // Compute exp(M)
+        let exp_m = matrix_exp_single(backend, &m, nn).map_err(to_ad_err)?;
+
+        // Extract top-right block → gradient d̄A
+        for j in 0..n {
+            for i in 0..n {
+                grad_data[b * n * n + i + j * n] = exp_m[i + (j + n) * nn];
+            }
+        }
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    tensor_from_data(grad_data, &dims).map_err(to_ad_err)
 }
 
 /// Reverse-mode AD rule for norm (VJP / pullback).
@@ -4293,9 +4848,16 @@ pub fn slogdet_frule<
 
 /// Forward-mode AD rule for general eigendecomposition (JVP / pushforward).
 ///
+/// Given eigendecomposition `A V = V diag(lambda)`, computes the tangents
+/// of eigenvalues and eigenvectors from a real tangent `dA` using the
+/// Mike Giles formulas.
+///
+/// Returns `(primal, tangent)` where both are [`EigResult`] with complex
+/// eigenvalues and eigenvectors.
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use tenferro_linalg::eig_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4312,14 +4874,73 @@ pub fn eig_frule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _tangent: &Tensor<T>,
-) -> AdResult<(EigenResult<T>, EigenResult<T>)> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "general eigendecomposition AD requires complex output; use eigen_frule for symmetric matrices".into(),
-    })
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    tangent: &Tensor<T>,
+) -> AdResult<(EigResult<T>, EigResult<T>)> {
+    // Forward pass
+    let eig_result = eig(backend, tensor).map_err(to_ad_err)?;
+
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    let val_data = extract_data_scalar(&eig_result.values)?;
+    let vec_data = extract_data_scalar(&eig_result.vectors)?;
+    let (tang_data, _) = extract_data(tangent)?;
+
+    let zero_c = Cx::new(T::zero(), T::zero());
+    let one_c = Cx::new(T::one(), T::zero());
+
+    let mut dval_data = vec![zero_c; n * bc];
+    let mut dvec_data = vec![zero_c; n * n * bc];
+
+    for b in 0..bc {
+        let lambda = &val_data[b * n..(b + 1) * n];
+        let v = &vec_data[b * n * n..(b + 1) * n * n];
+        let da = &tang_data[b * n * n..(b + 1) * n * n];
+
+        // Convert real dA to complex
+        let da_complex: Vec<Cx<T>> = da.iter().map(|&x| Cx::new(x, T::zero())).collect();
+
+        // W = V^{-1} dA V = solve(V, dA_c @ V)
+        let da_v = complex_mat_mul_nn(&da_complex, v, n);
+        let w = complex_solve_nn(backend, v, &da_v, n)?;
+
+        // d_lambda = diag(W)
+        for i in 0..n {
+            dval_data[b * n + i] = w[i + i * n];
+        }
+
+        // F matrix: F[i,j] = 1/(lambda_j - lambda_i) for i != j, 0 on diagonal
+        let mut f_mat = vec![zero_c; n * n];
+        for i in 0..n {
+            for j in 0..n {
+                if i != j {
+                    let diff = lambda[j] - lambda[i];
+                    f_mat[i + j * n] = one_c / diff;
+                }
+            }
+        }
+
+        // dV = V * (F .* W)
+        let mut fw = vec![zero_c; n * n];
+        for k in 0..n * n {
+            fw[k] = f_mat[k] * w[k];
+        }
+        let dv = complex_mat_mul_nn(v, &fw, n);
+        dvec_data[b * n * n..(b + 1) * n * n].copy_from_slice(&dv);
+    }
+
+    // Build tangent EigResult
+    let val_dims = output_dims(&[n], batch_dims);
+    let vec_dims = output_dims(&[n, n], batch_dims);
+
+    let d_result = EigResult {
+        values: tensor_from_data_scalar(dval_data, &val_dims).map_err(to_ad_err)?,
+        vectors: tensor_from_data_scalar(dvec_data, &vec_dims).map_err(to_ad_err)?,
+    };
+
+    Ok((eig_result, d_result))
 }
 
 /// Forward-mode AD rule for pseudoinverse (JVP / pushforward).
@@ -4402,9 +5023,18 @@ pub fn pinv_frule<
 
 /// Forward-mode AD rule for matrix exponential (JVP / pushforward).
 ///
+/// Computes `exp(A)` and the Frechet derivative `d(exp(A))` in the direction `dA`.
+/// Uses the auxiliary 2n x 2n matrix trick (PyTorch approach):
+///
+/// ```text
+/// M = [[A, dA], [0, A]]
+/// exp(A)    = top-left  n×n block of exp(M)
+/// d(exp(A)) = top-right n×n block of exp(M)
+/// ```
+///
 /// # Examples
 ///
-/// ```no_run
+/// ```
 /// use tenferro_linalg::matrix_exp_frule;
 /// use tenferro_linalg::backend::FaerBackend;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
@@ -4421,14 +5051,60 @@ pub fn matrix_exp_frule<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    _backend: &mut B,
-    _tensor: &Tensor<T>,
-    _tangent: &Tensor<T>,
+    backend: &mut B,
+    tensor: &Tensor<T>,
+    tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)> {
-    Err(chainrules_core::AutodiffError::ModeNotSupported {
-        mode: "rrule/frule".into(),
-        reason: "matrix exponential AD not yet implemented".into(),
-    })
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
+    let bc = batch_count(batch_dims);
+
+    let (a_data, _) = extract_data(tensor)?;
+    let (da_data, _) = extract_data(tangent)?;
+
+    let nn = 2 * n;
+    let mut result_data = vec![T::zero(); n * n * bc];
+    let mut tangent_data = vec![T::zero(); n * n * bc];
+
+    for b in 0..bc {
+        let a = &a_data[b * n * n..(b + 1) * n * n];
+        let da = &da_data[b * n * n..(b + 1) * n * n];
+
+        // Build 2n×2n auxiliary matrix M = [[A, dA], [0, A]]
+        let mut m = vec![T::zero(); nn * nn];
+        for j in 0..n {
+            for i in 0..n {
+                // Top-left: A
+                m[i + j * nn] = a[i + j * n];
+                // Top-right: dA
+                m[i + (j + n) * nn] = da[i + j * n];
+                // Bottom-right: A
+                m[(i + n) + (j + n) * nn] = a[i + j * n];
+                // Bottom-left: already zero
+            }
+        }
+
+        // Compute exp(M) — call matrix_exp_single with the 2n×2n matrix
+        let exp_m = matrix_exp_single(backend, &m, nn).map_err(to_ad_err)?;
+
+        // Extract top-left block → exp(A)
+        for j in 0..n {
+            for i in 0..n {
+                result_data[b * n * n + i + j * n] = exp_m[i + j * nn];
+            }
+        }
+
+        // Extract top-right block → d(exp(A))
+        for j in 0..n {
+            for i in 0..n {
+                tangent_data[b * n * n + i + j * n] = exp_m[i + (j + n) * nn];
+            }
+        }
+    }
+
+    let dims = output_dims(&[n, n], batch_dims);
+    let result = tensor_from_data(result_data, &dims).map_err(to_ad_err)?;
+    let tang = tensor_from_data(tangent_data, &dims).map_err(to_ad_err)?;
+    Ok((result, tang))
 }
 
 /// Forward-mode AD rule for norm (JVP / pushforward).
