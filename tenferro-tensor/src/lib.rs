@@ -542,6 +542,30 @@ impl<T> DataBuffer<T> {
         Arc::strong_count(&self.inner) == 1
     }
 
+    /// Extract the inner `Vec<T>` if this is the sole Arc owner of a CPU-owned buffer.
+    ///
+    /// Returns `None` if the Arc is shared, the buffer is externally-owned, or GPU.
+    pub fn try_into_vec(self) -> Option<Vec<T>> {
+        let inner = Arc::try_unwrap(self.inner).ok()?;
+        // Wrap in ManuallyDrop to control when Drop runs.
+        // For Owned, the custom Drop impl is a no-op, so skipping it is safe.
+        // For External/Gpu we manually invoke drop to fire the release callback.
+        let mut md = std::mem::ManuallyDrop::new(inner);
+        match &mut *md {
+            BufferInner::Owned(v) => {
+                // Safety: We hold sole Arc ownership. ptr::read moves the Vec out.
+                // ManuallyDrop prevents BufferInner::drop from running (no-op for Owned).
+                Some(unsafe { std::ptr::read(v as *const Vec<T>) })
+            }
+            _ => {
+                // Non-CPU-owned: run drop to invoke the release callback.
+                // Safety: md is not accessed again after this call.
+                unsafe { std::mem::ManuallyDrop::drop(&mut md) };
+                None
+            }
+        }
+    }
+
     /// Returns a raw CPU pointer to the data, or `None` for GPU buffers.
     ///
     /// # Examples
@@ -930,6 +954,14 @@ impl<T: Scalar> Tensor<T> {
             conjugated: false,
             fw_grad: None,
         })
+    }
+
+    /// Try to extract the underlying data as `Vec<T>`.
+    ///
+    /// Returns `Some` only if this is the sole owner of a CPU-owned buffer.
+    /// Returns `None` if the buffer is shared, externally-owned, or GPU.
+    pub fn try_into_data_vec(self) -> Option<Vec<T>> {
+        self.buffer.try_into_vec()
     }
 
     /// Create an identity matrix.
