@@ -2,6 +2,7 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 
 use num_complex::{Complex32, Complex64};
+use strided_perm::try_fuse_group;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
@@ -667,45 +668,55 @@ fn execute_batched_gemm_f64(
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
-    let batch_size: usize = if batch_dims.is_empty() {
-        1
-    } else {
-        batch_dims.iter().product()
-    };
-
     let mut a_mat = vec![0.0_f64; m * k];
     let mut b_mat = vec![0.0_f64; k * n];
     let mut c_mat = vec![0.0_f64; m * n];
-    let mut idx = Vec::with_capacity(batch_dims.len() + 2);
+    let nb = batch_dims.len();
+    let a_strides = a.strides();
+    let b_strides = b.strides();
+    let c_strides = output.strides();
+    let a_batch = &a_strides[..nb];
+    let b_batch = &b_strides[..nb];
+    let c_batch = &c_strides[..nb];
+    let a_row = a_strides[nb];
+    let a_col = a_strides[nb + 1];
+    let b_row = b_strides[nb];
+    let b_col = b_strides[nb + 1];
+    let c_row = c_strides[nb];
+    let c_col = c_strides[nb + 1];
 
-    for batch_flat in 0..batch_size {
-        let batch_idx = unflatten_index(batch_flat, batch_dims);
+    let a_ptr = a.ptr();
+    let b_ptr = b.ptr();
+    let c_ptr = output.as_mut_ptr();
 
+    let mut idx = vec![0usize; nb];
+    let mut a_off = 0isize;
+    let mut b_off = 0isize;
+    let mut c_off = 0isize;
+
+    loop {
         for kk in 0..k {
             for i in 0..m {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(i);
-                idx.push(kk);
-                a_mat[i + kk * m] = a.get(&idx);
+                let src_off = a_off + i as isize * a_row + kk as isize * a_col;
+                a_mat[i + kk * m] = unsafe { *a_ptr.offset(src_off) };
             }
         }
+
         for j in 0..n {
             for kk in 0..k {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(kk);
-                idx.push(j);
-                b_mat[kk + j * k] = b.get(&idx);
+                let src_off = b_off + kk as isize * b_row + j as isize * b_col;
+                b_mat[kk + j * k] = unsafe { *b_ptr.offset(src_off) };
             }
         }
-        for j in 0..n {
-            for i in 0..m {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(i);
-                idx.push(j);
-                c_mat[i + j * m] = output.get(&idx);
+
+        if beta == 0.0 {
+            c_mat.fill(0.0);
+        } else {
+            for j in 0..n {
+                for i in 0..m {
+                    let src_off = c_off + i as isize * c_row + j as isize * c_col;
+                    c_mat[i + j * m] = unsafe { *c_ptr.offset(src_off) };
+                }
             }
         }
 
@@ -713,12 +724,38 @@ fn execute_batched_gemm_f64(
 
         for j in 0..n {
             for i in 0..m {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(i);
-                idx.push(j);
-                output.set(&idx, c_mat[i + j * m]);
+                let dst_off = c_off + i as isize * c_row + j as isize * c_col;
+                unsafe {
+                    *c_ptr.offset(dst_off) = c_mat[i + j * m];
+                }
             }
+        }
+
+        if nb == 0 {
+            break;
+        }
+
+        let mut carried_all = true;
+        for ax in 0..nb {
+            let dim = batch_dims[ax];
+            let next = idx[ax] + 1;
+            if next < dim {
+                idx[ax] = next;
+                a_off += a_batch[ax];
+                b_off += b_batch[ax];
+                c_off += c_batch[ax];
+                carried_all = false;
+                break;
+            } else {
+                idx[ax] = 0;
+                let back = (dim as isize - 1).max(0);
+                a_off -= back * a_batch[ax];
+                b_off -= back * b_batch[ax];
+                c_off -= back * c_batch[ax];
+            }
+        }
+        if carried_all {
+            break;
         }
     }
 
@@ -737,45 +774,55 @@ fn execute_batched_gemm_f32(
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
-    let batch_size: usize = if batch_dims.is_empty() {
-        1
-    } else {
-        batch_dims.iter().product()
-    };
-
     let mut a_mat = vec![0.0_f32; m * k];
     let mut b_mat = vec![0.0_f32; k * n];
     let mut c_mat = vec![0.0_f32; m * n];
-    let mut idx = Vec::with_capacity(batch_dims.len() + 2);
+    let nb = batch_dims.len();
+    let a_strides = a.strides();
+    let b_strides = b.strides();
+    let c_strides = output.strides();
+    let a_batch = &a_strides[..nb];
+    let b_batch = &b_strides[..nb];
+    let c_batch = &c_strides[..nb];
+    let a_row = a_strides[nb];
+    let a_col = a_strides[nb + 1];
+    let b_row = b_strides[nb];
+    let b_col = b_strides[nb + 1];
+    let c_row = c_strides[nb];
+    let c_col = c_strides[nb + 1];
 
-    for batch_flat in 0..batch_size {
-        let batch_idx = unflatten_index(batch_flat, batch_dims);
+    let a_ptr = a.ptr();
+    let b_ptr = b.ptr();
+    let c_ptr = output.as_mut_ptr();
 
+    let mut idx = vec![0usize; nb];
+    let mut a_off = 0isize;
+    let mut b_off = 0isize;
+    let mut c_off = 0isize;
+
+    loop {
         for kk in 0..k {
             for i in 0..m {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(i);
-                idx.push(kk);
-                a_mat[i + kk * m] = a.get(&idx);
+                let src_off = a_off + i as isize * a_row + kk as isize * a_col;
+                a_mat[i + kk * m] = unsafe { *a_ptr.offset(src_off) };
             }
         }
+
         for j in 0..n {
             for kk in 0..k {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(kk);
-                idx.push(j);
-                b_mat[kk + j * k] = b.get(&idx);
+                let src_off = b_off + kk as isize * b_row + j as isize * b_col;
+                b_mat[kk + j * k] = unsafe { *b_ptr.offset(src_off) };
             }
         }
-        for j in 0..n {
-            for i in 0..m {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(i);
-                idx.push(j);
-                c_mat[i + j * m] = output.get(&idx);
+
+        if beta == 0.0 {
+            c_mat.fill(0.0);
+        } else {
+            for j in 0..n {
+                for i in 0..m {
+                    let src_off = c_off + i as isize * c_row + j as isize * c_col;
+                    c_mat[i + j * m] = unsafe { *c_ptr.offset(src_off) };
+                }
             }
         }
 
@@ -783,12 +830,38 @@ fn execute_batched_gemm_f32(
 
         for j in 0..n {
             for i in 0..m {
-                idx.clear();
-                idx.extend_from_slice(&batch_idx);
-                idx.push(i);
-                idx.push(j);
-                output.set(&idx, c_mat[i + j * m]);
+                let dst_off = c_off + i as isize * c_row + j as isize * c_col;
+                unsafe {
+                    *c_ptr.offset(dst_off) = c_mat[i + j * m];
+                }
             }
+        }
+
+        if nb == 0 {
+            break;
+        }
+
+        let mut carried_all = true;
+        for ax in 0..nb {
+            let dim = batch_dims[ax];
+            let next = idx[ax] + 1;
+            if next < dim {
+                idx[ax] = next;
+                a_off += a_batch[ax];
+                b_off += b_batch[ax];
+                c_off += c_batch[ax];
+                carried_all = false;
+                break;
+            } else {
+                idx[ax] = 0;
+                let back = (dim as isize - 1).max(0);
+                a_off -= back * a_batch[ax];
+                b_off -= back * b_batch[ax];
+                c_off -= back * c_batch[ax];
+            }
+        }
+        if carried_all {
+            break;
         }
     }
 
@@ -1436,6 +1509,12 @@ fn execute_contract<T: Scalar>(
     let a = inputs[0];
     let b = inputs[1];
 
+    if let Some(done) =
+        try_execute_contract_gemm(alpha, inputs, beta, output, modes_a, modes_b, modes_c)?
+    {
+        return Ok(done);
+    }
+
     // Determine contracted modes: in both A and B but not in C
     let contracted_modes: Vec<u32> = modes_a
         .iter()
@@ -1455,33 +1534,73 @@ fn execute_contract<T: Scalar>(
         contracted_dims.iter().product()
     };
 
+    // Precompute where each A/B axis value comes from in the inner loop.
+    // 0 => from output index (c_idx), 1 => from contracted index (k_idx), 2 => constant 0
+    let a_axis_map: Vec<(u8, usize)> = modes_a
+        .iter()
+        .map(|&mode| {
+            if let Some(c_pos) = modes_c.iter().position(|&m| m == mode) {
+                (0, c_pos)
+            } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
+                (1, k_pos)
+            } else {
+                // Keep legacy behavior: modes that are only in A are fixed at index 0.
+                (2, 0)
+            }
+        })
+        .collect();
+    let b_axis_map: Vec<(u8, usize)> = modes_b
+        .iter()
+        .map(|&mode| {
+            if let Some(c_pos) = modes_c.iter().position(|&m| m == mode) {
+                (0, c_pos)
+            } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
+                (1, k_pos)
+            } else {
+                // Keep legacy behavior: modes that are only in B are fixed at index 0.
+                (2, 0)
+            }
+        })
+        .collect();
+
+    // Unflatten helper that writes into a reusable buffer (no allocation).
+    fn unflatten_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
+        debug_assert_eq!(dims.len(), out.len());
+        for (i, &d) in dims.iter().enumerate() {
+            if d == 0 {
+                out[i] = 0;
+            } else {
+                out[i] = flat % d;
+                flat /= d;
+            }
+        }
+    }
+
     let out_dims = output.dims().to_vec();
+    let mut a_idx = vec![0usize; modes_a.len()];
+    let mut b_idx = vec![0usize; modes_b.len()];
+    let mut k_idx = vec![0usize; contracted_dims.len()];
 
     for_each_index(&out_dims, |c_idx| {
         let mut sum = T::zero();
         for k_flat in 0..contracted_total {
-            let k_idx = unflatten_index(k_flat, &contracted_dims);
-
-            // Build A indices
-            let mut a_idx = vec![0; modes_a.len()];
-            for (ax, &mode) in modes_a.iter().enumerate() {
-                if let Some(c_pos) = modes_c.iter().position(|&m| m == mode) {
-                    a_idx[ax] = c_idx[c_pos];
-                } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
-                    a_idx[ax] = k_idx[k_pos];
-                }
+            if !contracted_dims.is_empty() {
+                unflatten_into(k_flat, &contracted_dims, &mut k_idx);
             }
-
-            // Build B indices
-            let mut b_idx = vec![0; modes_b.len()];
-            for (ax, &mode) in modes_b.iter().enumerate() {
-                if let Some(c_pos) = modes_c.iter().position(|&m| m == mode) {
-                    b_idx[ax] = c_idx[c_pos];
-                } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
-                    b_idx[ax] = k_idx[k_pos];
-                }
+            for (ax, &(src, pos)) in a_axis_map.iter().enumerate() {
+                a_idx[ax] = match src {
+                    0 => c_idx[pos],
+                    1 => k_idx[pos],
+                    _ => 0,
+                };
             }
-
+            for (ax, &(src, pos)) in b_axis_map.iter().enumerate() {
+                b_idx[ax] = match src {
+                    0 => c_idx[pos],
+                    1 => k_idx[pos],
+                    _ => 0,
+                };
+            }
             sum = sum + a.get(&a_idx) * b.get(&b_idx);
         }
         let old = if beta == T::zero() {
@@ -1492,6 +1611,445 @@ fn execute_contract<T: Scalar>(
         output.set(c_idx, alpha * sum + old);
     });
     Ok(())
+}
+
+fn try_execute_contract_gemm<T: Scalar + 'static>(
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    modes_a: &[u32],
+    modes_b: &[u32],
+    modes_c: &[u32],
+) -> Result<Option<()>> {
+    #[derive(Clone)]
+    struct ModeSpec {
+        batch_modes: Vec<u32>,
+        m_modes: Vec<u32>,
+        n_modes: Vec<u32>,
+        k_modes: Vec<u32>,
+    }
+
+    fn build_mode_spec(modes_a: &[u32], modes_b: &[u32], modes_c: &[u32]) -> Option<ModeSpec> {
+        let batch_modes: Vec<u32> = modes_c
+            .iter()
+            .copied()
+            .filter(|m| modes_a.contains(m) && modes_b.contains(m))
+            .collect();
+        let m_modes: Vec<u32> = modes_c
+            .iter()
+            .copied()
+            .filter(|m| modes_a.contains(m) && !modes_b.contains(m))
+            .collect();
+        let n_modes: Vec<u32> = modes_c
+            .iter()
+            .copied()
+            .filter(|m| modes_b.contains(m) && !modes_a.contains(m))
+            .collect();
+        let k_modes: Vec<u32> = modes_a
+            .iter()
+            .copied()
+            .filter(|m| modes_b.contains(m) && !modes_c.contains(m))
+            .collect();
+
+        let expected_a = batch_modes.len() + m_modes.len() + k_modes.len();
+        let expected_b = batch_modes.len() + k_modes.len() + n_modes.len();
+        if expected_a != modes_a.len() || expected_b != modes_b.len() {
+            return None;
+        }
+        if batch_modes.len() + m_modes.len() + n_modes.len() != modes_c.len() {
+            return None;
+        }
+        Some(ModeSpec {
+            batch_modes,
+            m_modes,
+            n_modes,
+            k_modes,
+        })
+    }
+
+    fn perm_for(target: &[u32], source: &[u32]) -> Option<Vec<usize>> {
+        target
+            .iter()
+            .map(|m| source.iter().position(|x| x == m))
+            .collect()
+    }
+
+    fn reordered_dims_strides(
+        modes_src: &[u32],
+        dims_src: &[usize],
+        strides_src: &[isize],
+        target: &[u32],
+    ) -> Option<(Vec<usize>, Vec<isize>)> {
+        let perm = perm_for(target, modes_src)?;
+        let dims = perm.iter().map(|&p| dims_src[p]).collect();
+        let strides = perm.iter().map(|&p| strides_src[p]).collect();
+        Some((dims, strides))
+    }
+
+    fn run_f64(
+        alpha: f64,
+        a: &StridedView<f64>,
+        b: &StridedView<f64>,
+        beta: f64,
+        c: &mut StridedViewMut<f64>,
+        modes_a: &[u32],
+        modes_b: &[u32],
+        modes_c: &[u32],
+        spec: &ModeSpec,
+    ) -> Option<Result<()>> {
+        let target_a: Vec<u32> = spec
+            .batch_modes
+            .iter()
+            .chain(spec.m_modes.iter())
+            .chain(spec.k_modes.iter())
+            .copied()
+            .collect();
+        let target_b: Vec<u32> = spec
+            .batch_modes
+            .iter()
+            .chain(spec.k_modes.iter())
+            .chain(spec.n_modes.iter())
+            .copied()
+            .collect();
+        let target_c: Vec<u32> = spec
+            .batch_modes
+            .iter()
+            .chain(spec.m_modes.iter())
+            .chain(spec.n_modes.iter())
+            .copied()
+            .collect();
+
+        let (a_dims, a_strides) =
+            reordered_dims_strides(modes_a, a.dims(), a.strides(), &target_a)?;
+        let (b_dims, b_strides) =
+            reordered_dims_strides(modes_b, b.dims(), b.strides(), &target_b)?;
+        let (c_dims, c_strides) =
+            reordered_dims_strides(modes_c, c.dims(), c.strides(), &target_c)?;
+
+        let nb = spec.batch_modes.len();
+        let nm = spec.m_modes.len();
+        let nk = spec.k_modes.len();
+        let nn = spec.n_modes.len();
+
+        let (batch_total, a_bs, b_bs, c_bs) = if nb == 0 {
+            (1usize, 0isize, 0isize, 0isize)
+        } else {
+            let (ta, sa) = try_fuse_group(&a_dims[..nb], &a_strides[..nb])?;
+            let (tb, sb) = try_fuse_group(&b_dims[..nb], &b_strides[..nb])?;
+            let (tc, sc) = try_fuse_group(&c_dims[..nb], &c_strides[..nb])?;
+            if ta != tb || ta != tc {
+                return None;
+            }
+            (ta, sa, sb, sc)
+        };
+
+        let (m_raw, a_ms) = if nm == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(&a_dims[nb..nb + nm], &a_strides[nb..nb + nm])?
+        };
+        let (m_chk, c_ms) = if nm == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(&c_dims[nb..nb + nm], &c_strides[nb..nb + nm])?
+        };
+        if m_raw != m_chk {
+            return None;
+        }
+
+        let (k_raw, a_ks) = if nk == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(
+                &a_dims[nb + nm..nb + nm + nk],
+                &a_strides[nb + nm..nb + nm + nk],
+            )?
+        };
+        let (k_chk, b_ks) = if nk == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(&b_dims[nb..nb + nk], &b_strides[nb..nb + nk])?
+        };
+        if k_raw != k_chk {
+            return None;
+        }
+
+        let (n_raw, b_ns) = if nn == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(
+                &b_dims[nb + nk..nb + nk + nn],
+                &b_strides[nb + nk..nb + nk + nn],
+            )?
+        };
+        let (n_chk, c_ns) = if nn == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(
+                &c_dims[nb + nm..nb + nm + nn],
+                &c_strides[nb + nm..nb + nm + nn],
+            )?
+        };
+        if n_raw != n_chk {
+            return None;
+        }
+
+        let m = m_raw.max(1);
+        let n = n_raw.max(1);
+        let k = k_raw.max(1);
+        let mut a_mat = vec![0.0_f64; m * k];
+        let mut b_mat = vec![0.0_f64; k * n];
+        let mut c_mat = vec![0.0_f64; m * n];
+
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = c.as_mut_ptr();
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+        let mut c_off = 0isize;
+
+        for _ in 0..batch_total {
+            for kk in 0..k {
+                for i in 0..m {
+                    let off = a_off + i as isize * a_ms + kk as isize * a_ks;
+                    a_mat[i + kk * m] = unsafe { *a_ptr.offset(off) };
+                }
+            }
+            for j in 0..n {
+                for kk in 0..k {
+                    let off = b_off + kk as isize * b_ks + j as isize * b_ns;
+                    b_mat[kk + j * k] = unsafe { *b_ptr.offset(off) };
+                }
+            }
+            if beta == 0.0 {
+                c_mat.fill(0.0);
+            } else {
+                for j in 0..n {
+                    for i in 0..m {
+                        let off = c_off + i as isize * c_ms + j as isize * c_ns;
+                        c_mat[i + j * m] = unsafe { *c_ptr.offset(off) };
+                    }
+                }
+            }
+
+            if let Err(e) = gemm_f64(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
+                return Some(Err(e));
+            }
+
+            for j in 0..n {
+                for i in 0..m {
+                    let off = c_off + i as isize * c_ms + j as isize * c_ns;
+                    unsafe {
+                        *c_ptr.offset(off) = c_mat[i + j * m];
+                    }
+                }
+            }
+
+            a_off += a_bs;
+            b_off += b_bs;
+            c_off += c_bs;
+        }
+        Some(Ok(()))
+    }
+
+    fn run_f32(
+        alpha: f32,
+        a: &StridedView<f32>,
+        b: &StridedView<f32>,
+        beta: f32,
+        c: &mut StridedViewMut<f32>,
+        modes_a: &[u32],
+        modes_b: &[u32],
+        modes_c: &[u32],
+        spec: &ModeSpec,
+    ) -> Option<Result<()>> {
+        let target_a: Vec<u32> = spec
+            .batch_modes
+            .iter()
+            .chain(spec.m_modes.iter())
+            .chain(spec.k_modes.iter())
+            .copied()
+            .collect();
+        let target_b: Vec<u32> = spec
+            .batch_modes
+            .iter()
+            .chain(spec.k_modes.iter())
+            .chain(spec.n_modes.iter())
+            .copied()
+            .collect();
+        let target_c: Vec<u32> = spec
+            .batch_modes
+            .iter()
+            .chain(spec.m_modes.iter())
+            .chain(spec.n_modes.iter())
+            .copied()
+            .collect();
+
+        let (a_dims, a_strides) =
+            reordered_dims_strides(modes_a, a.dims(), a.strides(), &target_a)?;
+        let (b_dims, b_strides) =
+            reordered_dims_strides(modes_b, b.dims(), b.strides(), &target_b)?;
+        let (c_dims, c_strides) =
+            reordered_dims_strides(modes_c, c.dims(), c.strides(), &target_c)?;
+
+        let nb = spec.batch_modes.len();
+        let nm = spec.m_modes.len();
+        let nk = spec.k_modes.len();
+        let nn = spec.n_modes.len();
+
+        let (batch_total, a_bs, b_bs, c_bs) = if nb == 0 {
+            (1usize, 0isize, 0isize, 0isize)
+        } else {
+            let (ta, sa) = try_fuse_group(&a_dims[..nb], &a_strides[..nb])?;
+            let (tb, sb) = try_fuse_group(&b_dims[..nb], &b_strides[..nb])?;
+            let (tc, sc) = try_fuse_group(&c_dims[..nb], &c_strides[..nb])?;
+            if ta != tb || ta != tc {
+                return None;
+            }
+            (ta, sa, sb, sc)
+        };
+
+        let (m_raw, a_ms) = if nm == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(&a_dims[nb..nb + nm], &a_strides[nb..nb + nm])?
+        };
+        let (m_chk, c_ms) = if nm == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(&c_dims[nb..nb + nm], &c_strides[nb..nb + nm])?
+        };
+        if m_raw != m_chk {
+            return None;
+        }
+
+        let (k_raw, a_ks) = if nk == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(
+                &a_dims[nb + nm..nb + nm + nk],
+                &a_strides[nb + nm..nb + nm + nk],
+            )?
+        };
+        let (k_chk, b_ks) = if nk == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(&b_dims[nb..nb + nk], &b_strides[nb..nb + nk])?
+        };
+        if k_raw != k_chk {
+            return None;
+        }
+
+        let (n_raw, b_ns) = if nn == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(
+                &b_dims[nb + nk..nb + nk + nn],
+                &b_strides[nb + nk..nb + nk + nn],
+            )?
+        };
+        let (n_chk, c_ns) = if nn == 0 {
+            (1usize, 0isize)
+        } else {
+            try_fuse_group(
+                &c_dims[nb + nm..nb + nm + nn],
+                &c_strides[nb + nm..nb + nm + nn],
+            )?
+        };
+        if n_raw != n_chk {
+            return None;
+        }
+
+        let m = m_raw.max(1);
+        let n = n_raw.max(1);
+        let k = k_raw.max(1);
+        let mut a_mat = vec![0.0_f32; m * k];
+        let mut b_mat = vec![0.0_f32; k * n];
+        let mut c_mat = vec![0.0_f32; m * n];
+
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = c.as_mut_ptr();
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+        let mut c_off = 0isize;
+
+        for _ in 0..batch_total {
+            for kk in 0..k {
+                for i in 0..m {
+                    let off = a_off + i as isize * a_ms + kk as isize * a_ks;
+                    a_mat[i + kk * m] = unsafe { *a_ptr.offset(off) };
+                }
+            }
+            for j in 0..n {
+                for kk in 0..k {
+                    let off = b_off + kk as isize * b_ks + j as isize * b_ns;
+                    b_mat[kk + j * k] = unsafe { *b_ptr.offset(off) };
+                }
+            }
+            if beta == 0.0 {
+                c_mat.fill(0.0);
+            } else {
+                for j in 0..n {
+                    for i in 0..m {
+                        let off = c_off + i as isize * c_ms + j as isize * c_ns;
+                        c_mat[i + j * m] = unsafe { *c_ptr.offset(off) };
+                    }
+                }
+            }
+
+            if let Err(e) = gemm_f32(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
+                return Some(Err(e));
+            }
+
+            for j in 0..n {
+                for i in 0..m {
+                    let off = c_off + i as isize * c_ms + j as isize * c_ns;
+                    unsafe {
+                        *c_ptr.offset(off) = c_mat[i + j * m];
+                    }
+                }
+            }
+
+            a_off += a_bs;
+            b_off += b_bs;
+            c_off += c_bs;
+        }
+        Some(Ok(()))
+    }
+
+    let spec = match build_mode_spec(modes_a, modes_b, modes_c) {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let tid = TypeId::of::<T>();
+    if tid == TypeId::of::<f64>() {
+        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f64>) };
+        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f64>) };
+        let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f64>) };
+        let alpha = unsafe { *(&alpha as *const T as *const f64) };
+        let beta = unsafe { *(&beta as *const T as *const f64) };
+        if let Some(r) = run_f64(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec) {
+            r?;
+            return Ok(Some(()));
+        }
+        return Ok(None);
+    }
+    if tid == TypeId::of::<f32>() {
+        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f32>) };
+        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f32>) };
+        let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f32>) };
+        let alpha = unsafe { *(&alpha as *const T as *const f32) };
+        let beta = unsafe { *(&beta as *const T as *const f32) };
+        if let Some(r) = run_f32(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec) {
+            r?;
+            return Ok(Some(()));
+        }
+        return Ok(None);
+    }
+    Ok(None)
 }
 
 // ===========================================================================
@@ -1668,8 +2226,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     }
 
     fn has_extension_for(_ext: Extension) -> bool {
-        // CPU backend supports both Contract and ElementwiseMul
-        true
+        matches!(_ext, Extension::ElementwiseMul)
     }
 }
 

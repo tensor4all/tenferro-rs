@@ -922,6 +922,37 @@ fn classify_modes(
     (batch, lo, ro, sum)
 }
 
+/// Returns true if this binary contraction can be safely lowered by
+/// `fallback_pairwise_contraction` (Permute + BatchedGemm pipeline).
+///
+/// The fallback path requires:
+/// - no duplicated labels in each operand/output
+/// - output labels to be a subset of input labels
+///
+/// Reduction-only labels present in only one input are allowed; they are
+/// reduced before GEMM decomposition.
+fn is_gemm_fallback_compatible(subs_a: &[u32], subs_b: &[u32], subs_c: &[u32]) -> bool {
+    let unique = |subs: &[u32]| -> bool {
+        let mut seen = HashSet::with_capacity(subs.len());
+        subs.iter().all(|&m| seen.insert(m))
+    };
+
+    if !unique(subs_a) || !unique(subs_b) || !unique(subs_c) {
+        return false;
+    }
+
+    let set_a: HashSet<u32> = subs_a.iter().copied().collect();
+    let set_b: HashSet<u32> = subs_b.iter().copied().collect();
+    let set_c: HashSet<u32> = subs_c.iter().copied().collect();
+
+    // Output labels must come from inputs.
+    if !set_c.iter().all(|m| set_a.contains(m) || set_b.contains(m)) {
+        return false;
+    }
+
+    true
+}
+
 /// Fallback pairwise contraction using core primitives only.
 ///
 /// Decomposes a binary contraction into:
@@ -947,14 +978,22 @@ where
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
     B: TensorPrims<A>,
 {
-    let (batch_modes, lo_modes, ro_modes, sum_modes) = classify_modes(subs_a, subs_b, subs_c);
+    // Pre-reduce axes that are present only in one input and not in output.
+    // This expands GEMM decomposition coverage to general binary contractions.
+    let (a_reduced, subs_a_reduced) =
+        reduce_unique_only_axes::<A, B>(ctx, a, subs_a, subs_b, subs_c)?;
+    let (b_reduced, subs_b_reduced) =
+        reduce_unique_only_axes::<A, B>(ctx, b, subs_b, subs_a, subs_c)?;
+
+    let (batch_modes, lo_modes, ro_modes, sum_modes) =
+        classify_modes(&subs_a_reduced, &subs_b_reduced, subs_c);
 
     // Build size_dict from input subscripts and shapes
     let mut size_dict: HashMap<u32, usize> = HashMap::new();
-    for (&label, &dim) in subs_a.iter().zip(a.dims()) {
+    for (&label, &dim) in subs_a_reduced.iter().zip(a_reduced.dims()) {
         size_dict.insert(label, dim);
     }
-    for (&label, &dim) in subs_b.iter().zip(b.dims()) {
+    for (&label, &dim) in subs_b_reduced.iter().zip(b_reduced.dims()) {
         size_dict.insert(label, dim);
     }
 
@@ -974,7 +1013,7 @@ where
         .chain(sum_modes.iter())
         .copied()
         .collect();
-    let perm_a = permute_or_copy::<A, B>(ctx, a, subs_a, &target_a)?;
+    let perm_a = permute_or_copy::<A, B>(ctx, &a_reduced, &subs_a_reduced, &target_a)?;
 
     // --- Step 2: Permute B to [batch, sum, ro] ---
     let target_b: Vec<u32> = batch_modes
@@ -983,7 +1022,7 @@ where
         .chain(ro_modes.iter())
         .copied()
         .collect();
-    let perm_b = permute_or_copy::<A, B>(ctx, b, subs_b, &target_b)?;
+    let perm_b = permute_or_copy::<A, B>(ctx, &b_reduced, &subs_b_reduced, &target_b)?;
 
     // --- Step 3: Reshape to [batch..., m, k] and [batch..., k, n] ---
     let a_gemm_shape: Vec<usize> = batch_sizes
@@ -1073,6 +1112,73 @@ where
     }
 
     Ok(())
+}
+
+/// Reduce axes that are present only in `subs_self` and absent from both
+/// `subs_other` and `subs_out`.
+fn reduce_unique_only_axes<A, B>(
+    ctx: &mut B::Context,
+    tensor: &Tensor<A::Scalar>,
+    subs_self: &[u32],
+    subs_other: &[u32],
+    subs_out: &[u32],
+) -> Result<(Tensor<A::Scalar>, Vec<u32>)>
+where
+    A: Algebra,
+    A::Scalar: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    let other_set: HashSet<u32> = subs_other.iter().copied().collect();
+    let out_set: HashSet<u32> = subs_out.iter().copied().collect();
+
+    let mut reduced_axes = Vec::new();
+    let mut kept_subs = Vec::with_capacity(subs_self.len());
+    for (ax, &label) in subs_self.iter().enumerate() {
+        if !other_set.contains(&label) && !out_set.contains(&label) {
+            reduced_axes.push(ax);
+        } else {
+            kept_subs.push(label);
+        }
+    }
+
+    if reduced_axes.is_empty() {
+        return Ok((tensor.clone(), subs_self.to_vec()));
+    }
+
+    let keep_set: HashSet<usize> = reduced_axes.iter().copied().collect();
+    let out_shape: Vec<usize> = tensor
+        .dims()
+        .iter()
+        .enumerate()
+        .filter_map(|(ax, &d)| {
+            if keep_set.contains(&ax) {
+                None
+            } else {
+                Some(d)
+            }
+        })
+        .collect();
+    let memory_space = tensor.logical_memory_space();
+    let mut reduced =
+        Tensor::<A::Scalar>::zeros(&out_shape, memory_space, MemoryOrder::ColumnMajor);
+
+    let desc = PrimDescriptor::Reduce {
+        modes_a: subs_self.to_vec(),
+        modes_c: kept_subs.clone(),
+        op: ReduceOp::Sum,
+    };
+    let shapes = [tensor.dims(), reduced.dims()];
+    let plan = B::plan(ctx, &desc, &shapes)?;
+    B::execute(
+        ctx,
+        &plan,
+        A::Scalar::one(),
+        &[tensor],
+        A::Scalar::zero(),
+        &mut reduced,
+    )?;
+
+    Ok((reduced, kept_subs))
 }
 
 /// Permute a tensor to a target mode order and ensure contiguous layout.
@@ -1185,6 +1291,14 @@ where
         return Backend::execute(ctx, &plan, alpha, &[a, b], beta, output);
     }
 
+    // Prefer GEMM decomposition when labels fit the matrix contraction model.
+    // This avoids the generic Contract kernel for common high-throughput cases.
+    if is_gemm_fallback_compatible(subs_a, subs_b, subs_c) {
+        return fallback_pairwise_contraction::<Alg, Backend>(
+            ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+        );
+    }
+
     // General contraction via Contract extension
     if Backend::has_extension_for(Extension::Contract) {
         let desc = PrimDescriptor::Contract {
@@ -1196,10 +1310,17 @@ where
         let plan = Backend::plan(ctx, &desc, &shapes)?;
         Backend::execute(ctx, &plan, alpha, &[a, b], beta, output)
     } else {
-        // Fallback: decompose into Permute + BatchedGemm
-        fallback_pairwise_contraction::<Alg, Backend>(
-            ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
-        )
+        // Contract is disabled in extension dispatch. For patterns that cannot
+        // be lowered by fallback_pairwise_contraction, directly try Contract.
+        // This keeps compatibility while making GEMM decomposition the default.
+        let desc = PrimDescriptor::Contract {
+            modes_a: subs_a.to_vec(),
+            modes_b: subs_b.to_vec(),
+            modes_c: subs_c.to_vec(),
+        };
+        let shapes = [a.dims(), b.dims(), output.dims()];
+        let plan = Backend::plan(ctx, &desc, &shapes)?;
+        Backend::execute(ctx, &plan, alpha, &[a, b], beta, output)
     }
 }
 
@@ -1241,19 +1362,39 @@ where
         );
     }
 
-    // Multi-tensor case: follow the contraction tree
-    let mut intermediates: Vec<Tensor<Alg::Scalar>> = Vec::new();
+    // Multi-tensor case: follow the contraction tree.
+    // Keep intermediates by logical index and recycle freed buffers by shape.
+    let memory_space = infer_memory_space(operands)?;
+    let mut intermediates: HashMap<usize, Tensor<Alg::Scalar>> = HashMap::new();
+    let mut reuse_pool: HashMap<Vec<usize>, Vec<Tensor<Alg::Scalar>>> = HashMap::new();
+
+    // Count remaining uses for each operand/index in the contraction schedule.
+    let mut use_counts = vec![0usize; n_inputs + tree.steps.len()];
+    for step in &tree.steps {
+        use_counts[step.left] += 1;
+        use_counts[step.right] += 1;
+    }
 
     for (step_idx, step) in tree.steps.iter().enumerate() {
         let left: &Tensor<Alg::Scalar> = if step.left < n_inputs {
             operands[step.left]
         } else {
-            &intermediates[step.left - n_inputs]
+            intermediates.get(&step.left).ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "missing intermediate tensor at index {}",
+                    step.left
+                ))
+            })?
         };
         let right: &Tensor<Alg::Scalar> = if step.right < n_inputs {
             operands[step.right]
         } else {
-            &intermediates[step.right - n_inputs]
+            intermediates.get(&step.right).ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "missing intermediate tensor at index {}",
+                    step.right
+                ))
+            })?
         };
 
         let subs_left = &tree.operand_subs[step.left];
@@ -1275,13 +1416,19 @@ where
             )?;
         } else {
             // Intermediate step: create new tensor with alpha=1, beta=0
-            // Allocate on the same memory space as the input operands.
             let result_idx = n_inputs + step_idx;
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = compute_output_shape(subs_result, &tree.size_dict)?;
-            let memory_space = infer_memory_space(operands)?;
-            let mut result =
-                Tensor::<Alg::Scalar>::zeros(&result_shape, memory_space, MemoryOrder::ColumnMajor);
+            let mut result = reuse_pool
+                .get_mut(&result_shape)
+                .and_then(|bufs| bufs.pop())
+                .unwrap_or_else(|| {
+                    Tensor::<Alg::Scalar>::zeros(
+                        &result_shape,
+                        memory_space,
+                        MemoryOrder::ColumnMajor,
+                    )
+                });
             execute_pairwise_contraction::<Alg, Backend>(
                 ctx,
                 subs_left,
@@ -1293,7 +1440,22 @@ where
                 Alg::Scalar::zero(),
                 &mut result,
             )?;
-            intermediates.push(result);
+            intermediates.insert(result_idx, result);
+        }
+
+        // Release consumed intermediates when their last use is complete.
+        let mut consumed = [step.left, step.right];
+        consumed.sort_unstable();
+        for (i, idx) in consumed.iter().enumerate() {
+            if i == 1 && consumed[0] == consumed[1] {
+                continue;
+            }
+            use_counts[*idx] = use_counts[*idx].saturating_sub(1);
+            if *idx >= n_inputs && use_counts[*idx] == 0 {
+                if let Some(t) = intermediates.remove(idx) {
+                    reuse_pool.entry(t.dims().to_vec()).or_default().push(t);
+                }
+            }
         }
     }
 
