@@ -89,12 +89,13 @@ fn parse_invalid_no_arrow() {
 
 #[test]
 fn parse_invalid_char() {
+    // Control characters (e.g. null) must be rejected.
     assert!(
         matches!(
-            Subscripts::parse("i+,+j->ij"),
-            Err(tenferro_device::Error::InvalidArgument(ref msg)) if msg.contains("invalid")
+            Subscripts::parse("i\u{0},\u{0}j->ij"),
+            Err(tenferro_device::Error::InvalidArgument(ref msg)) if msg.contains("control") || msg.contains("invalid")
         ),
-        "expected InvalidArgument for invalid character"
+        "expected InvalidArgument for control character"
     );
 }
 
@@ -1773,8 +1774,11 @@ fn parse_various_invalid_chars() {
         );
     }
 
-    // Separators/symbols must still be rejected.
-    let invalid_cases = [("i+,+j->ij", "plus sign"), ("i ,j ->ij", "space")];
+    // Control characters must still be rejected.
+    let invalid_cases = [
+        ("i\u{0},\u{0}j->ij", "null byte"),
+        ("i\u{000A}j->ij", "newline"),
+    ];
     for (notation, desc) in &invalid_cases {
         let result = Subscripts::parse(notation);
         assert!(
