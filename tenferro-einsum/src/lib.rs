@@ -953,6 +953,106 @@ fn is_gemm_fallback_compatible(subs_a: &[u32], subs_b: &[u32], subs_c: &[u32]) -
     true
 }
 
+/// Try a specialized outer-product lowering via broadcast + ElementwiseMul.
+///
+/// This path targets disjoint binary einsum (no summed/shared modes), e.g.:
+/// `i,j->ij`. It avoids GEMM(k=1) overhead and can be substantially faster.
+fn try_outer_elementwise_contraction<A, B>(
+    ctx: &mut B::Context,
+    subs_a: &[u32],
+    subs_b: &[u32],
+    subs_c: &[u32],
+    a: &Tensor<A::Scalar>,
+    b: &Tensor<A::Scalar>,
+    alpha: A::Scalar,
+    beta: A::Scalar,
+    output: &mut Tensor<A::Scalar>,
+) -> Result<bool>
+where
+    A: Algebra,
+    A::Scalar: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    if !B::has_extension_for(Extension::ElementwiseMul) {
+        return Ok(false);
+    }
+
+    let unique = |subs: &[u32]| -> bool {
+        let mut seen = HashSet::with_capacity(subs.len());
+        subs.iter().all(|&m| seen.insert(m))
+    };
+    if !unique(subs_a) || !unique(subs_b) || !unique(subs_c) {
+        return Ok(false);
+    }
+
+    let set_a: HashSet<u32> = subs_a.iter().copied().collect();
+    let set_b: HashSet<u32> = subs_b.iter().copied().collect();
+    // Must be pure outer: disjoint labels between inputs.
+    if set_a.iter().any(|m| set_b.contains(m)) {
+        return Ok(false);
+    }
+
+    let canonical_modes: Vec<u32> = subs_a.iter().chain(subs_b.iter()).copied().collect();
+    let set_c: HashSet<u32> = subs_c.iter().copied().collect();
+    if set_c != canonical_modes.iter().copied().collect::<HashSet<_>>() {
+        return Ok(false);
+    }
+
+    let mut size_dict = HashMap::new();
+    for (&m, &d) in subs_a.iter().zip(a.dims()) {
+        size_dict.insert(m, d);
+    }
+    for (&m, &d) in subs_b.iter().zip(b.dims()) {
+        size_dict.insert(m, d);
+    }
+
+    let canonical_shape: Vec<usize> = canonical_modes.iter().map(|m| size_dict[m]).collect();
+    let a_ext_shape: Vec<usize> = canonical_modes
+        .iter()
+        .map(|m| if set_a.contains(m) { size_dict[m] } else { 1 })
+        .collect();
+    let b_ext_shape: Vec<usize> = canonical_modes
+        .iter()
+        .map(|m| if set_b.contains(m) { size_dict[m] } else { 1 })
+        .collect();
+
+    let a_reshaped = a.reshape(&a_ext_shape)?;
+    let b_reshaped = b.reshape(&b_ext_shape)?;
+    let a_bcast = a_reshaped.broadcast(&canonical_shape)?;
+    let b_bcast = b_reshaped.broadcast(&canonical_shape)?;
+
+    if canonical_modes == subs_c {
+        let desc = PrimDescriptor::ElementwiseMul;
+        let shapes = [a_bcast.dims(), b_bcast.dims(), output.dims()];
+        let plan = B::plan(ctx, &desc, &shapes)?;
+        B::execute(ctx, &plan, alpha, &[&a_bcast, &b_bcast], beta, output)?;
+        return Ok(true);
+    }
+
+    let memory_space = output.logical_memory_space();
+    let mut temp =
+        Tensor::<A::Scalar>::zeros(&canonical_shape, memory_space, MemoryOrder::ColumnMajor);
+    let desc = PrimDescriptor::ElementwiseMul;
+    let shapes = [a_bcast.dims(), b_bcast.dims(), temp.dims()];
+    let plan = B::plan(ctx, &desc, &shapes)?;
+    B::execute(
+        ctx,
+        &plan,
+        A::Scalar::one(),
+        &[&a_bcast, &b_bcast],
+        A::Scalar::zero(),
+        &mut temp,
+    )?;
+    let desc = PrimDescriptor::Permute {
+        modes_a: canonical_modes,
+        modes_b: subs_c.to_vec(),
+    };
+    let shapes = [temp.dims(), output.dims()];
+    let plan = B::plan(ctx, &desc, &shapes)?;
+    B::execute(ctx, &plan, alpha, &[&temp], beta, output)?;
+    Ok(true)
+}
+
 /// Fallback pairwise contraction using core primitives only.
 ///
 /// Decomposes a binary contraction into:
@@ -1289,6 +1389,13 @@ where
         let shapes = [a.dims(), b.dims(), output.dims()];
         let plan = Backend::plan(ctx, &desc, &shapes)?;
         return Backend::execute(ctx, &plan, alpha, &[a, b], beta, output);
+    }
+
+    // Specialized outer-product path (disjoint binary einsum).
+    if try_outer_elementwise_contraction::<Alg, Backend>(
+        ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+    )? {
+        return Ok(());
     }
 
     // Prefer GEMM decomposition when labels fit the matrix contraction model.
