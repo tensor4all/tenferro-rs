@@ -1150,10 +1150,17 @@ where
         .dims()
         .iter()
         .enumerate()
-        .filter_map(|(ax, &d)| if keep_set.contains(&ax) { None } else { Some(d) })
+        .filter_map(|(ax, &d)| {
+            if keep_set.contains(&ax) {
+                None
+            } else {
+                Some(d)
+            }
+        })
         .collect();
     let memory_space = tensor.logical_memory_space();
-    let mut reduced = Tensor::<A::Scalar>::zeros(&out_shape, memory_space, MemoryOrder::ColumnMajor);
+    let mut reduced =
+        Tensor::<A::Scalar>::zeros(&out_shape, memory_space, MemoryOrder::ColumnMajor);
 
     let desc = PrimDescriptor::Reduce {
         modes_a: subs_self.to_vec(),

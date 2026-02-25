@@ -1778,7 +1778,10 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (n_raw, b_ns) = if nn == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(&b_dims[nb + nk..nb + nk + nn], &b_strides[nb + nk..nb + nk + nn])?
+            try_fuse_group(
+                &b_dims[nb + nk..nb + nk + nn],
+                &b_strides[nb + nk..nb + nk + nn],
+            )?
         };
         let (n_chk, c_ns) = if nn == 0 {
             (1usize, 0isize)
@@ -1941,7 +1944,10 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (n_raw, b_ns) = if nn == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(&b_dims[nb + nk..nb + nk + nn], &b_strides[nb + nk..nb + nk + nn])?
+            try_fuse_group(
+                &b_dims[nb + nk..nb + nk + nn],
+                &b_strides[nb + nk..nb + nk + nn],
+            )?
         };
         let (n_chk, c_ns) = if nn == 0 {
             (1usize, 0isize)
