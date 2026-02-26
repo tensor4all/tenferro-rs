@@ -9,8 +9,8 @@ use num_complex::{Complex32, Complex64};
 use strided_perm::try_fuse_group;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
-use tenferro_device::{Error, Result};
-use tenferro_tensor::Tensor;
+use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
     for_each_index, mode_position, unflatten_index, validate_execute_inputs, validate_rank,
@@ -72,6 +72,37 @@ where
     let innermost_stride = strides[rank - 1] as usize;
 
     innermost_stride == 1
+}
+
+/// Conditionally make a tensor contiguous for GEMM compatibility.
+///
+/// If the tensor is already GEMM-compatible (row-major matrix with contiguous
+/// batch dimensions), returns a clone without copying. Otherwise, creates a
+/// contiguous copy.
+fn maybe_make_contiguous<T>(
+    ctx: &mut CpuContext,
+    tensor: &Tensor<T>,
+    batch_dims: &[usize],
+) -> Result<Tensor<T>>
+where
+    T: Scalar + 'static,
+{
+    if is_gemm_compatible(tensor, batch_dims) {
+        return Ok(tensor.clone());
+    }
+
+    let mut contiguous = Tensor::zeros(
+        tensor.dims(),
+        tensor.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let desc = PrimDescriptor::MakeContiguous;
+    let shapes: Vec<&[usize]> = vec![tensor.dims(), contiguous.dims()];
+    let plan = CpuBackend::plan(ctx, &desc, &shapes)?;
+
+    CpuBackend::execute(ctx, &plan, T::one(), &[tensor], T::zero(), &mut contiguous)?;
+
+    Ok(contiguous)
 }
 
 /// Compute connected components from a list of paired axis positions using union-find.
