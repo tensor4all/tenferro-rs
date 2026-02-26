@@ -41,6 +41,39 @@ fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_,
         .map_err(|e| Error::StrideError(format!("{e}")))
 }
 
+/// Check if a tensor's strides are compatible with batched GEMM operations.
+///
+/// Returns true if the tensor has row-major layout (innermost stride == 1)
+/// and batch dimensions are contiguous.
+///
+/// This is used to skip unnecessary contiguous copies before GEMM.
+fn is_gemm_compatible<T>(tensor: &Tensor<T>, batch_dims: &[usize]) -> bool
+where
+    T: Scalar,
+{
+    let dims = tensor.dims();
+    let strides = tensor.strides();
+    let rank = dims.len();
+
+    if rank < 2 {
+        return false;
+    }
+
+    let matrix_size = dims[rank - 2] * dims[rank - 1];
+    let batch_rank = rank - 2;
+
+    for i in 0..batch_rank {
+        let expected_stride: usize = batch_dims.iter().skip(i + 1).product::<usize>() * matrix_size;
+        if strides[i] as usize != expected_stride {
+            return false;
+        }
+    }
+
+    let innermost_stride = strides[rank - 1] as usize;
+
+    innermost_stride == 1
+}
+
 /// Compute connected components from a list of paired axis positions using union-find.
 ///
 /// Returns `(components, comp_dims)` where:
