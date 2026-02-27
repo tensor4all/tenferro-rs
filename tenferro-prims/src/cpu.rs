@@ -106,6 +106,88 @@ fn compute_paired_components(
     (components, comp_dims)
 }
 
+/// Pre-computed mode analysis for Contract GEMM fast path.
+#[derive(Debug, Clone)]
+pub(crate) struct ContractGemmSpec {
+    /// Target mode order for A: [batch, m, k]
+    a_target: Vec<u32>,
+    /// Target mode order for B: [batch, k, n]
+    b_target: Vec<u32>,
+    /// Target mode order for C: [batch, m, n]
+    c_target: Vec<u32>,
+    batch_modes: Vec<u32>,
+    m_modes: Vec<u32>,
+    n_modes: Vec<u32>,
+    k_modes: Vec<u32>,
+}
+
+/// Build a [`ContractGemmSpec`] from mode labels, or `None` if the
+/// contraction is not a valid batched-GEMM pattern.
+fn build_contract_gemm_spec(
+    modes_a: &[u32],
+    modes_b: &[u32],
+    modes_c: &[u32],
+) -> Option<ContractGemmSpec> {
+    let batch_modes: Vec<u32> = modes_c
+        .iter()
+        .copied()
+        .filter(|m| modes_a.contains(m) && modes_b.contains(m))
+        .collect();
+    let m_modes: Vec<u32> = modes_c
+        .iter()
+        .copied()
+        .filter(|m| modes_a.contains(m) && !modes_b.contains(m))
+        .collect();
+    let n_modes: Vec<u32> = modes_c
+        .iter()
+        .copied()
+        .filter(|m| modes_b.contains(m) && !modes_a.contains(m))
+        .collect();
+    let k_modes: Vec<u32> = modes_a
+        .iter()
+        .copied()
+        .filter(|m| modes_b.contains(m) && !modes_c.contains(m))
+        .collect();
+
+    let expected_a = batch_modes.len() + m_modes.len() + k_modes.len();
+    let expected_b = batch_modes.len() + k_modes.len() + n_modes.len();
+    if expected_a != modes_a.len() || expected_b != modes_b.len() {
+        return None;
+    }
+    if batch_modes.len() + m_modes.len() + n_modes.len() != modes_c.len() {
+        return None;
+    }
+
+    let a_target: Vec<u32> = batch_modes
+        .iter()
+        .chain(m_modes.iter())
+        .chain(k_modes.iter())
+        .copied()
+        .collect();
+    let b_target: Vec<u32> = batch_modes
+        .iter()
+        .chain(k_modes.iter())
+        .chain(n_modes.iter())
+        .copied()
+        .collect();
+    let c_target: Vec<u32> = batch_modes
+        .iter()
+        .chain(m_modes.iter())
+        .chain(n_modes.iter())
+        .copied()
+        .collect();
+
+    Some(ContractGemmSpec {
+        a_target,
+        b_target,
+        c_target,
+        batch_modes,
+        m_modes,
+        n_modes,
+        k_modes,
+    })
+}
+
 /// CPU plan — concrete enum, no type erasure.
 ///
 /// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
@@ -189,6 +271,8 @@ pub enum CpuPlan<T: Scalar> {
         modes_b: Vec<u32>,
         /// Mode labels for output C.
         modes_c: Vec<u32>,
+        /// Cached GEMM mode analysis (None if not a valid GEMM pattern).
+        gemm_spec: Option<ContractGemmSpec>,
         _marker: PhantomData<T>,
     },
     /// Plan for element-wise multiplication (extended op).
@@ -691,10 +775,12 @@ impl CpuBackend {
                         }
                     }
                 }
+                let gemm_spec = build_contract_gemm_spec(modes_a, modes_b, modes_c);
                 Ok(CpuPlan::Contract {
                     modes_a: modes_a.clone(),
                     modes_b: modes_b.clone(),
                     modes_c: modes_c.clone(),
+                    gemm_spec,
                     _marker: PhantomData,
                 })
             }
@@ -1913,13 +1999,21 @@ fn execute_contract<T: Scalar>(
     modes_a: &[u32],
     modes_b: &[u32],
     modes_c: &[u32],
+    cached_gemm_spec: Option<&ContractGemmSpec>,
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
 
-    if let Some(done) =
-        try_execute_contract_gemm(alpha, inputs, beta, output, modes_a, modes_b, modes_c)?
-    {
+    if let Some(done) = try_execute_contract_gemm(
+        alpha,
+        inputs,
+        beta,
+        output,
+        modes_a,
+        modes_b,
+        modes_c,
+        cached_gemm_spec,
+    )? {
         return Ok(done);
     }
 
@@ -2029,6 +2123,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
     modes_a: &[u32],
     modes_b: &[u32],
     modes_c: &[u32],
+    cached_spec: Option<&ContractGemmSpec>,
 ) -> Result<Option<()>> {
     #[derive(Clone)]
     struct ModeSpec {
@@ -2105,35 +2200,44 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         modes_b: &[u32],
         modes_c: &[u32],
         spec: &ModeSpec,
+        cached: Option<&ContractGemmSpec>,
     ) -> Option<Result<()>> {
-        let target_a: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.k_modes.iter())
-            .copied()
-            .collect();
-        let target_b: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.k_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
-        let target_c: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
+        let owned_a;
+        let owned_b;
+        let owned_c;
+        let (target_a, target_b, target_c) = if let Some(cs) = cached {
+            (cs.a_target.as_slice(), cs.b_target.as_slice(), cs.c_target.as_slice())
+        } else {
+            owned_a = spec
+                .batch_modes
+                .iter()
+                .chain(spec.m_modes.iter())
+                .chain(spec.k_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            owned_b = spec
+                .batch_modes
+                .iter()
+                .chain(spec.k_modes.iter())
+                .chain(spec.n_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            owned_c = spec
+                .batch_modes
+                .iter()
+                .chain(spec.m_modes.iter())
+                .chain(spec.n_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            (owned_a.as_slice(), owned_b.as_slice(), owned_c.as_slice())
+        };
 
         let (a_dims, a_strides) =
-            reordered_dims_strides(modes_a, a.dims(), a.strides(), &target_a)?;
+            reordered_dims_strides(modes_a, a.dims(), a.strides(), target_a)?;
         let (b_dims, b_strides) =
-            reordered_dims_strides(modes_b, b.dims(), b.strides(), &target_b)?;
+            reordered_dims_strides(modes_b, b.dims(), b.strides(), target_b)?;
         let (c_dims, c_strides) =
-            reordered_dims_strides(modes_c, c.dims(), c.strides(), &target_c)?;
+            reordered_dims_strides(modes_c, c.dims(), c.strides(), target_c)?;
 
         let nb = spec.batch_modes.len();
         let nm = spec.m_modes.len();
@@ -2271,35 +2375,44 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         modes_b: &[u32],
         modes_c: &[u32],
         spec: &ModeSpec,
+        cached: Option<&ContractGemmSpec>,
     ) -> Option<Result<()>> {
-        let target_a: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.k_modes.iter())
-            .copied()
-            .collect();
-        let target_b: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.k_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
-        let target_c: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
+        let owned_a;
+        let owned_b;
+        let owned_c;
+        let (target_a, target_b, target_c) = if let Some(cs) = cached {
+            (cs.a_target.as_slice(), cs.b_target.as_slice(), cs.c_target.as_slice())
+        } else {
+            owned_a = spec
+                .batch_modes
+                .iter()
+                .chain(spec.m_modes.iter())
+                .chain(spec.k_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            owned_b = spec
+                .batch_modes
+                .iter()
+                .chain(spec.k_modes.iter())
+                .chain(spec.n_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            owned_c = spec
+                .batch_modes
+                .iter()
+                .chain(spec.m_modes.iter())
+                .chain(spec.n_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            (owned_a.as_slice(), owned_b.as_slice(), owned_c.as_slice())
+        };
 
         let (a_dims, a_strides) =
-            reordered_dims_strides(modes_a, a.dims(), a.strides(), &target_a)?;
+            reordered_dims_strides(modes_a, a.dims(), a.strides(), target_a)?;
         let (b_dims, b_strides) =
-            reordered_dims_strides(modes_b, b.dims(), b.strides(), &target_b)?;
+            reordered_dims_strides(modes_b, b.dims(), b.strides(), target_b)?;
         let (c_dims, c_strides) =
-            reordered_dims_strides(modes_c, c.dims(), c.strides(), &target_c)?;
+            reordered_dims_strides(modes_c, c.dims(), c.strides(), target_c)?;
 
         let nb = spec.batch_modes.len();
         let nm = spec.m_modes.len();
@@ -2427,9 +2540,18 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         Some(Ok(()))
     }
 
-    let spec = match build_mode_spec(modes_a, modes_b, modes_c) {
-        Some(s) => s,
-        None => return Ok(None),
+    let spec = if let Some(cached) = cached_spec {
+        ModeSpec {
+            batch_modes: cached.batch_modes.clone(),
+            m_modes: cached.m_modes.clone(),
+            n_modes: cached.n_modes.clone(),
+            k_modes: cached.k_modes.clone(),
+        }
+    } else {
+        match build_mode_spec(modes_a, modes_b, modes_c) {
+            Some(s) => s,
+            None => return Ok(None),
+        }
     };
 
     let tid = TypeId::of::<T>();
@@ -2439,7 +2561,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f64>) };
         let alpha = unsafe { *(&alpha as *const T as *const f64) };
         let beta = unsafe { *(&beta as *const T as *const f64) };
-        if let Some(r) = run_f64(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec) {
+        if let Some(r) = run_f64(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec, cached_spec) {
             r?;
             return Ok(Some(()));
         }
@@ -2451,7 +2573,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f32>) };
         let alpha = unsafe { *(&alpha as *const T as *const f32) };
         let beta = unsafe { *(&beta as *const T as *const f32) };
-        if let Some(r) = run_f32(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec) {
+        if let Some(r) = run_f32(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec, cached_spec) {
             r?;
             return Ok(Some(()));
         }
@@ -2618,6 +2740,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 modes_a,
                 modes_b,
                 modes_c,
+                gemm_spec,
                 ..
             } => {
                 validate_execute_inputs(inputs, 2, "Contract")?;
@@ -2629,6 +2752,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     modes_a,
                     modes_b,
                     modes_c,
+                    gemm_spec.as_ref(),
                 )
             }
         }
