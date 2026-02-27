@@ -155,7 +155,30 @@ for _ in 0..n {
 }
 ```
 
-### 5. Calling `Backend::plan()` inside hot loops
+### 5. Allocating Vec inside hot loops
+
+**Bad:**
+```rust
+for_each_index(&dims, |idx| {
+    for i in 0..n {
+        let buf = vec![0usize; rank];  // ALLOCATION PER ITERATION
+        // ...
+    }
+});
+```
+
+**Good:** Pre-allocate outside and reuse with `.fill(0)`:
+```rust
+let mut buf = vec![0usize; rank];
+for_each_index(&dims, |idx| {
+    for i in 0..n {
+        buf.fill(0);
+        // ...
+    }
+});
+```
+
+### 6. Calling `Backend::plan()` inside hot loops
 
 **Bad:** Computing plans per-step inside the execution loop.
 

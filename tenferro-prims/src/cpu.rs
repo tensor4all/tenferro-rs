@@ -956,23 +956,28 @@ fn execute_batched_gemm_naive<T: Scalar>(
         batch_dims.iter().product()
     };
 
+    // Pre-allocate index buffers: [batch..., row, col]
+    let nb = batch_dims.len();
+    let mut a_idx = vec![0usize; nb + 2];
+    let mut b_idx = vec![0usize; nb + 2];
+    let mut c_idx = vec![0usize; nb + 2];
+
     for batch_flat in 0..batch_size {
-        let batch_idx = unflatten_index(batch_flat, batch_dims);
+        unflatten_index_into(batch_flat, batch_dims, &mut a_idx[..nb]);
+        b_idx[..nb].copy_from_slice(&a_idx[..nb]);
+        c_idx[..nb].copy_from_slice(&a_idx[..nb]);
         for i in 0..m {
             for j in 0..n {
                 let mut sum = T::zero();
                 for kk in 0..k {
-                    let mut a_idx = batch_idx.clone();
-                    a_idx.push(i);
-                    a_idx.push(kk);
-                    let mut b_idx = batch_idx.clone();
-                    b_idx.push(kk);
-                    b_idx.push(j);
+                    a_idx[nb] = i;
+                    a_idx[nb + 1] = kk;
+                    b_idx[nb] = kk;
+                    b_idx[nb + 1] = j;
                     sum = sum + a.get(&a_idx) * b.get(&b_idx);
                 }
-                let mut c_idx = batch_idx.clone();
-                c_idx.push(i);
-                c_idx.push(j);
+                c_idx[nb] = i;
+                c_idx[nb + 1] = j;
                 let old = if beta == T::zero() {
                     T::zero()
                 } else {
@@ -1458,20 +1463,23 @@ fn execute_reduce_sum<T: Scalar>(
     let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
     let reduced_total: usize = reduced_dims.iter().product();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut red_idx = vec![0usize; reduced_dims.len()];
+    let mut in_idx = vec![0usize; in_dims.len()];
+
     for_each_index(&out_dims, |out_idx| {
         let mut sum = T::zero();
         for red_flat in 0..reduced_total {
-            let red_idx = unflatten_index(red_flat, &reduced_dims);
+            unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
             // Build full input index by interleaving free and reduced
-            let mut in_idx = Vec::with_capacity(in_dims.len());
             let mut out_pos = 0;
             let mut red_pos = 0;
             for ax in 0..in_dims.len() {
                 if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    in_idx.push(red_idx[red_pos]);
+                    in_idx[ax] = red_idx[red_pos];
                     red_pos += 1;
                 } else {
-                    in_idx.push(out_idx[out_pos]);
+                    in_idx[ax] = out_idx[out_pos];
                     out_pos += 1;
                 }
             }
@@ -1487,6 +1495,14 @@ fn execute_reduce_sum<T: Scalar>(
     Ok(())
 }
 
+/// Unflatten a linear index into a pre-allocated buffer (column-major).
+fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
+    for d in 0..dims.len() {
+        out[d] = flat % dims[d];
+        flat /= dims[d];
+    }
+}
+
 fn execute_trace<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
@@ -1500,12 +1516,15 @@ fn execute_trace<T: Scalar>(
     let out_dims = output.dims().to_vec();
     let n_comps = comp_dims.len();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut comp_idx = vec![0usize; n_comps];
+    let mut in_idx = vec![0usize; in_dims.len()];
+
     for_each_index(&out_dims, |out_idx| {
         let mut sum = T::zero();
         // Odometer over component dimensions (Cartesian product)
-        let mut comp_idx = vec![0usize; n_comps];
+        comp_idx.fill(0);
         loop {
-            let mut in_idx = vec![0; in_dims.len()];
             for (out_pos, &in_ax) in free_axes.iter().enumerate() {
                 in_idx[in_ax] = out_idx[out_pos];
             }
@@ -1559,14 +1578,17 @@ fn execute_anti_trace<T: Scalar>(
     let out_dims = output.dims().to_vec();
     let n_comps = comp_dims.len();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut comp_idx = vec![0usize; n_comps];
+    let mut out_idx = vec![0usize; out_dims.len()];
+
     // For each input element, scatter to all diagonal positions in output
     // using Cartesian product over component dimensions.
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
         // Odometer over component dimensions (Cartesian product)
-        let mut comp_idx = vec![0usize; n_comps];
+        comp_idx.fill(0);
         loop {
-            let mut out_idx = vec![0; out_dims.len()];
             for (in_pos, &out_ax) in free_axes.iter().enumerate() {
                 out_idx[out_ax] = in_idx[in_pos];
             }
@@ -1618,12 +1640,15 @@ fn execute_anti_diag<T: Scalar>(
 
     let gen_dims: Vec<usize> = generative_comps.iter().map(|&c| comp_dims[c]).collect();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut gen_idx = vec![0usize; generative_comps.len()];
+    let mut out_idx = vec![0usize; out_dims.len()];
+
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
         // Odometer over generative component dimensions
-        let mut gen_idx = vec![0usize; generative_comps.len()];
+        gen_idx.fill(0);
         loop {
-            let mut out_idx = vec![0; out_dims.len()];
             // Set free axes from input
             for (in_pos, &out_ax) in free_axes.iter().enumerate() {
                 out_idx[out_ax] = in_idx[in_pos];
