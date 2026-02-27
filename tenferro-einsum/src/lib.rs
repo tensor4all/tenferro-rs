@@ -1868,6 +1868,7 @@ fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
 fn execute_pairwise_with_plan<Alg, Backend>(
     ctx: &mut Backend::Context,
     plan: &StepPlan,
+    prim_plan: Option<&Backend::Plan>,
     subs_a: &[u32],
     subs_b: &[u32],
     subs_c: &[u32],
@@ -1885,11 +1886,13 @@ where
 {
     match &plan.strategy {
         StepStrategy::ElementwiseMul => {
-            if Backend::has_extension_for(Extension::ElementwiseMul) {
+            if let Some(pp) = prim_plan {
+                Backend::execute(ctx, pp, alpha, &[a, b], beta, output)
+            } else if Backend::has_extension_for(Extension::ElementwiseMul) {
                 let desc = PrimDescriptor::ElementwiseMul;
                 let shapes = [a.dims(), b.dims(), output.dims()];
-                let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
-                Backend::execute(ctx, &prim_plan, alpha, &[a, b], beta, output)
+                let pp = Backend::plan(ctx, &desc, &shapes)?;
+                Backend::execute(ctx, &pp, alpha, &[a, b], beta, output)
             } else {
                 // Fall back to non-plan path
                 execute_pairwise_contraction::<Alg, Backend>(
@@ -1907,33 +1910,27 @@ where
             execute_outer_with_plan::<Alg, Backend>(ctx, op_plan, subs_c, a, b, alpha, beta, output)
         }
         StepStrategy::Gemm(gemm_plan) => {
-            if Backend::has_extension_for(Extension::Contract) {
-                // Preferred optimization path: fused Contract
+            // Gemm decomposition path: pre-computed plan with strided faer access.
+            // This is faster than Contract for all sizes because it avoids
+            // dense-matrix copy overhead in execute_contract.
+            execute_gemm_with_plan::<Alg, Backend>(
+                ctx, gemm_plan, subs_c, a, b, alpha, beta, output, pool,
+            )
+        }
+        StepStrategy::Contract => {
+            if let Some(pp) = prim_plan {
+                Backend::execute(ctx, pp, alpha, &[a, b], beta, output)
+            } else {
+                // Fallback: compute plan at runtime
                 let desc = PrimDescriptor::Contract {
                     modes_a: subs_a.to_vec(),
                     modes_b: subs_b.to_vec(),
                     modes_c: subs_c.to_vec(),
                 };
                 let shapes = [a.dims(), b.dims(), output.dims()];
-                let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
-                Backend::execute(ctx, &prim_plan, alpha, &[a, b], beta, output)
-            } else {
-                // Fallback: core ops decomposition
-                execute_gemm_with_plan::<Alg, Backend>(
-                    ctx, gemm_plan, subs_c, a, b, alpha, beta, output, pool,
-                )
+                let pp = Backend::plan(ctx, &desc, &shapes)?;
+                Backend::execute(ctx, &pp, alpha, &[a, b], beta, output)
             }
-        }
-        StepStrategy::Contract => {
-            // Contract extension: direct fused execution
-            let desc = PrimDescriptor::Contract {
-                modes_a: subs_a.to_vec(),
-                modes_b: subs_b.to_vec(),
-                modes_c: subs_c.to_vec(),
-            };
-            let shapes = [a.dims(), b.dims(), output.dims()];
-            let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
-            Backend::execute(ctx, &prim_plan, alpha, &[a, b], beta, output)
         }
     }
 }
@@ -2190,6 +2187,63 @@ where
     // Pre-compile step plans to avoid per-step HashMap/HashSet allocations.
     let step_plans = compile_step_plans(tree);
 
+    // Pre-compute Backend prim plans for Contract/ElementwiseMul extensions.
+    // This moves plan() calls out of the per-step hot loop.
+    let use_contract = Backend::has_extension_for(Extension::Contract);
+    let use_ewmul = Backend::has_extension_for(Extension::ElementwiseMul);
+    let prim_plans: Vec<Option<Backend::Plan>> = if use_contract || use_ewmul {
+        step_plans
+            .iter()
+            .enumerate()
+            .map(|(step_idx, sp)| {
+                let needs_contract = use_contract
+                    && matches!(sp.strategy, StepStrategy::Contract);
+                let needs_ewmul =
+                    use_ewmul && matches!(sp.strategy, StepStrategy::ElementwiseMul);
+                if !needs_contract && !needs_ewmul {
+                    return None;
+                }
+                let step = &tree.steps[step_idx];
+                let subs_a = &tree.operand_subs[step.left];
+                let subs_b = &tree.operand_subs[step.right];
+                let is_last = step_idx == tree.steps.len() - 1;
+                let subs_c = if is_last {
+                    &tree.subscripts.output
+                } else {
+                    &tree.operand_subs[n_inputs + step_idx]
+                };
+                let shape_a: &[usize] = if step.left < n_inputs {
+                    operands[step.left].dims()
+                } else {
+                    &tree.step_output_shapes[step.left - n_inputs]
+                };
+                let shape_b: &[usize] = if step.right < n_inputs {
+                    operands[step.right].dims()
+                } else {
+                    &tree.step_output_shapes[step.right - n_inputs]
+                };
+                let shape_c: &[usize] = if is_last {
+                    output.dims()
+                } else {
+                    &tree.step_output_shapes[step_idx]
+                };
+                let desc = if needs_contract {
+                    PrimDescriptor::Contract {
+                        modes_a: subs_a.to_vec(),
+                        modes_b: subs_b.to_vec(),
+                        modes_c: subs_c.to_vec(),
+                    }
+                } else {
+                    PrimDescriptor::ElementwiseMul
+                };
+                let shapes = [shape_a, shape_b, shape_c];
+                Backend::plan(ctx, &desc, &shapes).ok()
+            })
+            .collect()
+    } else {
+        (0..step_plans.len()).map(|_| None).collect()
+    };
+
     // Use Vec-indexed storage instead of HashMap for O(1) access.
     let memory_space = infer_memory_space(operands)?;
     let total_slots = n_inputs + tree.steps.len();
@@ -2234,6 +2288,7 @@ where
             execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
                 &step_plans[step_idx],
+                prim_plans[step_idx].as_ref(),
                 subs_left,
                 subs_right,
                 &tree.subscripts.output,
@@ -2253,6 +2308,7 @@ where
             execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
                 &step_plans[step_idx],
+                prim_plans[step_idx].as_ref(),
                 subs_left,
                 subs_right,
                 subs_result,
