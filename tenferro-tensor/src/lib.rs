@@ -1509,6 +1509,66 @@ impl<T: Scalar> Tensor<T> {
         })
     }
 
+    /// Create a zero-copy view with explicit dims and strides.
+    ///
+    /// Shares the underlying buffer. The caller is responsible for ensuring
+    /// that the new layout is valid (all accessed positions are within bounds).
+    /// This is verified at construction time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the new layout accesses positions outside the buffer.
+    pub fn view_as_strided(
+        &self,
+        new_dims: Vec<usize>,
+        new_strides: Vec<isize>,
+    ) -> Result<Tensor<T>> {
+        self.wait();
+        let ndim = new_dims.len();
+        if new_strides.len() != ndim {
+            return Err(Error::InvalidArgument(format!(
+                "strides length {} doesn't match dims length {}",
+                new_strides.len(),
+                ndim
+            )));
+        }
+        // Bounds check
+        let n_elements: usize = new_dims.iter().product();
+        if n_elements > 0 {
+            let buf_len = self.buffer.len();
+            let mut min_pos = self.offset;
+            let mut max_pos = self.offset;
+            for k in 0..ndim {
+                if new_dims[k] == 0 {
+                    continue;
+                }
+                let extent = (new_dims[k] - 1) as isize * new_strides[k];
+                if extent >= 0 {
+                    max_pos += extent;
+                } else {
+                    min_pos += extent;
+                }
+            }
+            if min_pos < 0 || max_pos >= buf_len as isize {
+                return Err(Error::StrideError(format!(
+                    "view_as_strided accesses positions {}..={} but buffer length is {}",
+                    min_pos, max_pos, buf_len
+                )));
+            }
+        }
+        Ok(Tensor {
+            buffer: self.buffer.clone(),
+            dims: new_dims,
+            strides: new_strides,
+            offset: self.offset,
+            logical_memory_space: self.logical_memory_space,
+            preferred_compute_device: self.preferred_compute_device,
+            event: None,
+            conjugated: self.conjugated,
+            fw_grad: None,
+        })
+    }
+
     /// Select a single index along a dimension, removing that dimension.
     ///
     /// Returns a tensor with `ndim() - 1` dimensions. This is a zero-copy

@@ -1202,36 +1202,18 @@ where
     let n: usize = ro_sizes.iter().product::<usize>().max(1);
     let k: usize = sum_sizes.iter().product::<usize>().max(1);
 
-    // --- Step 1: Permute A to [batch, lo, sum] ---
+    // --- Steps 1-4: Permute, fuse, GEMM ---
     let target_a: Vec<u32> = batch_modes
         .iter()
         .chain(lo_modes.iter())
         .chain(sum_modes.iter())
         .copied()
         .collect();
-    let perm_a = permute_or_copy::<A, B>(ctx, &a_reduced, &subs_a_reduced, &target_a)?;
-
-    // --- Step 2: Permute B to [batch, sum, ro] ---
     let target_b: Vec<u32> = batch_modes
         .iter()
         .chain(sum_modes.iter())
         .chain(ro_modes.iter())
         .copied()
-        .collect();
-    let perm_b = permute_or_copy::<A, B>(ctx, &b_reduced, &subs_b_reduced, &target_b)?;
-
-    // --- Step 3: Reshape to [batch..., m, k] and [batch..., k, n] ---
-    let a_gemm_shape: Vec<usize> = batch_sizes
-        .iter()
-        .copied()
-        .chain(std::iter::once(m))
-        .chain(std::iter::once(k))
-        .collect();
-    let b_gemm_shape: Vec<usize> = batch_sizes
-        .iter()
-        .copied()
-        .chain(std::iter::once(k))
-        .chain(std::iter::once(n))
         .collect();
     let c_gemm_shape: Vec<usize> = batch_sizes
         .iter()
@@ -1240,11 +1222,27 @@ where
         .chain(std::iter::once(n))
         .collect();
 
-    let a_reshaped = perm_a.reshape(&a_gemm_shape)?;
-    let b_reshaped = perm_b.reshape(&b_gemm_shape)?;
-
-    // --- Step 4: BatchedGemm → temp ---
     let memory_space = a.logical_memory_space();
+
+    // Try fusability-aware path: permute (metadata-only) + fuse groups → zero-copy GEMM
+    let (a_reshaped, b_reshaped) = prepare_gemm_operands::<A, B>(
+        ctx,
+        &a_reduced,
+        &subs_a_reduced,
+        &target_a,
+        &batch_sizes,
+        lo_modes.len(),
+        sum_modes.len(),
+        &b_reduced,
+        &subs_b_reduced,
+        &target_b,
+        sum_modes.len(),
+        ro_modes.len(),
+        m,
+        n,
+        k,
+    )?;
+
     let mut temp = alloc_tensor_pooled::<A::Scalar>(&c_gemm_shape, memory_space);
 
     let desc = PrimDescriptor::BatchedGemm {
@@ -1377,6 +1375,119 @@ where
 
 /// Permute a tensor to a target mode order and ensure contiguous layout.
 ///
+/// Prepare two operands for GEMM with fusability-aware zero-copy optimization.
+///
+/// For each operand: permute to target order, then check if the lo/sum (or sum/ro)
+/// dimension groups are fusable via `try_fuse_group`. If fusable, construct a
+/// zero-copy view with fused [batch..., M, K] (or [batch..., K, N]) shape.
+/// If not fusable, fall back to `permute_or_copy` + `reshape`.
+fn prepare_gemm_operands<A, B>(
+    ctx: &mut B::Context,
+    a: &Tensor<A::Scalar>,
+    subs_a: &[u32],
+    target_a: &[u32],
+    batch_sizes: &[usize],
+    n_lo: usize,
+    n_sum_a: usize,
+    b: &Tensor<A::Scalar>,
+    subs_b: &[u32],
+    target_b: &[u32],
+    n_sum_b: usize,
+    n_ro: usize,
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<(Tensor<A::Scalar>, Tensor<A::Scalar>)>
+where
+    A: Algebra,
+    A::Scalar: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    let nb = batch_sizes.len();
+    let a_gemm_shape: Vec<usize> = batch_sizes
+        .iter()
+        .copied()
+        .chain(std::iter::once(m))
+        .chain(std::iter::once(k))
+        .collect();
+    let b_gemm_shape: Vec<usize> = batch_sizes
+        .iter()
+        .copied()
+        .chain(std::iter::once(k))
+        .chain(std::iter::once(n))
+        .collect();
+
+    let a_prepared =
+        prepare_one_operand::<A, B>(ctx, a, subs_a, target_a, nb, n_lo, n_sum_a, &a_gemm_shape)?;
+    let b_prepared =
+        prepare_one_operand::<A, B>(ctx, b, subs_b, target_b, nb, n_sum_b, n_ro, &b_gemm_shape)?;
+    Ok((a_prepared, b_prepared))
+}
+
+/// Prepare a single operand for GEMM: permute and try to fuse dimension groups.
+fn prepare_one_operand<A, B>(
+    ctx: &mut B::Context,
+    tensor: &Tensor<A::Scalar>,
+    current_subs: &[u32],
+    target_subs: &[u32],
+    nb: usize,
+    n_group1: usize,
+    n_group2: usize,
+    fallback_shape: &[usize],
+) -> Result<Tensor<A::Scalar>>
+where
+    A: Algebra,
+    A::Scalar: Scalar + HasAlgebra<Algebra = A>,
+    B: TensorPrims<A>,
+{
+    use strided_perm::try_fuse_group;
+
+    // Step 1: Permute (metadata-only, zero-copy)
+    let permuted = if current_subs == target_subs {
+        tensor.clone()
+    } else {
+        let perm = compute_permutation(current_subs, target_subs);
+        tensor.permute(&perm)?
+    };
+
+    let dims = permuted.dims();
+    let strides = permuted.strides();
+
+    // Step 2: Try to fuse each dimension group
+    let g1_dims = &dims[nb..nb + n_group1];
+    let g1_strides = &strides[nb..nb + n_group1];
+    let g2_dims = &dims[nb + n_group1..nb + n_group1 + n_group2];
+    let g2_strides = &strides[nb + n_group1..nb + n_group1 + n_group2];
+
+    let fused_g1 = try_fuse_group(g1_dims, g1_strides);
+    let fused_g2 = try_fuse_group(g2_dims, g2_strides);
+
+    if let (Some((size1, stride1)), Some((size2, stride2))) = (fused_g1, fused_g2) {
+        // Zero-copy: construct fused view [batch..., fused_g1, fused_g2]
+        let mut fused_dims = Vec::with_capacity(nb + 2);
+        let mut fused_strides = Vec::with_capacity(nb + 2);
+        fused_dims.extend_from_slice(&dims[..nb]);
+        fused_strides.extend_from_slice(&strides[..nb]);
+        fused_dims.push(size1);
+        fused_strides.push(stride1);
+        fused_dims.push(size2);
+        fused_strides.push(stride2);
+        return permuted.view_as_strided(fused_dims, fused_strides);
+    }
+
+    // Fallback: copy to contiguous, then reshape
+    let contiguous = permute_or_copy::<A, B>(ctx, tensor, current_subs, target_subs)?;
+    contiguous.reshape(fallback_shape)
+}
+
+/// Compute a permutation that reorders `current` labels to match `target` order.
+fn compute_permutation(current: &[u32], target: &[u32]) -> Vec<usize> {
+    target
+        .iter()
+        .map(|t| current.iter().position(|c| c == t).unwrap())
+        .collect()
+}
+
 /// Uses `Tensor::permute` (zero-copy view) first; copies to a pooled buffer
 /// only when the result is non-contiguous. Falls back to MakeContiguous when
 /// `current_subs == target_subs`.
@@ -1525,6 +1636,545 @@ where
 }
 
 // ============================================================================
+// Step plan pre-computation
+// ============================================================================
+
+/// Pre-computed information for reducing axes unique to one operand.
+struct ReducePlan {
+    /// Subscripts of the operand before reduction.
+    original_subs: Vec<u32>,
+    /// Subscripts after reduction (labels kept).
+    kept_subs: Vec<u32>,
+    /// Shape of the tensor after reduction.
+    out_shape: Vec<usize>,
+}
+
+/// Pre-computed GEMM decomposition plan for a pairwise contraction step.
+struct GemmPlan {
+    /// Pre-reduction plan for left operand (None if no reduction needed).
+    reduce_a: Option<ReducePlan>,
+    /// Pre-reduction plan for right operand (None if no reduction needed).
+    reduce_b: Option<ReducePlan>,
+    /// Subscripts of A after any pre-reduction.
+    subs_a: Vec<u32>,
+    /// Subscripts of B after any pre-reduction.
+    subs_b: Vec<u32>,
+    /// Left-only dimension modes.
+    lo_modes: Vec<u32>,
+    /// Right-only dimension modes.
+    ro_modes: Vec<u32>,
+    /// Summed (contracted) dimension modes.
+    sum_modes: Vec<u32>,
+    /// Pre-computed batch dimension sizes.
+    batch_sizes: Vec<usize>,
+    /// Fused left-only size (product of lo dimensions).
+    m: usize,
+    /// Fused right-only size (product of ro dimensions).
+    n: usize,
+    /// Fused summed size (product of sum dimensions).
+    k: usize,
+    /// Target subscript order for A: [batch..., lo..., sum...].
+    target_a: Vec<u32>,
+    /// Target subscript order for B: [batch..., sum..., ro...].
+    target_b: Vec<u32>,
+    /// Shape of GEMM output: [batch..., m, n].
+    c_gemm_shape: Vec<usize>,
+    /// Expanded shape: [batch..., lo..., ro...].
+    expanded_shape: Vec<usize>,
+    /// Canonical mode order of expanded output: [batch, lo, ro].
+    canonical_modes: Vec<u32>,
+    /// Whether a final permute is needed (canonical_modes != subs_c).
+    needs_final_permute: bool,
+}
+
+/// Pre-computed outer-product plan for a pairwise contraction step.
+struct OuterProductPlan {
+    /// Canonical mode order: [a_modes..., b_modes...].
+    canonical_modes: Vec<u32>,
+    /// Shape of A after reshape for broadcast.
+    a_ext_shape: Vec<usize>,
+    /// Shape of B after reshape for broadcast.
+    b_ext_shape: Vec<usize>,
+    /// Full canonical shape.
+    canonical_shape: Vec<usize>,
+    /// Whether a final permute is needed (canonical_modes != subs_c).
+    needs_final_permute: bool,
+}
+
+/// Pre-computed contraction strategy for one tree step.
+enum StepStrategy {
+    /// subs_a == subs_b == subs_c: direct ElementwiseMul.
+    ElementwiseMul,
+    /// Disjoint binary einsum: broadcast + ElementwiseMul.
+    OuterProduct(OuterProductPlan),
+    /// Matrix contraction: permute + BatchedGemm + permute.
+    Gemm(GemmPlan),
+    /// General contraction (Contract extension or fallback).
+    Contract,
+}
+
+/// Pre-computed plan for a single contraction tree step.
+struct StepPlan {
+    strategy: StepStrategy,
+}
+
+/// Pre-compute the reduction plan for axes unique to one operand.
+fn compute_reduce_plan(
+    subs_self: &[u32],
+    subs_other: &[u32],
+    subs_out: &[u32],
+    size_dict: &HashMap<u32, usize>,
+) -> Option<ReducePlan> {
+    let other_set: HashSet<u32> = subs_other.iter().copied().collect();
+    let out_set: HashSet<u32> = subs_out.iter().copied().collect();
+
+    let mut has_reduction = false;
+    let mut kept_subs = Vec::with_capacity(subs_self.len());
+    for &label in subs_self {
+        if !other_set.contains(&label) && !out_set.contains(&label) {
+            has_reduction = true;
+        } else {
+            kept_subs.push(label);
+        }
+    }
+
+    if !has_reduction {
+        return None;
+    }
+
+    let out_shape: Vec<usize> = kept_subs.iter().map(|m| size_dict[m]).collect();
+    Some(ReducePlan {
+        original_subs: subs_self.to_vec(),
+        kept_subs,
+        out_shape,
+    })
+}
+
+/// Compile step plans for all steps in a contraction tree.
+///
+/// Pre-computes strategy, mode classification, sizes, and target subscripts
+/// for each step, eliminating per-step HashMap/HashSet allocations at execution time.
+fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
+    let n_inputs = tree.subscripts.inputs.len();
+    let size_dict = &tree.size_dict;
+
+    tree.steps
+        .iter()
+        .enumerate()
+        .map(|(step_idx, step)| {
+            let subs_a = &tree.operand_subs[step.left];
+            let subs_b = &tree.operand_subs[step.right];
+            let is_last = step_idx == tree.steps.len() - 1;
+            let subs_c = if is_last {
+                &tree.subscripts.output
+            } else {
+                &tree.operand_subs[n_inputs + step_idx]
+            };
+
+            // Check ElementwiseMul: same labels, same order
+            if subs_a == subs_b && subs_a.as_slice() == subs_c {
+                return StepPlan {
+                    strategy: StepStrategy::ElementwiseMul,
+                };
+            }
+
+            // Check outer product: disjoint labels
+            let set_a: HashSet<u32> = subs_a.iter().copied().collect();
+            let set_b: HashSet<u32> = subs_b.iter().copied().collect();
+            if !set_a.iter().any(|m| set_b.contains(m)) {
+                let set_c: HashSet<u32> = subs_c.iter().copied().collect();
+                let canonical_modes: Vec<u32> =
+                    subs_a.iter().chain(subs_b.iter()).copied().collect();
+                let canonical_set: HashSet<u32> = canonical_modes.iter().copied().collect();
+                // Unique labels in each operand and output, and output = a ∪ b
+                let unique_a = subs_a.len() == set_a.len();
+                let unique_b = subs_b.len() == set_b.len();
+                let unique_c = subs_c.len() == set_c.len();
+                if unique_a && unique_b && unique_c && set_c == canonical_set {
+                    let canonical_shape: Vec<usize> =
+                        canonical_modes.iter().map(|m| size_dict[m]).collect();
+                    let a_ext_shape: Vec<usize> = canonical_modes
+                        .iter()
+                        .map(|m| if set_a.contains(m) { size_dict[m] } else { 1 })
+                        .collect();
+                    let b_ext_shape: Vec<usize> = canonical_modes
+                        .iter()
+                        .map(|m| if set_b.contains(m) { size_dict[m] } else { 1 })
+                        .collect();
+                    let needs_final_permute = canonical_modes.as_slice() != subs_c;
+                    return StepPlan {
+                        strategy: StepStrategy::OuterProduct(OuterProductPlan {
+                            canonical_modes,
+                            a_ext_shape,
+                            b_ext_shape,
+                            canonical_shape,
+                            needs_final_permute,
+                        }),
+                    };
+                }
+            }
+
+            // Check GEMM compatibility
+            let unique = |subs: &[u32]| -> bool {
+                let mut seen = HashSet::with_capacity(subs.len());
+                subs.iter().all(|&m| seen.insert(m))
+            };
+            if unique(subs_a) && unique(subs_b) && unique(subs_c) {
+                let set_c: HashSet<u32> = subs_c.iter().copied().collect();
+                let set_ab: HashSet<u32> = set_a.union(&set_b).copied().collect();
+                if set_c.is_subset(&set_ab) {
+                    // GEMM-compatible: pre-compute the full plan
+                    let reduce_a = compute_reduce_plan(subs_a, subs_b, subs_c, size_dict);
+                    let reduce_b = compute_reduce_plan(subs_b, subs_a, subs_c, size_dict);
+
+                    let effective_a = reduce_a
+                        .as_ref()
+                        .map(|r| r.kept_subs.clone())
+                        .unwrap_or_else(|| subs_a.to_vec());
+                    let effective_b = reduce_b
+                        .as_ref()
+                        .map(|r| r.kept_subs.clone())
+                        .unwrap_or_else(|| subs_b.to_vec());
+
+                    let (batch_modes, lo_modes, ro_modes, sum_modes) =
+                        classify_modes(&effective_a, &effective_b, subs_c);
+
+                    let batch_sizes: Vec<usize> =
+                        batch_modes.iter().map(|m| size_dict[m]).collect();
+                    let lo_sizes: Vec<usize> = lo_modes.iter().map(|m| size_dict[m]).collect();
+                    let ro_sizes: Vec<usize> = ro_modes.iter().map(|m| size_dict[m]).collect();
+                    let sum_sizes: Vec<usize> = sum_modes.iter().map(|m| size_dict[m]).collect();
+
+                    let m = lo_sizes.iter().product::<usize>().max(1);
+                    let n = ro_sizes.iter().product::<usize>().max(1);
+                    let k = sum_sizes.iter().product::<usize>().max(1);
+
+                    let target_a: Vec<u32> = batch_modes
+                        .iter()
+                        .chain(lo_modes.iter())
+                        .chain(sum_modes.iter())
+                        .copied()
+                        .collect();
+                    let target_b: Vec<u32> = batch_modes
+                        .iter()
+                        .chain(sum_modes.iter())
+                        .chain(ro_modes.iter())
+                        .copied()
+                        .collect();
+
+                    let c_gemm_shape: Vec<usize> = batch_sizes
+                        .iter()
+                        .copied()
+                        .chain(std::iter::once(m))
+                        .chain(std::iter::once(n))
+                        .collect();
+
+                    let expanded_shape: Vec<usize> = batch_sizes
+                        .iter()
+                        .chain(lo_sizes.iter())
+                        .chain(ro_sizes.iter())
+                        .copied()
+                        .collect();
+
+                    let canonical_modes: Vec<u32> = batch_modes
+                        .iter()
+                        .chain(lo_modes.iter())
+                        .chain(ro_modes.iter())
+                        .copied()
+                        .collect();
+
+                    let needs_final_permute = canonical_modes.as_slice() != subs_c;
+
+                    return StepPlan {
+                        strategy: StepStrategy::Gemm(GemmPlan {
+                            reduce_a,
+                            reduce_b,
+                            subs_a: effective_a,
+                            subs_b: effective_b,
+                            lo_modes,
+                            ro_modes,
+                            sum_modes,
+                            batch_sizes,
+                            m,
+                            n,
+                            k,
+                            target_a,
+                            target_b,
+                            c_gemm_shape,
+                            expanded_shape,
+                            canonical_modes,
+                            needs_final_permute,
+                        }),
+                    };
+                }
+            }
+
+            // Fallback: general Contract
+            StepPlan {
+                strategy: StepStrategy::Contract,
+            }
+        })
+        .collect()
+}
+
+/// Execute a pairwise contraction using a pre-computed step plan.
+///
+/// This avoids per-step HashMap/HashSet allocations by using the pre-computed
+/// strategy, mode classification, sizes, and target subscripts.
+fn execute_pairwise_with_plan<Alg, Backend>(
+    ctx: &mut Backend::Context,
+    plan: &StepPlan,
+    subs_a: &[u32],
+    subs_b: &[u32],
+    subs_c: &[u32],
+    a: &Tensor<Alg::Scalar>,
+    b: &Tensor<Alg::Scalar>,
+    alpha: Alg::Scalar,
+    beta: Alg::Scalar,
+    output: &mut Tensor<Alg::Scalar>,
+) -> Result<()>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
+    match &plan.strategy {
+        StepStrategy::ElementwiseMul => {
+            if Backend::has_extension_for(Extension::ElementwiseMul) {
+                let desc = PrimDescriptor::ElementwiseMul;
+                let shapes = [a.dims(), b.dims(), output.dims()];
+                let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+                Backend::execute(ctx, &prim_plan, alpha, &[a, b], beta, output)
+            } else {
+                // Fall back to non-plan path
+                execute_pairwise_contraction::<Alg, Backend>(
+                    ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+                )
+            }
+        }
+        StepStrategy::OuterProduct(op_plan) => {
+            if !Backend::has_extension_for(Extension::ElementwiseMul) {
+                // Fall back to non-plan path
+                return execute_pairwise_contraction::<Alg, Backend>(
+                    ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+                );
+            }
+            execute_outer_with_plan::<Alg, Backend>(ctx, op_plan, subs_c, a, b, alpha, beta, output)
+        }
+        StepStrategy::Gemm(gemm_plan) => execute_gemm_with_plan::<Alg, Backend>(
+            ctx, gemm_plan, subs_c, a, b, alpha, beta, output,
+        ),
+        StepStrategy::Contract => execute_pairwise_contraction::<Alg, Backend>(
+            ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+        ),
+    }
+}
+
+/// Execute outer product contraction using a pre-computed plan.
+fn execute_outer_with_plan<Alg, Backend>(
+    ctx: &mut Backend::Context,
+    plan: &OuterProductPlan,
+    subs_c: &[u32],
+    a: &Tensor<Alg::Scalar>,
+    b: &Tensor<Alg::Scalar>,
+    alpha: Alg::Scalar,
+    beta: Alg::Scalar,
+    output: &mut Tensor<Alg::Scalar>,
+) -> Result<()>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
+    let a_reshaped = a.reshape(&plan.a_ext_shape)?;
+    let b_reshaped = b.reshape(&plan.b_ext_shape)?;
+    let a_bcast = a_reshaped.broadcast(&plan.canonical_shape)?;
+    let b_bcast = b_reshaped.broadcast(&plan.canonical_shape)?;
+
+    if !plan.needs_final_permute {
+        let desc = PrimDescriptor::ElementwiseMul;
+        let shapes = [a_bcast.dims(), b_bcast.dims(), output.dims()];
+        let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+        Backend::execute(ctx, &prim_plan, alpha, &[&a_bcast, &b_bcast], beta, output)
+    } else {
+        let memory_space = output.logical_memory_space();
+        let mut temp = Tensor::<Alg::Scalar>::zeros(
+            &plan.canonical_shape,
+            memory_space,
+            MemoryOrder::ColumnMajor,
+        );
+        let desc = PrimDescriptor::ElementwiseMul;
+        let shapes = [a_bcast.dims(), b_bcast.dims(), temp.dims()];
+        let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+        Backend::execute(
+            ctx,
+            &prim_plan,
+            Alg::Scalar::one(),
+            &[&a_bcast, &b_bcast],
+            Alg::Scalar::zero(),
+            &mut temp,
+        )?;
+        let desc = PrimDescriptor::Permute {
+            modes_a: plan.canonical_modes.clone(),
+            modes_b: subs_c.to_vec(),
+        };
+        let shapes = [temp.dims(), output.dims()];
+        let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+        Backend::execute(ctx, &prim_plan, alpha, &[&temp], beta, output)
+    }
+}
+
+/// Execute pre-reduction of unique-only axes using a pre-computed plan.
+fn execute_reduce_with_plan<Alg, Backend>(
+    ctx: &mut Backend::Context,
+    reduce: &ReducePlan,
+    tensor: &Tensor<Alg::Scalar>,
+) -> Result<Tensor<Alg::Scalar>>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
+    let memory_space = tensor.logical_memory_space();
+    let mut reduced = alloc_tensor_pooled::<Alg::Scalar>(&reduce.out_shape, memory_space);
+    let desc = PrimDescriptor::Reduce {
+        modes_a: reduce.original_subs.clone(),
+        modes_c: reduce.kept_subs.clone(),
+        op: ReduceOp::Sum,
+    };
+    let shapes = [tensor.dims(), reduced.dims()];
+    let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+    Backend::execute(
+        ctx,
+        &prim_plan,
+        Alg::Scalar::one(),
+        &[tensor],
+        Alg::Scalar::zero(),
+        &mut reduced,
+    )?;
+    Ok(reduced)
+}
+
+/// Execute GEMM contraction using a pre-computed plan.
+fn execute_gemm_with_plan<Alg, Backend>(
+    ctx: &mut Backend::Context,
+    plan: &GemmPlan,
+    subs_c: &[u32],
+    a: &Tensor<Alg::Scalar>,
+    b: &Tensor<Alg::Scalar>,
+    alpha: Alg::Scalar,
+    beta: Alg::Scalar,
+    output: &mut Tensor<Alg::Scalar>,
+) -> Result<()>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
+    // Pre-reduce unique-only axes if needed
+    let a_reduced;
+    let a_ref = if let Some(ref reduce) = plan.reduce_a {
+        a_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, a)?;
+        &a_reduced
+    } else {
+        a
+    };
+    let b_reduced;
+    let b_ref = if let Some(ref reduce) = plan.reduce_b {
+        b_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, b)?;
+        &b_reduced
+    } else {
+        b
+    };
+
+    let memory_space = a.logical_memory_space();
+    let nb = plan.batch_sizes.len();
+
+    // Prepare GEMM operands with fusability check
+    let a_gemm_shape: Vec<usize> = plan
+        .batch_sizes
+        .iter()
+        .copied()
+        .chain(std::iter::once(plan.m))
+        .chain(std::iter::once(plan.k))
+        .collect();
+    let b_gemm_shape: Vec<usize> = plan
+        .batch_sizes
+        .iter()
+        .copied()
+        .chain(std::iter::once(plan.k))
+        .chain(std::iter::once(plan.n))
+        .collect();
+
+    let a_prepared = prepare_one_operand::<Alg, Backend>(
+        ctx,
+        a_ref,
+        &plan.subs_a,
+        &plan.target_a,
+        nb,
+        plan.lo_modes.len(),
+        plan.sum_modes.len(),
+        &a_gemm_shape,
+    )?;
+    let b_prepared = prepare_one_operand::<Alg, Backend>(
+        ctx,
+        b_ref,
+        &plan.subs_b,
+        &plan.target_b,
+        nb,
+        plan.sum_modes.len(),
+        plan.ro_modes.len(),
+        &b_gemm_shape,
+    )?;
+
+    // Execute GEMM
+    let mut temp = alloc_tensor_pooled::<Alg::Scalar>(&plan.c_gemm_shape, memory_space);
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: plan.batch_sizes.clone(),
+        m: plan.m,
+        n: plan.n,
+        k: plan.k,
+    };
+    let shapes = [a_prepared.dims(), b_prepared.dims(), temp.dims()];
+    let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+    Backend::execute(
+        ctx,
+        &prim_plan,
+        Alg::Scalar::one(),
+        &[&a_prepared, &b_prepared],
+        Alg::Scalar::zero(),
+        &mut temp,
+    )?;
+
+    // Reshape and permute to output
+    let temp_expanded = temp.reshape(&plan.expanded_shape)?;
+
+    if !plan.needs_final_permute {
+        if alpha == Alg::Scalar::one() && beta == Alg::Scalar::zero() {
+            *output = temp_expanded;
+        } else {
+            let desc = PrimDescriptor::Permute {
+                modes_a: plan.canonical_modes.clone(),
+                modes_b: subs_c.to_vec(),
+            };
+            let shapes = [temp_expanded.dims(), output.dims()];
+            let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+            Backend::execute(ctx, &prim_plan, alpha, &[&temp_expanded], beta, output)?;
+        }
+    } else {
+        let desc = PrimDescriptor::Permute {
+            modes_a: plan.canonical_modes.clone(),
+            modes_b: subs_c.to_vec(),
+        };
+        let shapes = [temp_expanded.dims(), output.dims()];
+        let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+        Backend::execute(ctx, &prim_plan, alpha, &[&temp_expanded], beta, output)?;
+    }
+
+    Ok(())
+}
+
+// ============================================================================
 // Contraction tree execution
 // ============================================================================
 
@@ -1563,6 +2213,9 @@ where
     }
 
     // Multi-tensor case: follow the contraction tree.
+    // Pre-compile step plans to avoid per-step HashMap/HashSet allocations.
+    let step_plans = compile_step_plans(tree);
+
     // Use Vec-indexed storage instead of HashMap for O(1) access.
     let memory_space = infer_memory_space(operands)?;
     let total_slots = n_inputs + tree.steps.len();
@@ -1604,8 +2257,9 @@ where
 
         if is_last {
             // Last step: write directly to output with alpha/beta
-            execute_pairwise_contraction::<Alg, Backend>(
+            execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
+                &step_plans[step_idx],
                 subs_left,
                 subs_right,
                 &tree.subscripts.output,
@@ -1621,8 +2275,9 @@ where
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = &tree.step_output_shapes[step_idx];
             let mut result = alloc_tensor_pooled::<Alg::Scalar>(result_shape, memory_space);
-            execute_pairwise_contraction::<Alg, Backend>(
+            execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
+                &step_plans[step_idx],
                 subs_left,
                 subs_right,
                 subs_result,
