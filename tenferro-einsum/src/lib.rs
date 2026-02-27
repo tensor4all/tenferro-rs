@@ -864,8 +864,11 @@ where
                     Ok(current.dims()[pos])
                 })
                 .collect::<Result<_>>()?;
-            let mut intermediate =
-                alloc_tensor_from_pool::<Alg::Scalar>(&inter_shape, output.logical_memory_space(), pool);
+            let mut intermediate = alloc_tensor_from_pool::<Alg::Scalar>(
+                &inter_shape,
+                output.logical_memory_space(),
+                pool,
+            );
             // Recursive call for trace/reduce: current_subs → inter_subs
             // inter_subs has no repeated labels, so this hits a different branch.
             execute_single_tensor_einsum::<Alg, Backend>(
@@ -1357,10 +1360,28 @@ where
         .chain(std::iter::once(n))
         .collect();
 
-    let a_prepared =
-        prepare_one_operand::<A, B>(ctx, a, subs_a, target_a, nb, n_lo, n_sum_a, &a_gemm_shape, pool)?;
-    let b_prepared =
-        prepare_one_operand::<A, B>(ctx, b, subs_b, target_b, nb, n_sum_b, n_ro, &b_gemm_shape, pool)?;
+    let a_prepared = prepare_one_operand::<A, B>(
+        ctx,
+        a,
+        subs_a,
+        target_a,
+        nb,
+        n_lo,
+        n_sum_a,
+        &a_gemm_shape,
+        pool,
+    )?;
+    let b_prepared = prepare_one_operand::<A, B>(
+        ctx,
+        b,
+        subs_b,
+        target_b,
+        nb,
+        n_sum_b,
+        n_ro,
+        &b_gemm_shape,
+        pool,
+    )?;
     Ok((a_prepared, b_prepared))
 }
 
@@ -2196,10 +2217,8 @@ where
             .iter()
             .enumerate()
             .map(|(step_idx, sp)| {
-                let needs_contract = use_contract
-                    && matches!(sp.strategy, StepStrategy::Contract);
-                let needs_ewmul =
-                    use_ewmul && matches!(sp.strategy, StepStrategy::ElementwiseMul);
+                let needs_contract = use_contract && matches!(sp.strategy, StepStrategy::Contract);
+                let needs_ewmul = use_ewmul && matches!(sp.strategy, StepStrategy::ElementwiseMul);
                 if !needs_contract && !needs_ewmul {
                     return None;
                 }
@@ -2304,7 +2323,8 @@ where
             let result_idx = n_inputs + step_idx;
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = &tree.step_output_shapes[step_idx];
-            let mut result = alloc_tensor_from_pool::<Alg::Scalar>(result_shape, memory_space, pool);
+            let mut result =
+                alloc_tensor_from_pool::<Alg::Scalar>(result_shape, memory_space, pool);
             execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
                 &step_plans[step_idx],

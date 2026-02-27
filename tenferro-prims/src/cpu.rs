@@ -2206,7 +2206,11 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let owned_b;
         let owned_c;
         let (target_a, target_b, target_c) = if let Some(cs) = cached {
-            (cs.a_target.as_slice(), cs.b_target.as_slice(), cs.c_target.as_slice())
+            (
+                cs.a_target.as_slice(),
+                cs.b_target.as_slice(),
+                cs.c_target.as_slice(),
+            )
         } else {
             owned_a = spec
                 .batch_modes
@@ -2232,12 +2236,9 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
             (owned_a.as_slice(), owned_b.as_slice(), owned_c.as_slice())
         };
 
-        let (a_dims, a_strides) =
-            reordered_dims_strides(modes_a, a.dims(), a.strides(), target_a)?;
-        let (b_dims, b_strides) =
-            reordered_dims_strides(modes_b, b.dims(), b.strides(), target_b)?;
-        let (c_dims, c_strides) =
-            reordered_dims_strides(modes_c, c.dims(), c.strides(), target_c)?;
+        let (a_dims, a_strides) = reordered_dims_strides(modes_a, a.dims(), a.strides(), target_a)?;
+        let (b_dims, b_strides) = reordered_dims_strides(modes_b, b.dims(), b.strides(), target_b)?;
+        let (c_dims, c_strides) = reordered_dims_strides(modes_c, c.dims(), c.strides(), target_c)?;
 
         let nb = spec.batch_modes.len();
         let nm = spec.m_modes.len();
@@ -2381,7 +2382,11 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let owned_b;
         let owned_c;
         let (target_a, target_b, target_c) = if let Some(cs) = cached {
-            (cs.a_target.as_slice(), cs.b_target.as_slice(), cs.c_target.as_slice())
+            (
+                cs.a_target.as_slice(),
+                cs.b_target.as_slice(),
+                cs.c_target.as_slice(),
+            )
         } else {
             owned_a = spec
                 .batch_modes
@@ -2407,12 +2412,9 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
             (owned_a.as_slice(), owned_b.as_slice(), owned_c.as_slice())
         };
 
-        let (a_dims, a_strides) =
-            reordered_dims_strides(modes_a, a.dims(), a.strides(), target_a)?;
-        let (b_dims, b_strides) =
-            reordered_dims_strides(modes_b, b.dims(), b.strides(), target_b)?;
-        let (c_dims, c_strides) =
-            reordered_dims_strides(modes_c, c.dims(), c.strides(), target_c)?;
+        let (a_dims, a_strides) = reordered_dims_strides(modes_a, a.dims(), a.strides(), target_a)?;
+        let (b_dims, b_strides) = reordered_dims_strides(modes_b, b.dims(), b.strides(), target_b)?;
+        let (c_dims, c_strides) = reordered_dims_strides(modes_c, c.dims(), c.strides(), target_c)?;
 
         let nb = spec.batch_modes.len();
         let nm = spec.m_modes.len();
@@ -2561,7 +2563,18 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f64>) };
         let alpha = unsafe { *(&alpha as *const T as *const f64) };
         let beta = unsafe { *(&beta as *const T as *const f64) };
-        if let Some(r) = run_f64(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec, cached_spec) {
+        if let Some(r) = run_f64(
+            alpha,
+            a,
+            b,
+            beta,
+            c,
+            modes_a,
+            modes_b,
+            modes_c,
+            &spec,
+            cached_spec,
+        ) {
             r?;
             return Ok(Some(()));
         }
@@ -2573,7 +2586,18 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f32>) };
         let alpha = unsafe { *(&alpha as *const T as *const f32) };
         let beta = unsafe { *(&beta as *const T as *const f32) };
-        if let Some(r) = run_f32(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec, cached_spec) {
+        if let Some(r) = run_f32(
+            alpha,
+            a,
+            b,
+            beta,
+            c,
+            modes_a,
+            modes_b,
+            modes_c,
+            &spec,
+            cached_spec,
+        ) {
             r?;
             return Ok(Some(()));
         }
