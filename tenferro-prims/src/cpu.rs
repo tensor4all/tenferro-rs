@@ -9,8 +9,8 @@ use num_complex::{Complex32, Complex64};
 use strided_perm::try_fuse_group;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
-use tenferro_device::{Error, Result};
-use tenferro_tensor::Tensor;
+use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
     for_each_index, mode_position, unflatten_index, validate_execute_inputs, validate_rank,
@@ -823,16 +823,20 @@ fn execute_batched_gemm_naive<T: Scalar>(
     Ok(())
 }
 
-fn execute_batched_gemm_f64(
+/// Fallback for backends (openblas, naive) requiring contiguous column-major data.
+/// Packs strided A, B, C into scratch buffers, calls contiguous gemm, unpacks C.
+#[cfg(not(feature = "gemm-faer"))]
+fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     ctx: &mut CpuContext,
-    alpha: f64,
-    inputs: &[&StridedView<f64>],
-    beta: f64,
-    output: &mut StridedViewMut<f64>,
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
     batch_dims: &[usize],
     m: usize,
     n: usize,
     k: usize,
+    gemm_fn: fn(T, &[T], &[T], T, &mut [T], usize, usize, usize) -> Result<()>,
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
@@ -854,8 +858,7 @@ fn execute_batched_gemm_f64(
     let b_ptr = b.ptr();
     let c_ptr = output.as_mut_ptr();
 
-    // Fast path: single GEMM on contiguous [m,k] x [k,n] -> [m,n].
-    // Avoids pack/unpack and scratch traffic for common binary cases.
+    // Fast path: contiguous column-major → no packing needed
     if nb == 0
         && a_row == 1
         && a_col == m as isize
@@ -867,66 +870,17 @@ fn execute_batched_gemm_f64(
         let a_mat = unsafe { std::slice::from_raw_parts(a_ptr, m * k) };
         let b_mat = unsafe { std::slice::from_raw_parts(b_ptr, k * n) };
         let c_mat = unsafe { std::slice::from_raw_parts_mut(c_ptr, m * n) };
-        return gemm_f64(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
+        return gemm_fn(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
     }
 
-    let mut a_mat = ctx.take_scratch::<f64>(m * k);
-    let mut b_mat = ctx.take_scratch::<f64>(k * n);
-    let mut c_mat = ctx.take_scratch::<f64>(m * n);
+    let mut a_mat = ctx.take_scratch::<T>(m * k);
+    let mut b_mat = ctx.take_scratch::<T>(k * n);
+    let mut c_mat = ctx.take_scratch::<T>(m * n);
 
     let mut idx = vec![0usize; nb];
     let mut a_off = 0isize;
     let mut b_off = 0isize;
     let mut c_off = 0isize;
-
-    // Fast path: outer-product case (k=1), avoids GEMM/pack entirely.
-    if k == 1 {
-        loop {
-            for i in 0..m {
-                let a_val = unsafe { *a_ptr.offset(a_off + i as isize * a_row) };
-                for j in 0..n {
-                    let b_val = unsafe { *b_ptr.offset(b_off + j as isize * b_col) };
-                    let dst_off = c_off + i as isize * c_row + j as isize * c_col;
-                    let prod = alpha * a_val * b_val;
-                    unsafe {
-                        if beta == 0.0 {
-                            *c_ptr.offset(dst_off) = prod;
-                        } else {
-                            *c_ptr.offset(dst_off) = prod + beta * *c_ptr.offset(dst_off);
-                        }
-                    }
-                }
-            }
-
-            if nb == 0 {
-                break;
-            }
-
-            let mut carried_all = true;
-            for ax in 0..nb {
-                let dim = batch_dims[ax];
-                let next = idx[ax] + 1;
-                if next < dim {
-                    idx[ax] = next;
-                    a_off += a_batch[ax];
-                    b_off += b_batch[ax];
-                    c_off += c_batch[ax];
-                    carried_all = false;
-                    break;
-                } else {
-                    idx[ax] = 0;
-                    let back = (dim as isize - 1).max(0);
-                    a_off -= back * a_batch[ax];
-                    b_off -= back * b_batch[ax];
-                    c_off -= back * c_batch[ax];
-                }
-            }
-            if carried_all {
-                break;
-            }
-        }
-        return Ok(());
-    }
 
     let mut result = Ok(());
     loop {
@@ -944,8 +898,8 @@ fn execute_batched_gemm_f64(
             }
         }
 
-        if beta == 0.0 {
-            c_mat.fill(0.0);
+        if beta == T::zero() {
+            c_mat.fill(T::zero());
         } else {
             for j in 0..n {
                 for i in 0..m {
@@ -955,7 +909,7 @@ fn execute_batched_gemm_f64(
             }
         }
 
-        if let Err(e) = gemm_f64(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
+        if let Err(e) = gemm_fn(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
             result = Err(e);
             break;
         }
@@ -1003,79 +957,74 @@ fn execute_batched_gemm_f64(
     result
 }
 
-fn execute_batched_gemm_f32(
-    ctx: &mut CpuContext,
-    alpha: f32,
-    inputs: &[&StridedView<f32>],
-    beta: f32,
-    output: &mut StridedViewMut<f32>,
+fn execute_batched_gemm_f64(
+    _ctx: &mut CpuContext,
+    alpha: f64,
+    inputs: &[&StridedView<f64>],
+    beta: f64,
+    output: &mut StridedViewMut<f64>,
     batch_dims: &[usize],
     m: usize,
     n: usize,
     k: usize,
 ) -> Result<()> {
-    let a = inputs[0];
-    let b = inputs[1];
-    let nb = batch_dims.len();
-    let a_strides = a.strides();
-    let b_strides = b.strides();
-    let c_strides = output.strides();
-    let a_batch = &a_strides[..nb];
-    let b_batch = &b_strides[..nb];
-    let c_batch = &c_strides[..nb];
-    let a_row = a_strides[nb];
-    let a_col = a_strides[nb + 1];
-    let b_row = b_strides[nb];
-    let b_col = b_strides[nb + 1];
-    let c_row = c_strides[nb];
-    let c_col = c_strides[nb + 1];
-
-    let a_ptr = a.ptr();
-    let b_ptr = b.ptr();
-    let c_ptr = output.as_mut_ptr();
-
-    // Fast path: single GEMM on contiguous [m,k] x [k,n] -> [m,n].
-    if nb == 0
-        && a_row == 1
-        && a_col == m as isize
-        && b_row == 1
-        && b_col == k as isize
-        && c_row == 1
-        && c_col == m as isize
+    #[cfg(feature = "gemm-faer")]
     {
-        let a_mat = unsafe { std::slice::from_raw_parts(a_ptr, m * k) };
-        let b_mat = unsafe { std::slice::from_raw_parts(b_ptr, k * n) };
-        let c_mat = unsafe { std::slice::from_raw_parts_mut(c_ptr, m * n) };
-        return gemm_f32(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
-    }
+        use faer::{Accum, MatMut, MatRef, Par};
 
-    let mut a_mat = ctx.take_scratch::<f32>(m * k);
-    let mut b_mat = ctx.take_scratch::<f32>(k * n);
-    let mut c_mat = ctx.take_scratch::<f32>(m * n);
+        let a = inputs[0];
+        let b = inputs[1];
+        let nb = batch_dims.len();
+        let a_strides = a.strides();
+        let b_strides = b.strides();
+        let c_strides = output.strides();
+        let a_batch = &a_strides[..nb];
+        let b_batch = &b_strides[..nb];
+        let c_batch = &c_strides[..nb];
+        let a_row = a_strides[nb];
+        let a_col = a_strides[nb + 1];
+        let b_row = b_strides[nb];
+        let b_col = b_strides[nb + 1];
+        let c_row = c_strides[nb];
+        let c_col = c_strides[nb + 1];
 
-    let mut idx = vec![0usize; nb];
-    let mut a_off = 0isize;
-    let mut b_off = 0isize;
-    let mut c_off = 0isize;
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = output.as_mut_ptr();
 
-    // Fast path: outer-product case (k=1), avoids GEMM/pack entirely.
-    if k == 1 {
+        let accum = if beta == 0.0 {
+            Accum::Replace
+        } else {
+            Accum::Add
+        };
+
+        let mut idx = vec![0usize; nb];
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+        let mut c_off = 0isize;
+
         loop {
-            for i in 0..m {
-                let a_val = unsafe { *a_ptr.offset(a_off + i as isize * a_row) };
+            // Create strided MatRef/MatMut directly — no pack/unpack needed.
+            let a_mat =
+                unsafe { MatRef::<f64>::from_raw_parts(a_ptr.offset(a_off), m, k, a_row, a_col) };
+            let b_mat =
+                unsafe { MatRef::<f64>::from_raw_parts(b_ptr.offset(b_off), k, n, b_row, b_col) };
+
+            // Pre-scale C by beta if needed (beta != 0 and beta != 1)
+            if beta != 0.0 && beta != 1.0 {
                 for j in 0..n {
-                    let b_val = unsafe { *b_ptr.offset(b_off + j as isize * b_col) };
-                    let dst_off = c_off + i as isize * c_row + j as isize * c_col;
-                    let prod = alpha * a_val * b_val;
-                    unsafe {
-                        if beta == 0.0 {
-                            *c_ptr.offset(dst_off) = prod;
-                        } else {
-                            *c_ptr.offset(dst_off) = prod + beta * *c_ptr.offset(dst_off);
-                        }
+                    for i in 0..m {
+                        let off = c_off + i as isize * c_row + j as isize * c_col;
+                        unsafe { *c_ptr.offset(off) *= beta };
                     }
                 }
             }
+
+            let mut c_mat = unsafe {
+                MatMut::<f64>::from_raw_parts_mut(c_ptr.offset(c_off), m, n, c_row, c_col)
+            };
+
+            faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
 
             if nb == 0 {
                 break;
@@ -1104,82 +1053,122 @@ fn execute_batched_gemm_f32(
                 break;
             }
         }
+
         return Ok(());
     }
 
-    let mut result = Ok(());
-    loop {
-        for kk in 0..k {
-            for i in 0..m {
-                let src_off = a_off + i as isize * a_row + kk as isize * a_col;
-                a_mat[i + kk * m] = unsafe { *a_ptr.offset(src_off) };
-            }
-        }
+    #[cfg(not(feature = "gemm-faer"))]
+    {
+        execute_batched_gemm_contiguous(
+            _ctx, alpha, inputs, beta, output, batch_dims, m, n, k, gemm_f64,
+        )
+    }
+}
 
-        for j in 0..n {
-            for kk in 0..k {
-                let src_off = b_off + kk as isize * b_row + j as isize * b_col;
-                b_mat[kk + j * k] = unsafe { *b_ptr.offset(src_off) };
-            }
-        }
+fn execute_batched_gemm_f32(
+    _ctx: &mut CpuContext,
+    alpha: f32,
+    inputs: &[&StridedView<f32>],
+    beta: f32,
+    output: &mut StridedViewMut<f32>,
+    batch_dims: &[usize],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    #[cfg(feature = "gemm-faer")]
+    {
+        use faer::{Accum, MatMut, MatRef, Par};
 
-        if beta == 0.0 {
-            c_mat.fill(0.0);
+        let a = inputs[0];
+        let b = inputs[1];
+        let nb = batch_dims.len();
+        let a_strides = a.strides();
+        let b_strides = b.strides();
+        let c_strides = output.strides();
+        let a_batch = &a_strides[..nb];
+        let b_batch = &b_strides[..nb];
+        let c_batch = &c_strides[..nb];
+        let a_row = a_strides[nb];
+        let a_col = a_strides[nb + 1];
+        let b_row = b_strides[nb];
+        let b_col = b_strides[nb + 1];
+        let c_row = c_strides[nb];
+        let c_col = c_strides[nb + 1];
+
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = output.as_mut_ptr();
+
+        let accum = if beta == 0.0 {
+            Accum::Replace
         } else {
-            for j in 0..n {
-                for i in 0..m {
-                    let src_off = c_off + i as isize * c_row + j as isize * c_col;
-                    c_mat[i + j * m] = unsafe { *c_ptr.offset(src_off) };
+            Accum::Add
+        };
+
+        let mut idx = vec![0usize; nb];
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+        let mut c_off = 0isize;
+
+        loop {
+            let a_mat =
+                unsafe { MatRef::<f32>::from_raw_parts(a_ptr.offset(a_off), m, k, a_row, a_col) };
+            let b_mat =
+                unsafe { MatRef::<f32>::from_raw_parts(b_ptr.offset(b_off), k, n, b_row, b_col) };
+
+            if beta != 0.0 && beta != 1.0 {
+                for j in 0..n {
+                    for i in 0..m {
+                        let off = c_off + i as isize * c_row + j as isize * c_col;
+                        unsafe { *c_ptr.offset(off) *= beta };
+                    }
                 }
             }
-        }
 
-        if let Err(e) = gemm_f32(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
-            result = Err(e);
-            break;
-        }
+            let mut c_mat = unsafe {
+                MatMut::<f32>::from_raw_parts_mut(c_ptr.offset(c_off), m, n, c_row, c_col)
+            };
 
-        for j in 0..n {
-            for i in 0..m {
-                let dst_off = c_off + i as isize * c_row + j as isize * c_col;
-                unsafe {
-                    *c_ptr.offset(dst_off) = c_mat[i + j * m];
-                }
-            }
-        }
+            faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
 
-        if nb == 0 {
-            break;
-        }
-
-        let mut carried_all = true;
-        for ax in 0..nb {
-            let dim = batch_dims[ax];
-            let next = idx[ax] + 1;
-            if next < dim {
-                idx[ax] = next;
-                a_off += a_batch[ax];
-                b_off += b_batch[ax];
-                c_off += c_batch[ax];
-                carried_all = false;
+            if nb == 0 {
                 break;
-            } else {
-                idx[ax] = 0;
-                let back = (dim as isize - 1).max(0);
-                a_off -= back * a_batch[ax];
-                b_off -= back * b_batch[ax];
-                c_off -= back * c_batch[ax];
+            }
+
+            let mut carried_all = true;
+            for ax in 0..nb {
+                let dim = batch_dims[ax];
+                let next = idx[ax] + 1;
+                if next < dim {
+                    idx[ax] = next;
+                    a_off += a_batch[ax];
+                    b_off += b_batch[ax];
+                    c_off += c_batch[ax];
+                    carried_all = false;
+                    break;
+                } else {
+                    idx[ax] = 0;
+                    let back = (dim as isize - 1).max(0);
+                    a_off -= back * a_batch[ax];
+                    b_off -= back * b_batch[ax];
+                    c_off -= back * c_batch[ax];
+                }
+            }
+            if carried_all {
+                break;
             }
         }
-        if carried_all {
-            break;
-        }
+
+        return Ok(());
     }
 
-    ctx.put_scratch(a_mat);
-    ctx.put_scratch(b_mat);
-    ctx.put_scratch(c_mat);
-    result
+    #[cfg(not(feature = "gemm-faer"))]
+    {
+        execute_batched_gemm_contiguous(
+            _ctx, alpha, inputs, beta, output, batch_dims, m, n, k, gemm_f32,
+        )
+    }
 }
 
 #[cfg(feature = "gemm-faer")]
@@ -1193,24 +1182,20 @@ fn gemm_f64(
     n: usize,
     k: usize,
 ) -> Result<()> {
-    let a_mat = faer::mat::from_column_major_slice(a, m, k);
-    let b_mat = faer::mat::from_column_major_slice(b, k, n);
-    let prod = &a_mat * &b_mat;
-    // When beta==0, skip reading from c to match the BLAS contract:
-    // "if beta is zero, C need not be set on input". This avoids
-    // propagating NaN from uninitialized pool buffers (0.0 * NaN = NaN).
+    use faer::{Accum, MatMut, MatRef, Par};
+
+    let a_mat = MatRef::from_column_major_slice(a, m, k);
+    let b_mat = MatRef::from_column_major_slice(b, k, n);
+
     if beta == 0.0 {
-        for j in 0..n {
-            for i in 0..m {
-                c[i + j * m] = alpha * prod[(i, j)];
-            }
-        }
+        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
+        faer::linalg::matmul::matmul(&mut c_mat, Accum::Replace, &a_mat, &b_mat, alpha, Par::Seq);
     } else {
-        for j in 0..n {
-            for i in 0..m {
-                c[i + j * m] = alpha * prod[(i, j)] + beta * c[i + j * m];
-            }
+        if beta != 1.0 {
+            c.iter_mut().for_each(|v| *v *= beta);
         }
+        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
+        faer::linalg::matmul::matmul(&mut c_mat, Accum::Add, &a_mat, &b_mat, alpha, Par::Seq);
     }
     Ok(())
 }
@@ -1289,22 +1274,20 @@ fn gemm_f32(
     n: usize,
     k: usize,
 ) -> Result<()> {
-    let a_mat = faer::mat::from_column_major_slice(a, m, k);
-    let b_mat = faer::mat::from_column_major_slice(b, k, n);
-    let prod = &a_mat * &b_mat;
-    // See gemm_f64 (gemm-faer) comment on beta==0 BLAS contract.
+    use faer::{Accum, MatMut, MatRef, Par};
+
+    let a_mat = MatRef::from_column_major_slice(a, m, k);
+    let b_mat = MatRef::from_column_major_slice(b, k, n);
+
     if beta == 0.0 {
-        for j in 0..n {
-            for i in 0..m {
-                c[i + j * m] = alpha * prod[(i, j)];
-            }
-        }
+        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
+        faer::linalg::matmul::matmul(&mut c_mat, Accum::Replace, &a_mat, &b_mat, alpha, Par::Seq);
     } else {
-        for j in 0..n {
-            for i in 0..m {
-                c[i + j * m] = alpha * prod[(i, j)] + beta * c[i + j * m];
-            }
+        if beta != 1.0 {
+            c.iter_mut().for_each(|v| *v *= beta);
         }
+        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
+        faer::linalg::matmul::matmul(&mut c_mat, Accum::Add, &a_mat, &b_mat, alpha, Par::Seq);
     }
     Ok(())
 }
