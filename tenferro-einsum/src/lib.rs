@@ -220,7 +220,6 @@
 //! // a.set_preferred_compute_device(None);
 //! ```
 
-use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
@@ -233,86 +232,27 @@ use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{Extension, PrimDescriptor, ReduceOp, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
+mod pool;
+use pool::BufferPool;
+
 // ============================================================================
-// Thread-local buffer pool
+// Buffer pool allocation helpers
 // ============================================================================
 
-thread_local! {
-    static BUFFER_POOL: RefCell<HashMap<TypeId, Box<dyn Any>>>
-        = RefCell::new(HashMap::new());
-}
-
-const MAX_POOL_PER_TYPE: usize = 16;
 const MAX_POOLED_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 
-fn take_from_pool<T: Copy + 'static>(len: usize) -> Vec<T> {
-    BUFFER_POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        let vecs = pool
-            .entry(TypeId::of::<T>())
-            .or_insert_with(|| Box::new(Vec::<Vec<T>>::new()))
-            .downcast_mut::<Vec<Vec<T>>>()
-            .unwrap();
-
-        let best_idx = vecs
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| v.capacity() >= len)
-            .min_by_key(|(_, v)| v.capacity())
-            .map(|(i, _)| i);
-
-        let mut data = best_idx
-            .map(|i| vecs.swap_remove(i))
-            .unwrap_or_else(|| Vec::with_capacity(len));
-        if data.capacity() < len {
-            data.reserve(len - data.capacity());
-        }
-        // Safety: len <= capacity; contents will be overwritten by the
-        // backend (beta=0 means the output buffer is fully written).
-        unsafe { data.set_len(len) };
-        data
-    })
-}
-
-fn return_to_pool<T: Copy + 'static>(mut data: Vec<T>) {
-    let bytes = data.capacity().saturating_mul(std::mem::size_of::<T>());
-    if bytes == 0 || bytes > MAX_POOLED_BYTES {
-        return;
-    }
-    data.clear();
-    BUFFER_POOL.with(|pool| {
-        let mut pool = pool.borrow_mut();
-        let vecs = pool
-            .entry(TypeId::of::<T>())
-            .or_insert_with(|| Box::new(Vec::<Vec<T>>::new()))
-            .downcast_mut::<Vec<Vec<T>>>()
-            .unwrap();
-        if vecs.len() >= MAX_POOL_PER_TYPE {
-            if let Some((min_i, min_cap)) = vecs
-                .iter()
-                .enumerate()
-                .map(|(i, v)| (i, v.capacity()))
-                .min_by_key(|(_, c)| *c)
-            {
-                if min_cap < data.capacity() {
-                    vecs.swap_remove(min_i);
-                    vecs.push(data);
-                }
-            }
-        } else {
-            vecs.push(data);
-        }
-    });
-}
-
-/// Allocate a column-major tensor from the thread-local pool, or fresh if too large.
-fn alloc_tensor_pooled<T: Scalar>(dims: &[usize], memory_space: LogicalMemorySpace) -> Tensor<T> {
+/// Allocate a column-major tensor from the buffer pool, or fresh if too large.
+fn alloc_tensor_from_pool<T: Scalar>(
+    dims: &[usize],
+    memory_space: LogicalMemorySpace,
+    pool: &mut BufferPool<T>,
+) -> Tensor<T> {
     let numel = dims.iter().product::<usize>().max(1);
     let bytes = numel.saturating_mul(std::mem::size_of::<T>());
     if bytes > MAX_POOLED_BYTES {
         return Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor);
     }
-    let data = take_from_pool::<T>(numel);
+    let data = pool.take(numel);
     // Column-major strides: [1, d0, d0*d1, ...]
     let mut strides = Vec::with_capacity(dims.len());
     let mut s = 1isize;
@@ -322,13 +262,6 @@ fn alloc_tensor_pooled<T: Scalar>(dims: &[usize], memory_space: LogicalMemorySpa
     }
     Tensor::from_vec(data, dims, &strides, 0)
         .unwrap_or_else(|_| Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor))
-}
-
-/// Return a tensor's buffer to the thread-local pool (no-op if shared or GPU).
-fn return_tensor_to_pool<T: Scalar>(tensor: Tensor<T>) {
-    if let Some(data) = tensor.try_into_data_vec() {
-        return_to_pool(data);
-    }
 }
 
 // ============================================================================
@@ -629,6 +562,7 @@ fn execute_single_tensor_einsum<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
+    pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<()>
 where
     Alg: Algebra,
@@ -931,7 +865,7 @@ where
                 })
                 .collect::<Result<_>>()?;
             let mut intermediate =
-                alloc_tensor_pooled::<Alg::Scalar>(&inter_shape, output.logical_memory_space());
+                alloc_tensor_from_pool::<Alg::Scalar>(&inter_shape, output.logical_memory_space(), pool);
             // Recursive call for trace/reduce: current_subs → inter_subs
             // inter_subs has no repeated labels, so this hits a different branch.
             execute_single_tensor_einsum::<Alg, Backend>(
@@ -942,6 +876,7 @@ where
                 Alg::Scalar::one(),
                 Alg::Scalar::zero(),
                 &mut intermediate,
+                pool,
             )?;
             current = intermediate;
             current_subs = inter_subs;
@@ -957,6 +892,7 @@ where
             alpha,
             beta,
             output,
+            pool,
         )
     }
 }
@@ -1168,6 +1104,7 @@ fn fallback_pairwise_contraction<A, B>(
     alpha: A::Scalar,
     beta: A::Scalar,
     output: &mut Tensor<A::Scalar>,
+    pool: &mut BufferPool<A::Scalar>,
 ) -> Result<()>
 where
     A: Algebra,
@@ -1177,9 +1114,9 @@ where
     // Pre-reduce axes that are present only in one input and not in output.
     // This expands GEMM decomposition coverage to general binary contractions.
     let (a_reduced, subs_a_reduced) =
-        reduce_unique_only_axes::<A, B>(ctx, a, subs_a, subs_b, subs_c)?;
+        reduce_unique_only_axes::<A, B>(ctx, a, subs_a, subs_b, subs_c, pool)?;
     let (b_reduced, subs_b_reduced) =
-        reduce_unique_only_axes::<A, B>(ctx, b, subs_b, subs_a, subs_c)?;
+        reduce_unique_only_axes::<A, B>(ctx, b, subs_b, subs_a, subs_c, pool)?;
 
     let (batch_modes, lo_modes, ro_modes, sum_modes) =
         classify_modes(&subs_a_reduced, &subs_b_reduced, subs_c);
@@ -1241,9 +1178,10 @@ where
         m,
         n,
         k,
+        pool,
     )?;
 
-    let mut temp = alloc_tensor_pooled::<A::Scalar>(&c_gemm_shape, memory_space);
+    let mut temp = alloc_tensor_from_pool::<A::Scalar>(&c_gemm_shape, memory_space, pool);
 
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: batch_sizes.clone(),
@@ -1315,6 +1253,7 @@ fn reduce_unique_only_axes<A, B>(
     subs_self: &[u32],
     subs_other: &[u32],
     subs_out: &[u32],
+    pool: &mut BufferPool<A::Scalar>,
 ) -> Result<(Tensor<A::Scalar>, Vec<u32>)>
 where
     A: Algebra,
@@ -1352,7 +1291,7 @@ where
         })
         .collect();
     let memory_space = tensor.logical_memory_space();
-    let mut reduced = alloc_tensor_pooled::<A::Scalar>(&out_shape, memory_space);
+    let mut reduced = alloc_tensor_from_pool::<A::Scalar>(&out_shape, memory_space, pool);
 
     let desc = PrimDescriptor::Reduce {
         modes_a: subs_self.to_vec(),
@@ -1397,6 +1336,7 @@ fn prepare_gemm_operands<A, B>(
     m: usize,
     n: usize,
     k: usize,
+    pool: &mut BufferPool<A::Scalar>,
 ) -> Result<(Tensor<A::Scalar>, Tensor<A::Scalar>)>
 where
     A: Algebra,
@@ -1418,9 +1358,9 @@ where
         .collect();
 
     let a_prepared =
-        prepare_one_operand::<A, B>(ctx, a, subs_a, target_a, nb, n_lo, n_sum_a, &a_gemm_shape)?;
+        prepare_one_operand::<A, B>(ctx, a, subs_a, target_a, nb, n_lo, n_sum_a, &a_gemm_shape, pool)?;
     let b_prepared =
-        prepare_one_operand::<A, B>(ctx, b, subs_b, target_b, nb, n_sum_b, n_ro, &b_gemm_shape)?;
+        prepare_one_operand::<A, B>(ctx, b, subs_b, target_b, nb, n_sum_b, n_ro, &b_gemm_shape, pool)?;
     Ok((a_prepared, b_prepared))
 }
 
@@ -1434,6 +1374,7 @@ fn prepare_one_operand<A, B>(
     n_group1: usize,
     n_group2: usize,
     fallback_shape: &[usize],
+    pool: &mut BufferPool<A::Scalar>,
 ) -> Result<Tensor<A::Scalar>>
 where
     A: Algebra,
@@ -1476,7 +1417,7 @@ where
     }
 
     // Fallback: copy to contiguous, then reshape
-    let contiguous = permute_or_copy::<A, B>(ctx, tensor, current_subs, target_subs)?;
+    let contiguous = permute_or_copy::<A, B>(ctx, tensor, current_subs, target_subs, pool)?;
     contiguous.reshape(fallback_shape)
 }
 
@@ -1496,6 +1437,7 @@ fn permute_or_copy<A, B>(
     tensor: &Tensor<A::Scalar>,
     current_subs: &[u32],
     target_subs: &[u32],
+    pool: &mut BufferPool<A::Scalar>,
 ) -> Result<Tensor<A::Scalar>>
 where
     A: Algebra,
@@ -1504,7 +1446,7 @@ where
 {
     if current_subs == target_subs {
         // No permutation needed; ensure contiguous
-        return make_contiguous_if_needed::<A, B>(ctx, tensor);
+        return make_contiguous_if_needed::<A, B>(ctx, tensor, pool);
     }
 
     // Build axis permutation: where does each target label come from?
@@ -1525,7 +1467,7 @@ where
 
     // Otherwise copy to a contiguous pooled buffer
     let memory_space = tensor.logical_memory_space();
-    let mut contiguous = alloc_tensor_pooled::<A::Scalar>(view.dims(), memory_space);
+    let mut contiguous = alloc_tensor_from_pool::<A::Scalar>(view.dims(), memory_space, pool);
     let desc = PrimDescriptor::MakeContiguous;
     let shapes = [view.dims(), contiguous.dims()];
     let plan = B::plan(ctx, &desc, &shapes)?;
@@ -1544,6 +1486,7 @@ where
 fn make_contiguous_if_needed<A, B>(
     ctx: &mut B::Context,
     tensor: &Tensor<A::Scalar>,
+    pool: &mut BufferPool<A::Scalar>,
 ) -> Result<Tensor<A::Scalar>>
 where
     A: Algebra,
@@ -1554,7 +1497,7 @@ where
         return Ok(tensor.clone());
     }
     let memory_space = tensor.logical_memory_space();
-    let mut result = alloc_tensor_pooled::<A::Scalar>(tensor.dims(), memory_space);
+    let mut result = alloc_tensor_from_pool::<A::Scalar>(tensor.dims(), memory_space, pool);
     let desc = PrimDescriptor::MakeContiguous;
     let shapes = [tensor.dims(), result.dims()];
     let plan = B::plan(ctx, &desc, &shapes)?;
@@ -1580,6 +1523,7 @@ fn execute_pairwise_contraction<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
+    pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<()>
 where
     Alg: Algebra,
@@ -1606,7 +1550,7 @@ where
     // This avoids the generic Contract kernel for common high-throughput cases.
     if is_gemm_fallback_compatible(subs_a, subs_b, subs_c) {
         return fallback_pairwise_contraction::<Alg, Backend>(
-            ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+            ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output, pool,
         );
     }
 
@@ -1932,6 +1876,7 @@ fn execute_pairwise_with_plan<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
+    pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<()>
 where
     Alg: Algebra,
@@ -1948,7 +1893,7 @@ where
             } else {
                 // Fall back to non-plan path
                 execute_pairwise_contraction::<Alg, Backend>(
-                    ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+                    ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output, pool,
                 )
             }
         }
@@ -1956,7 +1901,7 @@ where
             if !Backend::has_extension_for(Extension::ElementwiseMul) {
                 // Fall back to non-plan path
                 return execute_pairwise_contraction::<Alg, Backend>(
-                    ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
+                    ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output, pool,
                 );
             }
             execute_outer_with_plan::<Alg, Backend>(ctx, op_plan, subs_c, a, b, alpha, beta, output)
@@ -1975,7 +1920,7 @@ where
             } else {
                 // Fallback: core ops decomposition
                 execute_gemm_with_plan::<Alg, Backend>(
-                    ctx, gemm_plan, subs_c, a, b, alpha, beta, output,
+                    ctx, gemm_plan, subs_c, a, b, alpha, beta, output, pool,
                 )
             }
         }
@@ -2052,6 +1997,7 @@ fn execute_reduce_with_plan<Alg, Backend>(
     ctx: &mut Backend::Context,
     reduce: &ReducePlan,
     tensor: &Tensor<Alg::Scalar>,
+    pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Algebra,
@@ -2059,7 +2005,7 @@ where
     Backend: TensorPrims<Alg>,
 {
     let memory_space = tensor.logical_memory_space();
-    let mut reduced = alloc_tensor_pooled::<Alg::Scalar>(&reduce.out_shape, memory_space);
+    let mut reduced = alloc_tensor_from_pool::<Alg::Scalar>(&reduce.out_shape, memory_space, pool);
     let desc = PrimDescriptor::Reduce {
         modes_a: reduce.original_subs.clone(),
         modes_c: reduce.kept_subs.clone(),
@@ -2088,6 +2034,7 @@ fn execute_gemm_with_plan<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
+    pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<()>
 where
     Alg: Algebra,
@@ -2097,14 +2044,14 @@ where
     // Pre-reduce unique-only axes if needed
     let a_reduced;
     let a_ref = if let Some(ref reduce) = plan.reduce_a {
-        a_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, a)?;
+        a_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, a, pool)?;
         &a_reduced
     } else {
         a
     };
     let b_reduced;
     let b_ref = if let Some(ref reduce) = plan.reduce_b {
-        b_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, b)?;
+        b_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, b, pool)?;
         &b_reduced
     } else {
         b
@@ -2138,6 +2085,7 @@ where
         plan.lo_modes.len(),
         plan.sum_modes.len(),
         &a_gemm_shape,
+        pool,
     )?;
     let b_prepared = prepare_one_operand::<Alg, Backend>(
         ctx,
@@ -2148,10 +2096,11 @@ where
         plan.sum_modes.len(),
         plan.ro_modes.len(),
         &b_gemm_shape,
+        pool,
     )?;
 
     // Execute GEMM
-    let mut temp = alloc_tensor_pooled::<Alg::Scalar>(&plan.c_gemm_shape, memory_space);
+    let mut temp = alloc_tensor_from_pool::<Alg::Scalar>(&plan.c_gemm_shape, memory_space, pool);
     let desc = PrimDescriptor::BatchedGemm {
         batch_dims: plan.batch_sizes.clone(),
         m: plan.m,
@@ -2209,6 +2158,7 @@ fn execute_tree<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
+    pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<()>
 where
     Alg: Algebra,
@@ -2232,6 +2182,7 @@ where
             alpha,
             beta,
             output,
+            pool,
         );
     }
 
@@ -2291,13 +2242,14 @@ where
                 alpha,
                 beta,
                 output,
+                pool,
             )?;
         } else {
             // Intermediate step: create new tensor with alpha=1, beta=0
             let result_idx = n_inputs + step_idx;
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = &tree.step_output_shapes[step_idx];
-            let mut result = alloc_tensor_pooled::<Alg::Scalar>(result_shape, memory_space);
+            let mut result = alloc_tensor_from_pool::<Alg::Scalar>(result_shape, memory_space, pool);
             execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
                 &step_plans[step_idx],
@@ -2309,6 +2261,7 @@ where
                 Alg::Scalar::one(),
                 Alg::Scalar::zero(),
                 &mut result,
+                pool,
             )?;
             intermediates[result_idx] = Some(result);
         }
@@ -2323,7 +2276,9 @@ where
             use_counts[*idx] = use_counts[*idx].saturating_sub(1);
             if *idx >= n_inputs && use_counts[*idx] == 0 {
                 if let Some(t) = intermediates[*idx].take() {
-                    return_tensor_to_pool(t);
+                    if let Some(data) = t.try_into_data_vec() {
+                        pool.return_buf(data);
+                    }
                 }
             }
         }
@@ -3044,6 +2999,7 @@ where
     let memory_space = infer_memory_space(operands)?;
     let mut output =
         Tensor::<Alg::Scalar>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor);
+    let mut pool = BufferPool::new();
     execute_tree::<Alg, Backend>(
         ctx,
         tree,
@@ -3051,6 +3007,7 @@ where
         Alg::Scalar::one(),
         Alg::Scalar::zero(),
         &mut output,
+        &mut pool,
     )?;
     Ok(output)
 }
@@ -3330,7 +3287,8 @@ where
     Backend: TensorPrims<Alg>,
 {
     let _ = size_dict; // size_dict already captured in tree.size_dict
-    execute_tree::<Alg, Backend>(ctx, tree, operands, alpha, beta, output)
+    let mut pool = BufferPool::new();
+    execute_tree::<Alg, Backend>(ctx, tree, operands, alpha, beta, output, &mut pool)
 }
 
 // ============================================================================
