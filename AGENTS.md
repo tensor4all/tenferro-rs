@@ -108,6 +108,59 @@ cargo bench -p tenferro-prims -- contraction
 RUSTFLAGS="-C target-cpu=native" cargo bench
 ```
 
+## Common Performance Anti-Patterns
+
+When writing performance-sensitive code (GEMM, tensor operations, inner loops), avoid these mistakes:
+
+### 1. Duplicated f64/f32 functions instead of generic code
+
+**Bad:** Copy-pasting the same function body for `f64` and `f32` (e.g., `run_f64` / `run_f32`).
+
+**Good:** Use a trait (e.g., `FaerGemm`) or macro to share the logic. TypeId dispatch only at the outer boundary.
+
+### 2. Allocating dense buffers when strided access is available
+
+**Bad:** `vec![0.0; m*k]` + copy from strided source + GEMM + copy back to strided destination.
+
+**Good:** Use `faer::MatRef::from_raw_parts(ptr, m, k, row_stride, col_stride)` to access strided data directly — zero allocation, zero copy.
+
+### 3. Zero-initializing buffers that will be immediately overwritten
+
+**Bad:** `vec![0.0; n]` followed by a loop that overwrites every element.
+
+**Good:** `Vec::with_capacity(n)` + `unsafe { set_len(n) }` if you will write all elements, or avoid allocation entirely (see #2).
+
+### 4. Per-element index multiplication in inner loops
+
+**Bad:**
+```rust
+for j in 0..n {
+    for i in 0..m {
+        let off = i as isize * row_stride + j as isize * col_stride;
+        *ptr.offset(off) *= beta;
+    }
+}
+```
+
+**Good:** Use incremental pointer offsets:
+```rust
+let mut col_off = 0isize;
+for _ in 0..n {
+    let mut off = col_off;
+    for _ in 0..m {
+        *ptr.offset(off) *= beta;
+        off += row_stride;
+    }
+    col_off += col_stride;
+}
+```
+
+### 5. Calling `Backend::plan()` inside hot loops
+
+**Bad:** Computing plans per-step inside the execution loop.
+
+**Good:** Pre-compute all plans before the loop and pass them in.
+
 ## Workspace Architecture
 
 ### Layered Design
