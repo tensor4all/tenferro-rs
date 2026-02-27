@@ -3,7 +3,6 @@
 //! This module provides the [`FaerBackend`] struct implementing
 //! [`LinalgBackend`] for `f64`, `f32`, `Complex64`, and `Complex32`.
 
-use faer::linalg::solvers::SpSolver;
 use num_complex::{Complex32, Complex64};
 
 // ============================================================================
@@ -11,6 +10,7 @@ use num_complex::{Complex32, Complex64};
 // ============================================================================
 
 use super::LinalgBackend;
+use faer::linalg::solvers::Solve;
 use tenferro_device::{Error, Result};
 
 /// Pure-Rust linear algebra backend powered by [faer](https://crates.io/crates/faer).
@@ -89,12 +89,14 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let mat = faer::mat::from_column_major_slice(a, m, n);
-                let svd = mat.thin_svd();
+                let mat = faer::MatRef::from_column_major_slice(a, m, n);
+                let svd = mat.thin_svd().map_err(|_| {
+                    Error::InvalidArgument("thin_svd: SVD computation failed".into())
+                })?;
 
-                let u_ref = svd.u();
-                let v_ref = svd.v();
-                let s_col = svd.s_diagonal();
+                let u_ref = svd.U();
+                let v_ref = svd.V();
+                let s_diag = svd.S();
 
                 for j in 0..k {
                     for i in 0..m {
@@ -102,6 +104,7 @@ macro_rules! impl_linalg_backend {
                     }
                 }
 
+                let s_col = s_diag.column_vector();
                 for i in 0..k {
                     s[i] = s_col[i];
                 }
@@ -147,11 +150,11 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let mat = faer::mat::from_column_major_slice(a, m, n);
+                let mat = faer::MatRef::from_column_major_slice(a, m, n);
                 let qr_result = mat.qr();
 
-                let q_mat = qr_result.compute_thin_q();
-                let r_mat = qr_result.compute_thin_r();
+                let q_mat = qr_result.compute_thin_Q();
+                let r_mat = qr_result.thin_R();
 
                 for j in 0..k {
                     for i in 0..m {
@@ -207,11 +210,11 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let mat = faer::mat::from_column_major_slice(a, m, n);
+                let mat = faer::MatRef::from_column_major_slice(a, m, n);
                 let lu_result = mat.partial_piv_lu();
 
-                let l_mat = lu_result.compute_l();
-                let u_mat = lu_result.compute_u();
+                let l_mat = lu_result.L();
+                let u_mat = lu_result.U();
 
                 for j in 0..k {
                     for i in 0..m {
@@ -225,7 +228,7 @@ macro_rules! impl_linalg_backend {
                     }
                 }
 
-                let perm_ref = lu_result.row_permutation();
+                let perm_ref = lu_result.P();
                 let (fwd, _inv) = perm_ref.arrays();
                 perm[..m].copy_from_slice(fwd);
 
@@ -248,10 +251,10 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let mat = faer::mat::from_column_major_slice(a, n, n);
-                match mat.cholesky(faer::Side::Lower) {
+                let mat = faer::MatRef::from_column_major_slice(a, n, n);
+                match mat.llt(faer::Side::Lower) {
                     Ok(chol) => {
-                        let l_mat = chol.compute_l();
+                        let l_mat = chol.L();
                         for j in 0..n {
                             for i in 0..n {
                                 l[i + j * n] = l_mat[(i, j)];
@@ -294,11 +297,13 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let mat = faer::mat::from_column_major_slice(a, n, n);
-                let eig = mat.selfadjoint_eigendecomposition(faer::Side::Lower);
+                let mat = faer::MatRef::from_column_major_slice(a, n, n);
+                let eig = mat.self_adjoint_eigen(faer::Side::Lower).map_err(|_| {
+                    Error::InvalidArgument("eigen_sym: eigendecomposition failed".into())
+                })?;
 
-                let u_ref = eig.u();
-                let s_diag = eig.s();
+                let u_ref = eig.U();
+                let s_diag = eig.S();
 
                 for j in 0..n {
                     for i in 0..n {
@@ -345,8 +350,8 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let a_mat = faer::mat::from_column_major_slice(a, m, k);
-                let b_mat = faer::mat::from_column_major_slice(b, k, n);
+                let a_mat = faer::MatRef::from_column_major_slice(a, m, k);
+                let b_mat = faer::MatRef::from_column_major_slice(b, k, n);
                 let result = &a_mat * &b_mat;
 
                 for j in 0..n {
@@ -388,8 +393,8 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let a_mat = faer::mat::from_column_major_slice(a, n, n);
-                let b_mat = faer::mat::from_column_major_slice(b, n, nrhs);
+                let a_mat = faer::MatRef::from_column_major_slice(a, n, n);
+                let b_mat = faer::MatRef::from_column_major_slice(b, n, nrhs);
                 let lu = a_mat.partial_piv_lu();
                 let result = lu.solve(&b_mat);
 
@@ -433,7 +438,7 @@ macro_rules! impl_linalg_backend {
                     )));
                 }
 
-                let a_mat = faer::mat::from_column_major_slice(a, n, n);
+                let a_mat = faer::MatRef::from_column_major_slice(a, n, n);
                 for col in 0..nrhs {
                     let b_col = &b[col * n..(col + 1) * n];
                     let x_col = &mut x[col * n..(col + 1) * n];
@@ -469,7 +474,7 @@ macro_rules! impl_linalg_backend {
                 values_ri: &mut [$ty],
                 vectors_ri: &mut [$ty],
             ) -> Result<()> {
-                use faer::complex_native::c64;
+                use faer::c64;
 
                 if a.len() < n * n {
                     return Err(Error::InvalidArgument(format!(
@@ -498,15 +503,18 @@ macro_rules! impl_linalg_backend {
                     .iter()
                     .map(|&v| c64::new(v as f64, 0.0))
                     .collect();
-                let mat = faer::mat::from_column_major_slice(&a_complex, n, n);
-                let eig = mat.eigendecomposition::<c64>();
+                let mat = faer::MatRef::from_column_major_slice(&a_complex, n, n);
+                let eig = mat.eigen().map_err(|e| {
+                    Error::InvalidArgument(format!("eigendecomposition failed: {e:?}"))
+                })?;
 
-                let s_col = eig.s().column_vector();
-                let u_ref = eig.u();
+                let s_diag = eig.S();
+                let s_col = s_diag.column_vector();
+                let u_ref = eig.U();
 
                 // Write eigenvalues as interleaved [re, im, re, im, ...]
                 for i in 0..n {
-                    let val = s_col.read(i);
+                    let val = s_col[i];
                     values_ri[2 * i] = val.re as $ty;
                     values_ri[2 * i + 1] = val.im as $ty;
                 }
@@ -534,15 +542,13 @@ impl_linalg_backend!(f32);
 // ============================================================================
 
 /// Convert a slice of `Complex64` to a `Vec` of faer `c64` (safe element-wise copy).
-fn to_faer_c64(src: &[Complex64]) -> Vec<faer::complex_native::c64> {
-    src.iter()
-        .map(|c| faer::complex_native::c64::new(c.re, c.im))
-        .collect()
+fn to_faer_c64(src: &[Complex64]) -> Vec<faer::c64> {
+    src.iter().map(|c| faer::c64::new(c.re, c.im)).collect()
 }
 
 /// Copy a faer `c64` matrix (column-major) into a `Complex64` output slice.
 fn from_faer_c64_mat(
-    mat: faer::MatRef<'_, faer::complex_native::c64>,
+    mat: faer::MatRef<'_, faer::c64>,
     out: &mut [Complex64],
     rows: usize,
     cols: usize,
@@ -556,15 +562,13 @@ fn from_faer_c64_mat(
 }
 
 /// Convert a slice of `Complex32` to a `Vec` of faer `c32` (safe element-wise copy).
-fn to_faer_c32(src: &[Complex32]) -> Vec<faer::complex_native::c32> {
-    src.iter()
-        .map(|c| faer::complex_native::c32::new(c.re, c.im))
-        .collect()
+fn to_faer_c32(src: &[Complex32]) -> Vec<faer::c32> {
+    src.iter().map(|c| faer::c32::new(c.re, c.im)).collect()
 }
 
 /// Copy a faer `c32` matrix (column-major) into a `Complex32` output slice.
 fn from_faer_c32_mat(
-    mat: faer::MatRef<'_, faer::complex_native::c32>,
+    mat: faer::MatRef<'_, faer::c32>,
     out: &mut [Complex32],
     rows: usize,
     cols: usize,
@@ -630,17 +634,20 @@ macro_rules! impl_complex_linalg_backend {
                 }
 
                 let a_faer = $to_faer(a);
-                let mat = faer::mat::from_column_major_slice(&a_faer, m, n);
-                let svd = mat.thin_svd();
+                let mat = faer::MatRef::from_column_major_slice(&a_faer, m, n);
+                let svd = mat.thin_svd().map_err(|_| {
+                    Error::InvalidArgument("thin_svd: SVD computation failed".into())
+                })?;
 
-                let u_ref = svd.u();
-                let v_ref = svd.v();
-                let s_col = svd.s_diagonal();
+                let u_ref = svd.U();
+                let v_ref = svd.V();
+                let s_diag = svd.S();
 
                 // Copy U (m x k)
                 $from_faer_mat(u_ref, u, m, k);
 
-                // Singular values are real (stored as complex with zero imag)
+                // Singular values are real
+                let s_col = s_diag.column_vector();
                 for i in 0..k {
                     s[i] = s_col[i].re;
                 }
@@ -688,14 +695,14 @@ macro_rules! impl_complex_linalg_backend {
                 }
 
                 let a_faer = $to_faer(a);
-                let mat = faer::mat::from_column_major_slice(&a_faer, m, n);
+                let mat = faer::MatRef::from_column_major_slice(&a_faer, m, n);
                 let qr_result = mat.qr();
 
-                let q_mat = qr_result.compute_thin_q();
-                let r_mat = qr_result.compute_thin_r();
+                let q_mat = qr_result.compute_thin_Q();
+                let r_mat = qr_result.thin_R();
 
                 $from_faer_mat(q_mat.as_ref(), q, m, k);
-                $from_faer_mat(r_mat.as_ref(), r, k, n);
+                $from_faer_mat(r_mat, r, k, n);
 
                 Ok(())
             }
@@ -740,16 +747,16 @@ macro_rules! impl_complex_linalg_backend {
                 }
 
                 let a_faer = $to_faer(a);
-                let mat = faer::mat::from_column_major_slice(&a_faer, m, n);
+                let mat = faer::MatRef::from_column_major_slice(&a_faer, m, n);
                 let lu_result = mat.partial_piv_lu();
 
-                let l_mat = lu_result.compute_l();
-                let u_mat = lu_result.compute_u();
+                let l_mat = lu_result.L();
+                let u_mat = lu_result.U();
 
-                $from_faer_mat(l_mat.as_ref(), l, m, k);
-                $from_faer_mat(u_mat.as_ref(), u_out, k, n);
+                $from_faer_mat(l_mat, l, m, k);
+                $from_faer_mat(u_mat, u_out, k, n);
 
-                let perm_ref = lu_result.row_permutation();
+                let perm_ref = lu_result.P();
                 let (fwd, _inv) = perm_ref.arrays();
                 perm[..m].copy_from_slice(fwd);
 
@@ -778,11 +785,11 @@ macro_rules! impl_complex_linalg_backend {
                 }
 
                 let a_faer = $to_faer(a);
-                let mat = faer::mat::from_column_major_slice(&a_faer, n, n);
-                match mat.cholesky(faer::Side::Lower) {
+                let mat = faer::MatRef::from_column_major_slice(&a_faer, n, n);
+                match mat.llt(faer::Side::Lower) {
                     Ok(chol) => {
-                        let l_mat = chol.compute_l();
-                        $from_faer_mat(l_mat.as_ref(), l, n, n);
+                        let l_mat = chol.L();
+                        $from_faer_mat(l_mat, l, n, n);
                         Ok(())
                     }
                     Err(_) => Err(Error::InvalidArgument(
@@ -821,11 +828,13 @@ macro_rules! impl_complex_linalg_backend {
                 }
 
                 let a_faer = $to_faer(a);
-                let mat = faer::mat::from_column_major_slice(&a_faer, n, n);
-                let eig = mat.selfadjoint_eigendecomposition(faer::Side::Lower);
+                let mat = faer::MatRef::from_column_major_slice(&a_faer, n, n);
+                let eig = mat.self_adjoint_eigen(faer::Side::Lower).map_err(|_| {
+                    Error::InvalidArgument("eigen_sym: eigendecomposition failed".into())
+                })?;
 
-                let u_ref = eig.u();
-                let s_diag = eig.s();
+                let u_ref = eig.U();
+                let s_diag = eig.S();
 
                 $from_faer_mat(u_ref, vectors, n, n);
 
@@ -871,8 +880,8 @@ macro_rules! impl_complex_linalg_backend {
 
                 let a_faer = $to_faer(a);
                 let b_faer = $to_faer(b);
-                let a_mat = faer::mat::from_column_major_slice(&a_faer, m, k);
-                let b_mat = faer::mat::from_column_major_slice(&b_faer, k, n);
+                let a_mat = faer::MatRef::from_column_major_slice(&a_faer, m, k);
+                let b_mat = faer::MatRef::from_column_major_slice(&b_faer, k, n);
                 let result = &a_mat * &b_mat;
 
                 $from_faer_mat(result.as_ref(), c, m, n);
@@ -912,8 +921,8 @@ macro_rules! impl_complex_linalg_backend {
 
                 let a_faer = $to_faer(a);
                 let b_faer = $to_faer(b);
-                let a_mat = faer::mat::from_column_major_slice(&a_faer, n, n);
-                let b_mat = faer::mat::from_column_major_slice(&b_faer, n, nrhs);
+                let a_mat = faer::MatRef::from_column_major_slice(&a_faer, n, n);
+                let b_mat = faer::MatRef::from_column_major_slice(&b_faer, n, nrhs);
                 let lu = a_mat.partial_piv_lu();
                 let result = lu.solve(&b_mat);
 
@@ -990,7 +999,7 @@ macro_rules! impl_complex_linalg_backend {
                 values_ri: &mut [$complex_ty],
                 vectors_ri: &mut [$complex_ty],
             ) -> Result<()> {
-                use faer::complex_native::c64;
+                use faer::c64;
 
                 // For complex T, each element already holds re+im, so
                 // values_ri has length n (not 2*n) and vectors_ri has length n*n.
@@ -1022,14 +1031,17 @@ macro_rules! impl_complex_linalg_backend {
                     .iter()
                     .map(|c| c64::new(c.re as f64, c.im as f64))
                     .collect();
-                let mat = faer::mat::from_column_major_slice(&a_c64, n, n);
-                let eig = mat.eigendecomposition::<c64>();
+                let mat = faer::MatRef::from_column_major_slice(&a_c64, n, n);
+                let eig = mat.eigen().map_err(|e| {
+                    Error::InvalidArgument(format!("eigendecomposition failed: {e:?}"))
+                })?;
 
-                let s_col = eig.s().column_vector();
-                let u_ref = eig.u();
+                let s_diag = eig.S();
+                let s_col = s_diag.column_vector();
+                let u_ref = eig.U();
 
                 for i in 0..n {
-                    let val = s_col.read(i);
+                    let val = s_col[i];
                     values_ri[i] = <$complex_ty>::new(val.re as $real_ty, val.im as $real_ty);
                 }
 
