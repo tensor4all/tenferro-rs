@@ -20,6 +20,7 @@ tenferro-tensor = { path = "../tenferro-tensor" }
 strided-view.workspace = true
 strided-traits.workspace = true
 strided-perm.workspace = true
+strided-kernel.workspace = true
 rayon = "1.10"
 libloading.workspace = true
 num-complex.workspace = true

@@ -877,13 +877,14 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     let mut b_mat = ctx.take_scratch::<T>(k * n);
     let mut c_mat = ctx.take_scratch::<T>(m * n);
 
-    let mut idx = vec![0usize; nb];
-    let mut a_off = 0isize;
-    let mut b_off = 0isize;
-    let mut c_off = 0isize;
-
-    let mut result = Ok(());
-    loop {
+    // Per-batch GEMM kernel (packs strided operands into scratch buffers)
+    let mut do_batch = |a_off: isize,
+                        b_off: isize,
+                        c_off: isize,
+                        a_mat: &mut [T],
+                        b_mat: &mut [T],
+                        c_mat: &mut [T]|
+     -> Result<()> {
         for kk in 0..k {
             for i in 0..m {
                 let src_off = a_off + i as isize * a_row + kk as isize * a_col;
@@ -909,10 +910,7 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
             }
         }
 
-        if let Err(e) = gemm_fn(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
-            result = Err(e);
-            break;
-        }
+        gemm_fn(alpha, a_mat, b_mat, beta, c_mat, m, n, k)?;
 
         for j in 0..n {
             for i in 0..m {
@@ -922,32 +920,65 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
                 }
             }
         }
+        Ok(())
+    };
 
-        if nb == 0 {
-            break;
-        }
+    let mut result = Ok(());
 
-        let mut carried_all = true;
-        for ax in 0..nb {
-            let dim = batch_dims[ax];
-            let next = idx[ax] + 1;
-            if next < dim {
-                idx[ax] = next;
-                a_off += a_batch[ax];
-                b_off += b_batch[ax];
-                c_off += c_batch[ax];
-                carried_all = false;
+    if nb == 0 {
+        result = do_batch(0, 0, 0, &mut a_mat, &mut b_mat, &mut c_mat);
+    } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
+        strided_perm::try_fuse_group(batch_dims, a_batch),
+        strided_perm::try_fuse_group(batch_dims, b_batch),
+        strided_perm::try_fuse_group(batch_dims, c_batch),
+    ) {
+        // Fast path: batch dims are fusable → pointer increment loop
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+        let mut c_off = 0isize;
+        for _ in 0..total {
+            if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
+                result = Err(e);
                 break;
-            } else {
-                idx[ax] = 0;
-                let back = (dim as isize - 1).max(0);
-                a_off -= back * a_batch[ax];
-                b_off -= back * b_batch[ax];
-                c_off -= back * c_batch[ax];
             }
+            a_off += a_step;
+            b_off += b_step;
+            c_off += c_step;
         }
-        if carried_all {
-            break;
+    } else {
+        // Fallback: carry-based multi-index iteration
+        let mut idx = vec![0usize; nb];
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+        let mut c_off = 0isize;
+        loop {
+            if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
+                result = Err(e);
+                break;
+            }
+
+            let mut carried_all = true;
+            for ax in 0..nb {
+                let dim = batch_dims[ax];
+                let next = idx[ax] + 1;
+                if next < dim {
+                    idx[ax] = next;
+                    a_off += a_batch[ax];
+                    b_off += b_batch[ax];
+                    c_off += c_batch[ax];
+                    carried_all = false;
+                    break;
+                } else {
+                    idx[ax] = 0;
+                    let back = (dim as isize - 1).max(0);
+                    a_off -= back * a_batch[ax];
+                    b_off -= back * b_batch[ax];
+                    c_off -= back * c_batch[ax];
+                }
+            }
+            if carried_all {
+                break;
+            }
         }
     }
 
@@ -998,13 +1029,8 @@ fn execute_batched_gemm_f64(
             Accum::Add
         };
 
-        let mut idx = vec![0usize; nb];
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-
-        loop {
-            // Create strided MatRef/MatMut directly — no pack/unpack needed.
+        // Per-batch GEMM kernel
+        let mut do_batch = |a_off: isize, b_off: isize, c_off: isize| {
             let a_mat =
                 unsafe { MatRef::<f64>::from_raw_parts(a_ptr.offset(a_off), m, k, a_row, a_col) };
             let b_mat =
@@ -1025,32 +1051,56 @@ fn execute_batched_gemm_f64(
             };
 
             faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
+        };
 
-            if nb == 0 {
-                break;
+        if nb == 0 {
+            do_batch(0, 0, 0);
+        } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
+            strided_perm::try_fuse_group(batch_dims, a_batch),
+            strided_perm::try_fuse_group(batch_dims, b_batch),
+            strided_perm::try_fuse_group(batch_dims, c_batch),
+        ) {
+            // Fast path: batch dims are fusable → pointer increment loop
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            for _ in 0..total {
+                do_batch(a_off, b_off, c_off);
+                a_off += a_step;
+                b_off += b_step;
+                c_off += c_step;
             }
+        } else {
+            // Fallback: carry-based multi-index iteration
+            let mut idx = vec![0usize; nb];
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            loop {
+                do_batch(a_off, b_off, c_off);
 
-            let mut carried_all = true;
-            for ax in 0..nb {
-                let dim = batch_dims[ax];
-                let next = idx[ax] + 1;
-                if next < dim {
-                    idx[ax] = next;
-                    a_off += a_batch[ax];
-                    b_off += b_batch[ax];
-                    c_off += c_batch[ax];
-                    carried_all = false;
-                    break;
-                } else {
-                    idx[ax] = 0;
-                    let back = (dim as isize - 1).max(0);
-                    a_off -= back * a_batch[ax];
-                    b_off -= back * b_batch[ax];
-                    c_off -= back * c_batch[ax];
+                let mut carried_all = true;
+                for ax in 0..nb {
+                    let dim = batch_dims[ax];
+                    let next = idx[ax] + 1;
+                    if next < dim {
+                        idx[ax] = next;
+                        a_off += a_batch[ax];
+                        b_off += b_batch[ax];
+                        c_off += c_batch[ax];
+                        carried_all = false;
+                        break;
+                    } else {
+                        idx[ax] = 0;
+                        let back = (dim as isize - 1).max(0);
+                        a_off -= back * a_batch[ax];
+                        b_off -= back * b_batch[ax];
+                        c_off -= back * c_batch[ax];
+                    }
                 }
-            }
-            if carried_all {
-                break;
+                if carried_all {
+                    break;
+                }
             }
         }
 
@@ -1106,12 +1156,8 @@ fn execute_batched_gemm_f32(
             Accum::Add
         };
 
-        let mut idx = vec![0usize; nb];
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-
-        loop {
+        // Per-batch GEMM kernel
+        let mut do_batch = |a_off: isize, b_off: isize, c_off: isize| {
             let a_mat =
                 unsafe { MatRef::<f32>::from_raw_parts(a_ptr.offset(a_off), m, k, a_row, a_col) };
             let b_mat =
@@ -1131,32 +1177,56 @@ fn execute_batched_gemm_f32(
             };
 
             faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
+        };
 
-            if nb == 0 {
-                break;
+        if nb == 0 {
+            do_batch(0, 0, 0);
+        } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
+            strided_perm::try_fuse_group(batch_dims, a_batch),
+            strided_perm::try_fuse_group(batch_dims, b_batch),
+            strided_perm::try_fuse_group(batch_dims, c_batch),
+        ) {
+            // Fast path: batch dims are fusable → pointer increment loop
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            for _ in 0..total {
+                do_batch(a_off, b_off, c_off);
+                a_off += a_step;
+                b_off += b_step;
+                c_off += c_step;
             }
+        } else {
+            // Fallback: carry-based multi-index iteration
+            let mut idx = vec![0usize; nb];
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            loop {
+                do_batch(a_off, b_off, c_off);
 
-            let mut carried_all = true;
-            for ax in 0..nb {
-                let dim = batch_dims[ax];
-                let next = idx[ax] + 1;
-                if next < dim {
-                    idx[ax] = next;
-                    a_off += a_batch[ax];
-                    b_off += b_batch[ax];
-                    c_off += c_batch[ax];
-                    carried_all = false;
-                    break;
-                } else {
-                    idx[ax] = 0;
-                    let back = (dim as isize - 1).max(0);
-                    a_off -= back * a_batch[ax];
-                    b_off -= back * b_batch[ax];
-                    c_off -= back * c_batch[ax];
+                let mut carried_all = true;
+                for ax in 0..nb {
+                    let dim = batch_dims[ax];
+                    let next = idx[ax] + 1;
+                    if next < dim {
+                        idx[ax] = next;
+                        a_off += a_batch[ax];
+                        b_off += b_batch[ax];
+                        c_off += c_batch[ax];
+                        carried_all = false;
+                        break;
+                    } else {
+                        idx[ax] = 0;
+                        let back = (dim as isize - 1).max(0);
+                        a_off -= back * a_batch[ax];
+                        b_off -= back * b_batch[ax];
+                        c_off -= back * c_batch[ax];
+                    }
                 }
-            }
-            if carried_all {
-                break;
+                if carried_all {
+                    break;
+                }
             }
         }
 
@@ -1620,158 +1690,27 @@ fn execute_elementwise_mul<T: Scalar>(
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
-    let dims = output.dims().to_vec();
 
-    let is_col_major_contiguous = |strides: &[isize], dims: &[usize]| -> bool {
-        if strides.len() != dims.len() {
-            return false;
-        }
-        let mut expect = 1isize;
-        for (&s, &d) in strides.iter().zip(dims.iter()) {
-            if s != expect {
-                return false;
-            }
-            expect = expect.saturating_mul(d as isize);
-        }
-        true
-    };
-    let numel: usize = dims.iter().product();
-
-    if is_col_major_contiguous(a.strides(), &dims)
-        && is_col_major_contiguous(b.strides(), &dims)
-        && is_col_major_contiguous(output.strides(), &dims)
-    {
-        let a_ptr = a.ptr();
-        let b_ptr = b.ptr();
-        let c_ptr = output.as_mut_ptr();
-        if beta == T::zero() {
-            for i in 0..numel {
-                unsafe {
-                    *c_ptr.add(i) = alpha * (*a_ptr.add(i) * *b_ptr.add(i));
-                }
-            }
-        } else {
-            for i in 0..numel {
-                unsafe {
-                    *c_ptr.add(i) = alpha * (*a_ptr.add(i) * *b_ptr.add(i)) + beta * *c_ptr.add(i);
-                }
-            }
-        }
-        return Ok(());
-    }
-
-    // Rank-2 outer-product specialization for broadcasted inputs:
-    // a: [m,1], b: [1,n] (or swapped ownership of the non-broadcast axis),
-    // output: [m,n] contiguous col-major.
-    if dims.len() == 2
-        && is_col_major_contiguous(output.strides(), &dims)
-        && a.strides().len() == 2
-        && b.strides().len() == 2
-        && a.strides().iter().all(|&s| s >= 0)
-        && b.strides().iter().all(|&s| s >= 0)
-    {
-        let m = dims[0];
-        let n = dims[1];
-        let a_s0 = a.strides()[0];
-        let a_s1 = a.strides()[1];
-        let b_s0 = b.strides()[0];
-        let b_s1 = b.strides()[1];
-        let a_ptr = a.ptr();
-        let b_ptr = b.ptr();
-        let c_ptr = output.as_mut_ptr();
-
-        let a_i_axis = if a_s1 == 0 {
-            Some(a_s0)
-        } else if a_s0 == 0 {
-            Some(a_s1)
-        } else {
-            None
-        };
-        let b_j_axis = if b_s0 == 0 {
-            Some(b_s1)
-        } else if b_s1 == 0 {
-            Some(b_s0)
-        } else {
-            None
-        };
-
-        if let (Some(a_i_stride), Some(b_j_stride)) = (a_i_axis, b_j_axis) {
-            for j in 0..n {
-                let b_val = unsafe { *b_ptr.offset(j as isize * b_j_stride) };
-                for i in 0..m {
-                    let a_val = unsafe { *a_ptr.offset(i as isize * a_i_stride) };
-                    let out_idx = i + j * m;
-                    let val = alpha * (a_val * b_val);
-                    unsafe {
-                        if beta == T::zero() {
-                            *c_ptr.add(out_idx) = val;
-                        } else {
-                            *c_ptr.add(out_idx) = val + beta * *c_ptr.add(out_idx);
-                        }
-                    }
-                }
-            }
-            return Ok(());
-        }
-    }
-
-    // Fast path for broadcast-heavy cases (e.g. outer products):
-    // when output is contiguous col-major, run a linear output loop while
-    // advancing source offsets with an odometer. This avoids per-element
-    // index allocations and repeated bounds/stride decoding in get/set.
-    let rank = dims.len();
-    if is_col_major_contiguous(output.strides(), &dims)
-        && a.strides().len() == rank
-        && b.strides().len() == rank
-        && a.strides().iter().all(|&s| s >= 0)
-        && b.strides().iter().all(|&s| s >= 0)
-    {
-        let a_ptr = a.ptr();
-        let b_ptr = b.ptr();
-        let c_ptr = output.as_mut_ptr();
-        let a_strides = a.strides();
-        let b_strides = b.strides();
-        let mut idx = vec![0usize; rank];
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-
-        for linear in 0..numel {
-            let val = unsafe { alpha * (*a_ptr.offset(a_off) * *b_ptr.offset(b_off)) };
-            unsafe {
-                if beta == T::zero() {
-                    *c_ptr.add(linear) = val;
-                } else {
-                    *c_ptr.add(linear) = val + beta * *c_ptr.add(linear);
-                }
-            }
-
-            if rank == 0 || linear + 1 == numel {
-                continue;
-            }
-
-            for ax in 0..rank {
-                idx[ax] += 1;
-                a_off += a_strides[ax];
-                b_off += b_strides[ax];
-                if idx[ax] < dims[ax] {
-                    break;
-                }
-                idx[ax] = 0;
-                a_off -= a_strides[ax] * dims[ax] as isize;
-                b_off -= b_strides[ax] * dims[ax] as isize;
-            }
-        }
-        return Ok(());
-    }
-
-    for_each_index(&dims, |idx| {
-        let val = alpha * (a.get(idx) * b.get(idx));
-        if beta == T::zero() {
-            output.set(idx, val);
-        } else {
+    if beta == T::zero() {
+        // Hot path (>99% of einsum calls): C = alpha * A * B
+        // Delegate to strided-kernel which handles dimension fusing,
+        // cache-optimized block traversal, and SIMD dispatch.
+        let alpha_val = alpha;
+        strided_kernel::zip_map2_into(output, a, b, move |a_val, b_val| {
+            alpha_val * (a_val * b_val)
+        })
+        .map_err(|e| Error::DeviceError(e.to_string()))?;
+    } else {
+        // Rare path: C = alpha * A * B + beta * C
+        // Cannot use zip_map2_into (overwrites dest, losing beta*C).
+        // Cannot alias dest with a zip_map3 source.
+        // Use index-based loop for correctness.
+        let dims = output.dims().to_vec();
+        for_each_index(&dims, |idx| {
+            let val = alpha * (a.get(idx) * b.get(idx));
             output.set(idx, val + beta * output.get(idx));
-        }
-    });
+        });
+    }
     Ok(())
 }
 
