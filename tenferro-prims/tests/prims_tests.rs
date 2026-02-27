@@ -300,7 +300,7 @@ fn plan_cache_complex64_separate_from_f64() {
 
 #[test]
 fn cpu_has_extension_contract() {
-    assert!(!cpu_has_ext::<f64>(Extension::Contract));
+    assert!(cpu_has_ext::<f64>(Extension::Contract));
 }
 
 #[test]

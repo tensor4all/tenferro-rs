@@ -2635,7 +2635,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     }
 
     fn has_extension_for(_ext: Extension) -> bool {
-        matches!(_ext, Extension::ElementwiseMul)
+        matches!(_ext, Extension::ElementwiseMul | Extension::Contract)
     }
 }
 

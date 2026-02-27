@@ -1961,12 +1961,35 @@ where
             }
             execute_outer_with_plan::<Alg, Backend>(ctx, op_plan, subs_c, a, b, alpha, beta, output)
         }
-        StepStrategy::Gemm(gemm_plan) => execute_gemm_with_plan::<Alg, Backend>(
-            ctx, gemm_plan, subs_c, a, b, alpha, beta, output,
-        ),
-        StepStrategy::Contract => execute_pairwise_contraction::<Alg, Backend>(
-            ctx, subs_a, subs_b, subs_c, a, b, alpha, beta, output,
-        ),
+        StepStrategy::Gemm(gemm_plan) => {
+            if Backend::has_extension_for(Extension::Contract) {
+                // Preferred optimization path: fused Contract
+                let desc = PrimDescriptor::Contract {
+                    modes_a: subs_a.to_vec(),
+                    modes_b: subs_b.to_vec(),
+                    modes_c: subs_c.to_vec(),
+                };
+                let shapes = [a.dims(), b.dims(), output.dims()];
+                let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+                Backend::execute(ctx, &prim_plan, alpha, &[a, b], beta, output)
+            } else {
+                // Fallback: core ops decomposition
+                execute_gemm_with_plan::<Alg, Backend>(
+                    ctx, gemm_plan, subs_c, a, b, alpha, beta, output,
+                )
+            }
+        }
+        StepStrategy::Contract => {
+            // Contract extension: direct fused execution
+            let desc = PrimDescriptor::Contract {
+                modes_a: subs_a.to_vec(),
+                modes_b: subs_b.to_vec(),
+                modes_c: subs_c.to_vec(),
+            };
+            let shapes = [a.dims(), b.dims(), output.dims()];
+            let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
+            Backend::execute(ctx, &prim_plan, alpha, &[a, b], beta, output)
+        }
     }
 }
 
