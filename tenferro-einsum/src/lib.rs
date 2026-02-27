@@ -1563,12 +1563,14 @@ where
     }
 
     // Multi-tensor case: follow the contraction tree.
-    // Keep intermediates by logical index; freed buffers go back to the thread-local pool.
+    // Use Vec-indexed storage instead of HashMap for O(1) access.
     let memory_space = infer_memory_space(operands)?;
-    let mut intermediates: HashMap<usize, Tensor<Alg::Scalar>> = HashMap::new();
+    let total_slots = n_inputs + tree.steps.len();
+    let mut intermediates: Vec<Option<Tensor<Alg::Scalar>>> = Vec::with_capacity(total_slots);
+    intermediates.resize_with(total_slots, || None);
 
     // Count remaining uses for each operand/index in the contraction schedule.
-    let mut use_counts = vec![0usize; n_inputs + tree.steps.len()];
+    let mut use_counts = vec![0usize; total_slots];
     for step in &tree.steps {
         use_counts[step.left] += 1;
         use_counts[step.right] += 1;
@@ -1578,7 +1580,7 @@ where
         let left: &Tensor<Alg::Scalar> = if step.left < n_inputs {
             operands[step.left]
         } else {
-            intermediates.get(&step.left).ok_or_else(|| {
+            intermediates[step.left].as_ref().ok_or_else(|| {
                 Error::InvalidArgument(format!(
                     "missing intermediate tensor at index {}",
                     step.left
@@ -1588,7 +1590,7 @@ where
         let right: &Tensor<Alg::Scalar> = if step.right < n_inputs {
             operands[step.right]
         } else {
-            intermediates.get(&step.right).ok_or_else(|| {
+            intermediates[step.right].as_ref().ok_or_else(|| {
                 Error::InvalidArgument(format!(
                     "missing intermediate tensor at index {}",
                     step.right
@@ -1617,8 +1619,8 @@ where
             // Intermediate step: create new tensor with alpha=1, beta=0
             let result_idx = n_inputs + step_idx;
             let subs_result = &tree.operand_subs[result_idx];
-            let result_shape = compute_output_shape(subs_result, &tree.size_dict)?;
-            let mut result = alloc_tensor_pooled::<Alg::Scalar>(&result_shape, memory_space);
+            let result_shape = &tree.step_output_shapes[step_idx];
+            let mut result = alloc_tensor_pooled::<Alg::Scalar>(result_shape, memory_space);
             execute_pairwise_contraction::<Alg, Backend>(
                 ctx,
                 subs_left,
@@ -1630,7 +1632,7 @@ where
                 Alg::Scalar::zero(),
                 &mut result,
             )?;
-            intermediates.insert(result_idx, result);
+            intermediates[result_idx] = Some(result);
         }
 
         // Release consumed intermediates when their last use is complete.
@@ -1642,7 +1644,7 @@ where
             }
             use_counts[*idx] = use_counts[*idx].saturating_sub(1);
             if *idx >= n_inputs && use_counts[*idx] == 0 {
-                if let Some(t) = intermediates.remove(idx) {
+                if let Some(t) = intermediates[*idx].take() {
                     return_tensor_to_pool(t);
                 }
             }
@@ -2060,6 +2062,8 @@ pub struct ContractionTree {
     size_dict: HashMap<u32, usize>,
     /// Subscripts for each operand (0..n_inputs from input, then intermediates).
     operand_subs: Vec<Vec<u32>>,
+    /// Pre-computed output shapes for each intermediate step (indexed by step_idx).
+    step_output_shapes: Vec<Vec<usize>>,
 }
 
 impl ContractionTree {
@@ -2203,11 +2207,20 @@ impl ContractionTree {
             steps.push(ContractionStep { left, right });
         }
 
+        // Pre-compute output shapes for each intermediate step.
+        let step_output_shapes: Vec<Vec<usize>> = (0..steps.len())
+            .map(|step_idx| {
+                let result_idx = n_inputs + step_idx;
+                compute_output_shape(&operand_subs[result_idx], &size_dict)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         Ok(Self {
             subscripts: subscripts.clone(),
             steps,
             size_dict,
             operand_subs,
+            step_output_shapes,
         })
     }
 }
