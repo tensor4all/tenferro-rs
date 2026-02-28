@@ -83,7 +83,7 @@ macro_rules! impl_faer_gemm {
                     Accum::Add
                 };
                 let mut c_mat = MatMut::<$ty>::from_raw_parts_mut(c_ptr, m, n, c_rs, c_cs);
-                faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
+                faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::rayon(0));
             }
         }
     };
