@@ -134,7 +134,11 @@ pub(crate) fn compute_output_shape(
 
 /// Compute intermediate subscripts when contracting two operands.
 /// Keeps labels from left/right that appear in the `needed` set.
-pub(crate) fn intermediate_subs(subs_left: &[u32], subs_right: &[u32], needed: &HashSet<u32>) -> Vec<u32> {
+pub(crate) fn intermediate_subs(
+    subs_left: &[u32],
+    subs_right: &[u32],
+    needed: &HashSet<u32>,
+) -> Vec<u32> {
     let mut seen = HashSet::new();
     let mut output = Vec::new();
     for &l in subs_left.iter().chain(subs_right.iter()) {

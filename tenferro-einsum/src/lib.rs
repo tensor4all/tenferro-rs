@@ -221,47 +221,38 @@
 //! ```
 
 // Internal modules
-mod notation;
-mod subscripts;
-mod nested;
-mod tree;
-mod util;
-mod manual;
-mod unary;
+pub(crate) mod ad;
+pub(crate) mod api;
 mod classify;
-mod prepare;
-mod plan;
 mod dispatch;
 mod execute;
-pub(crate) mod api;
-pub(crate) mod ad;
+mod manual;
+mod nested;
+mod notation;
+mod plan;
 mod pool;
+mod prepare;
+mod subscripts;
+mod tree;
+mod unary;
+mod util;
 
 // Public re-exports: types
-pub use subscripts::Subscripts;
 pub use nested::NestedEinsum;
+pub use subscripts::Subscripts;
 pub use tree::ContractionTree;
 
 // Public re-exports: functions
 pub use api::{
-    einsum,
-    einsum_into,
-    einsum_owned,
-    einsum_with_plan,
-    einsum_with_plan_into,
-    einsum_with_plan_owned,
-    einsum_with_subscripts,
-    einsum_with_subscripts_into,
+    einsum, einsum_into, einsum_owned, einsum_with_plan, einsum_with_plan_into,
+    einsum_with_plan_owned, einsum_with_subscripts, einsum_with_subscripts_into,
     einsum_with_subscripts_owned,
 };
 
-pub use ad::{
-    dual_einsum,
-    einsum_frule,
-    einsum_hvp,
-    einsum_rrule,
-    tracked_einsum,
-};
+pub use ad::{dual_einsum, einsum_frule, einsum_hvp, einsum_rrule, tracked_einsum};
+
+#[cfg(feature = "profile-dispatch")]
+pub use dispatch::print_and_reset_profile;
 
 // ============================================================================
 // Tests

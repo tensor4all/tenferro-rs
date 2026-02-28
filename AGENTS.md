@@ -32,6 +32,21 @@ See [`docs/design/`](docs/design/) for architecture and design documents.
 
 **Note**: Files under `docs/plans/` are historical records of past design discussions and decisions. They may contradict the current API or design — do not update them to match the current state.
 
+## Performance-Critical Conventions
+
+### Column-Major Dimension Ordering
+
+tenferro uses **column-major** (Fortran order) storage: the leftmost dimension has the smallest stride and varies fastest in memory. When designing internal layouts for multi-dimensional operations (einsum GEMM, linalg, etc.), dimension ordering must respect this:
+
+- **Batch dimensions go on the RIGHT (trailing)**: In col-major, rightmost dims have the largest stride. Placing batch dims on the right means each batch slice occupies a contiguous block of memory, giving good cache locality for the GEMM kernel operating within each slice.
+- **Contraction/compute dimensions go on the LEFT (leading)**: lo (M), sum (K), ro (N) dims should be leftmost so the GEMM kernel accesses contiguous memory.
+
+**Wrong** (batch on left in col-major): `A[batch..., m, k]` — batch has smallest stride, so elements within each `(m, k)` slice are scattered across memory.
+
+**Correct** (batch on right in col-major): `A[lo..., sum..., batch...]` — each batch slice is contiguous, matching strided-rs's convention and standard GEMM cache behavior.
+
+This applies to `target_a`, `target_b`, `c_gemm_shape` in einsum's `GemmPlan`, and to any future batched operation layout.
+
 ## Code Style
 
 - `cargo fmt --all` for formatting (always run before committing)

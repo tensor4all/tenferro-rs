@@ -8,7 +8,6 @@ use tenferro_tensor::Tensor;
 
 use crate::dispatch::execute_pairwise_with_plan;
 use crate::nested::NestedEinsum;
-use crate::plan::{compile_step_plans, StepStrategy};
 use crate::pool::BufferPool;
 use crate::tree::ContractionTree;
 use crate::unary::execute_single_tensor_einsum;
@@ -18,6 +17,11 @@ use crate::util::{alloc_tensor_from_pool, infer_memory_space};
 use crate::api::einsum_with_subscripts;
 
 /// Execute a ContractionTree against concrete input tensors.
+///
+/// When `lazy_final` is true, the final step may produce a non-contiguous
+/// view (lazy permute) instead of a physical copy. This is safe when the
+/// output tensor is internally allocated (e.g. by `einsum_with_plan`) but
+/// NOT when it is a user-provided buffer (e.g. `einsum_with_plan_into`).
 pub(crate) fn execute_tree<Alg, Backend>(
     ctx: &mut Backend::Context,
     tree: &ContractionTree,
@@ -26,6 +30,7 @@ pub(crate) fn execute_tree<Alg, Backend>(
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
     pool: &mut BufferPool<Alg::Scalar>,
+    lazy_final: bool,
 ) -> Result<()>
 where
     Alg: Algebra,
@@ -54,36 +59,27 @@ where
     }
 
     // Multi-tensor case: follow the contraction tree.
-    // Pre-compile step plans to avoid per-step HashMap/HashSet allocations.
-    let step_plans = compile_step_plans(tree);
+    // Step plans are pre-compiled and cached in the ContractionTree.
+    let step_plans = &tree.step_plans;
 
-    // Pre-compute Backend prim plans for Contract/ElementwiseMul extensions.
-    // This moves plan() calls out of the per-step hot loop.
-    let use_contract = Backend::has_extension_for(Extension::Contract);
+    // Pre-compute Backend prim plans for ElementwiseMul extension.
+    // Only pre-compute for steps where all dimensions are batch (m==n==k==1)
+    // and no diagonal extraction is needed (shapes are known at plan time).
     let use_ewmul = Backend::has_extension_for(Extension::ElementwiseMul);
-    let prim_plans: Vec<Option<Backend::Plan>> = if use_contract || use_ewmul {
+    let prim_plans: Vec<Option<Backend::Plan>> = if use_ewmul {
         step_plans
             .iter()
             .enumerate()
             .map(|(step_idx, sp)| {
-                // Pre-compute Contract plans for Contraction(None) steps only.
-                // Contraction(Some(_)) steps pre-reduce at runtime, so Contract plan
-                // must be computed after reduction with the reduced subscripts/shapes.
-                let needs_contract = use_contract
-                    && matches!(sp.strategy, StepStrategy::Contraction(None));
-                let needs_ewmul = use_ewmul && matches!(sp.strategy, StepStrategy::ElementwiseMul);
-                if !needs_contract && !needs_ewmul {
+                // Only pre-compute EwMul for pure batch steps without diagonal extraction.
+                // Diagonal extraction changes shapes at runtime, so we can't plan ahead.
+                if sp.gemm.m != 1 || sp.gemm.n != 1 || sp.gemm.k != 1 {
+                    return None;
+                }
+                if sp.diag_a.is_some() || sp.diag_b.is_some() {
                     return None;
                 }
                 let step = &tree.steps[step_idx];
-                let subs_a = &tree.operand_subs[step.left];
-                let subs_b = &tree.operand_subs[step.right];
-                let is_last = step_idx == tree.steps.len() - 1;
-                let subs_c = if is_last {
-                    &tree.subscripts.output
-                } else {
-                    &tree.operand_subs[n_inputs + step_idx]
-                };
                 let shape_a: &[usize] = if step.left < n_inputs {
                     operands[step.left].dims()
                 } else {
@@ -94,21 +90,40 @@ where
                 } else {
                     &tree.step_output_shapes[step.right - n_inputs]
                 };
+                let is_last = step_idx == tree.steps.len() - 1;
                 let shape_c: &[usize] = if is_last {
                     output.dims()
                 } else {
                     &tree.step_output_shapes[step_idx]
                 };
-                let desc = if needs_contract {
-                    PrimDescriptor::Contract {
-                        modes_a: subs_a.to_vec(),
-                        modes_b: subs_b.to_vec(),
-                        modes_c: subs_c.to_vec(),
-                    }
-                } else {
-                    PrimDescriptor::ElementwiseMul
-                };
+                let desc = PrimDescriptor::ElementwiseMul;
                 let shapes = [shape_a, shape_b, shape_c];
+                Backend::plan(ctx, &desc, &shapes).ok()
+            })
+            .collect()
+    } else {
+        (0..step_plans.len()).map(|_| None).collect()
+    };
+
+    // Pre-compute BatchedGemm plans for all steps.
+    // Shapes are fully determined by StepPlan (m, k, n, batch_sizes) —
+    // independent of actual tensor data or strides.
+    let use_contract = Backend::has_extension_for(Extension::Contract);
+    let gemm_plans: Vec<Option<Backend::Plan>> = if !use_contract {
+        step_plans
+            .iter()
+            .map(|sp| {
+                let desc = PrimDescriptor::BatchedGemm {
+                    batch_dims: sp.gemm.batch_sizes.clone(),
+                    m: sp.gemm.m,
+                    n: sp.gemm.n,
+                    k: sp.gemm.k,
+                };
+                let shapes = [
+                    sp.gemm.a_gemm_shape.as_slice(),
+                    sp.gemm.b_gemm_shape.as_slice(),
+                    sp.gemm.c_gemm_shape.as_slice(),
+                ];
                 Backend::plan(ctx, &desc, &shapes).ok()
             })
             .collect()
@@ -156,11 +171,12 @@ where
         let is_last = step_idx == tree.steps.len() - 1;
 
         if is_last {
-            // Last step: write directly to output with alpha/beta
+            // Last step: write directly to output with alpha/beta.
             execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
                 &step_plans[step_idx],
                 prim_plans[step_idx].as_ref(),
+                gemm_plans[step_idx].as_ref(),
                 subs_left,
                 subs_right,
                 &tree.subscripts.output,
@@ -170,9 +186,12 @@ where
                 beta,
                 output,
                 pool,
+                lazy_final,
             )?;
         } else {
-            // Intermediate step: create new tensor with alpha=1, beta=0
+            // Intermediate step: create new tensor with alpha=1, beta=0.
+            // lazy_output=true: may return a non-contiguous view to avoid
+            // a physical permute; the next step handles arbitrary strides.
             let result_idx = n_inputs + step_idx;
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = &tree.step_output_shapes[step_idx];
@@ -182,6 +201,7 @@ where
                 ctx,
                 &step_plans[step_idx],
                 prim_plans[step_idx].as_ref(),
+                gemm_plans[step_idx].as_ref(),
                 subs_left,
                 subs_right,
                 subs_result,
@@ -191,6 +211,7 @@ where
                 Alg::Scalar::zero(),
                 &mut result,
                 pool,
+                true,
             )?;
             intermediates[result_idx] = Some(result);
         }

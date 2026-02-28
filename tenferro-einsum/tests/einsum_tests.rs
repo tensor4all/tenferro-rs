@@ -36,6 +36,43 @@ fn get(t: &Tensor<f64>, idx: &[usize]) -> f64 {
     data[pos as usize]
 }
 
+/// Helper: read all elements in col-major (Fortran) logical order.
+/// Works correctly regardless of the tensor's physical memory layout.
+fn to_col_major_vec(t: &Tensor<f64>) -> Vec<f64> {
+    let dims = t.dims();
+    let ndim = dims.len();
+    let total: usize = dims.iter().product();
+    let mut result = Vec::with_capacity(total);
+    let mut index = vec![0usize; ndim];
+    for _ in 0..total {
+        result.push(get(t, &index));
+        // Increment index in col-major order (leftmost axis varies fastest)
+        for d in 0..ndim {
+            index[d] += 1;
+            if index[d] < dims[d] {
+                break;
+            }
+            index[d] = 0;
+        }
+    }
+    result
+}
+
+/// Helper: assert two tensors are element-wise equal (col-major logical order).
+fn assert_tensors_close(a: &Tensor<f64>, b: &Tensor<f64>, label: &str) {
+    assert_eq!(a.dims(), b.dims(), "{label}: shape mismatch");
+    let va = to_col_major_vec(a);
+    let vb = to_col_major_vec(b);
+    for i in 0..va.len() {
+        assert!(
+            (va[i] - vb[i]).abs() < 1e-10,
+            "{label}[{i}]: a={}, b={}",
+            va[i],
+            vb[i]
+        );
+    }
+}
+
 // ============================================================================
 // Subscripts parsing
 // ============================================================================
@@ -1277,8 +1314,8 @@ typed_einsum_tests!(typed_complex64, num_complex::Complex64);
 //     - Trace + full reduction ("iij->"): the trace backend does not sum
 //       over non-paired, non-output axes (j is silently ignored)
 //     - Repeated labels in a single operand during pairwise contraction
-//       ("ii,j->j"): the Contract descriptor does not enforce diagonal
-//       constraints on repeated labels within one operand
+//       ("ii,j->j"): RESOLVED — unified GEMM dispatcher uses Tensor::diagonal
+//       for diagonal extraction before GEMM decomposition
 // ============================================================================
 
 // ============================================================================
@@ -2416,16 +2453,7 @@ fn nested_einsum_propagates_fw_grad() {
 
     let nested_grad = result.fw_grad().unwrap();
     let flat_grad = flat.fw_grad().unwrap();
-    let ng = nested_grad.buffer().as_slice().unwrap();
-    let fg = flat_grad.buffer().as_slice().unwrap();
-    for i in 0..ng.len() {
-        assert!(
-            (ng[i] - fg[i]).abs() < 1e-10,
-            "fw_grad[{i}]: nested={}, flat={}",
-            ng[i],
-            fg[i]
-        );
-    }
+    assert_tensors_close(&nested_grad, &flat_grad, "fw_grad");
 }
 
 #[test]
@@ -2469,16 +2497,7 @@ fn einsum_frule_parenthesized() {
     )
     .unwrap();
 
-    let ns = nested_tangent.buffer().as_slice().unwrap();
-    let fs = flat_tangent.buffer().as_slice().unwrap();
-    for i in 0..ns.len() {
-        assert!(
-            (ns[i] - fs[i]).abs() < 1e-10,
-            "frule tangent[{i}]: nested={}, flat={}",
-            ns[i],
-            fs[i]
-        );
-    }
+    assert_tensors_close(&nested_tangent, &flat_tangent, "frule tangent");
 }
 
 #[test]
@@ -2580,31 +2599,125 @@ fn dual_einsum_parenthesized() {
             .unwrap();
 
     // Primals must match
-    let np = nested_result.primal().buffer().as_slice().unwrap();
-    let fp = flat_result.primal().buffer().as_slice().unwrap();
-    for i in 0..np.len() {
-        assert!(
-            (np[i] - fp[i]).abs() < 1e-10,
-            "dual primal[{i}]: nested={}, flat={}",
-            np[i],
-            fp[i]
-        );
-    }
+    assert_tensors_close(nested_result.primal(), flat_result.primal(), "dual primal");
 
     // Tangents must match
-    let nt = nested_result
-        .tangent()
-        .unwrap()
-        .buffer()
-        .as_slice()
+    assert_tensors_close(
+        nested_result.tangent().unwrap(),
+        flat_result.tangent().unwrap(),
+        "dual tangent",
+    );
+}
+
+// ============================================================================
+// Binary trace-like patterns (repeated labels in a single operand)
+// ============================================================================
+
+#[test]
+fn einsum_binary_diag_ii_jk_to_ijk() {
+    // "ii,jk->ijk": diagonal extraction on A, outer product with B
+    let mut ctx = CpuContext::new(1);
+    // A is 3x3
+    let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0], &[3, 3], COL)
         .unwrap();
-    let ft = flat_result.tangent().unwrap().buffer().as_slice().unwrap();
-    for i in 0..nt.len() {
-        assert!(
-            (nt[i] - ft[i]).abs() < 1e-10,
-            "dual tangent[{i}]: nested={}, flat={}",
-            nt[i],
-            ft[i]
-        );
-    }
+    // B is 2x2
+    let b = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ii,jk->ijk", &[&a, &b], None).unwrap();
+    assert_eq!(c.dims(), &[3, 2, 2]);
+
+    // diag(A) = [1, 2, 3], result[i,j,k] = diag(A)[i] * B[j,k]
+    let data = c.buffer().as_slice().unwrap();
+    // Column-major: fastest index is i
+    // (i=0,j=0,k=0) = 1*1=1, (i=1,j=0,k=0) = 2*1=2, (i=2,j=0,k=0) = 3*1=3
+    assert_eq!(data[0], 1.0); // [0,0,0]
+    assert_eq!(data[1], 2.0); // [1,0,0]
+    assert_eq!(data[2], 3.0); // [2,0,0]
+                              // (i=0,j=1,k=0) = 1*2=2, (i=1,j=1,k=0) = 2*2=4, (i=2,j=1,k=0) = 3*2=6
+    assert_eq!(data[3], 2.0); // [0,1,0]
+    assert_eq!(data[4], 4.0); // [1,1,0]
+    assert_eq!(data[5], 6.0); // [2,1,0]
+}
+
+#[test]
+fn einsum_binary_diag_iij_jk_to_ik() {
+    // "iij,jk->ik": diagonal extraction on A (over i), then contract j
+    let mut ctx = CpuContext::new(1);
+    // A is 2x2x3 with subs [i,i,j], column-major strides [1,2,4]
+    // Diagonal: A[0,0,j] = {1,2,3}, A[1,1,j] = {4,5,6}, off-diagonal = 0
+    #[rustfmt::skip]
+    let a_data: Vec<f64> = vec![
+        // j=0: A[0,0,0]=1, A[1,0,0]=0, A[0,1,0]=0, A[1,1,0]=4
+        1.0, 0.0, 0.0, 4.0,
+        // j=1: A[0,0,1]=2, A[1,0,1]=0, A[0,1,1]=0, A[1,1,1]=5
+        2.0, 0.0, 0.0, 5.0,
+        // j=2: A[0,0,2]=3, A[1,0,2]=0, A[0,1,2]=0, A[1,1,2]=6
+        3.0, 0.0, 0.0, 6.0,
+    ];
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 2, 3], COL).unwrap();
+    // B is 3x2 with subs [j,k], column-major: B = [[1,0],[0,1],[0,0]]
+    let b = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2], COL).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "iij,jk->ik", &[&a, &b], None).unwrap();
+    assert_eq!(c.dims(), &[2, 2]);
+
+    // diag(A) over i gives shape [3,2] with subs [j,i]
+    // A_diag[j=0,i=0]=1, A_diag[j=1,i=0]=2, A_diag[j=2,i=0]=3
+    // A_diag[j=0,i=1]=4, A_diag[j=1,i=1]=5, A_diag[j=2,i=1]=6
+    // C[i,k] = sum_j A_diag[j,i] * B[j,k]
+    // C[0,0] = 1*1 + 2*0 + 3*0 = 1
+    // C[1,0] = 4*1 + 5*0 + 6*0 = 4
+    // C[0,1] = 1*0 + 2*1 + 3*0 = 2
+    // C[1,1] = 4*0 + 5*1 + 6*0 = 5
+    let data = c.buffer().as_slice().unwrap();
+    assert!((data[0] - 1.0).abs() < 1e-10); // [0,0]
+    assert!((data[1] - 4.0).abs() < 1e-10); // [1,0]
+    assert!((data[2] - 2.0).abs() < 1e-10); // [0,1]
+    assert!((data[3] - 5.0).abs() < 1e-10); // [1,1]
+}
+
+#[test]
+fn einsum_binary_diag_ii_jj_to_ij() {
+    // "ii,jj->ij": diagonal extraction on both operands
+    let mut ctx = CpuContext::new(1);
+    // A is 3x3
+    let mut a_data = vec![0.0; 9];
+    a_data[0] = 1.0; // [0,0]
+    a_data[4] = 2.0; // [1,1]
+    a_data[8] = 3.0; // [2,2]
+    let a = Tensor::<f64>::from_slice(&a_data, &[3, 3], COL).unwrap();
+    // B is 2x2
+    let mut b_data = vec![0.0; 4];
+    b_data[0] = 10.0; // [0,0]
+    b_data[3] = 20.0; // [1,1]
+    let b = Tensor::<f64>::from_slice(&b_data, &[2, 2], COL).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ii,jj->ij", &[&a, &b], None).unwrap();
+    assert_eq!(c.dims(), &[3, 2]);
+
+    // diag(A) = [1,2,3], diag(B) = [10,20]
+    // C[i,j] = diag(A)[i] * diag(B)[j]
+    let data = c.buffer().as_slice().unwrap();
+    assert_eq!(data[0], 10.0); // [0,0] = 1*10
+    assert_eq!(data[1], 20.0); // [1,0] = 2*10
+    assert_eq!(data[2], 30.0); // [2,0] = 3*10
+    assert_eq!(data[3], 20.0); // [0,1] = 1*20
+    assert_eq!(data[4], 40.0); // [1,1] = 2*20
+    assert_eq!(data[5], 60.0); // [2,1] = 3*20
+}
+
+#[test]
+fn einsum_binary_diag_ii_j_to_j() {
+    // "ii,j->j": trace of A (scalar), elementwise mul with B
+    let mut ctx = CpuContext::new(1);
+    // A is 3x3 with trace = 1+5+9 = 15
+    let a_data: Vec<f64> = (1..=9).map(|x| x as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[3, 3], COL).unwrap();
+    // B is [2, 3]
+    let b = Tensor::<f64>::from_slice(&[2.0, 3.0], &[2], COL).unwrap();
+    let c = einsum::<S, CpuBackend>(&mut ctx, "ii,j->j", &[&a, &b], None).unwrap();
+    assert_eq!(c.dims(), &[2]);
+
+    // trace(A) = 1 + 5 + 9 = 15
+    // C[j] = trace(A) * B[j] = 15 * [2, 3] = [30, 45]
+    let data = c.buffer().as_slice().unwrap();
+    assert_eq!(data[0], 30.0);
+    assert_eq!(data[1], 45.0);
 }

@@ -1791,6 +1791,14 @@ impl<T: Scalar> Tensor<T> {
             || is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
     }
 
+    /// Check if the tensor has column-major contiguous layout.
+    ///
+    /// Returns `true` when data elements are stored in Fortran order:
+    /// stride\[0\] = 1, stride\[i\] = stride\[i-1\] * dims\[i-1\].
+    pub fn is_col_major_contiguous(&self) -> bool {
+        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
+    }
+
     /// Return a lazily-conjugated tensor (shared buffer, flag flip).
     ///
     /// No data is copied. The returned tensor shares the same underlying

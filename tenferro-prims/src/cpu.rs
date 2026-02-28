@@ -650,10 +650,23 @@ impl CpuBackend {
                 k,
             } => {
                 // BatchedGemm expects 3 shapes: A, B, C
+                // Layout: [m/k, k/n, batch...] — batch dims are trailing
                 validate_shape_count(shapes, 3, "BatchedGemm")?;
-                let expected_a: Vec<usize> = batch_dims.iter().copied().chain([*m, *k]).collect();
-                let expected_b: Vec<usize> = batch_dims.iter().copied().chain([*k, *n]).collect();
-                let expected_c: Vec<usize> = batch_dims.iter().copied().chain([*m, *n]).collect();
+                let expected_a: Vec<usize> = [*m, *k]
+                    .iter()
+                    .copied()
+                    .chain(batch_dims.iter().copied())
+                    .collect();
+                let expected_b: Vec<usize> = [*k, *n]
+                    .iter()
+                    .copied()
+                    .chain(batch_dims.iter().copied())
+                    .collect();
+                let expected_c: Vec<usize> = [*m, *n]
+                    .iter()
+                    .copied()
+                    .chain(batch_dims.iter().copied())
+                    .collect();
                 validate_shape_eq(shapes[0], &expected_a, "BatchedGemm input A")?;
                 validate_shape_eq(shapes[1], &expected_b, "BatchedGemm input B")?;
                 validate_shape_eq(shapes[2], &expected_c, "BatchedGemm output C")?;
@@ -956,28 +969,28 @@ fn execute_batched_gemm_naive<T: Scalar>(
         batch_dims.iter().product()
     };
 
-    // Pre-allocate index buffers: [batch..., row, col]
+    // Pre-allocate index buffers: [row, col, batch...]
     let nb = batch_dims.len();
-    let mut a_idx = vec![0usize; nb + 2];
-    let mut b_idx = vec![0usize; nb + 2];
-    let mut c_idx = vec![0usize; nb + 2];
+    let mut a_idx = vec![0usize; 2 + nb];
+    let mut b_idx = vec![0usize; 2 + nb];
+    let mut c_idx = vec![0usize; 2 + nb];
 
     for batch_flat in 0..batch_size {
-        unflatten_index_into(batch_flat, batch_dims, &mut a_idx[..nb]);
-        b_idx[..nb].copy_from_slice(&a_idx[..nb]);
-        c_idx[..nb].copy_from_slice(&a_idx[..nb]);
+        unflatten_index_into(batch_flat, batch_dims, &mut a_idx[2..]);
+        b_idx[2..].copy_from_slice(&a_idx[2..]);
+        c_idx[2..].copy_from_slice(&a_idx[2..]);
         for i in 0..m {
             for j in 0..n {
                 let mut sum = T::zero();
                 for kk in 0..k {
-                    a_idx[nb] = i;
-                    a_idx[nb + 1] = kk;
-                    b_idx[nb] = kk;
-                    b_idx[nb + 1] = j;
+                    a_idx[0] = i;
+                    a_idx[1] = kk;
+                    b_idx[0] = kk;
+                    b_idx[1] = j;
                     sum = sum + a.get(&a_idx) * b.get(&b_idx);
                 }
-                c_idx[nb] = i;
-                c_idx[nb + 1] = j;
+                c_idx[0] = i;
+                c_idx[1] = j;
                 let old = if beta == T::zero() {
                     T::zero()
                 } else {
@@ -1011,15 +1024,16 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     let a_strides = a.strides();
     let b_strides = b.strides();
     let c_strides = output.strides();
-    let a_batch = &a_strides[..nb];
-    let b_batch = &b_strides[..nb];
-    let c_batch = &c_strides[..nb];
-    let a_row = a_strides[nb];
-    let a_col = a_strides[nb + 1];
-    let b_row = b_strides[nb];
-    let b_col = b_strides[nb + 1];
-    let c_row = c_strides[nb];
-    let c_col = c_strides[nb + 1];
+    // Layout: [row, col, batch...] — GEMM dims are leading, batch dims trailing
+    let a_row = a_strides[0];
+    let a_col = a_strides[1];
+    let a_batch = &a_strides[2..];
+    let b_row = b_strides[0];
+    let b_col = b_strides[1];
+    let b_batch = &b_strides[2..];
+    let c_row = c_strides[0];
+    let c_col = c_strides[1];
+    let c_batch = &c_strides[2..];
 
     let a_ptr = a.ptr();
     let b_ptr = b.ptr();
@@ -1094,57 +1108,53 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
 
     if nb == 0 {
         result = do_batch(0, 0, 0, &mut a_mat, &mut b_mat, &mut c_mat);
-    } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
-        strided_perm::try_fuse_group(batch_dims, a_batch),
-        strided_perm::try_fuse_group(batch_dims, b_batch),
-        strided_perm::try_fuse_group(batch_dims, c_batch),
-    ) {
-        // Fast path: batch dims are fusable → pointer increment loop
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-        for _ in 0..total {
-            if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
-                result = Err(e);
-                break;
-            }
-            a_off += a_step;
-            b_off += b_step;
-            c_off += c_step;
-        }
     } else {
-        // Fallback: carry-based multi-index iteration
-        let mut idx = vec![0usize; nb];
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-        loop {
-            if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
-                result = Err(e);
-                break;
-            }
+        // Independent fusability check per operand
+        let a_fused = strided_perm::try_fuse_group(batch_dims, a_batch);
+        let b_fused = strided_perm::try_fuse_group(batch_dims, b_batch);
+        let c_fused = strided_perm::try_fuse_group(batch_dims, c_batch);
+        let total: usize = batch_dims.iter().product();
 
-            let mut carried_all = true;
-            for ax in 0..nb {
-                let dim = batch_dims[ax];
-                let next = idx[ax] + 1;
-                if next < dim {
-                    idx[ax] = next;
-                    a_off += a_batch[ax];
-                    b_off += b_batch[ax];
-                    c_off += c_batch[ax];
-                    carried_all = false;
+        if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
+            (a_fused, b_fused, c_fused)
+        {
+            // All-fused fast path: simple pointer increment
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            for _ in 0..total {
+                if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
+                    result = Err(e);
                     break;
-                } else {
-                    idx[ax] = 0;
-                    let back = (dim as isize - 1).max(0);
-                    a_off -= back * a_batch[ax];
-                    b_off -= back * b_batch[ax];
-                    c_off -= back * c_batch[ax];
                 }
+                a_off += a_step;
+                b_off += b_step;
+                c_off += c_step;
             }
-            if carried_all {
-                break;
+        } else {
+            // Mixed path: each operand independently fused or strided
+            let mut idx = vec![0usize; nb];
+            for flat in 0..total {
+                let a_off = batch_offset(flat, &idx, a_fused, a_batch);
+                let b_off = batch_offset(flat, &idx, b_fused, b_batch);
+                let c_off = batch_offset(flat, &idx, c_fused, c_batch);
+                if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
+                    result = Err(e);
+                    break;
+                }
+
+                // Advance shared multi-index (carry-based)
+                if flat + 1 < total {
+                    for ax in 0..nb {
+                        let next = idx[ax] + 1;
+                        if next < batch_dims[ax] {
+                            idx[ax] = next;
+                            break;
+                        } else {
+                            idx[ax] = 0;
+                        }
+                    }
+                }
             }
         }
     }
@@ -1153,6 +1163,25 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     ctx.put_scratch(b_mat);
     ctx.put_scratch(c_mat);
     result
+}
+
+/// Compute batch offset for one operand: fused path uses flat index × step,
+/// strided path uses multi-index dot product with strides.
+#[inline]
+fn batch_offset(
+    flat: usize,
+    idx: &[usize],
+    fused: Option<(usize, isize)>,
+    batch_strides: &[isize],
+) -> isize {
+    if let Some((_, step)) = fused {
+        flat as isize * step
+    } else {
+        idx.iter()
+            .zip(batch_strides)
+            .map(|(&i, &s)| i as isize * s)
+            .sum()
+    }
 }
 
 /// Strided batched GEMM via faer — zero allocation, zero copy.
@@ -1173,15 +1202,16 @@ fn execute_batched_gemm_strided<T: FaerGemm>(
     let a_strides = a.strides();
     let b_strides = b.strides();
     let c_strides = output.strides();
-    let a_batch = &a_strides[..nb];
-    let b_batch = &b_strides[..nb];
-    let c_batch = &c_strides[..nb];
-    let a_row = a_strides[nb];
-    let a_col = a_strides[nb + 1];
-    let b_row = b_strides[nb];
-    let b_col = b_strides[nb + 1];
-    let c_row = c_strides[nb];
-    let c_col = c_strides[nb + 1];
+    // Layout: [row, col, batch...] — GEMM dims are leading, batch dims trailing
+    let a_row = a_strides[0];
+    let a_col = a_strides[1];
+    let a_batch = &a_strides[2..];
+    let b_row = b_strides[0];
+    let b_col = b_strides[1];
+    let b_batch = &b_strides[2..];
+    let c_row = c_strides[0];
+    let c_col = c_strides[1];
+    let c_batch = &c_strides[2..];
 
     let a_ptr = a.ptr();
     let b_ptr = b.ptr();
@@ -1208,49 +1238,47 @@ fn execute_batched_gemm_strided<T: FaerGemm>(
 
     if nb == 0 {
         do_batch(0, 0, 0);
-    } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
-        strided_perm::try_fuse_group(batch_dims, a_batch),
-        strided_perm::try_fuse_group(batch_dims, b_batch),
-        strided_perm::try_fuse_group(batch_dims, c_batch),
-    ) {
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-        for _ in 0..total {
-            do_batch(a_off, b_off, c_off);
-            a_off += a_step;
-            b_off += b_step;
-            c_off += c_step;
-        }
     } else {
-        let mut idx = vec![0usize; nb];
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-        loop {
-            do_batch(a_off, b_off, c_off);
+        // Independent fusability check per operand
+        let a_fused = strided_perm::try_fuse_group(batch_dims, a_batch);
+        let b_fused = strided_perm::try_fuse_group(batch_dims, b_batch);
+        let c_fused = strided_perm::try_fuse_group(batch_dims, c_batch);
+        let total: usize = batch_dims.iter().product();
 
-            let mut carried_all = true;
-            for ax in 0..nb {
-                let dim = batch_dims[ax];
-                let next = idx[ax] + 1;
-                if next < dim {
-                    idx[ax] = next;
-                    a_off += a_batch[ax];
-                    b_off += b_batch[ax];
-                    c_off += c_batch[ax];
-                    carried_all = false;
-                    break;
-                } else {
-                    idx[ax] = 0;
-                    let back = (dim as isize - 1).max(0);
-                    a_off -= back * a_batch[ax];
-                    b_off -= back * b_batch[ax];
-                    c_off -= back * c_batch[ax];
-                }
+        if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
+            (a_fused, b_fused, c_fused)
+        {
+            // All-fused fast path: simple pointer increment
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            for _ in 0..total {
+                do_batch(a_off, b_off, c_off);
+                a_off += a_step;
+                b_off += b_step;
+                c_off += c_step;
             }
-            if carried_all {
-                break;
+        } else {
+            // Mixed path: each operand independently fused or strided
+            let mut idx = vec![0usize; nb];
+            for flat in 0..total {
+                let a_off = batch_offset(flat, &idx, a_fused, a_batch);
+                let b_off = batch_offset(flat, &idx, b_fused, b_batch);
+                let c_off = batch_offset(flat, &idx, c_fused, c_batch);
+                do_batch(a_off, b_off, c_off);
+
+                // Advance shared multi-index (carry-based)
+                if flat + 1 < total {
+                    for ax in 0..nb {
+                        let next = idx[ax] + 1;
+                        if next < batch_dims[ax] {
+                            idx[ax] = next;
+                            break;
+                        } else {
+                            idx[ax] = 0;
+                        }
+                    }
+                }
             }
         }
     }
@@ -2651,7 +2679,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     }
 
     fn has_extension_for(_ext: Extension) -> bool {
-        matches!(_ext, Extension::ElementwiseMul | Extension::Contract)
+        matches!(_ext, Extension::ElementwiseMul)
     }
 }
 

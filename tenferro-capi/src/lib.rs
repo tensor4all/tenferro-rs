@@ -65,7 +65,7 @@ use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{einsum, einsum_frule, einsum_rrule};
 use tenferro_linalg::backend::FaerBackend;
 use tenferro_linalg::{svd, svd_frule, svd_rrule, SvdCotangent, SvdOptions};
-use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 // ============================================================================
@@ -311,6 +311,30 @@ pub struct TfeTensorF64 {
 /// Convert a `Tensor<f64>` into an opaque handle.
 fn tensor_to_handle(tensor: Tensor<f64>) -> *mut TfeTensorF64 {
     Box::into_raw(Box::new(tensor)) as *mut TfeTensorF64
+}
+
+/// Ensure a tensor has column-major contiguous data layout.
+///
+/// Einsum may return lazily-permuted views (zero-copy, non-standard strides).
+/// The C-API exposes raw data pointers, so all returned tensors must have
+/// data physically arranged in column-major order.
+fn ensure_col_major(
+    ctx: &mut CpuContext,
+    tensor: Tensor<f64>,
+) -> std::result::Result<Tensor<f64>, tenferro_device::Error> {
+    if tensor.is_col_major_contiguous() {
+        return Ok(tensor);
+    }
+    let mut result = Tensor::<f64>::zeros(
+        tensor.dims(),
+        tensor.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let desc = PrimDescriptor::MakeContiguous;
+    let shapes = [tensor.dims(), result.dims()];
+    let plan = CpuBackend::plan(ctx, &desc, &shapes)?;
+    CpuBackend::execute(ctx, &plan, 1.0, &[&tensor], 0.0, &mut result)?;
+    Ok(result)
 }
 
 /// Borrow the tensor behind an opaque handle.
@@ -1076,6 +1100,7 @@ pub unsafe extern "C" fn tfe_einsum_f64(
 
         let mut ctx = CpuContext::new(1);
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, None)
+            .and_then(|t| ensure_col_major(&mut ctx, t))
             .map(|t| tensor_to_handle(t))
             .map_err(|e| map_device_error(&e))
     }));
@@ -1151,6 +1176,7 @@ pub unsafe extern "C" fn tfe_einsum_rrule_f64(
 
         let out_slice = std::slice::from_raw_parts_mut(grads_out, num_operands);
         for (i, g) in grads.into_iter().enumerate() {
+            let g = ensure_col_major(&mut ctx, g).map_err(|e| map_device_error(&e))?;
             out_slice[i] = tensor_to_handle(g);
         }
 
@@ -1226,6 +1252,7 @@ pub unsafe extern "C" fn tfe_einsum_frule_f64(
 
         let mut ctx = CpuContext::new(1);
         einsum_frule::<Standard<f64>, CpuBackend>(&mut ctx, subs, &primal_refs, &tangent_refs)
+            .and_then(|t| ensure_col_major(&mut ctx, t))
             .map(|t| tensor_to_handle(t))
             .map_err(|e| map_device_error(&e))
     }));

@@ -10,6 +10,23 @@ use crate::classify::compute_permutation;
 use crate::pool::BufferPool;
 use crate::util::alloc_tensor_from_pool;
 
+#[cfg(feature = "profile-dispatch")]
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(feature = "profile-dispatch")]
+static PREPARE_ZEROCOPY: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "profile-dispatch")]
+static PREPARE_FALLBACK: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "profile-dispatch")]
+static PREPARE_FALLBACK_ELEMS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(feature = "profile-dispatch")]
+pub(crate) fn print_and_reset_prepare_profile() {
+    let zc = PREPARE_ZEROCOPY.swap(0, Ordering::Relaxed);
+    let fb = PREPARE_FALLBACK.swap(0, Ordering::Relaxed);
+    let elems = PREPARE_FALLBACK_ELEMS.swap(0, Ordering::Relaxed);
+    eprintln!("[prepare profile] zero_copy={zc}  fallback_copy={fb}  fallback_elems={elems}");
+}
+
 /// Prepare a single operand for GEMM: permute and try to fuse dimension groups.
 pub(crate) fn prepare_one_operand<A, B>(
     ctx: &mut B::Context,
@@ -41,28 +58,37 @@ where
     let strides = permuted.strides();
 
     // Step 2: Try to fuse each dimension group
-    let g1_dims = &dims[nb..nb + n_group1];
-    let g1_strides = &strides[nb..nb + n_group1];
-    let g2_dims = &dims[nb + n_group1..nb + n_group1 + n_group2];
-    let g2_strides = &strides[nb + n_group1..nb + n_group1 + n_group2];
+    // Layout after permute: [g1..., g2..., batch...]
+    let g1_dims = &dims[..n_group1];
+    let g1_strides = &strides[..n_group1];
+    let g2_dims = &dims[n_group1..n_group1 + n_group2];
+    let g2_strides = &strides[n_group1..n_group1 + n_group2];
 
     let fused_g1 = try_fuse_group(g1_dims, g1_strides);
     let fused_g2 = try_fuse_group(g2_dims, g2_strides);
 
     if let (Some((size1, stride1)), Some((size2, stride2))) = (fused_g1, fused_g2) {
-        // Zero-copy: construct fused view [batch..., fused_g1, fused_g2]
+        // Zero-copy: construct fused view [fused_g1, fused_g2, batch...]
+        #[cfg(feature = "profile-dispatch")]
+        PREPARE_ZEROCOPY.fetch_add(1, Ordering::Relaxed);
         let mut fused_dims = Vec::with_capacity(nb + 2);
         let mut fused_strides = Vec::with_capacity(nb + 2);
-        fused_dims.extend_from_slice(&dims[..nb]);
-        fused_strides.extend_from_slice(&strides[..nb]);
         fused_dims.push(size1);
         fused_strides.push(stride1);
         fused_dims.push(size2);
         fused_strides.push(stride2);
+        fused_dims.extend_from_slice(&dims[n_group1 + n_group2..]);
+        fused_strides.extend_from_slice(&strides[n_group1 + n_group2..]);
         return permuted.view_as_strided(fused_dims, fused_strides);
     }
 
     // Fallback: copy to contiguous, then reshape
+    #[cfg(feature = "profile-dispatch")]
+    {
+        PREPARE_FALLBACK.fetch_add(1, Ordering::Relaxed);
+        let n_elems: usize = dims.iter().product();
+        PREPARE_FALLBACK_ELEMS.fetch_add(n_elems as u64, Ordering::Relaxed);
+    }
     let contiguous = permute_or_copy::<A, B>(ctx, tensor, current_subs, target_subs, pool)?;
     contiguous.reshape(fallback_shape)
 }

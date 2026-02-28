@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use tenferro_device::{Error, Result};
 
+use crate::plan::{compile_step_plans, StepPlan};
 use crate::subscripts::Subscripts;
-use crate::util::{build_size_dict, compute_output_shape, intermediate_subs, contraction_cost};
+use crate::util::{build_size_dict, compute_output_shape, contraction_cost, intermediate_subs};
 
 /// A single step in the contraction sequence.
 pub(crate) struct ContractionStep {
@@ -33,6 +34,8 @@ pub struct ContractionTree {
     pub(crate) operand_subs: Vec<Vec<u32>>,
     /// Pre-computed output shapes for each intermediate step (indexed by step_idx).
     pub(crate) step_output_shapes: Vec<Vec<usize>>,
+    /// Pre-compiled step plans (cached to avoid recomputation per execute call).
+    pub(crate) step_plans: Vec<StepPlan>,
 }
 
 impl ContractionTree {
@@ -184,12 +187,15 @@ impl ContractionTree {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        Ok(Self {
+        let mut tree = Self {
             subscripts: subscripts.clone(),
             steps,
             size_dict,
             operand_subs,
             step_output_shapes,
-        })
+            step_plans: Vec::new(),
+        };
+        tree.step_plans = compile_step_plans(&tree);
+        Ok(tree)
     }
 }

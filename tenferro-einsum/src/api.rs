@@ -6,13 +6,13 @@ use tenferro_device::Result;
 use tenferro_prims::TensorPrims;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
+use crate::ad::einsum_frule_impl;
 use crate::execute::{execute_nested, execute_tree};
 use crate::nested::NestedEinsum;
 use crate::pool::BufferPool;
 use crate::subscripts::Subscripts;
 use crate::tree::ContractionTree;
 use crate::util::{compute_output_shape, infer_memory_space};
-use crate::ad::einsum_frule_impl;
 
 /// Execute einsum using string notation.
 ///
@@ -160,6 +160,7 @@ where
         Alg::Scalar::zero(),
         &mut output,
         &mut pool,
+        true, // lazy_final: output is internally allocated
     )?;
     Ok(output)
 }
@@ -440,5 +441,5 @@ where
 {
     let _ = size_dict; // size_dict already captured in tree.size_dict
     let mut pool = BufferPool::new();
-    execute_tree::<Alg, Backend>(ctx, tree, operands, alpha, beta, output, &mut pool)
+    execute_tree::<Alg, Backend>(ctx, tree, operands, alpha, beta, output, &mut pool, false)
 }

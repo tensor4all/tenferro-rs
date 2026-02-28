@@ -299,8 +299,11 @@ fn plan_cache_complex64_separate_from_f64() {
 // ============================================================================
 
 #[test]
-fn cpu_has_extension_contract() {
-    assert!(cpu_has_ext::<f64>(Extension::Contract));
+fn cpu_has_no_extension_contract() {
+    // CPU backend does not advertise Contract — einsum always uses
+    // the GEMM fallback path (prepare + BatchedGemm) which handles
+    // non-fusible strides via copy instead of O(n^rank) naive loop.
+    assert!(!cpu_has_ext::<f64>(Extension::Contract));
 }
 
 #[test]
@@ -2284,11 +2287,12 @@ macro_rules! typed_prims_tests {
             #[test]
             fn batched_gemm_with_batch() {
                 let mut ctx = CpuContext::new(1);
-                let a = tensor_from_fn(&[2, 2, 3], |idx| {
-                    <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2] + 1)
+                // Layout: [m, k, batch] — GEMM dims leading, batch trailing
+                let a = tensor_from_fn(&[2, 3, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[2] * 100 + idx[0] * 10 + idx[1] + 1)
                 });
-                let b = tensor_from_fn(&[2, 3, 2], |idx| {
-                    <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2] + 1)
+                let b = tensor_from_fn(&[3, 2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[2] * 100 + idx[0] * 10 + idx[1] + 1)
                 });
                 let mut c = tensor_zeros::<$T>(&[2, 2, 2]);
 
@@ -2299,7 +2303,7 @@ macro_rules! typed_prims_tests {
                     k: 3,
                 };
                 let plan =
-                    cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 2, 3], &[2, 3, 2], &[2, 2, 2]]).unwrap();
+                    cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3, 2], &[3, 2, 2], &[2, 2, 2]]).unwrap();
                 cpu_execute(
                     &mut ctx,
                     &plan,
@@ -2316,19 +2320,19 @@ macro_rules! typed_prims_tests {
                             let mut expected = <$T as TestScalar>::from_f64(0.0);
                             for k in 0..3 {
                                 expected = expected
-                                    + tensor_get(&a, &[batch, i, k])
-                                        * tensor_get(&b, &[batch, k, j]);
+                                    + tensor_get(&a, &[i, k, batch])
+                                        * tensor_get(&b, &[k, j, batch]);
                             }
                             assert!(
                                 <$T as TestScalar>::approx_eq(
-                                    tensor_get(&c, &[batch, i, j]),
+                                    tensor_get(&c, &[i, j, batch]),
                                     expected
                                 ),
-                                "C[{batch},{i},{j}] = {:?}, expected {:?}, diff = {}",
-                                tensor_get(&c, &[batch, i, j]),
+                                "C[{i},{j},{batch}] = {:?}, expected {:?}, diff = {}",
+                                tensor_get(&c, &[i, j, batch]),
                                 expected,
                                 <$T as TestScalar>::diff_norm(
-                                    tensor_get(&c, &[batch, i, j]),
+                                    tensor_get(&c, &[i, j, batch]),
                                     expected
                                 )
                             );
