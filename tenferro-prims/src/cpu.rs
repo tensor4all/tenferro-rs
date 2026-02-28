@@ -83,7 +83,14 @@ macro_rules! impl_faer_gemm {
                     Accum::Add
                 };
                 let mut c_mat = MatMut::<$ty>::from_raw_parts_mut(c_ptr, m, n, c_rs, c_cs);
-                faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::rayon(0));
+                faer::linalg::matmul::matmul(
+                    &mut c_mat,
+                    accum,
+                    &a_mat,
+                    &b_mat,
+                    alpha,
+                    Par::rayon(0),
+                );
             }
         }
     };
@@ -936,7 +943,8 @@ fn execute_make_contiguous<T: Scalar>(
     output: &mut StridedViewMut<T>,
 ) -> Result<()> {
     if alpha == T::one() && beta == T::zero() {
-        strided_perm::copy_into_par(output, input).map_err(|e| Error::StrideError(e.to_string()))?;
+        strided_perm::copy_into_par(output, input)
+            .map_err(|e| Error::StrideError(e.to_string()))?;
     } else {
         let dims = output.dims().to_vec();
         for_each_index(&dims, |idx| {
