@@ -66,7 +66,11 @@ where
             .iter()
             .enumerate()
             .map(|(step_idx, sp)| {
-                let needs_contract = use_contract && matches!(sp.strategy, StepStrategy::Contract);
+                // Pre-compute Contract plans for Contraction(None) steps only.
+                // Contraction(Some(_)) steps pre-reduce at runtime, so Contract plan
+                // must be computed after reduction with the reduced subscripts/shapes.
+                let needs_contract = use_contract
+                    && matches!(sp.strategy, StepStrategy::Contraction(None));
                 let needs_ewmul = use_ewmul && matches!(sp.strategy, StepStrategy::ElementwiseMul);
                 if !needs_contract && !needs_ewmul {
                     return None;

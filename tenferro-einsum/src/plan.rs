@@ -71,10 +71,10 @@ pub(crate) enum StepStrategy {
     ElementwiseMul,
     /// Disjoint binary einsum: broadcast + ElementwiseMul.
     OuterProduct(OuterProductPlan),
-    /// Matrix contraction: permute + BatchedGemm + permute.
-    Gemm(GemmPlan),
-    /// General contraction (Contract extension or fallback).
-    Contract,
+    /// Contraction: try Contract extension first, fall back to permute+GEMM.
+    /// Some(plan) = GEMM-compatible (has pre-computed GemmPlan for fallback).
+    /// None = not GEMM-compatible (trace-like, Contract extension only).
+    Contraction(Option<GemmPlan>),
 }
 
 /// Pre-computed plan for a single contraction tree step.
@@ -250,7 +250,7 @@ pub(crate) fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
                     let needs_final_permute = canonical_modes.as_slice() != subs_c;
 
                     return StepPlan {
-                        strategy: StepStrategy::Gemm(GemmPlan {
+                        strategy: StepStrategy::Contraction(Some(GemmPlan {
                             reduce_a,
                             reduce_b,
                             subs_a: effective_a,
@@ -268,14 +268,14 @@ pub(crate) fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
                             expanded_shape,
                             canonical_modes,
                             needs_final_permute,
-                        }),
+                        })),
                     };
                 }
             }
 
-            // Fallback: general Contract
+            // Fallback: not GEMM-compatible, Contract extension only
             StepPlan {
-                strategy: StepStrategy::Contract,
+                strategy: StepStrategy::Contraction(None),
             }
         })
         .collect()

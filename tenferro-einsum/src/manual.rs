@@ -1,15 +1,21 @@
+// These imports are used by manual_einsum, which is intentionally dead code
+// (reserved for future AD rules). Allow the lint to avoid noise.
+#[allow(unused_imports)]
 use std::collections::{HashMap, HashSet};
 
+#[allow(unused_imports)]
 use num_traits::{One, Zero};
 use tenferro_algebra::Scalar;
 use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::subscripts::Subscripts;
+#[allow(unused_imports)]
 use crate::util::{compute_output_shape, tensor_get, unflatten_index};
 
 /// Execute a manual einsum without TensorPrims (for AD pullback).
 /// Only supports 1-tensor and 2-tensor contractions.
+#[allow(dead_code)]
 pub(crate) fn manual_einsum<T: Scalar>(
     subs: &Subscripts,
     operands: &[Tensor<T>],
