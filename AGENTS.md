@@ -32,11 +32,36 @@ See [`docs/design/`](docs/design/) for architecture and design documents.
 
 **Note**: Files under `docs/plans/` are historical records of past design discussions and decisions. They may contradict the current API or design — do not update them to match the current state.
 
+## Performance-Critical Conventions
+
+### Column-Major Dimension Ordering
+
+tenferro uses **column-major** (Fortran order) storage: the leftmost dimension has the smallest stride and varies fastest in memory. When designing internal layouts for multi-dimensional operations (einsum GEMM, linalg, etc.), dimension ordering must respect this:
+
+- **Batch dimensions go on the RIGHT (trailing)**: In col-major, rightmost dims have the largest stride. Placing batch dims on the right means each batch slice occupies a contiguous block of memory, giving good cache locality for the GEMM kernel operating within each slice.
+- **Contraction/compute dimensions go on the LEFT (leading)**: lo (M), sum (K), ro (N) dims should be leftmost so the GEMM kernel accesses contiguous memory.
+
+**Wrong** (batch on left in col-major): `A[batch..., m, k]` — batch has smallest stride, so elements within each `(m, k)` slice are scattered across memory.
+
+**Correct** (batch on right in col-major): `A[lo..., sum..., batch...]` — each batch slice is contiguous, matching strided-rs's convention and standard GEMM cache behavior.
+
+This applies to `target_a`, `target_b`, `c_gemm_shape` in einsum's `GemmPlan`, and to any future batched operation layout.
+
 ## Code Style
 
 - `cargo fmt --all` for formatting (always run before committing)
 - Avoid `unwrap()`/`expect()` in library code
 - Use `thiserror` for public API error types
+
+### File Organization
+
+Keep source files **small and focused** — one logical concern per file. Avoid monolithic files that grow beyond ~500 lines. Benefits:
+
+- **Abstraction review**: module boundaries make the public/private API surface explicit and easier to audit
+- **Parallel editing**: multiple agents (or humans) can work on separate files without merge conflicts
+- **Navigation**: smaller files are faster to read and search
+
+When a file grows large, split it by functionality (e.g., parsing, plan computation, execution, public API, AD rules) rather than by arbitrary line count.
 
 ### ASCII Diagrams
 
@@ -107,6 +132,82 @@ cargo bench -p tenferro-prims -- contraction
 # Run benchmarks with native CPU features
 RUSTFLAGS="-C target-cpu=native" cargo bench
 ```
+
+## Common Performance Anti-Patterns
+
+When writing performance-sensitive code (GEMM, tensor operations, inner loops), avoid these mistakes:
+
+### 1. Duplicated f64/f32 functions instead of generic code
+
+**Bad:** Copy-pasting the same function body for `f64` and `f32` (e.g., `run_f64` / `run_f32`).
+
+**Good:** Use a trait (e.g., `FaerGemm`) or macro to share the logic. TypeId dispatch only at the outer boundary.
+
+### 2. Allocating dense buffers when strided access is available
+
+**Bad:** `vec![0.0; m*k]` + copy from strided source + GEMM + copy back to strided destination.
+
+**Good:** Use `faer::MatRef::from_raw_parts(ptr, m, k, row_stride, col_stride)` to access strided data directly — zero allocation, zero copy.
+
+### 3. Zero-initializing buffers that will be immediately overwritten
+
+**Bad:** `vec![0.0; n]` followed by a loop that overwrites every element.
+
+**Good:** `Vec::with_capacity(n)` + `unsafe { set_len(n) }` if you will write all elements, or avoid allocation entirely (see #2).
+
+### 4. Per-element index multiplication in inner loops
+
+**Bad:**
+```rust
+for j in 0..n {
+    for i in 0..m {
+        let off = i as isize * row_stride + j as isize * col_stride;
+        *ptr.offset(off) *= beta;
+    }
+}
+```
+
+**Good:** Use incremental pointer offsets:
+```rust
+let mut col_off = 0isize;
+for _ in 0..n {
+    let mut off = col_off;
+    for _ in 0..m {
+        *ptr.offset(off) *= beta;
+        off += row_stride;
+    }
+    col_off += col_stride;
+}
+```
+
+### 5. Allocating Vec inside hot loops
+
+**Bad:**
+```rust
+for_each_index(&dims, |idx| {
+    for i in 0..n {
+        let buf = vec![0usize; rank];  // ALLOCATION PER ITERATION
+        // ...
+    }
+});
+```
+
+**Good:** Pre-allocate outside and reuse with `.fill(0)`:
+```rust
+let mut buf = vec![0usize; rank];
+for_each_index(&dims, |idx| {
+    for i in 0..n {
+        buf.fill(0);
+        // ...
+    }
+});
+```
+
+### 6. Calling `Backend::plan()` inside hot loops
+
+**Bad:** Computing plans per-step inside the execution loop.
+
+**Good:** Pre-compute all plans before the loop and pass them in.
 
 ## Workspace Architecture
 

@@ -18,6 +18,82 @@ use crate::{
     TensorPrims, UnaryOp,
 };
 
+/// Trait for types that support strided GEMM via faer (zero-copy, zero-allocation).
+///
+/// Computes `C = beta * C + alpha * A * B` using faer's `matmul` with arbitrary strides.
+#[cfg(feature = "gemm-faer")]
+trait FaerGemm: Scalar {
+    /// # Safety
+    /// All pointers must be valid for the given dimensions and strides.
+    unsafe fn strided_gemm(
+        alpha: Self,
+        a_ptr: *const Self,
+        m: usize,
+        k: usize,
+        a_rs: isize,
+        a_cs: isize,
+        b_ptr: *const Self,
+        n: usize,
+        b_rs: isize,
+        b_cs: isize,
+        beta: Self,
+        c_ptr: *mut Self,
+        c_rs: isize,
+        c_cs: isize,
+    );
+}
+
+#[cfg(feature = "gemm-faer")]
+macro_rules! impl_faer_gemm {
+    ($ty:ty) => {
+        impl FaerGemm for $ty {
+            unsafe fn strided_gemm(
+                alpha: $ty,
+                a_ptr: *const $ty,
+                m: usize,
+                k: usize,
+                a_rs: isize,
+                a_cs: isize,
+                b_ptr: *const $ty,
+                n: usize,
+                b_rs: isize,
+                b_cs: isize,
+                beta: $ty,
+                c_ptr: *mut $ty,
+                c_rs: isize,
+                c_cs: isize,
+            ) {
+                use faer::{Accum, MatMut, MatRef, Par};
+                let a_mat = MatRef::<$ty>::from_raw_parts(a_ptr, m, k, a_rs, a_cs);
+                let b_mat = MatRef::<$ty>::from_raw_parts(b_ptr, k, n, b_rs, b_cs);
+                let accum = if beta == 0.0 {
+                    Accum::Replace
+                } else {
+                    if beta != 1.0 {
+                        let mut col_off = 0isize;
+                        for _ in 0..n {
+                            let mut off = col_off;
+                            for _ in 0..m {
+                                *c_ptr.offset(off) *= beta;
+                                off += c_rs;
+                            }
+                            col_off += c_cs;
+                        }
+                    }
+                    Accum::Add
+                };
+                let mut c_mat = MatMut::<$ty>::from_raw_parts_mut(c_ptr, m, n, c_rs, c_cs);
+                faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
+            }
+        }
+    };
+}
+
+#[cfg(feature = "gemm-faer")]
+impl_faer_gemm!(f64);
+#[cfg(feature = "gemm-faer")]
+impl_faer_gemm!(f32);
+
 /// Convert a CPU tensor to an immutable strided view.
 fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
     let data = t
@@ -106,6 +182,88 @@ fn compute_paired_components(
     (components, comp_dims)
 }
 
+/// Pre-computed mode analysis for Contract GEMM fast path.
+#[derive(Debug, Clone)]
+pub(crate) struct ContractGemmSpec {
+    /// Target mode order for A: [batch, m, k]
+    a_target: Vec<u32>,
+    /// Target mode order for B: [batch, k, n]
+    b_target: Vec<u32>,
+    /// Target mode order for C: [batch, m, n]
+    c_target: Vec<u32>,
+    batch_modes: Vec<u32>,
+    m_modes: Vec<u32>,
+    n_modes: Vec<u32>,
+    k_modes: Vec<u32>,
+}
+
+/// Build a [`ContractGemmSpec`] from mode labels, or `None` if the
+/// contraction is not a valid batched-GEMM pattern.
+fn build_contract_gemm_spec(
+    modes_a: &[u32],
+    modes_b: &[u32],
+    modes_c: &[u32],
+) -> Option<ContractGemmSpec> {
+    let batch_modes: Vec<u32> = modes_c
+        .iter()
+        .copied()
+        .filter(|m| modes_a.contains(m) && modes_b.contains(m))
+        .collect();
+    let m_modes: Vec<u32> = modes_c
+        .iter()
+        .copied()
+        .filter(|m| modes_a.contains(m) && !modes_b.contains(m))
+        .collect();
+    let n_modes: Vec<u32> = modes_c
+        .iter()
+        .copied()
+        .filter(|m| modes_b.contains(m) && !modes_a.contains(m))
+        .collect();
+    let k_modes: Vec<u32> = modes_a
+        .iter()
+        .copied()
+        .filter(|m| modes_b.contains(m) && !modes_c.contains(m))
+        .collect();
+
+    let expected_a = batch_modes.len() + m_modes.len() + k_modes.len();
+    let expected_b = batch_modes.len() + k_modes.len() + n_modes.len();
+    if expected_a != modes_a.len() || expected_b != modes_b.len() {
+        return None;
+    }
+    if batch_modes.len() + m_modes.len() + n_modes.len() != modes_c.len() {
+        return None;
+    }
+
+    let a_target: Vec<u32> = batch_modes
+        .iter()
+        .chain(m_modes.iter())
+        .chain(k_modes.iter())
+        .copied()
+        .collect();
+    let b_target: Vec<u32> = batch_modes
+        .iter()
+        .chain(k_modes.iter())
+        .chain(n_modes.iter())
+        .copied()
+        .collect();
+    let c_target: Vec<u32> = batch_modes
+        .iter()
+        .chain(m_modes.iter())
+        .chain(n_modes.iter())
+        .copied()
+        .collect();
+
+    Some(ContractGemmSpec {
+        a_target,
+        b_target,
+        c_target,
+        batch_modes,
+        m_modes,
+        n_modes,
+        k_modes,
+    })
+}
+
 /// CPU plan — concrete enum, no type erasure.
 ///
 /// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
@@ -189,6 +347,8 @@ pub enum CpuPlan<T: Scalar> {
         modes_b: Vec<u32>,
         /// Mode labels for output C.
         modes_c: Vec<u32>,
+        /// Cached GEMM mode analysis (None if not a valid GEMM pattern).
+        gemm_spec: Option<ContractGemmSpec>,
         _marker: PhantomData<T>,
     },
     /// Plan for element-wise multiplication (extended op).
@@ -490,10 +650,23 @@ impl CpuBackend {
                 k,
             } => {
                 // BatchedGemm expects 3 shapes: A, B, C
+                // Layout: [m/k, k/n, batch...] — batch dims are trailing
                 validate_shape_count(shapes, 3, "BatchedGemm")?;
-                let expected_a: Vec<usize> = batch_dims.iter().copied().chain([*m, *k]).collect();
-                let expected_b: Vec<usize> = batch_dims.iter().copied().chain([*k, *n]).collect();
-                let expected_c: Vec<usize> = batch_dims.iter().copied().chain([*m, *n]).collect();
+                let expected_a: Vec<usize> = [*m, *k]
+                    .iter()
+                    .copied()
+                    .chain(batch_dims.iter().copied())
+                    .collect();
+                let expected_b: Vec<usize> = [*k, *n]
+                    .iter()
+                    .copied()
+                    .chain(batch_dims.iter().copied())
+                    .collect();
+                let expected_c: Vec<usize> = [*m, *n]
+                    .iter()
+                    .copied()
+                    .chain(batch_dims.iter().copied())
+                    .collect();
                 validate_shape_eq(shapes[0], &expected_a, "BatchedGemm input A")?;
                 validate_shape_eq(shapes[1], &expected_b, "BatchedGemm input B")?;
                 validate_shape_eq(shapes[2], &expected_c, "BatchedGemm output C")?;
@@ -691,10 +864,12 @@ impl CpuBackend {
                         }
                     }
                 }
+                let gemm_spec = build_contract_gemm_spec(modes_a, modes_b, modes_c);
                 Ok(CpuPlan::Contract {
                     modes_a: modes_a.clone(),
                     modes_b: modes_b.clone(),
                     modes_c: modes_c.clone(),
+                    gemm_spec,
                     _marker: PhantomData,
                 })
             }
@@ -794,23 +969,28 @@ fn execute_batched_gemm_naive<T: Scalar>(
         batch_dims.iter().product()
     };
 
+    // Pre-allocate index buffers: [row, col, batch...]
+    let nb = batch_dims.len();
+    let mut a_idx = vec![0usize; 2 + nb];
+    let mut b_idx = vec![0usize; 2 + nb];
+    let mut c_idx = vec![0usize; 2 + nb];
+
     for batch_flat in 0..batch_size {
-        let batch_idx = unflatten_index(batch_flat, batch_dims);
+        unflatten_index_into(batch_flat, batch_dims, &mut a_idx[2..]);
+        b_idx[2..].copy_from_slice(&a_idx[2..]);
+        c_idx[2..].copy_from_slice(&a_idx[2..]);
         for i in 0..m {
             for j in 0..n {
                 let mut sum = T::zero();
                 for kk in 0..k {
-                    let mut a_idx = batch_idx.clone();
-                    a_idx.push(i);
-                    a_idx.push(kk);
-                    let mut b_idx = batch_idx.clone();
-                    b_idx.push(kk);
-                    b_idx.push(j);
+                    a_idx[0] = i;
+                    a_idx[1] = kk;
+                    b_idx[0] = kk;
+                    b_idx[1] = j;
                     sum = sum + a.get(&a_idx) * b.get(&b_idx);
                 }
-                let mut c_idx = batch_idx.clone();
-                c_idx.push(i);
-                c_idx.push(j);
+                c_idx[0] = i;
+                c_idx[1] = j;
                 let old = if beta == T::zero() {
                     T::zero()
                 } else {
@@ -844,15 +1024,16 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     let a_strides = a.strides();
     let b_strides = b.strides();
     let c_strides = output.strides();
-    let a_batch = &a_strides[..nb];
-    let b_batch = &b_strides[..nb];
-    let c_batch = &c_strides[..nb];
-    let a_row = a_strides[nb];
-    let a_col = a_strides[nb + 1];
-    let b_row = b_strides[nb];
-    let b_col = b_strides[nb + 1];
-    let c_row = c_strides[nb];
-    let c_col = c_strides[nb + 1];
+    // Layout: [row, col, batch...] — GEMM dims are leading, batch dims trailing
+    let a_row = a_strides[0];
+    let a_col = a_strides[1];
+    let a_batch = &a_strides[2..];
+    let b_row = b_strides[0];
+    let b_col = b_strides[1];
+    let b_batch = &b_strides[2..];
+    let c_row = c_strides[0];
+    let c_col = c_strides[1];
+    let c_batch = &c_strides[2..];
 
     let a_ptr = a.ptr();
     let b_ptr = b.ptr();
@@ -927,57 +1108,53 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
 
     if nb == 0 {
         result = do_batch(0, 0, 0, &mut a_mat, &mut b_mat, &mut c_mat);
-    } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
-        strided_perm::try_fuse_group(batch_dims, a_batch),
-        strided_perm::try_fuse_group(batch_dims, b_batch),
-        strided_perm::try_fuse_group(batch_dims, c_batch),
-    ) {
-        // Fast path: batch dims are fusable → pointer increment loop
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-        for _ in 0..total {
-            if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
-                result = Err(e);
-                break;
-            }
-            a_off += a_step;
-            b_off += b_step;
-            c_off += c_step;
-        }
     } else {
-        // Fallback: carry-based multi-index iteration
-        let mut idx = vec![0usize; nb];
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-        loop {
-            if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
-                result = Err(e);
-                break;
-            }
+        // Independent fusability check per operand
+        let a_fused = strided_perm::try_fuse_group(batch_dims, a_batch);
+        let b_fused = strided_perm::try_fuse_group(batch_dims, b_batch);
+        let c_fused = strided_perm::try_fuse_group(batch_dims, c_batch);
+        let total: usize = batch_dims.iter().product();
 
-            let mut carried_all = true;
-            for ax in 0..nb {
-                let dim = batch_dims[ax];
-                let next = idx[ax] + 1;
-                if next < dim {
-                    idx[ax] = next;
-                    a_off += a_batch[ax];
-                    b_off += b_batch[ax];
-                    c_off += c_batch[ax];
-                    carried_all = false;
+        if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
+            (a_fused, b_fused, c_fused)
+        {
+            // All-fused fast path: simple pointer increment
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            for _ in 0..total {
+                if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
+                    result = Err(e);
                     break;
-                } else {
-                    idx[ax] = 0;
-                    let back = (dim as isize - 1).max(0);
-                    a_off -= back * a_batch[ax];
-                    b_off -= back * b_batch[ax];
-                    c_off -= back * c_batch[ax];
                 }
+                a_off += a_step;
+                b_off += b_step;
+                c_off += c_step;
             }
-            if carried_all {
-                break;
+        } else {
+            // Mixed path: each operand independently fused or strided
+            let mut idx = vec![0usize; nb];
+            for flat in 0..total {
+                let a_off = batch_offset(flat, &idx, a_fused, a_batch);
+                let b_off = batch_offset(flat, &idx, b_fused, b_batch);
+                let c_off = batch_offset(flat, &idx, c_fused, c_batch);
+                if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
+                    result = Err(e);
+                    break;
+                }
+
+                // Advance shared multi-index (carry-based)
+                if flat + 1 < total {
+                    for ax in 0..nb {
+                        let next = idx[ax] + 1;
+                        if next < batch_dims[ax] {
+                            idx[ax] = next;
+                            break;
+                        } else {
+                            idx[ax] = 0;
+                        }
+                    }
+                }
             }
         }
     }
@@ -988,285 +1165,124 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     result
 }
 
-fn execute_batched_gemm_f64(
-    _ctx: &mut CpuContext,
-    alpha: f64,
-    inputs: &[&StridedView<f64>],
-    beta: f64,
-    output: &mut StridedViewMut<f64>,
-    batch_dims: &[usize],
-    m: usize,
-    n: usize,
-    k: usize,
-) -> Result<()> {
-    #[cfg(feature = "gemm-faer")]
-    {
-        use faer::{Accum, MatMut, MatRef, Par};
-
-        let a = inputs[0];
-        let b = inputs[1];
-        let nb = batch_dims.len();
-        let a_strides = a.strides();
-        let b_strides = b.strides();
-        let c_strides = output.strides();
-        let a_batch = &a_strides[..nb];
-        let b_batch = &b_strides[..nb];
-        let c_batch = &c_strides[..nb];
-        let a_row = a_strides[nb];
-        let a_col = a_strides[nb + 1];
-        let b_row = b_strides[nb];
-        let b_col = b_strides[nb + 1];
-        let c_row = c_strides[nb];
-        let c_col = c_strides[nb + 1];
-
-        let a_ptr = a.ptr();
-        let b_ptr = b.ptr();
-        let c_ptr = output.as_mut_ptr();
-
-        let accum = if beta == 0.0 {
-            Accum::Replace
-        } else {
-            Accum::Add
-        };
-
-        // Per-batch GEMM kernel
-        let mut do_batch = |a_off: isize, b_off: isize, c_off: isize| {
-            let a_mat =
-                unsafe { MatRef::<f64>::from_raw_parts(a_ptr.offset(a_off), m, k, a_row, a_col) };
-            let b_mat =
-                unsafe { MatRef::<f64>::from_raw_parts(b_ptr.offset(b_off), k, n, b_row, b_col) };
-
-            // Pre-scale C by beta if needed (beta != 0 and beta != 1)
-            if beta != 0.0 && beta != 1.0 {
-                for j in 0..n {
-                    for i in 0..m {
-                        let off = c_off + i as isize * c_row + j as isize * c_col;
-                        unsafe { *c_ptr.offset(off) *= beta };
-                    }
-                }
-            }
-
-            let mut c_mat = unsafe {
-                MatMut::<f64>::from_raw_parts_mut(c_ptr.offset(c_off), m, n, c_row, c_col)
-            };
-
-            faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
-        };
-
-        if nb == 0 {
-            do_batch(0, 0, 0);
-        } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
-            strided_perm::try_fuse_group(batch_dims, a_batch),
-            strided_perm::try_fuse_group(batch_dims, b_batch),
-            strided_perm::try_fuse_group(batch_dims, c_batch),
-        ) {
-            // Fast path: batch dims are fusable → pointer increment loop
-            let mut a_off = 0isize;
-            let mut b_off = 0isize;
-            let mut c_off = 0isize;
-            for _ in 0..total {
-                do_batch(a_off, b_off, c_off);
-                a_off += a_step;
-                b_off += b_step;
-                c_off += c_step;
-            }
-        } else {
-            // Fallback: carry-based multi-index iteration
-            let mut idx = vec![0usize; nb];
-            let mut a_off = 0isize;
-            let mut b_off = 0isize;
-            let mut c_off = 0isize;
-            loop {
-                do_batch(a_off, b_off, c_off);
-
-                let mut carried_all = true;
-                for ax in 0..nb {
-                    let dim = batch_dims[ax];
-                    let next = idx[ax] + 1;
-                    if next < dim {
-                        idx[ax] = next;
-                        a_off += a_batch[ax];
-                        b_off += b_batch[ax];
-                        c_off += c_batch[ax];
-                        carried_all = false;
-                        break;
-                    } else {
-                        idx[ax] = 0;
-                        let back = (dim as isize - 1).max(0);
-                        a_off -= back * a_batch[ax];
-                        b_off -= back * b_batch[ax];
-                        c_off -= back * c_batch[ax];
-                    }
-                }
-                if carried_all {
-                    break;
-                }
-            }
-        }
-
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "gemm-faer"))]
-    {
-        execute_batched_gemm_contiguous(
-            _ctx, alpha, inputs, beta, output, batch_dims, m, n, k, gemm_f64,
-        )
-    }
-}
-
-fn execute_batched_gemm_f32(
-    _ctx: &mut CpuContext,
-    alpha: f32,
-    inputs: &[&StridedView<f32>],
-    beta: f32,
-    output: &mut StridedViewMut<f32>,
-    batch_dims: &[usize],
-    m: usize,
-    n: usize,
-    k: usize,
-) -> Result<()> {
-    #[cfg(feature = "gemm-faer")]
-    {
-        use faer::{Accum, MatMut, MatRef, Par};
-
-        let a = inputs[0];
-        let b = inputs[1];
-        let nb = batch_dims.len();
-        let a_strides = a.strides();
-        let b_strides = b.strides();
-        let c_strides = output.strides();
-        let a_batch = &a_strides[..nb];
-        let b_batch = &b_strides[..nb];
-        let c_batch = &c_strides[..nb];
-        let a_row = a_strides[nb];
-        let a_col = a_strides[nb + 1];
-        let b_row = b_strides[nb];
-        let b_col = b_strides[nb + 1];
-        let c_row = c_strides[nb];
-        let c_col = c_strides[nb + 1];
-
-        let a_ptr = a.ptr();
-        let b_ptr = b.ptr();
-        let c_ptr = output.as_mut_ptr();
-
-        let accum = if beta == 0.0 {
-            Accum::Replace
-        } else {
-            Accum::Add
-        };
-
-        // Per-batch GEMM kernel
-        let mut do_batch = |a_off: isize, b_off: isize, c_off: isize| {
-            let a_mat =
-                unsafe { MatRef::<f32>::from_raw_parts(a_ptr.offset(a_off), m, k, a_row, a_col) };
-            let b_mat =
-                unsafe { MatRef::<f32>::from_raw_parts(b_ptr.offset(b_off), k, n, b_row, b_col) };
-
-            if beta != 0.0 && beta != 1.0 {
-                for j in 0..n {
-                    for i in 0..m {
-                        let off = c_off + i as isize * c_row + j as isize * c_col;
-                        unsafe { *c_ptr.offset(off) *= beta };
-                    }
-                }
-            }
-
-            let mut c_mat = unsafe {
-                MatMut::<f32>::from_raw_parts_mut(c_ptr.offset(c_off), m, n, c_row, c_col)
-            };
-
-            faer::linalg::matmul::matmul(&mut c_mat, accum, &a_mat, &b_mat, alpha, Par::Seq);
-        };
-
-        if nb == 0 {
-            do_batch(0, 0, 0);
-        } else if let (Some((total, a_step)), Some((_, b_step)), Some((_, c_step))) = (
-            strided_perm::try_fuse_group(batch_dims, a_batch),
-            strided_perm::try_fuse_group(batch_dims, b_batch),
-            strided_perm::try_fuse_group(batch_dims, c_batch),
-        ) {
-            // Fast path: batch dims are fusable → pointer increment loop
-            let mut a_off = 0isize;
-            let mut b_off = 0isize;
-            let mut c_off = 0isize;
-            for _ in 0..total {
-                do_batch(a_off, b_off, c_off);
-                a_off += a_step;
-                b_off += b_step;
-                c_off += c_step;
-            }
-        } else {
-            // Fallback: carry-based multi-index iteration
-            let mut idx = vec![0usize; nb];
-            let mut a_off = 0isize;
-            let mut b_off = 0isize;
-            let mut c_off = 0isize;
-            loop {
-                do_batch(a_off, b_off, c_off);
-
-                let mut carried_all = true;
-                for ax in 0..nb {
-                    let dim = batch_dims[ax];
-                    let next = idx[ax] + 1;
-                    if next < dim {
-                        idx[ax] = next;
-                        a_off += a_batch[ax];
-                        b_off += b_batch[ax];
-                        c_off += c_batch[ax];
-                        carried_all = false;
-                        break;
-                    } else {
-                        idx[ax] = 0;
-                        let back = (dim as isize - 1).max(0);
-                        a_off -= back * a_batch[ax];
-                        b_off -= back * b_batch[ax];
-                        c_off -= back * c_batch[ax];
-                    }
-                }
-                if carried_all {
-                    break;
-                }
-            }
-        }
-
-        return Ok(());
-    }
-
-    #[cfg(not(feature = "gemm-faer"))]
-    {
-        execute_batched_gemm_contiguous(
-            _ctx, alpha, inputs, beta, output, batch_dims, m, n, k, gemm_f32,
-        )
-    }
-}
-
-#[cfg(feature = "gemm-faer")]
-fn gemm_f64(
-    alpha: f64,
-    a: &[f64],
-    b: &[f64],
-    beta: f64,
-    c: &mut [f64],
-    m: usize,
-    n: usize,
-    k: usize,
-) -> Result<()> {
-    use faer::{Accum, MatMut, MatRef, Par};
-
-    let a_mat = MatRef::from_column_major_slice(a, m, k);
-    let b_mat = MatRef::from_column_major_slice(b, k, n);
-
-    if beta == 0.0 {
-        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
-        faer::linalg::matmul::matmul(&mut c_mat, Accum::Replace, &a_mat, &b_mat, alpha, Par::Seq);
+/// Compute batch offset for one operand: fused path uses flat index × step,
+/// strided path uses multi-index dot product with strides.
+#[inline]
+fn batch_offset(
+    flat: usize,
+    idx: &[usize],
+    fused: Option<(usize, isize)>,
+    batch_strides: &[isize],
+) -> isize {
+    if let Some((_, step)) = fused {
+        flat as isize * step
     } else {
-        if beta != 1.0 {
-            c.iter_mut().for_each(|v| *v *= beta);
-        }
-        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
-        faer::linalg::matmul::matmul(&mut c_mat, Accum::Add, &a_mat, &b_mat, alpha, Par::Seq);
+        idx.iter()
+            .zip(batch_strides)
+            .map(|(&i, &s)| i as isize * s)
+            .sum()
     }
+}
+
+/// Strided batched GEMM via faer — zero allocation, zero copy.
+#[cfg(feature = "gemm-faer")]
+fn execute_batched_gemm_strided<T: FaerGemm>(
+    alpha: T,
+    inputs: &[&StridedView<T>],
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    batch_dims: &[usize],
+    m: usize,
+    n: usize,
+    k: usize,
+) -> Result<()> {
+    let a = inputs[0];
+    let b = inputs[1];
+    let nb = batch_dims.len();
+    let a_strides = a.strides();
+    let b_strides = b.strides();
+    let c_strides = output.strides();
+    // Layout: [row, col, batch...] — GEMM dims are leading, batch dims trailing
+    let a_row = a_strides[0];
+    let a_col = a_strides[1];
+    let a_batch = &a_strides[2..];
+    let b_row = b_strides[0];
+    let b_col = b_strides[1];
+    let b_batch = &b_strides[2..];
+    let c_row = c_strides[0];
+    let c_col = c_strides[1];
+    let c_batch = &c_strides[2..];
+
+    let a_ptr = a.ptr();
+    let b_ptr = b.ptr();
+    let c_ptr = output.as_mut_ptr();
+
+    let do_batch = |a_off: isize, b_off: isize, c_off: isize| unsafe {
+        T::strided_gemm(
+            alpha,
+            a_ptr.offset(a_off),
+            m,
+            k,
+            a_row,
+            a_col,
+            b_ptr.offset(b_off),
+            n,
+            b_row,
+            b_col,
+            beta,
+            c_ptr.offset(c_off),
+            c_row,
+            c_col,
+        );
+    };
+
+    if nb == 0 {
+        do_batch(0, 0, 0);
+    } else {
+        // Independent fusability check per operand
+        let a_fused = strided_perm::try_fuse_group(batch_dims, a_batch);
+        let b_fused = strided_perm::try_fuse_group(batch_dims, b_batch);
+        let c_fused = strided_perm::try_fuse_group(batch_dims, c_batch);
+        let total: usize = batch_dims.iter().product();
+
+        if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
+            (a_fused, b_fused, c_fused)
+        {
+            // All-fused fast path: simple pointer increment
+            let mut a_off = 0isize;
+            let mut b_off = 0isize;
+            let mut c_off = 0isize;
+            for _ in 0..total {
+                do_batch(a_off, b_off, c_off);
+                a_off += a_step;
+                b_off += b_step;
+                c_off += c_step;
+            }
+        } else {
+            // Mixed path: each operand independently fused or strided
+            let mut idx = vec![0usize; nb];
+            for flat in 0..total {
+                let a_off = batch_offset(flat, &idx, a_fused, a_batch);
+                let b_off = batch_offset(flat, &idx, b_fused, b_batch);
+                let c_off = batch_offset(flat, &idx, c_fused, c_batch);
+                do_batch(a_off, b_off, c_off);
+
+                // Advance shared multi-index (carry-based)
+                if flat + 1 < total {
+                    for ax in 0..nb {
+                        let next = idx[ax] + 1;
+                        if next < batch_dims[ax] {
+                            idx[ax] = next;
+                            break;
+                        } else {
+                            idx[ax] = 0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1329,35 +1345,6 @@ fn gemm_f64(
                 c[i + j * m] = alpha * sum + beta * c[i + j * m];
             }
         }
-    }
-    Ok(())
-}
-
-#[cfg(feature = "gemm-faer")]
-fn gemm_f32(
-    alpha: f32,
-    a: &[f32],
-    b: &[f32],
-    beta: f32,
-    c: &mut [f32],
-    m: usize,
-    n: usize,
-    k: usize,
-) -> Result<()> {
-    use faer::{Accum, MatMut, MatRef, Par};
-
-    let a_mat = MatRef::from_column_major_slice(a, m, k);
-    let b_mat = MatRef::from_column_major_slice(b, k, n);
-
-    if beta == 0.0 {
-        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
-        faer::linalg::matmul::matmul(&mut c_mat, Accum::Replace, &a_mat, &b_mat, alpha, Par::Seq);
-    } else {
-        if beta != 1.0 {
-            c.iter_mut().for_each(|v| *v *= beta);
-        }
-        let mut c_mat = MatMut::from_column_major_slice_mut(c, m, n);
-        faer::linalg::matmul::matmul(&mut c_mat, Accum::Add, &a_mat, &b_mat, alpha, Par::Seq);
     }
     Ok(())
 }
@@ -1426,7 +1413,7 @@ fn gemm_f32(
 }
 
 fn execute_batched_gemm<T: Scalar + 'static>(
-    ctx: &mut CpuContext,
+    _ctx: &mut CpuContext,
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -1438,22 +1425,55 @@ fn execute_batched_gemm<T: Scalar + 'static>(
 ) -> Result<()> {
     let tid = TypeId::of::<T>();
 
+    macro_rules! dispatch_gemm {
+        ($ty:ty) => {{
+            let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<$ty>) };
+            let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<$ty>) };
+            let out =
+                unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<$ty>) };
+            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
+            let beta = unsafe { *(&beta as *const T as *const $ty) };
+            #[cfg(feature = "gemm-faer")]
+            {
+                return execute_batched_gemm_strided(
+                    alpha,
+                    &[a, b],
+                    beta,
+                    out,
+                    batch_dims,
+                    m,
+                    n,
+                    k,
+                );
+            }
+            #[cfg(not(feature = "gemm-faer"))]
+            {
+                return execute_batched_gemm_contiguous(
+                    _ctx,
+                    alpha,
+                    &[a, b],
+                    beta,
+                    out,
+                    batch_dims,
+                    m,
+                    n,
+                    k,
+                    gemm_fn,
+                );
+            }
+        }};
+    }
+
     if tid == TypeId::of::<f64>() {
-        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f64>) };
-        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f64>) };
-        let out = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f64>) };
-        let alpha = unsafe { *(&alpha as *const T as *const f64) };
-        let beta = unsafe { *(&beta as *const T as *const f64) };
-        return execute_batched_gemm_f64(ctx, alpha, &[a, b], beta, out, batch_dims, m, n, k);
+        #[cfg(not(feature = "gemm-faer"))]
+        let gemm_fn = gemm_f64;
+        dispatch_gemm!(f64);
     }
 
     if tid == TypeId::of::<f32>() {
-        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f32>) };
-        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f32>) };
-        let out = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f32>) };
-        let alpha = unsafe { *(&alpha as *const T as *const f32) };
-        let beta = unsafe { *(&beta as *const T as *const f32) };
-        return execute_batched_gemm_f32(ctx, alpha, &[a, b], beta, out, batch_dims, m, n, k);
+        #[cfg(not(feature = "gemm-faer"))]
+        let gemm_fn = gemm_f32;
+        dispatch_gemm!(f32);
     }
 
     execute_batched_gemm_naive(alpha, inputs, beta, output, batch_dims, m, n, k)
@@ -1471,20 +1491,23 @@ fn execute_reduce_sum<T: Scalar>(
     let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
     let reduced_total: usize = reduced_dims.iter().product();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut red_idx = vec![0usize; reduced_dims.len()];
+    let mut in_idx = vec![0usize; in_dims.len()];
+
     for_each_index(&out_dims, |out_idx| {
         let mut sum = T::zero();
         for red_flat in 0..reduced_total {
-            let red_idx = unflatten_index(red_flat, &reduced_dims);
+            unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
             // Build full input index by interleaving free and reduced
-            let mut in_idx = Vec::with_capacity(in_dims.len());
             let mut out_pos = 0;
             let mut red_pos = 0;
             for ax in 0..in_dims.len() {
                 if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    in_idx.push(red_idx[red_pos]);
+                    in_idx[ax] = red_idx[red_pos];
                     red_pos += 1;
                 } else {
-                    in_idx.push(out_idx[out_pos]);
+                    in_idx[ax] = out_idx[out_pos];
                     out_pos += 1;
                 }
             }
@@ -1500,6 +1523,14 @@ fn execute_reduce_sum<T: Scalar>(
     Ok(())
 }
 
+/// Unflatten a linear index into a pre-allocated buffer (column-major).
+fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
+    for d in 0..dims.len() {
+        out[d] = flat % dims[d];
+        flat /= dims[d];
+    }
+}
+
 fn execute_trace<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
@@ -1513,12 +1544,15 @@ fn execute_trace<T: Scalar>(
     let out_dims = output.dims().to_vec();
     let n_comps = comp_dims.len();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut comp_idx = vec![0usize; n_comps];
+    let mut in_idx = vec![0usize; in_dims.len()];
+
     for_each_index(&out_dims, |out_idx| {
         let mut sum = T::zero();
         // Odometer over component dimensions (Cartesian product)
-        let mut comp_idx = vec![0usize; n_comps];
+        comp_idx.fill(0);
         loop {
-            let mut in_idx = vec![0; in_dims.len()];
             for (out_pos, &in_ax) in free_axes.iter().enumerate() {
                 in_idx[in_ax] = out_idx[out_pos];
             }
@@ -1572,14 +1606,17 @@ fn execute_anti_trace<T: Scalar>(
     let out_dims = output.dims().to_vec();
     let n_comps = comp_dims.len();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut comp_idx = vec![0usize; n_comps];
+    let mut out_idx = vec![0usize; out_dims.len()];
+
     // For each input element, scatter to all diagonal positions in output
     // using Cartesian product over component dimensions.
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
         // Odometer over component dimensions (Cartesian product)
-        let mut comp_idx = vec![0usize; n_comps];
+        comp_idx.fill(0);
         loop {
-            let mut out_idx = vec![0; out_dims.len()];
             for (in_pos, &out_ax) in free_axes.iter().enumerate() {
                 out_idx[out_ax] = in_idx[in_pos];
             }
@@ -1631,12 +1668,15 @@ fn execute_anti_diag<T: Scalar>(
 
     let gen_dims: Vec<usize> = generative_comps.iter().map(|&c| comp_dims[c]).collect();
 
+    // Pre-allocate reusable buffers outside the hot loop
+    let mut gen_idx = vec![0usize; generative_comps.len()];
+    let mut out_idx = vec![0usize; out_dims.len()];
+
     for_each_index(&in_dims, |in_idx| {
         let val = alpha * input.get(in_idx);
         // Odometer over generative component dimensions
-        let mut gen_idx = vec![0usize; generative_comps.len()];
+        gen_idx.fill(0);
         loop {
-            let mut out_idx = vec![0; out_dims.len()];
             // Set free axes from input
             for (in_pos, &out_ax) in free_axes.iter().enumerate() {
                 out_idx[out_ax] = in_idx[in_pos];
@@ -1913,13 +1953,21 @@ fn execute_contract<T: Scalar>(
     modes_a: &[u32],
     modes_b: &[u32],
     modes_c: &[u32],
+    cached_gemm_spec: Option<&ContractGemmSpec>,
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
 
-    if let Some(done) =
-        try_execute_contract_gemm(alpha, inputs, beta, output, modes_a, modes_b, modes_c)?
-    {
+    if let Some(done) = try_execute_contract_gemm(
+        alpha,
+        inputs,
+        beta,
+        output,
+        modes_a,
+        modes_b,
+        modes_c,
+        cached_gemm_spec,
+    )? {
         return Ok(done);
     }
 
@@ -2029,6 +2077,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
     modes_a: &[u32],
     modes_b: &[u32],
     modes_c: &[u32],
+    cached_spec: Option<&ContractGemmSpec>,
 ) -> Result<Option<()>> {
     #[derive(Clone)]
     struct ModeSpec {
@@ -2095,45 +2144,87 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         Some((dims, strides))
     }
 
-    fn run_f64(
-        alpha: f64,
-        a: &StridedView<f64>,
-        b: &StridedView<f64>,
-        beta: f64,
-        c: &mut StridedViewMut<f64>,
+    /// Pre-computed fused GEMM geometry for a contract operation.
+    struct GemmLayout {
+        batch_total: usize,
+        m: usize,
+        n: usize,
+        k: usize,
+        /// A row stride (m dimension)
+        a_ms: isize,
+        /// A col stride (k dimension)
+        a_ks: isize,
+        /// B row stride (k dimension)
+        b_ks: isize,
+        /// B col stride (n dimension)
+        b_ns: isize,
+        /// C row stride (m dimension)
+        c_ms: isize,
+        /// C col stride (n dimension)
+        c_ns: isize,
+        /// A batch stride
+        a_bs: isize,
+        /// B batch stride
+        b_bs: isize,
+        /// C batch stride
+        c_bs: isize,
+    }
+
+    /// Compute the fused GEMM layout from mode specs and tensor shapes/strides.
+    /// Returns `None` if the modes cannot be fused into a valid GEMM layout.
+    fn compute_layout(
+        a_dims_src: &[usize],
+        a_strides_src: &[isize],
+        b_dims_src: &[usize],
+        b_strides_src: &[isize],
+        c_dims_src: &[usize],
+        c_strides_src: &[isize],
         modes_a: &[u32],
         modes_b: &[u32],
         modes_c: &[u32],
         spec: &ModeSpec,
-    ) -> Option<Result<()>> {
-        let target_a: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.k_modes.iter())
-            .copied()
-            .collect();
-        let target_b: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.k_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
-        let target_c: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
+        cached: Option<&ContractGemmSpec>,
+    ) -> Option<GemmLayout> {
+        let owned_a;
+        let owned_b;
+        let owned_c;
+        let (target_a, target_b, target_c) = if let Some(cs) = cached {
+            (
+                cs.a_target.as_slice(),
+                cs.b_target.as_slice(),
+                cs.c_target.as_slice(),
+            )
+        } else {
+            owned_a = spec
+                .batch_modes
+                .iter()
+                .chain(spec.m_modes.iter())
+                .chain(spec.k_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            owned_b = spec
+                .batch_modes
+                .iter()
+                .chain(spec.k_modes.iter())
+                .chain(spec.n_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            owned_c = spec
+                .batch_modes
+                .iter()
+                .chain(spec.m_modes.iter())
+                .chain(spec.n_modes.iter())
+                .copied()
+                .collect::<Vec<u32>>();
+            (owned_a.as_slice(), owned_b.as_slice(), owned_c.as_slice())
+        };
 
         let (a_dims, a_strides) =
-            reordered_dims_strides(modes_a, a.dims(), a.strides(), &target_a)?;
+            reordered_dims_strides(modes_a, a_dims_src, a_strides_src, target_a)?;
         let (b_dims, b_strides) =
-            reordered_dims_strides(modes_b, b.dims(), b.strides(), &target_b)?;
+            reordered_dims_strides(modes_b, b_dims_src, b_strides_src, target_b)?;
         let (c_dims, c_strides) =
-            reordered_dims_strides(modes_c, c.dims(), c.strides(), &target_c)?;
+            reordered_dims_strides(modes_c, c_dims_src, c_strides_src, target_c)?;
 
         let nb = spec.batch_modes.len();
         let nm = spec.m_modes.len();
@@ -2203,12 +2294,95 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
             return None;
         }
 
-        let m = m_raw.max(1);
-        let n = n_raw.max(1);
-        let k = k_raw.max(1);
-        let mut a_mat = vec![0.0_f64; m * k];
-        let mut b_mat = vec![0.0_f64; k * n];
-        let mut c_mat = vec![0.0_f64; m * n];
+        Some(GemmLayout {
+            batch_total,
+            m: m_raw.max(1),
+            n: n_raw.max(1),
+            k: k_raw.max(1),
+            a_ms,
+            a_ks,
+            b_ks,
+            b_ns,
+            c_ms,
+            c_ns,
+            a_bs,
+            b_bs,
+            c_bs,
+        })
+    }
+
+    /// Strided GEMM via faer — zero allocation, zero copy.
+    #[cfg(feature = "gemm-faer")]
+    fn run_strided<U: FaerGemm>(
+        alpha: U,
+        a: &StridedView<U>,
+        b: &StridedView<U>,
+        beta: U,
+        c: &mut StridedViewMut<U>,
+        layout: &GemmLayout,
+    ) -> Result<()> {
+        let a_ptr = a.ptr();
+        let b_ptr = b.ptr();
+        let c_ptr = c.as_mut_ptr();
+        let mut a_off = 0isize;
+        let mut b_off = 0isize;
+        let mut c_off = 0isize;
+        for _ in 0..layout.batch_total {
+            unsafe {
+                U::strided_gemm(
+                    alpha,
+                    a_ptr.offset(a_off),
+                    layout.m,
+                    layout.k,
+                    layout.a_ms,
+                    layout.a_ks,
+                    b_ptr.offset(b_off),
+                    layout.n,
+                    layout.b_ks,
+                    layout.b_ns,
+                    beta,
+                    c_ptr.offset(c_off),
+                    layout.c_ms,
+                    layout.c_ns,
+                );
+            }
+            a_off += layout.a_bs;
+            b_off += layout.b_bs;
+            c_off += layout.c_bs;
+        }
+        Ok(())
+    }
+
+    /// Dense-packing GEMM for non-faer backends (openblas, naive).
+    #[cfg(not(feature = "gemm-faer"))]
+    fn run_dense<U: Scalar>(
+        alpha: U,
+        a: &StridedView<U>,
+        b: &StridedView<U>,
+        beta: U,
+        c: &mut StridedViewMut<U>,
+        layout: &GemmLayout,
+        gemm_fn: fn(U, &[U], &[U], U, &mut [U], usize, usize, usize) -> Result<()>,
+    ) -> Result<()> {
+        let GemmLayout {
+            batch_total,
+            m,
+            n,
+            k,
+            a_ms,
+            a_ks,
+            b_ks,
+            b_ns,
+            c_ms,
+            c_ns,
+            a_bs,
+            b_bs,
+            c_bs,
+        } = *layout;
+
+        let mut a_mat = vec![U::zero(); m * k];
+        let mut b_mat = vec![U::zero(); k * n];
+        let mut c_mat = vec![U::zero(); m * n];
 
         let a_ptr = a.ptr();
         let b_ptr = b.ptr();
@@ -2230,8 +2404,8 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
                     b_mat[kk + j * k] = unsafe { *b_ptr.offset(off) };
                 }
             }
-            if beta == 0.0 {
-                c_mat.fill(0.0);
+            if beta == U::zero() {
+                c_mat.iter_mut().for_each(|v| *v = U::zero());
             } else {
                 for j in 0..n {
                     for i in 0..m {
@@ -2241,9 +2415,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
                 }
             }
 
-            if let Err(e) = gemm_f64(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
-                return Some(Err(e));
-            }
+            gemm_fn(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k)?;
 
             for j in 0..n {
                 for i in 0..m {
@@ -2258,204 +2430,74 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
             b_off += b_bs;
             c_off += c_bs;
         }
-        Some(Ok(()))
+        Ok(())
     }
 
-    fn run_f32(
-        alpha: f32,
-        a: &StridedView<f32>,
-        b: &StridedView<f32>,
-        beta: f32,
-        c: &mut StridedViewMut<f32>,
-        modes_a: &[u32],
-        modes_b: &[u32],
-        modes_c: &[u32],
-        spec: &ModeSpec,
-    ) -> Option<Result<()>> {
-        let target_a: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.k_modes.iter())
-            .copied()
-            .collect();
-        let target_b: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.k_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
-        let target_c: Vec<u32> = spec
-            .batch_modes
-            .iter()
-            .chain(spec.m_modes.iter())
-            .chain(spec.n_modes.iter())
-            .copied()
-            .collect();
-
-        let (a_dims, a_strides) =
-            reordered_dims_strides(modes_a, a.dims(), a.strides(), &target_a)?;
-        let (b_dims, b_strides) =
-            reordered_dims_strides(modes_b, b.dims(), b.strides(), &target_b)?;
-        let (c_dims, c_strides) =
-            reordered_dims_strides(modes_c, c.dims(), c.strides(), &target_c)?;
-
-        let nb = spec.batch_modes.len();
-        let nm = spec.m_modes.len();
-        let nk = spec.k_modes.len();
-        let nn = spec.n_modes.len();
-
-        let (batch_total, a_bs, b_bs, c_bs) = if nb == 0 {
-            (1usize, 0isize, 0isize, 0isize)
-        } else {
-            let (ta, sa) = try_fuse_group(&a_dims[..nb], &a_strides[..nb])?;
-            let (tb, sb) = try_fuse_group(&b_dims[..nb], &b_strides[..nb])?;
-            let (tc, sc) = try_fuse_group(&c_dims[..nb], &c_strides[..nb])?;
-            if ta != tb || ta != tc {
-                return None;
-            }
-            (ta, sa, sb, sc)
-        };
-
-        let (m_raw, a_ms) = if nm == 0 {
-            (1usize, 0isize)
-        } else {
-            try_fuse_group(&a_dims[nb..nb + nm], &a_strides[nb..nb + nm])?
-        };
-        let (m_chk, c_ms) = if nm == 0 {
-            (1usize, 0isize)
-        } else {
-            try_fuse_group(&c_dims[nb..nb + nm], &c_strides[nb..nb + nm])?
-        };
-        if m_raw != m_chk {
-            return None;
+    // === Build spec ===
+    let spec = if let Some(cached) = cached_spec {
+        ModeSpec {
+            batch_modes: cached.batch_modes.clone(),
+            m_modes: cached.m_modes.clone(),
+            n_modes: cached.n_modes.clone(),
+            k_modes: cached.k_modes.clone(),
         }
-
-        let (k_raw, a_ks) = if nk == 0 {
-            (1usize, 0isize)
-        } else {
-            try_fuse_group(
-                &a_dims[nb + nm..nb + nm + nk],
-                &a_strides[nb + nm..nb + nm + nk],
-            )?
-        };
-        let (k_chk, b_ks) = if nk == 0 {
-            (1usize, 0isize)
-        } else {
-            try_fuse_group(&b_dims[nb..nb + nk], &b_strides[nb..nb + nk])?
-        };
-        if k_raw != k_chk {
-            return None;
+    } else {
+        match build_mode_spec(modes_a, modes_b, modes_c) {
+            Some(s) => s,
+            None => return Ok(None),
         }
+    };
 
-        let (n_raw, b_ns) = if nn == 0 {
-            (1usize, 0isize)
-        } else {
-            try_fuse_group(
-                &b_dims[nb + nk..nb + nk + nn],
-                &b_strides[nb + nk..nb + nk + nn],
-            )?
-        };
-        let (n_chk, c_ns) = if nn == 0 {
-            (1usize, 0isize)
-        } else {
-            try_fuse_group(
-                &c_dims[nb + nm..nb + nm + nn],
-                &c_strides[nb + nm..nb + nm + nn],
-            )?
-        };
-        if n_raw != n_chk {
-            return None;
-        }
-
-        let m = m_raw.max(1);
-        let n = n_raw.max(1);
-        let k = k_raw.max(1);
-        let mut a_mat = vec![0.0_f32; m * k];
-        let mut b_mat = vec![0.0_f32; k * n];
-        let mut c_mat = vec![0.0_f32; m * n];
-
-        let a_ptr = a.ptr();
-        let b_ptr = b.ptr();
-        let c_ptr = c.as_mut_ptr();
-        let mut a_off = 0isize;
-        let mut b_off = 0isize;
-        let mut c_off = 0isize;
-
-        for _ in 0..batch_total {
-            for kk in 0..k {
-                for i in 0..m {
-                    let off = a_off + i as isize * a_ms + kk as isize * a_ks;
-                    a_mat[i + kk * m] = unsafe { *a_ptr.offset(off) };
-                }
-            }
-            for j in 0..n {
-                for kk in 0..k {
-                    let off = b_off + kk as isize * b_ks + j as isize * b_ns;
-                    b_mat[kk + j * k] = unsafe { *b_ptr.offset(off) };
-                }
-            }
-            if beta == 0.0 {
-                c_mat.fill(0.0);
-            } else {
-                for j in 0..n {
-                    for i in 0..m {
-                        let off = c_off + i as isize * c_ms + j as isize * c_ns;
-                        c_mat[i + j * m] = unsafe { *c_ptr.offset(off) };
-                    }
-                }
-            }
-
-            if let Err(e) = gemm_f32(alpha, &a_mat, &b_mat, beta, &mut c_mat, m, n, k) {
-                return Some(Err(e));
-            }
-
-            for j in 0..n {
-                for i in 0..m {
-                    let off = c_off + i as isize * c_ms + j as isize * c_ns;
-                    unsafe {
-                        *c_ptr.offset(off) = c_mat[i + j * m];
-                    }
-                }
-            }
-
-            a_off += a_bs;
-            b_off += b_bs;
-            c_off += c_bs;
-        }
-        Some(Ok(()))
-    }
-
-    let spec = match build_mode_spec(modes_a, modes_b, modes_c) {
-        Some(s) => s,
+    // === Compute layout (type-independent) ===
+    let layout = match compute_layout(
+        inputs[0].dims(),
+        inputs[0].strides(),
+        inputs[1].dims(),
+        inputs[1].strides(),
+        output.dims(),
+        output.strides(),
+        modes_a,
+        modes_b,
+        modes_c,
+        &spec,
+        cached_spec,
+    ) {
+        Some(l) => l,
         None => return Ok(None),
     };
 
+    // === Dispatch based on concrete type ===
     let tid = TypeId::of::<T>();
+
+    macro_rules! dispatch_contract {
+        ($ty:ty) => {{
+            let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<$ty>) };
+            let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<$ty>) };
+            let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<$ty>) };
+            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
+            let beta = unsafe { *(&beta as *const T as *const $ty) };
+            #[cfg(feature = "gemm-faer")]
+            {
+                run_strided(alpha, a, b, beta, c, &layout)?;
+                return Ok(Some(()));
+            }
+            #[cfg(not(feature = "gemm-faer"))]
+            {
+                run_dense(alpha, a, b, beta, c, &layout, gemm_fn)?;
+                return Ok(Some(()));
+            }
+        }};
+    }
+
     if tid == TypeId::of::<f64>() {
-        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f64>) };
-        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f64>) };
-        let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f64>) };
-        let alpha = unsafe { *(&alpha as *const T as *const f64) };
-        let beta = unsafe { *(&beta as *const T as *const f64) };
-        if let Some(r) = run_f64(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec) {
-            r?;
-            return Ok(Some(()));
-        }
-        return Ok(None);
+        #[cfg(not(feature = "gemm-faer"))]
+        let gemm_fn = gemm_f64;
+        dispatch_contract!(f64);
     }
     if tid == TypeId::of::<f32>() {
-        let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<f32>) };
-        let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<f32>) };
-        let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<f32>) };
-        let alpha = unsafe { *(&alpha as *const T as *const f32) };
-        let beta = unsafe { *(&beta as *const T as *const f32) };
-        if let Some(r) = run_f32(alpha, a, b, beta, c, modes_a, modes_b, modes_c, &spec) {
-            r?;
-            return Ok(Some(()));
-        }
-        return Ok(None);
+        #[cfg(not(feature = "gemm-faer"))]
+        let gemm_fn = gemm_f32;
+        dispatch_contract!(f32);
     }
     Ok(None)
 }
@@ -2618,6 +2660,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                 modes_a,
                 modes_b,
                 modes_c,
+                gemm_spec,
                 ..
             } => {
                 validate_execute_inputs(inputs, 2, "Contract")?;
@@ -2629,6 +2672,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     modes_a,
                     modes_b,
                     modes_c,
+                    gemm_spec.as_ref(),
                 )
             }
         }

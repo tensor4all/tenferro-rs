@@ -15,6 +15,18 @@ fn ctx() -> tenferro_prims::CpuContext {
     tenferro_prims::CpuContext::new(1)
 }
 
+/// Helper: read element at multi-index from a tensor (stride-aware).
+fn get<T: tenferro_algebra::Scalar>(t: &Tensor<T>, idx: &[usize]) -> T {
+    let data = t.buffer().as_slice().unwrap();
+    let pos = t.offset()
+        + idx
+            .iter()
+            .zip(t.strides())
+            .map(|(&i, &s)| i as isize * s)
+            .sum::<isize>();
+    data[pos as usize]
+}
+
 // ============================================================================
 // MaxPlus matmul: C[i,k] = max_j(A[i,j] + B[j,k])
 // ============================================================================
@@ -141,12 +153,11 @@ fn tropical_maxplus_batch_matmul() {
     // C0[1,0] = max(2+0.5, 4+0.5) = max(2.5, 4.5) = 4.5
     // C0[0,1] = max(1+1.0, 3+1.0) = max(2.0, 4.0) = 4.0
     // C0[1,1] = max(2+1.0, 4+1.0) = max(3.0, 5.0) = 5.0
-    let data = c.buffer().as_slice().unwrap();
-    // Column-major [b, i, k]: data[b + 2*i + 4*k]
-    assert_eq!(data[0], MaxPlus(3.5)); // b=0,i=0,k=0
-    assert_eq!(data[2], MaxPlus(4.5)); // b=0,i=1,k=0
-    assert_eq!(data[4], MaxPlus(4.0)); // b=0,i=0,k=1
-    assert_eq!(data[6], MaxPlus(5.0)); // b=0,i=1,k=1
+    // Use stride-aware indexing (output may be a lazy-permuted view)
+    assert_eq!(get(&c, &[0, 0, 0]), MaxPlus(3.5)); // b=0,i=0,k=0
+    assert_eq!(get(&c, &[0, 1, 0]), MaxPlus(4.5)); // b=0,i=1,k=0
+    assert_eq!(get(&c, &[0, 0, 1]), MaxPlus(4.0)); // b=0,i=0,k=1
+    assert_eq!(get(&c, &[0, 1, 1]), MaxPlus(5.0)); // b=0,i=1,k=1
 }
 
 // ============================================================================
@@ -329,11 +340,11 @@ fn tropical_maxplus_three_chain() {
     // D[1,0] = max(5+0, 5+0) = 5
     // D[0,1] = max(4+0, 4+0) = 4
     // D[1,1] = max(5+0, 5+0) = 5
-    let data = d.buffer().as_slice().unwrap();
-    assert_eq!(data[0], MaxPlus(4.0));
-    assert_eq!(data[1], MaxPlus(5.0));
-    assert_eq!(data[2], MaxPlus(4.0));
-    assert_eq!(data[3], MaxPlus(5.0));
+    // Compare logical elements (stride-aware, layout-independent)
+    assert_eq!(get(&d, &[0, 0]), MaxPlus(4.0));
+    assert_eq!(get(&d, &[1, 0]), MaxPlus(5.0));
+    assert_eq!(get(&d, &[0, 1]), MaxPlus(4.0));
+    assert_eq!(get(&d, &[1, 1]), MaxPlus(5.0));
 }
 
 // ============================================================================

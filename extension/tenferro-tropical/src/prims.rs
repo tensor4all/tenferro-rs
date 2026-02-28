@@ -278,7 +278,8 @@ fn execute_batched_gemm_optimized<T: Scalar + TropicalGemmDispatch>(
     let b = inputs[1];
     let batch_size: usize = batch_dims.iter().product::<usize>().max(1);
 
-    // Extract A into contiguous row-major buffer: [batch, m, k] row-major
+    // Extract A into contiguous row-major buffer
+    // Layout: [m, k, batch...] — GEMM dims leading, batch trailing
     let a_total = batch_size * m * k;
     let b_total = batch_size * k * n;
     let mut a_buf: Vec<T::Inner> = Vec::with_capacity(a_total);
@@ -288,9 +289,8 @@ fn execute_batched_gemm_optimized<T: Scalar + TropicalGemmDispatch>(
         let batch_idx = unflatten_index(batch_flat, batch_dims);
         for i in 0..m {
             for j in 0..k {
-                let mut idx = batch_idx.clone();
-                idx.push(i);
-                idx.push(j);
+                let mut idx = vec![i, j];
+                idx.extend_from_slice(&batch_idx);
                 a_buf.push(a.get(&idx).inner_value());
             }
         }
@@ -299,9 +299,8 @@ fn execute_batched_gemm_optimized<T: Scalar + TropicalGemmDispatch>(
         let batch_idx = unflatten_index(batch_flat, batch_dims);
         for i in 0..k {
             for j in 0..n {
-                let mut idx = batch_idx.clone();
-                idx.push(i);
-                idx.push(j);
+                let mut idx = vec![i, j];
+                idx.extend_from_slice(&batch_idx);
                 b_buf.push(b.get(&idx).inner_value());
             }
         }
@@ -315,9 +314,8 @@ fn execute_batched_gemm_optimized<T: Scalar + TropicalGemmDispatch>(
         let batch_idx = unflatten_index(batch_flat, batch_dims);
         for i in 0..m {
             for j in 0..n {
-                let mut c_idx = batch_idx.clone();
-                c_idx.push(i);
-                c_idx.push(j);
+                let mut c_idx = vec![i, j];
+                c_idx.extend_from_slice(&batch_idx);
                 let flat = batch_flat * m * n + i * n + j;
                 let val = T::from_inner(result[flat]);
                 let old = if beta == T::zero() {
@@ -351,23 +349,21 @@ fn execute_batched_gemm_fallback<T: Scalar>(
         batch_dims.iter().product()
     };
 
+    // Layout: [row, col, batch...] — GEMM dims leading, batch trailing
     for batch_flat in 0..batch_size {
         let batch_idx = unflatten_index(batch_flat, batch_dims);
         for i in 0..m {
             for j in 0..n {
                 let mut sum = T::zero();
                 for kk in 0..k {
-                    let mut a_idx = batch_idx.clone();
-                    a_idx.push(i);
-                    a_idx.push(kk);
-                    let mut b_idx = batch_idx.clone();
-                    b_idx.push(kk);
-                    b_idx.push(j);
+                    let mut a_idx = vec![i, kk];
+                    a_idx.extend_from_slice(&batch_idx);
+                    let mut b_idx = vec![kk, j];
+                    b_idx.extend_from_slice(&batch_idx);
                     sum = sum + a.get(&a_idx) * b.get(&b_idx);
                 }
-                let mut c_idx = batch_idx.clone();
-                c_idx.push(i);
-                c_idx.push(j);
+                let mut c_idx = vec![i, j];
+                c_idx.extend_from_slice(&batch_idx);
                 let old = if beta == T::zero() {
                     T::zero()
                 } else {
@@ -685,28 +681,28 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
                     "BatchedGemm rank mismatch between descriptor and shapes".into(),
                 ));
             }
-            for (i, &bd) in batch_dims.iter().enumerate() {
-                if a_shape[i] != bd || b_shape[i] != bd || c_shape[i] != bd {
-                    return Err(Error::InvalidArgument(
-                        "BatchedGemm batch dimensions do not match shapes".into(),
-                    ));
-                }
-            }
-            let off = batch_dims.len();
-            if a_shape[off] != *m || a_shape[off + 1] != *k {
+            // Layout: [m/k, k/n, batch...] — GEMM dims leading, batch trailing
+            if a_shape[0] != *m || a_shape[1] != *k {
                 return Err(Error::InvalidArgument(
                     "BatchedGemm A shape mismatch".into(),
                 ));
             }
-            if b_shape[off] != *k || b_shape[off + 1] != *n {
+            if b_shape[0] != *k || b_shape[1] != *n {
                 return Err(Error::InvalidArgument(
                     "BatchedGemm B shape mismatch".into(),
                 ));
             }
-            if c_shape[off] != *m || c_shape[off + 1] != *n {
+            if c_shape[0] != *m || c_shape[1] != *n {
                 return Err(Error::InvalidArgument(
                     "BatchedGemm C shape mismatch".into(),
                 ));
+            }
+            for (i, &bd) in batch_dims.iter().enumerate() {
+                if a_shape[2 + i] != bd || b_shape[2 + i] != bd || c_shape[2 + i] != bd {
+                    return Err(Error::InvalidArgument(
+                        "BatchedGemm batch dimensions do not match shapes".into(),
+                    ));
+                }
             }
 
             Ok(TropicalPlan::BatchedGemm {

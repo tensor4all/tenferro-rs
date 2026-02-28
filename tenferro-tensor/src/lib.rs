@@ -667,8 +667,8 @@ impl<T> DataBuffer<T> {
 /// ```
 pub struct Tensor<T: Scalar> {
     buffer: DataBuffer<T>,
-    dims: Vec<usize>,
-    strides: Vec<isize>,
+    dims: Arc<[usize]>,
+    strides: Arc<[isize]>,
     offset: isize,
     /// The logical memory space where this tensor's data resides.
     logical_memory_space: LogicalMemorySpace,
@@ -798,8 +798,8 @@ impl<T: Scalar> Tensor<T> {
         let strides = compute_contiguous_strides(dims, order);
         Tensor {
             buffer: DataBuffer::from_vec(vec![T::zero(); n_elements]),
-            dims: dims.to_vec(),
-            strides,
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset: 0,
             logical_memory_space: memory_space,
             preferred_compute_device: None,
@@ -835,8 +835,8 @@ impl<T: Scalar> Tensor<T> {
         let strides = compute_contiguous_strides(dims, order);
         Tensor {
             buffer: DataBuffer::from_vec(vec![T::one(); n_elements]),
-            dims: dims.to_vec(),
-            strides,
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset: 0,
             logical_memory_space: memory_space,
             preferred_compute_device: None,
@@ -876,8 +876,8 @@ impl<T: Scalar> Tensor<T> {
         let strides = compute_contiguous_strides(dims, order);
         Ok(Tensor {
             buffer: DataBuffer::from_vec(data.to_vec()),
-            dims: dims.to_vec(),
-            strides,
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset: 0,
             logical_memory_space: LogicalMemorySpace::MainMemory,
             preferred_compute_device: None,
@@ -945,8 +945,8 @@ impl<T: Scalar> Tensor<T> {
         }
         Ok(Tensor {
             buffer: DataBuffer::from_vec(data),
-            dims: dims.to_vec(),
-            strides: strides.to_vec(),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
             offset,
             logical_memory_space: LogicalMemorySpace::MainMemory,
             preferred_compute_device: None,
@@ -994,8 +994,8 @@ impl<T: Scalar> Tensor<T> {
         }
         Tensor {
             buffer: DataBuffer::from_vec(data),
-            dims: dims.to_vec(),
-            strides: strides.to_vec(),
+            dims: Arc::from(dims.as_slice()),
+            strides: Arc::from(strides),
             offset: 0,
             logical_memory_space: memory_space,
             preferred_compute_device: None,
@@ -1305,8 +1305,8 @@ impl<T: Scalar> Tensor<T> {
             }
             seen[p] = true;
         }
-        let new_dims: Vec<usize> = perm.iter().map(|&p| self.dims[p]).collect();
-        let new_strides: Vec<isize> = perm.iter().map(|&p| self.strides[p]).collect();
+        let new_dims: Arc<[usize]> = perm.iter().map(|&p| self.dims[p]).collect();
+        let new_strides: Arc<[isize]> = perm.iter().map(|&p| self.strides[p]).collect();
         Ok(Tensor {
             buffer: self.buffer.clone(),
             dims: new_dims,
@@ -1349,7 +1349,7 @@ impl<T: Scalar> Tensor<T> {
                 ndim
             )));
         }
-        let mut new_strides = self.strides.clone();
+        let mut new_strides = self.strides.to_vec();
         for i in 0..ndim {
             if self.dims[i] == target_dims[i] {
                 // keep stride
@@ -1364,8 +1364,8 @@ impl<T: Scalar> Tensor<T> {
         }
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: target_dims.to_vec(),
-            strides: new_strides,
+            dims: Arc::from(target_dims),
+            strides: Arc::from(new_strides),
             offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -1444,8 +1444,8 @@ impl<T: Scalar> Tensor<T> {
 
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: new_dims,
-            strides: new_strides,
+            dims: Arc::from(new_dims),
+            strides: Arc::from(new_strides),
             offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -1481,7 +1481,7 @@ impl<T: Scalar> Tensor<T> {
         let new_len: usize = new_dims.iter().product();
         if old_len != new_len {
             return Err(Error::ShapeMismatch {
-                expected: self.dims.clone(),
+                expected: self.dims.to_vec(),
                 got: new_dims.to_vec(),
             });
         }
@@ -1498,8 +1498,8 @@ impl<T: Scalar> Tensor<T> {
         let new_strides = compute_contiguous_strides(new_dims, order);
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: new_dims.to_vec(),
-            strides: new_strides,
+            dims: Arc::from(new_dims),
+            strides: Arc::from(new_strides),
             offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -1558,8 +1558,8 @@ impl<T: Scalar> Tensor<T> {
         }
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: new_dims,
-            strides: new_strides,
+            dims: Arc::from(new_dims),
+            strides: Arc::from(new_strides),
             offset: self.offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -1606,14 +1606,14 @@ impl<T: Scalar> Tensor<T> {
             )));
         }
         let new_offset = self.offset + index as isize * self.strides[dim];
-        let mut new_dims = self.dims.clone();
-        let mut new_strides = self.strides.clone();
+        let mut new_dims = self.dims.to_vec();
+        let mut new_strides = self.strides.to_vec();
         new_dims.remove(dim);
         new_strides.remove(dim);
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: new_dims,
-            strides: new_strides,
+            dims: Arc::from(new_dims),
+            strides: Arc::from(new_strides),
             offset: new_offset,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -1662,11 +1662,11 @@ impl<T: Scalar> Tensor<T> {
             )));
         }
         let new_offset = self.offset + start as isize * self.strides[dim];
-        let mut new_dims = self.dims.clone();
+        let mut new_dims = self.dims.to_vec();
         new_dims[dim] = length;
         Ok(Tensor {
             buffer: self.buffer.clone(),
-            dims: new_dims,
+            dims: Arc::from(new_dims),
             strides: self.strides.clone(),
             offset: new_offset,
             logical_memory_space: self.logical_memory_space,
@@ -1718,7 +1718,7 @@ impl<T: Scalar> Tensor<T> {
         Tensor {
             buffer: DataBuffer::from_vec(data),
             dims: self.dims.clone(),
-            strides: dst_strides,
+            strides: Arc::from(dst_strides),
             offset: 0,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -1789,6 +1789,14 @@ impl<T: Scalar> Tensor<T> {
     pub fn is_contiguous(&self) -> bool {
         is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
             || is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
+    }
+
+    /// Check if the tensor has column-major contiguous layout.
+    ///
+    /// Returns `true` when data elements are stored in Fortran order:
+    /// stride\[0\] = 1, stride\[i\] = stride\[i-1\] * dims\[i-1\].
+    pub fn is_col_major_contiguous(&self) -> bool {
+        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
     }
 
     /// Return a lazily-conjugated tensor (shared buffer, flag flip).
@@ -1942,7 +1950,7 @@ impl<T: Scalar> Tensor<T> {
         Tensor {
             buffer: DataBuffer::from_vec(data),
             dims: self.dims.clone(),
-            strides: out_strides,
+            strides: Arc::from(out_strides),
             offset: 0,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -2028,7 +2036,7 @@ impl<T: Scalar> Tensor<T> {
         Tensor {
             buffer: DataBuffer::from_vec(data),
             dims: self.dims.clone(),
-            strides: out_strides,
+            strides: Arc::from(out_strides),
             offset: 0,
             logical_memory_space: self.logical_memory_space,
             preferred_compute_device: self.preferred_compute_device,
@@ -2208,7 +2216,7 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
         let mut result = Tensor {
             buffer: DataBuffer::from_vec(data),
             dims: a.dims.clone(),
-            strides: dst_strides,
+            strides: Arc::from(dst_strides),
             offset: 0,
             logical_memory_space: a.logical_memory_space,
             preferred_compute_device: a.preferred_compute_device,
