@@ -203,6 +203,26 @@ pub trait LinalgScalar:
 
     /// Complex conjugate (identity for real types).
     fn conj(&self) -> Self;
+
+    /// Buffer sizes for `eig_general` output.
+    ///
+    /// Returns `(values_len, vectors_len)` — the number of `T` elements
+    /// needed for the interleaved eigenvalue/eigenvector output buffers.
+    /// For real types this is `(2*n, 2*n*n)` (interleaved re/im pairs);
+    /// for complex types it is `(n, n*n)`.
+    fn eig_buffer_sizes(n: usize) -> (usize, usize);
+
+    /// Convert interleaved `eig_general` output to `Complex` tensors.
+    ///
+    /// For real `T`, `val_ri` has `[re0, im0, re1, im1, ...]` layout.
+    /// For complex `T`, `val_ri` already contains complex values directly.
+    fn eig_ri_to_complex(
+        n: usize,
+        val_ri: &[Self],
+        vec_ri: &[Self],
+        values_out: &mut [Self::Complex],
+        vectors_out: &mut [Self::Complex],
+    );
 }
 
 impl LinalgScalar for f64 {
@@ -219,6 +239,23 @@ impl LinalgScalar for f64 {
     #[inline]
     fn conj(&self) -> f64 {
         *self
+    }
+    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
+        (2 * n, 2 * n * n)
+    }
+    fn eig_ri_to_complex(
+        n: usize,
+        val_ri: &[Self],
+        vec_ri: &[Self],
+        values_out: &mut [Complex64],
+        vectors_out: &mut [Complex64],
+    ) {
+        for i in 0..n {
+            values_out[i] = Complex64::new(val_ri[2 * i], val_ri[2 * i + 1]);
+        }
+        for k in 0..(n * n) {
+            vectors_out[k] = Complex64::new(vec_ri[2 * k], vec_ri[2 * k + 1]);
+        }
     }
 }
 
@@ -237,6 +274,23 @@ impl LinalgScalar for f32 {
     fn conj(&self) -> f32 {
         *self
     }
+    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
+        (2 * n, 2 * n * n)
+    }
+    fn eig_ri_to_complex(
+        n: usize,
+        val_ri: &[Self],
+        vec_ri: &[Self],
+        values_out: &mut [Complex32],
+        vectors_out: &mut [Complex32],
+    ) {
+        for i in 0..n {
+            values_out[i] = Complex32::new(val_ri[2 * i], val_ri[2 * i + 1]);
+        }
+        for k in 0..(n * n) {
+            vectors_out[k] = Complex32::new(vec_ri[2 * k], vec_ri[2 * k + 1]);
+        }
+    }
 }
 
 impl LinalgScalar for Complex64 {
@@ -254,6 +308,19 @@ impl LinalgScalar for Complex64 {
     fn conj(&self) -> Complex64 {
         Complex64::conj(self)
     }
+    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
+        (n, n * n)
+    }
+    fn eig_ri_to_complex(
+        n: usize,
+        val_ri: &[Self],
+        vec_ri: &[Self],
+        values_out: &mut [Complex64],
+        vectors_out: &mut [Complex64],
+    ) {
+        values_out[..n].copy_from_slice(&val_ri[..n]);
+        vectors_out[..n * n].copy_from_slice(&vec_ri[..n * n]);
+    }
 }
 
 impl LinalgScalar for Complex32 {
@@ -270,6 +337,19 @@ impl LinalgScalar for Complex32 {
     #[inline]
     fn conj(&self) -> Complex32 {
         Complex32::conj(self)
+    }
+    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
+        (n, n * n)
+    }
+    fn eig_ri_to_complex(
+        n: usize,
+        val_ri: &[Self],
+        vec_ri: &[Self],
+        values_out: &mut [Complex32],
+        vectors_out: &mut [Complex32],
+    ) {
+        values_out[..n].copy_from_slice(&val_ri[..n]);
+        vectors_out[..n * n].copy_from_slice(&vec_ri[..n * n]);
     }
 }
 

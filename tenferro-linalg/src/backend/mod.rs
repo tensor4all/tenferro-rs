@@ -1,58 +1,103 @@
 //! Backend abstraction for linear algebra operations.
 //!
-//! Currently only the CPU backend ([`FaerBackend`]) is available.
-//! GPU backends (cuSOLVER, hipSOLVER) are planned but not yet implemented.
+//! This module provides both the slice-level [`LinalgBackend`] trait (used
+//! internally by the CPU provider) and the tensor-level
+//! [`TensorLinalgBackend`] trait (the public backend boundary).
 //!
-//! To add a GPU backend, implement [`LinalgBackend<T>`] for your backend type
-//! and gate it behind a cargo feature (e.g., `#[cfg(feature = "cuda")]`).
+//! # CPU provider selection
 //!
-//! This module defines the [`LinalgBackend`] trait, which provides a
-//! backend-agnostic interface for matrix decompositions and solvers.
-//! Implementations write results into caller-provided output buffers
-//! (pre-allocated slices), avoiding internal allocations.
+//! Exactly one of the following features must be enabled:
 //!
-//! All matrices use **column-major** (Fortran) layout: element `(i, j)` of
-//! an `m x n` matrix is stored at index `i + j * m`.
+//! - `linalg-faer`: Pure-Rust via [`faer`](https://crates.io/crates/faer) (default)
+//! - `linalg-lapack`: External LAPACK binding (placeholder)
 //!
-//! # Available backends
+//! Enabling both or neither is a compile error.
 //!
-//! - **faer** (feature `faer`, enabled by default): Pure-Rust linear algebra
-//!   via the [`faer`](https://crates.io/crates/faer) crate.
+//! # Device backends
+//!
+//! - **CPU**: [`CpuTensorLinalgBackend`] / [`CpuTensorLinalgContext`]
+//! - **CUDA**: [`CudaTensorLinalgBackend`] / [`CudaTensorLinalgContext`] (stub)
+//! - **HIP**: [`HipTensorLinalgBackend`] / [`HipTensorLinalgContext`] (stub)
 //!
 //! # Examples
 //!
-//! ```
-//! use tenferro_linalg::backend::{LinalgBackend, FaerBackend};
+//! ```ignore
+//! use tenferro_linalg::backend::{CpuTensorLinalgContext, TensorLinalgBackend, CpuTensorLinalgBackend};
+//! use tenferro_tensor::Tensor;
 //!
-//! let mut backend = FaerBackend::new();
-//! let a = [1.0_f64, 0.0, 0.0, 1.0]; // 2x2 identity, col-major
-//! let mut u = [0.0; 4];
-//! let mut s = [0.0; 2];
-//! let mut vt = [0.0; 4];
-//! backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).unwrap();
+//! let mut ctx = CpuTensorLinalgContext::new();
+//! let a: Tensor<f64> = todo!();
+//! let b: Tensor<f64> = todo!();
+//! let _x = <CpuTensorLinalgBackend as TensorLinalgBackend<f64>>::solve(&mut ctx, &a, &b).unwrap();
 //! ```
 
-#[cfg(feature = "faer")]
-pub mod faer_backend;
-pub mod tensor_backend;
+// ============================================================================
+// Feature policy: exactly one CPU linalg provider must be enabled
+// ============================================================================
 
-#[cfg(feature = "faer")]
-pub use faer_backend::FaerBackend;
-pub use tensor_backend::{
+#[cfg(all(feature = "linalg-faer", feature = "linalg-lapack"))]
+compile_error!(
+    "Features `linalg-faer` and `linalg-lapack` are mutually exclusive. Enable exactly one."
+);
+
+#[cfg(not(any(feature = "linalg-faer", feature = "linalg-lapack")))]
+compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg-lapack`.");
+
+// ============================================================================
+// Submodules
+// ============================================================================
+
+// Slice-level backend (internal implementation detail)
+#[cfg(feature = "linalg-faer")]
+pub mod faer_backend;
+
+// Tensor-level API and types
+pub mod tensor_api;
+pub mod tensor_context;
+pub(crate) mod tensor_helpers;
+
+// Device backends
+pub mod cpu;
+#[cfg(feature = "linalg-faer")]
+pub(crate) mod cpu_faer;
+#[cfg(feature = "linalg-lapack")]
+pub(crate) mod cpu_lapack;
+pub mod cuda;
+pub mod hip;
+
+// ============================================================================
+// Re-exports
+// ============================================================================
+
+// Tensor-level API (public)
+pub use tensor_api::{
     EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
     TensorLinalgBackend,
 };
-#[cfg(feature = "faer")]
-pub use tensor_backend::{FaerTensorLinalgBackend, FaerTensorLinalgContext};
+pub use tensor_context::TensorLinalgContextFor;
+
+// CPU backend (public)
+pub use cpu::{CpuTensorLinalgBackend, CpuTensorLinalgContext};
+
+// GPU backend stubs (public)
+pub use cuda::{CudaTensorLinalgBackend, CudaTensorLinalgContext};
+pub use hip::{HipTensorLinalgBackend, HipTensorLinalgContext};
+
+// Slice-level backend (still public for backward compatibility during migration)
+#[cfg(feature = "linalg-faer")]
+pub use faer_backend::FaerBackend;
 
 use tenferro_device::Result;
 
-/// Backend-agnostic interface for matrix linear algebra operations.
+/// Slice-level backend interface for matrix linear algebra operations.
 ///
 /// All input/output slices use **column-major** layout. The trait is
 /// parameterized by scalar type `T` (e.g., `f64`, `f32`).
 ///
 /// Implementations take `&mut self` to allow internal workspace reuse.
+///
+/// This trait is used internally by CPU provider implementations.
+/// The public API boundary is [`TensorLinalgBackend`].
 ///
 /// # Examples
 ///
@@ -69,15 +114,9 @@ use tenferro_device::Result;
 /// ```
 pub trait LinalgBackend<T: Copy + 'static> {
     /// The real-valued scalar type for singular/eigenvalues.
-    /// For real `T`, this is `T` itself. For complex `T`, this would be the real part type.
     type Real: Copy + 'static;
 
     /// Thin SVD: `A = U diag(S) Vt`.
-    ///
-    /// - `a`: input matrix, column-major `m x n`
-    /// - `u`: output, column-major `m x k` where `k = min(m, n)`
-    /// - `s`: output, vector of length `k` (singular values, descending)
-    /// - `vt`: output, column-major `k x n` (conjugate transpose of V)
     fn thin_svd(
         &mut self,
         a: &[T],
@@ -89,18 +128,9 @@ pub trait LinalgBackend<T: Copy + 'static> {
     ) -> Result<()>;
 
     /// Thin QR decomposition: `A = Q R`.
-    ///
-    /// - `a`: input matrix, column-major `m x n`
-    /// - `q`: output, column-major `m x k` where `k = min(m, n)`
-    /// - `r`: output, column-major `k x n`
     fn qr(&mut self, a: &[T], m: usize, n: usize, q: &mut [T], r: &mut [T]) -> Result<()>;
 
     /// LU decomposition with partial pivoting: `P A = L U`.
-    ///
-    /// - `a`: input matrix, column-major `m x n`
-    /// - `perm`: output, forward permutation vector of length `m`
-    /// - `l`: output, column-major `m x k` where `k = min(m, n)`
-    /// - `u_out`: output, column-major `k x n`
     fn lu(
         &mut self,
         a: &[T],
@@ -112,16 +142,9 @@ pub trait LinalgBackend<T: Copy + 'static> {
     ) -> Result<()>;
 
     /// Cholesky decomposition: `A = L L^H`.
-    ///
-    /// - `a`: input matrix, column-major `n x n` (must be symmetric positive definite)
-    /// - `l`: output, column-major `n x n` (lower triangular)
     fn cholesky(&mut self, a: &[T], n: usize, l: &mut [T]) -> Result<()>;
 
     /// Symmetric eigendecomposition: `A = V diag(lambda) V^H`.
-    ///
-    /// - `a`: input matrix, column-major `n x n` (must be symmetric/Hermitian)
-    /// - `values`: output, eigenvalues in ascending order, length `n`
-    /// - `vectors`: output, eigenvectors column-major `n x n`
     fn eigen_sym(
         &mut self,
         a: &[T],
@@ -131,10 +154,6 @@ pub trait LinalgBackend<T: Copy + 'static> {
     ) -> Result<()>;
 
     /// Matrix multiplication: `C = A * B`.
-    ///
-    /// - `a`: input, column-major `m x k`
-    /// - `b`: input, column-major `k x n`
-    /// - `c`: output, column-major `m x n`
     fn mat_mul(
         &mut self,
         a: &[T],
@@ -146,18 +165,9 @@ pub trait LinalgBackend<T: Copy + 'static> {
     ) -> Result<()>;
 
     /// Solve linear system: `A x = b`.
-    ///
-    /// - `a`: input, column-major `n x n`
-    /// - `b`: input, column-major `n x nrhs`
-    /// - `x`: output, column-major `n x nrhs`
     fn solve(&mut self, a: &[T], b: &[T], n: usize, nrhs: usize, x: &mut [T]) -> Result<()>;
 
     /// Solve triangular system: `A x = b`.
-    ///
-    /// - `a`: input, column-major `n x n` (upper or lower triangular)
-    /// - `b`: input, column-major `n x nrhs`
-    /// - `upper`: if `true`, `A` is upper triangular; otherwise lower triangular
-    /// - `x`: output, column-major `n x nrhs`
     fn solve_triangular(
         &mut self,
         a: &[T],
@@ -168,18 +178,10 @@ pub trait LinalgBackend<T: Copy + 'static> {
         x: &mut [T],
     ) -> Result<()>;
 
-    /// General (non-symmetric) eigendecomposition: `A V = V diag(lambda)`.
+    /// General eigendecomposition: `A V = V diag(lambda)`.
     ///
-    /// Eigenvalues and eigenvectors are always complex-valued.
-    /// Output slices hold interleaved real/imaginary pairs: `[re0, im0, re1, im1, ...]`.
-    /// For real input `T`, each eigenvalue uses 2 floats.
-    ///
-    /// - `a`: input matrix, column-major `n x n`
-    /// - `values_ri`: length `2*n` (interleaved re/im pairs)
-    /// - `vectors_ri`: length `2*n*n` (interleaved re/im pairs, column-major)
-    ///
-    /// For complex `T` (e.g., `Complex64`), each element already holds re+im,
-    /// so `values_ri` has length `n` and `vectors_ri` has length `n*n`.
+    /// For real `T`: output uses interleaved re/im pairs (`2*n` values, `2*n*n` vectors).
+    /// For complex `T`: output uses direct complex elements (`n` values, `n*n` vectors).
     fn eig_general(
         &mut self,
         a: &[T],

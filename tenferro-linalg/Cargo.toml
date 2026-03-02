@@ -8,8 +8,9 @@ publish.workspace = true
 description = "Batched matrix linear algebra decompositions (SVD, QR, LU, eigen) with AD rules for the tenferro workspace."
 
 [features]
-default = ["faer"]
-faer = ["dep:faer"]
+default = ["linalg-faer"]
+linalg-faer = ["dep:faer"]
+linalg-lapack = []
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
