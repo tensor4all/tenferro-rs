@@ -1,6 +1,6 @@
 {
-  "_comment": "Extracted from BackwardsLinalg.jl test suite. See docs/design/testing.md for details.",
-  "_random": "Uniform [-1, 1] for real/imag parts. symm=true: A + A'.",
+  "_comment": "Historical linalg case catalog extracted from BackwardsLinalg.jl. Kept as reference only; the current tenferro-linalg tests do not load this file.",
+  "_random": "Original generation convention for the historical catalog: uniform [-1, 1] for real/imag parts, symm=true: A + A'.",
   "svd": [
     {"shape": [3, 2], "dtype": "c64"},
     {"shape": [3, 6], "dtype": "c64"},

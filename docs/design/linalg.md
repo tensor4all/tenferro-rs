@@ -261,7 +261,7 @@ pub struct LstsqGrad<T: Scalar> {
 | `qr_rrule` | `(tensor, cotangent: &QrCotangent) -> AdResult<Tensor>` |
 | `lu_rrule` | `(tensor, cotangent: &LuCotangent, pivot) -> AdResult<Tensor>` |
 | `eigen_rrule` | `(tensor, cotangent: &EigenCotangent) -> AdResult<Tensor>` |
-| `eig_rrule` | `(tensor, cotangent: &EigenCotangent) -> AdResult<Tensor>` |
+| `eig_rrule` | `(tensor, cotangent: &EigCotangent) -> AdResult<Tensor>` |
 | `lstsq_rrule` | `(a, b, cotangent) -> AdResult<LstsqGrad>` |
 | `cholesky_rrule` | `(tensor, cotangent) -> AdResult<Tensor>` |
 | `solve_rrule` | `(a, b, cotangent) -> AdResult<SolveGrad>` |
@@ -280,14 +280,13 @@ pub struct LstsqGrad<T: Scalar> {
 | `qr_frule` | `(tensor, tangent) -> AdResult<(QrResult, QrResult)>` |
 | `lu_frule` | `(tensor, tangent, pivot) -> AdResult<(LuResult, LuResult)>` |
 | `eigen_frule` | `(tensor, tangent) -> AdResult<(EigenResult, EigenResult)>` |
-| `eig_frule` | `(tensor, tangent) -> AdResult<(EigenResult, EigenResult)>` |
+| `eig_frule` | `(tensor, tangent) -> AdResult<(EigResult, EigResult)>` |
 | `lstsq_frule` | `(a, b, tangent_a, tangent_b) -> AdResult<(LstsqResult, LstsqResult)>` |
 | `cholesky_frule` | `(tensor, tangent) -> AdResult<(Tensor, Tensor)>` |
 | `solve_frule` | `(a, b, tangent_a, tangent_b) -> AdResult<(Tensor, Tensor)>` |
 | `inv_frule` | `(tensor, tangent) -> AdResult<(Tensor, Tensor)>` |
 | `det_frule` | `(tensor, tangent) -> AdResult<(Tensor, Tensor)>` |
 | `slogdet_frule` | `(tensor, tangent) -> AdResult<(SlogdetResult, SlogdetResult)>` |
-| `eig_frule` | `(tensor, tangent) -> AdResult<(EigenResult, EigenResult)>` |
 | `pinv_frule` | `(tensor, tangent, rcond) -> AdResult<(Tensor, Tensor)>` |
 | `matrix_exp_frule` | `(tensor, tangent) -> AdResult<(Tensor, Tensor)>` |
 | `norm_frule` | `(tensor, tangent, kind) -> AdResult<(Tensor, Tensor)>` |
@@ -433,18 +432,15 @@ Test utilities (`check_rrule_fd`, `check_frule_fd`) live alongside the test
 file and compare the analytic AD output element-wise against the FD
 approximation.
 
-### Known FD discrepancies
+### Current FD status
 
-Three AD rules have FD mismatches that are tracked as `#[ignore]` tests:
+All current `rrule` and `frule` implementations in `tenferro-linalg`
+pass the finite-difference checks in `tenferro-linalg/tests/linalg_tests.rs`
+with the documented tolerances (`eps = 1e-6`, `atol = 1e-4`).
 
-| Rule | Max error | Root cause |
-|------|-----------|------------|
-| `lu_rrule` | ~0.1 | Formula discrepancy with discrete permutation |
-| `lstsq_rrule` | ~0.09 | Simplified formula omits residual correction term |
-| `qr_frule` | ~0.86 | Simplified `dR = triu(Q^T dA)` is not the correct pushforward |
-
-These are implementation gaps, not fundamental limitations. Correct formulas
-exist in the literature (PyTorch, JAX) and will be ported in follow-up work.
+The previously problematic `lu_rrule`, `lstsq_rrule`, and `qr_frule`
+paths were aligned with the formulas used in PyTorch's manual autograd
+implementation and are now covered by normal (non-ignored) tests.
 
 ### Coverage thresholds
 

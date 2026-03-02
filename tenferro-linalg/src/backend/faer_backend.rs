@@ -1104,11 +1104,7 @@ mod tests {
         for i in 0..3 {
             for j in 0..3 {
                 let expected = if i == j { 1.0 } else { 0.0 };
-                assert!(
-                    (recon[i + j * 3] - expected).abs() < 1e-10,
-                    "reconstruction[{i},{j}] = {}, expected {expected}",
-                    recon[i + j * 3]
-                );
+                assert!((recon[i + j * 3] - expected).abs() < 1e-10);
             }
         }
     }
@@ -1144,12 +1140,7 @@ mod tests {
             }
         }
         for idx in 0..a.len() {
-            assert!(
-                (recon[idx] - a[idx]).abs() < 1e-10,
-                "reconstruction[{idx}] = {}, expected {}",
-                recon[idx],
-                a[idx]
-            );
+            assert!((recon[idx] - a[idx]).abs() < 1e-10);
         }
     }
 
@@ -1196,12 +1187,7 @@ mod tests {
             }
         }
         for idx in 0..a.len() {
-            assert!(
-                (recon[idx] - a[idx]).abs() < 1e-10,
-                "QR reconstruction[{idx}] = {}, expected {}",
-                recon[idx],
-                a[idx]
-            );
+            assert!((recon[idx] - a[idx]).abs() < 1e-10);
         }
     }
 
@@ -1217,12 +1203,7 @@ mod tests {
 
         // Identity * B = B
         for idx in 0..4 {
-            assert!(
-                (c[idx] - b[idx]).abs() < 1e-10,
-                "mat_mul[{idx}] = {}, expected {}",
-                c[idx],
-                b[idx]
-            );
+            assert!((c[idx] - b[idx]).abs() < 1e-10);
         }
     }
 
@@ -1265,12 +1246,7 @@ mod tests {
             }
         }
         for idx in 0..4 {
-            assert!(
-                (recon[idx] - a[idx]).abs() < 1e-10,
-                "Cholesky reconstruction[{idx}] = {}, expected {}",
-                recon[idx],
-                a[idx]
-            );
+            assert!((recon[idx] - a[idx]).abs() < 1e-10);
         }
     }
 
@@ -1285,16 +1261,8 @@ mod tests {
         backend.eigen_sym(&a, 2, &mut values, &mut vectors).unwrap();
 
         // Eigenvalues of [[2,1],[1,2]] are 1 and 3
-        assert!(
-            (values[0] - 1.0).abs() < 1e-10,
-            "eigenvalue[0] = {}, expected 1.0",
-            values[0]
-        );
-        assert!(
-            (values[1] - 3.0).abs() < 1e-10,
-            "eigenvalue[1] = {}, expected 3.0",
-            values[1]
-        );
+        assert!((values[0] - 1.0).abs() < 1e-10);
+        assert!((values[1] - 3.0).abs() < 1e-10);
     }
 
     #[test]
@@ -1352,12 +1320,7 @@ mod tests {
             }
         }
         for idx in 0..a.len() {
-            assert!(
-                (recon[idx] - a[idx]).abs() < 1e-10,
-                "LU reconstruction[{idx}] = {}, expected {}",
-                recon[idx],
-                a[idx]
-            );
+            assert!((recon[idx] - a[idx]).abs() < 1e-10);
         }
     }
 
@@ -1644,6 +1607,36 @@ mod tests {
             .is_err());
     }
 
+    #[test]
+    fn faer_backend_thin_svd_f64_nan_returns_error() {
+        let mut backend = FaerBackend::new();
+        let a = [f64::NAN, 0.0, 0.0, 1.0];
+        let mut u = [0.0_f64; 4];
+        let mut s = [0.0_f64; 2];
+        let mut vt = [0.0_f64; 4];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_f64_nan_returns_error() {
+        let mut backend = FaerBackend::new();
+        let a = [1.0, f64::NAN, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0];
+        let mut values = [0.0_f64; 3];
+        let mut vectors = [0.0_f64; 9];
+        assert!(backend.eigen_sym(&a, 3, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_f64_nan_returns_error() {
+        let mut backend = FaerBackend::new();
+        let a = [f64::NAN, 0.0, 0.0, 1.0];
+        let mut values_ri = [0.0_f64; 4];
+        let mut vectors_ri = [0.0_f64; 8];
+        assert!(backend
+            .eig_general(&a, 2, &mut values_ri, &mut vectors_ri)
+            .is_err());
+    }
+
     // ========================================================================
     // Complex64 backend tests
     // ========================================================================
@@ -1866,16 +1859,8 @@ mod tests {
         backend.eigen_sym(&a, n, &mut values, &mut vectors).unwrap();
 
         // Eigenvalues should be 1.0 and 4.0 (ascending)
-        assert!(
-            (values[0] - 1.0).abs() < 1e-10,
-            "eigenvalue[0] = {}, expected 1.0",
-            values[0]
-        );
-        assert!(
-            (values[1] - 4.0).abs() < 1e-10,
-            "eigenvalue[1] = {}, expected 4.0",
-            values[1]
-        );
+        assert!((values[0] - 1.0).abs() < 1e-10);
+        assert!((values[1] - 4.0).abs() < 1e-10);
 
         // Verify A * v = lambda * v for each eigenvector
         for col in 0..n {
@@ -1969,5 +1954,55 @@ mod tests {
             complex_max_err(&ax, &b) < 1e-10,
             "solve_triangular(upper): A*x != b"
         );
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_complex64_nan_returns_error() {
+        let mut backend = FaerBackend::new();
+        let a = [
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ];
+        let mut u = vec![Complex64::new(0.0, 0.0); 4];
+        let mut s = [0.0_f64; 2];
+        let mut vt = vec![Complex64::new(0.0, 0.0); 4];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_complex64_nan_returns_error() {
+        let mut backend = FaerBackend::new();
+        let a = [
+            Complex64::new(1.0, 0.0),
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ];
+        let mut values = [0.0_f64; 3];
+        let mut vectors = vec![Complex64::new(0.0, 0.0); 9];
+        assert!(backend.eigen_sym(&a, 3, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_complex64_nan_returns_error() {
+        let mut backend = FaerBackend::new();
+        let a = [
+            Complex64::new(f64::NAN, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ];
+        let mut values = vec![Complex64::new(0.0, 0.0); 2];
+        let mut vectors = vec![Complex64::new(0.0, 0.0); 4];
+        assert!(backend
+            .eig_general(&a, 2, &mut values, &mut vectors)
+            .is_err());
     }
 }

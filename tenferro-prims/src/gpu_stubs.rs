@@ -224,3 +224,110 @@ impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+    use std::ptr;
+
+    use tenferro_tensor::MemoryOrder;
+
+    use super::*;
+
+    #[cfg(not(feature = "cuda"))]
+    #[test]
+    fn cuda_stub_reports_errors_and_panics_for_resolve_conj() {
+        let mut ctx = CudaContext {
+            _stream: ptr::null_mut(),
+            _workspace: Vec::new(),
+            _plan_cache: PlanCache::new(),
+        };
+        let plan = CudaPlan::<f64> {
+            _handle: ptr::null_mut(),
+            _workspace_size: 0,
+            _marker: PhantomData,
+        };
+        let input = Tensor::<f64>::ones(
+            &[1],
+            tenferro_device::LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let mut output = Tensor::<f64>::zeros(
+            &[1],
+            tenferro_device::LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let desc = PrimDescriptor::MakeContiguous;
+
+        let plan_result =
+            <CudaBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[1], &[1]]);
+        assert!(matches!(plan_result, Err(Error::DeviceError(_))));
+
+        let exec_result = <CudaBackend as TensorPrims<Standard<f64>>>::execute(
+            &mut ctx,
+            &plan,
+            1.0,
+            &[&input],
+            0.0,
+            &mut output,
+        );
+        assert!(matches!(exec_result, Err(Error::DeviceError(_))));
+        assert!(
+            !<CudaBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::Contract)
+        );
+
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            CudaBackend::resolve_conj(&mut ctx, &input)
+        }));
+        assert!(panic.is_err());
+    }
+
+    #[test]
+    fn rocm_stub_reports_errors_and_panics_for_resolve_conj() {
+        let mut ctx = RocmContext {
+            _stream: ptr::null_mut(),
+            _workspace: Vec::new(),
+            _plan_cache: PlanCache::new(),
+        };
+        let plan = RocmPlan::<f64> {
+            _handle: ptr::null_mut(),
+            _workspace_size: 0,
+            _marker: PhantomData,
+        };
+        let input = Tensor::<f64>::ones(
+            &[1],
+            tenferro_device::LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let mut output = Tensor::<f64>::zeros(
+            &[1],
+            tenferro_device::LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+        let desc = PrimDescriptor::MakeContiguous;
+
+        let plan_result =
+            <RocmBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[1], &[1]]);
+        assert!(matches!(plan_result, Err(Error::DeviceError(_))));
+
+        let exec_result = <RocmBackend as TensorPrims<Standard<f64>>>::execute(
+            &mut ctx,
+            &plan,
+            1.0,
+            &[&input],
+            0.0,
+            &mut output,
+        );
+        assert!(matches!(exec_result, Err(Error::DeviceError(_))));
+        assert!(
+            !<RocmBackend as TensorPrims<Standard<f64>>>::has_extension_for(
+                Extension::ElementwiseMul
+            )
+        );
+
+        let panic = catch_unwind(AssertUnwindSafe(|| {
+            RocmBackend::resolve_conj(&mut ctx, &input)
+        }));
+        assert!(panic.is_err());
+    }
+}

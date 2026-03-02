@@ -2967,17 +2967,46 @@ pub fn lu_rrule<
     backend: &mut B,
     tensor: &Tensor<T>,
     cotangent: &LuCotangent<T>,
-    _pivot: LuPivot,
+    pivot: LuPivot,
 ) -> AdResult<Tensor<T>> {
-    let result = lu(backend, tensor, LuPivot::Partial)
+    let result = lu(backend, tensor, pivot)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let k = m.min(n);
     let bc = batch_count(batch_dims);
 
+    if let Some(ref dl) = cotangent.l {
+        if dl.dims() != result.l.dims() {
+            return Err(to_ad_err(Error::InvalidArgument(format!(
+                "lu_rrule L cotangent shape mismatch: expected {:?}, got {:?}",
+                result.l.dims(),
+                dl.dims()
+            ))));
+        }
+    }
+    if let Some(ref du) = cotangent.u {
+        if du.dims() != result.u.dims() {
+            return Err(to_ad_err(Error::InvalidArgument(format!(
+                "lu_rrule U cotangent shape mismatch: expected {:?}, got {:?}",
+                result.u.dims(),
+                du.dims()
+            ))));
+        }
+    }
+
     let (l_data, _) = extract_data(&result.l)?;
     let (u_data, _) = extract_data(&result.u)?;
+    let dl_data = if let Some(ref dl) = cotangent.l {
+        Some(extract_data(dl)?.0)
+    } else {
+        None
+    };
+    let du_data = if let Some(ref du) = cotangent.u {
+        Some(extract_data(du)?.0)
+    } else {
+        None
+    };
     let p_vec = result.p.as_ref();
 
     let mut grad_a = vec![T::zero(); m * n * bc];
@@ -2985,104 +3014,146 @@ pub fn lu_rrule<
     for b in 0..bc {
         let l_b = &l_data[b * m * k..(b + 1) * m * k];
         let u_b = &u_data[b * k * n..(b + 1) * k * n];
+        let dl_b = dl_data
+            .as_ref()
+            .map(|data| &data[b * m * k..(b + 1) * m * k]);
+        let du_b = du_data
+            .as_ref()
+            .map(|data| &data[b * k * n..(b + 1) * k * n]);
 
-        let dl_b: Vec<T> = if let Some(ref dl) = cotangent.l {
-            let (dl_data, _) = extract_data(dl)?;
-            dl_data[b * m * k..(b + 1) * m * k].to_vec()
-        } else {
-            vec![T::zero(); m * k]
-        };
-        let du_b: Vec<T> = if let Some(ref du) = cotangent.u {
-            let (du_data, _) = extract_data(du)?;
-            du_data[b * k * n..(b + 1) * k * n].to_vec()
-        } else {
-            vec![T::zero(); k * n]
-        };
+        let batch_grad = if m == n {
+            let l_t = transpose(l_b, k, k);
+            let mut inner = vec![T::zero(); k * k];
 
-        // F_bar = tril_strict(L^T dL) + triu(dU U^T) (k×k)
-        let lt_dl = backend_mat_mul(backend, &transpose(l_b, m, k), k, m, &dl_b[..m * k], k)?;
-        let du_ut = backend_mat_mul(
-            backend,
-            &du_b[..k * k],
-            k,
-            n.min(k),
-            &transpose(&u_b[..k * k], k, n.min(k)),
-            k,
-        )?;
-        let mut f_bar = vec![T::zero(); k * k];
-        for j in 0..k {
-            for i in 0..k {
-                if i > j {
-                    f_bar[i + j * k] = lt_dl[i + j * k];
-                } else {
-                    f_bar[i + j * k] = du_ut[i + j * k];
-                }
+            if let Some(dl_b) = dl_b {
+                let lt_dl = backend_mat_mul(backend, &l_t, k, k, dl_b, k)?;
+                inner = add_vec(&inner, &tril_strict(&lt_dl, k));
             }
-        }
+            if let Some(du_b) = du_b {
+                let du_ut = backend_mat_mul(backend, du_b, k, k, &transpose(u_b, k, k), k)?;
+                inner = add_vec(&inner, &triu(&du_ut, k));
+            }
 
-        // dA = P^T L^{-T} F_bar U^{-T}
-        let lt = transpose(l_b, m, k);
-        let lt_square: Vec<T> = if m > k {
-            let mut s = vec![T::zero(); k * k];
+            let right_t = backend_solve_tri(backend, u_b, &transpose(&inner, k, k), k, k, true)?;
+            let right = transpose(&right_t, k, k);
+            backend_solve_tri(backend, &l_t, &right, k, k, true)?
+        } else if m < n {
+            let l_t = transpose(l_b, k, k);
+            let u1: Vec<T> = {
+                let mut out = vec![T::zero(); k * k];
+                for j in 0..k {
+                    for i in 0..k {
+                        out[i + j * k] = u_b[i + j * k];
+                    }
+                }
+                out
+            };
+
+            let mut core = vec![T::zero(); k * k];
+            if let Some(dl_b) = dl_b {
+                let lt_dl = backend_mat_mul(backend, &l_t, k, k, dl_b, k)?;
+                core = add_vec(&core, &lt_dl);
+            }
+            if let Some(du_b) = du_b {
+                let mut du_triu = vec![T::zero(); k * n];
+                for j in 0..n {
+                    for i in 0..k {
+                        if i <= j {
+                            du_triu[i + j * k] = du_b[i + j * k];
+                        }
+                    }
+                }
+                let du_term = backend_mat_mul(backend, &du_triu, k, n, &transpose(u_b, k, n), k)?;
+                core = sub_vec(&core, &du_term);
+            }
+
+            let lower = tril_strict(&core, k);
+            let lower_t = backend_solve_tri(backend, &u1, &transpose(&lower, k, k), k, k, true)?;
+            let leading = transpose(&lower_t, k, k);
+
+            let mut pre_left = vec![T::zero(); k * n];
             for j in 0..k {
                 for i in 0..k {
-                    s[i + j * k] = lt[i + j * k];
+                    pre_left[i + j * k] = leading[i + j * k];
                 }
             }
-            s
-        } else {
-            lt
-        };
-        let linvt_fbar = backend_solve_tri(backend, &lt_square, &f_bar, k, k, true)?;
+            if let Some(du_b) = du_b {
+                for j in 0..k {
+                    for i in 0..=j {
+                        pre_left[i + j * k] = pre_left[i + j * k] + du_b[i + j * k];
+                    }
+                }
+                for j in k..n {
+                    for i in 0..k {
+                        pre_left[i + j * k] = du_b[i + j * k];
+                    }
+                }
+            }
 
-        let ut = transpose(u_b, k, n);
-        let ut_square: Vec<T> = if n > k {
-            let mut s = vec![T::zero(); k * k];
+            backend_solve_tri(backend, &l_t, &pre_left, k, n, true)?
+        } else {
+            let l1: Vec<T> = {
+                let mut out = vec![T::zero(); k * k];
+                for j in 0..k {
+                    for i in 0..k {
+                        out[i + j * k] = l_b[i + j * m];
+                    }
+                }
+                out
+            };
+            let l1_t = transpose(&l1, k, k);
+
+            let mut core = vec![T::zero(); k * k];
+            if let Some(du_b) = du_b {
+                let du_term = backend_mat_mul(backend, du_b, k, k, &transpose(u_b, k, k), k)?;
+                core = add_vec(&core, &du_term);
+            }
+            if let Some(dl_b) = dl_b {
+                let mut dl_tril = vec![T::zero(); m * k];
+                for j in 0..k {
+                    for i in (j + 1)..m {
+                        dl_tril[i + j * m] = dl_b[i + j * m];
+                    }
+                }
+                let lt_dl = backend_mat_mul(backend, &transpose(l_b, m, k), k, m, &dl_tril, k)?;
+                core = sub_vec(&core, &lt_dl);
+            }
+
+            let upper = triu(&core, k);
+            let leading = backend_solve_tri(backend, &l1_t, &upper, k, k, true)?;
+
+            let mut pre_right = vec![T::zero(); m * k];
             for j in 0..k {
                 for i in 0..k {
-                    s[i + j * k] = ut[i + j * k];
+                    pre_right[i + j * m] = leading[i + j * k];
                 }
             }
-            s
-        } else {
-            ut
-        };
-        let da_inner_t = backend_solve_tri(
-            backend,
-            &ut_square,
-            &transpose(&linvt_fbar, k, k),
-            k,
-            k,
-            false,
-        )?;
-        let da_inner = transpose(&da_inner_t, k, k);
+            if let Some(dl_b) = dl_b {
+                for j in 0..k {
+                    for i in (j + 1)..k {
+                        pre_right[i + j * m] = pre_right[i + j * m] + dl_b[i + j * m];
+                    }
+                    for i in k..m {
+                        pre_right[i + j * m] = dl_b[i + j * m];
+                    }
+                }
+            }
 
-        // Apply P^T (inverse permutation)
-        let p_inv: Vec<usize> = if let Some(pv) = p_vec {
+            let batch_grad_t =
+                backend_solve_tri(backend, u_b, &transpose(&pre_right, m, k), k, m, true)?;
+            transpose(&batch_grad_t, k, m)
+        };
+
+        let out = &mut grad_a[b * m * n..(b + 1) * m * n];
+        if let Some(pv) = p_vec {
             let p_b = &pv[b * m..(b + 1) * m];
-            let mut inv = vec![0usize; m];
-            for i in 0..m {
-                if p_b[i] < m {
-                    inv[p_b[i]] = i;
-                }
-            }
-            inv
-        } else {
-            (0..m).collect()
-        };
-
-        if m == n {
             for j in 0..n {
                 for i in 0..m {
-                    grad_a[b * m * n + p_inv[i] + j * m] = da_inner[i + j * k];
+                    out[p_b[i] + j * m] = batch_grad[i + j * m];
                 }
             }
         } else {
-            for j in 0..n.min(k) {
-                for i in 0..m.min(k) {
-                    grad_a[b * m * n + p_inv[i] + j * m] = da_inner[i + j * k];
-                }
-            }
+            out.copy_from_slice(&batch_grad);
         }
     }
 
@@ -3220,19 +3291,23 @@ pub fn lstsq_rrule<
     b: &Tensor<T>,
     cotangent_x: &Tensor<T>,
 ) -> AdResult<LstsqGrad<T>> {
-    // lstsq: min_x ||Ax - b||^2, solution x = (A^T A)^{-1} A^T b
-    // dA = -(A^{-T} dx) x^T + (b - Ax) z^T where z = (A^T A)^{-1} dx ... complex
-    // Simplified: use the identity dx = (A^T A)^{-1} A^T db - (A^T A)^{-1} (dA^T (b - Ax) + A^T dA x)
-    // For reverse mode: dA = (b - Ax) z^T - A z x^T where z = A^{+T} dx
     let result = lstsq(backend, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
 
+    if cotangent_x.dims() != result.x.dims() {
+        return Err(to_ad_err(Error::InvalidArgument(format!(
+            "lstsq_rrule cotangent shape mismatch: expected {:?}, got {:?}",
+            result.x.dims(),
+            cotangent_x.dims()
+        ))));
+    }
+
     let (a_data, _) = extract_data(a)?;
-    let (b_data, _) = extract_data(b)?;
     let (x_data, _) = extract_data(&result.x)?;
+    let (r_data, _) = extract_data(&result.residual)?;
     let (dx_data, _) = extract_data(cotangent_x)?;
 
     let mut grad_a_data = vec![T::zero(); m * n * bc];
@@ -3240,54 +3315,21 @@ pub fn lstsq_rrule<
 
     for batch in 0..bc {
         let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
-        let b_b = &b_data[batch * m..(batch + 1) * m];
         let x_b = &x_data[batch * n..(batch + 1) * n];
+        let r_b = &r_data[batch * m..(batch + 1) * m];
         let dx_b = &dx_data[batch * n..(batch + 1) * n];
 
-        // z = A^{+T} dx = (A^T A)^{-1} A dx (solve via the transpose pinv)
-        // A^T A z = A^T ... but simpler: z = pinv(A^T) dx
-        // Use QR: A = QR, then A^{+T} = Q R^{-1}, so z = Q R^{-1} dx
         let (q_d, r_d) = backend_qr(backend, a_b, m, n)?;
-        let k = m.min(n);
-        // r_square: first k×k of R
-        let r_square: Vec<T> = {
-            let mut rs = vec![T::zero(); k * k];
-            for j in 0..k {
-                for i in 0..k {
-                    rs[i + j * k] = r_d[i + j * k];
-                }
-            }
-            rs
-        };
-        let rinv_dx = backend_solve_tri(backend, &r_square, dx_b, k, 1, true)?;
-        // z = Q * rinv_dx (m×1)
-        let z = backend_mat_mul(backend, &q_d, m, k, &rinv_dx, 1)?;
+        let y = backend_solve_tri(backend, &transpose(&r_d, n, n), dx_b, n, 1, false)?;
+        let z = backend_solve_tri(backend, &r_d, &y, n, 1, true)?;
+        let grad_b = backend_mat_mul(backend, &q_d, m, n, &y, 1)?;
 
-        // residual = b - Ax
-        let ax = backend_mat_mul(backend, a_b, m, n, x_b, 1)?;
-        let residual: Vec<T> = b_b
-            .iter()
-            .zip(ax.iter())
-            .map(|(&bi, &axi)| bi - axi)
-            .collect();
-
-        // dA = residual z^T - A z x^T ... but actually the simpler formula:
-        // dA = -z x^T (from the solution contribution)
-        // db = z (from b contribution)
-        // Plus residual term... For overdetermined systems:
-        // dA = -(z x^T) + ... this is approximate. Use the standard formula:
-        // dA = -z x^T, db = z (standard least squares gradient)
         for j in 0..n {
             for i in 0..m {
-                grad_a_data[batch * m * n + i + j * m] = -z[i] * x_b[j];
+                grad_a_data[batch * m * n + i + j * m] = r_b[i] * z[j] - grad_b[i] * x_b[j];
             }
         }
-
-        // Also add residual correction: d(residual)/dA contribution
-        // For overdetermined: db += residual_correction... keep simple for now
-        let _ = residual; // used only for reconstruction check
-
-        grad_b_data[batch * m..(batch + 1) * m].copy_from_slice(&z);
+        grad_b_data[batch * m..(batch + 1) * m].copy_from_slice(&grad_b);
     }
 
     let a_dims = output_dims(&[m, n], batch_dims);
@@ -4166,6 +4208,7 @@ pub fn qr_frule<
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let k = m.min(n);
     let bc = batch_count(batch_dims);
+    let half: T = scalar_from(0.5).map_err(to_ad_err)?;
 
     let (q_data, _) = extract_data(&result.q)?;
     let (r_data, _) = extract_data(&result.r)?;
@@ -4179,55 +4222,60 @@ pub fn qr_frule<
         let r_b = &r_data[b * k * n..(b + 1) * k * n];
         let da_b = &da_data[b * m * n..(b + 1) * m * n];
 
-        // Q^T dA (k×n)
-        let qt_da = backend_mat_mul(backend, &transpose(q_b, m, k), k, m, da_b, n)?;
+        let (dq_b_vec, dr_b_vec) = if m >= n {
+            let r_sq = r_b[..n * n].to_vec();
+            let darinv_t = backend_solve_tri(
+                backend,
+                &transpose(&r_sq, n, n),
+                &transpose(da_b, m, n),
+                n,
+                m,
+                false,
+            )?;
+            let darinv = transpose(&darinv_t, n, m);
+            let qhdarinv = backend_mat_mul(backend, &transpose(q_b, m, n), n, m, &darinv, n)?;
+            let sym = add_vec(&qhdarinv, &transpose(&qhdarinv, n, n));
 
-        // M = R^{-1} Q^T dA → solve R M = Q^T dA (for square R block)
-        let r_sq: Vec<T> = {
-            let mut rs = vec![T::zero(); k * k];
+            let mut dr_hat = vec![T::zero(); n * n];
+            for j in 0..n {
+                for i in 0..=j {
+                    let mut val = sym[i + j * n];
+                    if i == j {
+                        val = val * half;
+                    }
+                    dr_hat[i + j * n] = val;
+                }
+            }
+
+            let dq = sub_vec(&darinv, &backend_mat_mul(backend, q_b, m, n, &dr_hat, n)?);
+            let dr = backend_mat_mul(backend, &dr_hat, n, n, &r_sq, n)?;
+            (dq, dr)
+        } else {
+            let qhda = backend_mat_mul(backend, &transpose(q_b, m, k), k, m, da_b, n)?;
+            let r1 = r_b[..k * k].to_vec();
+
+            let mut qhda1 = vec![T::zero(); k * k];
             for j in 0..k {
                 for i in 0..k {
-                    rs[i + j * k] = r_b[i + j * k];
+                    qhda1[i + j * k] = qhda[i + j * k];
                 }
             }
-            rs
+            let qhda1_rinv_t = backend_solve_tri(
+                backend,
+                &transpose(&r1, k, k),
+                &transpose(&qhda1, k, k),
+                k,
+                k,
+                false,
+            )?;
+            let qhda1_rinv = transpose(&qhda1_rinv_t, k, k);
+            let lower = tril_strict(&qhda1_rinv, k);
+            let dq_hat = sub_vec(&lower, &transpose(&lower, k, k));
+
+            let dr = sub_vec(&qhda, &backend_mat_mul(backend, &dq_hat, k, k, r_b, n)?);
+            let dq = backend_mat_mul(backend, q_b, m, k, &dq_hat, k)?;
+            (dq, dr)
         };
-
-        // dR = triu(Q^T dA)[:k, :n] for the thin case, but using the proper formula:
-        // F = R^{-1} Q^T dA, dR = triu(F) R ... no wait.
-        // Proper: dR[:k,:k] = triu(Q^T dA[:,:k]) for the square part
-        // Simpler approach: dR = Q^T dA (projects cotangent), dQ = (dA - Q dR) R^{-1}
-
-        // dR_full = Q^T dA (k×n)
-        // But we need triu: for R upper triangular, dR should be upper triangular
-        let mut dr_b_vec = vec![T::zero(); k * n];
-        // For the square part (k×k): dR_sq = triu(Qt_dA[:k,:k])
-        for j in 0..n {
-            for i in 0..k.min(j + 1) {
-                dr_b_vec[i + j * k] = qt_da[i + j * k];
-            }
-        }
-
-        // dQ = (dA - Q dR) R^{-1}
-        let q_dr = backend_mat_mul(backend, q_b, m, k, &dr_b_vec, n)?;
-        let da_minus_qdr: Vec<T> = da_b.iter().zip(q_dr.iter()).map(|(&a, &b)| a - b).collect();
-
-        // Solve (dA - Q dR) = dQ R → dQ = (dA - Q dR) R^{-1}
-        // For thin case: dQ (m×k) R_sq (k×k) = (dA - Q dR)[:, :k]
-        let rhs: Vec<T> = {
-            let mut r = vec![T::zero(); m * k];
-            for j in 0..k {
-                for i in 0..m {
-                    r[i + j * m] = da_minus_qdr[i + j * m];
-                }
-            }
-            r
-        };
-        // Solve: dQ R = rhs → dQ = rhs R^{-1} → R^T dQ^T = rhs^T
-        let rhs_t = transpose(&rhs, m, k);
-        let r_sq_t = transpose(&r_sq, k, k);
-        let dq_t = backend_solve_tri(backend, &r_sq_t, &rhs_t, k, m, false)?;
-        let dq_b_vec = transpose(&dq_t, k, m);
 
         dq_data[b * m * k..(b + 1) * m * k].copy_from_slice(&dq_b_vec);
         dr_data[b * k * n..(b + 1) * k * n].copy_from_slice(&dr_b_vec);
