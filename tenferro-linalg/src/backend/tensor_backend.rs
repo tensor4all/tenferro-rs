@@ -389,3 +389,178 @@ where
         todo!("FaerTensorLinalgBackend::eig is an API skeleton")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
+    };
+    use tenferro_tensor::{MemoryOrder, Tensor};
+
+    #[test]
+    fn tensor_result_structs_clone_and_preserve_shapes() {
+        let q = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+        let r = q.clone();
+        let s = Tensor::<f64>::from_slice(&[3.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let complex_values = Tensor::<num_complex::Complex64>::from_slice(
+            &[
+                num_complex::Complex64::new(1.0, 0.5),
+                num_complex::Complex64::new(2.0, -0.5),
+            ],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let complex_vectors = Tensor::<num_complex::Complex64>::from_slice(
+            &[
+                num_complex::Complex64::new(1.0, 0.0),
+                num_complex::Complex64::new(0.0, 0.0),
+                num_complex::Complex64::new(0.0, 0.0),
+                num_complex::Complex64::new(1.0, 0.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+
+        let qr = QrTensorResult {
+            q: q.clone(),
+            r: r.clone(),
+        };
+        let svd = SvdTensorResult {
+            u: q.clone(),
+            s: s.clone(),
+            vt: r.clone(),
+        };
+        let lu = LuTensorResult {
+            l: q.clone(),
+            u: r.clone(),
+            pivots: vec![1, 0],
+        };
+        let eigen = EigenTensorResult {
+            values: s.clone(),
+            vectors: q.clone(),
+        };
+        let eig = EigTensorResult::<f64> {
+            values: complex_values.clone(),
+            vectors: complex_vectors.clone(),
+        };
+
+        let qr_clone = qr.clone();
+        let svd_clone = svd.clone();
+        let lu_clone = lu.clone();
+        let eigen_clone = eigen.clone();
+        let eig_clone = eig.clone();
+
+        assert_eq!(qr_clone.q.dims(), &[2, 2]);
+        assert_eq!(qr_clone.r.dims(), &[2, 2]);
+        assert_eq!(svd_clone.u.dims(), &[2, 2]);
+        assert_eq!(svd_clone.s.dims(), &[2]);
+        assert_eq!(svd_clone.vt.dims(), &[2, 2]);
+        assert_eq!(lu_clone.l.dims(), &[2, 2]);
+        assert_eq!(lu_clone.u.dims(), &[2, 2]);
+        assert_eq!(lu_clone.pivots, vec![1, 0]);
+        assert_eq!(eigen_clone.values.dims(), &[2]);
+        assert_eq!(eigen_clone.vectors.dims(), &[2, 2]);
+        assert_eq!(eig_clone.values.dims(), &[2]);
+        assert_eq!(eig_clone.vectors.dims(), &[2, 2]);
+    }
+
+    #[cfg(feature = "faer")]
+    mod faer_api_skeleton_tests {
+        use super::super::{FaerTensorLinalgBackend, FaerTensorLinalgContext, TensorLinalgBackend};
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        use tenferro_tensor::{MemoryOrder, Tensor};
+
+        fn sample_matrix() -> Tensor<f64> {
+            Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap()
+        }
+
+        fn sample_rhs() -> Tensor<f64> {
+            Tensor::<f64>::from_slice(&[1.0, 2.0], &[2, 1], MemoryOrder::ColumnMajor).unwrap()
+        }
+
+        fn sample_context() -> FaerTensorLinalgContext {
+            FaerTensorLinalgContext {
+                _inner: super::super::super::FaerBackend::new(),
+            }
+        }
+
+        #[test]
+        fn faer_tensor_backend_marker_traits_are_available() {
+            let backend = FaerTensorLinalgBackend;
+            let copied = backend;
+            let defaulted = FaerTensorLinalgBackend::default();
+            let _ = (backend, copied, defaulted);
+        }
+
+        #[test]
+        fn faer_tensor_context_new_is_placeholder() {
+            let result = catch_unwind(AssertUnwindSafe(FaerTensorLinalgContext::new));
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn faer_tensor_methods_are_placeholder_panics() {
+            let a = sample_matrix();
+            let b = sample_rhs();
+
+            let solve = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ =
+                    <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::solve(&mut ctx, &a, &b);
+            }));
+            assert!(solve.is_err());
+
+            let solve_triangular = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ = <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::solve_triangular(
+                    &mut ctx, &a, &b, true,
+                );
+            }));
+            assert!(solve_triangular.is_err());
+
+            let qr = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ = <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::qr(&mut ctx, &a);
+            }));
+            assert!(qr.is_err());
+
+            let thin_svd = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ =
+                    <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::thin_svd(&mut ctx, &a);
+            }));
+            assert!(thin_svd.is_err());
+
+            let lu_factor = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ =
+                    <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::lu_factor(&mut ctx, &a);
+            }));
+            assert!(lu_factor.is_err());
+
+            let cholesky = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ =
+                    <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::cholesky(&mut ctx, &a);
+            }));
+            assert!(cholesky.is_err());
+
+            let eigen_sym = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ =
+                    <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::eigen_sym(&mut ctx, &a);
+            }));
+            assert!(eigen_sym.is_err());
+
+            let eig = catch_unwind(AssertUnwindSafe(|| {
+                let mut ctx = sample_context();
+                let _ = <FaerTensorLinalgBackend as TensorLinalgBackend<f64>>::eig(&mut ctx, &a);
+            }));
+            assert!(eig.is_err());
+        }
+    }
+}
