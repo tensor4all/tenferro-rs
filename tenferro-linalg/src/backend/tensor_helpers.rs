@@ -60,3 +60,65 @@ pub(crate) fn extract_contiguous_slice<T: LinalgScalar>(a: &Tensor<T>) -> Result
         .as_slice()
         .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tenferro_tensor::MemoryOrder;
+
+    fn make(data: &[f64], dims: &[usize]) -> Tensor<f64> {
+        Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
+    }
+
+    #[test]
+    fn validate_matrix_shape_2d() {
+        let a = make(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        let (m, n, batch) = validate_matrix_shape(&a).unwrap();
+        assert_eq!((m, n), (2, 3));
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn validate_matrix_shape_1d_fails() {
+        let a = make(&[1.0, 2.0], &[2]);
+        assert!(validate_matrix_shape(&a).is_err());
+    }
+
+    #[test]
+    fn validate_square_ok() {
+        let a = make(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+        let (n, batch) = validate_square(&a).unwrap();
+        assert_eq!(n, 2);
+        assert!(batch.is_empty());
+    }
+
+    #[test]
+    fn validate_square_nonsquare_fails() {
+        let a = make(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+        assert!(validate_square(&a).is_err());
+    }
+
+    #[test]
+    fn batch_count_empty() {
+        assert_eq!(batch_count(&[]), 1);
+    }
+
+    #[test]
+    fn batch_count_nonempty() {
+        assert_eq!(batch_count(&[2, 3]), 6);
+    }
+
+    #[test]
+    fn ensure_col_major_contiguous() {
+        let a = make(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = ensure_col_major(&a);
+        assert!(b.is_contiguous());
+    }
+
+    #[test]
+    fn extract_contiguous_slice_ok() {
+        let a = make(&[1.0, 2.0], &[2]);
+        let s = extract_contiguous_slice(&a).unwrap();
+        assert_eq!(s.len(), 2);
+    }
+}

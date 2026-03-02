@@ -43,17 +43,17 @@
 //!
 //! ```
 //! use tenferro_linalg::{svd, SvdOptions};
-//! use tenferro_linalg::backend::FaerBackend;
+//! use tenferro_linalg::backend::CpuTensorLinalgContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut backend = FaerBackend::new();
+//! let mut ctx = CpuTensorLinalgContext::new();
 //!
 //! // 2D matrix: shape [3, 4]
 //! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-//! let result = svd(&mut backend, &a, None).unwrap();
+//! let result = svd(&mut ctx, &a, None).unwrap();
 //! // result.u:  shape [3, 3]  (m × k, k = min(m,n) = 3)
 //! // result.s:  shape [3]     (singular values)
 //! // result.vt: shape [3, 4]  (k × n)
@@ -63,17 +63,17 @@
 //!
 //! ```
 //! use tenferro_linalg::svd;
-//! use tenferro_linalg::backend::FaerBackend;
+//! use tenferro_linalg::backend::CpuTensorLinalgContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut backend = FaerBackend::new();
+//! let mut ctx = CpuTensorLinalgContext::new();
 //!
 //! // Batched: shape [m, n, batch] = [3, 4, 10]
 //! let a = Tensor::<f64>::zeros(&[3, 4, 10], mem, col);
-//! let result = svd(&mut backend, &a, None).unwrap();
+//! let result = svd(&mut ctx, &a, None).unwrap();
 //! // result.u:  shape [3, 3, 10]
 //! // result.s:  shape [3, 10]
 //! // result.vt: shape [3, 4, 10]
@@ -83,13 +83,13 @@
 //!
 //! ```
 //! use tenferro_linalg::svd;
-//! use tenferro_linalg::backend::FaerBackend;
+//! use tenferro_linalg::backend::CpuTensorLinalgContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut backend = FaerBackend::new();
+//! let mut ctx = CpuTensorLinalgContext::new();
 //!
 //! // 4D tensor [2, 3, 4, 5] — want SVD with left=[0,1], right=[2,3]
 //! let t = Tensor::<f64>::zeros(&[2, 3, 4, 5], mem, col);
@@ -97,7 +97,7 @@
 //! // permute + reshape (contiguous is handled internally, but can be called explicitly)
 //! let mat = t.permute(&[0, 1, 2, 3]).unwrap()  // already in order
 //!            .reshape(&[6, 20]).unwrap();        // m = 2*3 = 6, n = 4*5 = 20
-//! let result = svd(&mut backend, &mat, None).unwrap();
+//! let result = svd(&mut ctx, &mat, None).unwrap();
 //! // Then reshape result.u, result.vt back to desired tensor shape
 //! ```
 //!
@@ -105,16 +105,16 @@
 //!
 //! ```
 //! use tenferro_linalg::{svd, svd_rrule, SvdCotangent};
-//! use tenferro_linalg::backend::FaerBackend;
+//! use tenferro_linalg::backend::CpuTensorLinalgContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut backend = FaerBackend::new();
+//! let mut ctx = CpuTensorLinalgContext::new();
 //!
 //! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-//! let result = svd(&mut backend, &a, None).unwrap();
+//! let result = svd(&mut ctx, &a, None).unwrap();
 //!
 //! // Full cotangent: gradient through U, S, and Vt
 //! let cotangent = SvdCotangent {
@@ -122,7 +122,7 @@
 //!     s: Some(Tensor::ones(&[3], mem, col)),
 //!     vt: Some(Tensor::ones(&[3, 4], mem, col)),
 //! };
-//! let grad_a = svd_rrule(&mut backend, &a, &cotangent, None).unwrap();
+//! let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 //! // grad_a has same shape as a: [3, 4]
 //!
 //! // Partial cotangent: gradient only through singular values (always stable)
@@ -131,12 +131,13 @@
 //!     s: Some(Tensor::ones(&[3], mem, col)),
 //!     vt: None,
 //! };
-//! let grad_a2 = svd_rrule(&mut backend, &a, &cotangent_s_only, None).unwrap();
+//! let grad_a2 = svd_rrule(&mut ctx, &a, &cotangent_s_only, None).unwrap();
 //! ```
 
 pub mod backend;
 mod prims_bridge;
 
+use backend::LinalgBackend;
 use chainrules_core::AdResult;
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
@@ -613,14 +614,14 @@ fn tensor_from_data_scalar<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Te
 ///
 /// ```
 /// use tenferro_linalg::svd;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = svd(&mut backend, &a, None).unwrap();
+/// let result = svd(&mut ctx, &a, None).unwrap();
 /// assert_eq!(result.s.ndim(), 1);
 /// ```
 pub struct SvdResult<T: Scalar, R: Scalar = T> {
@@ -676,14 +677,14 @@ impl Default for SvdOptions {
 ///
 /// ```
 /// use tenferro_linalg::qr;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[4, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = qr(&mut backend, &a).unwrap();
+/// let result = qr(&mut ctx, &a).unwrap();
 /// assert_eq!(result.q.dims(), &[4, 3]);
 /// assert_eq!(result.r.dims(), &[3, 3]);
 /// ```
@@ -728,20 +729,20 @@ pub enum LuPivot {
 ///
 /// ```
 /// use tenferro_linalg::{lu, LuPivot};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 ///
 /// // With partial pivoting (default)
-/// let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+/// let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 /// assert!(result.p.is_some());
 ///
 /// // NoPivot currently returns an error in this implementation.
-/// assert!(lu(&mut backend, &a, LuPivot::NoPivot).is_err());
+/// assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
 /// ```
 pub struct LuResult<T: Scalar> {
     /// Row permutation indices. `Some` for [`LuPivot::Partial`], `None` for
@@ -764,14 +765,14 @@ pub struct LuResult<T: Scalar> {
 ///
 /// ```
 /// use tenferro_linalg::eigen;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = eigen(&mut backend, &a).unwrap();
+/// let result = eigen(&mut ctx, &a).unwrap();
 /// assert_eq!(result.values.dims(), &[3]);
 /// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
@@ -797,14 +798,14 @@ pub struct EigenResult<T: Scalar, R: Scalar = T> {
 ///
 /// ```
 /// use tenferro_linalg::{eig, EigResult};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result: EigResult<f64> = eig(&mut backend, &a).unwrap();
+/// let result: EigResult<f64> = eig(&mut ctx, &a).unwrap();
 /// assert_eq!(result.values.dims(), &[3]);
 /// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
@@ -826,14 +827,14 @@ pub struct EigResult<R: LinalgScalar<Real = R> + num_traits::Float> {
 ///
 /// ```
 /// use tenferro_linalg::slogdet;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = slogdet(&mut backend, &a).unwrap();
+/// let result = slogdet(&mut ctx, &a).unwrap();
 /// ```
 pub struct SlogdetResult<T: Scalar, R: Scalar = T> {
     /// Sign of determinant. Shape: `(*)`.
@@ -848,17 +849,17 @@ pub struct SlogdetResult<T: Scalar, R: Scalar = T> {
 ///
 /// ```
 /// use tenferro_linalg::solve_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
-/// let grad = solve_rrule(&mut backend, &a, &b, &cotangent).unwrap();
+/// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// // grad.a: shape [3, 3], grad.b: shape [3]
 /// ```
 pub struct SolveGrad<T: Scalar> {
@@ -914,31 +915,34 @@ pub enum NormKind {
 ///
 /// ```
 /// use tenferro_linalg::{svd, SvdOptions};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, col);
 ///
 /// // Full SVD
-/// let result = svd(&mut backend, &a, None).unwrap();
+/// let result = svd(&mut ctx, &a, None).unwrap();
 ///
 /// // Truncated SVD
 /// let opts = SvdOptions { max_rank: Some(2), cutoff: None };
-/// let result = svd(&mut backend, &a, Some(&opts)).unwrap();
+/// let result = svd(&mut ctx, &a, Some(&opts)).unwrap();
 /// ```
 ///
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn svd<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     options: Option<&SvdOptions>,
-) -> Result<SvdResult<T, B::Real>> {
+) -> Result<SvdResult<T, T::Real>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (m, n, batch_dims) = validate_2d(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -955,24 +959,25 @@ pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     };
 
     let mut u_data = vec![T::zero(); m * max_k * bc];
-    let mut s_data = vec![<B::Real>::zero(); max_k * bc];
+    let mut s_data = vec![<T::Real>::zero(); max_k * bc];
     let mut vt_data = vec![T::zero(); max_k * n * bc];
 
     // Pre-allocate temp buffers for full-rank results per batch
     let mut u_full = vec![T::zero(); m * k];
-    let mut s_full = vec![<B::Real>::zero(); k];
+    let mut s_full = vec![<T::Real>::zero(); k];
     let mut vt_full = vec![T::zero(); k * n];
 
     for b in 0..bc {
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        backend.thin_svd(batch_data, m, n, &mut u_full, &mut s_full, &mut vt_full)?;
+        ctx.faer_backend
+            .thin_svd(batch_data, m, n, &mut u_full, &mut s_full, &mut vt_full)?;
 
         // Apply cutoff truncation
         let actual_k = if let Some(opts) = options {
             if let Some(cutoff) = opts.cutoff {
-                let cutoff_r: B::Real = scalar_from(cutoff)?;
+                let cutoff_r: T::Real = scalar_from(cutoff)?;
                 let mut ak = max_k;
                 while ak > 0 && s_full[ak - 1] < cutoff_r {
                     ak -= 1;
@@ -1028,23 +1033,26 @@ pub fn svd<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```
 /// use tenferro_linalg::qr;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[4, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = qr(&mut backend, &a).unwrap();
+/// let result = qr(&mut ctx, &a).unwrap();
 /// ```
 ///
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn qr<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<QrResult<T>> {
+) -> Result<QrResult<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (m, n, batch_dims) = validate_2d(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1062,7 +1070,7 @@ pub fn qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 
         let q_out = &mut q_data[b * m * k..(b + 1) * m * k];
         let r_out = &mut r_data[b * k * n..(b + 1) * k * n];
-        backend.qr(batch_data, m, n, q_out, r_out)?;
+        ctx.faer_backend.qr(batch_data, m, n, q_out, r_out)?;
     }
 
     let q_dims = output_dims(&[m, k], batch_dims);
@@ -1091,29 +1099,32 @@ pub fn qr<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```
 /// use tenferro_linalg::{lu, LuPivot};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 ///
 /// // Partial pivoting (default)
-/// let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+/// let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 ///
 /// // NoPivot currently returns an error in this implementation.
-/// assert!(lu(&mut backend, &a, LuPivot::NoPivot).is_err());
+/// assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
 /// ```
 ///
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn lu<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn lu<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     pivot: LuPivot,
-) -> Result<LuResult<T>> {
+) -> Result<LuResult<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (m, n, batch_dims) = validate_2d(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1140,7 +1151,8 @@ pub fn lu<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
         let perm_out = &mut all_perms[b * m..(b + 1) * m];
         let l_out = &mut l_data[b * m * k..(b + 1) * m * k];
         let u_out = &mut u_data[b * k * n..(b + 1) * k * n];
-        backend.lu(batch_data, m, n, perm_out, l_out, u_out)?;
+        ctx.faer_backend
+            .lu(batch_data, m, n, perm_out, l_out, u_out)?;
     }
 
     let l_dims = output_dims(&[m, k], batch_dims);
@@ -1167,24 +1179,27 @@ pub fn lu<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```
 /// use tenferro_linalg::eigen;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = eigen(&mut backend, &a).unwrap();
+/// let result = eigen(&mut ctx, &a).unwrap();
 /// ```
 ///
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions, the first two
 /// dimensions are not equal, or the matrix is not symmetric/Hermitian.
-pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn eigen<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<EigenResult<T, B::Real>> {
+) -> Result<EigenResult<T, T::Real>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1194,7 +1209,7 @@ pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 
     validate_hermitian_batches(data, offset, n, bc, "eigen")?;
 
-    let mut val_data = vec![<B::Real>::zero(); n * bc];
+    let mut val_data = vec![<T::Real>::zero(); n * bc];
     let mut vec_data = vec![T::zero(); n * n * bc];
 
     for b in 0..bc {
@@ -1203,7 +1218,8 @@ pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 
         let val_out = &mut val_data[b * n..(b + 1) * n];
         let vec_out = &mut vec_data[b * n * n..(b + 1) * n * n];
-        backend.eigen_sym(batch_data, n, val_out, vec_out)?;
+        ctx.faer_backend
+            .eigen_sym(batch_data, n, val_out, vec_out)?;
     }
 
     let val_dims = output_dims(&[n], batch_dims);
@@ -1227,27 +1243,30 @@ pub fn eigen<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```
 /// use tenferro_linalg::lstsq;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
-/// let result = lstsq(&mut backend, &a, &b).unwrap();
+/// let result = lstsq(&mut ctx, &a, &b).unwrap();
 /// ```
 ///
 /// # Errors
 ///
 /// Returns an error if `A` has fewer than 2 dimensions, `m < n`, or `b`
 /// does not match `(m, *)` with the same batch dimensions as `A`.
-pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn lstsq<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
-) -> Result<LstsqResult<T>> {
+) -> Result<LstsqResult<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (m, n, batch_dims) = validate_2d(a)?;
     if m < n {
         return Err(Error::InvalidArgument(format!(
@@ -1257,7 +1276,7 @@ pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
     validate_lstsq_rhs(b, m, batch_dims)?;
 
     // Solve via QR: A = Q R, then x = R^{-1} Q^T b
-    let qr_result = qr(backend, a)?;
+    let qr_result = qr(ctx, a)?;
     let q_input = ensure_col_major(&qr_result.q);
     let r_input = ensure_col_major(&qr_result.r);
     let b_input = ensure_col_major(b);
@@ -1293,7 +1312,8 @@ pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
         }
 
         // Solve R x = Q^T b (upper triangular)
-        backend.solve_triangular(r_b, &qtb, k, 1, true, &mut x_buf)?;
+        ctx.faer_backend
+            .solve_triangular(r_b, &qtb, k, 1, true, &mut x_buf)?;
         x_data[batch * n..(batch + 1) * n].copy_from_slice(&x_buf);
 
         // Compute residual: r = b - A x
@@ -1327,19 +1347,22 @@ pub fn lstsq<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```no_run
 /// use tenferro_linalg::cholesky;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let l = cholesky(&mut backend, &a).unwrap();
+/// let l = cholesky(&mut ctx, &a).unwrap();
 /// ```
-pub fn cholesky<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn cholesky<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1354,7 +1377,7 @@ pub fn cholesky<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
         let batch_data = &data[start..start + mat_size];
 
         let l_out = &mut l_data[b * mat_size..(b + 1) * mat_size];
-        backend.cholesky(batch_data, n, l_out)?;
+        ctx.faer_backend.cholesky(batch_data, n, l_out)?;
     }
 
     let dims = output_dims(&[n, n], batch_dims);
@@ -1370,22 +1393,25 @@ pub fn cholesky<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```
 /// use tenferro_linalg::solve;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
-/// let x = solve(&mut backend, &a, &b).unwrap();
+/// let x = solve(&mut ctx, &a, &b).unwrap();
 /// ```
-pub fn solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn solve<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(a)?;
     let nrhs = validate_solve_rhs(b, n, batch_dims, "solve")?;
     let a_input = ensure_col_major(a);
@@ -1404,7 +1430,7 @@ pub fn solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
         let b_b = &b_data[b_off + batch * n * nrhs..b_off + (batch + 1) * n * nrhs];
 
         let x_out = &mut x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        backend.solve(a_b, b_b, n, nrhs, x_out)?;
+        ctx.faer_backend.solve(a_b, b_b, n, nrhs, x_out)?;
     }
 
     let x_dims = b.dims().to_vec();
@@ -1419,19 +1445,22 @@ pub fn solve<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```
 /// use tenferro_linalg::inv;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let a_inv = inv(&mut backend, &a).unwrap();
+/// let a_inv = inv(&mut ctx, &a).unwrap();
 /// ```
-pub fn inv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn inv<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1451,7 +1480,7 @@ pub fn inv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
         let start = offset + b * mat_size;
         let a_b = &data[start..start + mat_size];
         let x_out = &mut inv_data[b * mat_size..(b + 1) * mat_size];
-        backend.solve(a_b, &eye_mat, n, n, x_out)?;
+        ctx.faer_backend.solve(a_b, &eye_mat, n, n, x_out)?;
     }
 
     let dims = output_dims(&[n, n], batch_dims);
@@ -1466,22 +1495,22 @@ pub fn inv<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
 ///
 /// ```
 /// use tenferro_linalg::det;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let d = det(&mut backend, &a).unwrap();
+/// let d = det(&mut ctx, &a).unwrap();
 /// ```
-pub fn det<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn det<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1501,7 +1530,8 @@ pub fn det<
         let batch_data = &data[start..start + mat_size];
 
         // det = product of diagonal of U * sign from permutation
-        backend.lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        ctx.faer_backend
+            .lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
 
         let mut d = T::one();
         for i in 0..n {
@@ -1554,23 +1584,23 @@ pub fn det<
 ///
 /// ```
 /// use tenferro_linalg::slogdet;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = slogdet(&mut backend, &a).unwrap();
+/// let result = slogdet(&mut ctx, &a).unwrap();
 /// // det(A) ≈ result.sign * exp(result.logabsdet)
 /// ```
-pub fn slogdet<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn slogdet<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<SlogdetResult<T>> {
+) -> Result<SlogdetResult<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1590,7 +1620,8 @@ pub fn slogdet<
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        backend.lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        ctx.faer_backend
+            .lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
 
         let mut log_abs = T::zero();
         let mut sign = T::one();
@@ -1660,14 +1691,14 @@ pub fn slogdet<
 ///
 /// ```
 /// use tenferro_linalg::eig;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let result = eig(&mut backend, &a).unwrap();
+/// let result = eig(&mut ctx, &a).unwrap();
 /// assert_eq!(result.values.dims(), &[3]);
 /// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```
@@ -1676,13 +1707,13 @@ pub fn slogdet<
 ///
 /// Returns an error if the input has fewer than 2 dimensions or the first
 /// two dimensions are not equal.
-pub fn eig<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn eig<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<EigResult<T>> {
+) -> Result<EigResult<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1705,7 +1736,8 @@ pub fn eig<
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        backend.eig_general(batch_data, n, &mut values_ri, &mut vectors_ri)?;
+        ctx.faer_backend
+            .eig_general(batch_data, n, &mut values_ri, &mut vectors_ri)?;
 
         // Convert interleaved [re, im, re, im, ...] to Complex<T>
         let val_out = &mut val_data[b * n..(b + 1) * n];
@@ -1739,27 +1771,27 @@ pub fn eig<
 ///
 /// ```
 /// use tenferro_linalg::pinv;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let a_pinv = pinv(&mut backend, &a, None).unwrap();
+/// let a_pinv = pinv(&mut ctx, &a, None).unwrap();
 /// ```
-pub fn pinv<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn pinv<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     rcond: Option<f64>,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (m, n, batch_dims) = validate_2d(tensor)?;
 
     // Compute via SVD: pinv(A) = V diag(1/S) U^T
-    let svd_result = svd(backend, tensor, None)?;
+    let svd_result = svd(ctx, tensor, None)?;
     let u_input = ensure_col_major(&svd_result.u);
     let s_input = ensure_col_major(&svd_result.s);
     let vt_input = ensure_col_major(&svd_result.vt);
@@ -1828,20 +1860,23 @@ pub fn pinv<
 ///
 /// ```
 /// use tenferro_linalg::matrix_exp;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let exp_a = matrix_exp(&mut backend, &a).unwrap();
+/// let exp_a = matrix_exp(&mut ctx, &a).unwrap();
 /// // exp(0) = I
 /// ```
-pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn matrix_exp<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
@@ -1854,7 +1889,7 @@ pub fn matrix_exp<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>
     for b in 0..bc {
         let start = offset + b * mat_size;
         let a_slice = &data[start..start + mat_size];
-        let exp_a = matrix_exp_single(backend, a_slice, n)?;
+        let exp_a = matrix_exp_single(ctx, a_slice, n)?;
         result_data[b * mat_size..(b + 1) * mat_size].copy_from_slice(&exp_a);
     }
 
@@ -1905,12 +1940,15 @@ fn matrix_1_norm<T: LinalgScalar>(a: &[T], n: usize) -> T::Real {
 }
 
 /// Multiply two n x n column-major matrices using the backend.
-fn backend_mat_mul_nn<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    _backend: &mut B,
+fn backend_mat_mul_nn<T: LinalgScalar>(
+    _ctx: &mut backend::CpuTensorLinalgContext,
     a: &[T],
     b: &[T],
     n: usize,
-) -> Result<Vec<T>> {
+) -> Result<Vec<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     prims_bridge::batched_gemm_via_prims(a, n, n, b, n)
 }
 
@@ -1943,11 +1981,14 @@ fn mat_add<T: LinalgScalar>(a: &[T], b: &[T]) -> Vec<T> {
 /// Compute matrix exponential of a single n x n column-major matrix.
 ///
 /// Uses scaling-and-squaring with Pad\u{e9}\[13/13\] approximation.
-fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+fn matrix_exp_single<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &[T],
     n: usize,
-) -> Result<Vec<T>> {
+) -> Result<Vec<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // Special case: 0x0 matrix
     if n == 0 {
         return Ok(Vec::new());
@@ -1982,9 +2023,9 @@ fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Rea
     let a_scaled = mat_scale(a, scale_inv);
 
     // 4. Compute matrix powers: A2, A4, A6
-    let a2 = backend_mat_mul_nn(backend, &a_scaled, &a_scaled, n)?;
-    let a4 = backend_mat_mul_nn(backend, &a2, &a2, n)?;
-    let a6 = backend_mat_mul_nn(backend, &a4, &a2, n)?;
+    let a2 = backend_mat_mul_nn(ctx, &a_scaled, &a_scaled, n)?;
+    let a4 = backend_mat_mul_nn(ctx, &a2, &a2, n)?;
+    let a6 = backend_mat_mul_nn(ctx, &a4, &a2, n)?;
 
     // Convert Pade coefficients to type T
     let b: Vec<T> = PADE13_COEFFS
@@ -2014,7 +2055,7 @@ fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Rea
     }
 
     // a6_inner_u = A6 * inner_u
-    let a6_inner_u = backend_mat_mul_nn(backend, &a6, &inner_u, n)?;
+    let a6_inner_u = backend_mat_mul_nn(ctx, &a6, &inner_u, n)?;
 
     // u_inner = a6_inner_u + b[7]*A6 + b[5]*A4 + b[3]*A2 + b[1]*I
     let mut u_inner = vec![T::zero(); nn];
@@ -2023,7 +2064,7 @@ fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Rea
     }
 
     // U = A_scaled * u_inner
-    let u = backend_mat_mul_nn(backend, &a_scaled, &u_inner, n)?;
+    let u = backend_mat_mul_nn(ctx, &a_scaled, &u_inner, n)?;
 
     // Compute inner_v = b[12]*A6 + b[10]*A4 + b[8]*A2
     let mut inner_v = vec![T::zero(); nn];
@@ -2032,7 +2073,7 @@ fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Rea
     }
 
     // a6_inner_v = A6 * inner_v
-    let a6_inner_v = backend_mat_mul_nn(backend, &a6, &inner_v, n)?;
+    let a6_inner_v = backend_mat_mul_nn(ctx, &a6, &inner_v, n)?;
 
     // V = a6_inner_v + b[6]*A6 + b[4]*A4 + b[2]*A2 + b[0]*I
     let mut v = vec![T::zero(); nn];
@@ -2052,11 +2093,11 @@ fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Rea
 
     // Solve lhs * X = rhs  (nrhs = n for matrix RHS)
     let mut result = vec![T::zero(); nn];
-    backend.solve(&lhs, &rhs, n, n, &mut result)?;
+    ctx.faer_backend.solve(&lhs, &rhs, n, n, &mut result)?;
 
     // 7. Repeated squaring: result = result^(2^s)
     for _ in 0..s {
-        result = backend_mat_mul_nn(backend, &result, &result, n)?;
+        result = backend_mat_mul_nn(ctx, &result, &result, n)?;
     }
 
     Ok(result)
@@ -2073,23 +2114,26 @@ fn matrix_exp_single<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Rea
 ///
 /// ```
 /// use tenferro_linalg::solve_triangular;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
-/// let x = solve_triangular(&mut backend, &a, &b, true).unwrap(); // upper=true
+/// let x = solve_triangular(&mut ctx, &a, &b, true).unwrap(); // upper=true
 /// ```
-pub fn solve_triangular<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+pub fn solve_triangular<T: LinalgScalar>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     upper: bool,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(a)?;
     let nrhs = validate_solve_rhs(b, n, batch_dims, "solve_triangular")?;
     let a_input = ensure_col_major(a);
@@ -2108,7 +2152,8 @@ pub fn solve_triangular<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::
         let b_b = &b_data[b_off + batch * n * nrhs..b_off + (batch + 1) * n * nrhs];
 
         let x_out = &mut x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        backend.solve_triangular(a_b, b_b, n, nrhs, upper, x_out)?;
+        ctx.faer_backend
+            .solve_triangular(a_b, b_b, n, nrhs, upper, x_out)?;
     }
 
     let x_dims = b.dims().to_vec();
@@ -2131,23 +2176,23 @@ pub fn solve_triangular<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::
 ///
 /// ```
 /// use tenferro_linalg::{norm, NormKind};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-/// let fro = norm(&mut backend, &a, NormKind::Fro).unwrap();
+/// let fro = norm(&mut ctx, &a, NormKind::Fro).unwrap();
 /// ```
-pub fn norm<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn norm<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     kind: NormKind,
-) -> Result<Tensor<T>> {
+) -> Result<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (m, n, batch_dims) = validate_2d(tensor)?;
     let bc = batch_count(batch_dims);
     let mat_size = m * n;
@@ -2178,7 +2223,7 @@ pub fn norm<
         }
         NormKind::Nuclear => {
             // Nuclear norm per batch: sum of singular values
-            let svd_result = svd(backend, tensor, None)?;
+            let svd_result = svd(ctx, tensor, None)?;
             let s_data = extract_slice(&svd_result.s)?;
             let s_off = svd_result.s.offset() as usize;
             let k = m.min(n);
@@ -2195,7 +2240,7 @@ pub fn norm<
         }
         NormKind::Spectral => {
             // Spectral norm per batch: largest singular value
-            let svd_result = svd(backend, tensor, None)?;
+            let svd_result = svd(ctx, tensor, None)?;
             let s_data = extract_slice(&svd_result.s)?;
             let s_off = svd_result.s.offset() as usize;
             let k = m.min(n);
@@ -2222,16 +2267,16 @@ pub fn norm<
 ///
 /// ```
 /// use tenferro_linalg::lstsq;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
-/// let result = lstsq(&mut backend, &a, &b).unwrap();
+/// let result = lstsq(&mut ctx, &a, &b).unwrap();
 /// assert_eq!(result.x.dims(), &[5]);
 /// ```
 pub struct LstsqResult<T: Scalar> {
@@ -2247,17 +2292,17 @@ pub struct LstsqResult<T: Scalar> {
 ///
 /// ```
 /// use tenferro_linalg::{lstsq, lstsq_rrule};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let dx = Tensor::<f64>::ones(&[5], mem, col);
-/// let grad = lstsq_rrule(&mut backend, &a, &b, &dx).unwrap();
+/// let grad = lstsq_rrule(&mut ctx, &a, &b, &dx).unwrap();
 /// // grad.a: shape [10, 5], grad.b: shape [10]
 /// ```
 pub struct LstsqGrad<T: Scalar> {
@@ -2559,16 +2604,16 @@ where
 /// Solve A X = B for X, where A and B are n*n complex matrices.
 ///
 /// Converts the complex n*n system to a real 2n*2n system and
-/// delegates to `backend.solve()`.
-fn complex_solve_nn<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+/// delegates to `ctx.faer_backend.solve()`.
+fn complex_solve_nn<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &[Cx<T>],
     b: &[Cx<T>],
     n: usize,
-) -> AdResult<Vec<Cx<T>>> {
+) -> AdResult<Vec<Cx<T>>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let nn = 2 * n;
     let mut a_real = vec![T::zero(); nn * nn];
     let mut b_real = vec![T::zero(); nn * nn];
@@ -2592,7 +2637,7 @@ fn complex_solve_nn<
     }
 
     let mut x_real = vec![T::zero(); nn * nn];
-    backend
+    ctx.faer_backend
         .solve(&a_real, &b_real, nn, nn, &mut x_real)
         .map_err(to_ad_err)?;
 
@@ -2611,50 +2656,52 @@ fn complex_solve_nn<
 // ============================================================================
 
 /// Mat mul via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_mat_mul<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    _backend: &mut B,
+fn backend_mat_mul<T: LinalgScalar<Real = T> + num_traits::Float>(
+    _ctx: &mut backend::CpuTensorLinalgContext,
     a: &[T],
     m: usize,
     k: usize,
     b: &[T],
     n: usize,
-) -> AdResult<Vec<T>> {
+) -> AdResult<Vec<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     prims_bridge::batched_gemm_via_prims(a, m, k, b, n).map_err(to_ad_err)
 }
 
 /// Solve via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+fn backend_solve<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &[T],
     b: &[T],
     n: usize,
     nrhs: usize,
-) -> AdResult<Vec<T>> {
+) -> AdResult<Vec<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let mut x = vec![T::zero(); n * nrhs];
-    backend.solve(a, b, n, nrhs, &mut x).map_err(to_ad_err)?;
+    ctx.faer_backend
+        .solve(a, b, n, nrhs, &mut x)
+        .map_err(to_ad_err)?;
     Ok(x)
 }
 
 /// Solve triangular via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve_tri<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+fn backend_solve_tri<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &[T],
     b: &[T],
     n: usize,
     nrhs: usize,
     upper: bool,
-) -> AdResult<Vec<T>> {
+) -> AdResult<Vec<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let mut x = vec![T::zero(); n * nrhs];
-    backend
+    ctx.faer_backend
         .solve_triangular(a, b, n, nrhs, upper, &mut x)
         .map_err(to_ad_err)?;
     Ok(x)
@@ -2662,20 +2709,20 @@ fn backend_solve_tri<
 
 /// Thin SVD via LinalgBackend, returning (U, S, V) for convenience in AD code.
 /// Note: returns V (not Vt) as column-major n×k for convenience in AD code.
-fn backend_thin_svd<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+fn backend_thin_svd<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &[T],
     m: usize,
     n: usize,
-) -> AdResult<(Vec<T>, Vec<T>, Vec<T>)> {
+) -> AdResult<(Vec<T>, Vec<T>, Vec<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let k = m.min(n);
     let mut u = vec![T::zero(); m * k];
     let mut s = vec![T::zero(); k];
     let mut vt = vec![T::zero(); k * n];
-    backend
+    ctx.faer_backend
         .thin_svd(a, m, n, &mut u, &mut s, &mut vt)
         .map_err(to_ad_err)?;
     // Convert Vt (k×n) to V (n×k) for convenience
@@ -2684,19 +2731,21 @@ fn backend_thin_svd<
 }
 
 /// QR decomposition via LinalgBackend, returning (Q, R) for convenience in AD code.
-fn backend_qr<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+fn backend_qr<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &[T],
     m: usize,
     n: usize,
-) -> AdResult<(Vec<T>, Vec<T>)> {
+) -> AdResult<(Vec<T>, Vec<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let k = m.min(n);
     let mut q = vec![T::zero(); m * k];
     let mut r = vec![T::zero(); k * n];
-    backend.qr(a, m, n, &mut q, &mut r).map_err(to_ad_err)?;
+    ctx.faer_backend
+        .qr(a, m, n, &mut q, &mut r)
+        .map_err(to_ad_err)?;
     Ok((q, r))
 }
 
@@ -2739,13 +2788,13 @@ fn extract_data<T: LinalgScalar>(tensor: &Tensor<T>) -> AdResult<(Vec<T>, usize)
 ///
 /// ```
 /// use tenferro_linalg::{svd, svd_rrule, SvdCotangent};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 ///
 /// let cotangent = SvdCotangent {
@@ -2753,18 +2802,18 @@ fn extract_data<T: LinalgScalar>(tensor: &Tensor<T>) -> AdResult<(Vec<T>, usize)
 ///     s: Some(Tensor::ones(&[3], mem, col)),
 ///     vt: None,
 /// };
-/// let grad_a = svd_rrule(&mut backend, &a, &cotangent, None).unwrap();
+/// let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
-pub fn svd_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn svd_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &SvdCotangent<T>,
     options: Option<&SvdOptions>,
-) -> AdResult<Tensor<T>> {
-    let result = svd(backend, tensor, options)
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = svd(ctx, tensor, options)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -2820,7 +2869,7 @@ pub fn svd_rrule<
             let (du_data, _) = extract_data(du)?;
             let du_b = &du_data[b * m * k..(b + 1) * m * k];
             // U^T dU (k×k)
-            let ut_du = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, du_b, k)?;
+            let ut_du = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, du_b, k)?;
             for i in 0..k {
                 for j in 0..k {
                     let sym = ut_du[i + j * k] + ut_du[j + i * k];
@@ -2836,7 +2885,7 @@ pub fn svd_rrule<
             // dV = dVt^T (n×k)
             let dv_b = transpose(dvt_b, k, n);
             // V^T dV (k×k)
-            let vt_dv = backend_mat_mul(backend, &transpose(&v_b, n, k), k, n, &dv_b, k)?;
+            let vt_dv = backend_mat_mul(ctx, &transpose(&v_b, n, k), k, n, &dv_b, k)?;
             for i in 0..k {
                 for j in 0..k {
                     let sym = vt_dv[i + j * k] + vt_dv[j + i * k];
@@ -2846,8 +2895,8 @@ pub fn svd_rrule<
         }
 
         // Core: dA_core = U * Gamma * V^T (m×k × k×k × k×n = m×n)
-        let u_gamma = backend_mat_mul(backend, u_b, m, k, &gamma, k)?;
-        let da_core = backend_mat_mul(backend, &u_gamma, m, k, &transpose(&v_b, n, k), n)?;
+        let u_gamma = backend_mat_mul(ctx, u_b, m, k, &gamma, k)?;
+        let da_core = backend_mat_mul(ctx, &u_gamma, m, k, &transpose(&v_b, n, k), n)?;
 
         // Copy core to output
         for i in 0..m * n {
@@ -2872,10 +2921,10 @@ pub fn svd_rrule<
                     }
                 }
                 // (I - UU^T) * du_sinv * V^T
-                let inner = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, &du_sinv, k)?;
-                let uut_du = backend_mat_mul(backend, u_b, m, k, &inner, k)?;
+                let inner = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, &du_sinv, k)?;
+                let uut_du = backend_mat_mul(ctx, u_b, m, k, &inner, k)?;
                 let proj = sub_vec(&du_sinv, &uut_du);
-                let correction = backend_mat_mul(backend, &proj, m, k, &transpose(&v_b, n, k), n)?;
+                let correction = backend_mat_mul(ctx, &proj, m, k, &transpose(&v_b, n, k), n)?;
                 for i in 0..m * n {
                     grad_a[b * m * n + i] = grad_a[b * m * n + i] + correction[i];
                 }
@@ -2890,8 +2939,8 @@ pub fn svd_rrule<
                 let dv_b = transpose(dvt_b, k, n);
                 // diag(1/S) * dV^T (k×n) = diag(1/S) * Vt_cotangent
                 // But we need dV (n×k), so: (I - VV^T) dV → project
-                let inner = backend_mat_mul(backend, &transpose(&v_b, n, k), k, n, &dv_b, k)?;
-                let vvt_dv = backend_mat_mul(backend, &v_b, n, k, &inner, k)?;
+                let inner = backend_mat_mul(ctx, &transpose(&v_b, n, k), k, n, &dv_b, k)?;
+                let vvt_dv = backend_mat_mul(ctx, &v_b, n, k, &inner, k)?;
                 let proj_dv = sub_vec(&dv_b, &vvt_dv);
                 // U * diag(1/S) * proj_dv^T
                 let mut u_sinv = vec![T::zero(); m * k];
@@ -2906,7 +2955,7 @@ pub fn svd_rrule<
                     }
                 }
                 let correction =
-                    backend_mat_mul(backend, &u_sinv, m, k, &transpose(&proj_dv, n, k), n)?;
+                    backend_mat_mul(ctx, &u_sinv, m, k, &transpose(&proj_dv, n, k), n)?;
                 for i in 0..m * n {
                     grad_a[b * m * n + i] = grad_a[b * m * n + i] + correction[i];
                 }
@@ -2925,29 +2974,29 @@ pub fn svd_rrule<
 ///
 /// ```
 /// use tenferro_linalg::{qr_rrule, QrCotangent};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[4, 3], mem, col);
 /// let cotangent = QrCotangent {
 ///     q: Some(Tensor::ones(&[4, 3], mem, col)),
 ///     r: None,
 /// };
-/// let grad_a = qr_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = qr_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn qr_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn qr_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &QrCotangent<T>,
-) -> AdResult<Tensor<T>> {
-    let result = qr(backend, tensor)
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = qr(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -2979,15 +3028,15 @@ pub fn qr_rrule<
 
         // For thin QR (m >= n): A = QR where Q is m×k, R is k×n
         // W = R dR^T - dQ^T Q (k×k)
-        let r_drt = backend_mat_mul(backend, r_b, k, n, &transpose(&dr_b, k, n), k)?;
-        let dqt_q = backend_mat_mul(backend, &transpose(&dq_b, m, k), k, m, q_b, k)?;
+        let r_drt = backend_mat_mul(ctx, r_b, k, n, &transpose(&dr_b, k, n), k)?;
+        let dqt_q = backend_mat_mul(ctx, &transpose(&dq_b, m, k), k, m, q_b, k)?;
         let w = sub_vec(&r_drt, &dqt_q);
 
         // H = copyltu(W) — symmetrize from lower triangle
         let h = copyltu(&w, k);
 
         // B = dQ + Q H (m×k)
-        let qh = backend_mat_mul(backend, q_b, m, k, &h, k)?;
+        let qh = backend_mat_mul(ctx, q_b, m, k, &h, k)?;
         let rhs = add_vec(&dq_b, &qh);
 
         // dA = B R^{-T} = solve R^T x = B^T, then transpose
@@ -3007,7 +3056,7 @@ pub fn qr_rrule<
 
         // dA[:, :k] = B R_square^{-T} (m×k solve)
         let rhs_t = transpose(&rhs, m, k);
-        let da_t = backend_solve_tri(backend, &r_square, &rhs_t, k, m, true)?;
+        let da_t = backend_solve_tri(ctx, &r_square, &rhs_t, k, m, true)?;
         let da_first_k = transpose(&da_t, k, m);
 
         // Copy first k columns
@@ -3045,30 +3094,30 @@ pub fn qr_rrule<
 ///
 /// ```
 /// use tenferro_linalg::{lu_rrule, LuCotangent, LuPivot};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = LuCotangent {
 ///     l: Some(Tensor::ones(&[3, 3], mem, col)),
 ///     u: None,
 /// };
-/// let grad_a = lu_rrule(&mut backend, &a, &cotangent, LuPivot::Partial).unwrap();
+/// let grad_a = lu_rrule(&mut ctx, &a, &cotangent, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn lu_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &LuCotangent<T>,
     pivot: LuPivot,
-) -> AdResult<Tensor<T>> {
-    let result = lu(backend, tensor, pivot)
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = lu(ctx, tensor, pivot)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3125,17 +3174,17 @@ pub fn lu_rrule<
             let mut inner = vec![T::zero(); k * k];
 
             if let Some(dl_b) = dl_b {
-                let lt_dl = backend_mat_mul(backend, &l_t, k, k, dl_b, k)?;
+                let lt_dl = backend_mat_mul(ctx, &l_t, k, k, dl_b, k)?;
                 inner = add_vec(&inner, &tril_strict(&lt_dl, k));
             }
             if let Some(du_b) = du_b {
-                let du_ut = backend_mat_mul(backend, du_b, k, k, &transpose(u_b, k, k), k)?;
+                let du_ut = backend_mat_mul(ctx, du_b, k, k, &transpose(u_b, k, k), k)?;
                 inner = add_vec(&inner, &triu(&du_ut, k));
             }
 
-            let right_t = backend_solve_tri(backend, u_b, &transpose(&inner, k, k), k, k, true)?;
+            let right_t = backend_solve_tri(ctx, u_b, &transpose(&inner, k, k), k, k, true)?;
             let right = transpose(&right_t, k, k);
-            backend_solve_tri(backend, &l_t, &right, k, k, true)?
+            backend_solve_tri(ctx, &l_t, &right, k, k, true)?
         } else if m < n {
             let l_t = transpose(l_b, k, k);
             let u1: Vec<T> = {
@@ -3150,7 +3199,7 @@ pub fn lu_rrule<
 
             let mut core = vec![T::zero(); k * k];
             if let Some(dl_b) = dl_b {
-                let lt_dl = backend_mat_mul(backend, &l_t, k, k, dl_b, k)?;
+                let lt_dl = backend_mat_mul(ctx, &l_t, k, k, dl_b, k)?;
                 core = add_vec(&core, &lt_dl);
             }
             if let Some(du_b) = du_b {
@@ -3162,12 +3211,12 @@ pub fn lu_rrule<
                         }
                     }
                 }
-                let du_term = backend_mat_mul(backend, &du_triu, k, n, &transpose(u_b, k, n), k)?;
+                let du_term = backend_mat_mul(ctx, &du_triu, k, n, &transpose(u_b, k, n), k)?;
                 core = sub_vec(&core, &du_term);
             }
 
             let lower = tril_strict(&core, k);
-            let lower_t = backend_solve_tri(backend, &u1, &transpose(&lower, k, k), k, k, true)?;
+            let lower_t = backend_solve_tri(ctx, &u1, &transpose(&lower, k, k), k, k, true)?;
             let leading = transpose(&lower_t, k, k);
 
             let mut pre_left = vec![T::zero(); k * n];
@@ -3189,7 +3238,7 @@ pub fn lu_rrule<
                 }
             }
 
-            backend_solve_tri(backend, &l_t, &pre_left, k, n, true)?
+            backend_solve_tri(ctx, &l_t, &pre_left, k, n, true)?
         } else {
             let l1: Vec<T> = {
                 let mut out = vec![T::zero(); k * k];
@@ -3204,7 +3253,7 @@ pub fn lu_rrule<
 
             let mut core = vec![T::zero(); k * k];
             if let Some(du_b) = du_b {
-                let du_term = backend_mat_mul(backend, du_b, k, k, &transpose(u_b, k, k), k)?;
+                let du_term = backend_mat_mul(ctx, du_b, k, k, &transpose(u_b, k, k), k)?;
                 core = add_vec(&core, &du_term);
             }
             if let Some(dl_b) = dl_b {
@@ -3214,12 +3263,12 @@ pub fn lu_rrule<
                         dl_tril[i + j * m] = dl_b[i + j * m];
                     }
                 }
-                let lt_dl = backend_mat_mul(backend, &transpose(l_b, m, k), k, m, &dl_tril, k)?;
+                let lt_dl = backend_mat_mul(ctx, &transpose(l_b, m, k), k, m, &dl_tril, k)?;
                 core = sub_vec(&core, &lt_dl);
             }
 
             let upper = triu(&core, k);
-            let leading = backend_solve_tri(backend, &l1_t, &upper, k, k, true)?;
+            let leading = backend_solve_tri(ctx, &l1_t, &upper, k, k, true)?;
 
             let mut pre_right = vec![T::zero(); m * k];
             for j in 0..k {
@@ -3239,7 +3288,7 @@ pub fn lu_rrule<
             }
 
             let batch_grad_t =
-                backend_solve_tri(backend, u_b, &transpose(&pre_right, m, k), k, m, true)?;
+                backend_solve_tri(ctx, u_b, &transpose(&pre_right, m, k), k, m, true)?;
             transpose(&batch_grad_t, k, m)
         };
 
@@ -3267,30 +3316,30 @@ pub fn lu_rrule<
 ///
 /// ```
 /// use tenferro_linalg::{eigen_rrule, EigenCotangent};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = EigenCotangent {
 ///     values: Some(Tensor::ones(&[3], mem, col)),
 ///     vectors: None,
 /// };
-/// let grad_a = eigen_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = eigen_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eigen_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn eigen_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &EigenCotangent<T>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // Symmetric eigendecomposition: A = V diag(E) V^T
-    let result = eigen(backend, tensor)
+    let result = eigen(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3338,7 +3387,7 @@ pub fn eigen_rrule<
         if let Some(ref dv) = cotangent.vectors {
             let (dv_data, _) = extract_data(dv)?;
             let dv_b = &dv_data[b * n * n..(b + 1) * n * n];
-            let vt_dv = backend_mat_mul(backend, &transpose(v_b, n, n), n, n, dv_b, n)?;
+            let vt_dv = backend_mat_mul(ctx, &transpose(v_b, n, n), n, n, dv_b, n)?;
             let half: T = scalar_from(0.5).map_err(to_ad_err)?;
             for i in 0..n {
                 for j in 0..n {
@@ -3349,8 +3398,8 @@ pub fn eigen_rrule<
         }
 
         // dA = V D V^T
-        let vd = backend_mat_mul(backend, v_b, n, n, &d_mat, n)?;
-        let da_b = backend_mat_mul(backend, &vd, n, n, &transpose(v_b, n, n), n)?;
+        let vd = backend_mat_mul(ctx, v_b, n, n, &d_mat, n)?;
+        let da_b = backend_mat_mul(ctx, &vd, n, n, &transpose(v_b, n, n), n)?;
 
         grad_a[b * n * n..(b + 1) * n * n].copy_from_slice(&da_b);
     }
@@ -3368,29 +3417,29 @@ pub fn eigen_rrule<
 ///
 /// ```
 /// use tenferro_linalg::lstsq_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let dx = Tensor::<f64>::ones(&[5], mem, col);
-/// let grad = lstsq_rrule(&mut backend, &a, &b, &dx).unwrap();
+/// let grad = lstsq_rrule(&mut ctx, &a, &b, &dx).unwrap();
 /// // grad.a: cotangent for A, grad.b: cotangent for b
 /// ```
-pub fn lstsq_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn lstsq_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent_x: &Tensor<T>,
-) -> AdResult<LstsqGrad<T>> {
-    let result = lstsq(backend, a, b)
+) -> AdResult<LstsqGrad<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = lstsq(ctx, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3418,10 +3467,10 @@ pub fn lstsq_rrule<
         let r_b = &r_data[batch * m..(batch + 1) * m];
         let dx_b = &dx_data[batch * n..(batch + 1) * n];
 
-        let (q_d, r_d) = backend_qr(backend, a_b, m, n)?;
-        let y = backend_solve_tri(backend, &transpose(&r_d, n, n), dx_b, n, 1, false)?;
-        let z = backend_solve_tri(backend, &r_d, &y, n, 1, true)?;
-        let grad_b = backend_mat_mul(backend, &q_d, m, n, &y, 1)?;
+        let (q_d, r_d) = backend_qr(ctx, a_b, m, n)?;
+        let y = backend_solve_tri(ctx, &transpose(&r_d, n, n), dx_b, n, 1, false)?;
+        let z = backend_solve_tri(ctx, &r_d, &y, n, 1, true)?;
+        let grad_b = backend_mat_mul(ctx, &q_d, m, n, &y, 1)?;
 
         for j in 0..n {
             for i in 0..m {
@@ -3449,27 +3498,27 @@ pub fn lstsq_rrule<
 ///
 /// ```no_run
 /// use tenferro_linalg::cholesky_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let grad_a = cholesky_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = cholesky_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn cholesky_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn cholesky_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // A = L L^T, dA = L^{-T} phi*(tril(L^T dL)) L^{-1}
-    let l = cholesky(backend, tensor)
+    let l = cholesky(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3485,18 +3534,18 @@ pub fn cholesky_rrule<
         let dl_b = &dl_data[b * n * n..(b + 1) * n * n];
 
         // S = tril(L^T dL)
-        let lt_dl = backend_mat_mul(backend, &transpose(l_b, n, n), n, n, dl_b, n)?;
+        let lt_dl = backend_mat_mul(ctx, &transpose(l_b, n, n), n, n, dl_b, n)?;
         let s = tril(&lt_dl, n);
 
         // Apply phi*: symmetrize S → (S + S^T) / 2
         let s_sym = phi_star(&s, n)?;
 
         // Solve L^T x = S_sym → x = L^{-T} S_sym
-        let x = backend_solve_tri(backend, &transpose(l_b, n, n), &s_sym, n, n, true)?;
+        let x = backend_solve_tri(ctx, &transpose(l_b, n, n), &s_sym, n, n, true)?;
 
         // Solve x L = result → result = x L^{-1} → L^T result^T = x^T → result^T = L^{-T} x^T
         let xt = transpose(&x, n, n);
-        let result_t = backend_solve_tri(backend, &transpose(l_b, n, n), &xt, n, n, true)?;
+        let result_t = backend_solve_tri(ctx, &transpose(l_b, n, n), &xt, n, n, true)?;
         let da_b = transpose(&result_t, n, n);
 
         grad_a[b * n * n..(b + 1) * n * n].copy_from_slice(&da_b);
@@ -3515,29 +3564,29 @@ pub fn cholesky_rrule<
 ///
 /// ```
 /// use tenferro_linalg::solve_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
-/// let grad = solve_rrule(&mut backend, &a, &b, &cotangent).unwrap();
+/// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
-pub fn solve_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn solve_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent: &Tensor<T>,
-) -> AdResult<SolveGrad<T>> {
+) -> AdResult<SolveGrad<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // Ax = b → G = A^{-T} dx, dB = G, dA = -G x^T
-    let x = solve(backend, a, b)
+    let x = solve(ctx, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3562,13 +3611,13 @@ pub fn solve_rrule<
 
         // G = A^{-T} dx = solve(A^T, dx)
         let at = transpose(a_b, n, n);
-        let g = backend_solve(backend, &at, dx_b, n, nrhs)?;
+        let g = backend_solve(ctx, &at, dx_b, n, nrhs)?;
 
         // dB = G
         grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
 
         // dA = -G x^T (n×nrhs × nrhs×n = n×n)
-        let g_xt = backend_mat_mul(backend, &g, n, nrhs, &transpose(x_b, n, nrhs), n)?;
+        let g_xt = backend_mat_mul(ctx, &g, n, nrhs, &transpose(x_b, n, nrhs), n)?;
         let neg_g_xt = scale_vec(&g_xt, -T::one());
         grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg_g_xt);
     }
@@ -3591,27 +3640,27 @@ pub fn solve_rrule<
 ///
 /// ```
 /// use tenferro_linalg::inv_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let grad_a = inv_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = inv_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn inv_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn inv_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dA = -B^T dB B^T where B = A^{-1}
-    let b_inv = inv(backend, tensor)
+    let b_inv = inv(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3627,8 +3676,8 @@ pub fn inv_rrule<
         let db_b = &db_data[batch * n * n..(batch + 1) * n * n];
 
         let bt = transpose(b_b, n, n);
-        let bt_db = backend_mat_mul(backend, &bt, n, n, db_b, n)?;
-        let bt_db_bt = backend_mat_mul(backend, &bt_db, n, n, &bt, n)?;
+        let bt_db = backend_mat_mul(ctx, &bt, n, n, db_b, n)?;
+        let bt_db_bt = backend_mat_mul(ctx, &bt_db, n, n, &bt, n)?;
         let neg = scale_vec(&bt_db_bt, -T::one());
         grad_a[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg);
     }
@@ -3646,27 +3695,27 @@ pub fn inv_rrule<
 ///
 /// ```
 /// use tenferro_linalg::det_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
-/// let grad_a = det_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = det_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn det_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn det_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dA = ddet * det(A) * A^{-T}
-    let det_val = det(backend, tensor)
+    let det_val = det(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3684,7 +3733,7 @@ pub fn det_rrule<
         let dd = ddet_data[batch];
 
         // A^{-T}
-        let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n)?;
+        let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
         let a_inv_t = transpose(&a_inv, n, n);
 
         let scale = dd * d;
@@ -3705,27 +3754,27 @@ pub fn det_rrule<
 ///
 /// ```
 /// use tenferro_linalg::{slogdet_rrule, SlogdetCotangent};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = SlogdetCotangent {
 ///     logabsdet: Some(Tensor::ones(&[], mem, col)),
 /// };
-/// let grad_a = slogdet_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn slogdet_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn slogdet_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &SlogdetCotangent<T>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dA = d_logabsdet * A^{-T}
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3741,7 +3790,7 @@ pub fn slogdet_rrule<
             let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
             let dl = dlog_data[batch];
 
-            let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n)?;
+            let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
             let a_inv_t = transpose(&a_inv, n, n);
             let da_b = scale_vec(&a_inv_t, dl);
             grad_a[batch * n * n..(batch + 1) * n * n].copy_from_slice(&da_b);
@@ -3766,34 +3815,34 @@ pub fn slogdet_rrule<
 ///
 /// ```
 /// use tenferro_linalg::{eig_rrule, EigCotangent};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 /// use num_complex::Complex64;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = EigCotangent::<f64> {
 ///     values: None,
 ///     vectors: None,
 /// };
-/// let grad_a = eig_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = eig_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eig_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn eig_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &EigCotangent<T>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
 
     // Compute eigendecomposition
-    let eig_result = eig(backend, tensor).map_err(to_ad_err)?;
+    let eig_result = eig(ctx, tensor).map_err(to_ad_err)?;
     let val_data = extract_data_scalar(&eig_result.values)?;
     let vec_data = extract_data_scalar(&eig_result.vectors)?;
 
@@ -3841,7 +3890,7 @@ pub fn eig_rrule<
 
         // d_bar_A = V^{-H} M_bar V^H = solve(V^H, M_bar @ V^H)
         let m_vh = complex_mat_mul_nn(&m_bar, &vh, n);
-        let da_complex = complex_solve_nn(backend, &vh, &m_vh, n)?;
+        let da_complex = complex_solve_nn(ctx, &vh, &m_vh, n)?;
 
         // Take real part (since input A was real)
         for k in 0..n * n {
@@ -3859,28 +3908,28 @@ pub fn eig_rrule<
 ///
 /// ```
 /// use tenferro_linalg::pinv_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col);
-/// let grad_a = pinv_rrule(&mut backend, &a, &cotangent, None).unwrap();
+/// let grad_a = pinv_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
-pub fn pinv_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn pinv_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
     rcond: Option<f64>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dA = -(A+)^T dA+ (A+)^T + (I - AA+)(dA+)^T A+(A+)^T + (A+)^T A+ (dA+)^T (I - A+A)
-    let ap = pinv(backend, tensor, rcond)
+    let ap = pinv(ctx, tensor, rcond)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3902,31 +3951,31 @@ pub fn pinv_rrule<
 
         // Term 1: -(A+)^T dA+ (A+)^T = -apt * dap * apt^T
         // apt: m×n, dap: n×m, apt: m×n → m×n * n×m * m×n = m×n
-        let t1 = backend_mat_mul(backend, &apt, m, n, dap_b, m)?;
-        let t1 = backend_mat_mul(backend, &t1, m, m, &apt, n)?;
+        let t1 = backend_mat_mul(ctx, &apt, m, n, dap_b, m)?;
+        let t1 = backend_mat_mul(ctx, &t1, m, m, &apt, n)?;
         let t1 = scale_vec(&t1, -T::one());
 
         // Term 2: (I - AA+)(dA+)^T A+ (A+)^T
         // AA+ (m×m)
-        let aap = backend_mat_mul(backend, a_b, m, n, ap_b, m)?;
+        let aap = backend_mat_mul(ctx, a_b, m, n, ap_b, m)?;
         let i_m = eye::<T>(m);
         let i_aap = sub_vec(&i_m, &aap);
         // (dA+)^T A+ = dapt * ap (m×n * n×m = m×m)
-        let dapt_ap = backend_mat_mul(backend, &dapt, m, n, ap_b, m)?;
+        let dapt_ap = backend_mat_mul(ctx, &dapt, m, n, ap_b, m)?;
         // * (A+)^T = * apt (m×m * m×n = m×n)
-        let dapt_ap_apt = backend_mat_mul(backend, &dapt_ap, m, m, &apt, n)?;
-        let t2 = backend_mat_mul(backend, &i_aap, m, m, &dapt_ap_apt, n)?;
+        let dapt_ap_apt = backend_mat_mul(ctx, &dapt_ap, m, m, &apt, n)?;
+        let t2 = backend_mat_mul(ctx, &i_aap, m, m, &dapt_ap_apt, n)?;
 
         // Term 3: (A+)^T A+ (dA+)^T (I - A+A)
         // A+A (n×n)
-        let apa = backend_mat_mul(backend, ap_b, n, m, a_b, n)?;
+        let apa = backend_mat_mul(ctx, ap_b, n, m, a_b, n)?;
         let i_n = eye::<T>(n);
         let i_apa = sub_vec(&i_n, &apa);
         // (A+)^T A+ = apt * ap (m×n * n×m = m×m)
-        let apt_ap = backend_mat_mul(backend, &apt, m, n, ap_b, m)?;
+        let apt_ap = backend_mat_mul(ctx, &apt, m, n, ap_b, m)?;
         // * (dA+)^T = * dapt (m×m * m×n = m×n)
-        let apt_ap_dapt = backend_mat_mul(backend, &apt_ap, m, m, &dapt, n)?;
-        let t3 = backend_mat_mul(backend, &apt_ap_dapt, m, n, &i_apa, n)?;
+        let apt_ap_dapt = backend_mat_mul(ctx, &apt_ap, m, m, &dapt, n)?;
+        let t3 = backend_mat_mul(ctx, &apt_ap_dapt, m, n, &i_apa, n)?;
 
         let da_b = add_vec(&t1, &add_vec(&t2, &t3));
         grad_a[batch * m * n..(batch + 1) * m * n].copy_from_slice(&da_b);
@@ -3951,25 +4000,25 @@ pub fn pinv_rrule<
 ///
 /// ```
 /// use tenferro_linalg::matrix_exp_rrule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let grad_a = matrix_exp_rrule(&mut backend, &a, &cotangent).unwrap();
+/// let grad_a = matrix_exp_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn matrix_exp_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn matrix_exp_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
 
@@ -4000,7 +4049,7 @@ pub fn matrix_exp_rrule<
         }
 
         // Compute exp(M)
-        let exp_m = matrix_exp_single(backend, &m, nn).map_err(to_ad_err)?;
+        let exp_m = matrix_exp_single(ctx, &m, nn).map_err(to_ad_err)?;
 
         // Extract top-right block → gradient d̄A
         for j in 0..n {
@@ -4020,26 +4069,26 @@ pub fn matrix_exp_rrule<
 ///
 /// ```
 /// use tenferro_linalg::{norm_rrule, NormKind};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
-/// let grad_a = norm_rrule(&mut backend, &a, &cotangent, NormKind::Fro).unwrap();
+/// let grad_a = norm_rrule(&mut ctx, &a, &cotangent, NormKind::Fro).unwrap();
 /// ```
-pub fn norm_rrule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn norm_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
     kind: NormKind,
-) -> AdResult<Tensor<T>> {
+) -> AdResult<Tensor<T>>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
@@ -4054,7 +4103,7 @@ pub fn norm_rrule<
     match kind {
         NormKind::Fro => {
             // dA = dn * A / ||A||_F
-            let nrm = norm(backend, tensor, NormKind::Fro)
+            let nrm = norm(ctx, tensor, NormKind::Fro)
                 .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
             let (nrm_data, _) = extract_data(&nrm)?;
             for batch in 0..bc {
@@ -4070,9 +4119,9 @@ pub fn norm_rrule<
             // dA = dn * U V^T
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n)?;
+                let (u, _s, v) = backend_thin_svd(ctx, a_b, m, n)?;
                 let k = m.min(n);
-                let uv = backend_mat_mul(backend, &u, m, k, &transpose(&v, n, k), n)?;
+                let uv = backend_mat_mul(ctx, &u, m, k, &transpose(&v, n, k), n)?;
                 let dn = dn_data[batch];
                 for i in 0..m * n {
                     grad_a[batch * m * n + i] = dn * uv[i];
@@ -4083,7 +4132,7 @@ pub fn norm_rrule<
             // dA = dn * u1 v1^T (rank-1 outer product of leading singular vectors)
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n)?;
+                let (u, _s, v) = backend_thin_svd(ctx, a_b, m, n)?;
                 let dn = dn_data[batch];
                 for j in 0..n {
                     for i in 0..m {
@@ -4118,27 +4167,27 @@ pub fn norm_rrule<
 ///
 /// ```
 /// use tenferro_linalg::svd_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
-/// let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+/// let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
-pub fn svd_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn svd_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     options: Option<&SvdOptions>,
-) -> AdResult<(SvdResult<T>, SvdResult<T>)> {
-    let result = svd(backend, tensor, options)
+) -> AdResult<(SvdResult<T>, SvdResult<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = svd(ctx, tensor, options)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4162,9 +4211,9 @@ pub fn svd_frule<
         let da_b = &da_data[b * m * n..(b + 1) * m * n];
 
         // C = U^T dA V (k×k)
-        let ut_da = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, da_b, n)?;
+        let ut_da = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, da_b, n)?;
         let v_b = transpose(vt_b, k, n);
-        let c = backend_mat_mul(backend, &ut_da, k, n, &v_b, k)?;
+        let c = backend_mat_mul(ctx, &ut_da, k, n, &v_b, k)?;
 
         // dS = diag(C)
         for i in 0..k {
@@ -4197,18 +4246,18 @@ pub fn svd_frule<
             }
         }
         let f_inner = hadamard(&f_mat, &sc_t_plus_cs);
-        let du_core = backend_mat_mul(backend, u_b, m, k, &f_inner, k)?;
+        let du_core = backend_mat_mul(ctx, u_b, m, k, &f_inner, k)?;
 
         // Projector term for dU
         if m > k {
-            let inner = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, da_b, n)?;
-            let uut_da = backend_mat_mul(backend, u_b, m, k, &inner, n)?;
+            let inner = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, da_b, n)?;
+            let uut_da = backend_mat_mul(ctx, u_b, m, k, &inner, n)?;
             let proj_da: Vec<T> = da_b
                 .iter()
                 .zip(uut_da.iter())
                 .map(|(&a, &b)| a - b)
                 .collect();
-            let proj_da_v = backend_mat_mul(backend, &proj_da, m, n, &v_b, k)?;
+            let proj_da_v = backend_mat_mul(ctx, &proj_da, m, n, &v_b, k)?;
             for j in 0..k {
                 let sinv = if s_b[j].abs() > eta {
                     T::one() / s_b[j]
@@ -4232,13 +4281,13 @@ pub fn svd_frule<
             }
         }
         let f_inner2 = hadamard(&f_mat, &st_c_plus_ct_s);
-        let dvt_core = backend_mat_mul(backend, &f_inner2, k, k, vt_b, n)?;
+        let dvt_core = backend_mat_mul(ctx, &f_inner2, k, k, vt_b, n)?;
 
         if n > k {
-            let vvt = backend_mat_mul(backend, &v_b, n, k, vt_b, n)?;
+            let vvt = backend_mat_mul(ctx, &v_b, n, k, vt_b, n)?;
             let i_n = eye::<T>(n);
             let i_vvt = sub_vec(&i_n, &vvt);
-            let ut_da = backend_mat_mul(backend, &transpose(u_b, m, k), k, m, da_b, n)?;
+            let ut_da = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, da_b, n)?;
             let sinv_ut_da = {
                 let mut r = vec![T::zero(); k * n];
                 for i in 0..k {
@@ -4253,7 +4302,7 @@ pub fn svd_frule<
                 }
                 r
             };
-            let proj = backend_mat_mul(backend, &sinv_ut_da, k, n, &i_vvt, n)?;
+            let proj = backend_mat_mul(ctx, &sinv_ut_da, k, n, &i_vvt, n)?;
             dvt_data[b * k * n..(b + 1) * k * n].copy_from_slice(&add_vec(&dvt_core, &proj));
         } else {
             dvt_data[b * k * n..(b + 1) * k * n].copy_from_slice(&dvt_core);
@@ -4282,26 +4331,26 @@ pub fn svd_frule<
 ///
 /// ```
 /// use tenferro_linalg::qr_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[4, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
-/// let (result, dresult) = qr_frule(&mut backend, &a, &da).unwrap();
+/// let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn qr_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn qr_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(QrResult<T>, QrResult<T>)> {
-    let result = qr(backend, tensor)
+) -> AdResult<(QrResult<T>, QrResult<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = qr(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4324,7 +4373,7 @@ pub fn qr_frule<
         let (dq_b_vec, dr_b_vec) = if m >= n {
             let r_sq = r_b[..n * n].to_vec();
             let darinv_t = backend_solve_tri(
-                backend,
+                ctx,
                 &transpose(&r_sq, n, n),
                 &transpose(da_b, m, n),
                 n,
@@ -4332,7 +4381,7 @@ pub fn qr_frule<
                 false,
             )?;
             let darinv = transpose(&darinv_t, n, m);
-            let qhdarinv = backend_mat_mul(backend, &transpose(q_b, m, n), n, m, &darinv, n)?;
+            let qhdarinv = backend_mat_mul(ctx, &transpose(q_b, m, n), n, m, &darinv, n)?;
             let sym = add_vec(&qhdarinv, &transpose(&qhdarinv, n, n));
 
             let mut dr_hat = vec![T::zero(); n * n];
@@ -4346,11 +4395,11 @@ pub fn qr_frule<
                 }
             }
 
-            let dq = sub_vec(&darinv, &backend_mat_mul(backend, q_b, m, n, &dr_hat, n)?);
-            let dr = backend_mat_mul(backend, &dr_hat, n, n, &r_sq, n)?;
+            let dq = sub_vec(&darinv, &backend_mat_mul(ctx, q_b, m, n, &dr_hat, n)?);
+            let dr = backend_mat_mul(ctx, &dr_hat, n, n, &r_sq, n)?;
             (dq, dr)
         } else {
-            let qhda = backend_mat_mul(backend, &transpose(q_b, m, k), k, m, da_b, n)?;
+            let qhda = backend_mat_mul(ctx, &transpose(q_b, m, k), k, m, da_b, n)?;
             let r1 = r_b[..k * k].to_vec();
 
             let mut qhda1 = vec![T::zero(); k * k];
@@ -4360,7 +4409,7 @@ pub fn qr_frule<
                 }
             }
             let qhda1_rinv_t = backend_solve_tri(
-                backend,
+                ctx,
                 &transpose(&r1, k, k),
                 &transpose(&qhda1, k, k),
                 k,
@@ -4371,8 +4420,8 @@ pub fn qr_frule<
             let lower = tril_strict(&qhda1_rinv, k);
             let dq_hat = sub_vec(&lower, &transpose(&lower, k, k));
 
-            let dr = sub_vec(&qhda, &backend_mat_mul(backend, &dq_hat, k, k, r_b, n)?);
-            let dq = backend_mat_mul(backend, q_b, m, k, &dq_hat, k)?;
+            let dr = sub_vec(&qhda, &backend_mat_mul(ctx, &dq_hat, k, k, r_b, n)?);
+            let dq = backend_mat_mul(ctx, q_b, m, k, &dq_hat, k)?;
             (dq, dr)
         };
 
@@ -4399,27 +4448,27 @@ pub fn qr_frule<
 ///
 /// ```
 /// use tenferro_linalg::{lu_frule, LuPivot};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (result, dresult) = lu_frule(&mut backend, &a, &da, LuPivot::Partial).unwrap();
+/// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn lu_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     pivot: LuPivot,
-) -> AdResult<(LuResult<T>, LuResult<T>)> {
-    let result = lu(backend, tensor, pivot)
+) -> AdResult<(LuResult<T>, LuResult<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = lu(ctx, tensor, pivot)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4472,7 +4521,7 @@ pub fn lu_frule<
             }
             s
         };
-        let linv_pda = backend_solve_tri(backend, &l_sq, &pda_sq, k, n, false)?;
+        let linv_pda = backend_solve_tri(ctx, &l_sq, &pda_sq, k, n, false)?;
 
         // Then: (L^{-1} PdA) U^{-1} → solve (result) U = linv_pda
         let u_sq: Vec<T> = {
@@ -4486,7 +4535,7 @@ pub fn lu_frule<
         };
         // Solve x U = linv_pda → U^T x^T = linv_pda^T
         let f_t = backend_solve_tri(
-            backend,
+            ctx,
             &transpose(&u_sq, k, k),
             &transpose(&linv_pda, k, n),
             k,
@@ -4497,7 +4546,7 @@ pub fn lu_frule<
 
         // dL = L tril_strict(F) (m×k)
         let tril_f = tril_strict(&f, k);
-        let dl_b_vec = backend_mat_mul(backend, &l_sq, k, k, &tril_f, k)?;
+        let dl_b_vec = backend_mat_mul(ctx, &l_sq, k, k, &tril_f, k)?;
         for j in 0..k {
             for i in 0..k {
                 dl_data[b * m * k + i + j * m] = dl_b_vec[i + j * k];
@@ -4506,7 +4555,7 @@ pub fn lu_frule<
 
         // dU = triu(F) U (k×n)
         let triu_f = triu(&f, k);
-        let du_b_vec = backend_mat_mul(backend, &triu_f, k, k, &u_sq, k)?;
+        let du_b_vec = backend_mat_mul(ctx, &triu_f, k, k, &u_sq, k)?;
         for j in 0..k {
             for i in 0..k {
                 du_data[b * k * n + i + j * k] = du_b_vec[i + j * k];
@@ -4532,26 +4581,26 @@ pub fn lu_frule<
 ///
 /// ```
 /// use tenferro_linalg::eigen_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (result, dresult) = eigen_frule(&mut backend, &a, &da).unwrap();
+/// let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn eigen_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn eigen_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(EigenResult<T>, EigenResult<T>)> {
-    let result = eigen(backend, tensor)
+) -> AdResult<(EigenResult<T>, EigenResult<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let result = eigen(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4571,8 +4620,8 @@ pub fn eigen_frule<
         let da_b = &da_data[b * n * n..(b + 1) * n * n];
 
         // C = V^T dA V (n×n)
-        let vt_da = backend_mat_mul(backend, &transpose(v_b, n, n), n, n, da_b, n)?;
-        let c = backend_mat_mul(backend, &vt_da, n, n, v_b, n)?;
+        let vt_da = backend_mat_mul(ctx, &transpose(v_b, n, n), n, n, da_b, n)?;
+        let c = backend_mat_mul(ctx, &vt_da, n, n, v_b, n)?;
 
         // dE = diag(C)
         for i in 0..n {
@@ -4597,7 +4646,7 @@ pub fn eigen_frule<
                 }
             }
         }
-        let dv_b_vec = backend_mat_mul(backend, v_b, n, n, &fc, n)?;
+        let dv_b_vec = backend_mat_mul(ctx, v_b, n, n, &fc, n)?;
         dv_data[b * n * n..(b + 1) * n * n].copy_from_slice(&dv_b_vec);
     }
 
@@ -4618,31 +4667,31 @@ pub fn eigen_frule<
 ///
 /// ```
 /// use tenferro_linalg::lstsq_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let da = Tensor::<f64>::ones(&[10, 5], mem, col);
 /// let db = Tensor::<f64>::ones(&[10], mem, col);
-/// let (result, dresult) = lstsq_frule(&mut backend, &a, &b, &da, &db).unwrap();
+/// let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn lstsq_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn lstsq_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     tangent_a: &Tensor<T>,
     tangent_b: &Tensor<T>,
-) -> AdResult<(LstsqResult<T>, LstsqResult<T>)> {
+) -> AdResult<(LstsqResult<T>, LstsqResult<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dx = A^+ (db - dA x), where A^+ = (A^T A)^{-1} A^T
-    let result = lstsq(backend, a, b)
+    let result = lstsq(ctx, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4663,18 +4712,18 @@ pub fn lstsq_frule<
         let db_b = &db_data[batch * m..(batch + 1) * m];
 
         // dA x (m×1)
-        let da_x = backend_mat_mul(backend, da_b, m, n, x_b, 1)?;
+        let da_x = backend_mat_mul(ctx, da_b, m, n, x_b, 1)?;
         // db - dA x
         let rhs: Vec<T> = db_b.iter().zip(da_x.iter()).map(|(&a, &b)| a - b).collect();
 
         // A^+ rhs = (A^T A)^{-1} A^T rhs
-        let at_rhs = backend_mat_mul(backend, &transpose(a_b, m, n), n, m, &rhs, 1)?;
-        let ata = backend_mat_mul(backend, &transpose(a_b, m, n), n, m, a_b, n)?;
-        let dx_b_vec = backend_solve(backend, &ata, &at_rhs, n, 1)?;
+        let at_rhs = backend_mat_mul(ctx, &transpose(a_b, m, n), n, m, &rhs, 1)?;
+        let ata = backend_mat_mul(ctx, &transpose(a_b, m, n), n, m, a_b, n)?;
+        let dx_b_vec = backend_solve(ctx, &ata, &at_rhs, n, 1)?;
         dx_data[batch * n..(batch + 1) * n].copy_from_slice(&dx_b_vec);
 
         // d(residual) = db - dA x - A dx
-        let a_dx = backend_mat_mul(backend, a_b, m, n, &dx_b_vec, 1)?;
+        let a_dx = backend_mat_mul(ctx, a_b, m, n, &dx_b_vec, 1)?;
         for i in 0..m {
             dres_data[batch * m + i] = rhs[i] - a_dx[i];
         }
@@ -4697,27 +4746,27 @@ pub fn lstsq_frule<
 ///
 /// ```no_run
 /// use tenferro_linalg::cholesky_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (l, dl) = cholesky_frule(&mut backend, &a, &da).unwrap();
+/// let (l, dl) = cholesky_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn cholesky_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn cholesky_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(Tensor<T>, Tensor<T>)> {
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dL = L phi(L^{-1} dA L^{-T})
-    let l = cholesky(backend, tensor)
+    let l = cholesky(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4733,17 +4782,16 @@ pub fn cholesky_frule<
         let da_b = &da_data[b * n * n..(b + 1) * n * n];
 
         // L^{-1} dA: solve L x = dA
-        let linv_da = backend_solve_tri(backend, l_b, da_b, n, n, false)?;
+        let linv_da = backend_solve_tri(ctx, l_b, da_b, n, n, false)?;
         // (L^{-1} dA) L^{-T}: solve (result) L^T = linv_da → L x^T = linv_da^T
-        let linv_da_linvt_t =
-            backend_solve_tri(backend, l_b, &transpose(&linv_da, n, n), n, n, false)?;
+        let linv_da_linvt_t = backend_solve_tri(ctx, l_b, &transpose(&linv_da, n, n), n, n, false)?;
         let inner = transpose(&linv_da_linvt_t, n, n);
 
         // phi(inner) = tril with diagonal halved
         let phi_inner = phi(&inner, n)?;
 
         // dL = L phi(inner)
-        let dl_b_vec = backend_mat_mul(backend, l_b, n, n, &phi_inner, n)?;
+        let dl_b_vec = backend_mat_mul(ctx, l_b, n, n, &phi_inner, n)?;
         dl_data[b * n * n..(b + 1) * n * n].copy_from_slice(&dl_b_vec);
     }
 
@@ -4759,31 +4807,31 @@ pub fn cholesky_frule<
 ///
 /// ```
 /// use tenferro_linalg::solve_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
-/// let (x, dx) = solve_frule(&mut backend, &a, &b, &da, &db).unwrap();
+/// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn solve_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     tangent_a: &Tensor<T>,
     tangent_b: &Tensor<T>,
-) -> AdResult<(Tensor<T>, Tensor<T>)> {
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dx = A^{-1} (db - dA x)
-    let x = solve(backend, a, b)
+    let x = solve(ctx, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4808,11 +4856,11 @@ pub fn solve_frule<
         let db_b = &db_data[batch * n * nrhs..(batch + 1) * n * nrhs];
 
         // dA x (n×nrhs)
-        let da_x = backend_mat_mul(backend, da_b, n, n, x_b, nrhs)?;
+        let da_x = backend_mat_mul(ctx, da_b, n, n, x_b, nrhs)?;
         // db - dA x
         let rhs = sub_vec(db_b, &da_x);
         // A^{-1} (db - dA x)
-        let dx_b_vec = backend_solve(backend, a_b, &rhs, n, nrhs)?;
+        let dx_b_vec = backend_solve(ctx, a_b, &rhs, n, nrhs)?;
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b_vec);
     }
 
@@ -4828,27 +4876,27 @@ pub fn solve_frule<
 ///
 /// ```
 /// use tenferro_linalg::inv_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (a_inv, da_inv) = inv_frule(&mut backend, &a, &da).unwrap();
+/// let (a_inv, da_inv) = inv_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn inv_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn inv_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(Tensor<T>, Tensor<T>)> {
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dB = -B dA B where B = A^{-1}
-    let b_inv = inv(backend, tensor)
+    let b_inv = inv(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4863,8 +4911,8 @@ pub fn inv_frule<
         let b_b = &binv_data[batch * n * n..(batch + 1) * n * n];
         let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
 
-        let b_da = backend_mat_mul(backend, b_b, n, n, da_b, n)?;
-        let b_da_b = backend_mat_mul(backend, &b_da, n, n, b_b, n)?;
+        let b_da = backend_mat_mul(ctx, b_b, n, n, da_b, n)?;
+        let b_da_b = backend_mat_mul(ctx, &b_da, n, n, b_b, n)?;
         let neg = scale_vec(&b_da_b, -T::one());
         db_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg);
     }
@@ -4881,27 +4929,27 @@ pub fn inv_frule<
 ///
 /// ```
 /// use tenferro_linalg::det_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (d, dd) = det_frule(&mut backend, &a, &da).unwrap();
+/// let (d, dd) = det_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn det_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn det_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(Tensor<T>, Tensor<T>)> {
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // d(det) = det(A) * tr(A^{-1} dA)
-    let d = det(backend, tensor)
+    let d = det(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4917,8 +4965,8 @@ pub fn det_frule<
         let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
         let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
 
-        let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n)?;
-        let a_inv_da = backend_mat_mul(backend, &a_inv, n, n, da_b, n)?;
+        let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
+        let a_inv_da = backend_mat_mul(ctx, &a_inv, n, n, da_b, n)?;
         let mut trace = T::zero();
         for i in 0..n {
             trace = trace + a_inv_da[i + i * n];
@@ -4938,27 +4986,27 @@ pub fn det_frule<
 ///
 /// ```
 /// use tenferro_linalg::slogdet_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (result, dresult) = slogdet_frule(&mut backend, &a, &da).unwrap();
+/// let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn slogdet_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn slogdet_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(SlogdetResult<T>, SlogdetResult<T>)> {
+) -> AdResult<(SlogdetResult<T>, SlogdetResult<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // d(logabsdet) = Re(tr(A^{-1} dA)), d(sign) = 0 (for real)
-    let result = slogdet(backend, tensor)
+    let result = slogdet(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4974,8 +5022,8 @@ pub fn slogdet_frule<
         let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
         let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
 
-        let a_inv = backend_solve(backend, a_b, &eye::<T>(n), n, n)?;
-        let a_inv_da = backend_mat_mul(backend, &a_inv, n, n, da_b, n)?;
+        let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
+        let a_inv_da = backend_mat_mul(ctx, &a_inv, n, n, da_b, n)?;
         let mut trace = T::zero();
         for i in 0..n {
             trace = trace + a_inv_da[i + i * n];
@@ -5006,27 +5054,27 @@ pub fn slogdet_frule<
 ///
 /// ```
 /// use tenferro_linalg::eig_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (result, dresult) = eig_frule(&mut backend, &a, &da).unwrap();
+/// let (result, dresult) = eig_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn eig_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn eig_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(EigResult<T>, EigResult<T>)> {
+) -> AdResult<(EigResult<T>, EigResult<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // Forward pass
-    let eig_result = eig(backend, tensor).map_err(to_ad_err)?;
+    let eig_result = eig(ctx, tensor).map_err(to_ad_err)?;
 
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
@@ -5051,7 +5099,7 @@ pub fn eig_frule<
 
         // W = V^{-1} dA V = solve(V, dA_c @ V)
         let da_v = complex_mat_mul_nn(&da_complex, v, n);
-        let w = complex_solve_nn(backend, v, &da_v, n)?;
+        let w = complex_solve_nn(ctx, v, &da_v, n)?;
 
         // d_lambda = diag(W)
         for i in 0..n {
@@ -5096,28 +5144,28 @@ pub fn eig_frule<
 ///
 /// ```
 /// use tenferro_linalg::pinv_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
-/// let (pinv_a, dpinv_a) = pinv_frule(&mut backend, &a, &da, None).unwrap();
+/// let (pinv_a, dpinv_a) = pinv_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
-pub fn pinv_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn pinv_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     rcond: Option<f64>,
-) -> AdResult<(Tensor<T>, Tensor<T>)> {
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     // dA+ = -A+ dA A+ + (I - A+A) dA^T (A+)^T A+ + A+ (A+)^T dA^T (I - AA+)
-    let ap = pinv(backend, tensor, rcond)
+    let ap = pinv(ctx, tensor, rcond)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -5138,25 +5186,25 @@ pub fn pinv_frule<
         let apt = transpose(ap_b, n, m); // m×n
 
         // Term 1: -A+ dA A+ (n×m × m×n × n×m = n×m)
-        let ap_da = backend_mat_mul(backend, ap_b, n, m, da_b, n)?;
-        let ap_da_ap = backend_mat_mul(backend, &ap_da, n, n, ap_b, m)?;
+        let ap_da = backend_mat_mul(ctx, ap_b, n, m, da_b, n)?;
+        let ap_da_ap = backend_mat_mul(ctx, &ap_da, n, n, ap_b, m)?;
         let t1 = scale_vec(&ap_da_ap, -T::one());
 
         // Term 2: (I - A+A) dA^T (A+)^T A+
-        let apa = backend_mat_mul(backend, ap_b, n, m, a_b, n)?; // n×n
+        let apa = backend_mat_mul(ctx, ap_b, n, m, a_b, n)?; // n×n
         let i_n = eye::<T>(n);
         let i_apa = sub_vec(&i_n, &apa);
-        let dat_apt = backend_mat_mul(backend, &dat, n, m, &apt, n)?; // n×n
-        let dat_apt_ap = backend_mat_mul(backend, &dat_apt, n, n, ap_b, m)?; // n×m
-        let t2 = backend_mat_mul(backend, &i_apa, n, n, &dat_apt_ap, m)?;
+        let dat_apt = backend_mat_mul(ctx, &dat, n, m, &apt, n)?; // n×n
+        let dat_apt_ap = backend_mat_mul(ctx, &dat_apt, n, n, ap_b, m)?; // n×m
+        let t2 = backend_mat_mul(ctx, &i_apa, n, n, &dat_apt_ap, m)?;
 
         // Term 3: A+ (A+)^T dA^T (I - AA+)
-        let aap = backend_mat_mul(backend, a_b, m, n, ap_b, m)?; // m×m
+        let aap = backend_mat_mul(ctx, a_b, m, n, ap_b, m)?; // m×m
         let i_m = eye::<T>(m);
         let i_aap = sub_vec(&i_m, &aap);
-        let ap_apt = backend_mat_mul(backend, ap_b, n, m, &apt, n)?; // n×n
-        let ap_apt_dat = backend_mat_mul(backend, &ap_apt, n, n, &dat, m)?; // n×m
-        let t3 = backend_mat_mul(backend, &ap_apt_dat, n, m, &i_aap, m)?;
+        let ap_apt = backend_mat_mul(ctx, ap_b, n, m, &apt, n)?; // n×n
+        let ap_apt_dat = backend_mat_mul(ctx, &ap_apt, n, n, &dat, m)?; // n×m
+        let t3 = backend_mat_mul(ctx, &ap_apt_dat, n, m, &i_aap, m)?;
 
         let dap_b_vec = add_vec(&t1, &add_vec(&t2, &t3));
         dap_data[batch * n * m..(batch + 1) * n * m].copy_from_slice(&dap_b_vec);
@@ -5183,25 +5231,25 @@ pub fn pinv_frule<
 ///
 /// ```
 /// use tenferro_linalg::matrix_exp_frule;
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let (exp_a, dexp_a) = matrix_exp_frule(&mut backend, &a, &da).unwrap();
+/// let (exp_a, dexp_a) = matrix_exp_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn matrix_exp_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn matrix_exp_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
-) -> AdResult<(Tensor<T>, Tensor<T>)> {
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
 
@@ -5231,7 +5279,7 @@ pub fn matrix_exp_frule<
         }
 
         // Compute exp(M) — call matrix_exp_single with the 2n×2n matrix
-        let exp_m = matrix_exp_single(backend, &m, nn).map_err(to_ad_err)?;
+        let exp_m = matrix_exp_single(ctx, &m, nn).map_err(to_ad_err)?;
 
         // Extract top-left block → exp(A)
         for j in 0..n {
@@ -5260,27 +5308,27 @@ pub fn matrix_exp_frule<
 ///
 /// ```
 /// use tenferro_linalg::{norm_frule, NormKind};
-/// use tenferro_linalg::backend::FaerBackend;
+/// use tenferro_linalg::backend::CpuTensorLinalgContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut backend = FaerBackend::new();
+/// let mut ctx = CpuTensorLinalgContext::new();
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
-/// let (n, dn) = norm_frule(&mut backend, &a, &da, NormKind::Fro).unwrap();
+/// let (n, dn) = norm_frule(&mut ctx, &a, &da, NormKind::Fro).unwrap();
 /// ```
-pub fn norm_frule<
-    T: LinalgScalar<Real = T> + num_traits::Float,
-    B: backend::LinalgBackend<T, Real = T>,
->(
-    backend: &mut B,
+pub fn norm_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut backend::CpuTensorLinalgContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     kind: NormKind,
-) -> AdResult<(Tensor<T>, Tensor<T>)> {
-    let nrm = norm(backend, tensor, kind)
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+{
+    let nrm = norm(ctx, tensor, kind)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -5311,10 +5359,10 @@ pub fn norm_frule<
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
                 let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n)?;
+                let (u, _s, v) = backend_thin_svd(ctx, a_b, m, n)?;
                 let k = m.min(n);
-                let ut_da = backend_mat_mul(backend, &transpose(&u, m, k), k, m, da_b, n)?;
-                let ut_da_v = backend_mat_mul(backend, &ut_da, k, n, &v, k)?;
+                let ut_da = backend_mat_mul(ctx, &transpose(&u, m, k), k, m, da_b, n)?;
+                let ut_da_v = backend_mat_mul(ctx, &ut_da, k, n, &v, k)?;
                 let mut trace = T::zero();
                 for i in 0..k {
                     trace = trace + ut_da_v[i + i * k];
@@ -5327,7 +5375,7 @@ pub fn norm_frule<
             for batch in 0..bc {
                 let a_b = &a_data[batch * m * n..(batch + 1) * m * n];
                 let da_b = &da_data[batch * m * n..(batch + 1) * m * n];
-                let (u, _s, v) = backend_thin_svd(backend, a_b, m, n)?;
+                let (u, _s, v) = backend_thin_svd(ctx, a_b, m, n)?;
                 let mut val = T::zero();
                 for i in 0..m {
                     for j in 0..n {
@@ -5351,111 +5399,77 @@ pub fn norm_frule<
     Ok((nrm, dnrm))
 }
 
+#[cfg(test)]
+mod eig_scalar_tests {
+    use super::*;
+    use num_complex::{Complex32, Complex64};
+
+    #[test]
+    fn eig_buffer_sizes_f32() {
+        let (vals, vecs) = f32::eig_buffer_sizes(3);
+        assert_eq!(vals, 6); // 2*n
+        assert_eq!(vecs, 18); // 2*n*n
+    }
+
+    #[test]
+    fn eig_ri_to_complex_f32() {
+        let val_ri = [1.0_f32, 0.5, 2.0, -0.5];
+        let vec_ri = [1.0_f32, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0];
+        let mut vals = [Complex32::new(0.0, 0.0); 2];
+        let mut vecs = [Complex32::new(0.0, 0.0); 4];
+        f32::eig_ri_to_complex(2, &val_ri, &vec_ri, &mut vals, &mut vecs);
+        assert!((vals[0].re - 1.0).abs() < 1e-6);
+        assert!((vals[0].im - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn eig_buffer_sizes_complex64() {
+        let (vals, vecs) = Complex64::eig_buffer_sizes(3);
+        assert_eq!(vals, 3); // n
+        assert_eq!(vecs, 9); // n*n
+    }
+
+    #[test]
+    fn eig_ri_to_complex_complex64() {
+        let c = |re, im| Complex64::new(re, im);
+        let val_ri = [c(1.0, 0.5), c(2.0, -0.5)];
+        let vec_ri = [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 1.0), c(1.0, 0.0)];
+        let mut vals = [Complex64::new(0.0, 0.0); 2];
+        let mut vecs = [Complex64::new(0.0, 0.0); 4];
+        Complex64::eig_ri_to_complex(2, &val_ri, &vec_ri, &mut vals, &mut vecs);
+        assert!((vals[0].re - 1.0).abs() < 1e-12);
+        assert!((vals[1].im + 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn eig_buffer_sizes_complex32() {
+        let (vals, vecs) = Complex32::eig_buffer_sizes(2);
+        assert_eq!(vals, 2); // n
+        assert_eq!(vecs, 4); // n*n
+    }
+
+    #[test]
+    fn eig_ri_to_complex_complex32() {
+        let c = |re, im| Complex32::new(re, im);
+        let val_ri = [c(1.0, 0.5), c(2.0, -0.5)];
+        let vec_ri = [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 1.0), c(1.0, 0.0)];
+        let mut vals = [Complex32::new(0.0, 0.0); 2];
+        let mut vecs = [Complex32::new(0.0, 0.0); 4];
+        Complex32::eig_ri_to_complex(2, &val_ri, &vec_ri, &mut vals, &mut vecs);
+        assert!((vals[0].re - 1.0).abs() < 1e-6);
+    }
+}
+
 #[allow(unexpected_cfgs)]
 #[cfg(all(test, not(coverage)))]
 mod internal_tests {
     use super::*;
     use num_complex::Complex64;
 
-    struct RejectingMatMulBackend;
-
-    impl backend::LinalgBackend<f64> for RejectingMatMulBackend {
-        type Real = f64;
-
-        fn thin_svd(
-            &mut self,
-            _a: &[f64],
-            _m: usize,
-            _n: usize,
-            _u: &mut [f64],
-            _s: &mut [Self::Real],
-            _vt: &mut [f64],
-        ) -> Result<()> {
-            unreachable!("thin_svd is not used in this test")
-        }
-
-        fn qr(
-            &mut self,
-            _a: &[f64],
-            _m: usize,
-            _n: usize,
-            _q: &mut [f64],
-            _r: &mut [f64],
-        ) -> Result<()> {
-            unreachable!("qr is not used in this test")
-        }
-
-        fn lu(
-            &mut self,
-            _a: &[f64],
-            _m: usize,
-            _n: usize,
-            _perm: &mut [usize],
-            _l: &mut [f64],
-            _u_out: &mut [f64],
-        ) -> Result<()> {
-            unreachable!("lu is not used in this test")
-        }
-
-        fn cholesky(&mut self, _a: &[f64], _n: usize, _l: &mut [f64]) -> Result<()> {
-            unreachable!("cholesky is not used in this test")
-        }
-
-        fn eigen_sym(
-            &mut self,
-            _a: &[f64],
-            _n: usize,
-            _values: &mut [Self::Real],
-            _vectors: &mut [f64],
-        ) -> Result<()> {
-            unreachable!("eigen_sym is not used in this test")
-        }
-
-        fn mat_mul(
-            &mut self,
-            _a: &[f64],
-            _m: usize,
-            _k: usize,
-            _b: &[f64],
-            _n: usize,
-            _c: &mut [f64],
-        ) -> Result<()> {
-            Err(Error::DeviceError("mat_mul should not be called".into()))
-        }
-
-        fn solve(
-            &mut self,
-            _a: &[f64],
-            _b: &[f64],
-            _n: usize,
-            _nrhs: usize,
-            _x: &mut [f64],
-        ) -> Result<()> {
-            unreachable!("solve is not used in this test")
-        }
-
-        fn solve_triangular(
-            &mut self,
-            _a: &[f64],
-            _b: &[f64],
-            _n: usize,
-            _nrhs: usize,
-            _upper: bool,
-            _x: &mut [f64],
-        ) -> Result<()> {
-            unreachable!("solve_triangular is not used in this test")
-        }
-
-        fn eig_general(
-            &mut self,
-            _a: &[f64],
-            _n: usize,
-            _values_ri: &mut [f64],
-            _vectors_ri: &mut [f64],
-        ) -> Result<()> {
-            unreachable!("eig_general is not used in this test")
-        }
-    }
+    // The old tests used mock backends (RejectingMatMulBackend) to verify that
+    // backend_mat_mul/backend_mat_mul_nn route through TensorPrims instead of the
+    // backend's mat_mul. Now that these functions accept CpuTensorLinalgContext
+    // (and ignore it, using prims_bridge directly), we just use a real context.
 
     #[test]
     fn validate_hermitian_batches_accepts_symmetric_input() {
@@ -5478,129 +5492,29 @@ mod internal_tests {
 
     #[test]
     fn backend_mat_mul_uses_prims_for_real_scalars() {
-        let mut backend = RejectingMatMulBackend;
+        let mut ctx = backend::CpuTensorLinalgContext::new();
         let a = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b = vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0];
 
-        let c = backend_mat_mul(&mut backend, &a, 2, 3, &b, 2).unwrap();
+        let c = backend_mat_mul(&mut ctx, &a, 2, 3, &b, 2).unwrap();
 
         assert_eq!(c, vec![76.0, 100.0, 103.0, 136.0]);
     }
 
     #[test]
     fn backend_mat_mul_nn_uses_prims_for_real_scalars() {
-        let mut backend = RejectingMatMulBackend;
+        let mut ctx = backend::CpuTensorLinalgContext::new();
         let a = vec![1.0_f64, 2.0, 3.0, 4.0];
         let b = vec![5.0_f64, 6.0, 7.0, 8.0];
 
-        let c = backend_mat_mul_nn(&mut backend, &a, &b, 2).unwrap();
+        let c = backend_mat_mul_nn(&mut ctx, &a, &b, 2).unwrap();
 
         assert_eq!(c, vec![23.0, 34.0, 31.0, 46.0]);
     }
 
-    struct RejectingMatMulBackendComplex;
-
-    impl backend::LinalgBackend<Complex64> for RejectingMatMulBackendComplex {
-        type Real = f64;
-
-        fn thin_svd(
-            &mut self,
-            _a: &[Complex64],
-            _m: usize,
-            _n: usize,
-            _u: &mut [Complex64],
-            _s: &mut [Self::Real],
-            _vt: &mut [Complex64],
-        ) -> Result<()> {
-            unreachable!("thin_svd is not used in this test")
-        }
-
-        fn qr(
-            &mut self,
-            _a: &[Complex64],
-            _m: usize,
-            _n: usize,
-            _q: &mut [Complex64],
-            _r: &mut [Complex64],
-        ) -> Result<()> {
-            unreachable!("qr is not used in this test")
-        }
-
-        fn lu(
-            &mut self,
-            _a: &[Complex64],
-            _m: usize,
-            _n: usize,
-            _perm: &mut [usize],
-            _l: &mut [Complex64],
-            _u_out: &mut [Complex64],
-        ) -> Result<()> {
-            unreachable!("lu is not used in this test")
-        }
-
-        fn cholesky(&mut self, _a: &[Complex64], _n: usize, _l: &mut [Complex64]) -> Result<()> {
-            unreachable!("cholesky is not used in this test")
-        }
-
-        fn eigen_sym(
-            &mut self,
-            _a: &[Complex64],
-            _n: usize,
-            _values: &mut [Self::Real],
-            _vectors: &mut [Complex64],
-        ) -> Result<()> {
-            unreachable!("eigen_sym is not used in this test")
-        }
-
-        fn mat_mul(
-            &mut self,
-            _a: &[Complex64],
-            _m: usize,
-            _k: usize,
-            _b: &[Complex64],
-            _n: usize,
-            _c: &mut [Complex64],
-        ) -> Result<()> {
-            Err(Error::DeviceError("mat_mul should not be called".into()))
-        }
-
-        fn solve(
-            &mut self,
-            _a: &[Complex64],
-            _b: &[Complex64],
-            _n: usize,
-            _nrhs: usize,
-            _x: &mut [Complex64],
-        ) -> Result<()> {
-            unreachable!("solve is not used in this test")
-        }
-
-        fn solve_triangular(
-            &mut self,
-            _a: &[Complex64],
-            _b: &[Complex64],
-            _n: usize,
-            _nrhs: usize,
-            _upper: bool,
-            _x: &mut [Complex64],
-        ) -> Result<()> {
-            unreachable!("solve_triangular is not used in this test")
-        }
-
-        fn eig_general(
-            &mut self,
-            _a: &[Complex64],
-            _n: usize,
-            _values_ri: &mut [Complex64],
-            _vectors_ri: &mut [Complex64],
-        ) -> Result<()> {
-            unreachable!("eig_general is not used in this test")
-        }
-    }
-
     #[test]
     fn backend_mat_mul_nn_uses_prims_for_complex_scalars() {
-        let mut backend = RejectingMatMulBackendComplex;
+        let mut ctx = backend::CpuTensorLinalgContext::new();
         let a = vec![
             Complex64::new(1.0, 0.0),
             Complex64::new(2.0, 0.0),
@@ -5614,7 +5528,7 @@ mod internal_tests {
             Complex64::new(8.0, 0.0),
         ];
 
-        let c = backend_mat_mul_nn(&mut backend, &a, &b, 2).unwrap();
+        let c = backend_mat_mul_nn(&mut ctx, &a, &b, 2).unwrap();
 
         assert_eq!(
             c,
