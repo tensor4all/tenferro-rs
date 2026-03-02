@@ -5271,7 +5271,8 @@ pub fn norm_frule<
     Ok((nrm, dnrm))
 }
 
-#[cfg(test)]
+#[allow(unexpected_cfgs)]
+#[cfg(all(test, not(coverage)))]
 mod internal_tests {
     use super::*;
     use num_complex::Complex64;
