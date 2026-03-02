@@ -14,6 +14,8 @@
 | [algebra.md](./algebra.md) | `HasAlgebra`, `Semiring`, tropical and user-defined algebra extensibility |
 | [autodiff.md](./autodiff.md) | `chainrules-core`/`chainrules` AD architecture, linalg AD rules, SVD rrule |
 | [linalg.md](./linalg.md) | `tenferro-linalg` decompositions, solvers, utilities, stateless AD rules |
+| [linalg-backend-api.md](./linalg-backend-api.md) | Proposed tensor-level backend layer for linalg decompositions and solves |
+| [linalg-gemm-prims.md](./linalg-gemm-prims.md) | Planned migration of `tenferro-linalg` GEMM paths onto `tenferro-prims::BatchedGemm` |
 | [capi.md](./capi.md) | C-API (FFI): opaque handles, DLPack interop, einsum + SVD + AD rules |
 | [capi-error-handling.md](./capi-error-handling.md) | C-API error handling policy: status mapping, shared helpers, last-error API |
 | [testing.md](./testing.md) | Testing strategy, handwritten linalg test coverage, gradient check method |

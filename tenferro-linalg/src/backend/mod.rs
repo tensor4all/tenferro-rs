@@ -34,9 +34,16 @@
 
 #[cfg(feature = "faer")]
 pub mod faer_backend;
+pub mod tensor_backend;
 
 #[cfg(feature = "faer")]
 pub use faer_backend::FaerBackend;
+pub use tensor_backend::{
+    EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
+    TensorLinalgBackend,
+};
+#[cfg(feature = "faer")]
+pub use tensor_backend::{FaerTensorLinalgBackend, FaerTensorLinalgContext};
 
 use tenferro_device::Result;
 
