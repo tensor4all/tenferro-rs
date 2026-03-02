@@ -24,6 +24,7 @@ strided-kernel.workspace = true
 rayon = "1.10"
 libloading.workspace = true
 num-complex.workspace = true
+num-traits.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { version = "0.1", optional = true }
 cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "dynamic-loading", "cuda-12060"] }

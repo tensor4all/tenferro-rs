@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Current Implementation Status
 
-**API skeleton only (POC phase)**: All public functions and trait methods are defined with full signatures and docstrings, but function bodies use `todo!()`. The purpose of this phase is to validate the API design before writing implementations. Do not add implementations — only define types, traits, and function signatures.
+The workspace contains active implementations alongside evolving APIs. Implementation work is allowed unless a task explicitly says otherwise.
 
 ### Documentation Requirements
 
-Every public type, trait, and function **must** include minimal but sufficient usage examples in its doc comments (`/// # Examples`). The examples should help a human quickly understand how to use the API. Use `ignore` attribute on examples that cannot run (due to `todo!()` bodies). Crate-level docs (`//!`) should include typical end-to-end usage examples.
+Every public type, trait, and function **must** include minimal but sufficient usage examples in its doc comments (`/// # Examples`). The examples should help a human quickly understand how to use the API. Use `ignore` attribute on examples that cannot run in docs. Crate-level docs (`//!`) should include typical end-to-end usage examples.
 
 ## Project Overview
 
