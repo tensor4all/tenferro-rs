@@ -25,15 +25,14 @@
 //!
 //! # CPU GEMM backend selection
 //!
-//! `BatchedGemm` on [`CpuBackend`] is feature-selectable:
+//! `BatchedGemm` on [`CpuBackend`] requires exactly one CPU GEMM backend feature:
 //! - `gemm-faer` (default): pure-Rust faer matmul backend
 //! - `gemm-openblas`: CBLAS/OpenBLAS backend via `cblas-sys`
-//! - neither feature: portable naive fallback (slow, correctness-only)
 //!
 //! To switch to OpenBLAS:
 //! `cargo test -p tenferro-prims --no-default-features --features gemm-openblas`
 //! (requires system CBLAS/OpenBLAS development libraries)
-//!
+
 //! # Algebra parameterization
 //!
 //! [`TensorPrims<Alg>`] is parameterized by algebra `Alg` (e.g.,
@@ -94,6 +93,12 @@
 //!     ).unwrap();
 //! }
 //! ```
+
+#[cfg(all(feature = "gemm-faer", feature = "gemm-openblas"))]
+compile_error!("enable exactly one GEMM backend: gemm-faer or gemm-openblas");
+
+#[cfg(all(not(feature = "gemm-faer"), not(feature = "gemm-openblas")))]
+compile_error!("enable exactly one GEMM backend: gemm-faer or gemm-openblas");
 
 mod cpu;
 mod registry;
@@ -592,17 +597,6 @@ pub(crate) fn for_each_index(dims: &[usize], mut f: impl FnMut(&[usize])) {
             index[d] = 0;
         }
     }
-}
-
-/// Unflatten a linear index to multi-dimensional indices (column-major).
-pub(crate) fn unflatten_index(flat: usize, dims: &[usize]) -> Vec<usize> {
-    let mut indices = vec![0; dims.len()];
-    let mut remainder = flat;
-    for d in 0..dims.len() {
-        indices[d] = remainder % dims[d];
-        remainder /= dims[d];
-    }
-    indices
 }
 
 /// Find the position of a mode label in a mode list, returning an error if not found.

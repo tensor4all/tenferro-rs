@@ -321,6 +321,7 @@ enum BufferInner<T> {
     /// the CPU. It is only valid as an argument to GPU API calls (cuTENSOR,
     /// hipTENSOR, cudaMemcpy, etc.).
     ///
+    #[allow(dead_code)]
     Gpu {
         /// Device pointer (NOT dereferenceable from CPU).
         device_ptr: *mut T,
@@ -715,10 +716,12 @@ pub struct Tensor<T: Scalar> {
 /// ```
 #[derive(Clone)]
 pub struct CompletionEvent {
+    #[allow(dead_code)]
     inner: CompletionEventInner,
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 enum CompletionEventInner {
     /// No pending operation.
     Noop,

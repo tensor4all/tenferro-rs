@@ -135,6 +135,7 @@
 //! ```
 
 pub mod backend;
+mod prims_bridge;
 
 use chainrules_core::AdResult;
 use num_complex::{Complex32, Complex64};
@@ -1825,14 +1826,12 @@ fn matrix_1_norm<T: LinalgScalar>(a: &[T], n: usize) -> T::Real {
 
 /// Multiply two n x n column-major matrices using the backend.
 fn backend_mat_mul_nn<T: LinalgScalar, B: backend::LinalgBackend<T, Real = T::Real>>(
-    backend: &mut B,
+    _backend: &mut B,
     a: &[T],
     b: &[T],
     n: usize,
 ) -> Result<Vec<T>> {
-    let mut c = vec![T::zero(); n * n];
-    backend.mat_mul(a, n, n, b, n, &mut c)?;
-    Ok(c)
+    prims_bridge::batched_gemm_via_prims(a, n, n, b, n)
 }
 
 /// Compute `result = alpha * a + beta * b` element-wise for flat slices.
@@ -2536,16 +2535,14 @@ fn backend_mat_mul<
     T: LinalgScalar<Real = T> + num_traits::Float,
     B: backend::LinalgBackend<T, Real = T>,
 >(
-    backend: &mut B,
+    _backend: &mut B,
     a: &[T],
     m: usize,
     k: usize,
     b: &[T],
     n: usize,
 ) -> AdResult<Vec<T>> {
-    let mut c = vec![T::zero(); m * n];
-    backend.mat_mul(a, m, k, b, n, &mut c).map_err(to_ad_err)?;
-    Ok(c)
+    prims_bridge::batched_gemm_via_prims(a, m, k, b, n).map_err(to_ad_err)
 }
 
 /// Solve via LinalgBackend, returning Vec for convenience in AD code.
@@ -5277,6 +5274,107 @@ pub fn norm_frule<
 #[cfg(test)]
 mod internal_tests {
     use super::*;
+    use num_complex::Complex64;
+
+    struct RejectingMatMulBackend;
+
+    impl backend::LinalgBackend<f64> for RejectingMatMulBackend {
+        type Real = f64;
+
+        fn thin_svd(
+            &mut self,
+            _a: &[f64],
+            _m: usize,
+            _n: usize,
+            _u: &mut [f64],
+            _s: &mut [Self::Real],
+            _vt: &mut [f64],
+        ) -> Result<()> {
+            unreachable!("thin_svd is not used in this test")
+        }
+
+        fn qr(
+            &mut self,
+            _a: &[f64],
+            _m: usize,
+            _n: usize,
+            _q: &mut [f64],
+            _r: &mut [f64],
+        ) -> Result<()> {
+            unreachable!("qr is not used in this test")
+        }
+
+        fn lu(
+            &mut self,
+            _a: &[f64],
+            _m: usize,
+            _n: usize,
+            _perm: &mut [usize],
+            _l: &mut [f64],
+            _u_out: &mut [f64],
+        ) -> Result<()> {
+            unreachable!("lu is not used in this test")
+        }
+
+        fn cholesky(&mut self, _a: &[f64], _n: usize, _l: &mut [f64]) -> Result<()> {
+            unreachable!("cholesky is not used in this test")
+        }
+
+        fn eigen_sym(
+            &mut self,
+            _a: &[f64],
+            _n: usize,
+            _values: &mut [Self::Real],
+            _vectors: &mut [f64],
+        ) -> Result<()> {
+            unreachable!("eigen_sym is not used in this test")
+        }
+
+        fn mat_mul(
+            &mut self,
+            _a: &[f64],
+            _m: usize,
+            _k: usize,
+            _b: &[f64],
+            _n: usize,
+            _c: &mut [f64],
+        ) -> Result<()> {
+            Err(Error::DeviceError("mat_mul should not be called".into()))
+        }
+
+        fn solve(
+            &mut self,
+            _a: &[f64],
+            _b: &[f64],
+            _n: usize,
+            _nrhs: usize,
+            _x: &mut [f64],
+        ) -> Result<()> {
+            unreachable!("solve is not used in this test")
+        }
+
+        fn solve_triangular(
+            &mut self,
+            _a: &[f64],
+            _b: &[f64],
+            _n: usize,
+            _nrhs: usize,
+            _upper: bool,
+            _x: &mut [f64],
+        ) -> Result<()> {
+            unreachable!("solve_triangular is not used in this test")
+        }
+
+        fn eig_general(
+            &mut self,
+            _a: &[f64],
+            _n: usize,
+            _values_ri: &mut [f64],
+            _vectors_ri: &mut [f64],
+        ) -> Result<()> {
+            unreachable!("eig_general is not used in this test")
+        }
+    }
 
     #[test]
     fn validate_hermitian_batches_accepts_symmetric_input() {
@@ -5295,5 +5393,156 @@ mod internal_tests {
         let data = vec![2.0, 1.0, 4.0, 3.0];
         let result = validate_hermitian_batches(&data, 0, 2, 1, "eigen");
         assert!(matches!(result, Err(Error::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn backend_mat_mul_uses_prims_for_real_scalars() {
+        let mut backend = RejectingMatMulBackend;
+        let a = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let b = vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0];
+
+        let c = backend_mat_mul(&mut backend, &a, 2, 3, &b, 2).unwrap();
+
+        assert_eq!(c, vec![76.0, 100.0, 103.0, 136.0]);
+    }
+
+    #[test]
+    fn backend_mat_mul_nn_uses_prims_for_real_scalars() {
+        let mut backend = RejectingMatMulBackend;
+        let a = vec![1.0_f64, 2.0, 3.0, 4.0];
+        let b = vec![5.0_f64, 6.0, 7.0, 8.0];
+
+        let c = backend_mat_mul_nn(&mut backend, &a, &b, 2).unwrap();
+
+        assert_eq!(c, vec![23.0, 34.0, 31.0, 46.0]);
+    }
+
+    struct RejectingMatMulBackendComplex;
+
+    impl backend::LinalgBackend<Complex64> for RejectingMatMulBackendComplex {
+        type Real = f64;
+
+        fn thin_svd(
+            &mut self,
+            _a: &[Complex64],
+            _m: usize,
+            _n: usize,
+            _u: &mut [Complex64],
+            _s: &mut [Self::Real],
+            _vt: &mut [Complex64],
+        ) -> Result<()> {
+            unreachable!("thin_svd is not used in this test")
+        }
+
+        fn qr(
+            &mut self,
+            _a: &[Complex64],
+            _m: usize,
+            _n: usize,
+            _q: &mut [Complex64],
+            _r: &mut [Complex64],
+        ) -> Result<()> {
+            unreachable!("qr is not used in this test")
+        }
+
+        fn lu(
+            &mut self,
+            _a: &[Complex64],
+            _m: usize,
+            _n: usize,
+            _perm: &mut [usize],
+            _l: &mut [Complex64],
+            _u_out: &mut [Complex64],
+        ) -> Result<()> {
+            unreachable!("lu is not used in this test")
+        }
+
+        fn cholesky(&mut self, _a: &[Complex64], _n: usize, _l: &mut [Complex64]) -> Result<()> {
+            unreachable!("cholesky is not used in this test")
+        }
+
+        fn eigen_sym(
+            &mut self,
+            _a: &[Complex64],
+            _n: usize,
+            _values: &mut [Self::Real],
+            _vectors: &mut [Complex64],
+        ) -> Result<()> {
+            unreachable!("eigen_sym is not used in this test")
+        }
+
+        fn mat_mul(
+            &mut self,
+            _a: &[Complex64],
+            _m: usize,
+            _k: usize,
+            _b: &[Complex64],
+            _n: usize,
+            _c: &mut [Complex64],
+        ) -> Result<()> {
+            Err(Error::DeviceError("mat_mul should not be called".into()))
+        }
+
+        fn solve(
+            &mut self,
+            _a: &[Complex64],
+            _b: &[Complex64],
+            _n: usize,
+            _nrhs: usize,
+            _x: &mut [Complex64],
+        ) -> Result<()> {
+            unreachable!("solve is not used in this test")
+        }
+
+        fn solve_triangular(
+            &mut self,
+            _a: &[Complex64],
+            _b: &[Complex64],
+            _n: usize,
+            _nrhs: usize,
+            _upper: bool,
+            _x: &mut [Complex64],
+        ) -> Result<()> {
+            unreachable!("solve_triangular is not used in this test")
+        }
+
+        fn eig_general(
+            &mut self,
+            _a: &[Complex64],
+            _n: usize,
+            _values_ri: &mut [Complex64],
+            _vectors_ri: &mut [Complex64],
+        ) -> Result<()> {
+            unreachable!("eig_general is not used in this test")
+        }
+    }
+
+    #[test]
+    fn backend_mat_mul_nn_uses_prims_for_complex_scalars() {
+        let mut backend = RejectingMatMulBackendComplex;
+        let a = vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(3.0, 0.0),
+            Complex64::new(4.0, 0.0),
+        ];
+        let b = vec![
+            Complex64::new(5.0, 0.0),
+            Complex64::new(6.0, 0.0),
+            Complex64::new(7.0, 0.0),
+            Complex64::new(8.0, 0.0),
+        ];
+
+        let c = backend_mat_mul_nn(&mut backend, &a, &b, 2).unwrap();
+
+        assert_eq!(
+            c,
+            vec![
+                Complex64::new(23.0, 0.0),
+                Complex64::new(34.0, 0.0),
+                Complex64::new(31.0, 0.0),
+                Complex64::new(46.0, 0.0),
+            ]
+        );
     }
 }
