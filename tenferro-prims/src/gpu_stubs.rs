@@ -30,6 +30,18 @@ pub struct CudaContext {
     _plan_cache: PlanCache,
 }
 
+#[cfg(not(feature = "cuda"))]
+impl CudaContext {
+    /// Create a stub CUDA context (no-op).
+    pub fn new() -> Self {
+        Self {
+            _stream: std::ptr::null_mut(),
+            _workspace: Vec::new(),
+            _plan_cache: PlanCache::new(),
+        }
+    }
+}
+
 /// CUDA plan (stub) — placeholder when `cuda` feature is not enabled.
 ///
 /// **Status: Stub.** Enable the `cuda` feature for the real implementation.
@@ -131,6 +143,17 @@ pub struct RocmContext {
     _stream: *mut c_void,
     _workspace: Vec<u8>,
     _plan_cache: PlanCache,
+}
+
+impl RocmContext {
+    /// Create a stub ROCm context (no-op).
+    pub fn new() -> Self {
+        Self {
+            _stream: std::ptr::null_mut(),
+            _workspace: Vec::new(),
+            _plan_cache: PlanCache::new(),
+        }
+    }
 }
 
 /// ROCm plan — wraps a hipTENSOR plan handle.
@@ -238,7 +261,7 @@ mod tests {
     #[test]
     fn cuda_stub_reports_errors_and_panics_for_resolve_conj() {
         let mut ctx = CudaContext {
-            _stream: ptr::null_mut(),
+            _stream: std::ptr::null_mut(),
             _workspace: Vec::new(),
             _plan_cache: PlanCache::new(),
         };
@@ -285,7 +308,7 @@ mod tests {
     #[test]
     fn rocm_stub_reports_errors_and_panics_for_resolve_conj() {
         let mut ctx = RocmContext {
-            _stream: ptr::null_mut(),
+            _stream: std::ptr::null_mut(),
             _workspace: Vec::new(),
             _plan_cache: PlanCache::new(),
         };

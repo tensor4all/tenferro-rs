@@ -43,13 +43,13 @@
 //!
 //! ```
 //! use tenferro_linalg::{svd, SvdOptions};
-//! use tenferro_linalg::backend::CpuTensorLinalgContext;
+//! use tenferro_prims::CpuContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut ctx = CpuTensorLinalgContext::new();
+//! let mut ctx = CpuContext::new(1);
 //!
 //! // 2D matrix: shape [3, 4]
 //! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
@@ -63,13 +63,13 @@
 //!
 //! ```
 //! use tenferro_linalg::svd;
-//! use tenferro_linalg::backend::CpuTensorLinalgContext;
+//! use tenferro_prims::CpuContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut ctx = CpuTensorLinalgContext::new();
+//! let mut ctx = CpuContext::new(1);
 //!
 //! // Batched: shape [m, n, batch] = [3, 4, 10]
 //! let a = Tensor::<f64>::zeros(&[3, 4, 10], mem, col);
@@ -83,13 +83,13 @@
 //!
 //! ```
 //! use tenferro_linalg::svd;
-//! use tenferro_linalg::backend::CpuTensorLinalgContext;
+//! use tenferro_prims::CpuContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut ctx = CpuTensorLinalgContext::new();
+//! let mut ctx = CpuContext::new(1);
 //!
 //! // 4D tensor [2, 3, 4, 5] — want SVD with left=[0,1], right=[2,3]
 //! let t = Tensor::<f64>::zeros(&[2, 3, 4, 5], mem, col);
@@ -105,13 +105,13 @@
 //!
 //! ```
 //! use tenferro_linalg::{svd, svd_rrule, SvdCotangent};
-//! use tenferro_linalg::backend::CpuTensorLinalgContext;
+//! use tenferro_prims::CpuContext;
 //! use tenferro_tensor::{Tensor, MemoryOrder};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let mut ctx = CpuTensorLinalgContext::new();
+//! let mut ctx = CpuContext::new(1);
 //!
 //! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 //! let result = svd(&mut ctx, &a, None).unwrap();
@@ -614,11 +614,11 @@ fn tensor_from_data_scalar<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Te
 ///
 /// ```
 /// use tenferro_linalg::svd;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = svd(&mut ctx, &a, None).unwrap();
@@ -677,11 +677,11 @@ impl Default for SvdOptions {
 ///
 /// ```
 /// use tenferro_linalg::qr;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[4, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = qr(&mut ctx, &a).unwrap();
@@ -729,11 +729,11 @@ pub enum LuPivot {
 ///
 /// ```
 /// use tenferro_linalg::{lu, LuPivot};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 ///
@@ -765,11 +765,11 @@ pub struct LuResult<T: Scalar> {
 ///
 /// ```
 /// use tenferro_linalg::eigen;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = eigen(&mut ctx, &a).unwrap();
@@ -798,11 +798,11 @@ pub struct EigenResult<T: Scalar, R: Scalar = T> {
 ///
 /// ```
 /// use tenferro_linalg::{eig, EigResult};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result: EigResult<f64> = eig(&mut ctx, &a).unwrap();
@@ -827,11 +827,11 @@ pub struct EigResult<R: LinalgScalar<Real = R> + num_traits::Float> {
 ///
 /// ```
 /// use tenferro_linalg::slogdet;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = slogdet(&mut ctx, &a).unwrap();
@@ -849,13 +849,13 @@ pub struct SlogdetResult<T: Scalar, R: Scalar = T> {
 ///
 /// ```
 /// use tenferro_linalg::solve_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
@@ -915,12 +915,12 @@ pub enum NormKind {
 ///
 /// ```
 /// use tenferro_linalg::{svd, SvdOptions};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, col);
 ///
@@ -936,7 +936,7 @@ pub enum NormKind {
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
 pub fn svd<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     options: Option<&SvdOptions>,
 ) -> Result<SvdResult<T, T::Real>>
@@ -971,8 +971,14 @@ where
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        ctx.faer_backend
-            .thin_svd(batch_data, m, n, &mut u_full, &mut s_full, &mut vt_full)?;
+        backend::FaerBackend::new().thin_svd(
+            batch_data,
+            m,
+            n,
+            &mut u_full,
+            &mut s_full,
+            &mut vt_full,
+        )?;
 
         // Apply cutoff truncation
         let actual_k = if let Some(opts) = options {
@@ -1033,11 +1039,11 @@ where
 ///
 /// ```
 /// use tenferro_linalg::qr;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[4, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = qr(&mut ctx, &a).unwrap();
@@ -1047,7 +1053,7 @@ where
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
 pub fn qr<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<QrResult<T>>
 where
@@ -1070,7 +1076,7 @@ where
 
         let q_out = &mut q_data[b * m * k..(b + 1) * m * k];
         let r_out = &mut r_data[b * k * n..(b + 1) * k * n];
-        ctx.faer_backend.qr(batch_data, m, n, q_out, r_out)?;
+        backend::FaerBackend::new().qr(batch_data, m, n, q_out, r_out)?;
     }
 
     let q_dims = output_dims(&[m, k], batch_dims);
@@ -1099,11 +1105,11 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{lu, LuPivot};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 ///
@@ -1118,7 +1124,7 @@ where
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
 pub fn lu<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     pivot: LuPivot,
 ) -> Result<LuResult<T>>
@@ -1151,8 +1157,7 @@ where
         let perm_out = &mut all_perms[b * m..(b + 1) * m];
         let l_out = &mut l_data[b * m * k..(b + 1) * m * k];
         let u_out = &mut u_data[b * k * n..(b + 1) * k * n];
-        ctx.faer_backend
-            .lu(batch_data, m, n, perm_out, l_out, u_out)?;
+        backend::FaerBackend::new().lu(batch_data, m, n, perm_out, l_out, u_out)?;
     }
 
     let l_dims = output_dims(&[m, k], batch_dims);
@@ -1179,11 +1184,11 @@ where
 ///
 /// ```
 /// use tenferro_linalg::eigen;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = eigen(&mut ctx, &a).unwrap();
@@ -1194,7 +1199,7 @@ where
 /// Returns an error if the input has fewer than 2 dimensions, the first two
 /// dimensions are not equal, or the matrix is not symmetric/Hermitian.
 pub fn eigen<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<EigenResult<T, T::Real>>
 where
@@ -1218,8 +1223,7 @@ where
 
         let val_out = &mut val_data[b * n..(b + 1) * n];
         let vec_out = &mut vec_data[b * n * n..(b + 1) * n * n];
-        ctx.faer_backend
-            .eigen_sym(batch_data, n, val_out, vec_out)?;
+        backend::FaerBackend::new().eigen_sym(batch_data, n, val_out, vec_out)?;
     }
 
     let val_dims = output_dims(&[n], batch_dims);
@@ -1243,13 +1247,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::lstsq;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let result = lstsq(&mut ctx, &a, &b).unwrap();
@@ -1260,7 +1264,7 @@ where
 /// Returns an error if `A` has fewer than 2 dimensions, `m < n`, or `b`
 /// does not match `(m, *)` with the same batch dimensions as `A`.
 pub fn lstsq<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<LstsqResult<T>>
@@ -1312,8 +1316,7 @@ where
         }
 
         // Solve R x = Q^T b (upper triangular)
-        ctx.faer_backend
-            .solve_triangular(r_b, &qtb, k, 1, true, &mut x_buf)?;
+        backend::FaerBackend::new().solve_triangular(r_b, &qtb, k, 1, true, &mut x_buf)?;
         x_data[batch * n..(batch + 1) * n].copy_from_slice(&x_buf);
 
         // Compute residual: r = b - A x
@@ -1347,17 +1350,17 @@ where
 ///
 /// ```no_run
 /// use tenferro_linalg::cholesky;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let l = cholesky(&mut ctx, &a).unwrap();
 /// ```
 pub fn cholesky<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
@@ -1377,7 +1380,7 @@ where
         let batch_data = &data[start..start + mat_size];
 
         let l_out = &mut l_data[b * mat_size..(b + 1) * mat_size];
-        ctx.faer_backend.cholesky(batch_data, n, l_out)?;
+        backend::FaerBackend::new().cholesky(batch_data, n, l_out)?;
     }
 
     let dims = output_dims(&[n, n], batch_dims);
@@ -1393,19 +1396,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::solve;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let x = solve(&mut ctx, &a, &b).unwrap();
 /// ```
 pub fn solve<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
@@ -1430,7 +1433,7 @@ where
         let b_b = &b_data[b_off + batch * n * nrhs..b_off + (batch + 1) * n * nrhs];
 
         let x_out = &mut x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        ctx.faer_backend.solve(a_b, b_b, n, nrhs, x_out)?;
+        backend::FaerBackend::new().solve(a_b, b_b, n, nrhs, x_out)?;
     }
 
     let x_dims = b.dims().to_vec();
@@ -1445,17 +1448,17 @@ where
 ///
 /// ```
 /// use tenferro_linalg::inv;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let a_inv = inv(&mut ctx, &a).unwrap();
 /// ```
 pub fn inv<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
@@ -1480,7 +1483,7 @@ where
         let start = offset + b * mat_size;
         let a_b = &data[start..start + mat_size];
         let x_out = &mut inv_data[b * mat_size..(b + 1) * mat_size];
-        ctx.faer_backend.solve(a_b, &eye_mat, n, n, x_out)?;
+        backend::FaerBackend::new().solve(a_b, &eye_mat, n, n, x_out)?;
     }
 
     let dims = output_dims(&[n, n], batch_dims);
@@ -1495,17 +1498,17 @@ where
 ///
 /// ```
 /// use tenferro_linalg::det;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let d = det(&mut ctx, &a).unwrap();
 /// ```
 pub fn det<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
@@ -1530,8 +1533,7 @@ where
         let batch_data = &data[start..start + mat_size];
 
         // det = product of diagonal of U * sign from permutation
-        ctx.faer_backend
-            .lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        backend::FaerBackend::new().lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
 
         let mut d = T::one();
         for i in 0..n {
@@ -1584,18 +1586,18 @@ where
 ///
 /// ```
 /// use tenferro_linalg::slogdet;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = slogdet(&mut ctx, &a).unwrap();
 /// // det(A) ≈ result.sign * exp(result.logabsdet)
 /// ```
 pub fn slogdet<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<SlogdetResult<T>>
 where
@@ -1620,8 +1622,7 @@ where
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        ctx.faer_backend
-            .lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        backend::FaerBackend::new().lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
 
         let mut log_abs = T::zero();
         let mut sign = T::one();
@@ -1691,11 +1692,11 @@ where
 ///
 /// ```
 /// use tenferro_linalg::eig;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let result = eig(&mut ctx, &a).unwrap();
@@ -1708,7 +1709,7 @@ where
 /// Returns an error if the input has fewer than 2 dimensions or the first
 /// two dimensions are not equal.
 pub fn eig<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<EigResult<T>>
 where
@@ -1736,8 +1737,7 @@ where
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        ctx.faer_backend
-            .eig_general(batch_data, n, &mut values_ri, &mut vectors_ri)?;
+        backend::FaerBackend::new().eig_general(batch_data, n, &mut values_ri, &mut vectors_ri)?;
 
         // Convert interleaved [re, im, re, im, ...] to Complex<T>
         let val_out = &mut val_data[b * n..(b + 1) * n];
@@ -1771,17 +1771,17 @@ where
 ///
 /// ```
 /// use tenferro_linalg::pinv;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let a_pinv = pinv(&mut ctx, &a, None).unwrap();
 /// ```
 pub fn pinv<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     rcond: Option<f64>,
 ) -> Result<Tensor<T>>
@@ -1860,18 +1860,18 @@ where
 ///
 /// ```
 /// use tenferro_linalg::matrix_exp;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let exp_a = matrix_exp(&mut ctx, &a).unwrap();
 /// // exp(0) = I
 /// ```
 pub fn matrix_exp<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
@@ -1941,7 +1941,7 @@ fn matrix_1_norm<T: LinalgScalar>(a: &[T], n: usize) -> T::Real {
 
 /// Multiply two n x n column-major matrices using the backend.
 fn backend_mat_mul_nn<T: LinalgScalar>(
-    _ctx: &mut backend::CpuTensorLinalgContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     b: &[T],
     n: usize,
@@ -1982,7 +1982,7 @@ fn mat_add<T: LinalgScalar>(a: &[T], b: &[T]) -> Vec<T> {
 ///
 /// Uses scaling-and-squaring with Pad\u{e9}\[13/13\] approximation.
 fn matrix_exp_single<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     n: usize,
 ) -> Result<Vec<T>>
@@ -2093,7 +2093,7 @@ where
 
     // Solve lhs * X = rhs  (nrhs = n for matrix RHS)
     let mut result = vec![T::zero(); nn];
-    ctx.faer_backend.solve(&lhs, &rhs, n, n, &mut result)?;
+    backend::FaerBackend::new().solve(&lhs, &rhs, n, n, &mut result)?;
 
     // 7. Repeated squaring: result = result^(2^s)
     for _ in 0..s {
@@ -2114,19 +2114,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::solve_triangular;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let x = solve_triangular(&mut ctx, &a, &b, true).unwrap(); // upper=true
 /// ```
 pub fn solve_triangular<T: LinalgScalar>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     upper: bool,
@@ -2152,8 +2152,7 @@ where
         let b_b = &b_data[b_off + batch * n * nrhs..b_off + (batch + 1) * n * nrhs];
 
         let x_out = &mut x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        ctx.faer_backend
-            .solve_triangular(a_b, b_b, n, nrhs, upper, x_out)?;
+        backend::FaerBackend::new().solve_triangular(a_b, b_b, n, nrhs, upper, x_out)?;
     }
 
     let x_dims = b.dims().to_vec();
@@ -2176,17 +2175,17 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{norm, NormKind};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4],
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let fro = norm(&mut ctx, &a, NormKind::Fro).unwrap();
 /// ```
 pub fn norm<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     kind: NormKind,
 ) -> Result<Tensor<T>>
@@ -2267,13 +2266,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::lstsq;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let result = lstsq(&mut ctx, &a, &b).unwrap();
@@ -2292,13 +2291,13 @@ pub struct LstsqResult<T: Scalar> {
 ///
 /// ```
 /// use tenferro_linalg::{lstsq, lstsq_rrule};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let dx = Tensor::<f64>::ones(&[5], mem, col);
@@ -2604,9 +2603,9 @@ where
 /// Solve A X = B for X, where A and B are n*n complex matrices.
 ///
 /// Converts the complex n*n system to a real 2n*2n system and
-/// delegates to `ctx.faer_backend.solve()`.
+/// delegates to `backend::FaerBackend::new().solve()`.
 fn complex_solve_nn<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &[Cx<T>],
     b: &[Cx<T>],
     n: usize,
@@ -2637,7 +2636,7 @@ where
     }
 
     let mut x_real = vec![T::zero(); nn * nn];
-    ctx.faer_backend
+    backend::FaerBackend::new()
         .solve(&a_real, &b_real, nn, nn, &mut x_real)
         .map_err(to_ad_err)?;
 
@@ -2657,7 +2656,7 @@ where
 
 /// Mat mul via LinalgBackend, returning Vec for convenience in AD code.
 fn backend_mat_mul<T: LinalgScalar<Real = T> + num_traits::Float>(
-    _ctx: &mut backend::CpuTensorLinalgContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     m: usize,
     k: usize,
@@ -2672,7 +2671,7 @@ where
 
 /// Solve via LinalgBackend, returning Vec for convenience in AD code.
 fn backend_solve<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     b: &[T],
     n: usize,
@@ -2682,7 +2681,7 @@ where
     backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let mut x = vec![T::zero(); n * nrhs];
-    ctx.faer_backend
+    backend::FaerBackend::new()
         .solve(a, b, n, nrhs, &mut x)
         .map_err(to_ad_err)?;
     Ok(x)
@@ -2690,7 +2689,7 @@ where
 
 /// Solve triangular via LinalgBackend, returning Vec for convenience in AD code.
 fn backend_solve_tri<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     b: &[T],
     n: usize,
@@ -2701,7 +2700,7 @@ where
     backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let mut x = vec![T::zero(); n * nrhs];
-    ctx.faer_backend
+    backend::FaerBackend::new()
         .solve_triangular(a, b, n, nrhs, upper, &mut x)
         .map_err(to_ad_err)?;
     Ok(x)
@@ -2710,7 +2709,7 @@ where
 /// Thin SVD via LinalgBackend, returning (U, S, V) for convenience in AD code.
 /// Note: returns V (not Vt) as column-major n×k for convenience in AD code.
 fn backend_thin_svd<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     m: usize,
     n: usize,
@@ -2722,7 +2721,7 @@ where
     let mut u = vec![T::zero(); m * k];
     let mut s = vec![T::zero(); k];
     let mut vt = vec![T::zero(); k * n];
-    ctx.faer_backend
+    backend::FaerBackend::new()
         .thin_svd(a, m, n, &mut u, &mut s, &mut vt)
         .map_err(to_ad_err)?;
     // Convert Vt (k×n) to V (n×k) for convenience
@@ -2732,7 +2731,7 @@ where
 
 /// QR decomposition via LinalgBackend, returning (Q, R) for convenience in AD code.
 fn backend_qr<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     m: usize,
     n: usize,
@@ -2743,7 +2742,7 @@ where
     let k = m.min(n);
     let mut q = vec![T::zero(); m * k];
     let mut r = vec![T::zero(); k * n];
-    ctx.faer_backend
+    backend::FaerBackend::new()
         .qr(a, m, n, &mut q, &mut r)
         .map_err(to_ad_err)?;
     Ok((q, r))
@@ -2788,13 +2787,13 @@ fn extract_data<T: LinalgScalar>(tensor: &Tensor<T>) -> AdResult<(Vec<T>, usize)
 ///
 /// ```
 /// use tenferro_linalg::{svd, svd_rrule, SvdCotangent};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 ///
 /// let cotangent = SvdCotangent {
@@ -2805,7 +2804,7 @@ fn extract_data<T: LinalgScalar>(tensor: &Tensor<T>) -> AdResult<(Vec<T>, usize)
 /// let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
 pub fn svd_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &SvdCotangent<T>,
     options: Option<&SvdOptions>,
@@ -2974,13 +2973,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{qr_rrule, QrCotangent};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[4, 3], mem, col);
 /// let cotangent = QrCotangent {
 ///     q: Some(Tensor::ones(&[4, 3], mem, col)),
@@ -2989,7 +2988,7 @@ where
 /// let grad_a = qr_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn qr_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &QrCotangent<T>,
 ) -> AdResult<Tensor<T>>
@@ -3094,13 +3093,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{lu_rrule, LuCotangent, LuPivot};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = LuCotangent {
 ///     l: Some(Tensor::ones(&[3, 3], mem, col)),
@@ -3109,7 +3108,7 @@ where
 /// let grad_a = lu_rrule(&mut ctx, &a, &cotangent, LuPivot::Partial).unwrap();
 /// ```
 pub fn lu_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &LuCotangent<T>,
     pivot: LuPivot,
@@ -3316,13 +3315,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{eigen_rrule, EigenCotangent};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = EigenCotangent {
 ///     values: Some(Tensor::ones(&[3], mem, col)),
@@ -3331,7 +3330,7 @@ where
 /// let grad_a = eigen_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn eigen_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &EigenCotangent<T>,
 ) -> AdResult<Tensor<T>>
@@ -3417,13 +3416,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::lstsq_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let dx = Tensor::<f64>::ones(&[5], mem, col);
@@ -3431,7 +3430,7 @@ where
 /// // grad.a: cotangent for A, grad.b: cotangent for b
 /// ```
 pub fn lstsq_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent_x: &Tensor<T>,
@@ -3498,19 +3497,19 @@ where
 ///
 /// ```no_run
 /// use tenferro_linalg::cholesky_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = cholesky_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn cholesky_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
@@ -3564,20 +3563,20 @@ where
 ///
 /// ```
 /// use tenferro_linalg::solve_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
 pub fn solve_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -3640,19 +3639,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::inv_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = inv_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn inv_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
@@ -3695,19 +3694,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::det_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
 /// let grad_a = det_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn det_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
@@ -3754,13 +3753,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{slogdet_rrule, SlogdetCotangent};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = SlogdetCotangent {
 ///     logabsdet: Some(Tensor::ones(&[], mem, col)),
@@ -3768,7 +3767,7 @@ where
 /// let grad_a = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn slogdet_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &SlogdetCotangent<T>,
 ) -> AdResult<Tensor<T>>
@@ -3815,14 +3814,14 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{eig_rrule, EigCotangent};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 /// use num_complex::Complex64;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = EigCotangent::<f64> {
 ///     values: None,
@@ -3831,7 +3830,7 @@ where
 /// let grad_a = eig_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn eig_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &EigCotangent<T>,
 ) -> AdResult<Tensor<T>>
@@ -3908,19 +3907,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::pinv_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let grad_a = pinv_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
 pub fn pinv_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
     rcond: Option<f64>,
@@ -4000,19 +3999,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::matrix_exp_rrule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = matrix_exp_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn matrix_exp_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
@@ -4069,19 +4068,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{norm_rrule, NormKind};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
 /// let grad_a = norm_rrule(&mut ctx, &a, &cotangent, NormKind::Fro).unwrap();
 /// ```
 pub fn norm_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
     kind: NormKind,
@@ -4167,19 +4166,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::svd_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
 pub fn svd_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     options: Option<&SvdOptions>,
@@ -4331,19 +4330,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::qr_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[4, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn qr_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(QrResult<T>, QrResult<T>)>
@@ -4448,19 +4447,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{lu_frule, LuPivot};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
 pub fn lu_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     pivot: LuPivot,
@@ -4581,19 +4580,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::eigen_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn eigen_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(EigenResult<T>, EigenResult<T>)>
@@ -4667,13 +4666,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::lstsq_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
 /// let b = Tensor::<f64>::zeros(&[10], mem, col);
 /// let da = Tensor::<f64>::ones(&[10, 5], mem, col);
@@ -4681,7 +4680,7 @@ where
 /// let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
 pub fn lstsq_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     tangent_a: &Tensor<T>,
@@ -4746,19 +4745,19 @@ where
 ///
 /// ```no_run
 /// use tenferro_linalg::cholesky_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (l, dl) = cholesky_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn cholesky_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
@@ -4807,13 +4806,13 @@ where
 ///
 /// ```
 /// use tenferro_linalg::solve_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
@@ -4821,7 +4820,7 @@ where
 /// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
 pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     tangent_a: &Tensor<T>,
@@ -4876,19 +4875,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::inv_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (a_inv, da_inv) = inv_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn inv_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
@@ -4929,19 +4928,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::det_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (d, dd) = det_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn det_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
@@ -4986,19 +4985,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::slogdet_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn slogdet_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(SlogdetResult<T>, SlogdetResult<T>)>
@@ -5054,19 +5053,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::eig_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eig_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn eig_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(EigResult<T>, EigResult<T>)>
@@ -5144,19 +5143,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::pinv_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (pinv_a, dpinv_a) = pinv_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
 pub fn pinv_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     rcond: Option<f64>,
@@ -5231,19 +5230,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::matrix_exp_frule;
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (exp_a, dexp_a) = matrix_exp_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn matrix_exp_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
@@ -5308,19 +5307,19 @@ where
 ///
 /// ```
 /// use tenferro_linalg::{norm_frule, NormKind};
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
+/// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (n, dn) = norm_frule(&mut ctx, &a, &da, NormKind::Fro).unwrap();
 /// ```
 pub fn norm_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut backend::CpuTensorLinalgContext,
+    ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     kind: NormKind,
@@ -5468,7 +5467,7 @@ mod internal_tests {
 
     // The old tests used mock backends (RejectingMatMulBackend) to verify that
     // backend_mat_mul/backend_mat_mul_nn route through TensorPrims instead of the
-    // backend's mat_mul. Now that these functions accept CpuTensorLinalgContext
+    // backend's mat_mul. Now that these functions accept CpuContext
     // (and ignore it, using prims_bridge directly), we just use a real context.
 
     #[test]
@@ -5492,7 +5491,7 @@ mod internal_tests {
 
     #[test]
     fn backend_mat_mul_uses_prims_for_real_scalars() {
-        let mut ctx = backend::CpuTensorLinalgContext::new();
+        let mut ctx = tenferro_prims::CpuContext::new(1);
         let a = vec![1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b = vec![7.0_f64, 8.0, 9.0, 10.0, 11.0, 12.0];
 
@@ -5503,7 +5502,7 @@ mod internal_tests {
 
     #[test]
     fn backend_mat_mul_nn_uses_prims_for_real_scalars() {
-        let mut ctx = backend::CpuTensorLinalgContext::new();
+        let mut ctx = tenferro_prims::CpuContext::new(1);
         let a = vec![1.0_f64, 2.0, 3.0, 4.0];
         let b = vec![5.0_f64, 6.0, 7.0, 8.0];
 
@@ -5514,7 +5513,7 @@ mod internal_tests {
 
     #[test]
     fn backend_mat_mul_nn_uses_prims_for_complex_scalars() {
-        let mut ctx = backend::CpuTensorLinalgContext::new();
+        let mut ctx = tenferro_prims::CpuContext::new(1);
         let a = vec![
             Complex64::new(1.0, 0.0),
             Complex64::new(2.0, 0.0),

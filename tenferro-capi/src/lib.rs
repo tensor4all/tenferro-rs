@@ -63,7 +63,6 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{einsum, einsum_frule, einsum_rrule};
-use tenferro_linalg::backend::CpuTensorLinalgContext;
 use tenferro_linalg::{svd, svd_frule, svd_rrule, SvdCotangent, SvdOptions};
 use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -1335,7 +1334,7 @@ pub unsafe extern "C" fn tfe_svd_f64(
         let (matrix, left_dims, right_dims) = matricize(t, left_indices, right_indices)?;
 
         let opts = build_svd_options(max_rank, cutoff);
-        let mut ctx = CpuTensorLinalgContext::new();
+        let mut ctx = CpuContext::new(1);
         let result = svd(&mut ctx, &matrix, opts.as_ref()).map_err(|e| map_device_error(&e))?;
 
         // Reshape U from [m, k] to [left_dims..., k]
@@ -1478,7 +1477,7 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
         };
 
         let opts = build_svd_options(max_rank, cutoff);
-        let mut ctx = CpuTensorLinalgContext::new();
+        let mut ctx = CpuContext::new(1);
         let grad_matrix = svd_rrule(&mut ctx, &matrix, &cotangent, opts.as_ref())
             .map_err(|e| map_ad_error(&e))?;
         let grad = grad_matrix_to_public(
@@ -1578,7 +1577,7 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
         };
 
         let opts = build_svd_options(max_rank, cutoff);
-        let mut ctx = CpuTensorLinalgContext::new();
+        let mut ctx = CpuContext::new(1);
         let (_primal, tangent_result) =
             svd_frule(&mut ctx, &matrix, &tang, opts.as_ref()).map_err(|e| map_ad_error(&e))?;
 

@@ -1,4 +1,4 @@
-//! CPU tensor linalg backend and context.
+//! CPU tensor linalg backend.
 //!
 //! The actual provider implementation is selected at compile time via
 //! `linalg-faer` or `linalg-lapack` features.
@@ -10,52 +10,11 @@ use crate::LinalgScalar;
 #[cfg(feature = "linalg-faer")]
 use super::cpu_faer;
 
-/// CPU execution context for tensor linalg operations.
-///
-/// Owns reusable workspace state for the selected CPU provider
-/// (faer or LAPACK). Create one per thread or pass explicitly.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_linalg::backend::CpuTensorLinalgContext;
-///
-/// let mut ctx = CpuTensorLinalgContext::new();
-/// ```
-#[derive(Debug)]
-pub struct CpuTensorLinalgContext {
-    #[cfg(feature = "linalg-faer")]
-    pub(crate) faer_backend: crate::backend::faer_backend::FaerBackend,
-}
-
-impl CpuTensorLinalgContext {
-    /// Create a new CPU tensor linalg context.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_linalg::backend::CpuTensorLinalgContext;
-    ///
-    /// let _ctx = CpuTensorLinalgContext::new();
-    /// ```
-    pub fn new() -> Self {
-        Self {
-            #[cfg(feature = "linalg-faer")]
-            faer_backend: crate::backend::faer_backend::FaerBackend::new(),
-        }
-    }
-}
-
-impl Default for CpuTensorLinalgContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Marker type for the CPU tensor linalg backend.
 ///
 /// The backend type provides the trait implementation, while
-/// [`CpuTensorLinalgContext`] owns backend-local execution state.
+/// [`tenferro_prims::CpuContext`] owns execution state (thread pool,
+/// plan cache, etc.).
 ///
 /// # Examples
 ///
@@ -73,7 +32,7 @@ where
     T: LinalgScalar,
     crate::backend::faer_backend::FaerBackend: crate::backend::LinalgBackend<T, Real = T::Real>,
 {
-    type Context = CpuTensorLinalgContext;
+    type Context = tenferro_prims::CpuContext;
 
     fn solve(
         ctx: &mut Self::Context,
@@ -136,7 +95,7 @@ where
 }
 
 #[cfg(feature = "linalg-faer")]
-impl<T> TensorLinalgContextFor<T> for CpuTensorLinalgContext
+impl<T> TensorLinalgContextFor<T> for tenferro_prims::CpuContext
 where
     T: LinalgScalar,
     crate::backend::faer_backend::FaerBackend: crate::backend::LinalgBackend<T, Real = T::Real>,
@@ -190,7 +149,7 @@ mod tests {
 
                 #[test]
                 fn solve() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
                     let b = make::<$scalar>(&[4.0, 7.0], &[2, 1]);
                     let x = CpuTensorLinalgBackend::solve(&mut ctx, &a, &b).unwrap();
@@ -199,7 +158,7 @@ mod tests {
 
                 #[test]
                 fn solve_triangular() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     let a = make::<$scalar>(&[2.0, 0.0, 1.0, 3.0], &[2, 2]);
                     let b = make::<$scalar>(&[5.0, 6.0], &[2, 1]);
                     let x =
@@ -209,7 +168,7 @@ mod tests {
 
                 #[test]
                 fn qr() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     let a = make::<$scalar>(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
                     let result = CpuTensorLinalgBackend::qr(&mut ctx, &a).unwrap();
                     assert_eq!(result.q.dims(), &[2, 2]);
@@ -218,7 +177,7 @@ mod tests {
 
                 #[test]
                 fn thin_svd() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     let a = make::<$scalar>(&[1.0, 0.0, 0.0, 2.0], &[2, 2]);
                     let result = CpuTensorLinalgBackend::thin_svd(&mut ctx, &a).unwrap();
                     assert_eq!(result.u.dims(), &[2, 2]);
@@ -228,7 +187,7 @@ mod tests {
 
                 #[test]
                 fn lu_factor() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
                     let result = CpuTensorLinalgBackend::lu_factor(&mut ctx, &a).unwrap();
                     assert_eq!(result.l.dims(), &[2, 2]);
@@ -238,7 +197,7 @@ mod tests {
 
                 #[test]
                 fn cholesky() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     // SPD (Hermitian positive-definite): [[4, 2], [2, 3]]
                     let a = make::<$scalar>(&[4.0, 2.0, 2.0, 3.0], &[2, 2]);
                     let l = CpuTensorLinalgBackend::cholesky(&mut ctx, &a).unwrap();
@@ -247,7 +206,7 @@ mod tests {
 
                 #[test]
                 fn eigen_sym() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
                     let result = CpuTensorLinalgBackend::eigen_sym(&mut ctx, &a).unwrap();
                     assert_eq!(result.values.dims(), &[2]);
@@ -256,7 +215,7 @@ mod tests {
 
                 #[test]
                 fn eig() {
-                    let mut ctx = CpuTensorLinalgContext::new();
+                    let mut ctx = tenferro_prims::CpuContext::new(1);
                     let a = make::<$scalar>(&[1.0, 2.0, 0.0, 3.0], &[2, 2]);
                     let result = CpuTensorLinalgBackend::eig(&mut ctx, &a).unwrap();
                     assert_eq!(result.values.dims(), &[2]);

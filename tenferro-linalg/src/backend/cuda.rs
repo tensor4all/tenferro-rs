@@ -1,7 +1,7 @@
 //! CUDA tensor linalg backend stub.
 //!
-//! This module defines the future CUDA backend and context types.
-//! All methods currently return `Error::UnsupportedDevice`.
+//! This module defines the future CUDA backend type.
+//! All methods currently return `Error::DeviceError`.
 
 use super::tensor_api::{
     EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
@@ -10,25 +10,6 @@ use super::tensor_api::{
 use crate::LinalgScalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
-
-/// CUDA execution context for tensor linalg operations (stub).
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_linalg::backend::CudaTensorLinalgContext;
-///
-/// let _ctx = CudaTensorLinalgContext::new();
-/// ```
-#[derive(Debug)]
-pub struct CudaTensorLinalgContext;
-
-impl CudaTensorLinalgContext {
-    /// Create a new CUDA tensor linalg context (stub).
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 /// Marker type for the CUDA tensor linalg backend (stub).
 ///
@@ -49,7 +30,7 @@ fn unsupported<T>() -> Result<T> {
 }
 
 impl<T: LinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
-    type Context = CudaTensorLinalgContext;
+    type Context = tenferro_prims::CudaContext;
 
     fn solve(_ctx: &mut Self::Context, _a: &Tensor<T>, _b: &Tensor<T>) -> Result<Tensor<T>> {
         unsupported()
@@ -93,7 +74,7 @@ mod tests {
 
     #[test]
     fn cuda_stubs_return_device_error() {
-        let mut ctx = CudaTensorLinalgContext::new();
+        let mut ctx = tenferro_prims::CudaContext::new();
         let a = dummy_tensor();
         let b = dummy_tensor();
         assert!(CudaTensorLinalgBackend::solve(&mut ctx, &a, &b).is_err());

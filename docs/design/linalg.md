@@ -328,7 +328,8 @@ The `TensorLinalgBackend<T>` trait abstracts the backend.
 the `linalg-faer` feature). It maps each operation to faer's thin-matrix
 API, handles column-major layout, and converts between `Tensor<T>` data
 slices and faer's `MatRef`/`MatMut`. Execution state is held in
-`CpuTensorLinalgContext`, passed explicitly to all operations.
+`tenferro_prims::CpuContext`, shared with the prims layer and passed
+explicitly to all operations.
 
 The linalg crate calls `tenferro-prims` operations for its AD formulas
 (BatchedGemm, ElementwiseMul, etc.) but calls the backend directly for

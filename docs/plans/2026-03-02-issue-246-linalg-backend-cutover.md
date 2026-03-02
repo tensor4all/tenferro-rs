@@ -82,8 +82,9 @@ git commit -m "refactor: split tensor linalg backend modules"
 
 - Add unit tests for:
   - cloning result structs preserves tensor shapes
-  - `TensorLinalgContextFor<T>` resolves a backend type for `CpuTensorLinalgContext`
-  - public names no longer include `FaerTensorLinalgBackend` / `FaerTensorLinalgContext`
+  - `TensorLinalgContextFor<T>` resolves a backend type for `tenferro_prims::CpuContext`
+  - old `Faer*` names are removed entirely rather than kept as aliases
+  - the public API does not introduce `CudaTensorLinalgContext` or `HipTensorLinalgContext`
 
 **Step 2: Run the targeted tests to verify failure**
 
@@ -118,7 +119,7 @@ git add tenferro-linalg/src/backend
 git commit -m "feat: define tensor linalg backend api"
 ```
 
-### Task 3: Implement the CPU context shell and faer-backed tensor execution
+### Task 3: Bind shared CpuContext and implement faer-backed tensor execution
 
 **Files:**
 - Modify: `tenferro-linalg/src/backend/cpu.rs`
@@ -137,7 +138,7 @@ git commit -m "feat: define tensor linalg backend api"
   - `cholesky`
   - `eigen_sym`
   - `eig`
-  through `CpuTensorLinalgContext`
+  through `tenferro_prims::CpuContext`
 - Cover real and complex representative cases
 
 **Step 2: Run the targeted tests to verify failure**
@@ -152,8 +153,8 @@ Expected: failures from missing implementations or placeholder stubs.
 
 **Step 3: Write the minimal implementation**
 
-- Implement `CpuTensorLinalgContext`
 - Implement `CpuTensorLinalgBackend`
+- Bind `CpuTensorLinalgBackend::Context = tenferro_prims::CpuContext`
 - For `linalg-faer`, perform tensor-level validation, contiguous handling, and output tensor allocation in `cpu_faer.rs`
 - Use slices only as an internal implementation detail inside `cpu_faer.rs`
 - Ensure `eig` returns `Tensor<T::Complex>` results correctly for both real and complex input
@@ -200,7 +201,9 @@ Expected: missing type or missing impl failures.
 
 **Step 3: Write the minimal implementation**
 
-- Define the stub contexts and backends
+- Define the stub backends
+- Bind `CudaTensorLinalgBackend::Context = tenferro_prims::CudaContext`
+- Bind `HipTensorLinalgBackend::Context = tenferro_prims::RocmContext`
 - Implement `TensorLinalgBackend<T>` for each with device-error stubs
 - Export the types from `backend/mod.rs`
 
@@ -232,11 +235,11 @@ git commit -m "feat: add gpu tensor linalg backend boundaries"
 **Step 1: Write the failing tests**
 
 - Convert representative public API tests to the new shape:
-  - `let mut ctx = CpuTensorLinalgContext::new();`
+  - `let mut ctx = tenferro_prims::CpuContext::new(4);`
   - `solve(&mut ctx, &a, &b)`
   - `qr(&mut ctx, &a)`
   - `svd(&mut ctx, &a, None)`
-- Add compile-fail checks or remove stale tests using `FaerBackend`
+- Remove stale tests using `FaerBackend` and replace them in the same change
 
 **Step 2: Run the targeted tests to verify failure**
 
@@ -246,14 +249,14 @@ Run:
 cargo test -p tenferro-linalg linalg_tests -- --nocapture
 ```
 
-Expected: widespread compile errors due to stale `FaerBackend` signatures.
+Expected: widespread compile errors due to stale `FaerBackend` signatures before the full rename lands.
 
 **Step 3: Write the minimal implementation**
 
 - Change crate-root public APIs from `&mut backend` to `&mut ctx`
 - Dispatch through `TensorLinalgContextFor<T>`
 - Keep user-facing result shaping and option handling in crate root
-- Update `tenferro-capi` call sites to construct and pass `CpuTensorLinalgContext`
+- Update `tenferro-capi` call sites to construct and pass `tenferro_prims::CpuContext`
 
 **Step 4: Run the targeted tests again**
 
@@ -325,7 +328,7 @@ git add tenferro-linalg/src/lib.rs tenferro-linalg/tests/linalg_tests.rs
 git commit -m "refactor: move linalg ad apis to explicit contexts"
 ```
 
-### Task 7: Remove old backend names and stale references
+### Task 7: Fully replace old backend names and stale references
 
 **Files:**
 - Modify: `tenferro-linalg/src/backend/mod.rs`
@@ -354,8 +357,9 @@ Expected: stale references remain before cleanup.
 
 **Step 3: Write the minimal cleanup**
 
-- Remove or rename stale docs, tests, and exports
-- Ensure examples use `CpuTensorLinalgContext`
+- Remove or rename stale docs, tests, exports, and downstream references in one pass
+- Do not leave aliases, deprecated type aliases, or wrapper shims
+- Ensure examples use `tenferro_prims::CpuContext`
 - Keep docs aligned with the new explicit-context model
 
 **Step 4: Run the searches again**

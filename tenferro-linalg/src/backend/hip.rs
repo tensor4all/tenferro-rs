@@ -1,7 +1,7 @@
 //! HIP tensor linalg backend stub.
 //!
-//! This module defines the future HIP backend and context types.
-//! All methods currently return `Error::UnsupportedDevice`.
+//! This module defines the future HIP backend type.
+//! All methods currently return `Error::DeviceError`.
 
 use super::tensor_api::{
     EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
@@ -10,25 +10,6 @@ use super::tensor_api::{
 use crate::LinalgScalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
-
-/// HIP execution context for tensor linalg operations (stub).
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_linalg::backend::HipTensorLinalgContext;
-///
-/// let _ctx = HipTensorLinalgContext::new();
-/// ```
-#[derive(Debug)]
-pub struct HipTensorLinalgContext;
-
-impl HipTensorLinalgContext {
-    /// Create a new HIP tensor linalg context (stub).
-    pub fn new() -> Self {
-        Self
-    }
-}
 
 /// Marker type for the HIP tensor linalg backend (stub).
 ///
@@ -49,7 +30,7 @@ fn unsupported<T>() -> Result<T> {
 }
 
 impl<T: LinalgScalar> TensorLinalgBackend<T> for HipTensorLinalgBackend {
-    type Context = HipTensorLinalgContext;
+    type Context = tenferro_prims::RocmContext;
 
     fn solve(_ctx: &mut Self::Context, _a: &Tensor<T>, _b: &Tensor<T>) -> Result<Tensor<T>> {
         unsupported()
@@ -93,7 +74,7 @@ mod tests {
 
     #[test]
     fn hip_stubs_return_device_error() {
-        let mut ctx = HipTensorLinalgContext::new();
+        let mut ctx = tenferro_prims::RocmContext::new();
         let a = dummy_tensor();
         let b = dummy_tensor();
         assert!(HipTensorLinalgBackend::solve(&mut ctx, &a, &b).is_err());

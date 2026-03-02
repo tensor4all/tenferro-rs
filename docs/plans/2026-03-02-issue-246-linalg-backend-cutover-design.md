@@ -11,7 +11,7 @@ Replace the current slice-based `tenferro-linalg` execution boundary with a tens
 - matches `tenferro-prims` in structure (`Backend + associated Context`)
 - accepts `Tensor<T>` at the backend boundary instead of raw slices
 - uses explicit execution contexts only
-- removes the old slice-based backend API instead of keeping compatibility shims
+- removes the old slice-based backend API instead of keeping compatibility shims or aliases
 - establishes CPU/CUDA/HIP backend types now, with CPU implemented first
 
 ## Core design
@@ -58,16 +58,20 @@ This is a deliberate divergence from PyTorch's global/thread-local dispatch styl
 
 ## Backend and context naming
 
-The public backend/context names are device-oriented, not provider-oriented:
+The public backend names are device-oriented, not provider-oriented:
 
 - `CpuTensorLinalgBackend`
-- `CpuTensorLinalgContext`
 - `CudaTensorLinalgBackend`
-- `CudaTensorLinalgContext`
 - `HipTensorLinalgBackend`
-- `HipTensorLinalgContext`
 
 Provider names such as `faer` or `lapack` do not appear in the public tensor-level backend API.
+
+There are no linalg-specific top-level context types for CPU or GPU. The tensor-level
+linalg layer reuses the existing `tenferro_prims` execution contexts directly:
+
+- CPU: `tenferro_prims::CpuContext`
+- CUDA: `tenferro_prims::CudaContext`
+- HIP/ROCm: `tenferro_prims::RocmContext`
 
 ## CPU provider selection
 
@@ -90,6 +94,34 @@ The implementation target for this cutover is:
 
 - `linalg-faer`: fully implemented
 - `linalg-lapack`: module boundary and feature policy established now, implementation may be stubbed unless the same change also supplies a real LAPACK path
+
+For execution state, each backend binds directly to the matching `tenferro_prims`
+context type:
+
+```rust
+impl<T> TensorLinalgBackend<T> for CpuTensorLinalgBackend
+where
+    T: LinalgScalar,
+{
+    type Context = tenferro_prims::CpuContext;
+    // ...
+}
+```
+
+Likewise:
+
+```rust
+impl<T> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
+    type Context = tenferro_prims::CudaContext;
+}
+
+impl<T> TensorLinalgBackend<T> for HipTensorLinalgBackend {
+    type Context = tenferro_prims::RocmContext;
+}
+```
+
+This keeps thread-pool, stream, workspace, and cache ownership in one place and
+avoids redundant linalg-only wrapper contexts.
 
 ## Public API direction
 
@@ -127,6 +159,12 @@ pub trait TensorLinalgContextFor<T: LinalgScalar> {
 
 Each context type binds itself to its backend. This keeps the public APIs generic over context while preserving the backend-marker pattern.
 
+`TensorLinalgContextFor<T>` is implemented directly for:
+
+- `tenferro_prims::CpuContext`
+- `tenferro_prims::CudaContext`
+- `tenferro_prims::RocmContext`
+
 ## File layout
 
 The previous monolithic `backend/tensor_backend.rs` is split into focused files:
@@ -146,12 +184,12 @@ Responsibilities:
 - `tensor_api.rs`: trait and tensor-level result structs
 - `tensor_context.rs`: `TensorLinalgContextFor`
 - `tensor_helpers.rs`: shared tensor validation, contiguous packing, output allocation
-- `cpu.rs`: CPU exports, feature policy, context shell
+- `cpu.rs`: CPU exports, feature policy, binding to shared `tenferro_prims::CpuContext`
 - `cpu_faer.rs`: `linalg-faer` implementation
 - `cpu_lapack.rs`: `linalg-lapack` implementation or stub boundary
-- `cuda.rs` / `hip.rs`: future-facing backend/context stubs
+- `cuda.rs` / `hip.rs`: future-facing backend stubs bound to shared `tenferro_prims` GPU contexts
 
-## Removal of the old slice boundary
+## Removal of the old slice boundary and old names
 
 This cutover removes the old slice-based linalg backend instead of retaining a compatibility layer.
 
@@ -163,6 +201,13 @@ Delete:
 - slice-oriented helper wrappers that exist only to bridge public APIs to slice backends
 
 After this change, slices may still appear inside provider-specific implementation files as an internal detail, but not in the public backend boundary.
+
+The rename is also atomic:
+
+- old provider-specific public names are deleted
+- no type aliases are retained
+- no deprecated wrappers are retained
+- docs, tests, and downstream call sites are updated in the same change
 
 ## Scope of the cutover
 
@@ -180,7 +225,7 @@ It includes:
 
 - no global or thread-local auto-dispatch layer
 - no runtime CPU provider switching
-- no retention of deprecated `Faer*` names for compatibility
+- no retention of deprecated `Faer*` names, aliases, or wrappers
 - no attempt to force linalg ops into the `TensorPrims` descriptor/plan model
 
 ## Known risk

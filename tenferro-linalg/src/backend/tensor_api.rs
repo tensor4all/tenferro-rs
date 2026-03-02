@@ -150,12 +150,10 @@ where
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_linalg::backend::{
-///     CpuTensorLinalgBackend, CpuTensorLinalgContext, TensorLinalgBackend,
-/// };
+/// use tenferro_linalg::backend::{CpuTensorLinalgBackend, TensorLinalgBackend};
 /// use tenferro_tensor::Tensor;
 ///
-/// let mut ctx = CpuTensorLinalgContext::new();
+/// let mut ctx = tenferro_prims::CpuContext::new(1);
 /// let a: Tensor<f64> = todo!();
 /// let b: Tensor<f64> = todo!();
 /// let _x = <CpuTensorLinalgBackend as TensorLinalgBackend<f64>>::solve(&mut ctx, &a, &b).unwrap();

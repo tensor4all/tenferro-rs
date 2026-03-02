@@ -9,7 +9,7 @@ use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
 use super::col_major_strides;
-use super::cpu::CpuTensorLinalgContext;
+use super::faer_backend::FaerBackend;
 use super::tensor_api::{
     EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
 };
@@ -29,13 +29,13 @@ fn tensor_from_data<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>
 
 /// Solve `A x = b` via faer.
 pub(crate) fn solve<T>(
-    ctx: &mut CpuTensorLinalgContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (n, batch_dims) = validate_square(a)?;
     let b_dims = b.dims();
@@ -58,12 +58,13 @@ where
     let mat_a = n * n;
     let mat_b = n * nrhs;
     let mut x_data = vec![T::zero(); mat_b * bc];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_a..a_off + (i + 1) * mat_a];
         let b_slice = &b_data[b_off + i * mat_b..b_off + (i + 1) * mat_b];
         let x_slice = &mut x_data[i * mat_b..(i + 1) * mat_b];
-        ctx.faer_backend.solve(a_slice, b_slice, n, nrhs, x_slice)?;
+        backend.solve(a_slice, b_slice, n, nrhs, x_slice)?;
     }
 
     let mut out_shape = vec![n, nrhs];
@@ -73,14 +74,14 @@ where
 
 /// Solve triangular `A x = b` via faer.
 pub(crate) fn solve_triangular<T>(
-    ctx: &mut CpuTensorLinalgContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
     upper: bool,
 ) -> Result<Tensor<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (n, batch_dims) = validate_square(a)?;
     let b_dims = b.dims();
@@ -103,13 +104,13 @@ where
     let mat_a = n * n;
     let mat_b = n * nrhs;
     let mut x_data = vec![T::zero(); mat_b * bc];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_a..a_off + (i + 1) * mat_a];
         let b_slice = &b_data[b_off + i * mat_b..b_off + (i + 1) * mat_b];
         let x_slice = &mut x_data[i * mat_b..(i + 1) * mat_b];
-        ctx.faer_backend
-            .solve_triangular(a_slice, b_slice, n, nrhs, upper, x_slice)?;
+        backend.solve_triangular(a_slice, b_slice, n, nrhs, upper, x_slice)?;
     }
 
     let mut out_shape = vec![n, nrhs];
@@ -118,10 +119,13 @@ where
 }
 
 /// Thin QR decomposition via faer.
-pub(crate) fn qr<T>(ctx: &mut CpuTensorLinalgContext, a: &Tensor<T>) -> Result<QrTensorResult<T>>
+pub(crate) fn qr<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+) -> Result<QrTensorResult<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -137,12 +141,13 @@ where
 
     let mut q_buf = vec![T::zero(); m * k];
     let mut r_buf = vec![T::zero(); k * n];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
         q_buf.fill(T::zero());
         r_buf.fill(T::zero());
-        ctx.faer_backend.qr(a_slice, m, n, &mut q_buf, &mut r_buf)?;
+        backend.qr(a_slice, m, n, &mut q_buf, &mut r_buf)?;
         q_data[i * m * k..(i + 1) * m * k].copy_from_slice(&q_buf);
         r_data[i * k * n..(i + 1) * k * n].copy_from_slice(&r_buf);
     }
@@ -160,12 +165,12 @@ where
 
 /// Thin SVD via faer.
 pub(crate) fn thin_svd<T>(
-    ctx: &mut CpuTensorLinalgContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
 ) -> Result<SvdTensorResult<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -183,11 +188,11 @@ where
     let mut u_buf = vec![T::zero(); m * k];
     let mut s_buf = vec![T::Real::zero(); k];
     let mut vt_buf = vec![T::zero(); k * n];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
-        ctx.faer_backend
-            .thin_svd(a_slice, m, n, &mut u_buf, &mut s_buf, &mut vt_buf)?;
+        backend.thin_svd(a_slice, m, n, &mut u_buf, &mut s_buf, &mut vt_buf)?;
         u_data[i * m * k..(i + 1) * m * k].copy_from_slice(&u_buf);
         s_data[i * k..(i + 1) * k].copy_from_slice(&s_buf);
         vt_data[i * k * n..(i + 1) * k * n].copy_from_slice(&vt_buf);
@@ -209,12 +214,12 @@ where
 
 /// LU factorization via faer.
 pub(crate) fn lu_factor<T>(
-    ctx: &mut CpuTensorLinalgContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
 ) -> Result<LuTensorResult<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -232,14 +237,14 @@ where
     let mut perm = vec![0usize; m];
     let mut l_buf = vec![T::zero(); m * k];
     let mut u_buf = vec![T::zero(); k * n];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
         perm.fill(0);
         l_buf.fill(T::zero());
         u_buf.fill(T::zero());
-        ctx.faer_backend
-            .lu(a_slice, m, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        backend.lu(a_slice, m, n, &mut perm, &mut l_buf, &mut u_buf)?;
         l_data[i * m * k..(i + 1) * m * k].copy_from_slice(&l_buf);
         u_data[i * k * n..(i + 1) * k * n].copy_from_slice(&u_buf);
         for (j, &p) in perm.iter().enumerate() {
@@ -260,10 +265,10 @@ where
 }
 
 /// Cholesky decomposition via faer.
-pub(crate) fn cholesky<T>(ctx: &mut CpuTensorLinalgContext, a: &Tensor<T>) -> Result<Tensor<T>>
+pub(crate) fn cholesky<T>(_ctx: &mut tenferro_prims::CpuContext, a: &Tensor<T>) -> Result<Tensor<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -275,11 +280,12 @@ where
 
     let mut l_data = vec![T::zero(); mat_size * bc];
     let mut l_buf = vec![T::zero(); mat_size];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
         l_buf.fill(T::zero());
-        ctx.faer_backend.cholesky(a_slice, n, &mut l_buf)?;
+        backend.cholesky(a_slice, n, &mut l_buf)?;
         l_data[i * mat_size..(i + 1) * mat_size].copy_from_slice(&l_buf);
     }
 
@@ -290,12 +296,12 @@ where
 
 /// Hermitian eigendecomposition via faer.
 pub(crate) fn eigen_sym<T>(
-    ctx: &mut CpuTensorLinalgContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
 ) -> Result<EigenTensorResult<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -310,11 +316,11 @@ where
 
     let mut val_buf = vec![T::Real::zero(); n];
     let mut vec_buf = vec![T::zero(); mat_size];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
-        ctx.faer_backend
-            .eigen_sym(a_slice, n, &mut val_buf, &mut vec_buf)?;
+        backend.eigen_sym(a_slice, n, &mut val_buf, &mut vec_buf)?;
         val_data[i * n..(i + 1) * n].copy_from_slice(&val_buf);
         vec_data[i * mat_size..(i + 1) * mat_size].copy_from_slice(&vec_buf);
     }
@@ -331,10 +337,13 @@ where
 }
 
 /// General eigendecomposition via faer.
-pub(crate) fn eig<T>(ctx: &mut CpuTensorLinalgContext, a: &Tensor<T>) -> Result<EigTensorResult<T>>
+pub(crate) fn eig<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+) -> Result<EigTensorResult<T>>
 where
     T: LinalgScalar,
-    super::faer_backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    FaerBackend: LinalgBackend<T, Real = T::Real>,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -351,11 +360,11 @@ where
 
     let mut all_values = vec![T::Complex::zero(); n * bc];
     let mut all_vectors = vec![T::Complex::zero(); mat_size * bc];
+    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
-        ctx.faer_backend
-            .eig_general(a_slice, n, &mut val_ri, &mut vec_ri)?;
+        backend.eig_general(a_slice, n, &mut val_ri, &mut vec_ri)?;
 
         T::eig_ri_to_complex(
             n,

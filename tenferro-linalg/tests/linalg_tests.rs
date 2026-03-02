@@ -1,8 +1,8 @@
 //! Tests for tenferro-linalg: forward decompositions and AD rules.
 
 use num_complex::{Complex32, Complex64};
-use tenferro_linalg::backend::CpuTensorLinalgContext;
 use tenferro_linalg::*;
+use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;
@@ -299,7 +299,7 @@ fn fd_helpers_general_test_matrix() {
 
 #[test]
 fn svd_identity_3x3() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // SVD of identity should give U=I, S=[1,1,1], Vt=I (up to sign)
     let data = vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
     let a = make_tensor(data, &[3, 3]);
@@ -316,7 +316,7 @@ fn svd_identity_3x3() {
 
 #[test]
 fn svd_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = U * diag(S) * Vt should reconstruct A
     let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]; // 2x3 col-major
     let a = make_tensor(data.clone(), &[2, 3]);
@@ -351,7 +351,7 @@ fn svd_reconstruction() {
 
 #[test]
 fn svd_tall_matrix() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // 4x2 matrix
     let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
     let a = make_tensor(data.clone(), &[4, 2]);
@@ -367,7 +367,7 @@ fn svd_tall_matrix() {
 
 #[test]
 fn svd_with_max_rank() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
     let a = make_tensor(data, &[2, 3]);
     let opts = SvdOptions {
@@ -386,7 +386,7 @@ fn svd_with_max_rank() {
 
 #[test]
 fn qr_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
     let a = make_tensor(data.clone(), &[2, 3]);
     let result = qr(&mut ctx, &a).unwrap();
@@ -418,7 +418,7 @@ fn qr_reconstruction() {
 
 #[test]
 fn qr_orthogonality() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![1.0, 4.0, 7.0, 2.0, 5.0, 8.0, 3.0, 6.0, 9.0];
     let a = make_tensor(data, &[3, 3]);
     let result = qr(&mut ctx, &a).unwrap();
@@ -447,7 +447,7 @@ fn qr_orthogonality() {
 
 #[test]
 fn lu_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![2.0, 1.0, 3.0, 1.0, 4.0, 7.0, 5.0, 3.0, 2.0];
     let a = make_tensor(data.clone(), &[3, 3]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
@@ -489,7 +489,7 @@ fn lu_reconstruction() {
 
 #[test]
 fn cholesky_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[4, 2], [2, 3]] (symmetric positive definite)
     let data = vec![4.0, 2.0, 2.0, 3.0];
     let a = make_tensor(data, &[2, 2]);
@@ -516,7 +516,7 @@ fn cholesky_reconstruction() {
 
 #[test]
 fn cholesky_not_positive_definite() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![1.0, 0.0, 0.0, -1.0];
     let a = make_tensor(data, &[2, 2]);
     assert!(cholesky(&mut ctx, &a).is_err());
@@ -528,7 +528,7 @@ fn cholesky_not_positive_definite() {
 
 #[test]
 fn eigen_symmetric() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Symmetric matrix: [[2, 1], [1, 2]]
     let data = vec![2.0, 1.0, 1.0, 2.0];
     let a = make_tensor(data, &[2, 2]);
@@ -542,7 +542,7 @@ fn eigen_symmetric() {
 
 #[test]
 fn eigen_nonsymmetric_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Non-symmetric matrix: [[2, 3], [1, 4]]
     let data = vec![2.0, 1.0, 3.0, 4.0];
     let a = make_tensor(data, &[2, 2]);
@@ -555,7 +555,7 @@ fn eigen_nonsymmetric_returns_error() {
 
 #[test]
 fn solve_identity() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_data = vec![1.0, 0.0, 0.0, 1.0];
     let b_data = vec![3.0, 7.0];
     let a = make_tensor(a_data, &[2, 2]);
@@ -568,7 +568,7 @@ fn solve_identity() {
 
 #[test]
 fn solve_general() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[2, 1], [1, 3]], b = [5, 10]
     let a = make_tensor(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
     let b = make_tensor(vec![5.0, 10.0], &[2, 1]);
@@ -583,7 +583,7 @@ fn solve_general() {
 
 #[test]
 fn solve_rhs_shape_mismatch_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     // Wrong leading dim: expected 2, got 3
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
@@ -592,7 +592,7 @@ fn solve_rhs_shape_mismatch_returns_error() {
 
 #[test]
 fn solve_scalar_rhs_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     // Scalar RHS is invalid; previously this could hit panic-prone paths.
     let b = make_tensor(vec![1.0], &[]);
@@ -601,7 +601,7 @@ fn solve_scalar_rhs_returns_error() {
 
 #[test]
 fn solve_triangular_batch_mismatch_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A has batch dim [2], b has batch dim [3]
     let a_data = vec![
         1.0, 0.0, 0.0, 1.0, // batch 0
@@ -614,7 +614,7 @@ fn solve_triangular_batch_mismatch_returns_error() {
 
 #[test]
 fn lstsq_rhs_shape_mismatch_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]); // expected [2]
     assert!(lstsq(&mut ctx, &a, &b).is_err());
@@ -626,7 +626,7 @@ fn lstsq_rhs_shape_mismatch_returns_error() {
 
 #[test]
 fn inv_2x2() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let a_inv = inv(&mut ctx, &a).unwrap();
     let inv_data = tensor_data(&a_inv);
@@ -655,7 +655,7 @@ fn inv_2x2() {
 
 #[test]
 fn det_2x2() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]);
     let d = det(&mut ctx, &a).unwrap();
     let dv = tensor_data(&d);
@@ -665,7 +665,7 @@ fn det_2x2() {
 
 #[test]
 fn det_3x3() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // det([[1,4,7],[2,5,8],[3,6,10]]) = 1*(50-48) - 4*(20-24) + 7*(12-15) = 2+16-21 = -3
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0], &[3, 3]);
     let d = det(&mut ctx, &a).unwrap();
@@ -679,7 +679,7 @@ fn det_3x3() {
 
 #[test]
 fn slogdet_positive_det() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let result = slogdet(&mut ctx, &a).unwrap();
     let sign = tensor_data(&result.sign);
@@ -697,7 +697,7 @@ fn slogdet_positive_det() {
 
 #[test]
 fn norm_frobenius() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let n = norm(&mut ctx, &a, NormKind::Fro).unwrap();
     let nv = tensor_data(&n);
@@ -707,7 +707,7 @@ fn norm_frobenius() {
 
 #[test]
 fn norm_spectral() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 2.0], &[2, 2]);
     let n = norm(&mut ctx, &a, NormKind::Spectral).unwrap();
     let nv = tensor_data(&n);
@@ -716,7 +716,7 @@ fn norm_spectral() {
 
 #[test]
 fn norm_frobenius_batched_returns_batch_shape() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Shape [2,2,2]: two batches of 2x2 matrices.
     let data = vec![
         1.0, 2.0, 3.0, 4.0, // batch 0
@@ -736,7 +736,7 @@ fn norm_frobenius_batched_returns_batch_shape() {
 
 #[test]
 fn pinv_square_invertible() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let ap = pinv(&mut ctx, &a, None).unwrap();
     let ap_data = tensor_data(&ap);
@@ -784,7 +784,7 @@ fn tensor_data_complex(t: &Tensor<num_complex::Complex64>) -> Vec<num_complex::C
 
 #[test]
 fn eig_2x2_identity() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let result = eig(&mut ctx, &a).unwrap();
     assert_eq!(result.values.dims(), &[2]);
@@ -800,7 +800,7 @@ fn eig_2x2_identity() {
 #[test]
 fn eig_2x2_real_eigenvalues() {
     // Diagonal matrix: eigenvalues are diagonal entries
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let result = eig(&mut ctx, &a).unwrap();
     let vals = tensor_data_complex(&result.values);
@@ -826,7 +826,7 @@ fn eig_2x2_real_eigenvalues() {
 fn eig_2x2_complex_eigenvalues() {
     // [[0, -1], [1, 0]] has eigenvalues +/- i
     // Column-major: [0, 1, -1, 0]
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![0.0, 1.0, -1.0, 0.0], &[2, 2]);
     let result = eig(&mut ctx, &a).unwrap();
     let vals = tensor_data_complex(&result.values);
@@ -851,7 +851,7 @@ fn eig_2x2_complex_eigenvalues() {
 #[test]
 fn eig_3x3_reconstruction() {
     // Verify A * V = V * diag(lambda) for a 3x3 matrix
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Upper triangular with known eigenvalues 1, 2, 3
     // Column-major: col0=[1,0,0], col1=[1,2,0], col2=[0,1,3]
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 1.0, 3.0], &[3, 3]);
@@ -885,7 +885,7 @@ fn eig_3x3_reconstruction() {
 #[test]
 fn eig_batched_2x2() {
     // Batched: shape [2, 2, 2] — two 2x2 matrices
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // batch 0: [[1, 0], [0, 2]] => eigenvalues 1, 2
     // batch 1: [[3, 0], [0, 4]] => eigenvalues 3, 4
     // Column-major for [2,2,2]: [1,0, 0,2, 3,0, 0,4]
@@ -915,7 +915,7 @@ fn eig_batched_2x2() {
 fn eig_rrule_diagonal_values_only() {
     // For diagonal matrix, eigenvalues are the diagonal entries.
     // With cotangent for eigenvalues = [1, 1], the gradient should be I (identity).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let cotangent = EigCotangent {
         values: Some(make_complex_tensor(
@@ -954,7 +954,7 @@ fn eig_rrule_diagonal_values_only() {
 #[test]
 fn eig_rrule_no_cotangent() {
     // With no cotangents, gradient should be zero
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let cotangent = EigCotangent::<f64> {
         values: None,
@@ -973,7 +973,7 @@ fn eig_rrule_no_cotangent() {
 #[test]
 fn eig_rrule_finite_difference() {
     // Verify eig_rrule against finite differences for a 3x3 matrix
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Upper triangular with distinct eigenvalues 1, 2, 3
     let a_data = vec![1.0, 0.0, 0.0, 0.5, 2.0, 0.0, 0.3, 0.7, 3.0];
     let a = make_tensor(a_data.clone(), &[3, 3]);
@@ -1035,7 +1035,7 @@ fn eig_rrule_finite_difference() {
 #[test]
 fn eig_frule_diagonal() {
     // For diagonal matrix, tangent eigenvalues should match tangent diagonal entries
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.2], &[2, 2]);
     let (result, tangent) = eig_frule(&mut ctx, &a, &da).unwrap();
@@ -1072,7 +1072,7 @@ fn eig_frule_diagonal() {
 #[test]
 fn eig_frule_finite_difference() {
     // Verify eig_frule against finite differences for a 3x3 matrix
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_data = vec![1.0, 0.0, 0.0, 0.5, 2.0, 0.0, 0.3, 0.7, 3.0];
     let da_data = vec![0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9];
     let a = make_tensor(a_data.clone(), &[3, 3]);
@@ -1128,7 +1128,7 @@ fn eig_frule_finite_difference() {
 #[test]
 fn matrix_exp_identity_succeeds() {
     // Previously this returned an error; now it should succeed.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data(&result);
@@ -1143,7 +1143,7 @@ fn matrix_exp_identity_succeeds() {
 #[test]
 fn matrix_exp_zero_is_identity() {
     // exp(0) = I
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let zeros = make_tensor(vec![0.0; 9], &[3, 3]);
     let result = matrix_exp(&mut ctx, &zeros).unwrap();
     let data = tensor_data(&result);
@@ -1162,7 +1162,7 @@ fn matrix_exp_zero_is_identity() {
 #[test]
 fn matrix_exp_diagonal() {
     // exp(diag(a,b)) = diag(exp(a), exp(b))
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 2.0], &[2, 2]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data(&result);
@@ -1187,7 +1187,7 @@ fn matrix_exp_nilpotent() {
     // For nilpotent matrix [[0,1],[0,0]], exp = [[1,1],[0,1]]
     // Column-major: [0,0, 1,0] for [[0,1],[0,0]]
     // col 0: (0,0), col 1: (1,0)  => A[0,0]=0, A[1,0]=0, A[0,1]=1, A[1,1]=0
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![0.0, 0.0, 1.0, 0.0], &[2, 2]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data(&result);
@@ -1214,7 +1214,7 @@ fn matrix_exp_nilpotent() {
 #[test]
 fn matrix_exp_large_norm() {
     // Test with matrix that requires scaling (large entries)
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![10.0, 0.0, 0.0, 10.0], &[2, 2]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data(&result);
@@ -1236,7 +1236,7 @@ fn matrix_exp_large_norm() {
 #[test]
 fn matrix_exp_1x1() {
     // 1x1 special case
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![3.0], &[1, 1]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data(&result);
@@ -1251,7 +1251,7 @@ fn matrix_exp_1x1() {
 #[test]
 fn matrix_exp_batched() {
     // Batched: two 2x2 matrices
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // batch 0: diag(1, 0), batch 1: diag(0, 2)
     // col-major with batch dim: [1,0, 0,0,  0,0, 0,2]
     let a = make_tensor(
@@ -1283,7 +1283,7 @@ fn matrix_exp_dense_2x2() {
     //
     // Column-major: A = [0, pi/2, -pi/2, 0]
     let pi_2 = std::f64::consts::FRAC_PI_2;
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![0.0, pi_2, -pi_2, 0.0], &[2, 2]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data(&result);
@@ -1305,7 +1305,7 @@ fn matrix_exp_dense_2x2() {
 
 #[test]
 fn norm_rrule_batched_cotangent_shape_mismatch_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(
         vec![
             1.0, 2.0, 3.0, 4.0, // batch 0
@@ -1324,7 +1324,7 @@ fn norm_rrule_batched_cotangent_shape_mismatch_returns_error() {
 
 #[test]
 fn inv_rrule_finite_diff() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_data = vec![2.0, 0.5, 0.5, 3.0];
     let a = make_tensor(a_data.clone(), &[2, 2]);
     let n = 2;
@@ -1365,7 +1365,7 @@ fn inv_rrule_finite_diff() {
 
 #[test]
 fn det_rrule_finite_diff() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_data = vec![2.0, 0.5, 0.5, 3.0];
     let a = make_tensor(a_data.clone(), &[2, 2]);
     let n = 2;
@@ -1398,7 +1398,7 @@ fn det_rrule_finite_diff() {
 
 #[test]
 fn solve_rrule_finite_diff() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_data = vec![2.0, 0.5, 0.3, 3.0];
     let b_data = vec![1.0, 2.0];
     let a = make_tensor(a_data.clone(), &[2, 2]);
@@ -1440,7 +1440,7 @@ fn solve_rrule_finite_diff() {
 
 #[test]
 fn cholesky_rrule_finite_diff() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Symmetric positive definite
     let a_data = vec![4.0, 1.0, 1.0, 3.0];
     let a = make_tensor(a_data.clone(), &[2, 2]);
@@ -1499,7 +1499,7 @@ fn cholesky_rrule_finite_diff() {
 
 #[test]
 fn inv_frule_finite_diff() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_data = vec![2.0, 0.5, 0.5, 3.0];
     let a = make_tensor(a_data.clone(), &[2, 2]);
     let eps = 1e-6;
@@ -1537,7 +1537,7 @@ fn inv_frule_finite_diff() {
 
 #[test]
 fn det_frule_finite_diff() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_data = vec![2.0, 0.5, 0.5, 3.0];
     let a = make_tensor(a_data.clone(), &[2, 2]);
     let eps = 1e-6;
@@ -1572,14 +1572,14 @@ fn det_frule_finite_diff() {
 
 #[test]
 fn svd_1d_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     assert!(svd(&mut ctx, &a, None).is_err());
 }
 
 #[test]
 fn qr_1d_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     assert!(qr(&mut ctx, &a).is_err());
 }
@@ -1590,7 +1590,7 @@ fn qr_1d_error() {
 
 #[test]
 fn linalg_scalar_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data: Vec<f32> = vec![1.0, 0.0, 0.0, 1.0];
     let a = Tensor::<f32>::from_vec(data, &[2, 2], &[1, 2], 0).unwrap();
     let result = svd(&mut ctx, &a, None).unwrap();
@@ -1605,28 +1605,28 @@ fn linalg_scalar_f32() {
 
 #[test]
 fn test_svd_1d_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0], &[5]);
     assert!(svd(&mut ctx, &a, None).is_err());
 }
 
 #[test]
 fn test_qr_1d_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0], &[5]);
     assert!(qr(&mut ctx, &a).is_err());
 }
 
 #[test]
 fn test_cholesky_non_square_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     assert!(cholesky(&mut ctx, &a).is_err());
 }
 
 #[test]
 fn test_solve_dimension_mismatch_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A is 3x3 but b has leading dimension 2 (mismatch)
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], &[3, 3]);
     let b = make_tensor(vec![1.0, 2.0], &[2, 1]);
@@ -1678,7 +1678,7 @@ fn c(re: f64, im: f64) -> Complex64 {
 
 #[test]
 fn test_svd_complex64_identity() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)];
     let a = make_complex_tensor(data, &[2, 2]);
     let result = svd(&mut ctx, &a, None).unwrap();
@@ -1700,7 +1700,7 @@ fn test_svd_complex64_identity() {
 
 #[test]
 fn test_svd_complex64_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Non-trivial 2x3 complex matrix
     let data = vec![
         c(1.0, 2.0),
@@ -1742,7 +1742,7 @@ fn test_svd_complex64_reconstruction() {
 
 #[test]
 fn test_svd_complex64_with_max_rank() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![
         c(1.0, 0.0),
         c(0.0, 1.0),
@@ -1764,7 +1764,7 @@ fn test_svd_complex64_with_max_rank() {
 
 #[test]
 fn test_qr_complex64_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![
         c(1.0, 1.0),
         c(2.0, -1.0),
@@ -1802,7 +1802,7 @@ fn test_qr_complex64_reconstruction() {
 
 #[test]
 fn test_lu_complex64_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![
         c(2.0, 1.0),
         c(4.0, 0.0),
@@ -1847,7 +1847,7 @@ fn test_lu_complex64_reconstruction() {
 
 #[test]
 fn test_cholesky_complex64_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Hermitian positive definite: [[4, 1+i], [1-i, 3]]
     let data = vec![c(4.0, 0.0), c(1.0, -1.0), c(1.0, 1.0), c(3.0, 0.0)];
     let a = make_complex_tensor(data.clone(), &[2, 2]);
@@ -1874,7 +1874,7 @@ fn test_cholesky_complex64_reconstruction() {
 
 #[test]
 fn test_eigen_complex64_hermitian() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Hermitian: [[3, 1-i], [1+i, 2]], eigenvalues 1 and 4
     let data = vec![c(3.0, 0.0), c(1.0, 1.0), c(1.0, -1.0), c(2.0, 0.0)];
     let a = make_complex_tensor(data, &[2, 2]);
@@ -1895,7 +1895,7 @@ fn test_eigen_complex64_hermitian() {
 
 #[test]
 fn test_solve_complex64() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[2+i, 1], [0, 3-i]], b = [3+i, 6-2i]
     let a_data = vec![c(2.0, 1.0), c(0.0, 0.0), c(1.0, 0.0), c(3.0, -1.0)];
     let b_data = vec![c(3.0, 1.0), c(6.0, -2.0)];
@@ -1917,7 +1917,7 @@ fn test_solve_complex64() {
 
 #[test]
 fn test_solve_triangular_complex64() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Lower triangular: [[2+i, 0], [1-i, 3]]
     let a_data = vec![c(2.0, 1.0), c(1.0, -1.0), c(0.0, 0.0), c(3.0, 0.0)];
     let b_data = vec![c(4.0, 2.0), c(5.0, 0.0)];
@@ -1945,7 +1945,7 @@ fn test_solve_triangular_complex64() {
 fn matrix_exp_frule_zero() {
     // d(exp(0))/dt at tangent dA should be dA itself (since Frechet derivative of exp at zero
     // is the identity map)
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let zeros = make_tensor(vec![0.0; 4], &[2, 2]);
     let da = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let (result, tangent) = matrix_exp_frule(&mut ctx, &zeros, &da).unwrap();
@@ -1964,7 +1964,7 @@ fn matrix_exp_frule_zero() {
 #[test]
 fn matrix_exp_rrule_zero() {
     // At A=0, the rrule should pass through the cotangent unchanged
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let zeros = make_tensor(vec![0.0; 4], &[2, 2]);
     let co = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let grad = matrix_exp_rrule(&mut ctx, &zeros, &co).unwrap();
@@ -1977,7 +1977,7 @@ fn matrix_exp_rrule_zero() {
 
 #[test]
 fn matrix_exp_frule_finite_difference() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![0.5, 0.1, -0.2, 0.3], &[2, 2]);
     let da = make_tensor(vec![0.1, 0.05, -0.03, 0.07], &[2, 2]);
     let eps = 1e-6;
@@ -2017,7 +2017,7 @@ fn matrix_exp_frule_finite_difference() {
 fn matrix_exp_rrule_finite_difference() {
     // Verify rrule via FD: for each entry (i,j) of A, perturb A[i,j] by eps and compute
     // (f(A+eps*E_ij) - f(A-eps*E_ij)) / (2*eps), then dot with cotangent.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a_vec = vec![0.5, 0.1, -0.2, 0.3];
     let a = make_tensor(a_vec.clone(), &[2, 2]);
     let co_vec = vec![1.0, -0.5, 0.3, 0.8];
@@ -2059,11 +2059,11 @@ fn matrix_exp_rrule_finite_difference() {
 fn svd_rrule_fd_through_s() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         svd(&mut b, x, None).unwrap().s
     };
     let rrule_fn = |x: &Tensor<f64>, co_s: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let co = SvdCotangent {
             u: None,
             s: Some(co_s.clone()),
@@ -2079,11 +2079,11 @@ fn svd_rrule_fd_through_s() {
 fn qr_rrule_fd_through_r() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         qr(&mut b, x).unwrap().r
     };
     let rrule_fn = |x: &Tensor<f64>, co_r: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let co = QrCotangent {
             q: None,
             r: Some(co_r.clone()),
@@ -2104,7 +2104,7 @@ fn lu_rrule_fd_through_l() {
     let eps = 1e-6;
     let atol = 1e-4;
 
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
     let l_size: usize = result.l.dims().iter().product();
 
@@ -2131,7 +2131,7 @@ fn lu_rrule_fd_through_l() {
         minus[idx] -= eps;
         let l_plus = tensor_data(
             &lu(
-                &mut CpuTensorLinalgContext::new(),
+                &mut CpuContext::new(1),
                 &make_tensor(plus, &[n, n]),
                 LuPivot::Partial,
             )
@@ -2140,7 +2140,7 @@ fn lu_rrule_fd_through_l() {
         );
         let l_minus = tensor_data(
             &lu(
-                &mut CpuTensorLinalgContext::new(),
+                &mut CpuContext::new(1),
                 &make_tensor(minus, &[n, n]),
                 LuPivot::Partial,
             )
@@ -2177,7 +2177,7 @@ fn eigen_rrule_fd_through_values() {
     let eps = 1e-6;
     let atol = 1e-4;
 
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let result = eigen(&mut ctx, &a).unwrap();
     let val_size: usize = result.values.dims().iter().product();
 
@@ -2211,20 +2211,14 @@ fn eigen_rrule_fd_through_values() {
             }
 
             let vals_p = tensor_data(
-                &eigen(
-                    &mut CpuTensorLinalgContext::new(),
-                    &make_tensor(plus, &[n, n]),
-                )
-                .unwrap()
-                .values,
+                &eigen(&mut CpuContext::new(1), &make_tensor(plus, &[n, n]))
+                    .unwrap()
+                    .values,
             );
             let vals_m = tensor_data(
-                &eigen(
-                    &mut CpuTensorLinalgContext::new(),
-                    &make_tensor(minus, &[n, n]),
-                )
-                .unwrap()
-                .values,
+                &eigen(&mut CpuContext::new(1), &make_tensor(minus, &[n, n]))
+                    .unwrap()
+                    .values,
             );
 
             let mut fd_val = 0.0;
@@ -2259,7 +2253,7 @@ fn cholesky_rrule_fd_systematic() {
     let atol = 1e-3;
 
     // Compute L and a cotangent
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let l = cholesky(&mut ctx, &a).unwrap();
     let l_size: usize = l.dims().iter().product();
     let cotangent_data: Vec<f64> = (0..l_size)
@@ -2289,20 +2283,10 @@ fn cholesky_rrule_fd_systematic() {
             minus[j + i * n] -= eps;
         }
 
-        let l_plus = tensor_data(
-            &cholesky(
-                &mut CpuTensorLinalgContext::new(),
-                &make_tensor(plus, &[n, n]),
-            )
-            .unwrap(),
-        );
-        let l_minus = tensor_data(
-            &cholesky(
-                &mut CpuTensorLinalgContext::new(),
-                &make_tensor(minus, &[n, n]),
-            )
-            .unwrap(),
-        );
+        let l_plus =
+            tensor_data(&cholesky(&mut CpuContext::new(1), &make_tensor(plus, &[n, n])).unwrap());
+        let l_minus =
+            tensor_data(&cholesky(&mut CpuContext::new(1), &make_tensor(minus, &[n, n])).unwrap());
 
         let mut fd_val = 0.0;
         for k in 0..l_size {
@@ -2332,7 +2316,7 @@ fn solve_rrule_fd_systematic() {
     let eps = 1e-6;
     let atol = 1e-4;
 
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let x = solve(&mut ctx, &a, &b).unwrap();
     let x_size: usize = x.dims().iter().product();
 
@@ -2354,22 +2338,10 @@ fn solve_rrule_fd_systematic() {
         let mut minus = a_data.clone();
         plus[idx] += eps;
         minus[idx] -= eps;
-        let xp = tensor_data(
-            &solve(
-                &mut CpuTensorLinalgContext::new(),
-                &make_tensor(plus, &[3, 3]),
-                &b,
-            )
-            .unwrap(),
-        );
-        let xm = tensor_data(
-            &solve(
-                &mut CpuTensorLinalgContext::new(),
-                &make_tensor(minus, &[3, 3]),
-                &b,
-            )
-            .unwrap(),
-        );
+        let xp =
+            tensor_data(&solve(&mut CpuContext::new(1), &make_tensor(plus, &[3, 3]), &b).unwrap());
+        let xm =
+            tensor_data(&solve(&mut CpuContext::new(1), &make_tensor(minus, &[3, 3]), &b).unwrap());
         for k in 0..x_size {
             fd_grad_a[idx] += co_data[k] * (xp[k] - xm[k]) / (2.0 * eps);
         }
@@ -2391,11 +2363,11 @@ fn solve_rrule_fd_systematic() {
 fn inv_rrule_fd_systematic() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         inv(&mut b, x).unwrap()
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         inv_rrule(&mut b, x, co).unwrap()
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-4);
@@ -2406,11 +2378,11 @@ fn inv_rrule_fd_systematic() {
 fn det_rrule_fd_systematic() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         det(&mut b, x).unwrap()
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         det_rrule(&mut b, x, co).unwrap()
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-4);
@@ -2421,11 +2393,11 @@ fn det_rrule_fd_systematic() {
 fn slogdet_rrule_fd_through_logabsdet() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         slogdet(&mut b, x).unwrap().logabsdet
     };
     let rrule_fn = |x: &Tensor<f64>, co_log: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let co = SlogdetCotangent {
             logabsdet: Some(co_log.clone()),
         };
@@ -2462,7 +2434,7 @@ fn lstsq_rrule_fd_systematic() {
     let eps = 1e-6;
     let atol = 1e-3;
 
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let result = lstsq(&mut ctx, &a, &b).unwrap();
     let x_size: usize = result.x.dims().iter().product();
 
@@ -2486,22 +2458,14 @@ fn lstsq_rrule_fd_systematic() {
         // b stays the same; when we perturb A, the residual for the perturbed
         // problem won't be exactly zero, but the FD formula is about x(A).
         let xp = tensor_data(
-            &lstsq(
-                &mut CpuTensorLinalgContext::new(),
-                &make_tensor(plus, &[m, n]),
-                &b,
-            )
-            .unwrap()
-            .x,
+            &lstsq(&mut CpuContext::new(1), &make_tensor(plus, &[m, n]), &b)
+                .unwrap()
+                .x,
         );
         let xm = tensor_data(
-            &lstsq(
-                &mut CpuTensorLinalgContext::new(),
-                &make_tensor(minus, &[m, n]),
-                &b,
-            )
-            .unwrap()
-            .x,
+            &lstsq(&mut CpuContext::new(1), &make_tensor(minus, &[m, n]), &b)
+                .unwrap()
+                .x,
         );
         for k in 0..x_size {
             fd_grad_a[idx] += co_data[k] * (xp[k] - xm[k]) / (2.0 * eps);
@@ -2524,11 +2488,11 @@ fn lstsq_rrule_fd_systematic() {
 fn pinv_rrule_fd_systematic() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         pinv(&mut b, x, None).unwrap()
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         pinv_rrule(&mut b, x, co, None).unwrap()
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-4);
@@ -2544,11 +2508,11 @@ fn matrix_exp_rrule_fd_systematic() {
     let a = make_tensor(a_scaled, &[3, 3]);
 
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         matrix_exp(&mut b, x).unwrap()
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         matrix_exp_rrule(&mut b, x, co).unwrap()
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-4);
@@ -2559,11 +2523,11 @@ fn matrix_exp_rrule_fd_systematic() {
 fn norm_fro_rrule_fd_systematic() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm(&mut b, x, NormKind::Fro).unwrap()
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm_rrule(&mut b, x, co, NormKind::Fro).unwrap()
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-4);
@@ -2591,7 +2555,7 @@ fn eig_rrule_fd_systematic() {
         vectors: None,
     };
 
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let grad = eig_rrule(&mut ctx, &a, &cotangent).unwrap();
     let grad_data = tensor_data(&grad);
 
@@ -2617,16 +2581,8 @@ fn eig_rrule_fd_systematic() {
         a_plus[idx] += eps;
         a_minus[idx] -= eps;
 
-        let r_p = eig(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(a_plus, &[n, n]),
-        )
-        .unwrap();
-        let r_m = eig(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(a_minus, &[n, n]),
-        )
-        .unwrap();
+        let r_p = eig(&mut CpuContext::new(1), &make_tensor(a_plus, &[n, n])).unwrap();
+        let r_m = eig(&mut CpuContext::new(1), &make_tensor(a_minus, &[n, n])).unwrap();
 
         let mut vp: Vec<f64> = tensor_data_complex(&r_p.values)
             .iter()
@@ -2661,11 +2617,11 @@ fn eig_rrule_fd_systematic() {
 fn svd_frule_fd_through_s() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         svd(&mut b, x, None).unwrap().s
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, tangent_result) = svd_frule(&mut b, x, dx, None).unwrap();
         tangent_result.s
     };
@@ -2677,11 +2633,11 @@ fn svd_frule_fd_through_s() {
 fn qr_frule_fd_through_r() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         qr(&mut b, x).unwrap().r
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, tangent_result) = qr_frule(&mut b, x, dx).unwrap();
         tangent_result.r
     };
@@ -2695,11 +2651,11 @@ fn qr_frule_fd_through_r() {
 fn lu_frule_fd_through_u() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         lu(&mut b, x, LuPivot::Partial).unwrap().u
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, tangent_result) = lu_frule(&mut b, x, dx, LuPivot::Partial).unwrap();
         tangent_result.u
     };
@@ -2729,7 +2685,7 @@ fn eigen_frule_fd_through_values() {
     let tangent_data = tensor_data(&sym_tangent);
 
     // Analytic: frule tangent through eigenvalues
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let (_, tangent_result) = eigen_frule(&mut ctx, &a, &sym_tangent).unwrap();
     let analytic = tensor_data(&tangent_result.values);
 
@@ -2756,20 +2712,14 @@ fn eigen_frule_fd_through_values() {
         .map(|(a, da)| a - eps * da)
         .collect();
     let mut vp = tensor_data(
-        &eigen(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(plus, &[n, n]),
-        )
-        .unwrap()
-        .values,
+        &eigen(&mut CpuContext::new(1), &make_tensor(plus, &[n, n]))
+            .unwrap()
+            .values,
     );
     let mut vm = tensor_data(
-        &eigen(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(minus, &[n, n]),
-        )
-        .unwrap()
-        .values,
+        &eigen(&mut CpuContext::new(1), &make_tensor(minus, &[n, n]))
+            .unwrap()
+            .values,
     );
     vp.sort_by(|a, b| a.partial_cmp(b).unwrap());
     vm.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -2808,7 +2758,7 @@ fn eig_frule_fd_through_values_re() {
     let tangent = make_tensor(tangent_data.clone(), &[n, n]);
 
     // Analytic
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let (primal, tangent_result) = eig_frule(&mut ctx, &a, &tangent).unwrap();
 
     // Sort eigenvalues by real part at base point
@@ -2837,16 +2787,8 @@ fn eig_frule_fd_through_values_re() {
         .zip(&tangent_data)
         .map(|(a, da)| a - eps * da)
         .collect();
-    let r_p = eig(
-        &mut CpuTensorLinalgContext::new(),
-        &make_tensor(plus, &[n, n]),
-    )
-    .unwrap();
-    let r_m = eig(
-        &mut CpuTensorLinalgContext::new(),
-        &make_tensor(minus, &[n, n]),
-    )
-    .unwrap();
+    let r_p = eig(&mut CpuContext::new(1), &make_tensor(plus, &[n, n])).unwrap();
+    let r_m = eig(&mut CpuContext::new(1), &make_tensor(minus, &[n, n])).unwrap();
     let mut vp: Vec<f64> = tensor_data_complex(&r_p.values)
         .iter()
         .map(|c| c.re)
@@ -2898,7 +2840,7 @@ fn cholesky_frule_fd_through_l() {
     let atol = 1e-4;
 
     // Analytic
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let (_, dl) = cholesky_frule(&mut ctx, &a, &sym_tangent).unwrap();
     let analytic = tensor_data(&dl);
 
@@ -2913,20 +2855,10 @@ fn cholesky_frule_fd_through_l() {
         .zip(&tangent_data)
         .map(|(a, da)| a - eps * da)
         .collect();
-    let l_plus = tensor_data(
-        &cholesky(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(plus, &[n, n]),
-        )
-        .unwrap(),
-    );
-    let l_minus = tensor_data(
-        &cholesky(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(minus, &[n, n]),
-        )
-        .unwrap(),
-    );
+    let l_plus =
+        tensor_data(&cholesky(&mut CpuContext::new(1), &make_tensor(plus, &[n, n])).unwrap());
+    let l_minus =
+        tensor_data(&cholesky(&mut CpuContext::new(1), &make_tensor(minus, &[n, n])).unwrap());
     let fd: Vec<f64> = l_plus
         .iter()
         .zip(&l_minus)
@@ -2965,7 +2897,7 @@ fn solve_frule_fd_through_x_vary_a() {
     let tangent_b = make_tensor(vec![0.0; n], &[n]);
 
     // Analytic
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let (_, dx) = solve_frule(&mut ctx, &a, &b, &tangent_a, &tangent_b).unwrap();
     let analytic = tensor_data(&dx);
 
@@ -2980,22 +2912,10 @@ fn solve_frule_fd_through_x_vary_a() {
         .zip(&tangent_a_data)
         .map(|(a, da)| a - eps * da)
         .collect();
-    let x_plus = tensor_data(
-        &solve(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(plus, &[n, n]),
-            &b,
-        )
-        .unwrap(),
-    );
-    let x_minus = tensor_data(
-        &solve(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(minus, &[n, n]),
-            &b,
-        )
-        .unwrap(),
-    );
+    let x_plus =
+        tensor_data(&solve(&mut CpuContext::new(1), &make_tensor(plus, &[n, n]), &b).unwrap());
+    let x_minus =
+        tensor_data(&solve(&mut CpuContext::new(1), &make_tensor(minus, &[n, n]), &b).unwrap());
     let fd: Vec<f64> = x_plus
         .iter()
         .zip(&x_minus)
@@ -3018,11 +2938,11 @@ fn solve_frule_fd_through_x_vary_a() {
 fn inv_frule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         inv(&mut b, x).unwrap()
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dinv) = inv_frule(&mut b, x, dx).unwrap();
         dinv
     };
@@ -3034,11 +2954,11 @@ fn inv_frule_fd() {
 fn det_frule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         det(&mut b, x).unwrap()
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dd) = det_frule(&mut b, x, dx).unwrap();
         dd
     };
@@ -3050,11 +2970,11 @@ fn det_frule_fd() {
 fn slogdet_frule_fd_through_logabsdet() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         slogdet(&mut b, x).unwrap().logabsdet
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dresult) = slogdet_frule(&mut b, x, dx).unwrap();
         dresult.logabsdet
     };
@@ -3099,7 +3019,7 @@ fn lstsq_frule_fd_through_x_vary_a() {
     let tangent_b = make_tensor(vec![0.0; m], &[m]);
 
     // Analytic
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let (_, dresult) = lstsq_frule(&mut ctx, &a, &b, &tangent_a, &tangent_b).unwrap();
     let analytic = tensor_data(&dresult.x);
 
@@ -3115,22 +3035,14 @@ fn lstsq_frule_fd_through_x_vary_a() {
         .map(|(a, da)| a - eps * da)
         .collect();
     let xp = tensor_data(
-        &lstsq(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(plus, &[m, n]),
-            &b,
-        )
-        .unwrap()
-        .x,
+        &lstsq(&mut CpuContext::new(1), &make_tensor(plus, &[m, n]), &b)
+            .unwrap()
+            .x,
     );
     let xm = tensor_data(
-        &lstsq(
-            &mut CpuTensorLinalgContext::new(),
-            &make_tensor(minus, &[m, n]),
-            &b,
-        )
-        .unwrap()
-        .x,
+        &lstsq(&mut CpuContext::new(1), &make_tensor(minus, &[m, n]), &b)
+            .unwrap()
+            .x,
     );
     let fd: Vec<f64> = xp
         .iter()
@@ -3154,11 +3066,11 @@ fn lstsq_frule_fd_through_x_vary_a() {
 fn pinv_frule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         pinv(&mut b, x, None).unwrap()
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dpinv) = pinv_frule(&mut b, x, dx, None).unwrap();
         dpinv
     };
@@ -3175,11 +3087,11 @@ fn matrix_exp_frule_fd() {
     let a = make_tensor(a_scaled, &[3, 3]);
 
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         matrix_exp(&mut b, x).unwrap()
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dexp) = matrix_exp_frule(&mut b, x, dx).unwrap();
         dexp
     };
@@ -3191,11 +3103,11 @@ fn matrix_exp_frule_fd() {
 fn norm_fro_frule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm(&mut b, x, NormKind::Fro).unwrap()
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dnrm) = norm_frule(&mut b, x, dx, NormKind::Fro).unwrap();
         dnrm
     };
@@ -3229,7 +3141,7 @@ fn tensor_data_f32(t: &Tensor<f32>) -> Vec<f32> {
 
 #[test]
 fn svd_f32_identity() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data: Vec<f32> = vec![1.0, 0.0, 0.0, 1.0];
     let a = make_tensor_f32(data, &[2, 2]);
     let result = svd(&mut ctx, &a, None).unwrap();
@@ -3244,7 +3156,7 @@ fn svd_f32_identity() {
 
 #[test]
 fn svd_f32_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // 2x3 matrix
     let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let a = make_tensor_f32(data.clone(), &[2, 3]);
@@ -3276,7 +3188,7 @@ fn svd_f32_reconstruction() {
 
 #[test]
 fn qr_f32_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data: Vec<f32> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
     let a = make_tensor_f32(data.clone(), &[2, 3]);
     let result = qr(&mut ctx, &a).unwrap();
@@ -3305,7 +3217,7 @@ fn qr_f32_reconstruction() {
 
 #[test]
 fn solve_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[2, 1], [1, 3]], b = [5, 10]
     let a = make_tensor_f32(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
     let b = make_tensor_f32(vec![5.0, 10.0], &[2, 1]);
@@ -3320,7 +3232,7 @@ fn solve_f32() {
 
 #[test]
 fn det_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[1, 2], [3, 4]], col-major: [1, 3, 2, 4]
     let a = make_tensor_f32(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]);
     let d = det(&mut ctx, &a).unwrap();
@@ -3335,7 +3247,7 @@ fn det_f32() {
 
 #[test]
 fn inv_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor_f32(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let a_inv = inv(&mut ctx, &a).unwrap();
     let inv_data = tensor_data_f32(&a_inv);
@@ -3358,7 +3270,7 @@ fn inv_f32() {
 
 #[test]
 fn lu_f32_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor_f32(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
     let l = tensor_data_f32(&result.l);
@@ -3394,7 +3306,7 @@ fn lu_f32_reconstruction() {
 
 #[test]
 fn cholesky_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // SPD: [[4, 2], [2, 3]]
     let a = make_tensor_f32(vec![4.0, 2.0, 2.0, 3.0], &[2, 2]);
     let l = cholesky(&mut ctx, &a).unwrap();
@@ -3419,7 +3331,7 @@ fn cholesky_f32() {
 
 #[test]
 fn eigen_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Symmetric: [[2, 1], [1, 3]]
     let a = make_tensor_f32(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
     let result = eigen(&mut ctx, &a).unwrap();
@@ -3434,7 +3346,7 @@ fn eigen_f32() {
 
 #[test]
 fn slogdet_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[1, 2], [3, 4]], col-major: [1, 3, 2, 4]
     let a = make_tensor_f32(vec![1.0, 3.0, 2.0, 4.0], &[2, 2]);
     let result = slogdet(&mut ctx, &a).unwrap();
@@ -3484,7 +3396,7 @@ fn tensor_data_c32(t: &Tensor<Complex32>) -> Vec<Complex32> {
 
 #[test]
 fn svd_complex32_identity() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![c32(1.0, 0.0), c32(0.0, 0.0), c32(0.0, 0.0), c32(1.0, 0.0)];
     let a = make_tensor_c32(data, &[2, 2]);
     let result = svd(&mut ctx, &a, None).unwrap();
@@ -3507,7 +3419,7 @@ fn svd_complex32_identity() {
 
 #[test]
 fn qr_complex32_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![c32(1.0, 2.0), c32(3.0, -1.0), c32(0.0, 1.0), c32(4.0, 0.0)];
     let a = make_tensor_c32(data.clone(), &[2, 2]);
     let result = qr(&mut ctx, &a).unwrap();
@@ -3534,7 +3446,7 @@ fn qr_complex32_reconstruction() {
 
 #[test]
 fn lu_complex32_reconstruction() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![c32(2.0, 1.0), c32(1.0, 0.0), c32(0.0, 1.0), c32(3.0, -1.0)];
     let a = make_tensor_c32(data.clone(), &[2, 2]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
@@ -3567,7 +3479,7 @@ fn lu_complex32_reconstruction() {
 
 #[test]
 fn solve_complex32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[2+i, 1], [0, 3-i]]
     let a = make_tensor_c32(
         vec![c32(2.0, 1.0), c32(0.0, 0.0), c32(1.0, 0.0), c32(3.0, -1.0)],
@@ -3585,7 +3497,7 @@ fn solve_complex32() {
 
 #[test]
 fn cholesky_complex32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Hermitian SPD: [[4, 2-i], [2+i, 5]]
     let a = make_tensor_c32(
         vec![c32(4.0, 0.0), c32(2.0, 1.0), c32(2.0, -1.0), c32(5.0, 0.0)],
@@ -3614,7 +3526,7 @@ fn cholesky_complex32() {
 
 #[test]
 fn eigen_complex32_hermitian() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Hermitian: [[3, 1-i], [1+i, 2]]
     let a = make_tensor_c32(
         vec![c32(3.0, 0.0), c32(1.0, 1.0), c32(1.0, -1.0), c32(2.0, 0.0)],
@@ -3637,7 +3549,7 @@ fn eigen_complex32_hermitian() {
 
 #[test]
 fn solve_triangular_complex32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Lower triangular: [[2+i, 0], [1, 3-i]]
     let a = make_tensor_c32(
         vec![c32(2.0, 1.0), c32(1.0, 0.0), c32(0.0, 0.0), c32(3.0, -1.0)],
@@ -3665,7 +3577,7 @@ fn solve_triangular_complex32() {
 
 #[test]
 fn inv_complex64() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let data = vec![c(1.0, 1.0), c(2.0, 0.0), c(0.0, 1.0), c(3.0, -1.0)];
     let a = make_complex_tensor(data.clone(), &[2, 2]);
     let a_inv = inv(&mut ctx, &a).unwrap();
@@ -3689,7 +3601,7 @@ fn inv_complex64() {
 
 #[test]
 fn lstsq_complex64() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Overdetermined 3x2 system
     let a = make_complex_tensor(
         vec![
@@ -3720,7 +3632,7 @@ fn lstsq_complex64() {
 
 #[test]
 fn matrix_exp_complex64() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // exp(0) = I
     let data = vec![c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(0.0, 0.0)];
     let a = make_complex_tensor(data, &[2, 2]);
@@ -3745,7 +3657,7 @@ fn matrix_exp_complex64() {
 
 #[test]
 fn solve_triangular_upper_f64() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Upper triangular: [[2, 1], [0, 3]]
     let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
     let b = make_tensor(vec![5.0, 6.0], &[2, 1]);
@@ -3758,7 +3670,7 @@ fn solve_triangular_upper_f64() {
 
 #[test]
 fn solve_triangular_lower_f64() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Lower triangular: [[2, 0], [1, 3]]
     let a = make_tensor(vec![2.0, 1.0, 0.0, 3.0], &[2, 2]);
     let b = make_tensor(vec![4.0, 5.0], &[2, 1]);
@@ -3771,7 +3683,7 @@ fn solve_triangular_lower_f64() {
 
 #[test]
 fn solve_triangular_upper_multi_rhs() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Upper triangular: [[1, 2], [0, 3]]
     let a = make_tensor(vec![1.0, 0.0, 2.0, 3.0], &[2, 2]);
     // b: (2, 2) = 2 columns
@@ -3793,7 +3705,7 @@ fn solve_triangular_upper_multi_rhs() {
 
 #[test]
 fn norm_nuclear_forward() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = diag(3, 1), nuclear norm = 3 + 1 = 4
     let a = make_tensor(vec![3.0, 0.0, 0.0, 1.0], &[2, 2]);
     let n = norm(&mut ctx, &a, NormKind::Nuclear).unwrap();
@@ -3803,7 +3715,7 @@ fn norm_nuclear_forward() {
 
 #[test]
 fn norm_spectral_forward() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = diag(3, 1), spectral norm = 3
     let a = make_tensor(vec![3.0, 0.0, 0.0, 1.0], &[2, 2]);
     let n = norm(&mut ctx, &a, NormKind::Spectral).unwrap();
@@ -3815,11 +3727,11 @@ fn norm_spectral_forward() {
 fn norm_nuclear_rrule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm(&mut b, x, NormKind::Nuclear).unwrap()
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm_rrule(&mut b, x, co, NormKind::Nuclear).unwrap()
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-3);
@@ -3829,11 +3741,11 @@ fn norm_nuclear_rrule_fd() {
 fn norm_spectral_rrule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm(&mut b, x, NormKind::Spectral).unwrap()
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm_rrule(&mut b, x, co, NormKind::Spectral).unwrap()
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-3);
@@ -3843,11 +3755,11 @@ fn norm_spectral_rrule_fd() {
 fn norm_nuclear_frule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm(&mut b, x, NormKind::Nuclear).unwrap()
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dnrm) = norm_frule(&mut b, x, dx, NormKind::Nuclear).unwrap();
         dnrm
     };
@@ -3858,11 +3770,11 @@ fn norm_nuclear_frule_fd() {
 fn norm_spectral_frule_fd() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         norm(&mut b, x, NormKind::Spectral).unwrap()
     };
     let frule_fn = |x: &Tensor<f64>, dx: &Tensor<f64>| {
-        let mut b = CpuTensorLinalgContext::new();
+        let mut b = CpuContext::new(1);
         let (_, dnrm) = norm_frule(&mut b, x, dx, NormKind::Spectral).unwrap();
         dnrm
     };
@@ -3875,7 +3787,7 @@ fn norm_spectral_frule_fd() {
 
 #[test]
 fn svd_with_cutoff() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Nearly rank-1 matrix
     let a = make_tensor(vec![1.0, 2.0, 1.0 + 1e-14, 2.0 + 1e-14], &[2, 2]);
     let opts = SvdOptions {
@@ -3895,7 +3807,7 @@ fn svd_with_cutoff() {
 
 #[test]
 fn svd_with_default_options() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let opts = SvdOptions::default();
     let result = svd(&mut ctx, &a, Some(&opts)).unwrap();
@@ -3909,7 +3821,7 @@ fn svd_with_default_options() {
 
 #[test]
 fn det_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 matrices: [[1,2],[3,4]] and [[5,6],[7,8]]
     // shape [2, 2, 2], strides [1, 2, 4]
     // data = [a[0,0,0]=1, a[1,0,0]=3, a[0,1,0]=2, a[1,1,0]=4, a[0,0,1]=5, a[1,0,1]=7, a[0,1,1]=6, a[1,1,1]=8]
@@ -3925,7 +3837,7 @@ fn det_batched() {
 
 #[test]
 fn slogdet_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 matrices stacked along batch dim
     // shape [2, 2, 2], same data as det_batched
     let a = make_tensor(vec![1.0, 3.0, 2.0, 4.0, 5.0, 7.0, 6.0, 8.0], &[2, 2, 2]);
@@ -3951,7 +3863,7 @@ fn slogdet_batched() {
 
 #[test]
 fn svd_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 identity matrices: shape [2, 2, 2], strides [1, 2, 4]
     // Batch 0 = I: [1, 0, 0, 1], Batch 1 = I: [1, 0, 0, 1]
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
@@ -3963,7 +3875,7 @@ fn svd_batched() {
 
 #[test]
 fn qr_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
     let result = qr(&mut ctx, &a).unwrap();
     assert_eq!(result.q.dims(), &[2, 2, 2]);
@@ -3972,7 +3884,7 @@ fn qr_batched() {
 
 #[test]
 fn solve_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 identity matrices, vector RHS per batch
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
     // b shape [2, 2] means vector RHS (n=2) for each batch
@@ -3988,7 +3900,7 @@ fn solve_batched() {
 
 #[test]
 fn inv_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 identity matrices
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
     let a_inv = inv(&mut ctx, &a).unwrap();
@@ -3997,7 +3909,7 @@ fn inv_batched() {
 
 #[test]
 fn norm_batched_fro() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 identity matrices
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
     let n = norm(&mut ctx, &a, NormKind::Fro).unwrap();
@@ -4019,7 +3931,7 @@ fn norm_batched_fro() {
 
 #[test]
 fn lstsq_overdetermined() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A = [[1,0],[0,1],[0,0]], b = [3, 7, 0]
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let b = make_tensor(vec![3.0, 7.0, 0.0], &[3]);
@@ -4032,7 +3944,7 @@ fn lstsq_overdetermined() {
 
 #[test]
 fn lstsq_underdetermined_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // m < n: 2x3
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0], &[2, 3]);
     let b = make_tensor(vec![1.0, 2.0], &[2]);
@@ -4045,7 +3957,7 @@ fn lstsq_underdetermined_returns_error() {
 
 #[test]
 fn validate_1d_input_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // 1D input to SVD
     let a = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     assert!(svd(&mut ctx, &a, None).is_err());
@@ -4054,7 +3966,7 @@ fn validate_1d_input_returns_error() {
 
 #[test]
 fn validate_non_square_for_square_ops() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // 2x3 input to square-only ops
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     assert!(eigen(&mut ctx, &a).is_err());
@@ -4066,7 +3978,7 @@ fn validate_non_square_for_square_ops() {
 
 #[test]
 fn solve_rhs_batch_mismatch() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A is (2,2,2), b is (2,3) — batch dim mismatch
     let a = make_tensor(vec![1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0], &[2, 2, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
@@ -4075,7 +3987,7 @@ fn solve_rhs_batch_mismatch() {
 
 #[test]
 fn solve_rhs_wrong_leading_dim() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A is (2,2), b is (3,1) — leading dim mismatch
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3, 1]);
@@ -4084,7 +3996,7 @@ fn solve_rhs_wrong_leading_dim() {
 
 #[test]
 fn solve_rhs_nrhs_zero() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     // b with nrhs=0
     let b: Tensor<f64> = Tensor::from_vec(vec![], &[2, 0], &[1, 2], 0).unwrap();
@@ -4093,7 +4005,7 @@ fn solve_rhs_nrhs_zero() {
 
 #[test]
 fn lstsq_rhs_wrong_leading_dim() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     // b dim[0] = 2, expected 3
     let b = make_tensor(vec![1.0, 2.0], &[2]);
@@ -4102,7 +4014,7 @@ fn lstsq_rhs_wrong_leading_dim() {
 
 #[test]
 fn lstsq_rhs_batch_mismatch() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A: (3, 2, 2), b: (3, 3)
     let a = make_tensor(
         vec![1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
@@ -4114,7 +4026,7 @@ fn lstsq_rhs_batch_mismatch() {
 
 #[test]
 fn lstsq_rhs_ndim_mismatch() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A: (3, 2), b: (3, 1, 1) — wrong ndim for b
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3, 1, 1]);
@@ -4123,7 +4035,7 @@ fn lstsq_rhs_ndim_mismatch() {
 
 #[test]
 fn cholesky_non_spd_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Matrix with negative eigenvalue: [[-1, 0], [0, 1]]
     let a = make_tensor(vec![-1.0, 0.0, 0.0, 1.0], &[2, 2]);
     assert!(cholesky(&mut ctx, &a).is_err());
@@ -4131,7 +4043,7 @@ fn cholesky_non_spd_returns_error() {
 
 #[test]
 fn norm_unsupported_kind_returns_error() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     // L1 norm is not yet implemented
     assert!(norm(&mut ctx, &a, NormKind::L1).is_err());
@@ -4145,7 +4057,7 @@ fn norm_unsupported_kind_returns_error() {
 #[test]
 fn svd_rrule_tall_with_du_cotangent() {
     // Exercise the m > k correction path in svd_rrule
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], // 3x2 matrix
         &[3, 2],
@@ -4170,7 +4082,7 @@ fn svd_rrule_tall_with_du_cotangent() {
 #[test]
 fn svd_rrule_wide_with_dvt_cotangent() {
     // Exercise the n > k correction path in svd_rrule
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(
         vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], // 2x3 matrix
         &[2, 3],
@@ -4198,7 +4110,7 @@ fn svd_rrule_wide_with_dvt_cotangent() {
 #[test]
 fn svd_frule_tall_matrix() {
     // Exercise the m > k projector path in svd_frule (3x2)
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]);
     let da = make_tensor(vec![0.1, -0.2, 0.3, -0.1, 0.2, -0.3], &[3, 2]);
     let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
@@ -4213,7 +4125,7 @@ fn svd_frule_tall_matrix() {
 #[test]
 fn svd_frule_wide_matrix() {
     // Exercise the n > k projector path in svd_frule (2x3)
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     let da = make_tensor(vec![0.1, -0.2, 0.3, -0.1, 0.2, -0.3], &[2, 3]);
     let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
@@ -4232,7 +4144,7 @@ fn svd_frule_wide_matrix() {
 #[test]
 fn qr_rrule_wide_matrix() {
     // Exercise the n > k path in qr_rrule (2x3 wide matrix)
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     let result = qr(&mut ctx, &a).unwrap();
     // Provide Q and R cotangents
@@ -4253,7 +4165,7 @@ fn qr_rrule_wide_matrix() {
 #[test]
 fn qr_frule_wide_matrix() {
     // Exercise the full path in qr_frule (2x3 wide matrix)
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
     let da = make_tensor(vec![0.1, -0.2, 0.3, -0.1, 0.2, -0.3], &[2, 3]);
     let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
@@ -4279,11 +4191,11 @@ fn lstsq_rrule_basic() {
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let b = make_tensor(vec![3.0, 7.0, 0.0], &[3]);
     let fwd = |x: &Tensor<f64>| {
-        let mut bk = CpuTensorLinalgContext::new();
+        let mut bk = CpuContext::new(1);
         lstsq(&mut bk, x, &b).unwrap().x
     };
     let rrule_fn = |x: &Tensor<f64>, co: &Tensor<f64>| {
-        let mut bk = CpuTensorLinalgContext::new();
+        let mut bk = CpuContext::new(1);
         lstsq_rrule(&mut bk, x, &b, co).unwrap().a
     };
     check_rrule_fd(fwd, rrule_fn, &a, 1e-6, 1e-2);
@@ -4297,7 +4209,7 @@ fn lstsq_rrule_basic() {
 fn eigen_rrule_with_vectors_cotangent() {
     // Exercise the code path where both values and vectors cotangents are provided.
     // We use a symmetric 3x3 with well-separated eigenvalues.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![5.0, 1.0, 0.0, 1.0, 3.0, 1.0, 0.0, 1.0, 1.0], &[3, 3]);
     let result = eigen(&mut ctx, &a).unwrap();
     let n = 3;
@@ -4323,7 +4235,7 @@ fn eigen_rrule_with_vectors_cotangent() {
 
 #[test]
 fn matrix_exp_1x1_scalar_val() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0], &[1, 1]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data(&result);
@@ -4337,7 +4249,7 @@ fn matrix_exp_1x1_scalar_val() {
 
 #[test]
 fn matrix_exp_f32() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor_f32(vec![0.0, 0.0, 0.0, 0.0], &[2, 2]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let data = tensor_data_f32(&result);
@@ -4352,7 +4264,7 @@ fn matrix_exp_f32() {
 
 #[test]
 fn pinv_with_threshold() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Nearly rank-deficient
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1e-15], &[2, 2]);
     let result = pinv(&mut ctx, &a, Some(1e-10)).unwrap();
@@ -4373,7 +4285,7 @@ fn pinv_with_threshold() {
 
 #[test]
 fn eig_3x3_general() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Non-symmetric matrix
     let a = make_tensor(vec![0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 2.0], &[3, 3]);
     let result = eig(&mut ctx, &a).unwrap();
@@ -4400,7 +4312,7 @@ fn eig_3x3_general() {
 
 #[test]
 fn norm_rrule_cotangent_scalar_mismatch() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     // norm of 2x2 -> scalar, cotangent should be scalar too, not 1D
     let bad_cot = make_tensor(vec![1.0, 2.0], &[2]);
@@ -4409,7 +4321,7 @@ fn norm_rrule_cotangent_scalar_mismatch() {
 
 #[test]
 fn norm_rrule_cotangent_batch_mismatch() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // batched: (2,2,2), norm -> shape [2], cotangent should be [2] not [3]
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
     let bad_cot = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
@@ -4422,7 +4334,7 @@ fn norm_rrule_cotangent_batch_mismatch() {
 
 #[test]
 fn norm_nuclear_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 diagonal matrices, shape [2, 2, 2], strides [1, 2, 4]
     // Batch 0 = diag(3,1): col-major [3, 0, 0, 1]
     // Batch 1 = diag(2,4): col-major [2, 0, 0, 4]
@@ -4438,7 +4350,7 @@ fn norm_nuclear_batched() {
 
 #[test]
 fn norm_spectral_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![3.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 4.0], &[2, 2, 2]);
     let n = norm(&mut ctx, &a, NormKind::Spectral).unwrap();
     let nd = tensor_data(&n);
@@ -4455,7 +4367,7 @@ fn norm_spectral_batched() {
 
 #[test]
 fn solve_vector_rhs() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let b = make_tensor(vec![3.0, 7.0], &[2]); // vector RHS, no nrhs dim
     let x = solve(&mut ctx, &a, &b).unwrap();
@@ -4470,7 +4382,7 @@ fn solve_vector_rhs() {
 
 #[test]
 fn solve_triangular_vector_rhs() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Upper tri: [[2, 1], [0, 3]]
     let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
     let b = make_tensor(vec![5.0, 6.0], &[2]); // vector RHS
@@ -4486,7 +4398,7 @@ fn solve_triangular_vector_rhs() {
 
 #[test]
 fn solve_triangular_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 upper triangular matrices, shape [2, 2, 2], strides [1, 2, 4]
     // Batch 0 = [[1,2],[0,3]]: col-major [1, 0, 2, 3]
     // Batch 1 = [[2,1],[0,4]]: col-major [2, 0, 1, 4]
@@ -4502,7 +4414,7 @@ fn solve_triangular_batched() {
 
 #[test]
 fn lstsq_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 3x2 identity-like matrices, shape [3, 2, 2], strides [1, 3, 6]
     // Batch 0 = [[1,0],[0,1],[0,0]]: col-major [1, 0, 0, 0, 1, 0]
     // Batch 1 = same
@@ -4522,7 +4434,7 @@ fn lstsq_batched() {
 
 #[test]
 fn pinv_batched() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Two 2x2 identity matrices, shape [2, 2, 2], strides [1, 2, 4]
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0], &[2, 2, 2]);
     let result = pinv(&mut ctx, &a, None).unwrap();
@@ -4544,7 +4456,7 @@ fn pinv_batched() {
 fn lu_rrule_square_basic_with_l_cotangent() {
     // Exercise lu_rrule code path with L cotangent on a 3x3 matrix.
     // We do not compare with FD (known formula mismatch), just verify execution + finiteness.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 4.0, 8.0, 1.0, 3.0, 7.0, 1.0, 3.0, 9.0], &[3, 3]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
     let l_dims = result.l.dims().to_vec();
@@ -4565,7 +4477,7 @@ fn lu_rrule_square_basic_with_l_cotangent() {
 #[test]
 fn lu_rrule_square_basic_with_u_cotangent() {
     // Exercise lu_rrule code path with U cotangent.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 4.0, 8.0, 1.0, 3.0, 7.0, 1.0, 3.0, 9.0], &[3, 3]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
     let u_dims = result.u.dims().to_vec();
@@ -4586,7 +4498,7 @@ fn lu_rrule_square_basic_with_u_cotangent() {
 #[test]
 fn lu_rrule_square_with_both_cotangents() {
     // Exercise lu_rrule with both L and U cotangents.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
     let l_dims = result.l.dims().to_vec();
@@ -4607,7 +4519,7 @@ fn lu_rrule_square_with_both_cotangents() {
 
 #[test]
 fn lu_rrule_wide_with_both_cotangents() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 1.0, 0.0, 3.0, 1.0, 4.0], &[2, 3]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
     let l_dims = result.l.dims().to_vec();
@@ -4625,7 +4537,7 @@ fn lu_rrule_wide_with_both_cotangents() {
 
 #[test]
 fn lu_rrule_tall_with_both_cotangents() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 1.0, 3.0, 0.0, 4.0, 1.0], &[3, 2]);
     let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
     let l_dims = result.l.dims().to_vec();
@@ -4643,7 +4555,7 @@ fn lu_rrule_tall_with_both_cotangents() {
 
 #[test]
 fn lu_rrule_rejects_l_cotangent_shape_mismatch() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
     let co = LuCotangent {
         l: Some(make_tensor(vec![1.0, 1.0, 1.0], &[3])),
@@ -4661,7 +4573,7 @@ fn lu_rrule_rejects_l_cotangent_shape_mismatch() {
 
 #[test]
 fn lu_rrule_rejects_u_cotangent_shape_mismatch() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
     let co = LuCotangent {
         l: None,
@@ -4684,7 +4596,7 @@ fn lu_rrule_rejects_u_cotangent_shape_mismatch() {
 #[test]
 fn eig_rrule_with_vectors_cotangent_only() {
     // Exercise eig_rrule with only vectors cotangent (no values cotangent).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 1.0, 0.0, 1.0, 3.0, 0.5, 0.0, 0.5, 1.0], &[3, 3]);
     let eig_result = eig(&mut ctx, &a).unwrap();
     let n = 3;
@@ -4714,7 +4626,7 @@ fn eig_rrule_with_vectors_cotangent_only() {
 #[test]
 fn eig_rrule_with_both_values_and_vectors() {
     // Exercise eig_rrule with both values and vectors cotangents.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![4.0, 0.5, 0.5, 2.0], &[2, 2]);
     let eig_result = eig(&mut ctx, &a).unwrap();
     let n = 2;
@@ -4749,7 +4661,7 @@ fn eig_rrule_with_both_values_and_vectors() {
 #[test]
 fn solve_rrule_multi_rhs() {
     // Exercise nrhs > 1 path in solve_rrule.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
     // b has shape [2, 3] (n=2, nrhs=3)
     let b = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[2, 3]);
@@ -4771,7 +4683,7 @@ fn solve_rrule_multi_rhs() {
 #[test]
 fn solve_frule_multi_rhs() {
     // Exercise nrhs > 1 path in solve_frule.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
     let b = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 1.0, 1.0], &[2, 3]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
@@ -4792,7 +4704,7 @@ fn solve_frule_multi_rhs() {
 #[test]
 fn lstsq_frule_basic() {
     // Exercise lstsq_frule with a tall overdetermined system.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A is 4x2 (overdetermined)
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0], &[4, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[4]);
@@ -4814,7 +4726,7 @@ fn lstsq_frule_basic() {
 #[test]
 fn pinv_rrule_execution() {
     // Exercise pinv_rrule (covers ~50 lines in lib.rs).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let ap = pinv(&mut ctx, &a, None).unwrap();
     let co = make_tensor(vec![1.0; ap.dims().iter().product::<usize>()], ap.dims());
@@ -4829,7 +4741,7 @@ fn pinv_rrule_execution() {
 #[test]
 fn pinv_frule_execution() {
     // Exercise pinv_frule (covers ~50 lines in lib.rs).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let da = make_tensor(vec![0.1; 6], &[3, 2]);
     let (ap, dap) = pinv_frule(&mut ctx, &a, &da, None).unwrap();
@@ -4848,7 +4760,7 @@ fn pinv_frule_execution() {
 #[test]
 fn norm_nuclear_rrule_execution() {
     // Exercise norm_rrule Nuclear path (covers ~10 lines).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let co = make_tensor(vec![1.0], &[]);
     let grad = norm_rrule(&mut ctx, &a, &co, NormKind::Nuclear).unwrap();
@@ -4862,7 +4774,7 @@ fn norm_nuclear_rrule_execution() {
 #[test]
 fn norm_spectral_rrule_execution() {
     // Exercise norm_rrule Spectral path (covers ~10 lines).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let co = make_tensor(vec![1.0], &[]);
     let grad = norm_rrule(&mut ctx, &a, &co, NormKind::Spectral).unwrap();
@@ -4883,7 +4795,7 @@ fn norm_spectral_rrule_execution() {
 #[test]
 fn norm_nuclear_frule_execution() {
     // Exercise norm_frule Nuclear path.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::Nuclear).unwrap();
@@ -4896,7 +4808,7 @@ fn norm_nuclear_frule_execution() {
 #[test]
 fn norm_spectral_frule_execution() {
     // Exercise norm_frule Spectral path.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::Spectral).unwrap();
@@ -4913,7 +4825,7 @@ fn norm_spectral_frule_execution() {
 #[test]
 fn qr_rrule_tall_execution() {
     // Exercise qr_rrule on a tall 4x2 matrix (m > k path).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.5], &[4, 2]);
     let result = qr(&mut ctx, &a).unwrap();
     let q_dims = result.q.dims().to_vec();
@@ -4935,7 +4847,7 @@ fn qr_rrule_tall_execution() {
 #[test]
 fn qr_frule_tall_execution() {
     // Exercise qr_frule on a tall 4x2 matrix.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 0.0, 1.0, 0.0, 0.5], &[4, 2]);
     let da = make_tensor(vec![0.1; 8], &[4, 2]);
     let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
@@ -4958,7 +4870,7 @@ fn qr_frule_tall_execution() {
 #[test]
 fn svd_rrule_tall_with_all_cotangents() {
     // Exercise all three cotangent branches on tall matrix (m > k).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let result = svd(&mut ctx, &a, None).unwrap();
     let s_dims = result.s.dims().to_vec();
@@ -4983,7 +4895,7 @@ fn svd_rrule_tall_with_all_cotangents() {
 #[test]
 fn svd_rrule_wide_with_all_cotangents() {
     // Exercise all three cotangent branches on wide matrix (n > k).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.5, 0.5], &[2, 3]);
     let result = svd(&mut ctx, &a, None).unwrap();
     let s_dims = result.s.dims().to_vec();
@@ -5012,7 +4924,7 @@ fn svd_rrule_wide_with_all_cotangents() {
 #[test]
 fn svd_frule_tall_all_outputs() {
     // Exercise svd_frule on tall matrix (exercises m > k projector path).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let da = make_tensor(vec![0.1; 6], &[3, 2]);
     let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
@@ -5027,7 +4939,7 @@ fn svd_frule_tall_all_outputs() {
 #[test]
 fn svd_frule_wide_all_outputs() {
     // Exercise svd_frule on wide matrix (exercises n > k projector path).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 0.5, 0.5], &[2, 3]);
     let da = make_tensor(vec![0.1; 6], &[2, 3]);
     let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
@@ -5046,7 +4958,7 @@ fn svd_frule_wide_all_outputs() {
 #[test]
 fn lu_frule_square_execution() {
     // Exercise lu_frule on a square matrix.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
@@ -5068,7 +4980,7 @@ fn lu_frule_square_execution() {
 
 #[test]
 fn cholesky_rrule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![4.0, 1.0, 1.0, 3.0], &[2, 2]);
     let l = cholesky(&mut ctx, &a).unwrap();
     let co = make_tensor(vec![1.0; 4], l.dims());
@@ -5082,7 +4994,7 @@ fn cholesky_rrule_execution() {
 
 #[test]
 fn cholesky_frule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![4.0, 1.0, 1.0, 3.0], &[2, 2]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
     let (l, dl) = cholesky_frule(&mut ctx, &a, &da).unwrap();
@@ -5100,7 +5012,7 @@ fn cholesky_frule_execution() {
 
 #[test]
 fn eigen_frule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![3.0, 1.0, 1.0, 2.0], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
@@ -5118,7 +5030,7 @@ fn eigen_frule_execution() {
 
 #[test]
 fn slogdet_rrule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let co_logabsdet = make_tensor(vec![1.0], &[]);
     let cotangent = SlogdetCotangent {
@@ -5138,7 +5050,7 @@ fn slogdet_rrule_execution() {
 
 #[test]
 fn slogdet_frule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
@@ -5152,7 +5064,7 @@ fn slogdet_frule_execution() {
 
 #[test]
 fn det_rrule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
     let co = make_tensor(vec![1.0], &[]);
     let grad = det_rrule(&mut ctx, &a, &co).unwrap();
@@ -5165,7 +5077,7 @@ fn det_rrule_execution() {
 
 #[test]
 fn det_frule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (d, dd) = det_frule(&mut ctx, &a, &da).unwrap();
@@ -5179,7 +5091,7 @@ fn det_frule_execution() {
 
 #[test]
 fn inv_rrule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
     let co = make_tensor(vec![1.0; 4], &[2, 2]);
     let grad = inv_rrule(&mut ctx, &a, &co).unwrap();
@@ -5192,7 +5104,7 @@ fn inv_rrule_execution() {
 
 #[test]
 fn inv_frule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (a_inv, da_inv) = inv_frule(&mut ctx, &a, &da).unwrap();
@@ -5210,7 +5122,7 @@ fn inv_frule_execution() {
 
 #[test]
 fn matrix_exp_rrule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![0.1, 0.0, 0.0, 0.2], &[2, 2]);
     let co = make_tensor(vec![1.0; 4], &[2, 2]);
     let grad = matrix_exp_rrule(&mut ctx, &a, &co).unwrap();
@@ -5223,7 +5135,7 @@ fn matrix_exp_rrule_execution() {
 
 #[test]
 fn matrix_exp_frule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![0.1, 0.0, 0.0, 0.2], &[2, 2]);
     let da = make_tensor(vec![0.1; 4], &[2, 2]);
     let (exp_a, dexp_a) = matrix_exp_frule(&mut ctx, &a, &da).unwrap();
@@ -5241,7 +5153,7 @@ fn matrix_exp_frule_execution() {
 
 #[test]
 fn eig_frule_execution() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 1.0, 0.0, 1.0, 3.0, 0.5, 0.0, 0.5, 1.0], &[3, 3]);
     let da = make_tensor(vec![0.01; 9], &[3, 3]);
     let (result, dresult) = eig_frule(&mut ctx, &a, &da).unwrap();
@@ -5256,7 +5168,7 @@ fn eig_frule_execution() {
 #[test]
 fn lstsq_rrule_full_execution() {
     // Exercise lstsq_rrule with a tall matrix to cover all lines.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     let result = lstsq(&mut ctx, &a, &b).unwrap();
@@ -5720,7 +5632,7 @@ fn backend_complex64_eig_general_invalid_vectors() {
 #[test]
 fn lu_nopivot_returns_error() {
     // Lines 1023-1025: LuPivot::NoPivot error branch.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
 }
@@ -5728,7 +5640,7 @@ fn lu_nopivot_returns_error() {
 #[test]
 fn solve_rhs_2d_batch_mismatch() {
     // Lines 321-325: validate_solve_rhs 2D b with wrong batch dims.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A is (2,2,2) => batch=[2], b is (2,1,3) => batch=[3], mismatch
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 1, 3]);
@@ -5738,7 +5650,7 @@ fn solve_rhs_2d_batch_mismatch() {
 #[test]
 fn solve_triangular_rhs_2d_batch_mismatch() {
     // Also covers lines 321-325 via solve_triangular path.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 1, 3]);
     assert!(solve_triangular(&mut ctx, &a, &b, true).is_err());
@@ -5747,7 +5659,7 @@ fn solve_triangular_rhs_2d_batch_mismatch() {
 #[test]
 fn norm_rrule_l1_unsupported() {
     // Lines 3955-3958: norm_rrule returns error for L1.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
     assert!(norm_rrule(&mut ctx, &a, &co, NormKind::L1).is_err());
@@ -5756,7 +5668,7 @@ fn norm_rrule_l1_unsupported() {
 #[test]
 fn norm_rrule_inf_unsupported() {
     // Lines 3955-3958: norm_rrule returns error for Inf.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
     assert!(norm_rrule(&mut ctx, &a, &co, NormKind::Inf).is_err());
@@ -5765,7 +5677,7 @@ fn norm_rrule_inf_unsupported() {
 #[test]
 fn norm_frule_l1_unsupported() {
     // Lines 5194-5197: norm_frule returns error for L1.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
     assert!(norm_frule(&mut ctx, &a, &da, NormKind::L1).is_err());
@@ -5774,7 +5686,7 @@ fn norm_frule_l1_unsupported() {
 #[test]
 fn norm_frule_inf_unsupported() {
     // Lines 5194-5197: norm_frule returns error for Inf.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
     assert!(norm_frule(&mut ctx, &a, &da, NormKind::Inf).is_err());
@@ -5787,7 +5699,7 @@ fn slogdet_negative_determinant() {
     // LU with partial pivoting may reorder rows. To ensure U has a negative diagonal,
     // use [[-2, 0], [0, 1]] — since -2 has largest absolute value, it's chosen as pivot,
     // yielding U with diag=[-2, 1], so diag[0] < 0 triggers the sign flip.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![-2.0, 0.0, 0.0, 1.0], &[2, 2]);
     let result = slogdet(&mut ctx, &a).unwrap();
     let sign_data = tensor_data(&result.sign);
@@ -5802,7 +5714,7 @@ fn slogdet_negative_determinant() {
 #[test]
 fn matrix_exp_0x0() {
     // Line 1852: matrix_exp with 0x0 matrix returns empty tensor.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0], &[1, 0], 0).unwrap();
     let result = matrix_exp(&mut ctx, &a).unwrap();
     assert_eq!(result.dims(), &[0, 0]);
@@ -5811,7 +5723,7 @@ fn matrix_exp_0x0() {
 #[test]
 fn norm_rrule_batched_cotangent_wrong_shape() {
     // Lines 390-394: validate_norm_cotangent batch mismatch with batch dims.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A is (2,2,3) -> batch_dims = [3], but cotangent shape is [2]
     let a = make_tensor(
         vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0, 3.0, 0.0, 0.0, 3.0],
@@ -5824,7 +5736,7 @@ fn norm_rrule_batched_cotangent_wrong_shape() {
 #[test]
 fn norm_rrule_batched_fro_correct_cotangent() {
     // Lines 395, 397: validate_norm_cotangent SUCCESS path with non-empty batch dims.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // A: (2,2,2) -> batch_dims = [2]
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
     // cotangent shape [2] matches batch_dims [2]
@@ -5840,7 +5752,7 @@ fn norm_rrule_batched_fro_correct_cotangent() {
 #[test]
 fn norm_frule_batched_fro() {
     // Exercise norm_frule with batched input to cover batched paths.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1, 0.2, 0.0, 0.0, 0.2], &[2, 2, 2]);
     let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::Fro).unwrap();
@@ -5858,7 +5770,7 @@ fn norm_frule_batched_fro() {
 #[test]
 fn norm_frule_zero_matrix() {
     // Line 5159: norm_frule Fro with zero matrix (nv == 0).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![0.0, 0.0, 0.0, 0.0], &[2, 2]);
     let da = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::Fro).unwrap();
@@ -5872,7 +5784,7 @@ fn norm_frule_zero_matrix() {
 #[test]
 fn svd_rrule_no_cotangent() {
     // Covers svd_rrule with all cotangents None.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let co = SvdCotangent {
         s: None,
@@ -5892,7 +5804,7 @@ fn svd_rrule_no_cotangent() {
 #[test]
 fn qr_rrule_r_only_cotangent() {
     // Covers qr_rrule with q=None.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.5, 0.5, 1.0], &[2, 2]);
     let result = qr(&mut ctx, &a).unwrap();
     let r_dims = result.r.dims().to_vec();
@@ -5912,7 +5824,7 @@ fn qr_rrule_r_only_cotangent() {
 #[test]
 fn matrix_exp_1x1_special_case() {
     // Line 1858-1862: matrix_exp with 1x1 matrix (special case path).
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0], &[1, 1]);
     let result = matrix_exp(&mut ctx, &a).unwrap();
     let rd = tensor_data(&result);
@@ -5926,7 +5838,7 @@ fn matrix_exp_1x1_special_case() {
 #[test]
 fn det_negative() {
     // Exercise det with matrix that has negative determinant.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // [[0, 1], [1, 0]] has det = -1
     let a = make_tensor(vec![0.0, 1.0, 1.0, 0.0], &[2, 2]);
     let result = det(&mut ctx, &a).unwrap();
@@ -5941,7 +5853,7 @@ fn det_negative() {
 #[test]
 fn slogdet_rrule_none_cotangent() {
     // Line 3608: slogdet_rrule with logabsdet=None -> skip inner block.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.0, 0.0, 3.0], &[2, 2]);
     let cotangent = SlogdetCotangent { logabsdet: None };
     let grad = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
@@ -5955,7 +5867,7 @@ fn slogdet_rrule_none_cotangent() {
 #[test]
 fn qr_rrule_q_only_cotangent() {
     // Line 2878: qr_rrule with r=None -> zero dR branch.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.5, 0.5, 1.0], &[2, 2]);
     let result = qr(&mut ctx, &a).unwrap();
     let q_dims = result.q.dims().to_vec();
@@ -5975,7 +5887,7 @@ fn qr_rrule_q_only_cotangent() {
 #[test]
 fn solve_rrule_vector_rhs() {
     // Line 3407: solve_rrule with 1D b -> nrhs=1 else branch.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![2.0, 0.5, 0.3, 3.0], &[2, 2]);
     let b = make_tensor(vec![1.0, 2.0], &[2]);
     let co = make_tensor(vec![1.0, 1.0], &[2]);
@@ -5993,7 +5905,7 @@ fn solve_rrule_vector_rhs() {
 #[test]
 fn eigen_rrule_vectors_only_cotangent() {
     // Line 3166: eigen_rrule with values=None -> skip dE branch.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Symmetric matrix
     let a = make_tensor(vec![2.0, 1.0, 1.0, 3.0], &[2, 2]);
     let result = eigen(&mut ctx, &a).unwrap();
@@ -6015,7 +5927,7 @@ fn eigen_rrule_vectors_only_cotangent() {
 fn svd_rrule_tall_rank_deficient_with_du() {
     // Lines 2769, 2803: svd_rrule non-square correction with near-zero singular value.
     // A rank-1 tall matrix has a zero singular value, triggering sinv -> T::zero() branch.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // 3x2 rank-1 matrix: [[1,0],[0,0],[0,0]] in col-major = [1,0,0, 0,0,0]
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[3, 2]);
     let result = svd(&mut ctx, &a, None).unwrap();
@@ -6042,7 +5954,7 @@ fn svd_rrule_tall_rank_deficient_with_du() {
 #[test]
 fn svd_rrule_wide_rank_deficient_with_dvt() {
     // Lines 2803: svd_rrule non-square correction for n > k with near-zero singular value.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // 2x3 rank-1 matrix
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[2, 3]);
     let result = svd(&mut ctx, &a, None).unwrap();
@@ -6069,7 +5981,7 @@ fn svd_rrule_wide_rank_deficient_with_dvt() {
 #[test]
 fn svd_frule_tall_rank_deficient() {
     // Lines 4075, 4107: svd_frule non-square correction with near-zero singular value.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[3, 2]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1, 0.0, 0.0], &[3, 2]);
     let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
@@ -6086,7 +5998,7 @@ fn svd_frule_tall_rank_deficient() {
 #[test]
 fn svd_frule_wide_rank_deficient() {
     // Lines 4075, 4107: svd_frule non-square correction for n > k with near-zero sv.
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0], &[2, 3]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1, 0.0, 0.0], &[2, 3]);
     let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
@@ -6102,7 +6014,7 @@ fn svd_frule_wide_rank_deficient() {
 
 #[test]
 fn svd_rrule_repeated_singular_values_finite() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // 2 * I has repeated singular values [2, 2].
     let a = make_tensor(vec![2.0, 0.0, 0.0, 2.0], &[2, 2]);
     let result = svd(&mut ctx, &a, None).unwrap();
@@ -6124,7 +6036,7 @@ fn svd_rrule_repeated_singular_values_finite() {
 
 #[test]
 fn svd_frule_near_repeated_singular_values_finite() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Diagonal matrix with nearly equal singular values.
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0 + 1e-12], &[2, 2]);
     let da = make_tensor(vec![0.0, 1e-6, -1e-6, 0.0], &[2, 2]);
@@ -6158,7 +6070,7 @@ fn svd_frule_near_repeated_singular_values_finite() {
 
 #[test]
 fn eigen_repeated_eigenvalues_identity() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], &[3, 3]);
     let result = eigen(&mut ctx, &a).unwrap();
 
@@ -6179,7 +6091,7 @@ fn eigen_repeated_eigenvalues_identity() {
 
 #[test]
 fn eigen_rrule_repeated_eigenvalues_finite() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], &[3, 3]);
     let cotangent = EigenCotangent {
         values: Some(make_tensor(vec![1.0; 3], &[3])),
@@ -6197,7 +6109,7 @@ fn eigen_rrule_repeated_eigenvalues_finite() {
 
 #[test]
 fn eigen_frule_near_repeated_eigenvalues_finite() {
-    let mut ctx = CpuTensorLinalgContext::new();
+    let mut ctx = CpuContext::new(1);
     // Symmetric matrix with a nearly repeated leading pair of eigenvalues.
     let a = make_tensor(
         vec![1.0, 0.0, 0.0, 0.0, 1.0 + 1e-12, 0.0, 0.0, 0.0, 3.0],

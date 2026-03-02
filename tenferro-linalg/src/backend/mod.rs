@@ -15,17 +15,17 @@
 //!
 //! # Device backends
 //!
-//! - **CPU**: [`CpuTensorLinalgBackend`] / [`CpuTensorLinalgContext`]
-//! - **CUDA**: [`CudaTensorLinalgBackend`] / [`CudaTensorLinalgContext`] (stub)
-//! - **HIP**: [`HipTensorLinalgBackend`] / [`HipTensorLinalgContext`] (stub)
+//! - **CPU**: [`CpuTensorLinalgBackend`] with [`tenferro_prims::CpuContext`]
+//! - **CUDA**: [`CudaTensorLinalgBackend`] with [`tenferro_prims::CudaContext`] (stub)
+//! - **HIP**: [`HipTensorLinalgBackend`] with [`tenferro_prims::RocmContext`] (stub)
 //!
 //! # Examples
 //!
 //! ```ignore
-//! use tenferro_linalg::backend::{CpuTensorLinalgContext, TensorLinalgBackend, CpuTensorLinalgBackend};
+//! use tenferro_linalg::backend::{TensorLinalgBackend, CpuTensorLinalgBackend};
 //! use tenferro_tensor::Tensor;
 //!
-//! let mut ctx = CpuTensorLinalgContext::new();
+//! let mut ctx = tenferro_prims::CpuContext::new(1);
 //! let a: Tensor<f64> = todo!();
 //! let b: Tensor<f64> = todo!();
 //! let _x = <CpuTensorLinalgBackend as TensorLinalgBackend<f64>>::solve(&mut ctx, &a, &b).unwrap();
@@ -77,11 +77,11 @@ pub use tensor_api::{
 pub use tensor_context::TensorLinalgContextFor;
 
 // CPU backend (public)
-pub use cpu::{CpuTensorLinalgBackend, CpuTensorLinalgContext};
+pub use cpu::CpuTensorLinalgBackend;
 
 // GPU backend stubs (public)
-pub use cuda::{CudaTensorLinalgBackend, CudaTensorLinalgContext};
-pub use hip::{HipTensorLinalgBackend, HipTensorLinalgContext};
+pub use cuda::CudaTensorLinalgBackend;
+pub use hip::HipTensorLinalgBackend;
 
 // Slice-level backend (still public for backward compatibility during migration)
 #[cfg(feature = "linalg-faer")]

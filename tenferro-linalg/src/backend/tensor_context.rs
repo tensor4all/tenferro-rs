@@ -13,10 +13,15 @@ use crate::LinalgScalar;
 /// belongs to. This keeps public APIs generic over context while
 /// preserving the backend-marker pattern.
 ///
+/// Implemented for:
+/// - [`tenferro_prims::CpuContext`] → [`CpuTensorLinalgBackend`](super::cpu::CpuTensorLinalgBackend)
+/// - [`tenferro_prims::CudaContext`] (future)
+/// - [`tenferro_prims::RocmContext`] (future)
+///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_linalg::backend::{CpuTensorLinalgContext, TensorLinalgContextFor};
+/// use tenferro_linalg::backend::TensorLinalgContextFor;
 ///
 /// fn do_work<T, C>(ctx: &mut C)
 /// where
