@@ -2098,10 +2098,7 @@ fn qr_rrule_fd_through_r() {
 // The LU decomposition with partial pivoting has a discrete permutation.
 // For a strongly diagonally dominant matrix, the permutation stays constant
 // under small perturbations, making FD reliable.
-// KNOWN ISSUE: lu_rrule has a formula discrepancy (max_err ~0.1). Ignored
-// until the rrule implementation is corrected.
 #[test]
-#[ignore = "lu_rrule formula needs correction — FD mismatch ~0.1"]
 fn lu_rrule_fd_through_l() {
     let a = make_general_test_matrix(3);
     let n = 3;
@@ -2411,13 +2408,7 @@ fn slogdet_rrule_fd_through_logabsdet() {
 }
 
 // 10. Lstsq rrule FD — test grad w.r.t. A (tall matrix)
-// The lstsq_rrule implementation uses a simplified formula dA = -z x^T that
-// omits the residual correction term. Even with a consistent system (zero
-// residual at the base point), the FD check shows ~0.09 discrepancy,
-// indicating the formula is incomplete.
-// KNOWN ISSUE: lstsq_rrule formula needs correction. Ignored until fixed.
 #[test]
-#[ignore = "lstsq_rrule formula needs correction — FD mismatch ~0.09"]
 fn lstsq_rrule_fd_systematic() {
     let m = 4;
     let n = 2;
@@ -2639,10 +2630,7 @@ fn svd_frule_fd_through_s() {
 }
 
 // 2. QR frule FD — test through R
-// KNOWN ISSUE: qr_frule formula has FD mismatch ~0.86. The simplified
-// dR = triu(Q^T dA) approach is not the correct pushforward formula.
 #[test]
-#[ignore = "qr_frule formula needs correction — FD mismatch ~0.86"]
 fn qr_frule_fd_through_r() {
     let a = make_general_test_matrix(3);
     let fwd = |x: &Tensor<f64>| {
@@ -4530,6 +4518,78 @@ fn lu_rrule_square_with_both_cotangents() {
     }
 }
 
+#[test]
+fn lu_rrule_wide_with_both_cotangents() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 1.0, 0.0, 3.0, 1.0, 4.0], &[2, 3]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+    let l_dims = result.l.dims().to_vec();
+    let u_dims = result.u.dims().to_vec();
+    let co = LuCotangent {
+        l: Some(make_tensor(vec![0.25; l_dims.iter().product()], &l_dims)),
+        u: Some(make_tensor(vec![0.5; u_dims.iter().product()], &u_dims)),
+    };
+    let grad = lu_rrule(&mut backend, &a, &co, LuPivot::Partial).unwrap();
+    assert_eq!(grad.dims(), &[2, 3]);
+    for &val in &tensor_data(&grad) {
+        assert!(val.is_finite(), "lu_rrule wide grad not finite: {val}");
+    }
+}
+
+#[test]
+fn lu_rrule_tall_with_both_cotangents() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![2.0, 1.0, 3.0, 0.0, 4.0, 1.0], &[3, 2]);
+    let result = lu(&mut backend, &a, LuPivot::Partial).unwrap();
+    let l_dims = result.l.dims().to_vec();
+    let u_dims = result.u.dims().to_vec();
+    let co = LuCotangent {
+        l: Some(make_tensor(vec![0.5; l_dims.iter().product()], &l_dims)),
+        u: Some(make_tensor(vec![0.25; u_dims.iter().product()], &u_dims)),
+    };
+    let grad = lu_rrule(&mut backend, &a, &co, LuPivot::Partial).unwrap();
+    assert_eq!(grad.dims(), &[3, 2]);
+    for &val in &tensor_data(&grad) {
+        assert!(val.is_finite(), "lu_rrule tall grad not finite: {val}");
+    }
+}
+
+#[test]
+fn lu_rrule_rejects_l_cotangent_shape_mismatch() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
+    let co = LuCotangent {
+        l: Some(make_tensor(vec![1.0, 1.0, 1.0], &[3])),
+        u: None,
+    };
+
+    let err = lu_rrule(&mut backend, &a, &co, LuPivot::Partial)
+        .err()
+        .expect("shape mismatch should return an error");
+    assert!(matches!(
+        err,
+        chainrules_core::AutodiffError::InvalidArgument(_)
+    ));
+}
+
+#[test]
+fn lu_rrule_rejects_u_cotangent_shape_mismatch() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![3.0, 1.0, 1.0, 4.0], &[2, 2]);
+    let co = LuCotangent {
+        l: None,
+        u: Some(make_tensor(vec![1.0, 1.0, 1.0], &[3])),
+    };
+
+    let err = lu_rrule(&mut backend, &a, &co, LuPivot::Partial)
+        .err()
+        .expect("shape mismatch should return an error");
+    assert!(matches!(
+        err,
+        chainrules_core::AutodiffError::InvalidArgument(_)
+    ));
+}
+
 // ============================================================================
 // Coverage: eig_rrule with vectors cotangent (EigCotangent)
 // ============================================================================
@@ -5950,5 +6010,138 @@ fn svd_frule_wide_rank_deficient() {
     let dvtd = tensor_data(&dresult.vt);
     for &val in &dvtd {
         assert!(val.is_finite(), "svd_frule dvt not finite: {val}");
+    }
+}
+
+#[test]
+fn svd_rrule_repeated_singular_values_finite() {
+    let mut backend = FaerBackend::new();
+    // 2 * I has repeated singular values [2, 2].
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 2.0], &[2, 2]);
+    let result = svd(&mut backend, &a, None).unwrap();
+    let cotangent = SvdCotangent {
+        u: Some(make_tensor(vec![1.0; 4], result.u.dims())),
+        s: Some(make_tensor(vec![1.0; 2], result.s.dims())),
+        vt: Some(make_tensor(vec![1.0; 4], result.vt.dims())),
+    };
+
+    let grad = svd_rrule(&mut backend, &a, &cotangent, None).unwrap();
+    let grad_data = tensor_data(&grad);
+    for &val in &grad_data {
+        assert!(
+            val.is_finite(),
+            "svd_rrule repeated-singular-value grad not finite: {val}"
+        );
+    }
+}
+
+#[test]
+fn svd_frule_near_repeated_singular_values_finite() {
+    let mut backend = FaerBackend::new();
+    // Diagonal matrix with nearly equal singular values.
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0 + 1e-12], &[2, 2]);
+    let da = make_tensor(vec![0.0, 1e-6, -1e-6, 0.0], &[2, 2]);
+
+    let (result, dresult) = svd_frule(&mut backend, &a, &da, None).unwrap();
+    for &val in &tensor_data(&result.s) {
+        assert!(
+            val.is_finite(),
+            "svd_frule repeated-spectrum s not finite: {val}"
+        );
+    }
+    for &val in &tensor_data(&dresult.u) {
+        assert!(
+            val.is_finite(),
+            "svd_frule repeated-spectrum dU not finite: {val}"
+        );
+    }
+    for &val in &tensor_data(&dresult.s) {
+        assert!(
+            val.is_finite(),
+            "svd_frule repeated-spectrum dS not finite: {val}"
+        );
+    }
+    for &val in &tensor_data(&dresult.vt) {
+        assert!(
+            val.is_finite(),
+            "svd_frule repeated-spectrum dVt not finite: {val}"
+        );
+    }
+}
+
+#[test]
+fn eigen_repeated_eigenvalues_identity() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], &[3, 3]);
+    let result = eigen(&mut backend, &a).unwrap();
+
+    let vals = tensor_data(&result.values);
+    for &val in &vals {
+        assert!(
+            (val - 1.0).abs() < 1e-10,
+            "repeated-eigenvalue forward check failed: {val}"
+        );
+    }
+    for &val in &tensor_data(&result.vectors) {
+        assert!(
+            val.is_finite(),
+            "eigen vectors not finite for repeated spectrum: {val}"
+        );
+    }
+}
+
+#[test]
+fn eigen_rrule_repeated_eigenvalues_finite() {
+    let mut backend = FaerBackend::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], &[3, 3]);
+    let cotangent = EigenCotangent {
+        values: Some(make_tensor(vec![1.0; 3], &[3])),
+        vectors: Some(make_tensor(vec![1.0; 9], &[3, 3])),
+    };
+
+    let grad = eigen_rrule(&mut backend, &a, &cotangent).unwrap();
+    for &val in &tensor_data(&grad) {
+        assert!(
+            val.is_finite(),
+            "eigen_rrule repeated-eigenvalue grad not finite: {val}"
+        );
+    }
+}
+
+#[test]
+fn eigen_frule_near_repeated_eigenvalues_finite() {
+    let mut backend = FaerBackend::new();
+    // Symmetric matrix with a nearly repeated leading pair of eigenvalues.
+    let a = make_tensor(
+        vec![1.0, 0.0, 0.0, 0.0, 1.0 + 1e-12, 0.0, 0.0, 0.0, 3.0],
+        &[3, 3],
+    );
+    let da = make_tensor(
+        vec![
+            0.0, 1e-6, 0.0, //
+            1e-6, 0.0, 1e-6, //
+            0.0, 1e-6, 0.0,
+        ],
+        &[3, 3],
+    );
+
+    let (result, dresult) = eigen_frule(&mut backend, &a, &da).unwrap();
+    for &val in &tensor_data(&result.values) {
+        assert!(
+            val.is_finite(),
+            "eigen_frule primal eigenvalue not finite: {val}"
+        );
+    }
+    for &val in &tensor_data(&dresult.values) {
+        assert!(
+            val.is_finite(),
+            "eigen_frule repeated-spectrum dE not finite: {val}"
+        );
+    }
+    for &val in &tensor_data(&dresult.vectors) {
+        assert!(
+            val.is_finite(),
+            "eigen_frule repeated-spectrum dV not finite: {val}"
+        );
     }
 }

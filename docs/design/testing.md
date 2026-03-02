@@ -130,34 +130,20 @@ Port from `tests/tropical.rs` and tropical-related tests in other files.
 
 ### tenferro-linalg
 
-Test case parameters (shape, dtype, symm) are managed in a JSON file:
-[`tenferro-linalg/tests/data/linalg_cases.json`](../../tenferro-linalg/tests/data/linalg_cases.json).
-Test input matrices are randomly generated for each case.
+The current linalg test suite is implemented directly in
+[`tenferro-linalg/tests/linalg_tests.rs`](../../tenferro-linalg/tests/linalg_tests.rs).
+It is a handwritten test matrix, not a generated JSON-driven harness.
 
-**Random generation convention:**
+The suite combines:
 
-- Real and imaginary parts drawn from uniform distribution `[-1, 1]`
-- When `symm: true`, symmetrize via `A + A'` (Hermitian for complex)
+- Small deterministic fixtures for reconstruction/property tests and error paths
+- Shared finite-difference helpers (`check_rrule_fd`, `check_frule_fd`, etc.)
+- Targeted branch-coverage tests for tall/wide, batched, and rank-deficient cases
+- Dtype coverage across `f64`, `f32`, `Complex64`, and `Complex32`
 
-**JSON schema:**
-
-```json
-{
-  "svd": [
-    {"shape": [3, 2], "dtype": "f64"},
-    {"shape": [3, 2], "dtype": "c64"},
-    ...
-  ],
-  "eigen": [
-    {"shape": [4, 4], "dtype": "f64", "symm": true}
-  ],
-  "lstsq": [
-    {"shape_a": [10, 5], "shape_b": [10], "dtype": "f64"}
-  ]
-}
-```
-
-`symm` defaults to `false` when omitted.
+Test inputs are intentionally deterministic so failures are reproducible.
+Some cases use fixed literals; others use helper-generated well-conditioned
+or general matrices defined in the test file.
 
 #### Forward (decomposition correctness)
 
@@ -172,7 +158,8 @@ BLAS/LAPACK do not specify sign/phase conventions, so reference data cannot be u
 | Eigen (symmetric) | `‖A − U·diag(E)·U'‖ < ε` | `U'U ≈ I` |
 | Lstsq | `A'(Ax − b) ≈ 0` | `‖Ax − b‖` is minimized |
 
-All tests run automatically for each (shape, dtype) case in the JSON file.
+Forward coverage is provided by explicit per-operation tests, with separate
+batched and dtype-specific checks where relevant.
 
 #### AD (rrule): finite-difference gradient check
 
@@ -203,7 +190,7 @@ The choice of `f` determines which cotangent paths of the rrule are exercised:
 Each cotangent branch should be tested in isolation first, then jointly,
 to ensure individual branches are correct before testing their combination.
 
-For each (shape, dtype) case in the JSON, all cotangent patterns are tested automatically:
+The current handwritten suite covers the following cotangent patterns:
 - SVD: dU only, dV only, dS only, joint dU+dV
 - QR: joint dQ+dR
 - LU: dL only, dU only, joint dL+dU
@@ -234,9 +221,9 @@ Here `H` and `op` are random Hermitian (or symmetric) matrices, generated indepe
 
 **Known gaps:**
 
-- Degenerate singular/eigenvalues (stress test for regularization)
-- Three AD rules have FD mismatches: `lu_rrule`, `lstsq_rrule`, `qr_frule`
-  (see [linalg.md](./linalg.md) Testing section for details)
+- Exact repeated-eigenvalue AD stress tests for general `eig` are not included.
+  Current stress coverage focuses on SVD and symmetric/Hermitian `eigen`,
+  where the implementation has explicit denominator regularization.
 
 ---
 
@@ -313,13 +300,13 @@ and Mathieu (2019).
 | Operation | rrule | frule | FD status | Notes |
 |-----------|-------|-------|-----------|-------|
 | SVD | done | done | pass | Per-cotangent-branch FD checks (dU, dS, dVt) |
-| QR | done | done | rrule pass, frule **ignored** | `qr_frule` formula mismatch ~0.86 |
-| LU | done | done | rrule **ignored**, frule pass | `lu_rrule` formula mismatch ~0.1 |
+| QR | done | done | pass | Full-rank and wide-case FD coverage |
+| LU | done | done | pass | Square, wide, and tall pullback/pushforward coverage |
 | Eigen (symmetric) | done | done | pass | dE only, dU only |
 | Eig (general) | done | done | pass | Complex output |
 | Cholesky | done | done | pass | |
 | `solve` | done | done | pass | dA and db branches |
-| `lstsq` | done | done | rrule **ignored**, frule pass | `lstsq_rrule` formula mismatch ~0.09 |
+| `lstsq` | done | done | pass | Includes residual-term pullback |
 | `inv` | done | done | pass | |
 | `det` | done | done | pass | |
 | `slogdet` | done | done | pass | |
@@ -332,8 +319,7 @@ Notes:
 - hvp for linalg operations is not planned. Second-order differentiation
   through linalg (e.g., SVD Hessians) is mathematically complex and deferred.
 - All linalg AD tests use central finite-difference verification
-  (`eps = 1e-6`, `atol = 1e-4`). Three rules have known FD discrepancies
-  and are marked `#[ignore]` in the test suite.
+  (`eps = 1e-6`, `atol = 1e-4`).
 - `tenferro-linalg` AD rules depend only on `chainrules-core` (not the full
   `chainrules` engine); test infrastructure calls `svd_rrule` etc. directly
   without requiring a tape.

@@ -904,6 +904,25 @@ fn tracked_einsum_rejects_mixed_tapes() {
     assert!(result.is_err(), "expected error for mixed-tape operands");
 }
 
+#[test]
+fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
+    use chainrules::TrackedTensor;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let a =
+        TrackedTensor::new(Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap());
+    let b =
+        TrackedTensor::new(Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap());
+
+    let result = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+
+    assert!(result.node_id().is_none());
+    assert!(!result.requires_grad());
+    assert_eq!(result.value().dims(), &[2, 2]);
+}
+
 // ============================================================================
 // Typed test scaffolding: trait and macro for multi-scalar einsum tests
 // ============================================================================
@@ -2116,6 +2135,55 @@ fn hvp_via_fw_grad_composition() {
     }
 }
 
+#[test]
+fn einsum_hvp_matches_manual_matmul_rule() {
+    use chainrules::Differentiable;
+    use tenferro_einsum::einsum_hvp;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[2.0, 1.0, 0.0, 3.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let grad_c = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let dgrad_c = Tensor::<f64>::from_slice(&[0.5, 1.0, 1.5, 2.0], &[2, 2], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "ij,jk->ik",
+        &[&a, &b],
+        &[Some(&da), None],
+        &grad_c,
+        &dgrad_c,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 2);
+
+    let expected_grad_a =
+        einsum::<S, CpuBackend>(&mut ctx, "ik,jk->ij", &[&grad_c, &b], None).unwrap();
+    let expected_hvp_a = {
+        let term_from_cot =
+            einsum::<S, CpuBackend>(&mut ctx, "ik,jk->ij", &[&dgrad_c, &b], None).unwrap();
+        let db_term = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+        let _ = db_term;
+        term_from_cot
+    };
+    let expected_grad_b =
+        einsum::<S, CpuBackend>(&mut ctx, "ij,ik->jk", &[&a, &grad_c], None).unwrap();
+    let expected_hvp_b = {
+        let term_from_cot =
+            einsum::<S, CpuBackend>(&mut ctx, "ij,ik->jk", &[&a, &dgrad_c], None).unwrap();
+        let term_from_a =
+            einsum::<S, CpuBackend>(&mut ctx, "ij,ik->jk", &[&da, &grad_c], None).unwrap();
+        Tensor::<f64>::accumulate_tangent(term_from_cot, &term_from_a)
+    };
+
+    assert_tensors_close(&hvps[0].0, &expected_grad_a, "hvp grad_a");
+    assert_tensors_close(&hvps[0].1, &expected_hvp_a, "hvp hvp_a");
+    assert_tensors_close(&hvps[1].0, &expected_grad_b, "hvp grad_b");
+    assert_tensors_close(&hvps[1].1, &expected_hvp_b, "hvp hvp_b");
+}
+
 // ============================================================================
 // einsum: input+output repeated labels (pipeline decomposition)
 // ============================================================================
@@ -2607,6 +2675,23 @@ fn dual_einsum_parenthesized() {
         flat_result.tangent().unwrap(),
         "dual tangent",
     );
+}
+
+#[test]
+fn dual_einsum_without_tangents_returns_primal_only() {
+    use chainrules::DualTensor;
+
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let a_dual = DualTensor::new(a.clone());
+    let b_dual = DualTensor::new(b.clone());
+
+    let result = dual_einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
+    let expected = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+
+    assert_tensors_close(result.primal(), &expected, "dual no tangent primal");
+    assert!(result.tangent().is_none());
 }
 
 // ============================================================================
