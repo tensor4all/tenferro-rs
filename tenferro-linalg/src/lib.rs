@@ -156,6 +156,12 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 /// (`f64`, `f32`) `Real = Self`; for complex types (`Complex64`, `Complex32`)
 /// `Real` is the real part type (`f64`, `f32`).
 ///
+/// The associated type [`Complex`](LinalgScalar::Complex) provides the
+/// canonical complex-valued companion type used by APIs such as general
+/// eigendecomposition. For real scalars it maps to the corresponding complex
+/// type (`f64 -> Complex64`, `f32 -> Complex32`); for complex scalars it maps
+/// to `Self`.
+///
 /// # Examples
 ///
 /// ```
@@ -174,7 +180,19 @@ pub trait LinalgScalar:
     + 'static
 {
     /// The real scalar type for eigenvalues / singular values.
-    type Real: LinalgScalar<Real = Self::Real> + num_traits::Float;
+    type Real: LinalgScalar<Real = Self::Real, Complex = Self::Complex> + num_traits::Float;
+
+    /// The canonical complex-valued companion type for this scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_linalg::LinalgScalar;
+    /// use num_complex::Complex64;
+    ///
+    /// let _: <f64 as LinalgScalar>::Complex = Complex64::new(1.0, 0.0);
+    /// ```
+    type Complex: LinalgScalar<Real = Self::Real, Complex = Self::Complex>;
 
     /// Absolute value mapped to the real type (modulus for complex).
     fn abs_real(&self) -> Self::Real;
@@ -188,6 +206,7 @@ pub trait LinalgScalar:
 
 impl LinalgScalar for f64 {
     type Real = f64;
+    type Complex = Complex64;
     #[inline]
     fn abs_real(&self) -> f64 {
         num_traits::Float::abs(*self)
@@ -204,6 +223,7 @@ impl LinalgScalar for f64 {
 
 impl LinalgScalar for f32 {
     type Real = f32;
+    type Complex = Complex32;
     #[inline]
     fn abs_real(&self) -> f32 {
         num_traits::Float::abs(*self)
@@ -220,6 +240,7 @@ impl LinalgScalar for f32 {
 
 impl LinalgScalar for Complex64 {
     type Real = f64;
+    type Complex = Complex64;
     #[inline]
     fn abs_real(&self) -> f64 {
         self.norm()
@@ -236,6 +257,7 @@ impl LinalgScalar for Complex64 {
 
 impl LinalgScalar for Complex32 {
     type Real = f32;
+    type Complex = Complex32;
     #[inline]
     fn abs_real(&self) -> f32 {
         self.norm()
