@@ -17,6 +17,7 @@ members = [
     # extern (general-purpose, non-tenferro)
     "extern/chainrules-core",
     "extern/chainrules",
+    "extern/chainrules-scalarops",
 ]
 resolver = "2"
 

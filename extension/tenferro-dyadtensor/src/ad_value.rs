@@ -1,3 +1,4 @@
+use chainrules_scalarops as scalarops;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
@@ -372,6 +373,26 @@ impl<T> AdScalar<T> {
         self.0
     }
 
+    /// Consumes this wrapper and returns only the primal scalar value.
+    ///
+    /// This is an explicit AD-drop API for intentional metadata discard.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdScalar;
+    ///
+    /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
+    /// assert_eq!(x.into_primal(), 2.0);
+    /// ```
+    pub fn into_primal(self) -> T {
+        match self.0 {
+            AdValue::Primal(primal) => primal,
+            AdValue::Forward { primal, .. } => primal,
+            AdValue::Reverse { primal, .. } => primal,
+        }
+    }
+
     /// Returns primal scalar reference.
     ///
     /// # Examples
@@ -398,6 +419,167 @@ impl<T> AdScalar<T> {
     /// ```
     pub fn tangent(&self) -> Option<&T> {
         self.0.tangent_ref()
+    }
+
+    /// Applies scalar conjugation with AD propagation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_dyadtensor::AdScalar;
+    ///
+    /// let x = AdScalar::new_forward(Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0));
+    /// let y = x.conj();
+    /// assert_eq!(*y.primal(), Complex64::new(1.0, -2.0));
+    /// assert_eq!(*y.tangent().unwrap(), Complex64::new(3.0, 4.0));
+    /// ```
+    pub fn conj(self) -> Self
+    where
+        T: scalarops::ScalarAd,
+    {
+        match self.0 {
+            AdValue::Primal(primal) => Self::new_primal(scalarops::conj(primal)),
+            AdValue::Forward { primal, tangent } => {
+                let (primal, tangent) = scalarops::conj_frule(primal, tangent);
+                Self::new_forward(primal, tangent)
+            }
+            AdValue::Reverse {
+                primal,
+                node,
+                tape,
+                tangent,
+            } => {
+                let (primal, tangent) = match tangent {
+                    Some(tangent) => {
+                        let (primal, tangent) = scalarops::conj_frule(primal, tangent);
+                        (primal, Some(tangent))
+                    }
+                    None => (scalarops::conj(primal), None),
+                };
+                Self::new_reverse(primal, node, tape, tangent)
+            }
+        }
+    }
+
+    /// Applies scalar square-root with AD propagation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdScalar;
+    ///
+    /// let x = AdScalar::new_forward(9.0_f64, 1.0_f64);
+    /// let y = x.sqrt();
+    /// assert!((*y.primal() - 3.0).abs() < 1e-12);
+    /// assert!((*y.tangent().unwrap() - 1.0 / 6.0).abs() < 1e-12);
+    /// ```
+    pub fn sqrt(self) -> Self
+    where
+        T: scalarops::ScalarAd,
+    {
+        match self.0 {
+            AdValue::Primal(primal) => Self::new_primal(scalarops::sqrt(primal)),
+            AdValue::Forward { primal, tangent } => {
+                let (primal, tangent) = scalarops::sqrt_frule(primal, tangent);
+                Self::new_forward(primal, tangent)
+            }
+            AdValue::Reverse {
+                primal,
+                node,
+                tape,
+                tangent,
+            } => {
+                let (primal, tangent) = match tangent {
+                    Some(tangent) => {
+                        let (primal, tangent) = scalarops::sqrt_frule(primal, tangent);
+                        (primal, Some(tangent))
+                    }
+                    None => (scalarops::sqrt(primal), None),
+                };
+                Self::new_reverse(primal, node, tape, tangent)
+            }
+        }
+    }
+
+    /// Applies scalar real-exponent power with AD propagation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdScalar;
+    ///
+    /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
+    /// let y = x.powf(3.0);
+    /// assert_eq!(*y.primal(), 8.0);
+    /// assert_eq!(*y.tangent().unwrap(), 12.0);
+    /// ```
+    pub fn powf(self, exponent: <T as scalarops::ScalarAd>::Real) -> Self
+    where
+        T: scalarops::ScalarAd,
+    {
+        match self.0 {
+            AdValue::Primal(primal) => Self::new_primal(scalarops::powf(primal, exponent)),
+            AdValue::Forward { primal, tangent } => {
+                let (primal, tangent) = scalarops::powf_frule(primal, exponent, tangent);
+                Self::new_forward(primal, tangent)
+            }
+            AdValue::Reverse {
+                primal,
+                node,
+                tape,
+                tangent,
+            } => {
+                let (primal, tangent) = match tangent {
+                    Some(tangent) => {
+                        let (primal, tangent) = scalarops::powf_frule(primal, exponent, tangent);
+                        (primal, Some(tangent))
+                    }
+                    None => (scalarops::powf(primal, exponent), None),
+                };
+                Self::new_reverse(primal, node, tape, tangent)
+            }
+        }
+    }
+
+    /// Applies scalar integer-exponent power with AD propagation.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdScalar;
+    ///
+    /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
+    /// let y = x.powi(4);
+    /// assert_eq!(*y.primal(), 16.0);
+    /// assert_eq!(*y.tangent().unwrap(), 32.0);
+    /// ```
+    pub fn powi(self, exponent: i32) -> Self
+    where
+        T: scalarops::ScalarAd,
+    {
+        match self.0 {
+            AdValue::Primal(primal) => Self::new_primal(scalarops::powi(primal, exponent)),
+            AdValue::Forward { primal, tangent } => {
+                let (primal, tangent) = scalarops::powi_frule(primal, exponent, tangent);
+                Self::new_forward(primal, tangent)
+            }
+            AdValue::Reverse {
+                primal,
+                node,
+                tape,
+                tangent,
+            } => {
+                let (primal, tangent) = match tangent {
+                    Some(tangent) => {
+                        let (primal, tangent) = scalarops::powi_frule(primal, exponent, tangent);
+                        (primal, Some(tangent))
+                    }
+                    None => (scalarops::powi(primal, exponent), None),
+                };
+                Self::new_reverse(primal, node, tape, tangent)
+            }
+        }
     }
 }
 
@@ -656,6 +838,7 @@ impl<T: Scalar> From<AdTensor<T>> for AdValue<Tensor<T>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_complex::Complex64;
     use tenferro_tensor::MemoryOrder;
 
     #[test]
@@ -676,5 +859,43 @@ mod tests {
         assert_eq!(ad.dims(), &[2]);
         assert_eq!(ad.ndim(), 1);
         assert_eq!(ad.len(), 2);
+    }
+
+    #[test]
+    fn ad_scalar_into_primal_drops_metadata() {
+        let x = AdScalar::new_forward(2.5_f64, 0.1_f64);
+        assert_eq!(x.into_primal(), 2.5_f64);
+    }
+
+    #[test]
+    fn ad_scalar_sqrt_forward_propagates_tangent() {
+        let x = AdScalar::new_forward(9.0_f64, 1.0_f64);
+        let y = x.sqrt();
+        assert!((*y.primal() - 3.0).abs() < 1e-12);
+        assert!((*y.tangent().unwrap() - (1.0 / 6.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn ad_scalar_powi_forward_propagates_tangent() {
+        let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
+        let y = x.powi(4);
+        assert_eq!(*y.primal(), 16.0);
+        assert_eq!(*y.tangent().unwrap(), 32.0);
+    }
+
+    #[test]
+    fn ad_scalar_conj_reverse_preserves_tape_metadata() {
+        let x = AdScalar::new_reverse(
+            Complex64::new(1.0, 2.0),
+            NodeId(11),
+            TapeId(7),
+            Some(Complex64::new(-1.0, 0.5)),
+        );
+        let y = x.conj();
+        assert_eq!(y.mode(), AdMode::Reverse);
+        assert_eq!(y.as_value().node_id(), Some(NodeId(11)));
+        assert_eq!(y.as_value().tape_id(), Some(TapeId(7)));
+        assert_eq!(*y.primal(), Complex64::new(1.0, -2.0));
+        assert_eq!(*y.tangent().unwrap(), Complex64::new(-1.0, -0.5));
     }
 }

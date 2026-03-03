@@ -34,3 +34,4 @@ verification procedures (reconstruction checks, finite-difference gradient check
 | [pinv.md](./pinv.md) | Pseudoinverse (`pinv_rrule`) | AD rules for Moore-Penrose pseudoinverse |
 | [matrix_exp.md](./matrix_exp.md) | Matrix exponential (`matrix_exp_rrule`) | AD rules for `exp(A)` |
 | [norm.md](./norm.md) | Norm (`norm_rrule`) | AD rules for matrix and vector norms |
+| [scalar_ops.md](./scalar_ops.md) | Scalar ops (`conj`, `sqrt`, `powf`, `powi`) | PyTorch-aligned scalar rrule/frule conventions and `handle_r_to_c` projection note |
