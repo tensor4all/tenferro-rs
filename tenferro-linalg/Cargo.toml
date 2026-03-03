@@ -8,8 +8,9 @@ publish.workspace = true
 description = "Batched matrix linear algebra decompositions (SVD, QR, LU, eigen) with AD rules for the tenferro workspace."
 
 [features]
-default = ["faer"]
-faer = ["dep:faer"]
+default = ["linalg-faer"]
+linalg-faer = ["dep:faer"]
+linalg-lapack = []
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
@@ -20,3 +21,6 @@ chainrules-core = { path = "../extern/chainrules-core" }
 faer = { workspace = true, optional = true }
 num-complex = { workspace = true }
 num-traits = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

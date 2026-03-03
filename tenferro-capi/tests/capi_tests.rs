@@ -3,8 +3,8 @@
 //! TDD approach: tests written to verify correctness based on docs/design/capi.md.
 
 use tenferro_capi::*;
-use tenferro_linalg::backend::FaerBackend;
 use tenferro_linalg::{svd_frule, svd_rrule, SvdCotangent};
+use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn approx_eq_slice(actual: &[f64], expected: &[f64], tol: f64) {
@@ -928,8 +928,8 @@ fn svd_rrule_rank3_permuted_axes_matches_rust_oracle() {
             s: Some(cot_s_public),
             vt: Some(cot_vt_mat),
         };
-        let mut backend = FaerBackend::new();
-        let grad_matrix = svd_rrule(&mut backend, &matrix, &cot, None).unwrap();
+        let mut ctx = CpuContext::new(1);
+        let grad_matrix = svd_rrule(&mut ctx, &matrix, &cot, None).unwrap();
         let grad_expected =
             unmatrixize_grad_for_test(grad_matrix, &left, &right, &left_dims, &right_dims);
         let expected_data = grad_expected
@@ -1007,9 +1007,8 @@ fn svd_frule_rank3_permuted_axes_matches_rust_oracle() {
         let dt = Tensor::from_slice(&da_data, &shape, MemoryOrder::ColumnMajor).unwrap();
         let (matrix, left_dims, right_dims) = matrixize_for_test(&t, &left, &right);
         let (tang_matrix, _, _) = matrixize_for_test(&dt, &left, &right);
-        let mut backend = FaerBackend::new();
-        let (_primal, tangent_result) =
-            svd_frule(&mut backend, &matrix, &tang_matrix, None).unwrap();
+        let mut ctx = CpuContext::new(1);
+        let (_primal, tangent_result) = svd_frule(&mut ctx, &matrix, &tang_matrix, None).unwrap();
 
         let k = tangent_result.s.len();
         let mut du_expected_dims = left_dims.clone();

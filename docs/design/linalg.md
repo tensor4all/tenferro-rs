@@ -323,10 +323,13 @@ tenferro-linalg functions
     └── GPU (planned): matricize → cuSOLVER → unmatricize
 ```
 
-The `LinalgBackend<T>` trait abstracts the backend. `FaerBackend` is the
-sole concrete implementation. It maps each operation to faer's thin-matrix
+The `TensorLinalgBackend<T>` trait abstracts the backend.
+`CpuTensorLinalgBackend` is the CPU implementation (backed by faer under
+the `linalg-faer` feature). It maps each operation to faer's thin-matrix
 API, handles column-major layout, and converts between `Tensor<T>` data
-slices and faer's `MatRef`/`MatMut`.
+slices and faer's `MatRef`/`MatMut`. Execution state is held in
+`tenferro_prims::CpuContext`, shared with the prims layer and passed
+explicitly to all operations.
 
 The linalg crate calls `tenferro-prims` operations for its AD formulas
 (BatchedGemm, ElementwiseMul, etc.) but calls the backend directly for

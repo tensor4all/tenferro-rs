@@ -223,12 +223,10 @@ encode everything as stateless slices or to overload the `TensorPrims` context.
 
 The concrete backend type and the execution context should also stay distinct.
 
-- `FaerTensorLinalgBackend` should be the adapter type that implements the
-  trait.
-- `FaerTensorLinalgContext` should own reusable faer-side state.
-
-Using the backend type itself as `Context` would make the API harder to extend
-once scratch buffers, plan caches, or stream/handle state are introduced.
+- `CpuTensorLinalgBackend` is the device-oriented backend type that implements
+  the trait. The name reflects the device (CPU), not the provider (faer).
+- The execution context is `tenferro_prims::CpuContext` — shared with the
+  prims layer. There are no linalg-specific context types.
 
 ## Pivot and `info` Policy
 
@@ -252,7 +250,7 @@ The migration should be incremental.
    with `type Complex`.
 3. Define the new tensor-level linalg trait and result structs.
 4. Implement a CPU adapter that wraps the current `FaerBackend`.
-   The adapter should use a distinct `FaerTensorLinalgContext`.
+   The adapter uses `tenferro_prims::CpuContext` as execution context.
 5. Migrate `solve` and `solve_triangular` first.
 6. Migrate `qr`, `lu_factor`, and `lu_solve`.
 7. Migrate `thin_svd`, `eigen_sym`, and `eig`.
@@ -319,7 +317,7 @@ The first concrete deliverable for issue #246 should be:
 - a trait definition for the tensor-level linalg backend
 - result structs for the multi-output operations
 - a decision that initial LU pivots remain `Vec<i32>`
-- a decision that the faer adapter uses a distinct `FaerTensorLinalgContext`
+- a decision that linalg reuses `tenferro_prims` contexts (no linalg-specific context types)
 - an explicit statement of which ops remain on `TensorPrims`
 - a CPU adapter sketch that maps the new API onto the current `FaerBackend`
 
