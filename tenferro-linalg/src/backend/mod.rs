@@ -9,7 +9,8 @@
 //! Exactly one of the following features must be enabled:
 //!
 //! - `linalg-faer`: Pure-Rust via [`faer`](https://crates.io/crates/faer) (default)
-//! - `linalg-lapack`: External LAPACK binding (placeholder)
+//! - `linalg-lapack`: LAPACK + CBLAS backend with provider selection
+//!   (`provider-src` or `provider-inject`)
 //!
 //! Enabling both or neither is a compile error.
 //!
@@ -48,6 +49,8 @@ compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg
 // ============================================================================
 
 // Slice-level backend (internal implementation detail)
+#[cfg(feature = "linalg-lapack")]
+pub(crate) mod blas_lapack_backend;
 #[cfg(feature = "linalg-faer")]
 pub(crate) mod faer_backend;
 

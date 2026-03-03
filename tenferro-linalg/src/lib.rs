@@ -134,7 +134,69 @@
 //! let grad_a2 = svd_rrule(&mut ctx, &a, &cotangent_s_only, None).unwrap();
 //! ```
 
+#[cfg(all(feature = "provider-src", not(feature = "linalg-lapack")))]
+compile_error!("provider-src requires linalg-lapack");
+#[cfg(all(feature = "provider-inject", not(feature = "linalg-lapack")))]
+compile_error!("provider-inject requires linalg-lapack");
+#[cfg(all(
+    any(
+        feature = "src-openblas",
+        feature = "src-netlib",
+        feature = "src-accelerate",
+        feature = "src-r",
+        feature = "src-intel-mkl-dynamic-sequential",
+        feature = "src-intel-mkl-dynamic-parallel",
+        feature = "src-intel-mkl-static-sequential",
+        feature = "src-intel-mkl-static-parallel"
+    ),
+    not(feature = "linalg-lapack")
+))]
+compile_error!("src-* features require linalg-lapack and provider-src");
+
+#[cfg(feature = "linalg-lapack")]
+const _: () = {
+    let provider_count =
+        (cfg!(feature = "provider-src") as usize) + (cfg!(feature = "provider-inject") as usize);
+    assert!(
+        provider_count == 1,
+        "linalg-lapack requires exactly one provider: provider-src or provider-inject"
+    );
+
+    let src_count = (cfg!(feature = "src-openblas") as usize)
+        + (cfg!(feature = "src-netlib") as usize)
+        + (cfg!(feature = "src-accelerate") as usize)
+        + (cfg!(feature = "src-r") as usize)
+        + (cfg!(feature = "src-intel-mkl-dynamic-sequential") as usize)
+        + (cfg!(feature = "src-intel-mkl-dynamic-parallel") as usize)
+        + (cfg!(feature = "src-intel-mkl-static-sequential") as usize)
+        + (cfg!(feature = "src-intel-mkl-static-parallel") as usize);
+
+    if cfg!(feature = "provider-src") {
+        assert!(
+            src_count == 1,
+            "provider-src requires exactly one src-* feature"
+        );
+    }
+    if cfg!(feature = "provider-inject") {
+        assert!(src_count == 0, "provider-inject forbids src-* features");
+    }
+};
+
+#[cfg(feature = "provider-src")]
+extern crate blas_src as _;
+#[cfg(feature = "provider-src")]
+extern crate cblas_src as _;
+#[cfg(feature = "provider-src")]
+extern crate lapack_src as _;
+
+#[cfg(feature = "provider-inject")]
+extern crate cblas_inject as _;
+#[cfg(feature = "provider-inject")]
+extern crate lapack_inject as _;
+
 pub mod backend;
+#[cfg(all(feature = "linalg-lapack", feature = "provider-inject"))]
+pub mod inject;
 mod prims_bridge;
 
 use chainrules_core::AdResult;
