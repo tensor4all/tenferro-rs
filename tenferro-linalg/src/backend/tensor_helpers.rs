@@ -9,6 +9,14 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::LinalgScalar;
 
+/// Normalized RHS metadata for solve-style operations.
+pub(crate) struct SolveRhsLayout {
+    /// Number of right-hand sides.
+    pub nrhs: usize,
+    /// Output shape to preserve the original vector-vs-matrix rank.
+    pub output_dims: Vec<usize>,
+}
+
 /// Validate that a tensor has at least 2 dimensions and return `(m, n, batch_dims)`.
 pub(crate) fn validate_matrix_shape<T: LinalgScalar>(
     a: &Tensor<T>,
@@ -59,6 +67,69 @@ pub(crate) fn extract_contiguous_slice<T: LinalgScalar>(a: &Tensor<T>) -> Result
     a.buffer()
         .as_slice()
         .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))
+}
+
+/// Validate solve RHS shape against a square matrix `(n, n, batch...)`.
+///
+/// Accepted RHS shapes:
+/// - `(n, batch...)`
+/// - `(n, nrhs, batch...)`
+pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
+    b: &Tensor<T>,
+    n: usize,
+    batch_dims: &[usize],
+    op_name: &str,
+) -> Result<SolveRhsLayout> {
+    let dims = b.dims();
+    if dims.len() == 1 + batch_dims.len() {
+        if dims[0] != n {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} expects b dim[0] == n ({n}), got {}",
+                dims[0]
+            )));
+        }
+        if &dims[1..] != batch_dims {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
+                batch_dims,
+                &dims[1..]
+            )));
+        }
+        return Ok(SolveRhsLayout {
+            nrhs: 1,
+            output_dims: dims.to_vec(),
+        });
+    }
+
+    if dims.len() == 2 + batch_dims.len() {
+        if dims[0] != n {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} expects b dim[0] == n ({n}), got {}",
+                dims[0]
+            )));
+        }
+        if dims[1] == 0 {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} requires b dim[1] (nrhs) > 0"
+            )));
+        }
+        if &dims[2..] != batch_dims {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
+                batch_dims,
+                &dims[2..]
+            )));
+        }
+        return Ok(SolveRhsLayout {
+            nrhs: dims[1],
+            output_dims: dims.to_vec(),
+        });
+    }
+
+    Err(Error::InvalidArgument(format!(
+        "{op_name} expects b shape (n, *) or (n, k, *), got {:?}",
+        dims
+    )))
 }
 
 #[cfg(test)]
@@ -120,5 +191,19 @@ mod tests {
         let a = make(&[1.0, 2.0], &[2]);
         let s = extract_contiguous_slice(&a).unwrap();
         assert_eq!(s.len(), 2);
+    }
+
+    #[test]
+    fn validate_solve_rhs_shape_vector() {
+        let b = make(&[1.0, 2.0], &[2]);
+        let layout = validate_solve_rhs_shape(&b, 2, &[], "solve").unwrap();
+        assert_eq!(layout.nrhs, 1);
+        assert_eq!(layout.output_dims, vec![2]);
+    }
+
+    #[test]
+    fn validate_solve_rhs_shape_scalar_fails() {
+        let b = make(&[1.0], &[]);
+        assert!(validate_solve_rhs_shape(&b, 2, &[], "solve").is_err());
     }
 }

@@ -137,7 +137,6 @@
 pub mod backend;
 mod prims_bridge;
 
-use backend::LinalgBackend;
 use chainrules_core::AdResult;
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
@@ -384,63 +383,6 @@ fn validate_square<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<(usize, &[usiz
         });
     }
     Ok((n, batch))
-}
-
-/// Validate RHS shape for solve/solve_triangular.
-///
-/// Accepted shapes for `b` when `a` is `(n, n, *)`:
-/// - `(n, *)` (vector RHS, implied `nrhs=1`)
-/// - `(n, k, *)` (multiple RHS)
-fn validate_solve_rhs<T: LinalgScalar>(
-    b: &Tensor<T>,
-    n: usize,
-    batch_dims: &[usize],
-    op_name: &str,
-) -> Result<usize> {
-    if b.ndim() == 1 + batch_dims.len() {
-        if b.dims()[0] != n {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} expects b dim[0] == n ({n}), got {}",
-                b.dims()[0]
-            )));
-        }
-        if &b.dims()[1..] != batch_dims {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
-                batch_dims,
-                &b.dims()[1..]
-            )));
-        }
-        return Ok(1);
-    }
-
-    if b.ndim() == 2 + batch_dims.len() {
-        if b.dims()[0] != n {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} expects b dim[0] == n ({n}), got {}",
-                b.dims()[0]
-            )));
-        }
-        if &b.dims()[2..] != batch_dims {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
-                batch_dims,
-                &b.dims()[2..]
-            )));
-        }
-        let nrhs = b.dims()[1];
-        if nrhs == 0 {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} requires b dim[1] (nrhs) > 0"
-            )));
-        }
-        return Ok(nrhs);
-    }
-
-    Err(Error::InvalidArgument(format!(
-        "{op_name} expects b shape (n, *) or (n, k, *), got {:?}",
-        b.dims()
-    )))
 }
 
 /// Validate RHS shape for least squares.
@@ -935,63 +877,60 @@ pub enum NormKind {
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn svd<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn svd<T: LinalgScalar, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     options: Option<&SvdOptions>,
 ) -> Result<SvdResult<T, T::Real>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    let (m, n, batch_dims) = validate_2d(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let k = m.min(n);
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::thin_svd(ctx, tensor)?;
+    if options.is_none() {
+        return Ok(SvdResult {
+            u: result.u,
+            s: result.s,
+            vt: result.vt,
+        });
+    }
+
+    let u_input = ensure_col_major(&result.u);
+    let s_input = ensure_col_major(&result.s);
+    let vt_input = ensure_col_major(&result.vt);
+    let u_data_in = extract_slice(&u_input)?;
+    let s_data_in = extract_slice(&s_input)?;
+    let vt_data_in = extract_slice(&vt_input)?;
+    let u_offset = u_input.offset() as usize;
+    let s_offset = s_input.offset() as usize;
+    let vt_offset = vt_input.offset() as usize;
+
+    let m = result.u.dims()[0];
+    let k = result.s.dims()[0];
+    let n = result.vt.dims()[1];
+    let batch_dims = &result.s.dims()[1..];
     let bc = batch_count(batch_dims);
-    let mat_size = m * n;
 
     // Determine effective rank after truncation
-    let max_k = if let Some(opts) = options {
-        opts.max_rank.map_or(k, |r| r.min(k))
-    } else {
-        k
-    };
+    let opts = options.expect("checked above");
+    let max_k = opts.max_rank.map_or(k, |r| r.min(k));
 
     let mut u_data = vec![T::zero(); m * max_k * bc];
     let mut s_data = vec![<T::Real>::zero(); max_k * bc];
     let mut vt_data = vec![T::zero(); max_k * n * bc];
 
-    // Pre-allocate temp buffers for full-rank results per batch
-    let mut u_full = vec![T::zero(); m * k];
-    let mut s_full = vec![<T::Real>::zero(); k];
-    let mut vt_full = vec![T::zero(); k * n];
-
     for b in 0..bc {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        backend::FaerBackend::new().thin_svd(
-            batch_data,
-            m,
-            n,
-            &mut u_full,
-            &mut s_full,
-            &mut vt_full,
-        )?;
+        let u_full = &u_data_in[u_offset + b * m * k..u_offset + (b + 1) * m * k];
+        let s_full = &s_data_in[s_offset + b * k..s_offset + (b + 1) * k];
+        let vt_full = &vt_data_in[vt_offset + b * k * n..vt_offset + (b + 1) * k * n];
 
         // Apply cutoff truncation
-        let actual_k = if let Some(opts) = options {
-            if let Some(cutoff) = opts.cutoff {
-                let cutoff_r: T::Real = scalar_from(cutoff)?;
-                let mut ak = max_k;
-                while ak > 0 && s_full[ak - 1] < cutoff_r {
-                    ak -= 1;
-                }
-                ak
-            } else {
-                max_k
+        let actual_k = if let Some(cutoff) = opts.cutoff {
+            let cutoff_r: T::Real = scalar_from(cutoff)?;
+            let mut ak = max_k;
+            while ak > 0 && s_full[ak - 1] < cutoff_r {
+                ak -= 1;
             }
+            ak
         } else {
             max_k
         };
@@ -1052,39 +991,15 @@ where
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn qr<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
-    tensor: &Tensor<T>,
-) -> Result<QrResult<T>>
+pub fn qr<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<QrResult<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    let (m, n, batch_dims) = validate_2d(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let k = m.min(n);
-    let bc = batch_count(batch_dims);
-    let mat_size = m * n;
-
-    let mut q_data = vec![T::zero(); m * k * bc];
-    let mut r_data = vec![T::zero(); k * n * bc];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        let q_out = &mut q_data[b * m * k..(b + 1) * m * k];
-        let r_out = &mut r_data[b * k * n..(b + 1) * k * n];
-        backend::FaerBackend::new().qr(batch_data, m, n, q_out, r_out)?;
-    }
-
-    let q_dims = output_dims(&[m, k], batch_dims);
-    let r_dims = output_dims(&[k, n], batch_dims);
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::qr(ctx, tensor)?;
 
     Ok(QrResult {
-        q: tensor_from_data(q_data, &q_dims)?,
-        r: tensor_from_data(r_data, &r_dims)?,
+        q: result.q,
+        r: result.r,
     })
 }
 
@@ -1123,50 +1038,26 @@ where
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn lu<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn lu<T: LinalgScalar, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     pivot: LuPivot,
 ) -> Result<LuResult<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    let (m, n, batch_dims) = validate_2d(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let k = m.min(n);
-    let bc = batch_count(batch_dims);
-    let mat_size = m * n;
-
     if pivot == LuPivot::NoPivot {
         return Err(Error::InvalidArgument(
             "NoPivot LU is not yet implemented".into(),
         ));
     }
 
-    let mut l_data = vec![T::zero(); m * k * bc];
-    let mut u_data = vec![T::zero(); k * n * bc];
-    // For batched LU, we store all permutations concatenated
-    let mut all_perms = vec![0usize; m * bc];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        let perm_out = &mut all_perms[b * m..(b + 1) * m];
-        let l_out = &mut l_data[b * m * k..(b + 1) * m * k];
-        let u_out = &mut u_data[b * k * n..(b + 1) * k * n];
-        backend::FaerBackend::new().lu(batch_data, m, n, perm_out, l_out, u_out)?;
-    }
-
-    let l_dims = output_dims(&[m, k], batch_dims);
-    let u_dims = output_dims(&[k, n], batch_dims);
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
 
     Ok(LuResult {
-        p: Some(all_perms),
-        l: tensor_from_data(l_data, &l_dims)?,
-        u: tensor_from_data(u_data, &u_dims)?,
+        p: Some(result.pivots.into_iter().map(|p| p as usize).collect()),
+        l: result.l,
+        u: result.u,
     })
 }
 
@@ -1198,40 +1089,21 @@ where
 ///
 /// Returns an error if the input has fewer than 2 dimensions, the first two
 /// dimensions are not equal, or the matrix is not symmetric/Hermitian.
-pub fn eigen<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
-    tensor: &Tensor<T>,
-) -> Result<EigenResult<T, T::Real>>
+pub fn eigen<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<EigenResult<T, T::Real>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;
     let offset = input.offset() as usize;
     let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
     validate_hermitian_batches(data, offset, n, bc, "eigen")?;
-
-    let mut val_data = vec![<T::Real>::zero(); n * bc];
-    let mut vec_data = vec![T::zero(); n * n * bc];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        let val_out = &mut val_data[b * n..(b + 1) * n];
-        let vec_out = &mut vec_data[b * n * n..(b + 1) * n * n];
-        backend::FaerBackend::new().eigen_sym(batch_data, n, val_out, vec_out)?;
-    }
-
-    let val_dims = output_dims(&[n], batch_dims);
-    let vec_dims = output_dims(&[n, n], batch_dims);
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::eigen_sym(ctx, tensor)?;
 
     Ok(EigenResult {
-        values: tensor_from_data(val_data, &val_dims)?,
-        vectors: tensor_from_data(vec_data, &vec_dims)?,
+        values: result.values,
+        vectors: result.vectors,
     })
 }
 
@@ -1269,7 +1141,7 @@ pub fn lstsq<T: LinalgScalar>(
     b: &Tensor<T>,
 ) -> Result<LstsqResult<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (m, n, batch_dims) = validate_2d(a)?;
     if m < n {
@@ -1316,7 +1188,7 @@ where
         }
 
         // Solve R x = Q^T b (upper triangular)
-        backend::FaerBackend::new().solve_triangular(r_b, &qtb, k, 1, true, &mut x_buf)?;
+        backend::cpu::solve_triangular_slices(r_b, &qtb, k, 1, true, &mut x_buf)?;
         x_data[batch * n..(batch + 1) * n].copy_from_slice(&x_buf);
 
         // Compute residual: r = b - A x
@@ -1359,32 +1231,11 @@ where
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let l = cholesky(&mut ctx, &a).unwrap();
 /// ```
-pub fn cholesky<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
-    tensor: &Tensor<T>,
-) -> Result<Tensor<T>>
+pub fn cholesky<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    let (n, batch_dims) = validate_square(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
-    let mut l_data = vec![T::zero(); n * n * bc];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        let l_out = &mut l_data[b * mat_size..(b + 1) * mat_size];
-        backend::FaerBackend::new().cholesky(batch_data, n, l_out)?;
-    }
-
-    let dims = output_dims(&[n, n], batch_dims);
-    tensor_from_data(l_data, &dims)
+    <C::Backend as backend::TensorLinalgBackend<T>>::cholesky(ctx, tensor)
 }
 
 /// Solve a square linear system `A x = b`.
@@ -1407,37 +1258,11 @@ where
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let x = solve(&mut ctx, &a, &b).unwrap();
 /// ```
-pub fn solve<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
-    a: &Tensor<T>,
-    b: &Tensor<T>,
-) -> Result<Tensor<T>>
+pub fn solve<T: LinalgScalar, C>(ctx: &mut C, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    let (n, batch_dims) = validate_square(a)?;
-    let nrhs = validate_solve_rhs(b, n, batch_dims, "solve")?;
-    let a_input = ensure_col_major(a);
-    let b_input = ensure_col_major(b);
-
-    let a_data = extract_slice(&a_input)?;
-    let b_data = extract_slice(&b_input)?;
-    let a_off = a_input.offset() as usize;
-    let b_off = b_input.offset() as usize;
-    let bc = batch_count(batch_dims);
-
-    let mut x_data = vec![T::zero(); n * nrhs * bc];
-
-    for batch in 0..bc {
-        let a_b = &a_data[a_off + batch * n * n..a_off + (batch + 1) * n * n];
-        let b_b = &b_data[b_off + batch * n * nrhs..b_off + (batch + 1) * n * nrhs];
-
-        let x_out = &mut x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        backend::FaerBackend::new().solve(a_b, b_b, n, nrhs, x_out)?;
-    }
-
-    let x_dims = b.dims().to_vec();
-    tensor_from_data(x_data, &x_dims)
+    <C::Backend as backend::TensorLinalgBackend<T>>::solve(ctx, a, b)
 }
 
 /// Compute the inverse of a square matrix.
@@ -1458,11 +1283,11 @@ where
 /// let a_inv = inv(&mut ctx, &a).unwrap();
 /// ```
 pub fn inv<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -1483,7 +1308,7 @@ where
         let start = offset + b * mat_size;
         let a_b = &data[start..start + mat_size];
         let x_out = &mut inv_data[b * mat_size..(b + 1) * mat_size];
-        backend::FaerBackend::new().solve(a_b, &eye_mat, n, n, x_out)?;
+        backend::cpu::solve_slices(a_b, &eye_mat, n, n, x_out)?;
     }
 
     let dims = output_dims(&[n, n], batch_dims);
@@ -1508,11 +1333,11 @@ where
 /// let d = det(&mut ctx, &a).unwrap();
 /// ```
 pub fn det<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -1533,7 +1358,7 @@ where
         let batch_data = &data[start..start + mat_size];
 
         // det = product of diagonal of U * sign from permutation
-        backend::FaerBackend::new().lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        backend::cpu::lu_slices(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
 
         let mut d = T::one();
         for i in 0..n {
@@ -1597,11 +1422,11 @@ where
 /// // det(A) ≈ result.sign * exp(result.logabsdet)
 /// ```
 pub fn slogdet<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
 ) -> Result<SlogdetResult<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -1622,7 +1447,7 @@ where
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        backend::FaerBackend::new().lu(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        backend::cpu::lu_slices(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
 
         let mut log_abs = T::zero();
         let mut sign = T::one();
@@ -1708,55 +1533,18 @@ where
 ///
 /// Returns an error if the input has fewer than 2 dimensions or the first
 /// two dimensions are not equal.
-pub fn eig<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn eig<T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<EigResult<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    let (n, batch_dims) = validate_square(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
-    type C<R> = num_complex::Complex<R>;
-
-    let zero_c = C::new(T::zero(), T::zero());
-    let mut val_data: Vec<C<T>> = vec![zero_c; n * bc];
-    let mut vec_data: Vec<C<T>> = vec![zero_c; n * n * bc];
-
-    // Temporary interleaved buffers for backend output.
-    // For real T, the backend writes [re0, im0, re1, im1, ...].
-    let mut values_ri = vec![T::zero(); 2 * n];
-    let mut vectors_ri = vec![T::zero(); 2 * n * n];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        backend::FaerBackend::new().eig_general(batch_data, n, &mut values_ri, &mut vectors_ri)?;
-
-        // Convert interleaved [re, im, re, im, ...] to Complex<T>
-        let val_out = &mut val_data[b * n..(b + 1) * n];
-        for i in 0..n {
-            val_out[i] = C::new(values_ri[2 * i], values_ri[2 * i + 1]);
-        }
-
-        let vec_out = &mut vec_data[b * n * n..(b + 1) * n * n];
-        for k in 0..n * n {
-            vec_out[k] = C::new(vectors_ri[2 * k], vectors_ri[2 * k + 1]);
-        }
-    }
-
-    let val_dims = output_dims(&[n], batch_dims);
-    let vec_dims = output_dims(&[n, n], batch_dims);
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::eig(ctx, tensor)?;
 
     Ok(EigResult {
-        values: tensor_from_data_scalar(val_data, &val_dims)?,
-        vectors: tensor_from_data_scalar(vec_data, &vec_dims)?,
+        values: result.values,
+        vectors: result.vectors,
     })
 }
 
@@ -1786,7 +1574,7 @@ pub fn pinv<T: LinalgScalar<Real = T> + num_traits::Float>(
     rcond: Option<f64>,
 ) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (m, n, batch_dims) = validate_2d(tensor)?;
 
@@ -1875,7 +1663,7 @@ pub fn matrix_exp<T: LinalgScalar>(
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -1947,7 +1735,7 @@ fn backend_mat_mul_nn<T: LinalgScalar>(
     n: usize,
 ) -> Result<Vec<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     prims_bridge::batched_gemm_via_prims(a, n, n, b, n)
 }
@@ -1987,7 +1775,7 @@ fn matrix_exp_single<T: LinalgScalar>(
     n: usize,
 ) -> Result<Vec<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // Special case: 0x0 matrix
     if n == 0 {
@@ -2093,7 +1881,7 @@ where
 
     // Solve lhs * X = rhs  (nrhs = n for matrix RHS)
     let mut result = vec![T::zero(); nn];
-    backend::FaerBackend::new().solve(&lhs, &rhs, n, n, &mut result)?;
+    backend::cpu::solve_slices(&lhs, &rhs, n, n, &mut result)?;
 
     // 7. Repeated squaring: result = result^(2^s)
     for _ in 0..s {
@@ -2125,38 +1913,16 @@ where
 /// let b = Tensor::<f64>::zeros(&[3], mem, col);
 /// let x = solve_triangular(&mut ctx, &a, &b, true).unwrap(); // upper=true
 /// ```
-pub fn solve_triangular<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn solve_triangular<T: LinalgScalar, C>(
+    ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     upper: bool,
 ) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    let (n, batch_dims) = validate_square(a)?;
-    let nrhs = validate_solve_rhs(b, n, batch_dims, "solve_triangular")?;
-    let a_input = ensure_col_major(a);
-    let b_input = ensure_col_major(b);
-
-    let a_data = extract_slice(&a_input)?;
-    let b_data = extract_slice(&b_input)?;
-    let a_off = a_input.offset() as usize;
-    let b_off = b_input.offset() as usize;
-    let bc = batch_count(batch_dims);
-
-    let mut x_data = vec![T::zero(); n * nrhs * bc];
-
-    for batch in 0..bc {
-        let a_b = &a_data[a_off + batch * n * n..a_off + (batch + 1) * n * n];
-        let b_b = &b_data[b_off + batch * n * nrhs..b_off + (batch + 1) * n * nrhs];
-
-        let x_out = &mut x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        backend::FaerBackend::new().solve_triangular(a_b, b_b, n, nrhs, upper, x_out)?;
-    }
-
-    let x_dims = b.dims().to_vec();
-    tensor_from_data(x_data, &x_dims)
+    <C::Backend as backend::TensorLinalgBackend<T>>::solve_triangular(ctx, a, b, upper)
 }
 
 /// Compute a matrix norm.
@@ -2190,7 +1956,7 @@ pub fn norm<T: LinalgScalar<Real = T> + num_traits::Float>(
     kind: NormKind,
 ) -> Result<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (m, n, batch_dims) = validate_2d(tensor)?;
     let bc = batch_count(batch_dims);
@@ -2603,15 +2369,15 @@ where
 /// Solve A X = B for X, where A and B are n*n complex matrices.
 ///
 /// Converts the complex n*n system to a real 2n*2n system and
-/// delegates to `backend::FaerBackend::new().solve()`.
+/// delegates to `backend::cpu::solve_slices()`.
 fn complex_solve_nn<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &[Cx<T>],
     b: &[Cx<T>],
     n: usize,
 ) -> AdResult<Vec<Cx<T>>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let nn = 2 * n;
     let mut a_real = vec![T::zero(); nn * nn];
@@ -2636,9 +2402,7 @@ where
     }
 
     let mut x_real = vec![T::zero(); nn * nn];
-    backend::FaerBackend::new()
-        .solve(&a_real, &b_real, nn, nn, &mut x_real)
-        .map_err(to_ad_err)?;
+    backend::cpu::solve_slices(&a_real, &b_real, nn, nn, &mut x_real).map_err(to_ad_err)?;
 
     let zero = Cx::new(T::zero(), T::zero());
     let mut result = vec![zero; n * n];
@@ -2664,32 +2428,30 @@ fn backend_mat_mul<T: LinalgScalar<Real = T> + num_traits::Float>(
     n: usize,
 ) -> AdResult<Vec<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     prims_bridge::batched_gemm_via_prims(a, m, k, b, n).map_err(to_ad_err)
 }
 
 /// Solve via LinalgBackend, returning Vec for convenience in AD code.
 fn backend_solve<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     b: &[T],
     n: usize,
     nrhs: usize,
 ) -> AdResult<Vec<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let mut x = vec![T::zero(); n * nrhs];
-    backend::FaerBackend::new()
-        .solve(a, b, n, nrhs, &mut x)
-        .map_err(to_ad_err)?;
+    backend::cpu::solve_slices(a, b, n, nrhs, &mut x).map_err(to_ad_err)?;
     Ok(x)
 }
 
 /// Solve triangular via LinalgBackend, returning Vec for convenience in AD code.
 fn backend_solve_tri<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     b: &[T],
     n: usize,
@@ -2697,33 +2459,29 @@ fn backend_solve_tri<T: LinalgScalar<Real = T> + num_traits::Float>(
     upper: bool,
 ) -> AdResult<Vec<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let mut x = vec![T::zero(); n * nrhs];
-    backend::FaerBackend::new()
-        .solve_triangular(a, b, n, nrhs, upper, &mut x)
-        .map_err(to_ad_err)?;
+    backend::cpu::solve_triangular_slices(a, b, n, nrhs, upper, &mut x).map_err(to_ad_err)?;
     Ok(x)
 }
 
 /// Thin SVD via LinalgBackend, returning (U, S, V) for convenience in AD code.
 /// Note: returns V (not Vt) as column-major n×k for convenience in AD code.
 fn backend_thin_svd<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     m: usize,
     n: usize,
 ) -> AdResult<(Vec<T>, Vec<T>, Vec<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let k = m.min(n);
     let mut u = vec![T::zero(); m * k];
     let mut s = vec![T::zero(); k];
     let mut vt = vec![T::zero(); k * n];
-    backend::FaerBackend::new()
-        .thin_svd(a, m, n, &mut u, &mut s, &mut vt)
-        .map_err(to_ad_err)?;
+    backend::cpu::thin_svd_slices(a, m, n, &mut u, &mut s, &mut vt).map_err(to_ad_err)?;
     // Convert Vt (k×n) to V (n×k) for convenience
     let v = transpose(&vt, k, n);
     Ok((u, s, v))
@@ -2731,20 +2489,18 @@ where
 
 /// QR decomposition via LinalgBackend, returning (Q, R) for convenience in AD code.
 fn backend_qr<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+    _ctx: &mut tenferro_prims::CpuContext,
     a: &[T],
     m: usize,
     n: usize,
 ) -> AdResult<(Vec<T>, Vec<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let k = m.min(n);
     let mut q = vec![T::zero(); m * k];
     let mut r = vec![T::zero(); k * n];
-    backend::FaerBackend::new()
-        .qr(a, m, n, &mut q, &mut r)
-        .map_err(to_ad_err)?;
+    backend::cpu::qr_slices(a, m, n, &mut q, &mut r).map_err(to_ad_err)?;
     Ok((q, r))
 }
 
@@ -2810,7 +2566,7 @@ pub fn svd_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     options: Option<&SvdOptions>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = svd(ctx, tensor, options)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -2993,7 +2749,7 @@ pub fn qr_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &QrCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = qr(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3114,7 +2870,7 @@ pub fn lu_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     pivot: LuPivot,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = lu(ctx, tensor, pivot)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3335,7 +3091,7 @@ pub fn eigen_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &EigenCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // Symmetric eigendecomposition: A = V diag(E) V^T
     let result = eigen(ctx, tensor)
@@ -3436,7 +3192,7 @@ pub fn lstsq_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent_x: &Tensor<T>,
 ) -> AdResult<LstsqGrad<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = lstsq(ctx, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -3514,7 +3270,7 @@ pub fn cholesky_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // A = L L^T, dA = L^{-T} phi*(tril(L^T dL)) L^{-1}
     let l = cholesky(ctx, tensor)
@@ -3582,7 +3338,7 @@ pub fn solve_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &Tensor<T>,
 ) -> AdResult<SolveGrad<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // Ax = b → G = A^{-T} dx, dB = G, dA = -G x^T
     let x = solve(ctx, a, b)
@@ -3656,7 +3412,7 @@ pub fn inv_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dA = -B^T dB B^T where B = A^{-1}
     let b_inv = inv(ctx, tensor)
@@ -3711,7 +3467,7 @@ pub fn det_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dA = ddet * det(A) * A^{-T}
     let det_val = det(ctx, tensor)
@@ -3772,7 +3528,7 @@ pub fn slogdet_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &SlogdetCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dA = d_logabsdet * A^{-T}
     let (n, batch_dims) = validate_square(tensor)
@@ -3829,13 +3585,13 @@ where
 /// };
 /// let grad_a = eig_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eig_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+pub fn eig_rrule<T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float>(
     ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     cotangent: &EigCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
@@ -3925,7 +3681,7 @@ pub fn pinv_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     rcond: Option<f64>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dA = -(A+)^T dA+ (A+)^T + (I - AA+)(dA+)^T A+(A+)^T + (A+)^T A+ (dA+)^T (I - A+A)
     let ap = pinv(ctx, tensor, rcond)
@@ -4016,7 +3772,7 @@ pub fn matrix_exp_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
@@ -4086,7 +3842,7 @@ pub fn norm_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
     kind: NormKind,
 ) -> AdResult<Tensor<T>>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4184,7 +3940,7 @@ pub fn svd_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     options: Option<&SvdOptions>,
 ) -> AdResult<(SvdResult<T>, SvdResult<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = svd(ctx, tensor, options)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4347,7 +4103,7 @@ pub fn qr_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent: &Tensor<T>,
 ) -> AdResult<(QrResult<T>, QrResult<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = qr(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4465,7 +4221,7 @@ pub fn lu_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     pivot: LuPivot,
 ) -> AdResult<(LuResult<T>, LuResult<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = lu(ctx, tensor, pivot)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4597,7 +4353,7 @@ pub fn eigen_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent: &Tensor<T>,
 ) -> AdResult<(EigenResult<T>, EigenResult<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let result = eigen(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4687,7 +4443,7 @@ pub fn lstsq_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent_b: &Tensor<T>,
 ) -> AdResult<(LstsqResult<T>, LstsqResult<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dx = A^+ (db - dA x), where A^+ = (A^T A)^{-1} A^T
     let result = lstsq(ctx, a, b)
@@ -4762,7 +4518,7 @@ pub fn cholesky_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dL = L phi(L^{-1} dA L^{-T})
     let l = cholesky(ctx, tensor)
@@ -4827,7 +4583,7 @@ pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent_b: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dx = A^{-1} (db - dA x)
     let x = solve(ctx, a, b)
@@ -4892,7 +4648,7 @@ pub fn inv_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dB = -B dA B where B = A^{-1}
     let b_inv = inv(ctx, tensor)
@@ -4945,7 +4701,7 @@ pub fn det_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // d(det) = det(A) * tr(A^{-1} dA)
     let d = det(ctx, tensor)
@@ -5002,7 +4758,7 @@ pub fn slogdet_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent: &Tensor<T>,
 ) -> AdResult<(SlogdetResult<T>, SlogdetResult<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // d(logabsdet) = Re(tr(A^{-1} dA)), d(sign) = 0 (for real)
     let result = slogdet(ctx, tensor)
@@ -5064,13 +4820,13 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eig_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn eig_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
+pub fn eig_frule<T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float>(
     ctx: &mut tenferro_prims::CpuContext,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(EigResult<T>, EigResult<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // Forward pass
     let eig_result = eig(ctx, tensor).map_err(to_ad_err)?;
@@ -5161,7 +4917,7 @@ pub fn pinv_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     rcond: Option<f64>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     // dA+ = -A+ dA A+ + (I - A+A) dA^T (A+)^T A+ + A+ (A+)^T dA^T (I - AA+)
     let ap = pinv(ctx, tensor, rcond)
@@ -5247,7 +5003,7 @@ pub fn matrix_exp_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
@@ -5325,7 +5081,7 @@ pub fn norm_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
     kind: NormKind,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    backend::FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: backend::CpuLinalgScalar,
 {
     let nrm = norm(ctx, tensor, kind)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -5537,6 +5293,96 @@ mod internal_tests {
                 Complex64::new(31.0, 0.0),
                 Complex64::new(46.0, 0.0),
             ]
+        );
+    }
+
+    trait TestScalar: LinalgScalar {
+        fn from_f64(v: f64) -> Self;
+    }
+
+    impl TestScalar for f64 {
+        fn from_f64(v: f64) -> Self {
+            v
+        }
+    }
+
+    impl TestScalar for Complex64 {
+        fn from_f64(v: f64) -> Self {
+            Self::new(v, 0.0)
+        }
+    }
+
+    fn make<T: TestScalar>(data: &[f64], dims: &[usize]) -> Tensor<T> {
+        let typed: Vec<T> = data.iter().map(|&v| T::from_f64(v)).collect();
+        Tensor::from_slice(&typed, dims, MemoryOrder::ColumnMajor).unwrap()
+    }
+
+    fn run_generic_context_solve_dispatch_smoke<T, C>(mut ctx: C, expect_device_error: bool)
+    where
+        T: TestScalar,
+        C: backend::TensorLinalgContextFor<T>,
+    {
+        let a = make::<T>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
+        let b = make::<T>(&[4.0, 7.0], &[2]);
+        match solve(&mut ctx, &a, &b) {
+            Ok(x) => {
+                assert!(!expect_device_error);
+                assert_eq!(x.dims(), &[2]);
+            }
+            Err(err) => {
+                assert!(expect_device_error);
+                assert!(matches!(err, Error::DeviceError(_)));
+            }
+        }
+    }
+
+    #[cfg(feature = "linalg-faer")]
+    #[test]
+    fn solve_dispatch_is_generic_over_cpu_context_and_scalar() {
+        run_generic_context_solve_dispatch_smoke::<f64, _>(
+            tenferro_prims::CpuContext::new(1),
+            false,
+        );
+        run_generic_context_solve_dispatch_smoke::<Complex64, _>(
+            tenferro_prims::CpuContext::new(1),
+            false,
+        );
+    }
+
+    #[cfg(feature = "linalg-lapack")]
+    #[test]
+    fn solve_dispatch_cpu_context_returns_device_error_in_lapack_stub() {
+        run_generic_context_solve_dispatch_smoke::<f64, _>(
+            tenferro_prims::CpuContext::new(1),
+            true,
+        );
+        run_generic_context_solve_dispatch_smoke::<Complex64, _>(
+            tenferro_prims::CpuContext::new(1),
+            true,
+        );
+    }
+
+    #[test]
+    fn solve_dispatch_is_generic_over_cuda_context_and_scalar() {
+        run_generic_context_solve_dispatch_smoke::<f64, _>(
+            tenferro_prims::CudaContext::new(),
+            true,
+        );
+        run_generic_context_solve_dispatch_smoke::<Complex64, _>(
+            tenferro_prims::CudaContext::new(),
+            true,
+        );
+    }
+
+    #[test]
+    fn solve_dispatch_is_generic_over_hip_context_and_scalar() {
+        run_generic_context_solve_dispatch_smoke::<f64, _>(
+            tenferro_prims::RocmContext::new(),
+            true,
+        );
+        run_generic_context_solve_dispatch_smoke::<Complex64, _>(
+            tenferro_prims::RocmContext::new(),
+            true,
         );
     }
 }

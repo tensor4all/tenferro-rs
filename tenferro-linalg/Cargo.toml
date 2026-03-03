@@ -21,3 +21,6 @@ chainrules-core = { path = "../extern/chainrules-core" }
 faer = { workspace = true, optional = true }
 num-complex = { workspace = true }
 num-traits = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

@@ -19,7 +19,7 @@ use tenferro_device::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// use tenferro_linalg::backend::{FaerBackend, LinalgBackend};
 ///
 /// let mut backend = FaerBackend::new();
@@ -2001,6 +2001,405 @@ mod tests {
         ];
         let mut values = vec![Complex64::new(0.0, 0.0); 2];
         let mut vectors = vec![Complex64::new(0.0, 0.0); 4];
+        assert!(backend
+            .eig_general(&a, 2, &mut values, &mut vectors)
+            .is_err());
+    }
+
+    // ========================================================================
+    // Complex32 coverage and additional complex error paths migrated from
+    // integration tests so the public API does not need to expose these cases.
+    // ========================================================================
+
+    #[test]
+    fn faer_backend_mat_mul_complex32() {
+        let mut backend = FaerBackend::new();
+        let c = |re: f32, im: f32| Complex32::new(re, im);
+        let a = [c(1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(1.0, 0.0)];
+        let b = [c(1.0, 1.0), c(3.0, 0.0), c(2.0, -1.0), c(4.0, 2.0)];
+        let mut out = [Complex32::new(0.0, 0.0); 4];
+
+        backend.mat_mul(&a, 2, 2, &b, 2, &mut out).unwrap();
+
+        for i in 0..4 {
+            assert!(
+                (out[i].re - b[i].re).abs() < 1e-5 && (out[i].im - b[i].im).abs() < 1e-5,
+                "C32 mat_mul[{i}] = {:?}, expected {:?}",
+                out[i],
+                b[i]
+            );
+        }
+    }
+
+    #[test]
+    fn faer_backend_solve_complex32() {
+        let mut backend = FaerBackend::new();
+        let c = |re: f32, im: f32| Complex32::new(re, im);
+        let a = [c(2.0, 0.0), c(1.0, -1.0), c(1.0, 1.0), c(3.0, 0.0)];
+        let b_rhs = [c(1.0, 1.0), c(2.0, 0.0)];
+        let mut x = [Complex32::new(0.0, 0.0); 2];
+
+        backend.solve(&a, &b_rhs, 2, 1, &mut x).unwrap();
+
+        let ax0 = a[0] * x[0] + a[2] * x[1];
+        let ax1 = a[1] * x[0] + a[3] * x[1];
+        assert!((ax0 - b_rhs[0]).norm() < 1e-3, "C32 solve Ax[0] mismatch");
+        assert!((ax1 - b_rhs[1]).norm() < 1e-3, "C32 solve Ax[1] mismatch");
+    }
+
+    #[test]
+    fn faer_backend_eig_general_complex32() {
+        let mut backend = FaerBackend::new();
+        let c = |re: f32, im: f32| Complex32::new(re, im);
+        let a = [c(1.0, 0.0), c(2.0, 0.0), c(0.0, 1.0), c(3.0, 0.0)];
+        let mut values = [Complex32::new(0.0, 0.0); 2];
+        let mut vectors = [Complex32::new(0.0, 0.0); 4];
+
+        backend
+            .eig_general(&a, 2, &mut values, &mut vectors)
+            .unwrap();
+
+        for &v in &values {
+            assert!(v.re.is_finite() && v.im.is_finite());
+        }
+    }
+
+    #[test]
+    fn faer_backend_eig_general_complex64() {
+        let mut backend = FaerBackend::new();
+        let c = |re: f64, im: f64| Complex64::new(re, im);
+        let a = [c(1.0, 0.0), c(2.0, 0.0), c(0.0, 1.0), c(3.0, 0.0)];
+        let mut values = [Complex64::new(0.0, 0.0); 2];
+        let mut vectors = [Complex64::new(0.0, 0.0); 4];
+
+        backend
+            .eig_general(&a, 2, &mut values, &mut vectors)
+            .unwrap();
+
+        for &v in &values {
+            assert!(v.re.is_finite() && v.im.is_finite());
+        }
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [Complex64::new(1.0, 0.0)];
+        let mut u = [Complex64::new(0.0, 0.0); 4];
+        let mut s = [0.0_f64; 2];
+        let mut vt = [Complex64::new(0.0, 0.0); 4];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_complex64_invalid_u() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut u = [z; 1];
+        let mut s = [0.0_f64; 2];
+        let mut vt = [z; 4];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_complex64_invalid_s() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut u = [z; 4];
+        let mut s = [0.0_f64; 1];
+        let mut vt = [z; 4];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_thin_svd_complex64_invalid_vt() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut u = [z; 4];
+        let mut s = [0.0_f64; 2];
+        let mut vt = [z; 1];
+        assert!(backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).is_err());
+    }
+
+    #[test]
+    fn faer_backend_qr_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let a = [z];
+        let mut q = [z; 4];
+        let mut r = [z; 4];
+        assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+    }
+
+    #[test]
+    fn faer_backend_qr_complex64_invalid_q() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut q = [z; 1];
+        let mut r = [z; 4];
+        assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+    }
+
+    #[test]
+    fn faer_backend_qr_complex64_invalid_r() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut q = [z; 4];
+        let mut r = [z; 1];
+        assert!(backend.qr(&a, 2, 2, &mut q, &mut r).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let a = [z];
+        let mut perm = [0usize; 2];
+        let mut l = [z; 4];
+        let mut u_out = [z; 4];
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_complex64_invalid_perm() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut perm = [0usize; 1];
+        let mut l = [z; 4];
+        let mut u_out = [z; 4];
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_complex64_invalid_l() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut perm = [0usize; 2];
+        let mut l = [z; 1];
+        let mut u_out = [z; 4];
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_lu_complex64_invalid_u() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut perm = [0usize; 2];
+        let mut l = [z; 4];
+        let mut u_out = [z; 1];
+        assert!(backend.lu(&a, 2, 2, &mut perm, &mut l, &mut u_out).is_err());
+    }
+
+    #[test]
+    fn faer_backend_cholesky_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let a = [z];
+        let mut l = [z; 4];
+        assert!(backend.cholesky(&a, 2, &mut l).is_err());
+    }
+
+    #[test]
+    fn faer_backend_cholesky_complex64_invalid_l() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(4.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut l = [z; 1];
+        assert!(backend.cholesky(&a, 2, &mut l).is_err());
+    }
+
+    #[test]
+    fn faer_backend_cholesky_complex64_not_pd() {
+        let mut backend = FaerBackend::new();
+        let c = |re, im| Complex64::new(re, im);
+        let a = [c(-1.0, 0.0), c(0.0, 0.0), c(0.0, 0.0), c(-1.0, 0.0)];
+        let mut l = [Complex64::new(0.0, 0.0); 4];
+        assert!(backend.cholesky(&a, 2, &mut l).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let a = [Complex64::new(1.0, 0.0)];
+        let mut values = [0.0_f64; 2];
+        let mut vectors = [Complex64::new(0.0, 0.0); 4];
+        assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_complex64_invalid_values() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut values = [0.0_f64; 1];
+        let mut vectors = [z; 4];
+        assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_eigen_sym_complex64_invalid_vectors() {
+        let mut backend = FaerBackend::new();
+        let c = Complex64::new(1.0, 0.0);
+        let z = Complex64::new(0.0, 0.0);
+        let a = [c, z, z, c];
+        let mut values = [0.0_f64; 2];
+        let mut vectors = [z; 1];
+        assert!(backend.eigen_sym(&a, 2, &mut values, &mut vectors).is_err());
+    }
+
+    #[test]
+    fn faer_backend_mat_mul_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let a = [z];
+        let b = [z; 4];
+        let mut c = [z; 4];
+        assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+    }
+
+    #[test]
+    fn faer_backend_mat_mul_complex64_invalid_b() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let b = [z];
+        let mut c = [z; 4];
+        assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+    }
+
+    #[test]
+    fn faer_backend_mat_mul_complex64_invalid_c() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let b = [c64, z, z, c64];
+        let mut c = [z; 1];
+        assert!(backend.mat_mul(&a, 2, 2, &b, 2, &mut c).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let a = [z];
+        let b = [z; 2];
+        let mut x = [z; 2];
+        assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_complex64_invalid_b() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let b = [z];
+        let mut x = [z; 2];
+        assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_complex64_invalid_x() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let b = [c64, z];
+        let mut x = [z];
+        assert!(backend.solve(&a, &b, 2, 1, &mut x).is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_triangular_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let a = [z];
+        let b = [z; 2];
+        let mut x = [z; 2];
+        assert!(backend
+            .solve_triangular(&a, &b, 2, 1, true, &mut x)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_triangular_complex64_invalid_b() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let b = [z];
+        let mut x = [z; 2];
+        assert!(backend
+            .solve_triangular(&a, &b, 2, 1, true, &mut x)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_solve_triangular_complex64_invalid_x() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let b = [c64, z];
+        let mut x = [z];
+        assert!(backend
+            .solve_triangular(&a, &b, 2, 1, true, &mut x)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_complex64_invalid_a() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let a = [z];
+        let mut values = [z; 2];
+        let mut vectors = [z; 4];
+        assert!(backend
+            .eig_general(&a, 2, &mut values, &mut vectors)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_complex64_invalid_values() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let mut values = [z];
+        let mut vectors = [z; 4];
+        assert!(backend
+            .eig_general(&a, 2, &mut values, &mut vectors)
+            .is_err());
+    }
+
+    #[test]
+    fn faer_backend_eig_general_complex64_invalid_vectors() {
+        let mut backend = FaerBackend::new();
+        let z = Complex64::new(0.0, 0.0);
+        let c64 = Complex64::new(1.0, 0.0);
+        let a = [c64, z, z, c64];
+        let mut values = [z; 2];
+        let mut vectors = [z; 1];
         assert!(backend
             .eig_general(&a, 2, &mut values, &mut vectors)
             .is_err());

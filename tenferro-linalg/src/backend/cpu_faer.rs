@@ -9,14 +9,13 @@ use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
 use super::col_major_strides;
-use super::faer_backend::FaerBackend;
 use super::tensor_api::{
     EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
 };
 use super::tensor_helpers::{
-    batch_count, ensure_col_major, extract_contiguous_slice, validate_matrix_shape, validate_square,
+    batch_count, ensure_col_major, extract_contiguous_slice, validate_matrix_shape,
+    validate_solve_rhs_shape, validate_square,
 };
-use super::LinalgBackend;
 use crate::LinalgScalar;
 
 use tenferro_algebra::Scalar;
@@ -35,17 +34,11 @@ pub(crate) fn solve<T>(
 ) -> Result<Tensor<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
-    let b_dims = b.dims();
-    if b_dims.len() < 2 || b_dims[0] != n {
-        return Err(tenferro_device::Error::InvalidArgument(format!(
-            "b first dim {} does not match a size {}",
-            b_dims[0], n
-        )));
-    }
-    let nrhs = b_dims[1];
+    let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
+    let nrhs = rhs.nrhs;
     let bc = batch_count(batch_dims);
 
     let a_contig = ensure_col_major(a);
@@ -58,18 +51,15 @@ where
     let mat_a = n * n;
     let mat_b = n * nrhs;
     let mut x_data = vec![T::zero(); mat_b * bc];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_a..a_off + (i + 1) * mat_a];
         let b_slice = &b_data[b_off + i * mat_b..b_off + (i + 1) * mat_b];
         let x_slice = &mut x_data[i * mat_b..(i + 1) * mat_b];
-        backend.solve(a_slice, b_slice, n, nrhs, x_slice)?;
+        super::cpu::solve_slices(a_slice, b_slice, n, nrhs, x_slice)?;
     }
 
-    let mut out_shape = vec![n, nrhs];
-    out_shape.extend_from_slice(batch_dims);
-    tensor_from_data(x_data, &out_shape)
+    tensor_from_data(x_data, &rhs.output_dims)
 }
 
 /// Solve triangular `A x = b` via faer.
@@ -81,17 +71,11 @@ pub(crate) fn solve_triangular<T>(
 ) -> Result<Tensor<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
-    let b_dims = b.dims();
-    if b_dims.len() < 2 || b_dims[0] != n {
-        return Err(tenferro_device::Error::InvalidArgument(format!(
-            "b first dim {} does not match a size {}",
-            b_dims[0], n
-        )));
-    }
-    let nrhs = b_dims[1];
+    let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
+    let nrhs = rhs.nrhs;
     let bc = batch_count(batch_dims);
 
     let a_contig = ensure_col_major(a);
@@ -104,18 +88,15 @@ where
     let mat_a = n * n;
     let mat_b = n * nrhs;
     let mut x_data = vec![T::zero(); mat_b * bc];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_a..a_off + (i + 1) * mat_a];
         let b_slice = &b_data[b_off + i * mat_b..b_off + (i + 1) * mat_b];
         let x_slice = &mut x_data[i * mat_b..(i + 1) * mat_b];
-        backend.solve_triangular(a_slice, b_slice, n, nrhs, upper, x_slice)?;
+        super::cpu::solve_triangular_slices(a_slice, b_slice, n, nrhs, upper, x_slice)?;
     }
 
-    let mut out_shape = vec![n, nrhs];
-    out_shape.extend_from_slice(batch_dims);
-    tensor_from_data(x_data, &out_shape)
+    tensor_from_data(x_data, &rhs.output_dims)
 }
 
 /// Thin QR decomposition via faer.
@@ -125,7 +106,7 @@ pub(crate) fn qr<T>(
 ) -> Result<QrTensorResult<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -141,13 +122,12 @@ where
 
     let mut q_buf = vec![T::zero(); m * k];
     let mut r_buf = vec![T::zero(); k * n];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
         q_buf.fill(T::zero());
         r_buf.fill(T::zero());
-        backend.qr(a_slice, m, n, &mut q_buf, &mut r_buf)?;
+        super::cpu::qr_slices(a_slice, m, n, &mut q_buf, &mut r_buf)?;
         q_data[i * m * k..(i + 1) * m * k].copy_from_slice(&q_buf);
         r_data[i * k * n..(i + 1) * k * n].copy_from_slice(&r_buf);
     }
@@ -170,7 +150,7 @@ pub(crate) fn thin_svd<T>(
 ) -> Result<SvdTensorResult<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -188,11 +168,10 @@ where
     let mut u_buf = vec![T::zero(); m * k];
     let mut s_buf = vec![T::Real::zero(); k];
     let mut vt_buf = vec![T::zero(); k * n];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
-        backend.thin_svd(a_slice, m, n, &mut u_buf, &mut s_buf, &mut vt_buf)?;
+        super::cpu::thin_svd_slices(a_slice, m, n, &mut u_buf, &mut s_buf, &mut vt_buf)?;
         u_data[i * m * k..(i + 1) * m * k].copy_from_slice(&u_buf);
         s_data[i * k..(i + 1) * k].copy_from_slice(&s_buf);
         vt_data[i * k * n..(i + 1) * k * n].copy_from_slice(&vt_buf);
@@ -219,7 +198,7 @@ pub(crate) fn lu_factor<T>(
 ) -> Result<LuTensorResult<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -237,14 +216,13 @@ where
     let mut perm = vec![0usize; m];
     let mut l_buf = vec![T::zero(); m * k];
     let mut u_buf = vec![T::zero(); k * n];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
         perm.fill(0);
         l_buf.fill(T::zero());
         u_buf.fill(T::zero());
-        backend.lu(a_slice, m, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        super::cpu::lu_slices(a_slice, m, n, &mut perm, &mut l_buf, &mut u_buf)?;
         l_data[i * m * k..(i + 1) * m * k].copy_from_slice(&l_buf);
         u_data[i * k * n..(i + 1) * k * n].copy_from_slice(&u_buf);
         for (j, &p) in perm.iter().enumerate() {
@@ -268,7 +246,7 @@ where
 pub(crate) fn cholesky<T>(_ctx: &mut tenferro_prims::CpuContext, a: &Tensor<T>) -> Result<Tensor<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -280,12 +258,11 @@ where
 
     let mut l_data = vec![T::zero(); mat_size * bc];
     let mut l_buf = vec![T::zero(); mat_size];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
         l_buf.fill(T::zero());
-        backend.cholesky(a_slice, n, &mut l_buf)?;
+        super::cpu::cholesky_slices(a_slice, n, &mut l_buf)?;
         l_data[i * mat_size..(i + 1) * mat_size].copy_from_slice(&l_buf);
     }
 
@@ -301,7 +278,7 @@ pub(crate) fn eigen_sym<T>(
 ) -> Result<EigenTensorResult<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -316,11 +293,10 @@ where
 
     let mut val_buf = vec![T::Real::zero(); n];
     let mut vec_buf = vec![T::zero(); mat_size];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
-        backend.eigen_sym(a_slice, n, &mut val_buf, &mut vec_buf)?;
+        super::cpu::eigen_sym_slices(a_slice, n, &mut val_buf, &mut vec_buf)?;
         val_data[i * n..(i + 1) * n].copy_from_slice(&val_buf);
         vec_data[i * mat_size..(i + 1) * mat_size].copy_from_slice(&vec_buf);
     }
@@ -343,7 +319,7 @@ pub(crate) fn eig<T>(
 ) -> Result<EigTensorResult<T>>
 where
     T: LinalgScalar,
-    FaerBackend: LinalgBackend<T, Real = T::Real>,
+    T: super::cpu::CpuLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -360,11 +336,10 @@ where
 
     let mut all_values = vec![T::Complex::zero(); n * bc];
     let mut all_vectors = vec![T::Complex::zero(); mat_size * bc];
-    let mut backend = FaerBackend::new();
 
     for i in 0..bc {
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
-        backend.eig_general(a_slice, n, &mut val_ri, &mut vec_ri)?;
+        super::cpu::eig_slices(a_slice, n, &mut val_ri, &mut vec_ri)?;
 
         T::eig_ri_to_complex(
             n,

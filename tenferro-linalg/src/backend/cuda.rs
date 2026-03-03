@@ -7,6 +7,7 @@ use super::tensor_api::{
     EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
     TensorLinalgBackend,
 };
+use super::tensor_context::TensorLinalgContextFor;
 use crate::LinalgScalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
@@ -61,6 +62,10 @@ impl<T: LinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
     fn eig(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<EigTensorResult<T>> {
         unsupported()
     }
+}
+
+impl<T: LinalgScalar> TensorLinalgContextFor<T> for tenferro_prims::CudaContext {
+    type Backend = CudaTensorLinalgBackend;
 }
 
 #[cfg(test)]

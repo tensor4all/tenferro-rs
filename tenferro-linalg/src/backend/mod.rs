@@ -49,11 +49,12 @@ compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg
 
 // Slice-level backend (internal implementation detail)
 #[cfg(feature = "linalg-faer")]
-pub mod faer_backend;
+pub(crate) mod faer_backend;
 
 // Tensor-level API and types
 pub mod tensor_api;
 pub mod tensor_context;
+#[cfg(feature = "linalg-faer")]
 pub(crate) mod tensor_helpers;
 
 // Device backends
@@ -77,15 +78,12 @@ pub use tensor_api::{
 pub use tensor_context::TensorLinalgContextFor;
 
 // CPU backend (public)
+pub use cpu::CpuLinalgScalar;
 pub use cpu::CpuTensorLinalgBackend;
 
 // GPU backend stubs (public)
 pub use cuda::CudaTensorLinalgBackend;
 pub use hip::HipTensorLinalgBackend;
-
-// Slice-level backend (still public for backward compatibility during migration)
-#[cfg(feature = "linalg-faer")]
-pub use faer_backend::FaerBackend;
 
 use tenferro_device::Result;
 
