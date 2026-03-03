@@ -145,6 +145,22 @@ Test inputs are intentionally deterministic so failures are reproducible.
 Some cases use fixed literals; others use helper-generated well-conditioned
 or general matrices defined in the test file.
 
+#### Crate-local benchmarks
+
+`tenferro-linalg` also has a crate-local benchmark entry point:
+
+- [`tenferro-linalg/benches/linalg_benchmarks.rs`](../../tenferro-linalg/benches/linalg_benchmarks.rs)
+
+Run with:
+
+```bash
+cargo bench -p tenferro-linalg --bench linalg_benchmarks
+```
+
+The benchmark set includes forward kernels (`svd`, `qr`, `solve`,
+`matrix_exp`) and representative AD rules (`svd_rrule`, `solve_rrule`)
+across small/medium square, tall, wide, and batched-small shapes.
+
 #### Forward (decomposition correctness)
 
 Due to phase/sign freedom, tests verify **reconstruction and properties**, not decomposition outputs directly.
