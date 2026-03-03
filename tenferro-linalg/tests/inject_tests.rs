@@ -5,7 +5,6 @@ use std::ops::{Add, Mul};
 use std::sync::Once;
 
 use num_traits::Zero;
-use tenferro_linalg::backend::{BlasLapackBackend, LinalgBackend};
 use tenferro_linalg::inject::{register_blas_lapack_fn_ptrs, BlasLapackFnPtrSet};
 
 static REGISTER_ONCE: Once = Once::new();
@@ -231,12 +230,28 @@ unsafe extern "C" fn test_dgesvd(
 fn provider_inject_mat_mul_f64() {
     register_test_ptrs_once();
 
-    let mut backend = BlasLapackBackend::new();
     let a = [1.0_f64, 3.0, 2.0, 4.0];
     let b = [5.0_f64, 7.0, 6.0, 8.0];
     let mut c = [0.0_f64; 4];
 
-    backend.mat_mul(&a, 2, 2, &b, 2, &mut c).unwrap();
+    unsafe {
+        cblas_sys::cblas_dgemm(
+            cblas_sys::CBLAS_LAYOUT::CblasColMajor,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            cblas_sys::CBLAS_TRANSPOSE::CblasNoTrans,
+            2,
+            2,
+            2,
+            1.0,
+            a.as_ptr(),
+            2,
+            b.as_ptr(),
+            2,
+            0.0,
+            c.as_mut_ptr(),
+            2,
+        );
+    }
 
     assert_eq!(c, [19.0, 43.0, 22.0, 50.0]);
 }
@@ -245,13 +260,41 @@ fn provider_inject_mat_mul_f64() {
 fn provider_inject_thin_svd_f64() {
     register_test_ptrs_once();
 
-    let mut backend = BlasLapackBackend::new();
-    let a = [1.0_f64, 0.0, 0.0, 1.0];
+    let mut a = [1.0_f64, 0.0, 0.0, 1.0];
     let mut u = [0.0_f64; 4];
     let mut s = [0.0_f64; 2];
     let mut vt = [0.0_f64; 4];
+    let mut info = 0;
 
-    backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).unwrap();
+    let mut work_query = [0.0_f64; 1];
+    unsafe {
+        lapack::dgesvd(
+            b'S',
+            b'S',
+            2,
+            2,
+            &mut a,
+            2,
+            &mut s,
+            &mut u,
+            2,
+            &mut vt,
+            2,
+            &mut work_query,
+            -1,
+            &mut info,
+        );
+    }
+    assert_eq!(info, 0);
+
+    let lwork = work_query[0].max(1.0).ceil() as i32;
+    let mut work = vec![0.0_f64; lwork as usize];
+    unsafe {
+        lapack::dgesvd(
+            b'S', b'S', 2, 2, &mut a, 2, &mut s, &mut u, 2, &mut vt, 2, &mut work, lwork, &mut info,
+        );
+    }
+    assert_eq!(info, 0);
 
     assert_eq!(s, [1.0, 1.0]);
     assert_eq!(u, [1.0, 0.0, 0.0, 1.0]);

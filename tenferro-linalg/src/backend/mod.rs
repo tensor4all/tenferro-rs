@@ -49,10 +49,10 @@ compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg
 // ============================================================================
 
 // Slice-level backend (internal implementation detail)
+#[cfg(feature = "linalg-lapack")]
+pub(crate) mod blas_lapack_backend;
 #[cfg(feature = "linalg-faer")]
 pub(crate) mod faer_backend;
-#[cfg(feature = "linalg-lapack")]
-pub mod blas_lapack_backend;
 
 // Tensor-level API and types
 pub mod tensor_api;
@@ -79,8 +79,6 @@ pub use tensor_api::{
     TensorLinalgBackend,
 };
 pub use tensor_context::TensorLinalgContextFor;
-#[cfg(feature = "linalg-lapack")]
-pub use blas_lapack_backend::BlasLapackBackend;
 
 // CPU backend (public)
 pub use cpu::CpuLinalgScalar;

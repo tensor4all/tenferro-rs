@@ -1,10 +1,6 @@
 //! Tests for tenferro-linalg: forward decompositions and AD rules.
 
 use num_complex::{Complex32, Complex64};
-#[cfg(all(not(feature = "linalg-faer"), feature = "linalg-lapack"))]
-use tenferro_linalg::backend::BlasLapackBackend as FaerBackend;
-#[cfg(feature = "linalg-faer")]
-use tenferro_linalg::backend::FaerBackend;
 use tenferro_linalg::*;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
