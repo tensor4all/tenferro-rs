@@ -1,0 +1,20 @@
+[package]
+name = "tenferro-dyadtensor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "AD-aware ergonomic tensor wrapper on top of tenferro APIs."
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+thiserror.workspace = true
+chainrules-core = { path = "../../extern/chainrules-core" }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-prims = { path = "../../tenferro-prims" }
+tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-linalg = { path = "../../tenferro-linalg" }
