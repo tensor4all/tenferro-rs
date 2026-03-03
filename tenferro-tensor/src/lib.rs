@@ -767,6 +767,26 @@ impl<T: Scalar> Clone for Tensor<T> {
     }
 }
 
+impl<T: Scalar> std::fmt::Debug for Tensor<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_pending_event = self.event.is_some();
+        let has_fw_grad = self.fw_grad.is_some();
+        f.debug_struct("Tensor")
+            .field("dtype", &std::any::type_name::<T>())
+            .field("dims", &self.dims)
+            .field("strides", &self.strides)
+            .field("offset", &self.offset)
+            .field("len", &self.len())
+            .field("logical_memory_space", &self.logical_memory_space)
+            .field("preferred_compute_device", &self.preferred_compute_device)
+            .field("is_contiguous", &self.is_contiguous())
+            .field("conjugated", &self.conjugated)
+            .field("has_pending_event", &has_pending_event)
+            .field("has_fw_grad", &has_fw_grad)
+            .finish()
+    }
+}
+
 impl<T: Scalar> Tensor<T> {
     // ========================================================================
     // Constructors
@@ -2240,3 +2260,24 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
 
 // DataBuffer<T> uses T directly in Vec<T> and *const T, so no PhantomData needed.
 // This module-level comment documents the design decision.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tensor_debug_is_summary_style() {
+        let tensor = Tensor::<f32>::zeros(
+            &[2, 3],
+            LogicalMemorySpace::MainMemory,
+            MemoryOrder::ColumnMajor,
+        );
+
+        let dbg = format!("{:?}", tensor);
+        assert!(dbg.contains("Tensor"));
+        assert!(dbg.contains("f32"));
+        assert!(dbg.contains("[2, 3]"));
+        assert!(dbg.contains("logical_memory_space"));
+        assert!(dbg.contains("is_contiguous"));
+    }
+}
