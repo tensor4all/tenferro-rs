@@ -9,7 +9,8 @@
 //! Exactly one of the following features must be enabled:
 //!
 //! - `linalg-faer`: Pure-Rust via [`faer`](https://crates.io/crates/faer) (default)
-//! - `linalg-lapack`: External LAPACK binding (placeholder)
+//! - `linalg-lapack`: LAPACK + CBLAS backend with provider selection
+//!   (`provider-src` or `provider-inject`)
 //!
 //! Enabling both or neither is a compile error.
 //!
@@ -50,6 +51,8 @@ compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg
 // Slice-level backend (internal implementation detail)
 #[cfg(feature = "linalg-faer")]
 pub(crate) mod faer_backend;
+#[cfg(feature = "linalg-lapack")]
+pub mod blas_lapack_backend;
 
 // Tensor-level API and types
 pub mod tensor_api;
@@ -76,6 +79,8 @@ pub use tensor_api::{
     TensorLinalgBackend,
 };
 pub use tensor_context::TensorLinalgContextFor;
+#[cfg(feature = "linalg-lapack")]
+pub use blas_lapack_backend::BlasLapackBackend;
 
 // CPU backend (public)
 pub use cpu::CpuLinalgScalar;

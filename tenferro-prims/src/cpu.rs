@@ -1,13 +1,13 @@
 use std::any::TypeId;
 use std::marker::PhantomData;
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 use std::alloc::{self, Layout};
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 use std::collections::BTreeMap;
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 use std::ops::{Deref, DerefMut};
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 use std::ptr::NonNull;
 
 use num_complex::{Complex32, Complex64};
@@ -393,17 +393,17 @@ pub enum CpuPlan<T: Scalar> {
 pub struct CpuContext {
     pool: rayon::ThreadPool,
     plan_cache: PlanCache,
-    #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+    #[cfg(feature = "gemm-blas")]
     scratch: ScratchPool,
 }
 
 /// Alignment for all scratch allocations (cache-line / AVX-512).
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 const SCRATCH_ALIGN: usize = 64;
 
 /// Raw byte buffer stored in the pool. Does NOT impl Drop — the pool
 /// handles deallocation in its own Drop impl.
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 struct RawBuf {
     ptr: NonNull<u8>,
     cap_bytes: usize,
@@ -411,7 +411,7 @@ struct RawBuf {
 
 // SAFETY: The underlying allocation is exclusively owned; sending across
 // threads is safe as long as no aliased references exist.
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 unsafe impl Send for RawBuf {}
 
 /// Typed scratch buffer obtained from [`ScratchPool`].
@@ -420,7 +420,7 @@ unsafe impl Send for RawBuf {}
 /// returns the buffer to the pool via [`ScratchPool::put`]; if dropped
 /// without returning (e.g. during a panic), Drop deallocates the raw
 /// memory so there is no leak.
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 pub(crate) struct ScratchBuf<T> {
     ptr: NonNull<u8>,
     cap_bytes: usize,
@@ -428,7 +428,7 @@ pub(crate) struct ScratchBuf<T> {
     _marker: PhantomData<T>,
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 impl<T> ScratchBuf<T> {
     /// Extract the raw buffer, consuming self **without** running Drop.
     fn into_raw(self) -> RawBuf {
@@ -441,7 +441,7 @@ impl<T> ScratchBuf<T> {
     }
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 impl<T> Deref for ScratchBuf<T> {
     type Target = [T];
     fn deref(&self) -> &[T] {
@@ -454,7 +454,7 @@ impl<T> Deref for ScratchBuf<T> {
     }
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 impl<T> DerefMut for ScratchBuf<T> {
     fn deref_mut(&mut self) -> &mut [T] {
         if self.len == 0 {
@@ -464,7 +464,7 @@ impl<T> DerefMut for ScratchBuf<T> {
     }
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 impl<T> Drop for ScratchBuf<T> {
     fn drop(&mut self) {
         if self.cap_bytes > 0 {
@@ -479,12 +479,12 @@ impl<T> Drop for ScratchBuf<T> {
 /// Type-independent byte-level scratch pool. Buffers are keyed by byte
 /// capacity so an f64 allocation can be reused for f32 or vice-versa.
 #[derive(Default)]
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 struct ScratchPool {
     pool: BTreeMap<usize, Vec<RawBuf>>,
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 impl ScratchPool {
     /// Obtain a scratch buffer holding at least `len` elements of `T`.
     /// Contents are **uninitialized**; callers must overwrite before reading.
@@ -547,7 +547,7 @@ impl ScratchPool {
     }
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 impl Drop for ScratchPool {
     fn drop(&mut self) {
         for (_, bufs) in std::mem::take(&mut self.pool) {
@@ -571,7 +571,7 @@ impl CpuContext {
         Self {
             pool,
             plan_cache: PlanCache::new(),
-            #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+            #[cfg(feature = "gemm-blas")]
             scratch: ScratchPool::default(),
         }
     }
@@ -591,12 +591,12 @@ impl CpuContext {
         &mut self.plan_cache
     }
 
-    #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+    #[cfg(feature = "gemm-blas")]
     fn take_scratch<T>(&mut self, len: usize) -> ScratchBuf<T> {
         self.scratch.take(len)
     }
 
-    #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+    #[cfg(feature = "gemm-blas")]
     fn put_scratch<T>(&mut self, buf: ScratchBuf<T>) {
         self.scratch.put(buf);
     }
@@ -987,7 +987,7 @@ fn execute_make_contiguous<T: Scalar>(
 
 /// Fallback for the OpenBLAS backend, which requires contiguous column-major data.
 /// Packs strided A, B, C into scratch buffers, calls contiguous gemm, unpacks C.
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     ctx: &mut CpuContext,
     alpha: T,
@@ -1268,7 +1268,7 @@ fn execute_batched_gemm_strided<T: FaerGemm>(
     Ok(())
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 fn gemm_f64(
     alpha: f64,
     a: &[f64],
@@ -1303,7 +1303,7 @@ fn gemm_f64(
     Ok(())
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 fn gemm_f32(
     alpha: f32,
     a: &[f32],
@@ -1338,7 +1338,7 @@ fn gemm_f32(
     Ok(())
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 fn gemm_c64(
     alpha: Complex64,
     a: &[Complex64],
@@ -1363,19 +1363,19 @@ fn gemm_c64(
             n_i32,
             k_i32,
             &alpha_ri,
-            a.as_ptr() as *const cblas_sys::c_double_complex,
+            a.as_ptr() as *const _,
             m_i32,
-            b.as_ptr() as *const cblas_sys::c_double_complex,
+            b.as_ptr() as *const _,
             k_i32,
             &beta_ri,
-            c.as_mut_ptr() as *mut cblas_sys::c_double_complex,
+            c.as_mut_ptr() as *mut _,
             m_i32,
         );
     }
     Ok(())
 }
 
-#[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(feature = "gemm-blas")]
 fn gemm_c32(
     alpha: Complex32,
     a: &[Complex32],
@@ -1400,12 +1400,12 @@ fn gemm_c32(
             n_i32,
             k_i32,
             &alpha_ri,
-            a.as_ptr() as *const cblas_sys::c_float_complex,
+            a.as_ptr() as *const _,
             m_i32,
-            b.as_ptr() as *const cblas_sys::c_float_complex,
+            b.as_ptr() as *const _,
             k_i32,
             &beta_ri,
-            c.as_mut_ptr() as *mut cblas_sys::c_float_complex,
+            c.as_mut_ptr() as *mut _,
             m_i32,
         );
     }
@@ -1460,28 +1460,28 @@ fn execute_batched_gemm<T: Scalar + 'static>(
     if tid == TypeId::of::<f64>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_gemm!(f64, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_gemm!(f64, contiguous, gemm_f64);
     }
 
     if tid == TypeId::of::<f32>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_gemm!(f32, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_gemm!(f32, contiguous, gemm_f32);
     }
 
     if tid == TypeId::of::<Complex64>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_gemm!(Complex64, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_gemm!(Complex64, contiguous, gemm_c64);
     }
 
     if tid == TypeId::of::<Complex32>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_gemm!(Complex32, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_gemm!(Complex32, contiguous, gemm_c32);
     }
 
@@ -2366,7 +2366,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
     }
 
     /// Dense-packing GEMM for the OpenBLAS backend.
-    #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+    #[cfg(feature = "gemm-blas")]
     fn run_dense<U: Scalar>(
         alpha: U,
         a: &StridedView<U>,
@@ -2505,25 +2505,25 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
     if tid == TypeId::of::<f64>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_contract!(f64, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_contract!(f64, dense, gemm_f64);
     }
     if tid == TypeId::of::<f32>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_contract!(f32, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_contract!(f32, dense, gemm_f32);
     }
     if tid == TypeId::of::<Complex64>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_contract!(Complex64, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_contract!(Complex64, dense, gemm_c64);
     }
     if tid == TypeId::of::<Complex32>() {
         #[cfg(feature = "gemm-faer")]
         dispatch_contract!(Complex32, strided);
-        #[cfg(all(not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+        #[cfg(feature = "gemm-blas")]
         dispatch_contract!(Complex32, dense, gemm_c32);
     }
     Ok(None)
@@ -2726,7 +2726,7 @@ fn scale_output<T: Scalar>(output: &mut StridedViewMut<T>, beta: T) {
     // If beta == 1, output is unchanged (identity scaling).
 }
 
-#[cfg(all(test, not(feature = "gemm-faer"), feature = "gemm-openblas"))]
+#[cfg(all(test, feature = "gemm-blas"))]
 mod scratch_pool_tests {
     use super::*;
 

@@ -27,11 +27,22 @@
 //!
 //! `BatchedGemm` on [`CpuBackend`] requires exactly one CPU GEMM backend feature:
 //! - `gemm-faer` (default): pure-Rust faer matmul backend
-//! - `gemm-openblas`: CBLAS/OpenBLAS backend via `cblas-sys`
+//! - `gemm-blas`: CBLAS backend (`cblas-sys`) with selectable symbol provider
 //!
-//! To switch to OpenBLAS:
-//! `cargo test -p tenferro-prims --no-default-features --features gemm-openblas`
-//! (requires system CBLAS/OpenBLAS development libraries)
+//! If `gemm-blas` is selected, choose exactly one provider:
+//! - `provider-src`: link BLAS source crates (`blas-src` + `cblas-src`)
+//! - `provider-inject`: link runtime-injected symbols (`cblas-inject`)
+//!
+//! With `provider-src`, choose exactly one `src-*` implementation:
+//! `src-openblas`, `src-netlib`, `src-accelerate`, `src-r`,
+//! `src-intel-mkl-dynamic-sequential`, `src-intel-mkl-dynamic-parallel`,
+//! `src-intel-mkl-static-sequential`, `src-intel-mkl-static-parallel`.
+//!
+//! Example (OpenBLAS source provider):
+//! `cargo test -p tenferro-prims --no-default-features --features "gemm-blas,provider-src,src-openblas"`
+//!
+//! Example (runtime-injected provider):
+//! `cargo test -p tenferro-prims --no-default-features --features "gemm-blas,provider-inject"`
 
 //! # Algebra parameterization
 //!
@@ -94,13 +105,70 @@
 //! }
 //! ```
 
-#[cfg(all(feature = "gemm-faer", feature = "gemm-openblas"))]
-compile_error!("enable exactly one GEMM backend: gemm-faer or gemm-openblas");
+#[cfg(all(feature = "gemm-faer", feature = "gemm-blas"))]
+compile_error!("enable exactly one GEMM backend: gemm-faer or gemm-blas");
 
-#[cfg(all(not(feature = "gemm-faer"), not(feature = "gemm-openblas")))]
-compile_error!("enable exactly one GEMM backend: gemm-faer or gemm-openblas");
+#[cfg(all(not(feature = "gemm-faer"), not(feature = "gemm-blas")))]
+compile_error!("enable exactly one GEMM backend: gemm-faer or gemm-blas");
+
+#[cfg(all(feature = "provider-src", not(feature = "gemm-blas")))]
+compile_error!("provider-src requires gemm-blas");
+#[cfg(all(feature = "provider-inject", not(feature = "gemm-blas")))]
+compile_error!("provider-inject requires gemm-blas");
+#[cfg(all(
+    any(
+        feature = "src-openblas",
+        feature = "src-netlib",
+        feature = "src-accelerate",
+        feature = "src-r",
+        feature = "src-intel-mkl-dynamic-sequential",
+        feature = "src-intel-mkl-dynamic-parallel",
+        feature = "src-intel-mkl-static-sequential",
+        feature = "src-intel-mkl-static-parallel"
+    ),
+    not(feature = "gemm-blas")
+))]
+compile_error!("src-* features require gemm-blas and provider-src");
+
+#[cfg(feature = "gemm-blas")]
+const _: () = {
+    let provider_count =
+        (cfg!(feature = "provider-src") as usize) + (cfg!(feature = "provider-inject") as usize);
+    assert!(
+        provider_count == 1,
+        "gemm-blas requires exactly one provider: provider-src or provider-inject"
+    );
+
+    let src_count = (cfg!(feature = "src-openblas") as usize)
+        + (cfg!(feature = "src-netlib") as usize)
+        + (cfg!(feature = "src-accelerate") as usize)
+        + (cfg!(feature = "src-r") as usize)
+        + (cfg!(feature = "src-intel-mkl-dynamic-sequential") as usize)
+        + (cfg!(feature = "src-intel-mkl-dynamic-parallel") as usize)
+        + (cfg!(feature = "src-intel-mkl-static-sequential") as usize)
+        + (cfg!(feature = "src-intel-mkl-static-parallel") as usize);
+
+    if cfg!(feature = "provider-src") {
+        assert!(
+            src_count == 1,
+            "provider-src requires exactly one src-* feature"
+        );
+    }
+    if cfg!(feature = "provider-inject") {
+        assert!(src_count == 0, "provider-inject forbids src-* features");
+    }
+};
+
+#[cfg(feature = "provider-src")]
+extern crate blas_src as _;
+#[cfg(feature = "provider-inject")]
+extern crate cblas_inject as _;
+#[cfg(feature = "provider-src")]
+extern crate cblas_src as _;
 
 mod cpu;
+#[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
+pub mod inject;
 mod registry;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
