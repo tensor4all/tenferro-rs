@@ -4,6 +4,12 @@ use tenferro_prims::{CpuContext, CudaContext, RocmContext};
 
 /// Runtime execution context used by builder `.run()` entry points.
 ///
+/// Current status:
+///
+/// - `Cpu`: supported by builder `.run()` paths.
+/// - `Cuda`/`Rocm`: accepted as context values, but current builder execution
+///   paths return [`Error::UnsupportedRuntimeOp`].
+///
 /// # Examples
 ///
 /// ```rust

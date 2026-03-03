@@ -37,6 +37,7 @@ tenferro-linalg          ← Linalg + linalg AD rules (depends on chainrules-cor
 Operation-specific AD rules live with their operations:
 - Einsum AD in `tenferro-einsum`
 - Linalg AD in `tenferro-linalg`
+- Scalar elementary AD rules in `chainrules-scalarops` (extension crate)
 - Future operations in their own crates
 
 ---
@@ -86,6 +87,36 @@ Linalg uses only stateless `_rrule`/`_frule` functions — no `tracked_*` or
 - `qr_rrule`, `qr_frule` — QR AD
 - `lu_rrule`, `lu_frule` — LU AD
 - `eigen_rrule`, `eigen_frule` — Eigen AD
+
+**Scalar AD helpers (in `chainrules-scalarops`):**
+
+- `conj`, `sqrt`, `powf`, `powi` primal/frule/rrule helpers for scalar types
+- complex convention follows PyTorch conjugate-Wirtinger + `handle_r_to_c` style projection
+- math details are documented in [AD Formula Notes: scalar ops](../AD/scalar_ops.md)
+
+**Dyadtensor AD eager aliases (in `tenferro-dyadtensor::ad`):**
+
+- integration-facing eager functions without `_ad` suffix:
+  `ad::einsum`, `ad::svd`, `ad::qr`, `ad::lu`, `ad::eigen`, `ad::lstsq`,
+  `ad::cholesky`, `ad::solve`, `ad::inv`, `ad::det`, `ad::slogdet`,
+  `ad::eig`, `ad::pinv`, `ad::matrix_exp`, `ad::solve_triangular`, `ad::norm`
+- each alias is an explicit eager wrapper around existing builder paths
+  (`*_ad(...).run()`), so no tape handle is exposed at call sites
+  and no implicit `Drop`-driven execution is used
+
+### Dyadtensor HVP Support Matrix (Current)
+
+| Surface | HVP status | Current behavior |
+|---------|------------|------------------|
+| `chainrules::Tape::hvp` | Supported | Use tape-level forward-over-reverse API |
+| `tenferro-einsum::einsum_hvp` | Supported | Local einsum HVP helper exists |
+| `tenferro-dyadtensor::ad::*` eager API | Not yet exposed | No dedicated dyadtensor HVP entry point yet |
+| `tenferro-dyadtensor::solve_triangular_ad` (fwd/rev) | Not supported | Returns `Error::UnsupportedAdOp { op: "solve_triangular_ad" }` |
+
+For migration work, dyadtensor-facing HVP is staged:
+1. Document currently available low-level paths (`Tape::hvp`, `einsum_hvp`).
+2. Keep explicit unsupported errors for missing AD/HVP paths.
+3. Add dyadtensor-level HVP entry points incrementally per operation family.
 
 ---
 

@@ -19,6 +19,7 @@ use crate::ad_value::{AdValue, NodeId};
 use crate::runtime::{with_default_runtime, RuntimeContext};
 use crate::{AdTensor, Error, Result, TapeId};
 
+pub mod ad;
 mod ad_results;
 
 pub use ad_results::{
@@ -1990,6 +1991,7 @@ pub fn norm_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> NormAdBuilder<'a, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tenferro_prims::{CudaContext, RocmContext};
     use tenferro_tensor::MemoryOrder;
 
     fn as_slice<T: Scalar>(t: &Tensor<T>) -> &[T] {
@@ -2004,6 +2006,36 @@ mod tests {
             .unwrap();
         let err = qr(&t).run().err();
         assert!(matches!(err, Some(Error::RuntimeNotConfigured)));
+    }
+
+    #[test]
+    fn run_with_cuda_runtime_returns_unsupported_runtime_error() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cuda(CudaContext::new()));
+        let t = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+        let err = qr(&t).run().err();
+        assert!(matches!(
+            err,
+            Some(Error::UnsupportedRuntimeOp {
+                op: "qr",
+                runtime: "cuda"
+            })
+        ));
+    }
+
+    #[test]
+    fn run_with_rocm_runtime_returns_unsupported_runtime_error() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Rocm(RocmContext::new()));
+        let t = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+        let err = qr(&t).run().err();
+        assert!(matches!(
+            err,
+            Some(Error::UnsupportedRuntimeOp {
+                op: "qr",
+                runtime: "rocm"
+            })
+        ));
     }
 
     #[test]
