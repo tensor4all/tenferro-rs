@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use num_traits::{One, Zero};
 use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
-use tenferro_device::Result;
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{PrimDescriptor, TensorPrims};
 use tenferro_tensor::Tensor;
 
@@ -205,6 +205,39 @@ where
     if tensor.is_contiguous() {
         return Ok(tensor.clone());
     }
+
+    // CPU fast-path: avoid PrimDescriptor/plan/execute overhead for pure host
+    // copies by using strided-perm directly while still reusing pooled buffers.
+    if tensor.logical_memory_space() == LogicalMemorySpace::MainMemory {
+        if let Some(src_data) = tensor.buffer().as_slice() {
+            let dims = tensor.dims();
+            let mut result =
+                alloc_tensor_from_pool::<A::Scalar>(dims, LogicalMemorySpace::MainMemory, pool);
+
+            let src =
+                strided_view::StridedView::new(src_data, dims, tensor.strides(), tensor.offset())
+                    .map_err(|e| Error::StrideError(e.to_string()))?;
+
+            // alloc_tensor_from_pool always returns column-major contiguous layout.
+            let mut dst_strides = Vec::with_capacity(dims.len());
+            let mut s = 1isize;
+            for &d in dims {
+                dst_strides.push(s);
+                s *= d as isize;
+            }
+
+            let dst_data = result.buffer_mut().as_mut_slice().ok_or_else(|| {
+                Error::DeviceError("CPU tensor expected in host copy path".into())
+            })?;
+            let mut dst = strided_view::StridedViewMut::new(dst_data, dims, &dst_strides, 0)
+                .map_err(|e| Error::StrideError(e.to_string()))?;
+
+            strided_perm::copy_into(&mut dst, &src)
+                .map_err(|e| Error::StrideError(e.to_string()))?;
+            return Ok(result);
+        }
+    }
+
     let memory_space = tensor.logical_memory_space();
     let mut result = alloc_tensor_from_pool::<A::Scalar>(tensor.dims(), memory_space, pool);
     let desc = PrimDescriptor::MakeContiguous;
