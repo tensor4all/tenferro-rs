@@ -9,6 +9,8 @@
 //! - **Integer label notation**: omeinsum-rs compatible, using `u32` labels
 //! - **N-ary contraction**: Automatic or manual optimization of pairwise
 //!   contraction order via [`ContractionTree`]
+//! - **Binary primitive**: Public two-input einsum APIs (`einsum_binary*`) for
+//!   composing explicit contraction paths in higher layers
 //! - **Accumulating variants**: [`einsum_into`], [`einsum_with_subscripts_into`],
 //!   [`einsum_with_plan_into`] write into a pre-allocated output buffer with
 //!   BLAS-style `alpha`/`beta` scaling, avoiding allocation in hot loops
@@ -223,6 +225,7 @@
 // Internal modules
 pub(crate) mod ad;
 pub(crate) mod api;
+mod binary;
 mod classify;
 mod dispatch;
 mod execute;
@@ -244,9 +247,13 @@ pub use tree::ContractionTree;
 
 // Public re-exports: functions
 pub use api::{
-    einsum, einsum_into, einsum_owned, einsum_with_plan, einsum_with_plan_into,
-    einsum_with_plan_owned, einsum_with_subscripts, einsum_with_subscripts_into,
-    einsum_with_subscripts_owned,
+    einsum, einsum_into, einsum_owned, einsum_with_path, einsum_with_path_into, einsum_with_plan,
+    einsum_with_plan_into, einsum_with_plan_owned, einsum_with_subscripts,
+    einsum_with_subscripts_into, einsum_with_subscripts_owned,
+};
+pub use binary::{
+    einsum_binary, einsum_binary_into, einsum_binary_with_subscripts,
+    einsum_binary_with_subscripts_into,
 };
 
 pub use ad::{dual_einsum, einsum_frule, einsum_hvp, einsum_rrule, tracked_einsum};
