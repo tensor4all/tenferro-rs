@@ -118,6 +118,52 @@ where
     einsum_with_plan::<Alg, Backend>(ctx, &tree, operands, size_dict)
 }
 
+/// Execute N-ary einsum with an explicit pairwise contraction path.
+///
+/// This is a convenience wrapper around [`ContractionTree::from_pairs`]
+/// + [`einsum_with_plan`]. It makes the "N-ary = binary composition along a
+/// path" model explicit in the public API.
+///
+/// # Arguments
+///
+/// * `subscripts` — Einsum subscripts
+/// * `pairs` — Ordered pairwise contraction path
+/// * `operands` — Input tensors
+/// * `size_dict` — Optional size overrides for output-only labels
+///
+/// # Errors
+///
+/// Returns an error if the path is invalid for the provided subscripts/shapes.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::{einsum_with_path, Subscripts};
+/// use tenferro_prims::{CpuBackend, CpuContext};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+/// // Path: contract B*C first, then A*(BC)
+/// let pairs = vec![(1, 2), (0, 3)];
+/// let d = einsum_with_path::<_, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None).unwrap();
+/// ```
+pub fn einsum_with_path<Alg, Backend>(
+    ctx: &mut Backend::Context,
+    subscripts: &Subscripts,
+    pairs: &[(usize, usize)],
+    operands: &[&Tensor<Alg::Scalar>],
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<Tensor<Alg::Scalar>>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
+    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    let tree = ContractionTree::from_pairs(subscripts, &shapes, pairs)?;
+    einsum_with_plan::<Alg, Backend>(ctx, &tree, operands, size_dict)
+}
+
 /// Execute einsum with a pre-optimized [`ContractionTree`].
 ///
 /// Avoids both subscript parsing and contraction order optimization.
@@ -389,6 +435,44 @@ where
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)?;
+    einsum_with_plan_into::<Alg, Backend>(ctx, &tree, operands, alpha, beta, output, size_dict)
+}
+
+/// Execute N-ary einsum with an explicit pairwise contraction path, accumulating
+/// into an existing output tensor.
+///
+/// Computes `output = alpha * einsum_path(operands) + beta * output`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_einsum::{einsum_with_path_into, Subscripts};
+/// use tenferro_prims::{CpuBackend, CpuContext};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+/// let pairs = vec![(1, 2), (0, 3)];
+/// einsum_with_path_into::<_, CpuBackend>(
+///     &mut ctx, &subs, &pairs, &[&a, &b, &c], 1.0, 0.0, &mut out, None
+/// ).unwrap();
+/// ```
+pub fn einsum_with_path_into<Alg, Backend>(
+    ctx: &mut Backend::Context,
+    subscripts: &Subscripts,
+    pairs: &[(usize, usize)],
+    operands: &[&Tensor<Alg::Scalar>],
+    alpha: Alg::Scalar,
+    beta: Alg::Scalar,
+    output: &mut Tensor<Alg::Scalar>,
+    size_dict: Option<&HashMap<u32, usize>>,
+) -> Result<()>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
+    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    let tree = ContractionTree::from_pairs(subscripts, &shapes, pairs)?;
     einsum_with_plan_into::<Alg, Backend>(ctx, &tree, operands, alpha, beta, output, size_dict)
 }
 

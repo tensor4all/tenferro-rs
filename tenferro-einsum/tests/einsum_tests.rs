@@ -7,8 +7,10 @@
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{
-    dual_einsum, einsum, einsum_frule, einsum_into, einsum_owned, einsum_rrule, einsum_with_plan,
-    einsum_with_subscripts, tracked_einsum, ContractionTree, Subscripts,
+    dual_einsum, einsum, einsum_frule, einsum_into, einsum_owned, einsum_rrule, einsum_with_path,
+    einsum_with_path_into, einsum_with_plan, einsum_with_plan_owned, einsum_with_subscripts,
+    einsum_with_subscripts_into, einsum_with_subscripts_owned, tracked_einsum, ContractionTree,
+    Subscripts,
 };
 use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -490,6 +492,150 @@ fn einsum_owned_matmul() {
     .unwrap();
     let c = einsum_owned::<S, CpuBackend>(&mut ctx, "ij,jk->ik", vec![a, b], None).unwrap();
     assert_eq!(c.dims(), &[2, 4]);
+}
+
+#[test]
+fn einsum_with_subscripts_owned_matches_borrowed() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+
+    let expected =
+        einsum_with_subscripts::<S, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
+    let got =
+        einsum_with_subscripts_owned::<S, CpuBackend>(&mut ctx, &subs, vec![a, b], None).unwrap();
+    assert_tensors_close(&got, &expected, "with_subscripts_owned");
+}
+
+#[test]
+fn einsum_with_plan_owned_matches_borrowed() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes: &[&[usize]] = &[&[2, 3], &[3, 4]];
+    let tree = ContractionTree::optimize(&subs, shapes).unwrap();
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+        COL,
+    )
+    .unwrap();
+
+    let expected = einsum_with_plan::<S, CpuBackend>(&mut ctx, &tree, &[&a, &b], None).unwrap();
+    let got = einsum_with_plan_owned::<S, CpuBackend>(&mut ctx, &tree, vec![a, b], None).unwrap();
+    assert_tensors_close(&got, &expected, "with_plan_owned");
+}
+
+#[test]
+fn einsum_with_path_matches_flat_nary() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let pairs = vec![(1, 2), (0, 3)];
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[9.0, 10.0, 11.0, 12.0], &[2, 2], COL).unwrap();
+
+    let via_path =
+        einsum_with_path::<S, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None).unwrap();
+    let flat = einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a, &b, &c], None).unwrap();
+    assert_tensors_close(&via_path, &flat, "with_path");
+}
+
+#[test]
+fn einsum_with_path_invalid_pairs_errors() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let bad_pairs = vec![(0, 99), (0, 3)];
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[9.0, 10.0, 11.0, 12.0], &[2, 2], COL).unwrap();
+
+    let result =
+        einsum_with_path::<S, CpuBackend>(&mut ctx, &subs, &bad_pairs, &[&a, &b, &c], None);
+    assert!(result.is_err(), "invalid contraction path must error");
+}
+
+#[test]
+fn einsum_with_subscripts_into_accumulate() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let expected_mm =
+        einsum_with_subscripts::<S, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
+
+    let mut out = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    einsum_with_subscripts_into::<S, CpuBackend>(
+        &mut ctx,
+        &subs,
+        &[&a, &b],
+        2.0,
+        3.0,
+        &mut out,
+        None,
+    )
+    .unwrap();
+
+    let got = out.buffer().as_slice().unwrap();
+    let mm = expected_mm.buffer().as_slice().unwrap();
+    for i in 0..got.len() {
+        let expected = 2.0 * mm[i] + 3.0;
+        assert!(
+            (got[i] - expected).abs() < 1e-10,
+            "with_subscripts_into[{i}] got={}, expected={expected}",
+            got[i]
+        );
+    }
+}
+
+#[test]
+fn einsum_with_path_into_accumulate() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let pairs = vec![(1, 2), (0, 3)];
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[9.0, 10.0, 11.0, 12.0], &[2, 2], COL).unwrap();
+    let base =
+        einsum_with_path::<S, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None).unwrap();
+
+    let mut out = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    einsum_with_path_into::<S, CpuBackend>(
+        &mut ctx,
+        &subs,
+        &pairs,
+        &[&a, &b, &c],
+        2.0,
+        3.0,
+        &mut out,
+        None,
+    )
+    .unwrap();
+
+    let got = out.buffer().as_slice().unwrap();
+    let base_data = base.buffer().as_slice().unwrap();
+    for i in 0..got.len() {
+        let expected = 2.0 * base_data[i] + 3.0;
+        assert!(
+            (got[i] - expected).abs() < 1e-10,
+            "with_path_into[{i}] got={}, expected={expected}",
+            got[i]
+        );
+    }
 }
 
 #[test]
