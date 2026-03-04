@@ -19,6 +19,7 @@ impl<T> BufferPool<T> {
 
     /// Take a buffer of at least `len` elements from the pool.
     /// Returns an uninitialized buffer (caller must fill before reading).
+    #[allow(clippy::uninit_vec)]
     pub fn take(&mut self, len: usize) -> Vec<T> {
         // Find smallest buffer with capacity >= len
         let mut found_cap = None;
