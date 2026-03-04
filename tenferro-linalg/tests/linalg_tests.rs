@@ -221,7 +221,7 @@ fn fd_helpers_smoke_test() {
 
     // frule: d(A^T) should be (dA)^T
     check_frule_fd(
-        &transpose_fn,
+        transpose_fn,
         |_x, dx| {
             let dd = tensor_data(dx);
             let mut out = vec![0.0; 6];
@@ -239,7 +239,7 @@ fn fd_helpers_smoke_test() {
 
     // rrule: grad w.r.t. A given cotangent on A^T is cotangent^T
     check_rrule_fd(
-        &transpose_fn,
+        transpose_fn,
         |_x, co| {
             let cd = tensor_data(co);
             // cotangent is 3x2, output grad is 2x3
@@ -632,7 +632,7 @@ fn inv_2x2() {
     let inv_data = tensor_data(&a_inv);
 
     // A * A^{-1} should be identity
-    let a_data = vec![1.0, 2.0, 3.0, 4.0];
+    let a_data = [1.0, 2.0, 3.0, 4.0];
     let n = 2;
     for i in 0..n {
         for j in 0..n {
@@ -742,7 +742,7 @@ fn pinv_square_invertible() {
     let ap_data = tensor_data(&ap);
 
     // A * A+ * A ~= A
-    let a_data = vec![1.0, 2.0, 3.0, 4.0];
+    let a_data = [1.0, 2.0, 3.0, 4.0];
     let n = 2;
     // A * A+
     let mut aap = vec![0.0; n * n];
@@ -2422,7 +2422,7 @@ fn lstsq_rrule_fd_systematic() {
         a_data[i + i * m] += 5.0;
     }
     // Construct b = A * x_true so residual is zero
-    let x_true = vec![1.0, 2.0];
+    let x_true = [1.0, 2.0];
     let mut b_data = vec![0.0; m];
     for i in 0..m {
         for j in 0..n {
@@ -2998,7 +2998,7 @@ fn lstsq_frule_fd_through_x_vary_a() {
         a_data[i + i * m] += 5.0;
     }
     // Construct b = A * x_true so residual is zero
-    let x_true = vec![1.0, 2.0];
+    let x_true = [1.0, 2.0];
     let mut b_data = vec![0.0; m];
     for i in 0..m {
         for j in 0..n {
@@ -3916,11 +3916,11 @@ fn norm_batched_fro() {
     let nd = tensor_data(&n);
     assert_eq!(nd.len(), 2);
     // Frobenius norm of identity = sqrt(2)
-    for i in 0..2 {
+    for (i, value) in nd.iter().enumerate().take(2) {
         assert!(
-            (nd[i] - 2.0_f64.sqrt()).abs() < 1e-10,
+            (*value - 2.0_f64.sqrt()).abs() < 1e-10,
             "batch Fro norm[{i}] = {}",
-            nd[i]
+            value
         );
     }
 }
@@ -4563,8 +4563,7 @@ fn lu_rrule_rejects_l_cotangent_shape_mismatch() {
     };
 
     let err = lu_rrule(&mut ctx, &a, &co, LuPivot::Partial)
-        .err()
-        .expect("shape mismatch should return an error");
+        .expect_err("shape mismatch should return an error");
     assert!(matches!(
         err,
         chainrules_core::AutodiffError::InvalidArgument(_)
@@ -4581,8 +4580,7 @@ fn lu_rrule_rejects_u_cotangent_shape_mismatch() {
     };
 
     let err = lu_rrule(&mut ctx, &a, &co, LuPivot::Partial)
-        .err()
-        .expect("shape mismatch should return an error");
+        .expect_err("shape mismatch should return an error");
     assert!(matches!(
         err,
         chainrules_core::AutodiffError::InvalidArgument(_)
@@ -4825,6 +4823,96 @@ fn solve_triangular_rrule_upper_fd() {
             grad_b[idx]
         );
     }
+}
+
+#[test]
+fn solve_triangular_rrule_complex64_matches_manual_formula() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_complex_tensor(
+        vec![c(2.0, 0.0), c(0.0, 0.0), c(1.0, -0.5), c(3.0, 0.0)],
+        &[2, 2],
+    );
+    let b = make_complex_tensor(vec![c(1.0, 0.5), c(2.0, -0.25)], &[2, 1]);
+    let cot = make_complex_tensor(vec![c(0.5, -0.2), c(-0.25, 0.1)], &[2, 1]);
+
+    let grad = solve_triangular_rrule(&mut ctx, &a, &b, &cot, true).unwrap();
+    let x = solve_triangular(&mut ctx, &a, &b, true).unwrap();
+
+    // G = solve(A^H, cot) where A is upper triangular => A^H is lower triangular.
+    let ad = complex_tensor_data(&a);
+    let a_h = make_complex_tensor(
+        vec![ad[0].conj(), ad[2].conj(), ad[1].conj(), ad[3].conj()],
+        &[2, 2],
+    );
+    let g = solve_triangular(&mut ctx, &a_h, &cot, false).unwrap();
+    let gd = complex_tensor_data(&g);
+    let xd = complex_tensor_data(&x);
+
+    // dA = triu(-G x^H), dB = G
+    let m00 = -(gd[0] * xd[0].conj());
+    let m10 = c(0.0, 0.0);
+    let m01 = -(gd[0] * xd[1].conj());
+    let m11 = -(gd[1] * xd[1].conj());
+    let expected_a = make_complex_tensor(vec![m00, m10, m01, m11], &[2, 2]);
+    let expected_b = make_complex_tensor(gd, &[2, 1]);
+
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.a),
+            &complex_tensor_data(&expected_a)
+        ) < 1e-10
+    );
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.b),
+            &complex_tensor_data(&expected_b)
+        ) < 1e-10
+    );
+}
+
+#[test]
+fn solve_rrule_complex64_matches_manual_formula() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_complex_tensor(
+        vec![c(3.0, 0.0), c(1.0, 0.5), c(0.2, -0.3), c(2.0, 0.0)],
+        &[2, 2],
+    );
+    let b = make_complex_tensor(vec![c(1.0, -0.2), c(0.5, 0.4)], &[2, 1]);
+    let cot = make_complex_tensor(vec![c(0.3, 0.1), c(-0.7, 0.2)], &[2, 1]);
+
+    let grad = solve_rrule(&mut ctx, &a, &b, &cot).unwrap();
+    let x = solve(&mut ctx, &a, &b).unwrap();
+
+    // G = solve(A^H, cot)
+    let ad = complex_tensor_data(&a);
+    let a_h = make_complex_tensor(
+        vec![ad[0].conj(), ad[2].conj(), ad[1].conj(), ad[3].conj()],
+        &[2, 2],
+    );
+    let g = solve(&mut ctx, &a_h, &cot).unwrap();
+    let gd = complex_tensor_data(&g);
+    let xd = complex_tensor_data(&x);
+
+    // dA = -G x^H, dB = G
+    let m00 = -(gd[0] * xd[0].conj());
+    let m10 = -(gd[1] * xd[0].conj());
+    let m01 = -(gd[0] * xd[1].conj());
+    let m11 = -(gd[1] * xd[1].conj());
+    let expected_a = make_complex_tensor(vec![m00, m10, m01, m11], &[2, 2]);
+    let expected_b = make_complex_tensor(gd, &[2, 1]);
+
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.a),
+            &complex_tensor_data(&expected_a)
+        ) < 1e-10
+    );
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.b),
+            &complex_tensor_data(&expected_b)
+        ) < 1e-10
+    );
 }
 
 // ============================================================================

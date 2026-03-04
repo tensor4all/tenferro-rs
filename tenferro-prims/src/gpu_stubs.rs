@@ -42,6 +42,13 @@ impl CudaContext {
     }
 }
 
+#[cfg(not(feature = "cuda"))]
+impl Default for CudaContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// CUDA plan (stub) — placeholder when `cuda` feature is not enabled.
 ///
 /// **Status: Stub.** Enable the `cuda` feature for the real implementation.
@@ -153,6 +160,12 @@ impl RocmContext {
             _workspace: Vec::new(),
             _plan_cache: PlanCache::new(),
         }
+    }
+}
+
+impl Default for RocmContext {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

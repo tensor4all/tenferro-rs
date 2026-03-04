@@ -133,9 +133,9 @@ where
 
 /// Execute N-ary einsum with an explicit pairwise contraction path.
 ///
-/// This is a convenience wrapper around [`ContractionTree::from_pairs`]
-/// + [`einsum_with_plan`]. It makes the "N-ary = binary composition along a
-/// path" model explicit in the public API.
+/// This is a convenience wrapper around [`ContractionTree::from_pairs`] and
+/// [`einsum_with_plan`]. It makes the "N-ary = binary composition along a path"
+/// model explicit in the public API.
 ///
 /// # Arguments
 ///

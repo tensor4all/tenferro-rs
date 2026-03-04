@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_bound_locations)]
+
 //! `tenferro-dyadtensor`: AD-aware tensor interface layer on top of `tenferro-rs`.
 
 pub mod ad_value;
@@ -6,6 +8,7 @@ pub mod context;
 pub mod dyn_types;
 pub mod error;
 pub mod policy;
+mod reverse_tape;
 pub mod runtime;
 pub mod traits;
 

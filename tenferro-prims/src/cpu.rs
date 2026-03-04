@@ -29,6 +29,7 @@ use crate::{
 trait FaerGemm: Scalar {
     /// # Safety
     /// All pointers must be valid for the given dimensions and strides.
+    #[allow(clippy::too_many_arguments)]
     unsafe fn strided_gemm(
         alpha: Self,
         a_ptr: *const Self,
@@ -1168,6 +1169,7 @@ fn batch_offset(
 
 /// Strided batched GEMM via faer — zero allocation, zero copy.
 #[cfg(feature = "gemm-faer")]
+#[allow(clippy::too_many_arguments)]
 fn execute_batched_gemm_strided<T: FaerGemm>(
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -1412,6 +1414,7 @@ fn gemm_c32(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_batched_gemm<T: Scalar + 'static>(
     _ctx: &mut CpuContext,
     alpha: T,
@@ -1514,12 +1517,12 @@ fn execute_reduce_sum<T: Scalar>(
             // Build full input index by interleaving free and reduced
             let mut out_pos = 0;
             let mut red_pos = 0;
-            for ax in 0..in_dims.len() {
+            for (ax, in_slot) in in_idx.iter_mut().enumerate().take(in_dims.len()) {
                 if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    in_idx[ax] = red_idx[red_pos];
+                    *in_slot = red_idx[red_pos];
                     red_pos += 1;
                 } else {
-                    in_idx[ax] = out_idx[out_pos];
+                    *in_slot = out_idx[out_pos];
                     out_pos += 1;
                 }
             }
@@ -1660,6 +1663,7 @@ fn execute_anti_trace<T: Scalar>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_anti_diag<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,
@@ -1818,9 +1822,9 @@ fn execute_elementwise_unary<T: Scalar>(
                     unsafe { *(&r as *const Complex32 as *const T) }
                 })
             } else {
-                Err(Error::InvalidArgument(format!(
-                    "Conj not supported for this scalar type"
-                )))
+                Err(Error::InvalidArgument(
+                    "Conj not supported for this scalar type".into(),
+                ))
             }
         }
         UnaryOp::Negate => {
@@ -1851,9 +1855,9 @@ fn execute_elementwise_unary<T: Scalar>(
                     unsafe { *(&r as *const Complex32 as *const T) }
                 })
             } else {
-                Err(Error::InvalidArgument(format!(
-                    "Negate not supported for this scalar type"
-                )))
+                Err(Error::InvalidArgument(
+                    "Negate not supported for this scalar type".into(),
+                ))
             }
         }
         UnaryOp::Reciprocal => {
@@ -1883,9 +1887,9 @@ fn execute_elementwise_unary<T: Scalar>(
                     unsafe { *(&r as *const Complex32 as *const T) }
                 })
             } else {
-                Err(Error::InvalidArgument(format!(
-                    "Reciprocal not supported for this scalar type"
-                )))
+                Err(Error::InvalidArgument(
+                    "Reciprocal not supported for this scalar type".into(),
+                ))
             }
         }
         UnaryOp::Abs => {
@@ -1917,9 +1921,9 @@ fn execute_elementwise_unary<T: Scalar>(
                     unsafe { *(&r as *const Complex32 as *const T) }
                 })
             } else {
-                Err(Error::InvalidArgument(format!(
-                    "Abs not supported for this scalar type"
-                )))
+                Err(Error::InvalidArgument(
+                    "Abs not supported for this scalar type".into(),
+                ))
             }
         }
         UnaryOp::Sqrt => {
@@ -1949,14 +1953,15 @@ fn execute_elementwise_unary<T: Scalar>(
                     unsafe { *(&r as *const Complex32 as *const T) }
                 })
             } else {
-                Err(Error::InvalidArgument(format!(
-                    "Sqrt not supported for this scalar type"
-                )))
+                Err(Error::InvalidArgument(
+                    "Sqrt not supported for this scalar type".into(),
+                ))
             }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_contract<T: Scalar>(
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -2081,6 +2086,7 @@ fn execute_contract<T: Scalar>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn try_execute_contract_gemm<T: Scalar + 'static>(
     alpha: T,
     inputs: &[&StridedView<T>],
@@ -2184,6 +2190,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
 
     /// Compute the fused GEMM layout from mode specs and tensor shapes/strides.
     /// Returns `None` if the modes cannot be fused into a valid GEMM layout.
+    #[allow(clippy::too_many_arguments)]
     fn compute_layout(
         a_dims_src: &[usize],
         a_strides_src: &[isize],

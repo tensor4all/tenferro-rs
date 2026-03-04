@@ -448,8 +448,8 @@ fn diagonal_data_access() {
     let buf = d.buffer().as_slice().unwrap();
     let off = d.offset();
     let s = d.strides()[0];
-    assert_eq!(buf[(off + 0 * s) as usize], 1.0);
-    assert_eq!(buf[(off + 1 * s) as usize], 2.0);
+    assert_eq!(buf[off as usize], 1.0);
+    assert_eq!(buf[(off + s) as usize], 2.0);
     assert_eq!(buf[(off + 2 * s) as usize], 3.0);
 }
 
@@ -540,8 +540,8 @@ fn select_dim0() {
     assert_eq!(s.dims(), &[3]);
     // Row 1: t(1,0)=2, t(1,1)=4, t(1,2)=6
     let buf = s.buffer().as_slice().unwrap();
-    assert_eq!(buf[(s.offset() + 0 * s.strides()[0]) as usize], 2.0);
-    assert_eq!(buf[(s.offset() + 1 * s.strides()[0]) as usize], 4.0);
+    assert_eq!(buf[s.offset() as usize], 2.0);
+    assert_eq!(buf[(s.offset() + s.strides()[0]) as usize], 4.0);
     assert_eq!(buf[(s.offset() + 2 * s.strides()[0]) as usize], 6.0);
 }
 
@@ -553,8 +553,8 @@ fn select_dim1() {
     assert_eq!(s.dims(), &[2]);
     // Col 2: t(0,2)=5, t(1,2)=6
     let buf = s.buffer().as_slice().unwrap();
-    assert_eq!(buf[(s.offset() + 0 * s.strides()[0]) as usize], 5.0);
-    assert_eq!(buf[(s.offset() + 1 * s.strides()[0]) as usize], 6.0);
+    assert_eq!(buf[s.offset() as usize], 5.0);
+    assert_eq!(buf[(s.offset() + s.strides()[0]) as usize], 6.0);
 }
 
 #[test]
@@ -594,7 +594,7 @@ fn narrow_basic() {
     // Cols 1..3: t(0,1)=3, t(1,1)=4, t(0,2)=5, t(1,2)=6
     let buf = n.buffer().as_slice().unwrap();
     let off = n.offset();
-    assert_eq!(buf[(off + 0) as usize], 3.0); // t(0,1)
+    assert_eq!(buf[off as usize], 3.0); // t(0,1)
     assert_eq!(buf[(off + 1) as usize], 4.0); // t(1,1)
 }
 

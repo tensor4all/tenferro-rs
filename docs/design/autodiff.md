@@ -106,6 +106,10 @@ Linalg uses only stateless `_rrule`/`_frule` functions — no `tracked_*` or
 - dyadtensor also exposes stateless local-rule helpers for integration paths:
   `ad::einsum_rrule`, `ad::einsum_frule`, `ad::einsum_hvp`,
   `ad::solve_triangular_rrule`
+- reverse pullback execution without tape-handle exposure is available via
+  `ad::pullback` / `ad::pullback_wrt` for builder ops that register local
+  reverse rules (currently `einsum_ad(...).run()` and
+  `solve_triangular_ad(...).run()`)
 
 ### Dyadtensor HVP Support Matrix (Current)
 
@@ -114,8 +118,9 @@ Linalg uses only stateless `_rrule`/`_frule` functions — no `tracked_*` or
 | `chainrules::Tape::hvp` | Supported | Use tape-level forward-over-reverse API |
 | `tenferro-einsum::einsum_hvp` | Supported | Local einsum HVP helper exists |
 | `tenferro-dyadtensor::ad::einsum_hvp` | Supported | Dyadtensor wrapper over local einsum HVP helper |
-| `tenferro-dyadtensor::solve_triangular_ad` | Forward supported | Uses `solve_triangular_frule` for JVP; dyadtensor reverse path still metadata-only |
+| `tenferro-dyadtensor::solve_triangular_ad` | Forward + reverse pullback (registered ops) | Uses `solve_triangular_frule` for JVP; reverse VJP is executed via `ad::pullback` |
 | `tenferro-dyadtensor::ad::solve_triangular_rrule` | Supported (stateless helper) | Explicit VJP helper without exposing tape handles |
+| `tenferro-dyadtensor::ad::pullback` | Supported (partial graph coverage) | Executes reverse pass for nodes with registered local rules |
 
 For migration work, dyadtensor-facing higher-order AD is staged:
 1. Provide stateless wrappers first (`ad::einsum_hvp`, `ad::solve_triangular_rrule`).

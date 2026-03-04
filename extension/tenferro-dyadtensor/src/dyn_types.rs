@@ -233,8 +233,7 @@ fn tensor_element<T: Scalar + Copy>(tensor: &Tensor<T>, indices: &[usize]) -> Re
     }
 
     let mut offset = tensor.offset();
-    for axis in 0..indices.len() {
-        let idx = indices[axis];
+    for (axis, &idx) in indices.iter().enumerate() {
         let dim = tensor.dims()[axis];
         if idx >= dim {
             return Err(Error::InvalidAdTensor {

@@ -16,6 +16,7 @@ use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad_value::{AdValue, NodeId};
+use crate::reverse_tape;
 use crate::runtime::{with_default_runtime, RuntimeContext};
 use crate::{AdTensor, Error, Result, TapeId};
 
@@ -111,6 +112,58 @@ fn derive_reverse_node<S: Scalar>(
     }
 
     NodeId(hasher.finish())
+}
+
+#[derive(Clone)]
+struct ReverseInputSpec {
+    node: NodeId,
+    dims: Vec<usize>,
+}
+
+fn collect_reverse_input_specs<S: Scalar>(
+    operands: &[&AdTensor<S>],
+) -> Vec<Option<ReverseInputSpec>> {
+    operands
+        .iter()
+        .map(|op| match op.as_value() {
+            AdValue::Reverse { node, .. } => Some(ReverseInputSpec {
+                node: *node,
+                dims: op.dims().to_vec(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn normalize_pullback_shape<T: Scalar>(
+    grad: Tensor<T>,
+    expected_dims: &[usize],
+    op_name: &'static str,
+) -> Result<Tensor<T>> {
+    if grad.dims() == expected_dims {
+        return Ok(grad);
+    }
+
+    let expected_len: usize = expected_dims.iter().product();
+    if grad.len() != expected_len {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} pullback shape mismatch: expected {:?} (len={expected_len}), got {:?} (len={})",
+                expected_dims,
+                grad.dims(),
+                grad.len()
+            ),
+        });
+    }
+
+    grad.reshape(expected_dims)
+        .map_err(|e| Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} pullback reshape failed from {:?} to {:?}: {e}",
+                grad.dims(),
+                expected_dims
+            ),
+        })
 }
 
 fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
@@ -310,7 +363,10 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdTensor<T>> {
+    pub fn run(self) -> Result<AdTensor<T>>
+    where
+        T: 'static,
+    {
         with_cpu_runtime("einsum_ad", |ctx| {
             let primals: Vec<&Tensor<T>> = self.operands.iter().map(|op| op.primal()).collect();
             let primal_out = tf_einsum::einsum::<Standard<T>, CpuBackend>(
@@ -328,7 +384,55 @@ where
                 None
             };
 
-            wrap_ad_output("einsum_ad", self.operands, primal_out, tangent_out, 0)
+            let out = wrap_ad_output("einsum_ad", self.operands, primal_out, tangent_out, 0)?;
+
+            if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+                let subscripts = self.subscripts.to_string();
+                let reverse_specs = collect_reverse_input_specs(self.operands);
+                let primal_owned: Vec<Tensor<T>> =
+                    primals.iter().map(|tensor| (*tensor).clone()).collect();
+                let output_node = *node;
+                let tape_id = *tape;
+
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let primal_refs: Vec<&Tensor<T>> = primal_owned.iter().collect();
+                        let gradients = with_cpu_runtime("einsum_ad_pullback", |ctx| {
+                            tf_einsum::einsum_rrule::<Standard<T>, CpuBackend>(
+                                ctx,
+                                &subscripts,
+                                &primal_refs,
+                                cotangent,
+                            )
+                            .map_err(Error::from)
+                        })?;
+
+                        if gradients.len() != reverse_specs.len() {
+                            return Err(Error::InvalidAdTensor {
+                                message: format!(
+                                    "einsum_ad pullback arity mismatch: expected {}, got {}",
+                                    reverse_specs.len(),
+                                    gradients.len()
+                                ),
+                            });
+                        }
+
+                        let mut input_grads = Vec::new();
+                        for (k, grad) in gradients.into_iter().enumerate() {
+                            let Some(spec) = &reverse_specs[k] else {
+                                continue;
+                            };
+                            let grad = normalize_pullback_shape(grad, &spec.dims, "einsum_ad")?;
+                            input_grads.push((spec.node, grad));
+                        }
+                        Ok(input_grads)
+                    }),
+                )?;
+            }
+
+            Ok(out)
         })
     }
 }
@@ -1895,7 +1999,10 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdTensor<T>> {
+    pub fn run(self) -> Result<AdTensor<T>>
+    where
+        T: 'static,
+    {
         let operands = [self.a, self.b];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
 
@@ -1938,7 +2045,44 @@ where
             )
         };
 
-        wrap_ad_output("solve_triangular_ad", &operands, primal, tangent, 0)
+        let out = wrap_ad_output("solve_triangular_ad", &operands, primal, tangent, 0)?;
+
+        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+            let a_primal = self.a.primal().clone();
+            let b_primal = self.b.primal().clone();
+            let reverse_specs = collect_reverse_input_specs(&operands);
+            let upper = self.upper;
+            let output_node = *node;
+            let tape_id = *tape;
+
+            reverse_tape::register_rule::<T>(
+                tape_id,
+                output_node,
+                Box::new(move |cotangent| {
+                    let grad = with_cpu_runtime("solve_triangular_ad_pullback", |ctx| {
+                        tenferro_linalg::solve_triangular_rrule::<T>(
+                            ctx, &a_primal, &b_primal, cotangent, upper,
+                        )
+                        .map_err(Error::from)
+                    })?;
+
+                    let mut input_grads = Vec::new();
+                    if let Some(spec) = &reverse_specs[0] {
+                        let grad_a =
+                            normalize_pullback_shape(grad.a, &spec.dims, "solve_triangular_ad")?;
+                        input_grads.push((spec.node, grad_a));
+                    }
+                    if let Some(spec) = &reverse_specs[1] {
+                        let grad_b =
+                            normalize_pullback_shape(grad.b, &spec.dims, "solve_triangular_ad")?;
+                        input_grads.push((spec.node, grad_b));
+                    }
+                    Ok(input_grads)
+                }),
+            )?;
+        }
+
+        Ok(out)
     }
 }
 

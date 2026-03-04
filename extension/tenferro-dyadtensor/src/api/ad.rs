@@ -19,6 +19,8 @@
 //! assert_eq!(out.q.dims(), &[2, 2]);
 //! ```
 
+use std::collections::HashMap;
+
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
@@ -28,7 +30,7 @@ use tenferro_linalg::{LinalgScalar, NormKind, SolveGrad};
 use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::Tensor;
 
-use crate::{AdTensor, Error, Result};
+use crate::{reverse_tape, AdTensor, AdValue, Error, NodeId, Result};
 
 use super::{
     AdEigResult, AdEigenResult, AdLstsqResult, AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
@@ -276,6 +278,74 @@ where
     super::solve_triangular_ad(a, b).run()
 }
 
+/// Reverse pullback from a reverse-mode output tensor.
+///
+/// The returned map is keyed by reverse `NodeId` and includes the seed
+/// cotangent for the output node itself.
+pub fn pullback<T: Scalar + 'static>(
+    output: &AdTensor<T>,
+    cotangent: &AdTensor<T>,
+) -> Result<HashMap<NodeId, Tensor<T>>> {
+    let (output_node, tape) = match output.as_value() {
+        AdValue::Reverse { node, tape, .. } => (*node, *tape),
+        _ => {
+            return Err(Error::InvalidAdTensor {
+                message: "ad::pullback requires reverse-mode output tensor".to_string(),
+            })
+        }
+    };
+
+    if cotangent.dims() != output.dims() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "ad::pullback cotangent shape mismatch: expected {:?}, got {:?}",
+                output.dims(),
+                cotangent.dims()
+            ),
+        });
+    }
+
+    reverse_tape::pullback(tape, output_node, cotangent.primal())
+}
+
+/// Reverse pullback projected to requested `wrt` tensors.
+///
+/// Returns `None` for non-reverse tensors or disconnected reverse tensors.
+pub fn pullback_wrt<T: Scalar + 'static>(
+    output: &AdTensor<T>,
+    cotangent: &AdTensor<T>,
+    wrt: &[&AdTensor<T>],
+) -> Result<Vec<Option<Tensor<T>>>> {
+    let tape = match output.as_value() {
+        AdValue::Reverse { tape, .. } => *tape,
+        _ => {
+            return Err(Error::InvalidAdTensor {
+                message: "ad::pullback_wrt requires reverse-mode output tensor".to_string(),
+            })
+        }
+    };
+
+    let all_grads = pullback(output, cotangent)?;
+    let mut out = Vec::with_capacity(wrt.len());
+
+    for wrt_tensor in wrt {
+        match wrt_tensor.as_value() {
+            AdValue::Reverse { node, tape: t, .. } => {
+                if *t != tape {
+                    return Err(Error::MixedReverseTape {
+                        expected: tape.0,
+                        found: t.0,
+                    });
+                }
+                out.push(all_grads.get(node).cloned());
+            }
+            _ => out.push(None),
+        }
+    }
+
+    Ok(out)
+}
+
 /// Eager AD norm (Frobenius by default).
 ///
 /// Equivalent to `crate::norm_ad(...).run()`.
@@ -411,7 +481,7 @@ pub fn solve_triangular_rrule<T: Scalar>(
     upper: bool,
 ) -> Result<SolveGrad<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar + CpuLinalgScalar,
 {
     super::with_cpu_runtime("solve_triangular_rrule", |ctx| {
         tenferro_linalg::solve_triangular_rrule::<T>(
@@ -427,6 +497,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use num_complex::Complex64;
+
     use super::*;
     use crate::{AdValue, NodeId, RuntimeContext, TapeId};
     use tenferro_prims::CpuContext;
@@ -434,6 +506,43 @@ mod tests {
 
     fn f64_2x2(values: [f64; 4]) -> Tensor<f64> {
         Tensor::<f64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
+    }
+
+    fn as_slice(t: &Tensor<f64>) -> &[f64] {
+        t.buffer()
+            .as_slice()
+            .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"))
+    }
+
+    fn max_abs_diff(a: &Tensor<f64>, b: &Tensor<f64>) -> f64 {
+        assert_eq!(a.dims(), b.dims());
+        as_slice(a)
+            .iter()
+            .zip(as_slice(b).iter())
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0_f64, f64::max)
+    }
+
+    fn complex_max_abs_diff(a: &Tensor<Complex64>, b: &Tensor<Complex64>) -> f64 {
+        assert_eq!(a.dims(), b.dims());
+        let a = a.contiguous(MemoryOrder::ColumnMajor);
+        let b = b.contiguous(MemoryOrder::ColumnMajor);
+        let a_off = a.offset() as usize;
+        let b_off = b.offset() as usize;
+        let len: usize = a.dims().iter().product();
+        let a_data = &a
+            .buffer()
+            .as_slice()
+            .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"))[a_off..a_off + len];
+        let b_data = &b
+            .buffer()
+            .as_slice()
+            .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"))[b_off..b_off + len];
+        a_data
+            .iter()
+            .zip(b_data.iter())
+            .map(|(x, y)| (*x - *y).norm())
+            .fold(0.0_f64, f64::max)
     }
 
     #[test]
@@ -565,5 +674,129 @@ mod tests {
         let grad = solve_triangular_rrule(&ad_a, &ad_b, &ad_cotangent, true).unwrap();
         assert_eq!(grad.a.dims(), &[2, 2]);
         assert_eq!(grad.b.dims(), &[2, 1]);
+    }
+
+    #[test]
+    fn solve_triangular_builder_reverse_pullback_matches_rrule() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+        let tape = TapeId(101);
+        let node_a = NodeId(11);
+        let node_b = NodeId(12);
+
+        let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
+        let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let cotangent =
+            Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let out = solve_triangular(&ad_a_rev, &ad_b_rev).unwrap();
+        assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+
+        let ad_cotangent = AdTensor::new_primal(cotangent);
+        let grad_map = pullback(&out, &ad_cotangent).unwrap();
+        let grad_a = grad_map.get(&node_a).expect("missing dA");
+        let grad_b = grad_map.get(&node_b).expect("missing dB");
+
+        let expected = solve_triangular_rrule(
+            &AdTensor::new_primal(a),
+            &AdTensor::new_primal(b.clone()),
+            &ad_cotangent,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(grad_a.dims(), &[2, 2]);
+        assert!(max_abs_diff(grad_a, &expected.a) < 1e-12);
+
+        let expected_b = expected.b.reshape(b.dims()).unwrap();
+        assert_eq!(grad_b.dims(), b.dims());
+        assert!(max_abs_diff(grad_b, &expected_b) < 1e-12);
+    }
+
+    #[test]
+    fn einsum_builder_reverse_pullback_wrt_matches_rrule() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+        let tape = TapeId(202);
+        let node_a = NodeId(31);
+        let node_b = NodeId(32);
+
+        let a = f64_2x2([1.0, 3.0, 2.0, 4.0]);
+        let b = f64_2x2([2.0, -1.0, 0.5, 1.5]);
+        let cotangent = f64_2x2([1.0, 0.0, 0.0, 1.0]);
+
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let out = einsum("ij,jk->ik", &[&ad_a_rev, &ad_b_rev]).unwrap();
+        assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+
+        let ad_cotangent = AdTensor::new_primal(cotangent.clone());
+        let grads = pullback_wrt(&out, &ad_cotangent, &[&ad_a_rev, &ad_b_rev]).unwrap();
+        let grad_a = grads[0].as_ref().expect("missing einsum dA");
+        let grad_b = grads[1].as_ref().expect("missing einsum dB");
+
+        let expected = einsum_rrule(
+            "ij,jk->ik",
+            &[&AdTensor::new_primal(a), &AdTensor::new_primal(b)],
+            &AdTensor::new_primal(cotangent),
+        )
+        .unwrap();
+
+        assert!(max_abs_diff(grad_a, &expected[0]) < 1e-12);
+        assert!(max_abs_diff(grad_b, &expected[1]) < 1e-12);
+    }
+
+    #[test]
+    fn solve_triangular_reverse_pullback_complex_matches_rrule() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+        let tape = TapeId(303);
+        let node_a = NodeId(41);
+        let node_b = NodeId(42);
+
+        let a = Tensor::<Complex64>::from_slice(
+            &[
+                Complex64::new(2.0, 0.0),
+                Complex64::new(0.0, 0.0),
+                Complex64::new(1.0, -0.5),
+                Complex64::new(3.0, 0.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b = Tensor::<Complex64>::from_slice(
+            &[Complex64::new(1.0, 0.5), Complex64::new(2.0, -0.25)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let cotangent = Tensor::<Complex64>::from_slice(
+            &[Complex64::new(0.5, 0.0), Complex64::new(-0.25, 0.1)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let out = solve_triangular(&ad_a_rev, &ad_b_rev).unwrap();
+        let grads = pullback(&out, &AdTensor::new_primal(cotangent.clone())).unwrap();
+        let grad_a = grads.get(&node_a).expect("missing complex dA");
+        let grad_b = grads.get(&node_b).expect("missing complex dB");
+
+        let expected = solve_triangular_rrule(
+            &AdTensor::new_primal(a),
+            &AdTensor::new_primal(b.clone()),
+            &AdTensor::new_primal(cotangent),
+            true,
+        )
+        .unwrap();
+
+        let expected_b = expected.b.reshape(b.dims()).unwrap();
+        assert!(complex_max_abs_diff(grad_a, &expected.a) < 1e-12);
+        assert!(complex_max_abs_diff(grad_b, &expected_b) < 1e-12);
     }
 }

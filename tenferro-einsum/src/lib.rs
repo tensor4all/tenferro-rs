@@ -1,3 +1,9 @@
+#![allow(
+    clippy::multiple_bound_locations,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
+
 //! High-level einsum with N-ary contraction tree optimization.
 //!
 //! This crate provides Einstein summation notation for [`Tensor`]

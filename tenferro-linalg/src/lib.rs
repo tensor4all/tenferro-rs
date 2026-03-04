@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_bound_locations)]
+
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
 //! CPU decompositions and solvers are fully implemented via the
@@ -655,21 +657,12 @@ pub struct SvdResult<T: Scalar, R: Scalar = T> {
 ///     cutoff: Some(1e-12),
 /// };
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SvdOptions {
     /// Maximum number of singular values to keep. `None` means no limit.
     pub max_rank: Option<usize>,
     /// Discard singular values below this threshold. `None` means no cutoff.
     pub cutoff: Option<f64>,
-}
-
-impl Default for SvdOptions {
-    fn default() -> Self {
-        Self {
-            max_rank: None,
-            cutoff: None,
-        }
-    }
 }
 
 /// QR decomposition result: `A = Q * R`.
@@ -1423,7 +1416,7 @@ where
     let mut l_buf = vec![T::zero(); n * n];
     let mut u_buf = vec![T::zero(); n * n];
 
-    for b in 0..bc {
+    for (b, det_slot) in det_data.iter_mut().enumerate().take(bc) {
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
@@ -1453,7 +1446,7 @@ where
         if sign < 0 {
             d = T::zero() - d;
         }
-        det_data[b] = d;
+        *det_slot = d;
     }
 
     let dims = if batch_dims.is_empty() {
@@ -2063,14 +2056,14 @@ where
         NormKind::Fro => {
             // Frobenius norm per batch: sqrt(sum of squares over matrix dims)
             let mut out = vec![T::zero(); bc];
-            for batch in 0..bc {
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
                 let start = offset + batch * mat_size;
                 let mut sum = T::zero();
                 for i in 0..mat_size {
                     let v = data[start + i];
                     sum = sum + v * v;
                 }
-                out[batch] = sum.sqrt();
+                *out_slot = sum.sqrt();
             }
             tensor_from_data(out, &out_dims)
         }
@@ -2081,13 +2074,13 @@ where
             let s_off = svd_result.s.offset() as usize;
             let k = m.min(n);
             let mut out = vec![T::zero(); bc];
-            for batch in 0..bc {
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
                 let mut sum = T::zero();
                 let start = s_off + batch * k;
                 for i in 0..k {
                     sum = sum + s_data[start + i];
                 }
-                out[batch] = sum;
+                *out_slot = sum;
             }
             tensor_from_data(out, &out_dims)
         }
@@ -2098,8 +2091,8 @@ where
             let s_off = svd_result.s.offset() as usize;
             let k = m.min(n);
             let mut out = vec![T::zero(); bc];
-            for batch in 0..bc {
-                out[batch] = s_data[s_off + batch * k];
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
+                *out_slot = s_data[s_off + batch * k];
             }
             tensor_from_data(out, &out_dims)
         }
@@ -2309,6 +2302,19 @@ fn transpose<T: LinalgScalar>(data: &[T], m: usize, n: usize) -> Vec<T> {
     result
 }
 
+/// Conjugate transpose (adjoint) of a column-major m×n matrix to n×m.
+///
+/// For real types this is equivalent to [`transpose`].
+fn adjoint_transpose<T: LinalgScalar>(data: &[T], m: usize, n: usize) -> Vec<T> {
+    let mut result = vec![T::zero(); m * n];
+    for j in 0..n {
+        for i in 0..m {
+            result[j + i * n] = data[i + j * m].conj();
+        }
+    }
+    result
+}
+
 /// Scale a slice element-wise: out[i] = alpha * data[i].
 fn scale_vec<T: LinalgScalar>(data: &[T], alpha: T) -> Vec<T> {
     data.iter().map(|&x| alpha * x).collect()
@@ -2507,7 +2513,7 @@ where
 // ============================================================================
 
 /// Mat mul via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_mat_mul<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+fn backend_mat_mul<T: LinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     m: usize,
@@ -2522,7 +2528,7 @@ where
 }
 
 /// Solve via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+fn backend_solve<T: LinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     b: &[T],
@@ -2538,7 +2544,7 @@ where
 }
 
 /// Solve triangular via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve_tri<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+fn backend_solve_tri<T: LinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     b: &[T],
@@ -3422,7 +3428,7 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
-pub fn solve_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+pub fn solve_rrule<T: LinalgScalar>(
     ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -3431,7 +3437,7 @@ pub fn solve_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
 where
     T: backend::CpuLinalgScalar,
 {
-    // Ax = b → G = A^{-T} dx, dB = G, dA = -G x^T
+    // Ax = b → G = A^{-H} dx, dB = G, dA = -G x^H
     let x = solve(ctx, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(a)
@@ -3455,17 +3461,18 @@ where
         let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
         let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
 
-        // G = A^{-T} dx = solve(A^T, dx)
-        let at = transpose(a_b, n, n);
+        // G = A^{-H} dx = solve(A^H, dx)
+        let at = adjoint_transpose(a_b, n, n);
         let g = backend_solve(ctx, &at, dx_b, n, nrhs)?;
 
         // dB = G
         grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
 
-        // dA = -G x^T (n×nrhs × nrhs×n = n×n)
-        let g_xt = backend_mat_mul(ctx, &g, n, nrhs, &transpose(x_b, n, nrhs), n)?;
-        let neg_g_xt = scale_vec(&g_xt, -T::one());
-        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg_g_xt);
+        // dA = -G x^H (n×nrhs × nrhs×n = n×n)
+        let x_h = adjoint_transpose(x_b, n, nrhs);
+        let g_xh = backend_mat_mul(ctx, &g, n, nrhs, &x_h, n)?;
+        let neg_g_xh = scale_vec(&g_xh, -T::one());
+        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg_g_xh);
     }
 
     let a_dims = output_dims(&[n, n], batch_dims);
@@ -3482,10 +3489,10 @@ where
 ///
 /// Given `A x = b` with triangular `A` and cotangent `x̄`, computes `(Ā, b̄)`.
 ///
-/// - `G = A^{-T} x̄` solved with transposed triangular structure
+/// - `G = A^{-H} x̄` solved with conjugate-transposed triangular structure
 /// - `b̄ = G`
-/// - `Ā = proj(-G x^T)` where `proj = triu` for upper, `tril` for lower
-pub fn solve_triangular_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+/// - `Ā = proj(-G x^H)` where `proj = triu` for upper, `tril` for lower
+pub fn solve_triangular_rrule<T: LinalgScalar>(
     ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -3518,20 +3525,21 @@ where
         let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
         let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
 
-        // G = A^{-T} dX, where A^T flips upper/lower.
-        let at = transpose(a_b, n, n);
+        // G = A^{-H} dX, where A^H flips upper/lower.
+        let at = adjoint_transpose(a_b, n, n);
         let g = backend_solve_tri(ctx, &at, dx_b, n, nrhs, !upper)?;
 
         // dB = G
         grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
 
-        // dA = proj(-G x^T)
-        let g_xt = backend_mat_mul(ctx, &g, n, nrhs, &transpose(x_b, n, nrhs), n)?;
-        let neg_g_xt = scale_vec(&g_xt, -T::one());
+        // dA = proj(-G x^H)
+        let x_h = adjoint_transpose(x_b, n, nrhs);
+        let g_xh = backend_mat_mul(ctx, &g, n, nrhs, &x_h, n)?;
+        let neg_g_xh = scale_vec(&g_xh, -T::one());
         let projected = if upper {
-            triu(&neg_g_xt, n)
+            triu(&neg_g_xh, n)
         } else {
-            tril(&neg_g_xt, n)
+            tril(&neg_g_xh, n)
         };
         grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&projected);
     }
