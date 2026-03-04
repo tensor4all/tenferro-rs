@@ -13,6 +13,8 @@
     "extension/tenferro-dyadtensor/src/dyn_types.rs",
     "extension/tenferro-dyadtensor/src/error.rs",
     "extension/tenferro-dyadtensor/src/lib.rs",
+    "extension/tenferro-dyadtensor/src/partial_diag/dyn_tensor.rs",
+    "extension/tenferro-dyadtensor/src/partial_diag/typed.rs",
     "extension/tenferro-dyadtensor/src/policy.rs",
     "extension/tenferro-dyadtensor/src/runtime.rs",
     "extension/tenferro-dyadtensor/src/traits.rs",

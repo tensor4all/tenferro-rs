@@ -7,6 +7,7 @@ pub mod api;
 pub mod context;
 pub mod dyn_types;
 pub mod error;
+pub mod partial_diag;
 pub mod policy;
 mod reverse_tape;
 pub mod runtime;
@@ -26,6 +27,10 @@ pub use context::{
 };
 pub use dyn_types::{DynAdTensor, DynAdValue, DynScalar, DynTensor, ScalarType};
 pub use error::{Error, Result};
+pub use partial_diag::{
+    plan_axis_classes_for_subscripts, AxisClassMergePlan, AxisClassPlanError, OperandAxisClassPlan,
+    OperandAxisClasses,
+};
 pub use policy::DiffPolicy;
 pub use runtime::{set_default_runtime, with_default_runtime, RuntimeContext};
 pub use traits::{
