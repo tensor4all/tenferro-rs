@@ -1,6 +1,9 @@
 use chainrules_scalarops as scalarops;
+use core::ops::{Add, Div, Mul, Sub};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
+
+use crate::{Error, Result};
 
 /// Automatic differentiation mode.
 ///
@@ -601,6 +604,161 @@ impl<T> From<AdScalar<T>> for AdValue<T> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct BinaryScalarState<T> {
+    primal: T,
+    tangent: Option<T>,
+    reverse: Option<(NodeId, TapeId)>,
+}
+
+fn split_binary_state<T: scalarops::ScalarAd>(value: AdScalar<T>) -> BinaryScalarState<T> {
+    match value.into_value() {
+        AdValue::Primal(primal) => BinaryScalarState {
+            primal,
+            tangent: None,
+            reverse: None,
+        },
+        AdValue::Forward { primal, tangent } => BinaryScalarState {
+            primal,
+            tangent: Some(tangent),
+            reverse: None,
+        },
+        AdValue::Reverse {
+            primal,
+            node,
+            tape,
+            tangent,
+        } => BinaryScalarState {
+            primal,
+            tangent,
+            reverse: Some((node, tape)),
+        },
+    }
+}
+
+fn binary_ad_scalar_try_op<T: scalarops::ScalarAd>(
+    lhs: AdScalar<T>,
+    rhs: AdScalar<T>,
+    _op_name: &'static str,
+    primal_rule: fn(T, T) -> T,
+    frule: fn(T, T, T, T) -> (T, T),
+) -> Result<AdScalar<T>> {
+    let lhs_state = split_binary_state(lhs);
+    let rhs_state = split_binary_state(rhs);
+
+    let primal = primal_rule(lhs_state.primal, rhs_state.primal);
+    let has_tangent = lhs_state.tangent.is_some() || rhs_state.tangent.is_some();
+    let tangent = if has_tangent {
+        let dx = lhs_state.tangent.unwrap_or_else(|| T::from_i32(0));
+        let dy = rhs_state.tangent.unwrap_or_else(|| T::from_i32(0));
+        let (_, tangent) = frule(lhs_state.primal, rhs_state.primal, dx, dy);
+        Some(tangent)
+    } else {
+        None
+    };
+
+    match (lhs_state.reverse, rhs_state.reverse) {
+        (None, None) => {
+            if let Some(tangent) = tangent {
+                Ok(AdScalar::new_forward(primal, tangent))
+            } else {
+                Ok(AdScalar::new_primal(primal))
+            }
+        }
+        (Some((node, tape)), None) => Ok(AdScalar::new_reverse(primal, node, tape, tangent)),
+        (None, Some((node, tape))) => Ok(AdScalar::new_reverse(primal, node, tape, tangent)),
+        (Some((lhs_node, lhs_tape)), Some((_, rhs_tape))) => {
+            if lhs_tape != rhs_tape {
+                return Err(Error::MixedReverseTape {
+                    expected: lhs_tape.0,
+                    found: rhs_tape.0,
+                });
+            }
+            Ok(AdScalar::new_reverse(primal, lhs_node, lhs_tape, tangent))
+        }
+    }
+}
+
+fn binary_ad_scalar_op<T: scalarops::ScalarAd>(
+    lhs: AdScalar<T>,
+    rhs: AdScalar<T>,
+    op_name: &'static str,
+    primal_rule: fn(T, T) -> T,
+    frule: fn(T, T, T, T) -> (T, T),
+) -> AdScalar<T> {
+    binary_ad_scalar_try_op(lhs, rhs, op_name, primal_rule, frule)
+        .unwrap_or_else(|e| panic!("{op_name}: {e}"))
+}
+
+impl<T> AdScalar<T>
+where
+    T: scalarops::ScalarAd,
+{
+    /// Checked addition for AD scalars.
+    pub fn try_add(self, rhs: Self) -> Result<Self> {
+        binary_ad_scalar_try_op(self, rhs, "add", scalarops::add, scalarops::add_frule)
+    }
+
+    /// Checked subtraction for AD scalars.
+    pub fn try_sub(self, rhs: Self) -> Result<Self> {
+        binary_ad_scalar_try_op(self, rhs, "sub", scalarops::sub, scalarops::sub_frule)
+    }
+
+    /// Checked multiplication for AD scalars.
+    pub fn try_mul(self, rhs: Self) -> Result<Self> {
+        binary_ad_scalar_try_op(self, rhs, "mul", scalarops::mul, scalarops::mul_frule)
+    }
+
+    /// Checked division for AD scalars.
+    pub fn try_div(self, rhs: Self) -> Result<Self> {
+        binary_ad_scalar_try_op(self, rhs, "div", scalarops::div, scalarops::div_frule)
+    }
+}
+
+impl<T> Add for AdScalar<T>
+where
+    T: scalarops::ScalarAd,
+{
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        binary_ad_scalar_op(self, rhs, "add", scalarops::add, scalarops::add_frule)
+    }
+}
+
+impl<T> Sub for AdScalar<T>
+where
+    T: scalarops::ScalarAd,
+{
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        binary_ad_scalar_op(self, rhs, "sub", scalarops::sub, scalarops::sub_frule)
+    }
+}
+
+impl<T> Mul for AdScalar<T>
+where
+    T: scalarops::ScalarAd,
+{
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        binary_ad_scalar_op(self, rhs, "mul", scalarops::mul, scalarops::mul_frule)
+    }
+}
+
+impl<T> Div for AdScalar<T>
+where
+    T: scalarops::ScalarAd,
+{
+    type Output = Self;
+
+    fn div(self, rhs: Self) -> Self::Output {
+        binary_ad_scalar_op(self, rhs, "div", scalarops::div, scalarops::div_frule)
+    }
+}
+
 /// Tensor newtype carrying AD mode information.
 ///
 /// # Examples
@@ -884,6 +1042,24 @@ mod tests {
     }
 
     #[test]
+    fn ad_scalar_mul_forward_propagates_tangent() {
+        let x = AdScalar::new_forward(2.0_f64, 0.5_f64);
+        let y = AdScalar::new_forward(4.0_f64, 0.25_f64);
+        let z = x * y;
+        assert_eq!(*z.primal(), 8.0_f64);
+        assert_eq!(*z.tangent().unwrap(), 2.5_f64);
+    }
+
+    #[test]
+    fn ad_scalar_div_forward_propagates_tangent() {
+        let x = AdScalar::new_forward(8.0_f64, 0.5_f64);
+        let y = AdScalar::new_forward(2.0_f64, 0.25_f64);
+        let z = x / y;
+        assert_eq!(*z.primal(), 4.0_f64);
+        assert_eq!(*z.tangent().unwrap(), -0.25_f64);
+    }
+
+    #[test]
     fn ad_scalar_conj_reverse_preserves_tape_metadata() {
         let x = AdScalar::new_reverse(
             Complex64::new(1.0, 2.0),
@@ -897,5 +1073,27 @@ mod tests {
         assert_eq!(y.as_value().tape_id(), Some(TapeId(7)));
         assert_eq!(*y.primal(), Complex64::new(1.0, -2.0));
         assert_eq!(*y.tangent().unwrap(), Complex64::new(-1.0, -0.5));
+    }
+
+    #[test]
+    #[should_panic(expected = "reverse-mode operands must share one tape")]
+    fn ad_scalar_binary_op_panics_on_mixed_reverse_tapes() {
+        let x = AdScalar::new_reverse(2.0_f64, NodeId(1), TapeId(7), None);
+        let y = AdScalar::new_reverse(3.0_f64, NodeId(2), TapeId(8), None);
+        let _ = x * y;
+    }
+
+    #[test]
+    fn ad_scalar_try_binary_op_returns_error_on_mixed_reverse_tapes() {
+        let x = AdScalar::new_reverse(2.0_f64, NodeId(1), TapeId(7), None);
+        let y = AdScalar::new_reverse(3.0_f64, NodeId(2), TapeId(8), None);
+        let err = x.try_mul(y).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::MixedReverseTape {
+                expected: 7,
+                found: 8
+            }
+        ));
     }
 }
