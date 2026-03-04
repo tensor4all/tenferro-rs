@@ -4697,6 +4697,69 @@ fn solve_frule_multi_rhs() {
     }
 }
 
+#[test]
+fn solve_triangular_frule_upper_fd() {
+    let mut ctx = CpuContext::new(1);
+    // Upper triangular A
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    // Two RHS columns
+    let b = make_tensor(vec![1.0, 2.0, 0.5, -1.0], &[2, 2]);
+    // Tangent includes lower-triangular entry to confirm projection behavior.
+    let da = make_tensor(vec![0.1, 0.2, -0.3, 0.4], &[2, 2]);
+    let db = make_tensor(vec![0.05, -0.1, 0.2, 0.3], &[2, 2]);
+
+    let (_x, dx) = solve_triangular_frule(&mut ctx, &a, &b, &da, &db, true).unwrap();
+    let analytic = tensor_data(&dx);
+
+    let eps = 1e-6;
+    let a_data = tensor_data(&a);
+    let b_data = tensor_data(&b);
+    let da_data = tensor_data(&da);
+    let db_data = tensor_data(&db);
+    let mut a_plus = a_data.clone();
+    let mut a_minus = a_data.clone();
+    let mut b_plus = b_data.clone();
+    let mut b_minus = b_data.clone();
+    for i in 0..a_data.len() {
+        a_plus[i] += eps * da_data[i];
+        a_minus[i] -= eps * da_data[i];
+    }
+    for i in 0..b_data.len() {
+        b_plus[i] += eps * db_data[i];
+        b_minus[i] -= eps * db_data[i];
+    }
+
+    let x_plus = solve_triangular(
+        &mut ctx,
+        &make_tensor(a_plus, &[2, 2]),
+        &make_tensor(b_plus, &[2, 2]),
+        true,
+    )
+    .unwrap();
+    let x_minus = solve_triangular(
+        &mut ctx,
+        &make_tensor(a_minus, &[2, 2]),
+        &make_tensor(b_minus, &[2, 2]),
+        true,
+    )
+    .unwrap();
+    let fd: Vec<f64> = tensor_data(&x_plus)
+        .iter()
+        .zip(tensor_data(&x_minus).iter())
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic
+        .iter()
+        .zip(fd.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < 1e-5,
+        "solve_triangular_frule FD check failed: max_err={max_err}"
+    );
+}
+
 // ============================================================================
 // Coverage: lstsq_frule
 // ============================================================================
@@ -5189,7 +5252,7 @@ fn lstsq_rrule_full_execution() {
     }
 }
 
-// Note: solve_triangular does not have rrule/frule AD functions in the current API.
+// Note: solve_triangular now has frule support, but rrule is still not exposed.
 
 // ============================================================================
 // Coverage: additional validation error paths and branch coverage

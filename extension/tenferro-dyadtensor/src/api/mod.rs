@@ -1890,10 +1890,6 @@ where
     }
 
     /// Executes AD triangular solve.
-    ///
-    /// Forward/reverse inputs are currently unsupported.
-    ///
-    /// Upstream tracking issue: `tensor4all/tenferro-rs#257`.
     /// # Examples
     ///
     /// ```ignore
@@ -1901,22 +1897,48 @@ where
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
         let operands = [self.a, self.b];
-        if has_forward(&operands) || has_reverse(&operands) {
-            return Err(Error::UnsupportedAdOp {
-                op: "solve_triangular_ad",
-            });
-        }
+        let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
 
-        with_cpu_runtime("solve_triangular_ad", |ctx| {
-            let out = tenferro_linalg::solve_triangular::<T, CpuContext>(
-                ctx,
-                self.a.primal(),
-                self.b.primal(),
-                self.upper,
+        let (primal, tangent) = if needs_tangent {
+            let ta = self
+                .a
+                .tangent()
+                .cloned()
+                .unwrap_or_else(|| zero_like(self.a.primal()));
+            let tb = self
+                .b
+                .tangent()
+                .cloned()
+                .unwrap_or_else(|| zero_like(self.b.primal()));
+
+            let (p, d) = with_cpu_runtime("solve_triangular_ad", |ctx| {
+                tenferro_linalg::solve_triangular_frule::<T>(
+                    ctx,
+                    self.a.primal(),
+                    self.b.primal(),
+                    &ta,
+                    &tb,
+                    self.upper,
+                )
+                .map_err(Error::from)
+            })?;
+            (p, Some(d))
+        } else {
+            (
+                with_cpu_runtime("solve_triangular_ad", |ctx| {
+                    tenferro_linalg::solve_triangular::<T, CpuContext>(
+                        ctx,
+                        self.a.primal(),
+                        self.b.primal(),
+                        self.upper,
+                    )
+                    .map_err(Error::from)
+                })?,
+                None,
             )
-            .map_err(Error::from)?;
-            Ok(AdTensor::new_primal(out))
-        })
+        };
+
+        wrap_ad_output("solve_triangular_ad", &operands, primal, tangent, 0)
     }
 }
 
@@ -2061,19 +2083,21 @@ mod tests {
     }
 
     #[test]
-    fn solve_triangular_ad_rejects_non_primal() {
+    fn solve_triangular_ad_supports_forward_mode() {
         let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-        let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+        let a = Tensor::<f64>::from_slice(&[2.0, 0.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
-        let b = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
         let da =
-            Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
+            Tensor::<f64>::from_slice(&[0.1, 0.0, -0.2, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
                 .unwrap();
+        let db = Tensor::<f64>::from_slice(&[0.2, -0.1], &[2], MemoryOrder::ColumnMajor).unwrap();
 
         let ad_a = AdTensor::new_forward(a, da);
-        let ad_b = AdTensor::new_primal(b);
-        let err = solve_triangular_ad(&ad_a, &ad_b).run().err();
-        assert!(matches!(err, Some(Error::UnsupportedAdOp { .. })));
+        let ad_b = AdTensor::new_forward(b, db);
+        let out = solve_triangular_ad(&ad_a, &ad_b).run().unwrap();
+        assert!(matches!(out.as_value(), AdValue::Forward { .. }));
+        assert_eq!(out.dims(), &[2]);
     }
 
     fn assert_primal_mode(t: &AdTensor<f64>) {
@@ -2232,11 +2256,19 @@ mod tests {
         let out_fwd = solve_ad(&ad_a_fwd, &ad_b).run().unwrap();
         assert!(matches!(out_fwd.as_value(), AdValue::Forward { .. }));
 
+        let out_tri_fwd = solve_triangular_ad(&ad_a_fwd, &ad_b).run().unwrap();
+        assert!(matches!(out_tri_fwd.as_value(), AdValue::Forward { .. }));
+
         let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None);
         let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None);
         let out_rev = einsum_ad("ij,jk->ik", &[&ad_a_rev, &ad_b_rev])
             .run()
             .unwrap();
         assert!(matches!(out_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11)));
+
+        let out_tri_rev = solve_triangular_ad(&ad_a_rev, &ad_b_rev).run().unwrap();
+        assert!(
+            matches!(out_tri_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11))
+        );
     }
 }

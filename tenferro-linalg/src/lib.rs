@@ -4737,6 +4737,90 @@ where
     Ok((x, dx))
 }
 
+/// Forward-mode AD rule for triangular solve (JVP / pushforward).
+///
+/// Computes:
+/// - `x = solve_triangular(a, b, upper)`
+/// - `dx = solve_triangular(a, db - proj(dA) * x, upper)`
+///
+/// where `proj(dA)` keeps only the active triangular part
+/// (`triu` when `upper=true`, `tril` when `upper=false`).
+pub fn solve_triangular_frule<T: LinalgScalar>(
+    ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+    tangent_a: &Tensor<T>,
+    tangent_b: &Tensor<T>,
+    upper: bool,
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    T: backend::CpuLinalgScalar,
+{
+    if tangent_a.dims() != a.dims() {
+        return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
+            "solve_triangular_frule: tangent_a shape mismatch: expected {:?}, got {:?}",
+            a.dims(),
+            tangent_a.dims()
+        )));
+    }
+    if tangent_b.dims() != b.dims() {
+        return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
+            "solve_triangular_frule: tangent_b shape mismatch: expected {:?}, got {:?}",
+            b.dims(),
+            tangent_b.dims()
+        )));
+    }
+
+    // dX = A^{-1} (dB - proj(dA) X), with projection to the triangular tangent space.
+    let x = solve_triangular(ctx, a, b, upper)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+
+    let (n, batch_dims) = validate_square(a)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let bc = batch_count(batch_dims);
+    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
+        b.dims()[1]
+    } else {
+        1
+    };
+
+    let (a_data, _) = extract_data(a)?;
+    let (x_data, _) = extract_data(&x)?;
+    let (da_data, _) = extract_data(tangent_a)?;
+    let (db_data, _) = extract_data(tangent_b)?;
+
+    let mut dx_data = vec![T::zero(); n * nrhs * bc];
+
+    for batch in 0..bc {
+        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
+        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+        let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
+        let db_b = &db_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+
+        // Project dA onto the same triangular structure as A.
+        let da_proj = if upper { triu(da_b, n) } else { tril(da_b, n) };
+
+        // dA * x, treating x as n x nrhs in column-major layout.
+        let da_x =
+            prims_bridge::batched_gemm_via_prims(&da_proj, n, n, x_b, nrhs).map_err(to_ad_err)?;
+
+        // RHS tangent: dB - dA * x
+        let rhs = sub_vec(db_b, &da_x);
+
+        // dX from triangular solve with the same structure.
+        let mut dx_b = vec![T::zero(); n * nrhs];
+        backend::cpu::solve_triangular_slices(a_b, &rhs, n, nrhs, upper, &mut dx_b)
+            .map_err(to_ad_err)?;
+
+        dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b);
+    }
+
+    let dims = output_dims(&[n, nrhs], batch_dims);
+    let dx = tensor_from_data(dx_data, &dims)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    Ok((x, dx))
+}
+
 /// Forward-mode AD rule for matrix inverse (JVP / pushforward).
 ///
 /// # Examples
