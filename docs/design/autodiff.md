@@ -111,7 +111,7 @@ Linalg uses only stateless `_rrule`/`_frule` functions — no `tracked_*` or
 | `chainrules::Tape::hvp` | Supported | Use tape-level forward-over-reverse API |
 | `tenferro-einsum::einsum_hvp` | Supported | Local einsum HVP helper exists |
 | `tenferro-dyadtensor::ad::*` eager API | Not yet exposed | No dedicated dyadtensor HVP entry point yet |
-| `tenferro-dyadtensor::solve_triangular_ad` (fwd/rev) | Not supported | Returns `Error::UnsupportedAdOp { op: "solve_triangular_ad" }` |
+| `tenferro-dyadtensor::solve_triangular_ad` | Forward supported | Uses `solve_triangular_frule` for JVP; reverse rrule is not exposed yet |
 
 For migration work, dyadtensor-facing HVP is staged:
 1. Document currently available low-level paths (`Tape::hvp`, `einsum_hvp`).
@@ -169,7 +169,7 @@ against libtorch's AD formulas led to a minimal design.
 |-----------|--------------|
 | `transpose` / `squeeze` / `unsqueeze` | Trivially derivable from `permute` / `reshape` |
 | `full` / `empty` / `arange` / `rand` | Composable from `from_vec` |
-| `solve_triangular` | Deferred to P1 |
+| `solve_triangular` | JVP (`solve_triangular_frule`) implemented; reverse rrule still deferred |
 
 ---
 
