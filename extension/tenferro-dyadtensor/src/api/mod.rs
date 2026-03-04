@@ -1105,11 +1105,13 @@ pub fn norm<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> NormBuilder<'a, T> {
     }
 }
 
-fn run_unary_tensor_ad<T, FPrimal, FFrule>(
+fn run_unary_tensor_ad<T, FPrimal, FFrule, FRrule>(
     op_name: &'static str,
+    pullback_op_name: &'static str,
     input: &AdTensor<T>,
     primal_fn: FPrimal,
     frule_fn: FFrule,
+    rrule_fn: FRrule,
 ) -> Result<AdTensor<T>>
 where
     T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
@@ -1120,6 +1122,12 @@ where
         &Tensor<T>,
     )
         -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>,
+    FRrule: Fn(
+            &mut CpuContext,
+            &Tensor<T>,
+            &Tensor<T>,
+        ) -> std::result::Result<Tensor<T>, chainrules_core::AutodiffError>
+        + 'static,
 {
     let operands = [input];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -1140,15 +1148,45 @@ where
         )
     };
 
-    wrap_ad_output(op_name, &operands, primal, tangent, 0)
+    let out = wrap_ad_output(op_name, &operands, primal, tangent, 0)?;
+
+    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        let input_primal = input.primal().clone();
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        let output_node = *node;
+        let tape_id = *tape;
+
+        reverse_tape::register_rule::<T>(
+            tape_id,
+            output_node,
+            Box::new(move |cotangent| {
+                let grad = with_cpu_runtime(pullback_op_name, |ctx| {
+                    rrule_fn(ctx, &input_primal, cotangent).map_err(Error::from)
+                })?;
+
+                let Some(spec) = &input_spec else {
+                    return Ok(Vec::new());
+                };
+                let grad = normalize_pullback_shape(grad, &spec.dims, op_name)?;
+                Ok(vec![(spec.node, grad)])
+            }),
+        )?;
+    }
+
+    Ok(out)
 }
 
-fn run_binary_tensor_ad<T, FPrimal, FFrule>(
+fn run_binary_tensor_ad<T, FPrimal, FFrule, FRrule>(
     op_name: &'static str,
+    pullback_op_name: &'static str,
     a: &AdTensor<T>,
     b: &AdTensor<T>,
     primal_fn: FPrimal,
     frule_fn: FFrule,
+    rrule_fn: FRrule,
 ) -> Result<AdTensor<T>>
 where
     T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
@@ -1161,6 +1199,13 @@ where
         &Tensor<T>,
     )
         -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>,
+    FRrule: Fn(
+            &mut CpuContext,
+            &Tensor<T>,
+            &Tensor<T>,
+            &Tensor<T>,
+        ) -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>
+        + 'static,
 {
     let operands = [a, b];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -1185,7 +1230,38 @@ where
         )
     };
 
-    wrap_ad_output(op_name, &operands, primal, tangent, 0)
+    let out = wrap_ad_output(op_name, &operands, primal, tangent, 0)?;
+
+    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        let a_primal = a.primal().clone();
+        let b_primal = b.primal().clone();
+        let reverse_specs = collect_reverse_input_specs(&operands);
+        let output_node = *node;
+        let tape_id = *tape;
+
+        reverse_tape::register_rule::<T>(
+            tape_id,
+            output_node,
+            Box::new(move |cotangent| {
+                let (grad_a, grad_b) = with_cpu_runtime(pullback_op_name, |ctx| {
+                    rrule_fn(ctx, &a_primal, &b_primal, cotangent).map_err(Error::from)
+                })?;
+
+                let mut input_grads = Vec::new();
+                if let Some(spec) = &reverse_specs[0] {
+                    let grad_a = normalize_pullback_shape(grad_a, &spec.dims, op_name)?;
+                    input_grads.push((spec.node, grad_a));
+                }
+                if let Some(spec) = &reverse_specs[1] {
+                    let grad_b = normalize_pullback_shape(grad_b, &spec.dims, op_name)?;
+                    input_grads.push((spec.node, grad_b));
+                }
+                Ok(input_grads)
+            }),
+        )?;
+    }
+
+    Ok(out)
 }
 
 /// Builder for AD SVD.
@@ -1594,9 +1670,11 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "cholesky_ad",
+            "cholesky_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::cholesky::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::cholesky_frule::<T>(ctx, t, dt),
+            |ctx, t, cotangent| tenferro_linalg::cholesky_rrule::<T>(ctx, t, cotangent),
         )
     }
 }
@@ -1635,10 +1713,15 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_binary_tensor_ad(
             "solve_ad",
+            "solve_ad_pullback",
             self.a,
             self.b,
             |ctx, a, b| tenferro_linalg::solve::<T, CpuContext>(ctx, a, b).map_err(Error::from),
             |ctx, a, b, da, db| tenferro_linalg::solve_frule::<T>(ctx, a, b, da, db),
+            |ctx, a, b, cotangent| {
+                let grad = tenferro_linalg::solve_rrule::<T>(ctx, a, b, cotangent)?;
+                Ok((grad.a, grad.b))
+            },
         )
     }
 }
@@ -1676,9 +1759,11 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "inv_ad",
+            "inv_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::inv::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::inv_frule::<T, CpuContext>(ctx, t, dt),
+            |ctx, t, cotangent| tenferro_linalg::inv_rrule::<T, CpuContext>(ctx, t, cotangent),
         )
     }
 }
@@ -1716,9 +1801,11 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "det_ad",
+            "det_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::det::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::det_frule::<T, CpuContext>(ctx, t, dt),
+            |ctx, t, cotangent| tenferro_linalg::det_rrule::<T, CpuContext>(ctx, t, cotangent),
         )
     }
 }
@@ -1904,11 +1991,15 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "pinv_ad",
+            "pinv_ad_pullback",
             self.tensor,
             |ctx, t| {
                 tenferro_linalg::pinv::<T, CpuContext>(ctx, t, self.rcond).map_err(Error::from)
             },
             |ctx, t, dt| tenferro_linalg::pinv_frule::<T, CpuContext>(ctx, t, dt, self.rcond),
+            move |ctx, t, cotangent| {
+                tenferro_linalg::pinv_rrule::<T, CpuContext>(ctx, t, cotangent, self.rcond)
+            },
         )
     }
 }
@@ -1949,9 +2040,13 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "matrix_exp_ad",
+            "matrix_exp_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::matrix_exp::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::matrix_exp_frule::<T, CpuContext>(ctx, t, dt),
+            |ctx, t, cotangent| {
+                tenferro_linalg::matrix_exp_rrule::<T, CpuContext>(ctx, t, cotangent)
+            },
         )
     }
 }
@@ -2134,9 +2229,13 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "norm_ad",
+            "norm_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::norm::<T, CpuContext>(ctx, t, self.kind).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::norm_frule::<T, CpuContext>(ctx, t, dt, self.kind),
+            move |ctx, t, cotangent| {
+                tenferro_linalg::norm_rrule::<T, CpuContext>(ctx, t, cotangent, self.kind)
+            },
         )
     }
 }

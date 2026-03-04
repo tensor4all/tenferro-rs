@@ -730,18 +730,21 @@ pub enum LuPivot {
 /// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
-/// use tenferro_device::LogicalMemorySpace;
 ///
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3],
-///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let a = Tensor::<f64>::from_slice(
+///     &[1.0, 0.0, 0.0, 1.0],
+///     &[2, 2],
+///     MemoryOrder::ColumnMajor
+/// ).unwrap();
 ///
 /// // With partial pivoting (default)
 /// let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 /// assert!(result.p.is_some());
 ///
-/// // NoPivot currently returns an error in this implementation.
-/// assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+/// // NoPivot is also supported.
+/// let no_pivot = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
+/// assert!(no_pivot.p.is_none());
 /// ```
 pub struct LuResult<T: Scalar> {
     /// Row permutation indices. `Some` for [`LuPivot::Partial`], `None` for
@@ -1079,17 +1082,20 @@ where
 /// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
-/// use tenferro_device::LogicalMemorySpace;
 ///
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3],
-///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let a = Tensor::<f64>::from_slice(
+///     &[1.0, 0.0, 0.0, 1.0],
+///     &[2, 2],
+///     MemoryOrder::ColumnMajor
+/// ).unwrap();
 ///
 /// // Partial pivoting (default)
 /// let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 ///
-/// // NoPivot currently returns an error in this implementation.
-/// assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+/// // NoPivot is supported (no permutation output).
+/// let no_pivot = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
+/// assert!(no_pivot.p.is_none());
 /// ```
 ///
 /// # Errors
@@ -1104,9 +1110,74 @@ where
     C: backend::TensorLinalgContextFor<T>,
 {
     if pivot == LuPivot::NoPivot {
-        return Err(Error::InvalidArgument(
-            "NoPivot LU is not yet implemented".into(),
-        ));
+        let (m, n, batch_dims) = validate_2d(tensor)?;
+        let bc = batch_count(batch_dims);
+        let k = m.min(n);
+        let mat_size = m * n;
+
+        let input = ensure_col_major(tensor);
+        let data = extract_slice(&input)?;
+        let offset = input.offset() as usize;
+
+        let mut all_l = vec![T::zero(); m * k * bc];
+        let mut all_u = vec![T::zero(); k * n * bc];
+
+        for batch in 0..bc {
+            let start = offset + batch * mat_size;
+            let mut lu_data = data[start..start + mat_size].to_vec();
+
+            // Doolittle LU without pivoting.
+            for p in 0..k {
+                let pivot_val = lu_data[p + p * m];
+                if pivot_val.abs_real() <= T::real_epsilon() {
+                    return Err(Error::InvalidArgument(format!(
+                        "NoPivot LU encountered near-zero pivot at row {p} in batch {batch}"
+                    )));
+                }
+
+                for i in (p + 1)..m {
+                    lu_data[i + p * m] = lu_data[i + p * m] / pivot_val;
+                }
+                for j in (p + 1)..n {
+                    let up = lu_data[p + j * m];
+                    for i in (p + 1)..m {
+                        let idx = i + j * m;
+                        lu_data[idx] = lu_data[idx] - lu_data[i + p * m] * up;
+                    }
+                }
+            }
+
+            for j in 0..k {
+                for i in 0..m {
+                    let val = if i < j {
+                        T::zero()
+                    } else if i == j {
+                        T::one()
+                    } else {
+                        lu_data[i + j * m]
+                    };
+                    all_l[batch * m * k + i + j * m] = val;
+                }
+            }
+            for j in 0..n {
+                for i in 0..k {
+                    let val = if i <= j {
+                        lu_data[i + j * m]
+                    } else {
+                        T::zero()
+                    };
+                    all_u[batch * k * n + i + j * k] = val;
+                }
+            }
+        }
+
+        let l_dims = output_dims(&[m, k], batch_dims);
+        let u_dims = output_dims(&[k, n], batch_dims);
+        return Ok(LuResult {
+            p: None,
+            l: tensor_from_data(all_l, &l_dims)?,
+            u: tensor_from_data(all_u, &u_dims)?,
+        });
     }
 
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
@@ -2011,6 +2082,8 @@ where
 /// - `NormKind::Fro`
 /// - `NormKind::Nuclear`
 /// - `NormKind::Spectral`
+/// - `NormKind::L1` (max absolute column sum)
+/// - `NormKind::Inf` (max absolute row sum)
 ///
 /// Return shape is `(*)` (batch dimensions). For non-batched input this is
 /// a scalar tensor `[]`.
@@ -2093,6 +2166,52 @@ where
             let mut out = vec![T::zero(); bc];
             for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
                 *out_slot = s_data[s_off + batch * k];
+            }
+            tensor_from_data(out, &out_dims)
+        }
+        NormKind::L1 => {
+            // Matrix L1 norm per batch: max absolute column sum.
+            let mut out = vec![T::zero(); bc];
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    *out_slot = T::zero();
+                    continue;
+                }
+                let start = offset + batch * mat_size;
+                let mut max_col_sum = T::zero();
+                for j in 0..n {
+                    let mut col_sum = T::zero();
+                    for i in 0..m {
+                        col_sum = col_sum + data[start + i + j * m].abs();
+                    }
+                    if j == 0 || col_sum > max_col_sum {
+                        max_col_sum = col_sum;
+                    }
+                }
+                *out_slot = max_col_sum;
+            }
+            tensor_from_data(out, &out_dims)
+        }
+        NormKind::Inf => {
+            // Matrix infinity norm per batch: max absolute row sum.
+            let mut out = vec![T::zero(); bc];
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    *out_slot = T::zero();
+                    continue;
+                }
+                let start = offset + batch * mat_size;
+                let mut max_row_sum = T::zero();
+                for i in 0..m {
+                    let mut row_sum = T::zero();
+                    for j in 0..n {
+                        row_sum = row_sum + data[start + i + j * m].abs();
+                    }
+                    if i == 0 || row_sum > max_row_sum {
+                        max_row_sum = row_sum;
+                    }
+                }
+                *out_slot = max_row_sum;
             }
             tensor_from_data(out, &out_dims)
         }
@@ -4081,6 +4200,100 @@ where
                 }
             }
         }
+        NormKind::L1 => {
+            // dA = dn * sign(A) on columns that attain max absolute column sum.
+            // At ties, average uniformly over active columns.
+            for batch in 0..bc {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut col_sums = vec![T::zero(); n];
+                for j in 0..n {
+                    let mut sum = T::zero();
+                    for i in 0..m {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    col_sums[j] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &col_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_cols: Vec<usize> = col_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(j, &sum)| if sum == max_sum { Some(j) } else { None })
+                    .collect();
+                if active_cols.is_empty() {
+                    continue;
+                }
+                let active_count = scalar_from::<T>(active_cols.len() as f64).map_err(to_ad_err)?;
+                let dn = dn_data[batch] / active_count;
+                for j in active_cols {
+                    for i in 0..m {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        grad_a[base + i + j * m] = grad_a[base + i + j * m] + dn * sign;
+                    }
+                }
+            }
+        }
+        NormKind::Inf => {
+            // dA = dn * sign(A) on rows that attain max absolute row sum.
+            // At ties, average uniformly over active rows.
+            for batch in 0..bc {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut row_sums = vec![T::zero(); m];
+                for i in 0..m {
+                    let mut sum = T::zero();
+                    for j in 0..n {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    row_sums[i] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &row_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_rows: Vec<usize> = row_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &sum)| if sum == max_sum { Some(i) } else { None })
+                    .collect();
+                if active_rows.is_empty() {
+                    continue;
+                }
+                let active_count = scalar_from::<T>(active_rows.len() as f64).map_err(to_ad_err)?;
+                let dn = dn_data[batch] / active_count;
+                for i in active_rows {
+                    for j in 0..n {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        grad_a[base + i + j * m] = grad_a[base + i + j * m] + dn * sign;
+                    }
+                }
+            }
+        }
         _ => {
             return Err(chainrules_core::AutodiffError::ModeNotSupported {
                 mode: "norm_rrule".into(),
@@ -5428,6 +5641,102 @@ where
                     }
                 }
                 dnrm_data[batch] = val;
+            }
+        }
+        NormKind::L1 => {
+            // d||A||_1 = sum_i sign(A_ij) dA_ij on active max columns.
+            // At ties, average uniformly over active columns.
+            for (batch, dn_slot) in dnrm_data.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut col_sums = vec![T::zero(); n];
+                for j in 0..n {
+                    let mut sum = T::zero();
+                    for i in 0..m {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    col_sums[j] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &col_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_cols: Vec<usize> = col_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(j, &sum)| if sum == max_sum { Some(j) } else { None })
+                    .collect();
+                if active_cols.is_empty() {
+                    continue;
+                }
+                let mut accum = T::zero();
+                for j in active_cols.iter().copied() {
+                    for i in 0..m {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        accum = accum + sign * da_data[base + i + j * m];
+                    }
+                }
+                let active_count = scalar_from::<T>(active_cols.len() as f64).map_err(to_ad_err)?;
+                *dn_slot = accum / active_count;
+            }
+        }
+        NormKind::Inf => {
+            // d||A||_inf = sum_j sign(A_ij) dA_ij on active max rows.
+            // At ties, average uniformly over active rows.
+            for (batch, dn_slot) in dnrm_data.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut row_sums = vec![T::zero(); m];
+                for i in 0..m {
+                    let mut sum = T::zero();
+                    for j in 0..n {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    row_sums[i] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &row_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_rows: Vec<usize> = row_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &sum)| if sum == max_sum { Some(i) } else { None })
+                    .collect();
+                if active_rows.is_empty() {
+                    continue;
+                }
+                let mut accum = T::zero();
+                for i in active_rows.iter().copied() {
+                    for j in 0..n {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        accum = accum + sign * da_data[base + i + j * m];
+                    }
+                }
+                let active_count = scalar_from::<T>(active_rows.len() as f64).map_err(to_ad_err)?;
+                *dn_slot = accum / active_count;
             }
         }
         _ => {

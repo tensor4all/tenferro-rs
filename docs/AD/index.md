@@ -35,3 +35,4 @@ verification procedures (reconstruction checks, finite-difference gradient check
 | [matrix_exp.md](./matrix_exp.md) | Matrix exponential (`matrix_exp_rrule`) | AD rules for `exp(A)` |
 | [norm.md](./norm.md) | Norm (`norm_rrule`) | AD rules for matrix and vector norms |
 | [scalar_ops.md](./scalar_ops.md) | Scalar ops (`conj`, `sqrt`, `powf`, `powi`) | PyTorch-aligned scalar rrule/frule conventions and `handle_r_to_c` projection note |
+| [dyadtensor_reverse.md](./dyadtensor_reverse.md) | Dyadtensor reverse wiring | `.run()` pullback registration coverage and current multi-output limits |

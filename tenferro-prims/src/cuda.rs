@@ -20,7 +20,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::{Scalar, Standard};
+use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
@@ -665,8 +665,25 @@ impl CudaBackend {
     }
 
     /// Materialize a lazily-conjugated tensor on GPU.
-    pub fn resolve_conj<T: Scalar>(_ctx: &mut CudaContext, _src: &Tensor<T>) -> Tensor<T> {
-        todo!("CudaBackend::resolve_conj — not yet implemented")
+    pub fn resolve_conj<T: Scalar + Conjugate>(
+        _ctx: &mut CudaContext,
+        src: &Tensor<T>,
+    ) -> Tensor<T> {
+        if !src.is_conjugated() {
+            return src.clone();
+        }
+
+        let contiguous = src.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+        let Some(data) = contiguous.buffer().as_slice() else {
+            return src.clone();
+        };
+        let conjugated_data: Vec<T> = data.iter().map(|&v| v.conj()).collect();
+        Tensor::from_slice(
+            &conjugated_data,
+            src.dims(),
+            tenferro_tensor::MemoryOrder::ColumnMajor,
+        )
+        .unwrap_or_else(|_| src.clone())
     }
 }
 

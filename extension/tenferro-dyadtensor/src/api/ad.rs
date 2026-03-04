@@ -716,6 +716,73 @@ mod tests {
     }
 
     #[test]
+    fn solve_builder_reverse_pullback_matches_rrule() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+        let tape = TapeId(111);
+        let node_a = NodeId(51);
+        let node_b = NodeId(52);
+
+        let a = f64_2x2([3.0, 1.0, 1.0, 2.0]);
+        let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let cotangent =
+            Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let out = solve(&ad_a_rev, &ad_b_rev).unwrap();
+        assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+
+        let ad_cotangent = AdTensor::new_primal(cotangent.clone());
+        let grads = pullback_wrt(&out, &ad_cotangent, &[&ad_a_rev, &ad_b_rev]).unwrap();
+        let grad_a = grads[0].as_ref().expect("missing solve dA");
+        let grad_b = grads[1].as_ref().expect("missing solve dB");
+
+        let expected = crate::api::with_cpu_runtime("solve_rrule_expected", |ctx| {
+            tenferro_linalg::solve_rrule::<f64>(ctx, &a, &b, &cotangent).map_err(Error::from)
+        })
+        .unwrap();
+
+        let expected_b = if expected.b.dims() == b.dims() {
+            expected.b
+        } else {
+            expected.b.reshape(b.dims()).unwrap()
+        };
+
+        assert!(max_abs_diff(grad_a, &expected.a) < 1e-12);
+        assert!(max_abs_diff(grad_b, &expected_b) < 1e-12);
+    }
+
+    #[test]
+    fn norm_builder_reverse_pullback_l1_matches_rrule() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+        let tape = TapeId(112);
+        let node_a = NodeId(61);
+
+        let a =
+            Tensor::<f64>::from_slice(&[1.0, 3.0, -2.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let cotangent: Tensor<f64> = Tensor::from_vec(vec![1.5], &[], &[], 0).unwrap();
+
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let out = crate::norm_ad(&ad_a_rev).kind(NormKind::L1).run().unwrap();
+        assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+
+        let ad_cotangent = AdTensor::new_primal(cotangent.clone());
+        let grads = pullback_wrt(&out, &ad_cotangent, &[&ad_a_rev]).unwrap();
+        let grad_a = grads[0].as_ref().expect("missing norm dA");
+
+        let expected = crate::api::with_cpu_runtime("norm_rrule_expected", |ctx| {
+            tenferro_linalg::norm_rrule::<f64, _>(ctx, &a, &cotangent, NormKind::L1)
+                .map_err(Error::from)
+        })
+        .unwrap();
+
+        assert!(max_abs_diff(grad_a, &expected) < 1e-12);
+    }
+
+    #[test]
     fn einsum_builder_reverse_pullback_wrt_matches_rrule() {
         let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 

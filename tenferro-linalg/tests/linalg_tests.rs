@@ -4042,12 +4042,16 @@ fn cholesky_non_spd_returns_error() {
 }
 
 #[test]
-fn norm_unsupported_kind_returns_error() {
+fn norm_l1_inf_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    // L1 norm is not yet implemented
-    assert!(norm(&mut ctx, &a, NormKind::L1).is_err());
-    assert!(norm(&mut ctx, &a, NormKind::Inf).is_err());
+    // Matrix [[1, 3], [2, 4]] in column-major storage.
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let l1 = norm(&mut ctx, &a, NormKind::L1).unwrap();
+    let inf = norm(&mut ctx, &a, NormKind::Inf).unwrap();
+    let l1_data = tensor_data(&l1);
+    let inf_data = tensor_data(&inf);
+    assert!((l1_data[0] - 7.0).abs() < 1e-12);
+    assert!((inf_data[0] - 6.0).abs() < 1e-12);
 }
 
 // ============================================================================
@@ -5414,11 +5418,37 @@ fn lstsq_rrule_full_execution() {
 // ============================================================================
 
 #[test]
-fn lu_nopivot_returns_error() {
-    // Lines 1023-1025: LuPivot::NoPivot error branch.
+fn lu_nopivot_reconstruction() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+    // Matrix with nonzero leading pivots for stable NoPivot factorization.
+    let data = vec![4.0, 1.0, 0.0, 2.0, 3.0, 1.0, 0.0, 1.0, 2.0];
+    let a = make_tensor(data.clone(), &[3, 3]);
+    let result = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
+    assert!(result.p.is_none());
+
+    let l = tensor_data(&result.l);
+    let u = tensor_data(&result.u);
+    let n = 3;
+    let mut lu_prod = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = 0.0;
+            for k in 0..n {
+                val += l[i + k * n] * u[k + j * n];
+            }
+            lu_prod[i + j * n] = val;
+        }
+    }
+
+    for i in 0..n {
+        for j in 0..n {
+            let err = (data[i + j * n] - lu_prod[i + j * n]).abs();
+            assert!(
+                err < 1e-10,
+                "NoPivot LU reconstruction error at ({i},{j}): {err}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -5441,39 +5471,63 @@ fn solve_triangular_rhs_2d_batch_mismatch() {
 }
 
 #[test]
-fn norm_rrule_l1_unsupported() {
-    // Lines 3955-3958: norm_rrule returns error for L1.
+fn norm_rrule_l1_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
-    assert!(norm_rrule(&mut ctx, &a, &co, NormKind::L1).is_err());
+    // Matrix [[1, -2], [3, 4]] => max column is 2nd.
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![2.0], &[], &[], 0).unwrap();
+    let grad = norm_rrule(&mut ctx, &a, &co, NormKind::L1).unwrap();
+    let gd = tensor_data(&grad);
+    let expected = vec![0.0, 0.0, -2.0, 2.0];
+    for (g, e) in gd.iter().zip(expected.iter()) {
+        assert!(
+            (g - e).abs() < 1e-12,
+            "L1 rrule mismatch: got {g}, expected {e}"
+        );
+    }
 }
 
 #[test]
-fn norm_rrule_inf_unsupported() {
-    // Lines 3955-3958: norm_rrule returns error for Inf.
+fn norm_rrule_inf_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
-    assert!(norm_rrule(&mut ctx, &a, &co, NormKind::Inf).is_err());
+    // Matrix [[1, -2], [3, 4]] => max row is 2nd.
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![2.0], &[], &[], 0).unwrap();
+    let grad = norm_rrule(&mut ctx, &a, &co, NormKind::Inf).unwrap();
+    let gd = tensor_data(&grad);
+    let expected = vec![0.0, 2.0, 0.0, 2.0];
+    for (g, e) in gd.iter().zip(expected.iter()) {
+        assert!(
+            (g - e).abs() < 1e-12,
+            "Inf rrule mismatch: got {g}, expected {e}"
+        );
+    }
 }
 
 #[test]
-fn norm_frule_l1_unsupported() {
-    // Lines 5194-5197: norm_frule returns error for L1.
+fn norm_frule_l1_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
-    assert!(norm_frule(&mut ctx, &a, &da, NormKind::L1).is_err());
+    // Matrix [[1, -2], [3, 4]] and tangent [[0.1, 0.2], [0.3, 0.4]].
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.3, 0.2, 0.4], &[2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::L1).unwrap();
+    let n = tensor_data(&nrm);
+    let dn = tensor_data(&dnrm);
+    assert!((n[0] - 6.0).abs() < 1e-12);
+    assert!((dn[0] - 0.2).abs() < 1e-12);
 }
 
 #[test]
-fn norm_frule_inf_unsupported() {
-    // Lines 5194-5197: norm_frule returns error for Inf.
+fn norm_frule_inf_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
-    assert!(norm_frule(&mut ctx, &a, &da, NormKind::Inf).is_err());
+    // Matrix [[1, -2], [3, 4]] and tangent [[0.1, 0.2], [0.3, 0.4]].
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.3, 0.2, 0.4], &[2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::Inf).unwrap();
+    let n = tensor_data(&nrm);
+    let dn = tensor_data(&dnrm);
+    assert!((n[0] - 7.0).abs() < 1e-12);
+    assert!((dn[0] - 0.7).abs() < 1e-12);
 }
 
 #[test]
