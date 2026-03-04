@@ -2,56 +2,56 @@ use tenferro_einsum::Subscripts;
 use tenferro_tensor::Tensor;
 
 use crate::dyn_types::{DynTensor, ScalarType};
-use crate::partial_diag::typed::PartialDiagTensor;
+use crate::partial_diag::typed::AdTensor;
 use crate::{Error, Result};
 
 /// Runtime-dispatched PartialDiagonal tensor.
 ///
-/// This is the dynamic counterpart of [`PartialDiagTensor<T>`].
+/// This is the dynamic counterpart of [`AdTensor<T>`].
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+/// use tenferro_dyadtensor::partial_diag::DynAdTensor;
 /// use tenferro_dyadtensor::DynTensor;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let dense = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-/// let x = DynPartialDiagTensor::from_dense(DynTensor::from(dense));
+/// let x = DynAdTensor::from_dense(DynTensor::from(dense));
 /// assert_eq!(x.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
 /// ```
 #[derive(Debug, Clone)]
-pub enum DynPartialDiagTensor {
+pub enum DynAdTensor {
     /// f32 payload.
-    F32(PartialDiagTensor<f32>),
+    F32(AdTensor<f32>),
     /// f64 payload.
-    F64(PartialDiagTensor<f64>),
+    F64(AdTensor<f64>),
     /// Complex32 payload.
-    C32(PartialDiagTensor<num_complex::Complex32>),
+    C32(AdTensor<num_complex::Complex32>),
     /// Complex64 payload.
-    C64(PartialDiagTensor<num_complex::Complex64>),
+    C64(AdTensor<num_complex::Complex64>),
 }
 
-impl DynPartialDiagTensor {
+impl DynAdTensor {
     /// Construct from dense runtime tensor.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::from_dense(DynTensor::from(dense));
+    /// let x = DynAdTensor::from_dense(DynTensor::from(dense));
     /// assert_eq!(x.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
     /// ```
     pub fn from_dense(payload: DynTensor) -> Self {
         match payload {
-            DynTensor::F32(t) => Self::F32(PartialDiagTensor::from_dense(t)),
-            DynTensor::F64(t) => Self::F64(PartialDiagTensor::from_dense(t)),
-            DynTensor::C32(t) => Self::C32(PartialDiagTensor::from_dense(t)),
-            DynTensor::C64(t) => Self::C64(PartialDiagTensor::from_dense(t)),
+            DynTensor::F32(t) => Self::F32(AdTensor::from_dense(t)),
+            DynTensor::F64(t) => Self::F64(AdTensor::from_dense(t)),
+            DynTensor::C32(t) => Self::C32(AdTensor::from_dense(t)),
+            DynTensor::C64(t) => Self::C64(AdTensor::from_dense(t)),
         }
     }
 
@@ -60,12 +60,12 @@ impl DynPartialDiagTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::new(vec![2, 2], vec![0, 0], DynTensor::from(payload)).unwrap();
+    /// let x = DynAdTensor::new(vec![2, 2], vec![0, 0], DynTensor::from(payload)).unwrap();
     /// assert_eq!(x.axis_classes(), &[0, 0]);
     /// ```
     pub fn new(
@@ -74,26 +74,10 @@ impl DynPartialDiagTensor {
         payload: DynTensor,
     ) -> Result<Self> {
         match payload {
-            DynTensor::F32(t) => Ok(Self::F32(PartialDiagTensor::new(
-                logical_dims,
-                axis_classes,
-                t,
-            )?)),
-            DynTensor::F64(t) => Ok(Self::F64(PartialDiagTensor::new(
-                logical_dims,
-                axis_classes,
-                t,
-            )?)),
-            DynTensor::C32(t) => Ok(Self::C32(PartialDiagTensor::new(
-                logical_dims,
-                axis_classes,
-                t,
-            )?)),
-            DynTensor::C64(t) => Ok(Self::C64(PartialDiagTensor::new(
-                logical_dims,
-                axis_classes,
-                t,
-            )?)),
+            DynTensor::F32(t) => Ok(Self::F32(AdTensor::new(logical_dims, axis_classes, t)?)),
+            DynTensor::F64(t) => Ok(Self::F64(AdTensor::new(logical_dims, axis_classes, t)?)),
+            DynTensor::C32(t) => Ok(Self::C32(AdTensor::new(logical_dims, axis_classes, t)?)),
+            DynTensor::C64(t) => Ok(Self::C64(AdTensor::new(logical_dims, axis_classes, t)?)),
         }
     }
 
@@ -102,32 +86,20 @@ impl DynPartialDiagTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::from_diagonal_vector(DynTensor::from(payload), 2).unwrap();
+    /// let x = DynAdTensor::from_diagonal_vector(DynTensor::from(payload), 2).unwrap();
     /// assert_eq!(x.logical_dims(), &[2, 2]);
     /// ```
     pub fn from_diagonal_vector(payload: DynTensor, logical_rank: usize) -> Result<Self> {
         match payload {
-            DynTensor::F32(t) => Ok(Self::F32(PartialDiagTensor::from_diagonal_vector(
-                t,
-                logical_rank,
-            )?)),
-            DynTensor::F64(t) => Ok(Self::F64(PartialDiagTensor::from_diagonal_vector(
-                t,
-                logical_rank,
-            )?)),
-            DynTensor::C32(t) => Ok(Self::C32(PartialDiagTensor::from_diagonal_vector(
-                t,
-                logical_rank,
-            )?)),
-            DynTensor::C64(t) => Ok(Self::C64(PartialDiagTensor::from_diagonal_vector(
-                t,
-                logical_rank,
-            )?)),
+            DynTensor::F32(t) => Ok(Self::F32(AdTensor::from_diagonal_vector(t, logical_rank)?)),
+            DynTensor::F64(t) => Ok(Self::F64(AdTensor::from_diagonal_vector(t, logical_rank)?)),
+            DynTensor::C32(t) => Ok(Self::C32(AdTensor::from_diagonal_vector(t, logical_rank)?)),
+            DynTensor::C64(t) => Ok(Self::C64(AdTensor::from_diagonal_vector(t, logical_rank)?)),
         }
     }
 
@@ -136,12 +108,12 @@ impl DynPartialDiagTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::from_dense(DynTensor::from(dense));
+    /// let x = DynAdTensor::from_dense(DynTensor::from(dense));
     /// assert_eq!(x.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
     /// ```
     pub fn scalar_type(&self) -> ScalarType {
@@ -158,12 +130,12 @@ impl DynPartialDiagTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::from_diagonal_vector(DynTensor::from(payload), 2).unwrap();
+    /// let x = DynAdTensor::from_diagonal_vector(DynTensor::from(payload), 2).unwrap();
     /// assert_eq!(x.logical_dims(), &[2, 2]);
     /// ```
     pub fn logical_dims(&self) -> &[usize] {
@@ -180,12 +152,12 @@ impl DynPartialDiagTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::from_diagonal_vector(DynTensor::from(payload), 2).unwrap();
+    /// let x = DynAdTensor::from_diagonal_vector(DynTensor::from(payload), 2).unwrap();
     /// assert_eq!(x.axis_classes(), &[0, 0]);
     /// ```
     pub fn axis_classes(&self) -> &[usize] {
@@ -197,17 +169,37 @@ impl DynPartialDiagTensor {
         }
     }
 
+    /// Returns `true` when the underlying layout is dense.
+    pub fn is_dense(&self) -> bool {
+        match self {
+            Self::F32(t) => t.is_dense(),
+            Self::F64(t) => t.is_dense(),
+            Self::C32(t) => t.is_dense(),
+            Self::C64(t) => t.is_dense(),
+        }
+    }
+
+    /// Returns `true` when the underlying layout is diagonal.
+    pub fn is_diag(&self) -> bool {
+        match self {
+            Self::F32(t) => t.is_diag(),
+            Self::F64(t) => t.is_diag(),
+            Self::C32(t) => t.is_diag(),
+            Self::C64(t) => t.is_diag(),
+        }
+    }
+
     /// Borrow compressed payload as runtime tensor.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::from_dense(DynTensor::from(dense));
+    /// let x = DynAdTensor::from_dense(DynTensor::from(dense));
     /// let p = x.payload();
     /// assert_eq!(p.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
     /// ```
@@ -245,46 +237,44 @@ impl DynPartialDiagTensor {
     ///
     /// ```ignore
     /// // Requires default runtime to be configured.
-    /// let out = DynPartialDiagTensor::einsum_with_subscripts(&subs, &[&a, &b])?;
+    /// let out = DynAdTensor::einsum_with_subscripts(&subs, &[&a, &b])?;
     /// ```
     pub fn einsum_with_subscripts(subscripts: &Subscripts, operands: &[&Self]) -> Result<Self> {
         let Some(first) = operands.first() else {
             return Err(Error::InvalidAdTensor {
-                message:
-                    "DynPartialDiagTensor::einsum_with_subscripts requires at least one operand"
-                        .to_string(),
+                message: "DynAdTensor::einsum_with_subscripts requires at least one operand"
+                    .to_string(),
             });
         };
         let scalar_type = first.scalar_type();
         if operands.iter().any(|op| op.scalar_type() != scalar_type) {
             return Err(Error::InvalidAdTensor {
-                message: "mixed scalar types are not supported in DynPartialDiagTensor einsum"
-                    .to_string(),
+                message: "mixed scalar types are not supported in DynAdTensor einsum".to_string(),
             });
         }
 
         match scalar_type {
             ScalarType::F32 => {
                 let typed = collect_typed_refs_f32(operands)?;
-                Ok(Self::F32(PartialDiagTensor::einsum_with_subscripts(
+                Ok(Self::F32(AdTensor::einsum_with_subscripts(
                     subscripts, &typed,
                 )?))
             }
             ScalarType::F64 => {
                 let typed = collect_typed_refs_f64(operands)?;
-                Ok(Self::F64(PartialDiagTensor::einsum_with_subscripts(
+                Ok(Self::F64(AdTensor::einsum_with_subscripts(
                     subscripts, &typed,
                 )?))
             }
             ScalarType::C32 => {
                 let typed = collect_typed_refs_c32(operands)?;
-                Ok(Self::C32(PartialDiagTensor::einsum_with_subscripts(
+                Ok(Self::C32(AdTensor::einsum_with_subscripts(
                     subscripts, &typed,
                 )?))
             }
             ScalarType::C64 => {
                 let typed = collect_typed_refs_c64(operands)?;
-                Ok(Self::C64(PartialDiagTensor::einsum_with_subscripts(
+                Ok(Self::C64(AdTensor::einsum_with_subscripts(
                     subscripts, &typed,
                 )?))
             }
@@ -292,13 +282,11 @@ impl DynPartialDiagTensor {
     }
 }
 
-fn collect_typed_refs_f32<'a>(
-    operands: &'a [&'a DynPartialDiagTensor],
-) -> Result<Vec<&'a PartialDiagTensor<f32>>> {
+fn collect_typed_refs_f32<'a>(operands: &'a [&'a DynAdTensor]) -> Result<Vec<&'a AdTensor<f32>>> {
     operands
         .iter()
         .map(|op| match op {
-            DynPartialDiagTensor::F32(v) => Ok(v),
+            DynAdTensor::F32(v) => Ok(v),
             _ => Err(Error::InvalidAdTensor {
                 message: "expected f32 operand".to_string(),
             }),
@@ -306,13 +294,11 @@ fn collect_typed_refs_f32<'a>(
         .collect()
 }
 
-fn collect_typed_refs_f64<'a>(
-    operands: &'a [&'a DynPartialDiagTensor],
-) -> Result<Vec<&'a PartialDiagTensor<f64>>> {
+fn collect_typed_refs_f64<'a>(operands: &'a [&'a DynAdTensor]) -> Result<Vec<&'a AdTensor<f64>>> {
     operands
         .iter()
         .map(|op| match op {
-            DynPartialDiagTensor::F64(v) => Ok(v),
+            DynAdTensor::F64(v) => Ok(v),
             _ => Err(Error::InvalidAdTensor {
                 message: "expected f64 operand".to_string(),
             }),
@@ -321,12 +307,12 @@ fn collect_typed_refs_f64<'a>(
 }
 
 fn collect_typed_refs_c32<'a>(
-    operands: &'a [&'a DynPartialDiagTensor],
-) -> Result<Vec<&'a PartialDiagTensor<num_complex::Complex32>>> {
+    operands: &'a [&'a DynAdTensor],
+) -> Result<Vec<&'a AdTensor<num_complex::Complex32>>> {
     operands
         .iter()
         .map(|op| match op {
-            DynPartialDiagTensor::C32(v) => Ok(v),
+            DynAdTensor::C32(v) => Ok(v),
             _ => Err(Error::InvalidAdTensor {
                 message: "expected Complex32 operand".to_string(),
             }),
@@ -335,12 +321,12 @@ fn collect_typed_refs_c32<'a>(
 }
 
 fn collect_typed_refs_c64<'a>(
-    operands: &'a [&'a DynPartialDiagTensor],
-) -> Result<Vec<&'a PartialDiagTensor<num_complex::Complex64>>> {
+    operands: &'a [&'a DynAdTensor],
+) -> Result<Vec<&'a AdTensor<num_complex::Complex64>>> {
     operands
         .iter()
         .map(|op| match op {
-            DynPartialDiagTensor::C64(v) => Ok(v),
+            DynAdTensor::C64(v) => Ok(v),
             _ => Err(Error::InvalidAdTensor {
                 message: "expected Complex64 operand".to_string(),
             }),
@@ -348,59 +334,59 @@ fn collect_typed_refs_c64<'a>(
         .collect()
 }
 
-impl From<PartialDiagTensor<f32>> for DynPartialDiagTensor {
-    fn from(value: PartialDiagTensor<f32>) -> Self {
+impl From<AdTensor<f32>> for DynAdTensor {
+    fn from(value: AdTensor<f32>) -> Self {
         Self::F32(value)
     }
 }
 
-impl From<PartialDiagTensor<f64>> for DynPartialDiagTensor {
-    fn from(value: PartialDiagTensor<f64>) -> Self {
+impl From<AdTensor<f64>> for DynAdTensor {
+    fn from(value: AdTensor<f64>) -> Self {
         Self::F64(value)
     }
 }
 
-impl From<PartialDiagTensor<num_complex::Complex32>> for DynPartialDiagTensor {
-    fn from(value: PartialDiagTensor<num_complex::Complex32>) -> Self {
+impl From<AdTensor<num_complex::Complex32>> for DynAdTensor {
+    fn from(value: AdTensor<num_complex::Complex32>) -> Self {
         Self::C32(value)
     }
 }
 
-impl From<PartialDiagTensor<num_complex::Complex64>> for DynPartialDiagTensor {
-    fn from(value: PartialDiagTensor<num_complex::Complex64>) -> Self {
+impl From<AdTensor<num_complex::Complex64>> for DynAdTensor {
+    fn from(value: AdTensor<num_complex::Complex64>) -> Self {
         Self::C64(value)
     }
 }
 
-impl From<DynPartialDiagTensor> for DynTensor {
-    fn from(value: DynPartialDiagTensor) -> Self {
+impl From<DynAdTensor> for DynTensor {
+    fn from(value: DynAdTensor) -> Self {
         match value {
-            DynPartialDiagTensor::F32(v) => DynTensor::from(v.into_payload()),
-            DynPartialDiagTensor::F64(v) => DynTensor::from(v.into_payload()),
-            DynPartialDiagTensor::C32(v) => DynTensor::from(v.into_payload()),
-            DynPartialDiagTensor::C64(v) => DynTensor::from(v.into_payload()),
+            DynAdTensor::F32(v) => DynTensor::from(v.into_payload()),
+            DynAdTensor::F64(v) => DynTensor::from(v.into_payload()),
+            DynAdTensor::C32(v) => DynTensor::from(v.into_payload()),
+            DynAdTensor::C64(v) => DynTensor::from(v.into_payload()),
         }
     }
 }
 
-impl From<&DynPartialDiagTensor> for DynTensor {
-    fn from(value: &DynPartialDiagTensor) -> Self {
+impl From<&DynAdTensor> for DynTensor {
+    fn from(value: &DynAdTensor) -> Self {
         value.payload()
     }
 }
 
-impl DynPartialDiagTensor {
+impl DynAdTensor {
     /// Access typed f64 payload view.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::DynPartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::DynAdTensor;
     /// use tenferro_dyadtensor::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = DynPartialDiagTensor::from_dense(DynTensor::from(dense));
+    /// let x = DynAdTensor::from_dense(DynTensor::from(dense));
     /// assert!(x.as_f64_payload().is_some());
     /// ```
     pub fn as_f64_payload(&self) -> Option<&Tensor<f64>> {
@@ -426,11 +412,10 @@ mod tests {
     #[test]
     fn dyn_diag_roundtrip_dense() {
         let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-        let x = DynPartialDiagTensor::from_diagonal_vector(
-            DynTensor::from(vector(&[1.0, 2.0, 3.0])),
-            2,
-        )
-        .unwrap();
+        let x = DynAdTensor::from_diagonal_vector(DynTensor::from(vector(&[1.0, 2.0, 3.0])), 2)
+            .unwrap();
+        assert!(!x.is_dense());
+        assert!(x.is_diag());
         let dense = x.to_dense().unwrap();
         match dense {
             DynTensor::F64(t) => assert_eq!(t.dims(), &[3, 3]),
@@ -441,18 +426,12 @@ mod tests {
     #[test]
     fn dyn_einsum_diag_chain() {
         let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-        let a = DynPartialDiagTensor::from_diagonal_vector(
-            DynTensor::from(vector(&[1.0, 2.0, 3.0])),
-            2,
-        )
-        .unwrap();
-        let b = DynPartialDiagTensor::from_diagonal_vector(
-            DynTensor::from(vector(&[4.0, 5.0, 6.0])),
-            2,
-        )
-        .unwrap();
+        let a = DynAdTensor::from_diagonal_vector(DynTensor::from(vector(&[1.0, 2.0, 3.0])), 2)
+            .unwrap();
+        let b = DynAdTensor::from_diagonal_vector(DynTensor::from(vector(&[4.0, 5.0, 6.0])), 2)
+            .unwrap();
         let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-        let c = DynPartialDiagTensor::einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
+        let c = DynAdTensor::einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
         assert_eq!(c.axis_classes(), &[0, 0]);
         match c.payload() {
             DynTensor::F64(t) => assert_eq!(t.dims(), &[3]),

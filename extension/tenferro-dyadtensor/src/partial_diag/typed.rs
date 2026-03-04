@@ -22,21 +22,21 @@ use crate::{Error, Result};
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+/// use tenferro_dyadtensor::partial_diag::AdTensor;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-/// let x = PartialDiagTensor::new(vec![3, 3], vec![0, 0], payload).unwrap();
+/// let x = AdTensor::new(vec![3, 3], vec![0, 0], payload).unwrap();
 /// assert_eq!(x.class_count(), 1);
 /// ```
 #[derive(Debug, Clone)]
-pub struct PartialDiagTensor<T: Scalar> {
+pub struct AdTensor<T: Scalar> {
     payload: Tensor<T>,
     logical_dims: Vec<usize>,
     axis_classes: Vec<usize>,
 }
 
-impl<T: Scalar> PartialDiagTensor<T> {
+impl<T: Scalar> AdTensor<T> {
     /// Construct from logical metadata and compressed payload.
     ///
     /// `axis_classes` is canonicalized to first-appearance order.
@@ -44,11 +44,11 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::new(vec![3, 3], vec![10, 10], payload).unwrap();
+    /// let x = AdTensor::new(vec![3, 3], vec![10, 10], payload).unwrap();
     /// assert_eq!(x.axis_classes(), &[0, 0]);
     /// ```
     pub fn new(
@@ -70,11 +70,11 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::from_dense(dense);
+    /// let x = AdTensor::from_dense(dense);
     /// assert_eq!(x.axis_classes(), &[0, 1]);
     /// ```
     pub fn from_dense(payload: Tensor<T>) -> Self {
@@ -94,11 +94,11 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::from_diagonal_vector(payload, 2).unwrap();
+    /// let x = AdTensor::from_diagonal_vector(payload, 2).unwrap();
     /// assert_eq!(x.axis_classes(), &[0, 0]);
     /// ```
     pub fn from_diagonal_vector(payload: Tensor<T>, logical_rank: usize) -> Result<Self> {
@@ -126,11 +126,11 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::from_dense(dense);
+    /// let x = AdTensor::from_dense(dense);
     /// assert_eq!(x.payload().dims(), &[2]);
     /// ```
     pub fn payload(&self) -> &Tensor<T> {
@@ -142,11 +142,11 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::from_dense(dense);
+    /// let x = AdTensor::from_dense(dense);
     /// let payload = x.into_payload();
     /// assert_eq!(payload.dims(), &[2]);
     /// ```
@@ -159,11 +159,11 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::from_diagonal_vector(payload, 2).unwrap();
+    /// let x = AdTensor::from_diagonal_vector(payload, 2).unwrap();
     /// assert_eq!(x.logical_dims(), &[2, 2]);
     /// ```
     pub fn logical_dims(&self) -> &[usize] {
@@ -175,11 +175,11 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::from_diagonal_vector(payload, 2).unwrap();
+    /// let x = AdTensor::from_diagonal_vector(payload, 2).unwrap();
     /// assert_eq!(x.axis_classes(), &[0, 0]);
     /// ```
     pub fn axis_classes(&self) -> &[usize] {
@@ -191,19 +191,42 @@ impl<T: Scalar> PartialDiagTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::PartialDiagTensor;
+    /// use tenferro_dyadtensor::partial_diag::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = PartialDiagTensor::from_diagonal_vector(payload, 3).unwrap();
+    /// let x = AdTensor::from_diagonal_vector(payload, 3).unwrap();
     /// assert_eq!(x.class_count(), 1);
     /// ```
     pub fn class_count(&self) -> usize {
         self.payload.dims().len()
     }
+
+    /// Returns `true` when this tensor is represented as a dense layout.
+    pub fn is_dense(&self) -> bool {
+        self.axis_classes.len() == self.logical_dims.len()
+            && self.logical_dims == self.payload.dims()
+            && self
+                .axis_classes
+                .iter()
+                .enumerate()
+                .all(|(i, &class_id)| class_id == i)
+    }
+
+    /// Returns `true` when this tensor is represented as a pure diagonal layout.
+    pub fn is_diag(&self) -> bool {
+        if self.logical_dims.is_empty() || self.axis_classes.len() != self.logical_dims.len() {
+            return false;
+        }
+        let first_dim = self.logical_dims[0];
+        self.axis_classes.iter().all(|&class_id| class_id == 0)
+            && self.logical_dims.iter().all(|&dim| dim == first_dim)
+            && self.payload.dims().len() == 1
+            && self.payload.dims()[0] == first_dim
+    }
 }
 
-impl<T> PartialDiagTensor<T>
+impl<T> AdTensor<T>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
@@ -217,14 +240,7 @@ where
     /// let dense = partial_diag.to_dense()?;
     /// ```
     pub fn to_dense(&self) -> Result<Tensor<T>> {
-        let is_dense_layout = self.axis_classes.len() == self.payload.dims().len()
-            && self
-                .axis_classes
-                .iter()
-                .enumerate()
-                .all(|(i, &class_id)| class_id == i)
-            && self.logical_dims == self.payload.dims();
-        if is_dense_layout {
+        if self.is_dense() {
             return Ok(self.payload.clone());
         }
 
@@ -262,7 +278,7 @@ where
     ///
     /// ```ignore
     /// // Requires default runtime to be configured.
-    /// let out = PartialDiagTensor::einsum_with_subscripts(&subs, &[&a, &b])?;
+    /// let out = AdTensor::einsum_with_subscripts(&subs, &[&a, &b])?;
     /// ```
     pub fn einsum_with_subscripts(subscripts: &Subscripts, operands: &[&Self]) -> Result<Self> {
         if operands.is_empty() {
@@ -325,7 +341,7 @@ where
             )
             .map_err(Error::from)?;
 
-            PartialDiagTensor::new(
+            AdTensor::new(
                 plan.output_dims.clone(),
                 plan.output_axis_classes.clone(),
                 compressed_output,
@@ -543,7 +559,7 @@ mod tests {
         let payload =
             Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
                 .unwrap();
-        let x = PartialDiagTensor::new(vec![2, 2, 2], vec![7, 7, 9], payload).unwrap();
+        let x = AdTensor::new(vec![2, 2, 2], vec![7, 7, 9], payload).unwrap();
         assert_eq!(x.axis_classes(), &[0, 0, 1]);
         assert_eq!(x.logical_dims(), &[2, 2, 2]);
     }
@@ -551,7 +567,9 @@ mod tests {
     #[test]
     fn to_dense_from_diag_rank2() {
         let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-        let x = PartialDiagTensor::from_diagonal_vector(vector(&[1.0, 2.0, 3.0]), 2).unwrap();
+        let x = AdTensor::from_diagonal_vector(vector(&[1.0, 2.0, 3.0]), 2).unwrap();
+        assert!(!x.is_dense());
+        assert!(x.is_diag());
         let dense = x.to_dense().unwrap();
         assert_eq!(dense.dims(), &[3, 3]);
         let s = dense.clone().into_contiguous(MemoryOrder::ColumnMajor);
@@ -562,13 +580,20 @@ mod tests {
     }
 
     #[test]
+    fn dense_layout_flags() {
+        let x = AdTensor::from_dense(dense3(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 2, 2, 2));
+        assert!(x.is_dense());
+        assert!(!x.is_diag());
+    }
+
+    #[test]
     fn einsum_diag_chain_preserves_compressed_output() {
         let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-        let a = PartialDiagTensor::from_diagonal_vector(vector(&[1.0, 2.0, 3.0]), 2).unwrap();
-        let b = PartialDiagTensor::from_diagonal_vector(vector(&[4.0, 5.0, 6.0]), 2).unwrap();
+        let a = AdTensor::from_diagonal_vector(vector(&[1.0, 2.0, 3.0]), 2).unwrap();
+        let b = AdTensor::from_diagonal_vector(vector(&[4.0, 5.0, 6.0]), 2).unwrap();
         let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-        let c = PartialDiagTensor::einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
+        let c = AdTensor::einsum_with_subscripts(&subs, &[&a, &b]).unwrap();
 
         assert_eq!(c.logical_dims(), &[3, 3]);
         assert_eq!(c.axis_classes(), &[0, 0]);
@@ -584,17 +609,12 @@ mod tests {
     fn einsum_dense_threeway_repeat_normalizes_payload() {
         let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-        let a = PartialDiagTensor::from_dense(dense3(
-            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
-            2,
-            2,
-            2,
-        ));
-        let b = PartialDiagTensor::from_diagonal_vector(vector(&[2.0, 3.0]), 2).unwrap();
-        let c = PartialDiagTensor::from_diagonal_vector(vector(&[5.0, 7.0]), 2).unwrap();
+        let a = AdTensor::from_dense(dense3(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], 2, 2, 2));
+        let b = AdTensor::from_diagonal_vector(vector(&[2.0, 3.0]), 2).unwrap();
+        let c = AdTensor::from_diagonal_vector(vector(&[5.0, 7.0]), 2).unwrap();
 
         let subs = Subscripts::new(&[&[0, 1, 2], &[0, 1], &[1, 2]], &[]);
-        let out = PartialDiagTensor::einsum_with_subscripts(&subs, &[&a, &b, &c]).unwrap();
+        let out = AdTensor::einsum_with_subscripts(&subs, &[&a, &b, &c]).unwrap();
 
         assert!(out.logical_dims().is_empty());
         assert!(out.axis_classes().is_empty());

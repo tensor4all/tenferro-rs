@@ -28,8 +28,8 @@ pub use context::{
 pub use dyn_types::{DynAdTensor, DynAdValue, DynScalar, DynTensor, ScalarType};
 pub use error::{Error, Result};
 pub use partial_diag::{
-    plan_axis_classes_for_subscripts, AxisClassMergePlan, AxisClassPlanError, DynPartialDiagTensor,
-    OperandAxisClassPlan, OperandAxisClasses, PartialDiagTensor,
+    plan_axis_classes_for_subscripts, AxisClassMergePlan, AxisClassPlanError, OperandAxisClassPlan,
+    OperandAxisClasses,
 };
 pub use policy::DiffPolicy;
 pub use runtime::{set_default_runtime, with_default_runtime, RuntimeContext};
