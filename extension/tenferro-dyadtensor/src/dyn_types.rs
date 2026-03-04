@@ -6,7 +6,7 @@ use num_traits::{One, Zero};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{AdMode, AdScalar, AdTensor, AdValue, Error, Result};
+use crate::{AdMode, AdScalar, AdTensor, AdValue, Error, NodeId, Result, TapeId};
 
 /// Runtime scalar type tag used by all `Dyn*` wrappers.
 ///
@@ -1488,6 +1488,128 @@ pub enum DynAdTensor {
     C64(AdTensor<Complex64>),
 }
 
+fn map_ad_tensor_unary_typed<T, U, F>(input: &AdTensor<T>, f: F) -> Result<AdTensor<U>>
+where
+    T: Scalar + Copy,
+    U: Scalar + Copy,
+    F: Fn(T) -> U + Copy,
+{
+    let mapped = match input.as_value().clone() {
+        AdValue::Primal(primal) => AdValue::Primal(tensor_map_unary_typed(&primal, f)?),
+        AdValue::Forward { primal, tangent } => AdValue::Forward {
+            primal: tensor_map_unary_typed(&primal, f)?,
+            tangent: tensor_map_unary_typed(&tangent, f)?,
+        },
+        AdValue::Reverse {
+            primal,
+            node,
+            tape,
+            tangent,
+        } => AdValue::Reverse {
+            primal: tensor_map_unary_typed(&primal, f)?,
+            node,
+            tape,
+            tangent: tangent
+                .as_ref()
+                .map(|t| tensor_map_unary_typed(t, f))
+                .transpose()?,
+        },
+    };
+    Ok(AdTensor(mapped))
+}
+
+fn tensor_add_typed<T>(lhs: &Tensor<T>, rhs: &Tensor<T>) -> Result<Tensor<T>>
+where
+    T: Scalar + Copy + Add<Output = T>,
+{
+    tensor_map_binary_typed(lhs, rhs, |x, y| x + y)
+}
+
+struct AdTensorBinaryState<T: Scalar> {
+    primal: Tensor<T>,
+    tangent: Option<Tensor<T>>,
+    reverse: Option<(NodeId, TapeId)>,
+}
+
+fn split_ad_tensor_state<T: Scalar>(value: AdValue<Tensor<T>>) -> AdTensorBinaryState<T> {
+    match value {
+        AdValue::Primal(primal) => AdTensorBinaryState {
+            primal,
+            tangent: None,
+            reverse: None,
+        },
+        AdValue::Forward { primal, tangent } => AdTensorBinaryState {
+            primal,
+            tangent: Some(tangent),
+            reverse: None,
+        },
+        AdValue::Reverse {
+            primal,
+            node,
+            tape,
+            tangent,
+        } => AdTensorBinaryState {
+            primal,
+            tangent,
+            reverse: Some((node, tape)),
+        },
+    }
+}
+
+fn merge_add_ad_tensors<T>(
+    lhs: AdValue<Tensor<T>>,
+    rhs: AdValue<Tensor<T>>,
+) -> Result<AdValue<Tensor<T>>>
+where
+    T: Scalar + Copy + Add<Output = T>,
+{
+    let lhs_state = split_ad_tensor_state(lhs);
+    let rhs_state = split_ad_tensor_state(rhs);
+
+    let primal = tensor_add_typed(&lhs_state.primal, &rhs_state.primal)?;
+    let tangent = match (lhs_state.tangent, rhs_state.tangent) {
+        (Some(a), Some(b)) => Some(tensor_add_typed(&a, &b)?),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
+    };
+
+    match (lhs_state.reverse, rhs_state.reverse) {
+        (None, None) => match tangent {
+            Some(tangent) => Ok(AdValue::Forward { primal, tangent }),
+            None => Ok(AdValue::Primal(primal)),
+        },
+        (Some((node, tape)), None) => Ok(AdValue::Reverse {
+            primal,
+            node,
+            tape,
+            tangent,
+        }),
+        (None, Some((node, tape))) => Ok(AdValue::Reverse {
+            primal,
+            node,
+            tape,
+            tangent,
+        }),
+        (Some((lhs_node, lhs_tape)), Some((_, rhs_tape))) => {
+            if lhs_tape != rhs_tape {
+                return Err(Error::InvalidAdTensor {
+                    message: format!(
+                        "compose_complex: reverse-mode tape mismatch (lhs={}, rhs={})",
+                        lhs_tape.0, rhs_tape.0
+                    ),
+                });
+            }
+            Ok(AdValue::Reverse {
+                primal,
+                node: lhs_node,
+                tape: lhs_tape,
+                tangent,
+            })
+        }
+    }
+}
+
 impl DynAdTensor {
     /// Returns runtime scalar type.
     ///
@@ -1689,6 +1811,69 @@ impl DynAdTensor {
             Some(v)
         } else {
             None
+        }
+    }
+
+    /// Returns true when scalar dtype is complex.
+    pub fn is_complex(&self) -> bool {
+        matches!(self, Self::C32(_) | Self::C64(_))
+    }
+
+    /// Returns true when scalar dtype is real.
+    pub fn is_real(&self) -> bool {
+        matches!(self, Self::F32(_) | Self::F64(_))
+    }
+
+    /// AD-preserving extraction of the real component.
+    ///
+    /// - Real dtype: returns itself.
+    /// - Complex dtype: returns real dtype (`C32->F32`, `C64->F64`).
+    pub fn real_part(&self) -> Result<Self> {
+        match self {
+            Self::F32(v) => Ok(Self::F32(v.clone())),
+            Self::F64(v) => Ok(Self::F64(v.clone())),
+            Self::C32(v) => Ok(Self::F32(map_ad_tensor_unary_typed(v, |z| z.re)?)),
+            Self::C64(v) => Ok(Self::F64(map_ad_tensor_unary_typed(v, |z| z.re)?)),
+        }
+    }
+
+    /// AD-preserving extraction of the imaginary component.
+    ///
+    /// - Real dtype: returns zero with matching real dtype.
+    /// - Complex dtype: returns real dtype (`C32->F32`, `C64->F64`).
+    pub fn imag_part(&self) -> Result<Self> {
+        match self {
+            Self::F32(v) => Ok(Self::F32(map_ad_tensor_unary_typed(v, |_| 0.0_f32)?)),
+            Self::F64(v) => Ok(Self::F64(map_ad_tensor_unary_typed(v, |_| 0.0_f64)?)),
+            Self::C32(v) => Ok(Self::F32(map_ad_tensor_unary_typed(v, |z| z.im)?)),
+            Self::C64(v) => Ok(Self::F64(map_ad_tensor_unary_typed(v, |z| z.im)?)),
+        }
+    }
+
+    /// Compose a complex AD tensor from real/imaginary AD tensors.
+    ///
+    /// Both inputs must be real and have matching precision (`F32/F32` or `F64/F64`).
+    pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
+        match (real, imag) {
+            (Self::F32(re), Self::F32(im)) => {
+                let re_c = map_ad_tensor_unary_typed(&re, |x| Complex32::new(x, 0.0))?;
+                let im_c = map_ad_tensor_unary_typed(&im, |y| Complex32::new(0.0, y))?;
+                let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
+                Ok(Self::C32(AdTensor(merged)))
+            }
+            (Self::F64(re), Self::F64(im)) => {
+                let re_c = map_ad_tensor_unary_typed(&re, |x| Complex64::new(x, 0.0))?;
+                let im_c = map_ad_tensor_unary_typed(&im, |y| Complex64::new(0.0, y))?;
+                let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
+                Ok(Self::C64(AdTensor(merged)))
+            }
+            (lhs, rhs) => Err(Error::InvalidAdTensor {
+                message: format!(
+                    "compose_complex requires matching real dtypes, got lhs={:?}, rhs={:?}",
+                    lhs.scalar_type(),
+                    rhs.scalar_type()
+                ),
+            }),
         }
     }
 
@@ -1947,5 +2132,109 @@ mod tests {
 
         let diff = lhs.max_abs_diff_primal(&rhs).unwrap();
         assert!((diff - 0.5).abs() < 1e-12, "expected diff=0.5, got {diff}");
+    }
+
+    #[test]
+    fn dyn_ad_tensor_real_imag_part_preserve_forward_mode() {
+        let primal = Tensor::<Complex64>::from_slice(
+            &[Complex64::new(2.5, -1.25)],
+            &[1],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let tangent = Tensor::<Complex64>::from_slice(
+            &[Complex64::new(0.5, 0.75)],
+            &[1],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let x: DynAdTensor = AdTensor::new_forward(primal, tangent).into();
+        assert!(x.is_complex());
+        assert!(!x.is_real());
+
+        let xr = x.real_part().unwrap();
+        let xi = x.imag_part().unwrap();
+        assert!(xr.is_real());
+        assert!(xi.is_real());
+        assert_eq!(xr.scalar_type(), ScalarType::F64);
+        assert_eq!(xi.scalar_type(), ScalarType::F64);
+        assert_eq!(xr.mode(), AdMode::Forward);
+        assert_eq!(xi.mode(), AdMode::Forward);
+
+        let xr_t = xr.as_f64().unwrap();
+        let xi_t = xi.as_f64().unwrap();
+        let xr_primal = xr_t.primal().buffer().as_slice().unwrap()[0];
+        let xr_tangent = xr_t.tangent().unwrap().buffer().as_slice().unwrap()[0];
+        let xi_primal = xi_t.primal().buffer().as_slice().unwrap()[0];
+        let xi_tangent = xi_t.tangent().unwrap().buffer().as_slice().unwrap()[0];
+
+        assert!((xr_primal - 2.5).abs() < 1e-12);
+        assert!((xr_tangent - 0.5).abs() < 1e-12);
+        assert!((xi_primal - (-1.25)).abs() < 1e-12);
+        assert!((xi_tangent - 0.75).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dyn_ad_tensor_compose_complex_roundtrip_forward() {
+        let re = AdTensor::new_forward(
+            Tensor::<f64>::from_slice(&[1.5], &[1], MemoryOrder::ColumnMajor).unwrap(),
+            Tensor::<f64>::from_slice(&[0.25], &[1], MemoryOrder::ColumnMajor).unwrap(),
+        );
+        let im = AdTensor::new_forward(
+            Tensor::<f64>::from_slice(&[-2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
+            Tensor::<f64>::from_slice(&[0.75], &[1], MemoryOrder::ColumnMajor).unwrap(),
+        );
+        let z = DynAdTensor::compose_complex(DynAdTensor::F64(re), DynAdTensor::F64(im)).unwrap();
+        assert_eq!(z.scalar_type(), ScalarType::C64);
+        assert_eq!(z.mode(), AdMode::Forward);
+
+        let zc = z.as_c64().unwrap();
+        let primal = zc.primal().buffer().as_slice().unwrap()[0];
+        let tangent = zc.tangent().unwrap().buffer().as_slice().unwrap()[0];
+        assert!((primal - Complex64::new(1.5, -2.0)).norm() < 1e-12);
+        assert!((tangent - Complex64::new(0.25, 0.75)).norm() < 1e-12);
+    }
+
+    #[test]
+    fn dyn_ad_tensor_compose_complex_rejects_non_real_inputs() {
+        let re = AdTensor::new_primal(
+            Tensor::<Complex64>::from_slice(
+                &[Complex64::new(1.0, 0.0)],
+                &[1],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap(),
+        );
+        let im = AdTensor::new_primal(
+            Tensor::<f64>::from_slice(&[2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
+        );
+        let err = match DynAdTensor::compose_complex(DynAdTensor::C64(re), DynAdTensor::F64(im)) {
+            Ok(_) => panic!("compose_complex should reject non-real input"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, Error::InvalidAdTensor { .. }));
+    }
+
+    #[test]
+    fn dyn_ad_tensor_compose_complex_checks_reverse_tape_compatibility() {
+        let re = AdTensor::new_reverse(
+            Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
+            crate::NodeId(1),
+            TapeId(7),
+            None,
+        );
+        let im = AdTensor::new_reverse(
+            Tensor::<f64>::from_slice(&[2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
+            crate::NodeId(2),
+            TapeId(8),
+            None,
+        );
+        let err = match DynAdTensor::compose_complex(DynAdTensor::F64(re), DynAdTensor::F64(im)) {
+            Ok(_) => panic!("compose_complex should reject mixed reverse tapes"),
+            Err(err) => err,
+        };
+        assert!(
+            matches!(err, Error::InvalidAdTensor { message } if message.contains("reverse-mode tape mismatch"))
+        );
     }
 }
