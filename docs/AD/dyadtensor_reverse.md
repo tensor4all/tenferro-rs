@@ -20,26 +20,39 @@ tensor-local tape node:
 | Builder | Pullback implementation |
 |---|---|
 | `einsum_ad(...).run()` | `tenferro_einsum::einsum_rrule` |
+| `svd_ad(...).run()` | `tenferro_linalg::svd_rrule` (per-output: `u`, `s`, `vt`) |
+| `qr_ad(...).run()` | `tenferro_linalg::qr_rrule` (per-output: `q`, `r`) |
+| `lu_ad(...).run()` | `tenferro_linalg::lu_rrule` (per-output: `l`, `u`) |
+| `eigen_ad(...).run()` | `tenferro_linalg::eigen_rrule` (per-output: `values`, `vectors`) |
+| `lstsq_ad(...).run()` | `x`: `tenferro_linalg::lstsq_rrule`; `residual`: zero pullback |
 | `solve_triangular_ad(...).run()` | `tenferro_linalg::solve_triangular_rrule` |
 | `cholesky_ad(...).run()` | `tenferro_linalg::cholesky_rrule` |
 | `solve_ad(...).run()` | `tenferro_linalg::solve_rrule` |
 | `inv_ad(...).run()` | `tenferro_linalg::inv_rrule` |
 | `det_ad(...).run()` | `tenferro_linalg::det_rrule` |
+| `slogdet_ad(...).run()` | `logabsdet`: `tenferro_linalg::slogdet_rrule`; `sign`: zero pullback |
+| `eig_ad(...).run()` | `tenferro_linalg::eig_rrule` via mixed-type bridge (`Complex -> Real`) |
 | `pinv_ad(...).run()` | `tenferro_linalg::pinv_rrule` |
 | `matrix_exp_ad(...).run()` | `tenferro_linalg::matrix_exp_rrule` |
 | `norm_ad(...).run()` | `tenferro_linalg::norm_rrule` |
 
-`ad::pullback` / `ad::pullback_wrt` can therefore consume these outputs
-directly, with no explicit tape symbol in user code.
+APIs:
+
+- Same scalar domain (`output` and `wrt` share dtype):
+  - `ad::pullback`
+  - `ad::pullback_wrt`
+- Mixed scalar domain (e.g. `eig_ad` complex outputs, real inputs):
+  - `ad::pullback_wrt_mixed`
+
+All of these keep tape symbols internal to dyadtensor.
 
 ## Current limits
 
-Multi-output builders (`svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`,
-`slogdet_ad`, `eig_ad`) still expose reverse metadata on outputs, but do not
-yet auto-register composed pullbacks in `.run()`.
-
-For those operators, use stateless `*_rrule` entry points directly when
-pullback execution is required.
+- Mixed-type pullback is currently bridge-based (`register_bridge_rule`) and is
+  implemented for operators that explicitly register a cross-domain reverse
+  bridge (`eig_ad` currently).
+- `ad::pullback` remains same-domain by design. Use `ad::pullback_wrt_mixed`
+  when `output` and `wrt` dtypes differ.
 
 ## Related AD-rule status updates
 
