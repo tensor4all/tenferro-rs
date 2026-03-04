@@ -29,7 +29,7 @@ verification procedures (reconstruction checks, finite-difference gradient check
 | [eig.md](./eig.md) | General eigen (`eig_rrule`) | Reverse-mode rule for general (non-symmetric) eigendecomposition |
 | [inv.md](./inv.md) | Matrix inverse (`inv_rrule`) | AD rules for `inv(A)`; formula `dA = -A^{-H} cotangent A^{-H}` |
 | [det.md](./det.md) | Determinant and slogdet | AD rules for `det(A)` and `slogdet(A)` |
-| [solve.md](./solve.md) | Linear solve (`solve_rrule`, `solve_triangular_frule`) | AD rules for `Ax = b` and triangular solve |
+| [solve.md](./solve.md) | Linear solve (`solve_rrule`, `solve_triangular_frule`, `solve_triangular_rrule`) | AD rules for `Ax = b` and triangular solve |
 | [lstsq.md](./lstsq.md) | Least squares (`lstsq_rrule`) | Reverse-mode rule for `argmin ||Ax - b||^2` |
 | [pinv.md](./pinv.md) | Pseudoinverse (`pinv_rrule`) | AD rules for Moore-Penrose pseudoinverse |
 | [matrix_exp.md](./matrix_exp.md) | Matrix exponential (`matrix_exp_rrule`) | AD rules for `exp(A)` |

@@ -3478,6 +3478,74 @@ where
     })
 }
 
+/// Reverse-mode AD rule for triangular solve (VJP / pullback).
+///
+/// Given `A x = b` with triangular `A` and cotangent `x̄`, computes `(Ā, b̄)`.
+///
+/// - `G = A^{-T} x̄` solved with transposed triangular structure
+/// - `b̄ = G`
+/// - `Ā = proj(-G x^T)` where `proj = triu` for upper, `tril` for lower
+pub fn solve_triangular_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+    ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+    cotangent: &Tensor<T>,
+    upper: bool,
+) -> AdResult<SolveGrad<T>>
+where
+    T: backend::CpuLinalgScalar,
+{
+    let x = solve_triangular(ctx, a, b, upper)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let (n, batch_dims) = validate_square(a)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let bc = batch_count(batch_dims);
+    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
+        b.dims()[1]
+    } else {
+        1
+    };
+
+    let (a_data, _) = extract_data(a)?;
+    let (x_data, _) = extract_data(&x)?;
+    let (dx_data, _) = extract_data(cotangent)?;
+
+    let mut grad_a_data = vec![T::zero(); n * n * bc];
+    let mut grad_b_data = vec![T::zero(); n * nrhs * bc];
+
+    for batch in 0..bc {
+        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
+        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+        let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+
+        // G = A^{-T} dX, where A^T flips upper/lower.
+        let at = transpose(a_b, n, n);
+        let g = backend_solve_tri(ctx, &at, dx_b, n, nrhs, !upper)?;
+
+        // dB = G
+        grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
+
+        // dA = proj(-G x^T)
+        let g_xt = backend_mat_mul(ctx, &g, n, nrhs, &transpose(x_b, n, nrhs), n)?;
+        let neg_g_xt = scale_vec(&g_xt, -T::one());
+        let projected = if upper {
+            triu(&neg_g_xt, n)
+        } else {
+            tril(&neg_g_xt, n)
+        };
+        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&projected);
+    }
+
+    let a_dims = output_dims(&[n, n], batch_dims);
+    let b_dims = output_dims(&[n, nrhs], batch_dims);
+    Ok(SolveGrad {
+        a: tensor_from_data(grad_a_data, &a_dims)
+            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+        b: tensor_from_data(grad_b_data, &b_dims)
+            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+    })
+}
+
 /// Reverse-mode AD rule for matrix inverse (VJP / pullback).
 ///
 /// `Ā = -A⁻ᴴ · cotangent · A⁻ᴴ`.

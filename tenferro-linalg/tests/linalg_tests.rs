@@ -4760,6 +4760,73 @@ fn solve_triangular_frule_upper_fd() {
     );
 }
 
+#[test]
+fn solve_triangular_rrule_upper_fd() {
+    let mut ctx = CpuContext::new(1);
+    // Upper triangular A
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0], &[2, 1]);
+    let cot = make_tensor(vec![0.7, -1.2], &[2, 1]);
+    let grad = solve_triangular_rrule(&mut ctx, &a, &b, &cot, true).unwrap();
+    let grad_a = tensor_data(&grad.a);
+    let grad_b = tensor_data(&grad.b);
+
+    let eps = 1e-6;
+    let a_data = tensor_data(&a);
+    let b_data = tensor_data(&b);
+    let cot_data = tensor_data(&cot);
+
+    // FD check for dA: dL = <cot, solve_triangular(A, b)>
+    for idx in 0..a_data.len() {
+        let mut a_plus = a_data.clone();
+        let mut a_minus = a_data.clone();
+        a_plus[idx] += eps;
+        a_minus[idx] -= eps;
+
+        let x_plus = solve_triangular(&mut ctx, &make_tensor(a_plus, &[2, 2]), &b, true).unwrap();
+        let x_minus = solve_triangular(&mut ctx, &make_tensor(a_minus, &[2, 2]), &b, true).unwrap();
+        let xp = tensor_data(&x_plus);
+        let xm = tensor_data(&x_minus);
+        let fd: f64 = xp
+            .iter()
+            .zip(xm.iter())
+            .zip(cot_data.iter())
+            .map(|((p, m), c)| c * (p - m) / (2.0 * eps))
+            .sum();
+
+        assert!(
+            (grad_a[idx] - fd).abs() < 1e-4,
+            "solve_triangular_rrule FD check failed at A[{idx}]: analytic={}, fd={fd}",
+            grad_a[idx]
+        );
+    }
+
+    // FD check for dB
+    for idx in 0..b_data.len() {
+        let mut b_plus = b_data.clone();
+        let mut b_minus = b_data.clone();
+        b_plus[idx] += eps;
+        b_minus[idx] -= eps;
+
+        let x_plus = solve_triangular(&mut ctx, &a, &make_tensor(b_plus, &[2, 1]), true).unwrap();
+        let x_minus = solve_triangular(&mut ctx, &a, &make_tensor(b_minus, &[2, 1]), true).unwrap();
+        let xp = tensor_data(&x_plus);
+        let xm = tensor_data(&x_minus);
+        let fd: f64 = xp
+            .iter()
+            .zip(xm.iter())
+            .zip(cot_data.iter())
+            .map(|((p, m), c)| c * (p - m) / (2.0 * eps))
+            .sum();
+
+        assert!(
+            (grad_b[idx] - fd).abs() < 1e-4,
+            "solve_triangular_rrule FD check failed at b[{idx}]: analytic={}, fd={fd}",
+            grad_b[idx]
+        );
+    }
+}
+
 // ============================================================================
 // Coverage: lstsq_frule
 // ============================================================================

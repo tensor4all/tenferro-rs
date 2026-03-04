@@ -88,7 +88,7 @@ These match the formulas above and are the compatibility target for tenferro.
 - `solve_frule`: implemented (general solve)
 - `solve_rrule`: implemented (general solve)
 - `solve_triangular_frule`: implemented (triangular JVP with triangular projection)
-- `solve_triangular` reverse rule: not yet exposed as public `rrule`
+- `solve_triangular_rrule`: implemented (triangular VJP with triangular projection)
 
 ## Right-side solve ($XA = B$)
 
