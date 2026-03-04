@@ -1831,6 +1831,20 @@ fn einsum_scalar_vector_products() {
     assert!((scalar_val(&c) - 21.0).abs() < 1e-10);
 }
 
+#[test]
+fn einsum_unit_extent_contraction_is_not_misrouted_to_elementwise() {
+    // Even when fused sizes are m=n=k=1, this is a true contraction:
+    // A[abcdef] * B[ace] -> C[bdf]
+    // The summed labels (a,c,e) and free labels (b,d,f) are distinct.
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(&[2.0], &[1, 1, 1, 1, 1, 1], COL).unwrap();
+    let b = Tensor::from_slice(&[3.0], &[1, 1, 1], COL).unwrap();
+
+    let out = einsum::<S, CpuBackend>(&mut ctx, "abcdef,ace->bdf", &[&a, &b], None).unwrap();
+    assert_eq!(out.dims(), &[1, 1, 1]);
+    assert_eq!(to_col_major_vec(&out), vec![6.0]);
+}
+
 // ============================================================================
 // Size-dict dependent cases
 // ============================================================================

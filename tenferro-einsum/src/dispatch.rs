@@ -121,8 +121,15 @@ where
     #[cfg(feature = "profile-dispatch")]
     REDUCE_NS.fetch_add(_reduce_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
-    // 3. EwMul fast-path (m==1, n==1, k==1 → all dimensions are batch)
-    if plan.gemm.m == 1 && plan.gemm.n == 1 && plan.gemm.k == 1 {
+    // 3. EwMul fast-path (pure batch only: no lo/ro/sum modes).
+    //
+    // Important: `m=n=k=1` alone is insufficient, because contractions over
+    // unit-extent summed axes (or unit-extent lo/ro axes) can still require
+    // non-elementwise semantics and shape changes.
+    let pure_batch_ewmul = plan.gemm.lo_modes.is_empty()
+        && plan.gemm.ro_modes.is_empty()
+        && plan.gemm.sum_modes.is_empty();
+    if pure_batch_ewmul {
         if let Some(pp) = ewmul_plan {
             #[cfg(feature = "profile-dispatch")]
             let _t0 = std::time::Instant::now();
