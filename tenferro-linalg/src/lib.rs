@@ -1,3 +1,5 @@
+#![allow(clippy::multiple_bound_locations)]
+
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
 //! CPU decompositions and solvers are fully implemented via the
@@ -655,21 +657,12 @@ pub struct SvdResult<T: Scalar, R: Scalar = T> {
 ///     cutoff: Some(1e-12),
 /// };
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SvdOptions {
     /// Maximum number of singular values to keep. `None` means no limit.
     pub max_rank: Option<usize>,
     /// Discard singular values below this threshold. `None` means no cutoff.
     pub cutoff: Option<f64>,
-}
-
-impl Default for SvdOptions {
-    fn default() -> Self {
-        Self {
-            max_rank: None,
-            cutoff: None,
-        }
-    }
 }
 
 /// QR decomposition result: `A = Q * R`.
@@ -737,18 +730,21 @@ pub enum LuPivot {
 /// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
-/// use tenferro_device::LogicalMemorySpace;
 ///
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3],
-///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let a = Tensor::<f64>::from_slice(
+///     &[1.0, 0.0, 0.0, 1.0],
+///     &[2, 2],
+///     MemoryOrder::ColumnMajor
+/// ).unwrap();
 ///
 /// // With partial pivoting (default)
 /// let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 /// assert!(result.p.is_some());
 ///
-/// // NoPivot currently returns an error in this implementation.
-/// assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+/// // NoPivot is also supported.
+/// let no_pivot = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
+/// assert!(no_pivot.p.is_none());
 /// ```
 pub struct LuResult<T: Scalar> {
     /// Row permutation indices. `Some` for [`LuPivot::Partial`], `None` for
@@ -1086,17 +1082,20 @@ where
 /// use tenferro_linalg::{lu, LuPivot};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
-/// use tenferro_device::LogicalMemorySpace;
 ///
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3],
-///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let a = Tensor::<f64>::from_slice(
+///     &[1.0, 0.0, 0.0, 1.0],
+///     &[2, 2],
+///     MemoryOrder::ColumnMajor
+/// ).unwrap();
 ///
 /// // Partial pivoting (default)
 /// let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 ///
-/// // NoPivot currently returns an error in this implementation.
-/// assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+/// // NoPivot is supported (no permutation output).
+/// let no_pivot = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
+/// assert!(no_pivot.p.is_none());
 /// ```
 ///
 /// # Errors
@@ -1111,9 +1110,74 @@ where
     C: backend::TensorLinalgContextFor<T>,
 {
     if pivot == LuPivot::NoPivot {
-        return Err(Error::InvalidArgument(
-            "NoPivot LU is not yet implemented".into(),
-        ));
+        let (m, n, batch_dims) = validate_2d(tensor)?;
+        let bc = batch_count(batch_dims);
+        let k = m.min(n);
+        let mat_size = m * n;
+
+        let input = ensure_col_major(tensor);
+        let data = extract_slice(&input)?;
+        let offset = input.offset() as usize;
+
+        let mut all_l = vec![T::zero(); m * k * bc];
+        let mut all_u = vec![T::zero(); k * n * bc];
+
+        for batch in 0..bc {
+            let start = offset + batch * mat_size;
+            let mut lu_data = data[start..start + mat_size].to_vec();
+
+            // Doolittle LU without pivoting.
+            for p in 0..k {
+                let pivot_val = lu_data[p + p * m];
+                if pivot_val.abs_real() <= T::real_epsilon() {
+                    return Err(Error::InvalidArgument(format!(
+                        "NoPivot LU encountered near-zero pivot at row {p} in batch {batch}"
+                    )));
+                }
+
+                for i in (p + 1)..m {
+                    lu_data[i + p * m] = lu_data[i + p * m] / pivot_val;
+                }
+                for j in (p + 1)..n {
+                    let up = lu_data[p + j * m];
+                    for i in (p + 1)..m {
+                        let idx = i + j * m;
+                        lu_data[idx] = lu_data[idx] - lu_data[i + p * m] * up;
+                    }
+                }
+            }
+
+            for j in 0..k {
+                for i in 0..m {
+                    let val = if i < j {
+                        T::zero()
+                    } else if i == j {
+                        T::one()
+                    } else {
+                        lu_data[i + j * m]
+                    };
+                    all_l[batch * m * k + i + j * m] = val;
+                }
+            }
+            for j in 0..n {
+                for i in 0..k {
+                    let val = if i <= j {
+                        lu_data[i + j * m]
+                    } else {
+                        T::zero()
+                    };
+                    all_u[batch * k * n + i + j * k] = val;
+                }
+            }
+        }
+
+        let l_dims = output_dims(&[m, k], batch_dims);
+        let u_dims = output_dims(&[k, n], batch_dims);
+        return Ok(LuResult {
+            p: None,
+            l: tensor_from_data(all_l, &l_dims)?,
+            u: tensor_from_data(all_u, &u_dims)?,
+        });
     }
 
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
@@ -1423,7 +1487,7 @@ where
     let mut l_buf = vec![T::zero(); n * n];
     let mut u_buf = vec![T::zero(); n * n];
 
-    for b in 0..bc {
+    for (b, det_slot) in det_data.iter_mut().enumerate().take(bc) {
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
@@ -1453,7 +1517,7 @@ where
         if sign < 0 {
             d = T::zero() - d;
         }
-        det_data[b] = d;
+        *det_slot = d;
     }
 
     let dims = if batch_dims.is_empty() {
@@ -2018,6 +2082,8 @@ where
 /// - `NormKind::Fro`
 /// - `NormKind::Nuclear`
 /// - `NormKind::Spectral`
+/// - `NormKind::L1` (max absolute column sum)
+/// - `NormKind::Inf` (max absolute row sum)
 ///
 /// Return shape is `(*)` (batch dimensions). For non-batched input this is
 /// a scalar tensor `[]`.
@@ -2063,14 +2129,14 @@ where
         NormKind::Fro => {
             // Frobenius norm per batch: sqrt(sum of squares over matrix dims)
             let mut out = vec![T::zero(); bc];
-            for batch in 0..bc {
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
                 let start = offset + batch * mat_size;
                 let mut sum = T::zero();
                 for i in 0..mat_size {
                     let v = data[start + i];
                     sum = sum + v * v;
                 }
-                out[batch] = sum.sqrt();
+                *out_slot = sum.sqrt();
             }
             tensor_from_data(out, &out_dims)
         }
@@ -2081,13 +2147,13 @@ where
             let s_off = svd_result.s.offset() as usize;
             let k = m.min(n);
             let mut out = vec![T::zero(); bc];
-            for batch in 0..bc {
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
                 let mut sum = T::zero();
                 let start = s_off + batch * k;
                 for i in 0..k {
                     sum = sum + s_data[start + i];
                 }
-                out[batch] = sum;
+                *out_slot = sum;
             }
             tensor_from_data(out, &out_dims)
         }
@@ -2098,8 +2164,54 @@ where
             let s_off = svd_result.s.offset() as usize;
             let k = m.min(n);
             let mut out = vec![T::zero(); bc];
-            for batch in 0..bc {
-                out[batch] = s_data[s_off + batch * k];
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
+                *out_slot = s_data[s_off + batch * k];
+            }
+            tensor_from_data(out, &out_dims)
+        }
+        NormKind::L1 => {
+            // Matrix L1 norm per batch: max absolute column sum.
+            let mut out = vec![T::zero(); bc];
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    *out_slot = T::zero();
+                    continue;
+                }
+                let start = offset + batch * mat_size;
+                let mut max_col_sum = T::zero();
+                for j in 0..n {
+                    let mut col_sum = T::zero();
+                    for i in 0..m {
+                        col_sum = col_sum + data[start + i + j * m].abs();
+                    }
+                    if j == 0 || col_sum > max_col_sum {
+                        max_col_sum = col_sum;
+                    }
+                }
+                *out_slot = max_col_sum;
+            }
+            tensor_from_data(out, &out_dims)
+        }
+        NormKind::Inf => {
+            // Matrix infinity norm per batch: max absolute row sum.
+            let mut out = vec![T::zero(); bc];
+            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    *out_slot = T::zero();
+                    continue;
+                }
+                let start = offset + batch * mat_size;
+                let mut max_row_sum = T::zero();
+                for i in 0..m {
+                    let mut row_sum = T::zero();
+                    for j in 0..n {
+                        row_sum = row_sum + data[start + i + j * m].abs();
+                    }
+                    if i == 0 || row_sum > max_row_sum {
+                        max_row_sum = row_sum;
+                    }
+                }
+                *out_slot = max_row_sum;
             }
             tensor_from_data(out, &out_dims)
         }
@@ -2309,6 +2421,19 @@ fn transpose<T: LinalgScalar>(data: &[T], m: usize, n: usize) -> Vec<T> {
     result
 }
 
+/// Conjugate transpose (adjoint) of a column-major m×n matrix to n×m.
+///
+/// For real types this is equivalent to [`transpose`].
+fn adjoint_transpose<T: LinalgScalar>(data: &[T], m: usize, n: usize) -> Vec<T> {
+    let mut result = vec![T::zero(); m * n];
+    for j in 0..n {
+        for i in 0..m {
+            result[j + i * n] = data[i + j * m].conj();
+        }
+    }
+    result
+}
+
 /// Scale a slice element-wise: out[i] = alpha * data[i].
 fn scale_vec<T: LinalgScalar>(data: &[T], alpha: T) -> Vec<T> {
     data.iter().map(|&x| alpha * x).collect()
@@ -2507,7 +2632,7 @@ where
 // ============================================================================
 
 /// Mat mul via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_mat_mul<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+fn backend_mat_mul<T: LinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     m: usize,
@@ -2522,7 +2647,7 @@ where
 }
 
 /// Solve via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+fn backend_solve<T: LinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     b: &[T],
@@ -2538,7 +2663,7 @@ where
 }
 
 /// Solve triangular via LinalgBackend, returning Vec for convenience in AD code.
-fn backend_solve_tri<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+fn backend_solve_tri<T: LinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     b: &[T],
@@ -3422,7 +3547,7 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
-pub fn solve_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
+pub fn solve_rrule<T: LinalgScalar>(
     ctx: &mut tenferro_prims::CpuContext,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -3431,7 +3556,7 @@ pub fn solve_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
 where
     T: backend::CpuLinalgScalar,
 {
-    // Ax = b → G = A^{-T} dx, dB = G, dA = -G x^T
+    // Ax = b → G = A^{-H} dx, dB = G, dA = -G x^H
     let x = solve(ctx, a, b)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (n, batch_dims) = validate_square(a)
@@ -3455,17 +3580,87 @@ where
         let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
         let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
 
-        // G = A^{-T} dx = solve(A^T, dx)
-        let at = transpose(a_b, n, n);
+        // G = A^{-H} dx = solve(A^H, dx)
+        let at = adjoint_transpose(a_b, n, n);
         let g = backend_solve(ctx, &at, dx_b, n, nrhs)?;
 
         // dB = G
         grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
 
-        // dA = -G x^T (n×nrhs × nrhs×n = n×n)
-        let g_xt = backend_mat_mul(ctx, &g, n, nrhs, &transpose(x_b, n, nrhs), n)?;
-        let neg_g_xt = scale_vec(&g_xt, -T::one());
-        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg_g_xt);
+        // dA = -G x^H (n×nrhs × nrhs×n = n×n)
+        let x_h = adjoint_transpose(x_b, n, nrhs);
+        let g_xh = backend_mat_mul(ctx, &g, n, nrhs, &x_h, n)?;
+        let neg_g_xh = scale_vec(&g_xh, -T::one());
+        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg_g_xh);
+    }
+
+    let a_dims = output_dims(&[n, n], batch_dims);
+    let b_dims = output_dims(&[n, nrhs], batch_dims);
+    Ok(SolveGrad {
+        a: tensor_from_data(grad_a_data, &a_dims)
+            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+        b: tensor_from_data(grad_b_data, &b_dims)
+            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+    })
+}
+
+/// Reverse-mode AD rule for triangular solve (VJP / pullback).
+///
+/// Given `A x = b` with triangular `A` and cotangent `x̄`, computes `(Ā, b̄)`.
+///
+/// - `G = A^{-H} x̄` solved with conjugate-transposed triangular structure
+/// - `b̄ = G`
+/// - `Ā = proj(-G x^H)` where `proj = triu` for upper, `tril` for lower
+pub fn solve_triangular_rrule<T: LinalgScalar>(
+    ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+    cotangent: &Tensor<T>,
+    upper: bool,
+) -> AdResult<SolveGrad<T>>
+where
+    T: backend::CpuLinalgScalar,
+{
+    let x = solve_triangular(ctx, a, b, upper)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let (n, batch_dims) = validate_square(a)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let bc = batch_count(batch_dims);
+    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
+        b.dims()[1]
+    } else {
+        1
+    };
+
+    let (a_data, _) = extract_data(a)?;
+    let (x_data, _) = extract_data(&x)?;
+    let (dx_data, _) = extract_data(cotangent)?;
+
+    let mut grad_a_data = vec![T::zero(); n * n * bc];
+    let mut grad_b_data = vec![T::zero(); n * nrhs * bc];
+
+    for batch in 0..bc {
+        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
+        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+        let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+
+        // G = A^{-H} dX, where A^H flips upper/lower.
+        let at = adjoint_transpose(a_b, n, n);
+        let g = backend_solve_tri(ctx, &at, dx_b, n, nrhs, !upper)?;
+
+        // dB = G
+        grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
+
+        // dA = proj(-G x^H)
+        let x_h = adjoint_transpose(x_b, n, nrhs);
+        let g_xh = backend_mat_mul(ctx, &g, n, nrhs, &x_h, n)?;
+        let neg_g_xh = scale_vec(&g_xh, -T::one());
+        let projected = if upper {
+            triu(&neg_g_xh, n)
+        } else {
+            tril(&neg_g_xh, n)
+        };
+        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&projected);
     }
 
     let a_dims = output_dims(&[n, n], batch_dims);
@@ -4001,6 +4196,100 @@ where
                 for j in 0..n {
                     for i in 0..m {
                         grad_a[batch * m * n + i + j * m] = dn * u[i] * v[j];
+                    }
+                }
+            }
+        }
+        NormKind::L1 => {
+            // dA = dn * sign(A) on columns that attain max absolute column sum.
+            // At ties, average uniformly over active columns.
+            for batch in 0..bc {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut col_sums = vec![T::zero(); n];
+                for j in 0..n {
+                    let mut sum = T::zero();
+                    for i in 0..m {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    col_sums[j] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &col_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_cols: Vec<usize> = col_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(j, &sum)| if sum == max_sum { Some(j) } else { None })
+                    .collect();
+                if active_cols.is_empty() {
+                    continue;
+                }
+                let active_count = scalar_from::<T>(active_cols.len() as f64).map_err(to_ad_err)?;
+                let dn = dn_data[batch] / active_count;
+                for j in active_cols {
+                    for i in 0..m {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        grad_a[base + i + j * m] = grad_a[base + i + j * m] + dn * sign;
+                    }
+                }
+            }
+        }
+        NormKind::Inf => {
+            // dA = dn * sign(A) on rows that attain max absolute row sum.
+            // At ties, average uniformly over active rows.
+            for batch in 0..bc {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut row_sums = vec![T::zero(); m];
+                for i in 0..m {
+                    let mut sum = T::zero();
+                    for j in 0..n {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    row_sums[i] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &row_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_rows: Vec<usize> = row_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &sum)| if sum == max_sum { Some(i) } else { None })
+                    .collect();
+                if active_rows.is_empty() {
+                    continue;
+                }
+                let active_count = scalar_from::<T>(active_rows.len() as f64).map_err(to_ad_err)?;
+                let dn = dn_data[batch] / active_count;
+                for i in active_rows {
+                    for j in 0..n {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        grad_a[base + i + j * m] = grad_a[base + i + j * m] + dn * sign;
                     }
                 }
             }
@@ -4737,6 +5026,90 @@ where
     Ok((x, dx))
 }
 
+/// Forward-mode AD rule for triangular solve (JVP / pushforward).
+///
+/// Computes:
+/// - `x = solve_triangular(a, b, upper)`
+/// - `dx = solve_triangular(a, db - proj(dA) * x, upper)`
+///
+/// where `proj(dA)` keeps only the active triangular part
+/// (`triu` when `upper=true`, `tril` when `upper=false`).
+pub fn solve_triangular_frule<T: LinalgScalar>(
+    ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+    tangent_a: &Tensor<T>,
+    tangent_b: &Tensor<T>,
+    upper: bool,
+) -> AdResult<(Tensor<T>, Tensor<T>)>
+where
+    T: backend::CpuLinalgScalar,
+{
+    if tangent_a.dims() != a.dims() {
+        return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
+            "solve_triangular_frule: tangent_a shape mismatch: expected {:?}, got {:?}",
+            a.dims(),
+            tangent_a.dims()
+        )));
+    }
+    if tangent_b.dims() != b.dims() {
+        return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
+            "solve_triangular_frule: tangent_b shape mismatch: expected {:?}, got {:?}",
+            b.dims(),
+            tangent_b.dims()
+        )));
+    }
+
+    // dX = A^{-1} (dB - proj(dA) X), with projection to the triangular tangent space.
+    let x = solve_triangular(ctx, a, b, upper)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+
+    let (n, batch_dims) = validate_square(a)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    let bc = batch_count(batch_dims);
+    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
+        b.dims()[1]
+    } else {
+        1
+    };
+
+    let (a_data, _) = extract_data(a)?;
+    let (x_data, _) = extract_data(&x)?;
+    let (da_data, _) = extract_data(tangent_a)?;
+    let (db_data, _) = extract_data(tangent_b)?;
+
+    let mut dx_data = vec![T::zero(); n * nrhs * bc];
+
+    for batch in 0..bc {
+        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
+        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+        let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
+        let db_b = &db_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+
+        // Project dA onto the same triangular structure as A.
+        let da_proj = if upper { triu(da_b, n) } else { tril(da_b, n) };
+
+        // dA * x, treating x as n x nrhs in column-major layout.
+        let da_x =
+            prims_bridge::batched_gemm_via_prims(&da_proj, n, n, x_b, nrhs).map_err(to_ad_err)?;
+
+        // RHS tangent: dB - dA * x
+        let rhs = sub_vec(db_b, &da_x);
+
+        // dX from triangular solve with the same structure.
+        let mut dx_b = vec![T::zero(); n * nrhs];
+        backend::cpu::solve_triangular_slices(a_b, &rhs, n, nrhs, upper, &mut dx_b)
+            .map_err(to_ad_err)?;
+
+        dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b);
+    }
+
+    let dims = output_dims(&[n, nrhs], batch_dims);
+    let dx = tensor_from_data(dx_data, &dims)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+    Ok((x, dx))
+}
+
 /// Forward-mode AD rule for matrix inverse (JVP / pushforward).
 ///
 /// # Examples
@@ -5268,6 +5641,102 @@ where
                     }
                 }
                 dnrm_data[batch] = val;
+            }
+        }
+        NormKind::L1 => {
+            // d||A||_1 = sum_i sign(A_ij) dA_ij on active max columns.
+            // At ties, average uniformly over active columns.
+            for (batch, dn_slot) in dnrm_data.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut col_sums = vec![T::zero(); n];
+                for j in 0..n {
+                    let mut sum = T::zero();
+                    for i in 0..m {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    col_sums[j] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &col_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_cols: Vec<usize> = col_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(j, &sum)| if sum == max_sum { Some(j) } else { None })
+                    .collect();
+                if active_cols.is_empty() {
+                    continue;
+                }
+                let mut accum = T::zero();
+                for j in active_cols.iter().copied() {
+                    for i in 0..m {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        accum = accum + sign * da_data[base + i + j * m];
+                    }
+                }
+                let active_count = scalar_from::<T>(active_cols.len() as f64).map_err(to_ad_err)?;
+                *dn_slot = accum / active_count;
+            }
+        }
+        NormKind::Inf => {
+            // d||A||_inf = sum_j sign(A_ij) dA_ij on active max rows.
+            // At ties, average uniformly over active rows.
+            for (batch, dn_slot) in dnrm_data.iter_mut().enumerate().take(bc) {
+                if m == 0 || n == 0 {
+                    continue;
+                }
+                let base = batch * m * n;
+                let mut row_sums = vec![T::zero(); m];
+                for i in 0..m {
+                    let mut sum = T::zero();
+                    for j in 0..n {
+                        sum = sum + a_data[base + i + j * m].abs();
+                    }
+                    row_sums[i] = sum;
+                }
+                let mut max_sum = T::neg_infinity();
+                for &sum in &row_sums {
+                    if sum > max_sum {
+                        max_sum = sum;
+                    }
+                }
+                let active_rows: Vec<usize> = row_sums
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &sum)| if sum == max_sum { Some(i) } else { None })
+                    .collect();
+                if active_rows.is_empty() {
+                    continue;
+                }
+                let mut accum = T::zero();
+                for i in active_rows.iter().copied() {
+                    for j in 0..n {
+                        let v = a_data[base + i + j * m];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        accum = accum + sign * da_data[base + i + j * m];
+                    }
+                }
+                let active_count = scalar_from::<T>(active_rows.len() as f64).map_err(to_ad_err)?;
+                *dn_slot = accum / active_count;
             }
         }
         _ => {

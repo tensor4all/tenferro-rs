@@ -195,7 +195,7 @@ fn error_invalid_argument_display() {
 #[test]
 fn ad_result_ok() {
     let result: AdResult<i32> = Ok(42);
-    assert_eq!(result.unwrap(), 42);
+    assert!(matches!(result, Ok(42)));
 }
 
 #[test]

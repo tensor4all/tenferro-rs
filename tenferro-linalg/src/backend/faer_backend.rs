@@ -448,7 +448,7 @@ macro_rules! impl_linalg_backend {
                         for i in (0..n).rev() {
                             let mut sum = b_col[i];
                             for j in (i + 1)..n {
-                                sum = sum - a_mat[(i, j)] * x_col[j];
+                                sum -= a_mat[(i, j)] * x_col[j];
                             }
                             x_col[i] = sum / a_mat[(i, i)];
                         }
@@ -457,7 +457,7 @@ macro_rules! impl_linalg_backend {
                         for i in 0..n {
                             let mut sum = b_col[i];
                             for j in 0..i {
-                                sum = sum - a_mat[(i, j)] * x_col[j];
+                                sum -= a_mat[(i, j)] * x_col[j];
                             }
                             x_col[i] = sum / a_mat[(i, i)];
                         }
@@ -973,7 +973,7 @@ macro_rules! impl_complex_linalg_backend {
                         for i in (0..n).rev() {
                             let mut sum = b_col[i];
                             for j in (i + 1)..n {
-                                sum = sum - a[i + j * n] * x_col[j];
+                                sum -= a[i + j * n] * x_col[j];
                             }
                             x_col[i] = sum / a[i + i * n];
                         }
@@ -982,7 +982,7 @@ macro_rules! impl_complex_linalg_backend {
                         for i in 0..n {
                             let mut sum = b_col[i];
                             for j in 0..i {
-                                sum = sum - a[i + j * n] * x_col[j];
+                                sum -= a[i + j * n] * x_col[j];
                             }
                             x_col[i] = sum / a[i + i * n];
                         }
@@ -1326,7 +1326,7 @@ mod tests {
 
     #[test]
     fn faer_backend_default_trait() {
-        let backend = FaerBackend::default();
+        let backend = FaerBackend;
         // Just verify it can be created
         let _ = backend;
     }

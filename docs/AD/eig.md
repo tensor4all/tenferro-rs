@@ -97,6 +97,23 @@ For symmetric/Hermitian $A$: $V$ is unitary ($V^{-1} = V^{\mathsf{H}}$),
 eigenvalues are real, and $V^{-\mathsf{H}} = V$, simplifying all formulas.
 See `eigen.md` for the symmetric case.
 
+## Dyadtensor integration
+
+`tenferro-dyadtensor::eig_ad(...).run()` emits complex outputs
+(`values`, `vectors`) and registers reverse bridge rules to real input nodes:
+
+- output cotangent domain: `Tensor<Complex<T>>`
+- input gradient domain: `Tensor<T>`
+
+This follows the PyTorch `handle_r_to_c` convention for real inputs: the final
+input cotangent is projected to the real domain (`Re(...)`).
+
+For reverse extraction:
+
+- use `ad::pullback_wrt_mixed` for `eig` outputs differentiated w.r.t. real
+  inputs,
+- use same-domain `ad::pullback` / `ad::pullback_wrt` for non-mixed cases.
+
 ## References
 
 1. Giles, M. B. (2008). ["An extended collection of matrix derivative

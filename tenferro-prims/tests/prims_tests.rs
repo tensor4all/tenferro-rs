@@ -1199,7 +1199,7 @@ fn resolve_conj_complex64_conjugated() {
         .buffer()
         .as_slice()
         .expect("CPU tensor must have CPU-accessible data");
-    let expected = vec![
+    let expected = [
         Complex64::new(1.0, -2.0),
         Complex64::new(3.0, -4.0),
         Complex64::new(5.0, -6.0),
@@ -1966,7 +1966,7 @@ macro_rules! typed_prims_tests {
                     for j in 0..2 {
                         let mut expected = <$T as TestScalar>::from_f64(0.0);
                         for k in 0..3 {
-                            expected = expected + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+                            expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
                         }
                         assert!(
                             <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
@@ -2043,7 +2043,7 @@ macro_rules! typed_prims_tests {
                 for i in 0..3 {
                     let mut expected = <$T as TestScalar>::from_f64(0.0);
                     for j in 0..4 {
-                        expected = expected + tensor_get(&a, &[i, j]);
+                        expected += tensor_get(&a, &[i, j]);
                     }
                     assert!(
                         <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
@@ -2082,7 +2082,7 @@ macro_rules! typed_prims_tests {
                 let mut expected = <$T as TestScalar>::from_f64(0.0);
                 for i in 0..3 {
                     for j in 0..4 {
-                        expected = expected + <$T as TestScalar>::from_usize(i + j + 1);
+                        expected += <$T as TestScalar>::from_usize(i + j + 1);
                     }
                 }
                 assert!(
@@ -2163,7 +2163,7 @@ macro_rules! typed_prims_tests {
                 let mut expected = <$T as TestScalar>::from_f64(0.0);
                 for i in 0..3usize {
                     for j in 0..4usize {
-                        expected = expected + tensor_get(&a, &[i, i, j, j]);
+                        expected += tensor_get(&a, &[i, i, j, j]);
                     }
                 }
                 assert!(
@@ -2271,7 +2271,7 @@ macro_rules! typed_prims_tests {
                     for j in 0..2 {
                         let mut expected = <$T as TestScalar>::from_f64(0.0);
                         for k in 0..3 {
-                            expected = expected + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+                            expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
                         }
                         assert!(
                             <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
@@ -2319,9 +2319,8 @@ macro_rules! typed_prims_tests {
                         for j in 0..2 {
                             let mut expected = <$T as TestScalar>::from_f64(0.0);
                             for k in 0..3 {
-                                expected = expected
-                                    + tensor_get(&a, &[i, k, batch])
-                                        * tensor_get(&b, &[k, j, batch]);
+                                expected +=
+                                    tensor_get(&a, &[i, k, batch]) * tensor_get(&b, &[k, j, batch]);
                             }
                             assert!(
                                 <$T as TestScalar>::approx_eq(
@@ -2368,7 +2367,7 @@ macro_rules! typed_prims_tests {
                 for j in 0..4 {
                     let mut expected = <$T as TestScalar>::from_f64(0.0);
                     for i in 0..3 {
-                        expected = expected + tensor_get(&a, &[i, j]);
+                        expected += tensor_get(&a, &[i, j]);
                     }
                     assert!(
                         <$T as TestScalar>::approx_eq(tensor_get(&c, &[j]), expected),
@@ -2407,7 +2406,7 @@ macro_rules! typed_prims_tests {
                 for i in 0..2 {
                     let mut expected = <$T as TestScalar>::from_f64(0.0);
                     for d in 0..3 {
-                        expected = expected + tensor_get(&a, &[i, d, d]);
+                        expected += tensor_get(&a, &[i, d, d]);
                     }
                     assert!(
                         <$T as TestScalar>::approx_eq(tensor_get(&c, &[i]), expected),
@@ -2871,7 +2870,7 @@ macro_rules! typed_prims_tests {
                     for j in 0..2 {
                         let mut matmul = <$T as TestScalar>::from_f64(0.0);
                         for k in 0..3 {
-                            matmul = matmul + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+                            matmul += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
                         }
                         let expected = <$T as TestScalar>::from_f64(2.0) * matmul
                             + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(5.0);
@@ -3029,7 +3028,7 @@ macro_rules! typed_prims_tests {
                     for j in 0..2 {
                         let mut matmul = <$T as TestScalar>::from_f64(0.0);
                         for k in 0..3 {
-                            matmul = matmul + tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+                            matmul += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
                         }
                         let expected = <$T as TestScalar>::from_f64(2.0) * matmul
                             + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(5.0);

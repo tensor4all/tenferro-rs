@@ -62,6 +62,42 @@ $$
 For unit-triangular matrices, the diagonal of $\bar{A}$ is additionally
 zeroed out.
 
+## PyTorch alignment (reference)
+
+Reference implementation in PyTorch:
+
+- `torch/csrc/autograd/FunctionsManual.cpp`
+  - `triangular_solve_jvp`
+  - `linalg_solve_triangular_forward_AD`
+  - `linalg_solve_triangular_backward`
+
+Equivalent formulas used there:
+
+- Forward/JVP:
+  - $dX = A^{-1}(dB - dAX)$
+  - with projection of $dA$ to triangular tangent space (`triu`/`tril`)
+- Backward/VJP:
+  - $G_B = A^{-H} G_X$
+  - $G_A = -G_B X^H$
+  - then triangular projection of $G_A$
+
+These match the formulas above and are the compatibility target for tenferro.
+
+## tenferro implementation mapping
+
+- `solve_frule`: implemented (general solve)
+- `solve_rrule`: implemented (general solve)
+- `solve_triangular_frule`: implemented (triangular JVP with triangular projection)
+- `solve_triangular_rrule`: implemented (triangular VJP with triangular projection;
+  real and complex scalars use adjoint-based formulas)
+- `tenferro-dyadtensor::solve_ad(...).run()`: reverse node now registers a
+  local pullback backed by `solve_rrule`
+- `tenferro-dyadtensor::ad::solve_triangular_rrule`: implemented as a
+  stateless dyadtensor-facing wrapper for integration code
+- `tenferro-dyadtensor::solve_triangular_ad(...).run()`: reverse node now
+  registers a local pullback, so `tenferro-dyadtensor::ad::pullback` can
+  execute VJP without exposing tape internals
+
 ## Right-side solve ($XA = B$)
 
 By transposition symmetry:

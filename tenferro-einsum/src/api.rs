@@ -14,6 +14,19 @@ use crate::subscripts::Subscripts;
 use crate::tree::ContractionTree;
 use crate::util::{compute_output_shape, infer_memory_space};
 
+fn canonicalize_col_major_operands<T: Scalar>(operands: &[&Tensor<T>]) -> Vec<Tensor<T>> {
+    operands
+        .iter()
+        .map(|t| {
+            if t.is_col_major_contiguous() && t.offset() == 0 {
+                (*t).clone()
+            } else {
+                (*t).clone().into_contiguous(MemoryOrder::ColumnMajor)
+            }
+        })
+        .collect()
+}
+
 /// Execute einsum using string notation.
 ///
 /// Parses the subscript string, optimizes the contraction order, and
@@ -120,9 +133,9 @@ where
 
 /// Execute N-ary einsum with an explicit pairwise contraction path.
 ///
-/// This is a convenience wrapper around [`ContractionTree::from_pairs`]
-/// + [`einsum_with_plan`]. It makes the "N-ary = binary composition along a
-/// path" model explicit in the public API.
+/// This is a convenience wrapper around [`ContractionTree::from_pairs`] and
+/// [`einsum_with_plan`]. It makes the "N-ary = binary composition along a path"
+/// model explicit in the public API.
 ///
 /// # Arguments
 ///
@@ -193,15 +206,17 @@ where
         }
     }
     let output_shape = compute_output_shape(&tree.subscripts.output, &sd)?;
+    let canonical_operands = canonicalize_col_major_operands(operands);
+    let canonical_refs: Vec<&Tensor<Alg::Scalar>> = canonical_operands.iter().collect();
     // Allocate the output tensor on the same memory space as the operands.
-    let memory_space = infer_memory_space(operands)?;
+    let memory_space = infer_memory_space(&canonical_refs)?;
     let mut output =
         Tensor::<Alg::Scalar>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor);
     let mut pool = BufferPool::new();
     execute_tree::<Alg, Backend>(
         ctx,
         tree,
-        operands,
+        &canonical_refs,
         Alg::Scalar::one(),
         Alg::Scalar::zero(),
         &mut output,
@@ -524,6 +539,17 @@ where
     Backend: TensorPrims<Alg>,
 {
     let _ = size_dict; // size_dict already captured in tree.size_dict
+    let canonical_operands = canonicalize_col_major_operands(operands);
+    let canonical_refs: Vec<&Tensor<Alg::Scalar>> = canonical_operands.iter().collect();
     let mut pool = BufferPool::new();
-    execute_tree::<Alg, Backend>(ctx, tree, operands, alpha, beta, output, &mut pool, false)
+    execute_tree::<Alg, Backend>(
+        ctx,
+        tree,
+        &canonical_refs,
+        alpha,
+        beta,
+        output,
+        &mut pool,
+        false,
+    )
 }

@@ -46,6 +46,10 @@ pub enum Error {
     #[error("invalid AD tensor operands: {message}")]
     InvalidAdTensor { message: String },
 
+    /// AD scalar operands are structurally invalid for the requested operation.
+    #[error("invalid AD scalar operands: {message}")]
+    InvalidAdScalar { message: String },
+
     /// Reverse-mode operands belong to different tapes.
     #[error("reverse-mode operands must share one tape: expected {expected}, found {found}")]
     MixedReverseTape { expected: u64, found: u64 },

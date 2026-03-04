@@ -138,7 +138,7 @@ fn is_contiguous_in_order(dims: &[usize], strides: &[isize], order: MemoryOrder)
     if ndim == 0 {
         return true;
     }
-    if dims.iter().any(|&d| d == 0) {
+    if dims.contains(&0) {
         return true;
     }
     let expected = compute_contiguous_strides(dims, order);
@@ -193,15 +193,17 @@ fn copy_strided<T: Copy>(
     }
 }
 
+struct StridedInput<'a, T> {
+    data: &'a [T],
+    strides: &'a [isize],
+    offset: isize,
+}
+
 /// Element-wise addition of two strided tensors into a contiguous destination.
 fn add_strided<T: Copy + std::ops::Add<Output = T>>(
-    a: &[T],
     dims: &[usize],
-    a_strides: &[isize],
-    a_offset: isize,
-    b: &[T],
-    b_strides: &[isize],
-    b_offset: isize,
+    a: StridedInput<'_, T>,
+    b: StridedInput<'_, T>,
     dst: &mut [T],
     dst_strides: &[isize],
 ) {
@@ -211,21 +213,21 @@ fn add_strided<T: Copy + std::ops::Add<Output = T>>(
         return;
     }
     if ndim == 0 {
-        dst[0] = a[a_offset as usize] + b[b_offset as usize];
+        dst[0] = a.data[a.offset as usize] + b.data[b.offset as usize];
         return;
     }
     let mut index = vec![0usize; ndim];
     for _ in 0..n_elements {
-        let a_pos = a_offset
+        let a_pos = a.offset
             + index
                 .iter()
-                .zip(a_strides.iter())
+                .zip(a.strides.iter())
                 .map(|(&i, &s)| i as isize * s)
                 .sum::<isize>();
-        let b_pos = b_offset
+        let b_pos = b.offset
             + index
                 .iter()
-                .zip(b_strides.iter())
+                .zip(b.strides.iter())
                 .map(|(&i, &s)| i as isize * s)
                 .sum::<isize>();
         let dst_pos: isize = index
@@ -233,7 +235,7 @@ fn add_strided<T: Copy + std::ops::Add<Output = T>>(
             .zip(dst_strides.iter())
             .map(|(&i, &s)| i as isize * s)
             .sum::<isize>();
-        dst[dst_pos as usize] = a[a_pos as usize] + b[b_pos as usize];
+        dst[dst_pos as usize] = a.data[a_pos as usize] + b.data[b_pos as usize];
 
         for d in 0..ndim {
             index[d] += 1;
@@ -1456,8 +1458,8 @@ impl<T: Scalar> Tensor<T> {
 
         let mut new_dims = Vec::new();
         let mut new_strides = Vec::new();
-        for k in 0..ndim {
-            if !used[k] {
+        for (k, was_used) in used.iter().enumerate().take(ndim) {
+            if !*was_used {
                 new_dims.push(self.dims[k]);
                 new_strides.push(self.strides[k]);
             }
@@ -2216,13 +2218,17 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
             let a_src = a.buffer.as_slice().expect("CPU-only: accumulate_tangent");
             let b_src = b.buffer.as_slice().expect("CPU-only: accumulate_tangent");
             add_strided(
-                a_src,
                 &a.dims,
-                &a.strides,
-                a.offset,
-                b_src,
-                &b.strides,
-                b.offset,
+                StridedInput {
+                    data: a_src,
+                    strides: &a.strides,
+                    offset: a.offset,
+                },
+                StridedInput {
+                    data: b_src,
+                    strides: &b.strides,
+                    offset: b.offset,
+                },
                 &mut data,
                 &dst_strides,
             );

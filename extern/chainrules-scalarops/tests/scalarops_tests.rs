@@ -1,6 +1,7 @@
 use chainrules_scalarops::{
-    conj, conj_frule, conj_rrule, handle_r_to_c_f32, handle_r_to_c_f64, powf, powf_frule,
-    powf_rrule, powi, powi_frule, powi_rrule, sqrt, sqrt_frule, sqrt_rrule,
+    add, add_frule, add_rrule, conj, conj_frule, conj_rrule, div, div_frule, div_rrule,
+    handle_r_to_c_f32, handle_r_to_c_f64, mul, mul_frule, mul_rrule, powf, powf_frule, powf_rrule,
+    powi, powi_frule, powi_rrule, sqrt, sqrt_frule, sqrt_rrule, sub, sub_frule, sub_rrule,
 };
 use num_complex::{Complex32, Complex64};
 
@@ -41,6 +42,58 @@ fn sqrt_rules_match_formula_f64() {
 }
 
 #[test]
+fn add_sub_rules_match_formula_f64() {
+    let x = 5.0_f64;
+    let y = 2.0_f64;
+    let dx = 0.3_f64;
+    let dy = 0.1_f64;
+    let g = 1.5_f64;
+
+    assert_eq!(add(x, y), 7.0_f64);
+    assert_eq!(sub(x, y), 3.0_f64);
+
+    let (add_y, add_dy) = add_frule(x, y, dx, dy);
+    assert_eq!(add_y, 7.0_f64);
+    assert_eq!(add_dy, 0.4_f64);
+    let (add_dx, add_dy_rr) = add_rrule(g);
+    assert_eq!(add_dx, g);
+    assert_eq!(add_dy_rr, g);
+
+    let (sub_y, sub_dy) = sub_frule(x, y, dx, dy);
+    assert_eq!(sub_y, 3.0_f64);
+    assert!((sub_dy - 0.2_f64).abs() < 1e-12);
+    let (sub_dx, sub_dy_rr) = sub_rrule(g);
+    assert_eq!(sub_dx, g);
+    assert_eq!(sub_dy_rr, -g);
+}
+
+#[test]
+fn mul_div_rules_match_formula_f64() {
+    let x = 8.0_f64;
+    let y = 2.0_f64;
+    let dx = 0.5_f64;
+    let dy = 0.25_f64;
+    let g = 1.0_f64;
+
+    assert_eq!(mul(x, y), 16.0_f64);
+    assert_eq!(div(x, y), 4.0_f64);
+
+    let (mul_y, mul_dy) = mul_frule(x, y, dx, dy);
+    assert_eq!(mul_y, 16.0_f64);
+    assert_eq!(mul_dy, dx * y + dy * x);
+    let (mul_dx, mul_dy_rr) = mul_rrule(x, y, g);
+    assert_eq!(mul_dx, g * y);
+    assert_eq!(mul_dy_rr, g * x);
+
+    let (div_y, div_dy) = div_frule(x, y, dx, dy);
+    assert_eq!(div_y, 4.0_f64);
+    assert_eq!(div_dy, (dx / y) - (dy * x / (y * y)));
+    let (div_dx, div_dy_rr) = div_rrule(x, y, g);
+    assert_eq!(div_dx, g / y);
+    assert_eq!(div_dy_rr, -(g * x / (y * y)));
+}
+
+#[test]
 fn powf_rules_match_formula_f64() {
     let x = 2.0_f64;
     let exponent = 3.0_f64;
@@ -53,6 +106,32 @@ fn powf_rules_match_formula_f64() {
 
     let grad = powf_rrule(x, exponent, g);
     assert!((grad - 12.0).abs() < 1e-12);
+}
+
+#[test]
+fn mul_div_rules_match_formula_complex64() {
+    let x = Complex64::new(1.5, -0.5);
+    let y = Complex64::new(-0.25, 2.0);
+    let dx = Complex64::new(0.3, -0.2);
+    let dy = Complex64::new(-0.1, 0.4);
+    let g = Complex64::new(0.7, -0.6);
+
+    let (mul_y, mul_dy) = mul_frule(x, y, dx, dy);
+    assert!((mul_y - (x * y)).norm() < 1e-12);
+    let expected_mul_tangent = dx * y.conj() + dy * x.conj();
+    assert!((mul_dy - expected_mul_tangent).norm() < 1e-12);
+    let (mul_dx, mul_dy_rr) = mul_rrule(x, y, g);
+    assert!((mul_dx - g * y.conj()).norm() < 1e-12);
+    assert!((mul_dy_rr - g * x.conj()).norm() < 1e-12);
+
+    let (div_y, div_dy) = div_frule(x, y, dx, dy);
+    assert!((div_y - (x / y)).norm() < 1e-12);
+    let expected_div_tangent = dx * (Complex64::new(1.0, 0.0) / y).conj()
+        + dy * ((Complex64::new(-1.0, 0.0) * x) / (y * y)).conj();
+    assert!((div_dy - expected_div_tangent).norm() < 1e-12);
+    let (div_dx, div_dy_rr) = div_rrule(x, y, g);
+    assert!((div_dx - g * (Complex64::new(1.0, 0.0) / y).conj()).norm() < 1e-12);
+    assert!((div_dy_rr - g * ((Complex64::new(-1.0, 0.0) * x) / (y * y)).conj()).norm() < 1e-12);
 }
 
 #[test]

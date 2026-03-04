@@ -16,6 +16,7 @@ use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad_value::{AdValue, NodeId};
+use crate::reverse_tape;
 use crate::runtime::{with_default_runtime, RuntimeContext};
 use crate::{AdTensor, Error, Result, TapeId};
 
@@ -111,6 +112,58 @@ fn derive_reverse_node<S: Scalar>(
     }
 
     NodeId(hasher.finish())
+}
+
+#[derive(Clone)]
+struct ReverseInputSpec {
+    node: NodeId,
+    dims: Vec<usize>,
+}
+
+fn collect_reverse_input_specs<S: Scalar>(
+    operands: &[&AdTensor<S>],
+) -> Vec<Option<ReverseInputSpec>> {
+    operands
+        .iter()
+        .map(|op| match op.as_value() {
+            AdValue::Reverse { node, .. } => Some(ReverseInputSpec {
+                node: *node,
+                dims: op.dims().to_vec(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn normalize_pullback_shape<T: Scalar>(
+    grad: Tensor<T>,
+    expected_dims: &[usize],
+    op_name: &'static str,
+) -> Result<Tensor<T>> {
+    if grad.dims() == expected_dims {
+        return Ok(grad);
+    }
+
+    let expected_len: usize = expected_dims.iter().product();
+    if grad.len() != expected_len {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} pullback shape mismatch: expected {:?} (len={expected_len}), got {:?} (len={})",
+                expected_dims,
+                grad.dims(),
+                grad.len()
+            ),
+        });
+    }
+
+    grad.reshape(expected_dims)
+        .map_err(|e| Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} pullback reshape failed from {:?} to {:?}: {e}",
+                grad.dims(),
+                expected_dims
+            ),
+        })
 }
 
 fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
@@ -310,7 +363,10 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdTensor<T>> {
+    pub fn run(self) -> Result<AdTensor<T>>
+    where
+        T: 'static,
+    {
         with_cpu_runtime("einsum_ad", |ctx| {
             let primals: Vec<&Tensor<T>> = self.operands.iter().map(|op| op.primal()).collect();
             let primal_out = tf_einsum::einsum::<Standard<T>, CpuBackend>(
@@ -328,7 +384,55 @@ where
                 None
             };
 
-            wrap_ad_output("einsum_ad", self.operands, primal_out, tangent_out, 0)
+            let out = wrap_ad_output("einsum_ad", self.operands, primal_out, tangent_out, 0)?;
+
+            if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+                let subscripts = self.subscripts.to_string();
+                let reverse_specs = collect_reverse_input_specs(self.operands);
+                let primal_owned: Vec<Tensor<T>> =
+                    primals.iter().map(|tensor| (*tensor).clone()).collect();
+                let output_node = *node;
+                let tape_id = *tape;
+
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let primal_refs: Vec<&Tensor<T>> = primal_owned.iter().collect();
+                        let gradients = with_cpu_runtime("einsum_ad_pullback", |ctx| {
+                            tf_einsum::einsum_rrule::<Standard<T>, CpuBackend>(
+                                ctx,
+                                &subscripts,
+                                &primal_refs,
+                                cotangent,
+                            )
+                            .map_err(Error::from)
+                        })?;
+
+                        if gradients.len() != reverse_specs.len() {
+                            return Err(Error::InvalidAdTensor {
+                                message: format!(
+                                    "einsum_ad pullback arity mismatch: expected {}, got {}",
+                                    reverse_specs.len(),
+                                    gradients.len()
+                                ),
+                            });
+                        }
+
+                        let mut input_grads = Vec::new();
+                        for (k, grad) in gradients.into_iter().enumerate() {
+                            let Some(spec) = &reverse_specs[k] else {
+                                continue;
+                            };
+                            let grad = normalize_pullback_shape(grad, &spec.dims, "einsum_ad")?;
+                            input_grads.push((spec.node, grad));
+                        }
+                        Ok(input_grads)
+                    }),
+                )?;
+            }
+
+            Ok(out)
         })
     }
 }
@@ -1001,11 +1105,13 @@ pub fn norm<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> NormBuilder<'a, T> {
     }
 }
 
-fn run_unary_tensor_ad<T, FPrimal, FFrule>(
+fn run_unary_tensor_ad<T, FPrimal, FFrule, FRrule>(
     op_name: &'static str,
+    pullback_op_name: &'static str,
     input: &AdTensor<T>,
     primal_fn: FPrimal,
     frule_fn: FFrule,
+    rrule_fn: FRrule,
 ) -> Result<AdTensor<T>>
 where
     T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
@@ -1016,6 +1122,12 @@ where
         &Tensor<T>,
     )
         -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>,
+    FRrule: Fn(
+            &mut CpuContext,
+            &Tensor<T>,
+            &Tensor<T>,
+        ) -> std::result::Result<Tensor<T>, chainrules_core::AutodiffError>
+        + 'static,
 {
     let operands = [input];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -1036,15 +1148,45 @@ where
         )
     };
 
-    wrap_ad_output(op_name, &operands, primal, tangent, 0)
+    let out = wrap_ad_output(op_name, &operands, primal, tangent, 0)?;
+
+    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        let input_primal = input.primal().clone();
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        let output_node = *node;
+        let tape_id = *tape;
+
+        reverse_tape::register_rule::<T>(
+            tape_id,
+            output_node,
+            Box::new(move |cotangent| {
+                let grad = with_cpu_runtime(pullback_op_name, |ctx| {
+                    rrule_fn(ctx, &input_primal, cotangent).map_err(Error::from)
+                })?;
+
+                let Some(spec) = &input_spec else {
+                    return Ok(Vec::new());
+                };
+                let grad = normalize_pullback_shape(grad, &spec.dims, op_name)?;
+                Ok(vec![(spec.node, grad)])
+            }),
+        )?;
+    }
+
+    Ok(out)
 }
 
-fn run_binary_tensor_ad<T, FPrimal, FFrule>(
+fn run_binary_tensor_ad<T, FPrimal, FFrule, FRrule>(
     op_name: &'static str,
+    pullback_op_name: &'static str,
     a: &AdTensor<T>,
     b: &AdTensor<T>,
     primal_fn: FPrimal,
     frule_fn: FFrule,
+    rrule_fn: FRrule,
 ) -> Result<AdTensor<T>>
 where
     T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
@@ -1057,6 +1199,13 @@ where
         &Tensor<T>,
     )
         -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>,
+    FRrule: Fn(
+            &mut CpuContext,
+            &Tensor<T>,
+            &Tensor<T>,
+            &Tensor<T>,
+        ) -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>
+        + 'static,
 {
     let operands = [a, b];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -1081,7 +1230,38 @@ where
         )
     };
 
-    wrap_ad_output(op_name, &operands, primal, tangent, 0)
+    let out = wrap_ad_output(op_name, &operands, primal, tangent, 0)?;
+
+    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        let a_primal = a.primal().clone();
+        let b_primal = b.primal().clone();
+        let reverse_specs = collect_reverse_input_specs(&operands);
+        let output_node = *node;
+        let tape_id = *tape;
+
+        reverse_tape::register_rule::<T>(
+            tape_id,
+            output_node,
+            Box::new(move |cotangent| {
+                let (grad_a, grad_b) = with_cpu_runtime(pullback_op_name, |ctx| {
+                    rrule_fn(ctx, &a_primal, &b_primal, cotangent).map_err(Error::from)
+                })?;
+
+                let mut input_grads = Vec::new();
+                if let Some(spec) = &reverse_specs[0] {
+                    let grad_a = normalize_pullback_shape(grad_a, &spec.dims, op_name)?;
+                    input_grads.push((spec.node, grad_a));
+                }
+                if let Some(spec) = &reverse_specs[1] {
+                    let grad_b = normalize_pullback_shape(grad_b, &spec.dims, op_name)?;
+                    input_grads.push((spec.node, grad_b));
+                }
+                Ok(input_grads)
+            }),
+        )?;
+    }
+
+    Ok(out)
 }
 
 /// Builder for AD SVD.
@@ -1147,10 +1327,109 @@ where
             (None, None, None)
         };
 
+        let out_u = wrap_ad_output("svd_ad", &operands, primal.u, du, 1)?;
+        let out_s = wrap_ad_output("svd_ad", &operands, primal.s, ds, 2)?;
+        let out_vt = wrap_ad_output("svd_ad", &operands, primal.vt, dvt, 3)?;
+
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        if let Some(spec) = input_spec {
+            let a_primal = self.tensor.primal().clone();
+            let options = self.options.cloned();
+
+            if let AdValue::Reverse { node, tape, .. } = out_u.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let options = options.clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("svd_ad_pullback_u", |ctx| {
+                            tenferro_linalg::svd_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::SvdCotangent {
+                                    u: Some(cotangent.clone()),
+                                    s: None,
+                                    vt: None,
+                                },
+                                options.as_ref(),
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "svd_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_s.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let options = options.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("svd_ad_pullback_s", |ctx| {
+                            tenferro_linalg::svd_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::SvdCotangent {
+                                    u: None,
+                                    s: Some(cotangent.clone()),
+                                    vt: None,
+                                },
+                                options.as_ref(),
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "svd_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_vt.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let options = options.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("svd_ad_pullback_vt", |ctx| {
+                            tenferro_linalg::svd_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::SvdCotangent {
+                                    u: None,
+                                    s: None,
+                                    vt: Some(cotangent.clone()),
+                                },
+                                options.as_ref(),
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "svd_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+        }
+
         Ok(AdSvdResult {
-            u: wrap_ad_output("svd_ad", &operands, primal.u, du, 1)?,
-            s: wrap_ad_output("svd_ad", &operands, primal.s, ds, 2)?,
-            vt: wrap_ad_output("svd_ad", &operands, primal.vt, dvt, 3)?,
+            u: out_u,
+            s: out_s,
+            vt: out_vt,
         })
     }
 }
@@ -1218,10 +1497,68 @@ where
             (None, None)
         };
 
-        Ok(AdQrResult {
-            q: wrap_ad_output("qr_ad", &operands, primal.q, dq, 1)?,
-            r: wrap_ad_output("qr_ad", &operands, primal.r, dr, 2)?,
-        })
+        let out_q = wrap_ad_output("qr_ad", &operands, primal.q, dq, 1)?;
+        let out_r = wrap_ad_output("qr_ad", &operands, primal.r, dr, 2)?;
+
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        if let Some(spec) = input_spec {
+            if let AdValue::Reverse { node, tape, .. } = out_q.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("qr_ad_pullback_q", |ctx| {
+                            tenferro_linalg::qr_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::QrCotangent {
+                                    q: Some(cotangent.clone()),
+                                    r: None,
+                                },
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "qr_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_r.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("qr_ad_pullback_r", |ctx| {
+                            tenferro_linalg::qr_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::QrCotangent {
+                                    q: None,
+                                    r: Some(cotangent.clone()),
+                                },
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "qr_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+        }
+
+        Ok(AdQrResult { q: out_q, r: out_r })
     }
 }
 
@@ -1298,10 +1635,75 @@ where
             (None, None)
         };
 
+        let out_l = wrap_ad_output("lu_ad", &operands, primal.l, dl, 1)?;
+        let out_u = wrap_ad_output("lu_ad", &operands, primal.u, du, 2)?;
+
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        if let Some(spec) = input_spec {
+            if let AdValue::Reverse { node, tape, .. } = out_l.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                let pivot = self.pivot;
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("lu_ad_pullback_l", |ctx| {
+                            tenferro_linalg::lu_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::LuCotangent {
+                                    l: Some(cotangent.clone()),
+                                    u: None,
+                                },
+                                pivot,
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "lu_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_u.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                let pivot = self.pivot;
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("lu_ad_pullback_u", |ctx| {
+                            tenferro_linalg::lu_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::LuCotangent {
+                                    l: None,
+                                    u: Some(cotangent.clone()),
+                                },
+                                pivot,
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "lu_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+        }
+
         Ok(AdLuResult {
             p: primal.p,
-            l: wrap_ad_output("lu_ad", &operands, primal.l, dl, 1)?,
-            u: wrap_ad_output("lu_ad", &operands, primal.u, du, 2)?,
+            l: out_l,
+            u: out_u,
         })
     }
 }
@@ -1370,9 +1772,70 @@ where
             (None, None)
         };
 
+        let out_values = wrap_ad_output("eigen_ad", &operands, primal.values, dvalues, 1)?;
+        let out_vectors = wrap_ad_output("eigen_ad", &operands, primal.vectors, dvectors, 2)?;
+
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        if let Some(spec) = input_spec {
+            if let AdValue::Reverse { node, tape, .. } = out_values.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("eigen_ad_pullback_values", |ctx| {
+                            tenferro_linalg::eigen_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::EigenCotangent {
+                                    values: Some(cotangent.clone()),
+                                    vectors: None,
+                                },
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "eigen_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_vectors.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("eigen_ad_pullback_vectors", |ctx| {
+                            tenferro_linalg::eigen_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::EigenCotangent {
+                                    values: None,
+                                    vectors: Some(cotangent.clone()),
+                                },
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "eigen_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+        }
+
         Ok(AdEigenResult {
-            values: wrap_ad_output("eigen_ad", &operands, primal.values, dvalues, 1)?,
-            vectors: wrap_ad_output("eigen_ad", &operands, primal.vectors, dvectors, 2)?,
+            values: out_values,
+            vectors: out_vectors,
         })
     }
 }
@@ -1450,9 +1913,72 @@ where
             (None, None)
         };
 
+        let out_x = wrap_ad_output("lstsq_ad", &operands, primal.x, dx, 1)?;
+        let out_residual = wrap_ad_output("lstsq_ad", &operands, primal.residual, dresidual, 2)?;
+
+        let reverse_specs = collect_reverse_input_specs(&operands);
+        if has_reverse(&operands) {
+            if let AdValue::Reverse { node, tape, .. } = out_x.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let reverse_specs = reverse_specs.clone();
+                let a_primal = self.a.primal().clone();
+                let b_primal = self.b.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("lstsq_ad_pullback_x", |ctx| {
+                            tenferro_linalg::lstsq_rrule::<T, CpuContext>(
+                                ctx, &a_primal, &b_primal, cotangent,
+                            )
+                            .map_err(Error::from)
+                        })?;
+
+                        let mut input_grads = Vec::new();
+                        if let Some(spec) = &reverse_specs[0] {
+                            let grad_a = normalize_pullback_shape(grad.a, &spec.dims, "lstsq_ad")?;
+                            input_grads.push((spec.node, grad_a));
+                        }
+                        if let Some(spec) = &reverse_specs[1] {
+                            let grad_b = normalize_pullback_shape(grad.b, &spec.dims, "lstsq_ad")?;
+                            input_grads.push((spec.node, grad_b));
+                        }
+                        Ok(input_grads)
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_residual.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let reverse_specs = reverse_specs.clone();
+                let zero_a = zero_like(self.a.primal());
+                let zero_b = zero_like(self.b.primal());
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |_cotangent| {
+                        let mut input_grads = Vec::new();
+                        if let Some(spec) = &reverse_specs[0] {
+                            let grad_a =
+                                normalize_pullback_shape(zero_a.clone(), &spec.dims, "lstsq_ad")?;
+                            input_grads.push((spec.node, grad_a));
+                        }
+                        if let Some(spec) = &reverse_specs[1] {
+                            let grad_b =
+                                normalize_pullback_shape(zero_b.clone(), &spec.dims, "lstsq_ad")?;
+                            input_grads.push((spec.node, grad_b));
+                        }
+                        Ok(input_grads)
+                    }),
+                )?;
+            }
+        }
+
         Ok(AdLstsqResult {
-            x: wrap_ad_output("lstsq_ad", &operands, primal.x, dx, 1)?,
-            residual: wrap_ad_output("lstsq_ad", &operands, primal.residual, dresidual, 2)?,
+            x: out_x,
+            residual: out_residual,
         })
     }
 }
@@ -1490,9 +2016,11 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "cholesky_ad",
+            "cholesky_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::cholesky::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::cholesky_frule::<T>(ctx, t, dt),
+            |ctx, t, cotangent| tenferro_linalg::cholesky_rrule::<T>(ctx, t, cotangent),
         )
     }
 }
@@ -1531,10 +2059,15 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_binary_tensor_ad(
             "solve_ad",
+            "solve_ad_pullback",
             self.a,
             self.b,
             |ctx, a, b| tenferro_linalg::solve::<T, CpuContext>(ctx, a, b).map_err(Error::from),
             |ctx, a, b, da, db| tenferro_linalg::solve_frule::<T>(ctx, a, b, da, db),
+            |ctx, a, b, cotangent| {
+                let grad = tenferro_linalg::solve_rrule::<T>(ctx, a, b, cotangent)?;
+                Ok((grad.a, grad.b))
+            },
         )
     }
 }
@@ -1572,9 +2105,11 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "inv_ad",
+            "inv_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::inv::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::inv_frule::<T, CpuContext>(ctx, t, dt),
+            |ctx, t, cotangent| tenferro_linalg::inv_rrule::<T, CpuContext>(ctx, t, cotangent),
         )
     }
 }
@@ -1612,9 +2147,11 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "det_ad",
+            "det_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::det::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::det_frule::<T, CpuContext>(ctx, t, dt),
+            |ctx, t, cotangent| tenferro_linalg::det_rrule::<T, CpuContext>(ctx, t, cotangent),
         )
     }
 }
@@ -1680,9 +2217,60 @@ where
             (None, None)
         };
 
+        let out_sign = wrap_ad_output("slogdet_ad", &operands, primal.sign, dsign, 1)?;
+        let out_logabsdet =
+            wrap_ad_output("slogdet_ad", &operands, primal.logabsdet, dlogabsdet, 2)?;
+
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        if let Some(spec) = input_spec {
+            if let AdValue::Reverse { node, tape, .. } = out_sign.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let zero = zero_like(self.tensor.primal());
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |_cotangent| {
+                        let grad =
+                            normalize_pullback_shape(zero.clone(), &spec.dims, "slogdet_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_logabsdet.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("slogdet_ad_pullback_logabsdet", |ctx| {
+                            tenferro_linalg::slogdet_rrule::<T, CpuContext>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::SlogdetCotangent {
+                                    logabsdet: Some(cotangent.clone()),
+                                },
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "slogdet_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+        }
+
         Ok(AdSlogdetResult {
-            sign: wrap_ad_output("slogdet_ad", &operands, primal.sign, dsign, 1)?,
-            logabsdet: wrap_ad_output("slogdet_ad", &operands, primal.logabsdet, dlogabsdet, 2)?,
+            sign: out_sign,
+            logabsdet: out_logabsdet,
         })
     }
 }
@@ -1748,9 +2336,70 @@ where
             (None, None)
         };
 
+        let out_values = wrap_ad_output("eig_ad", &operands, primal.values, dvalues, 1)?;
+        let out_vectors = wrap_ad_output("eig_ad", &operands, primal.vectors, dvectors, 2)?;
+
+        let input_spec = collect_reverse_input_specs(&operands)
+            .into_iter()
+            .next()
+            .flatten();
+        if let Some(spec) = input_spec {
+            if let AdValue::Reverse { node, tape, .. } = out_values.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_bridge_rule::<Complex<T>, T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("eig_ad_pullback_values", |ctx| {
+                            tenferro_linalg::eig_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::EigCotangent {
+                                    values: Some(cotangent.clone()),
+                                    vectors: None,
+                                },
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "eig_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+
+            if let AdValue::Reverse { node, tape, .. } = out_vectors.as_value() {
+                let output_node = *node;
+                let tape_id = *tape;
+                let spec = spec.clone();
+                let a_primal = self.tensor.primal().clone();
+                reverse_tape::register_bridge_rule::<Complex<T>, T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let grad = with_cpu_runtime("eig_ad_pullback_vectors", |ctx| {
+                            tenferro_linalg::eig_rrule::<T>(
+                                ctx,
+                                &a_primal,
+                                &tenferro_linalg::EigCotangent {
+                                    values: None,
+                                    vectors: Some(cotangent.clone()),
+                                },
+                            )
+                            .map_err(Error::from)
+                        })?;
+                        let grad = normalize_pullback_shape(grad, &spec.dims, "eig_ad")?;
+                        Ok(vec![(spec.node, grad)])
+                    }),
+                )?;
+            }
+        }
+
         Ok(AdEigResult {
-            values: wrap_ad_output("eig_ad", &operands, primal.values, dvalues, 1)?,
-            vectors: wrap_ad_output("eig_ad", &operands, primal.vectors, dvectors, 2)?,
+            values: out_values,
+            vectors: out_vectors,
         })
     }
 }
@@ -1800,11 +2449,15 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "pinv_ad",
+            "pinv_ad_pullback",
             self.tensor,
             |ctx, t| {
                 tenferro_linalg::pinv::<T, CpuContext>(ctx, t, self.rcond).map_err(Error::from)
             },
             |ctx, t, dt| tenferro_linalg::pinv_frule::<T, CpuContext>(ctx, t, dt, self.rcond),
+            move |ctx, t, cotangent| {
+                tenferro_linalg::pinv_rrule::<T, CpuContext>(ctx, t, cotangent, self.rcond)
+            },
         )
     }
 }
@@ -1845,9 +2498,13 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "matrix_exp_ad",
+            "matrix_exp_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::matrix_exp::<T, CpuContext>(ctx, t).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::matrix_exp_frule::<T, CpuContext>(ctx, t, dt),
+            |ctx, t, cotangent| {
+                tenferro_linalg::matrix_exp_rrule::<T, CpuContext>(ctx, t, cotangent)
+            },
         )
     }
 }
@@ -1890,33 +2547,95 @@ where
     }
 
     /// Executes AD triangular solve.
-    ///
-    /// Forward/reverse inputs are currently unsupported.
-    ///
-    /// Upstream tracking issue: `tensor4all/tenferro-rs#257`.
     /// # Examples
     ///
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdTensor<T>> {
+    pub fn run(self) -> Result<AdTensor<T>>
+    where
+        T: 'static,
+    {
         let operands = [self.a, self.b];
-        if has_forward(&operands) || has_reverse(&operands) {
-            return Err(Error::UnsupportedAdOp {
-                op: "solve_triangular_ad",
-            });
+        let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+
+        let (primal, tangent) = if needs_tangent {
+            let ta = self
+                .a
+                .tangent()
+                .cloned()
+                .unwrap_or_else(|| zero_like(self.a.primal()));
+            let tb = self
+                .b
+                .tangent()
+                .cloned()
+                .unwrap_or_else(|| zero_like(self.b.primal()));
+
+            let (p, d) = with_cpu_runtime("solve_triangular_ad", |ctx| {
+                tenferro_linalg::solve_triangular_frule::<T>(
+                    ctx,
+                    self.a.primal(),
+                    self.b.primal(),
+                    &ta,
+                    &tb,
+                    self.upper,
+                )
+                .map_err(Error::from)
+            })?;
+            (p, Some(d))
+        } else {
+            (
+                with_cpu_runtime("solve_triangular_ad", |ctx| {
+                    tenferro_linalg::solve_triangular::<T, CpuContext>(
+                        ctx,
+                        self.a.primal(),
+                        self.b.primal(),
+                        self.upper,
+                    )
+                    .map_err(Error::from)
+                })?,
+                None,
+            )
+        };
+
+        let out = wrap_ad_output("solve_triangular_ad", &operands, primal, tangent, 0)?;
+
+        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+            let a_primal = self.a.primal().clone();
+            let b_primal = self.b.primal().clone();
+            let reverse_specs = collect_reverse_input_specs(&operands);
+            let upper = self.upper;
+            let output_node = *node;
+            let tape_id = *tape;
+
+            reverse_tape::register_rule::<T>(
+                tape_id,
+                output_node,
+                Box::new(move |cotangent| {
+                    let grad = with_cpu_runtime("solve_triangular_ad_pullback", |ctx| {
+                        tenferro_linalg::solve_triangular_rrule::<T>(
+                            ctx, &a_primal, &b_primal, cotangent, upper,
+                        )
+                        .map_err(Error::from)
+                    })?;
+
+                    let mut input_grads = Vec::new();
+                    if let Some(spec) = &reverse_specs[0] {
+                        let grad_a =
+                            normalize_pullback_shape(grad.a, &spec.dims, "solve_triangular_ad")?;
+                        input_grads.push((spec.node, grad_a));
+                    }
+                    if let Some(spec) = &reverse_specs[1] {
+                        let grad_b =
+                            normalize_pullback_shape(grad.b, &spec.dims, "solve_triangular_ad")?;
+                        input_grads.push((spec.node, grad_b));
+                    }
+                    Ok(input_grads)
+                }),
+            )?;
         }
 
-        with_cpu_runtime("solve_triangular_ad", |ctx| {
-            let out = tenferro_linalg::solve_triangular::<T, CpuContext>(
-                ctx,
-                self.a.primal(),
-                self.b.primal(),
-                self.upper,
-            )
-            .map_err(Error::from)?;
-            Ok(AdTensor::new_primal(out))
-        })
+        Ok(out)
     }
 }
 
@@ -1968,9 +2687,13 @@ where
     pub fn run(self) -> Result<AdTensor<T>> {
         run_unary_tensor_ad(
             "norm_ad",
+            "norm_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::norm::<T, CpuContext>(ctx, t, self.kind).map_err(Error::from),
             |ctx, t, dt| tenferro_linalg::norm_frule::<T, CpuContext>(ctx, t, dt, self.kind),
+            move |ctx, t, cotangent| {
+                tenferro_linalg::norm_rrule::<T, CpuContext>(ctx, t, cotangent, self.kind)
+            },
         )
     }
 }
@@ -2061,19 +2784,21 @@ mod tests {
     }
 
     #[test]
-    fn solve_triangular_ad_rejects_non_primal() {
+    fn solve_triangular_ad_supports_forward_mode() {
         let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-        let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+        let a = Tensor::<f64>::from_slice(&[2.0, 0.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
-        let b = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
         let da =
-            Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
+            Tensor::<f64>::from_slice(&[0.1, 0.0, -0.2, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
                 .unwrap();
+        let db = Tensor::<f64>::from_slice(&[0.2, -0.1], &[2], MemoryOrder::ColumnMajor).unwrap();
 
         let ad_a = AdTensor::new_forward(a, da);
-        let ad_b = AdTensor::new_primal(b);
-        let err = solve_triangular_ad(&ad_a, &ad_b).run().err();
-        assert!(matches!(err, Some(Error::UnsupportedAdOp { .. })));
+        let ad_b = AdTensor::new_forward(b, db);
+        let out = solve_triangular_ad(&ad_a, &ad_b).run().unwrap();
+        assert!(matches!(out.as_value(), AdValue::Forward { .. }));
+        assert_eq!(out.dims(), &[2]);
     }
 
     fn assert_primal_mode(t: &AdTensor<f64>) {
@@ -2232,11 +2957,19 @@ mod tests {
         let out_fwd = solve_ad(&ad_a_fwd, &ad_b).run().unwrap();
         assert!(matches!(out_fwd.as_value(), AdValue::Forward { .. }));
 
+        let out_tri_fwd = solve_triangular_ad(&ad_a_fwd, &ad_b).run().unwrap();
+        assert!(matches!(out_tri_fwd.as_value(), AdValue::Forward { .. }));
+
         let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None);
         let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None);
         let out_rev = einsum_ad("ij,jk->ik", &[&ad_a_rev, &ad_b_rev])
             .run()
             .unwrap();
         assert!(matches!(out_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11)));
+
+        let out_tri_rev = solve_triangular_ad(&ad_a_rev, &ad_b_rev).run().unwrap();
+        assert!(
+            matches!(out_tri_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11))
+        );
     }
 }

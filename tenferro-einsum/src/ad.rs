@@ -497,11 +497,11 @@ where
         hvp_k = Some(term);
 
         // Terms from tangents of other primals
-        for j in 0..n {
+        for (j, tangent_j_opt) in tangents.iter().enumerate().take(n) {
             if j == k {
                 continue;
             }
-            if let Some(tangent_j) = tangents[j] {
+            if let Some(tangent_j) = *tangent_j_opt {
                 let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
                 for (i, &op) in primals.iter().enumerate() {
                     if i != k {

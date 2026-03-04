@@ -119,6 +119,9 @@ $$
 - **Frobenius**: PyTorch decomposes to `linalg_vector_norm(A, 2, dims)`.
 - **Nuclear**: PyTorch decomposes to `svdvals(A).sum()` — no dedicated backward.
 - **Spectral**: PyTorch decomposes to `amax(svdvals(A))` — no dedicated backward.
+- **Matrix L1 / Inf**: implemented directly as max absolute column/row sums.
+  For ties (multiple active maximizers), `frule`/`rrule` use uniform averaging
+  over the active set.
 - Nuclear and spectral norms inherit AD rules from SVD backward.
 
 ## References

@@ -221,7 +221,7 @@ fn fd_helpers_smoke_test() {
 
     // frule: d(A^T) should be (dA)^T
     check_frule_fd(
-        &transpose_fn,
+        transpose_fn,
         |_x, dx| {
             let dd = tensor_data(dx);
             let mut out = vec![0.0; 6];
@@ -239,7 +239,7 @@ fn fd_helpers_smoke_test() {
 
     // rrule: grad w.r.t. A given cotangent on A^T is cotangent^T
     check_rrule_fd(
-        &transpose_fn,
+        transpose_fn,
         |_x, co| {
             let cd = tensor_data(co);
             // cotangent is 3x2, output grad is 2x3
@@ -632,7 +632,7 @@ fn inv_2x2() {
     let inv_data = tensor_data(&a_inv);
 
     // A * A^{-1} should be identity
-    let a_data = vec![1.0, 2.0, 3.0, 4.0];
+    let a_data = [1.0, 2.0, 3.0, 4.0];
     let n = 2;
     for i in 0..n {
         for j in 0..n {
@@ -742,7 +742,7 @@ fn pinv_square_invertible() {
     let ap_data = tensor_data(&ap);
 
     // A * A+ * A ~= A
-    let a_data = vec![1.0, 2.0, 3.0, 4.0];
+    let a_data = [1.0, 2.0, 3.0, 4.0];
     let n = 2;
     // A * A+
     let mut aap = vec![0.0; n * n];
@@ -2422,7 +2422,7 @@ fn lstsq_rrule_fd_systematic() {
         a_data[i + i * m] += 5.0;
     }
     // Construct b = A * x_true so residual is zero
-    let x_true = vec![1.0, 2.0];
+    let x_true = [1.0, 2.0];
     let mut b_data = vec![0.0; m];
     for i in 0..m {
         for j in 0..n {
@@ -2998,7 +2998,7 @@ fn lstsq_frule_fd_through_x_vary_a() {
         a_data[i + i * m] += 5.0;
     }
     // Construct b = A * x_true so residual is zero
-    let x_true = vec![1.0, 2.0];
+    let x_true = [1.0, 2.0];
     let mut b_data = vec![0.0; m];
     for i in 0..m {
         for j in 0..n {
@@ -3916,11 +3916,11 @@ fn norm_batched_fro() {
     let nd = tensor_data(&n);
     assert_eq!(nd.len(), 2);
     // Frobenius norm of identity = sqrt(2)
-    for i in 0..2 {
+    for (i, value) in nd.iter().enumerate().take(2) {
         assert!(
-            (nd[i] - 2.0_f64.sqrt()).abs() < 1e-10,
+            (*value - 2.0_f64.sqrt()).abs() < 1e-10,
             "batch Fro norm[{i}] = {}",
-            nd[i]
+            value
         );
     }
 }
@@ -4042,12 +4042,16 @@ fn cholesky_non_spd_returns_error() {
 }
 
 #[test]
-fn norm_unsupported_kind_returns_error() {
+fn norm_l1_inf_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    // L1 norm is not yet implemented
-    assert!(norm(&mut ctx, &a, NormKind::L1).is_err());
-    assert!(norm(&mut ctx, &a, NormKind::Inf).is_err());
+    // Matrix [[1, 3], [2, 4]] in column-major storage.
+    let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let l1 = norm(&mut ctx, &a, NormKind::L1).unwrap();
+    let inf = norm(&mut ctx, &a, NormKind::Inf).unwrap();
+    let l1_data = tensor_data(&l1);
+    let inf_data = tensor_data(&inf);
+    assert!((l1_data[0] - 7.0).abs() < 1e-12);
+    assert!((inf_data[0] - 6.0).abs() < 1e-12);
 }
 
 // ============================================================================
@@ -4563,8 +4567,7 @@ fn lu_rrule_rejects_l_cotangent_shape_mismatch() {
     };
 
     let err = lu_rrule(&mut ctx, &a, &co, LuPivot::Partial)
-        .err()
-        .expect("shape mismatch should return an error");
+        .expect_err("shape mismatch should return an error");
     assert!(matches!(
         err,
         chainrules_core::AutodiffError::InvalidArgument(_)
@@ -4581,8 +4584,7 @@ fn lu_rrule_rejects_u_cotangent_shape_mismatch() {
     };
 
     let err = lu_rrule(&mut ctx, &a, &co, LuPivot::Partial)
-        .err()
-        .expect("shape mismatch should return an error");
+        .expect_err("shape mismatch should return an error");
     assert!(matches!(
         err,
         chainrules_core::AutodiffError::InvalidArgument(_)
@@ -4695,6 +4697,226 @@ fn solve_frule_multi_rhs() {
     for &val in &dxd {
         assert!(val.is_finite(), "solve_frule dx not finite: {val}");
     }
+}
+
+#[test]
+fn solve_triangular_frule_upper_fd() {
+    let mut ctx = CpuContext::new(1);
+    // Upper triangular A
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    // Two RHS columns
+    let b = make_tensor(vec![1.0, 2.0, 0.5, -1.0], &[2, 2]);
+    // Tangent includes lower-triangular entry to confirm projection behavior.
+    let da = make_tensor(vec![0.1, 0.2, -0.3, 0.4], &[2, 2]);
+    let db = make_tensor(vec![0.05, -0.1, 0.2, 0.3], &[2, 2]);
+
+    let (_x, dx) = solve_triangular_frule(&mut ctx, &a, &b, &da, &db, true).unwrap();
+    let analytic = tensor_data(&dx);
+
+    let eps = 1e-6;
+    let a_data = tensor_data(&a);
+    let b_data = tensor_data(&b);
+    let da_data = tensor_data(&da);
+    let db_data = tensor_data(&db);
+    let mut a_plus = a_data.clone();
+    let mut a_minus = a_data.clone();
+    let mut b_plus = b_data.clone();
+    let mut b_minus = b_data.clone();
+    for i in 0..a_data.len() {
+        a_plus[i] += eps * da_data[i];
+        a_minus[i] -= eps * da_data[i];
+    }
+    for i in 0..b_data.len() {
+        b_plus[i] += eps * db_data[i];
+        b_minus[i] -= eps * db_data[i];
+    }
+
+    let x_plus = solve_triangular(
+        &mut ctx,
+        &make_tensor(a_plus, &[2, 2]),
+        &make_tensor(b_plus, &[2, 2]),
+        true,
+    )
+    .unwrap();
+    let x_minus = solve_triangular(
+        &mut ctx,
+        &make_tensor(a_minus, &[2, 2]),
+        &make_tensor(b_minus, &[2, 2]),
+        true,
+    )
+    .unwrap();
+    let fd: Vec<f64> = tensor_data(&x_plus)
+        .iter()
+        .zip(tensor_data(&x_minus).iter())
+        .map(|(p, m)| (p - m) / (2.0 * eps))
+        .collect();
+
+    let max_err = analytic
+        .iter()
+        .zip(fd.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_err < 1e-5,
+        "solve_triangular_frule FD check failed: max_err={max_err}"
+    );
+}
+
+#[test]
+fn solve_triangular_rrule_upper_fd() {
+    let mut ctx = CpuContext::new(1);
+    // Upper triangular A
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0], &[2, 1]);
+    let cot = make_tensor(vec![0.7, -1.2], &[2, 1]);
+    let grad = solve_triangular_rrule(&mut ctx, &a, &b, &cot, true).unwrap();
+    let grad_a = tensor_data(&grad.a);
+    let grad_b = tensor_data(&grad.b);
+
+    let eps = 1e-6;
+    let a_data = tensor_data(&a);
+    let b_data = tensor_data(&b);
+    let cot_data = tensor_data(&cot);
+
+    // FD check for dA: dL = <cot, solve_triangular(A, b)>
+    for idx in 0..a_data.len() {
+        let mut a_plus = a_data.clone();
+        let mut a_minus = a_data.clone();
+        a_plus[idx] += eps;
+        a_minus[idx] -= eps;
+
+        let x_plus = solve_triangular(&mut ctx, &make_tensor(a_plus, &[2, 2]), &b, true).unwrap();
+        let x_minus = solve_triangular(&mut ctx, &make_tensor(a_minus, &[2, 2]), &b, true).unwrap();
+        let xp = tensor_data(&x_plus);
+        let xm = tensor_data(&x_minus);
+        let fd: f64 = xp
+            .iter()
+            .zip(xm.iter())
+            .zip(cot_data.iter())
+            .map(|((p, m), c)| c * (p - m) / (2.0 * eps))
+            .sum();
+
+        assert!(
+            (grad_a[idx] - fd).abs() < 1e-4,
+            "solve_triangular_rrule FD check failed at A[{idx}]: analytic={}, fd={fd}",
+            grad_a[idx]
+        );
+    }
+
+    // FD check for dB
+    for idx in 0..b_data.len() {
+        let mut b_plus = b_data.clone();
+        let mut b_minus = b_data.clone();
+        b_plus[idx] += eps;
+        b_minus[idx] -= eps;
+
+        let x_plus = solve_triangular(&mut ctx, &a, &make_tensor(b_plus, &[2, 1]), true).unwrap();
+        let x_minus = solve_triangular(&mut ctx, &a, &make_tensor(b_minus, &[2, 1]), true).unwrap();
+        let xp = tensor_data(&x_plus);
+        let xm = tensor_data(&x_minus);
+        let fd: f64 = xp
+            .iter()
+            .zip(xm.iter())
+            .zip(cot_data.iter())
+            .map(|((p, m), c)| c * (p - m) / (2.0 * eps))
+            .sum();
+
+        assert!(
+            (grad_b[idx] - fd).abs() < 1e-4,
+            "solve_triangular_rrule FD check failed at b[{idx}]: analytic={}, fd={fd}",
+            grad_b[idx]
+        );
+    }
+}
+
+#[test]
+fn solve_triangular_rrule_complex64_matches_manual_formula() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_complex_tensor(
+        vec![c(2.0, 0.0), c(0.0, 0.0), c(1.0, -0.5), c(3.0, 0.0)],
+        &[2, 2],
+    );
+    let b = make_complex_tensor(vec![c(1.0, 0.5), c(2.0, -0.25)], &[2, 1]);
+    let cot = make_complex_tensor(vec![c(0.5, -0.2), c(-0.25, 0.1)], &[2, 1]);
+
+    let grad = solve_triangular_rrule(&mut ctx, &a, &b, &cot, true).unwrap();
+    let x = solve_triangular(&mut ctx, &a, &b, true).unwrap();
+
+    // G = solve(A^H, cot) where A is upper triangular => A^H is lower triangular.
+    let ad = complex_tensor_data(&a);
+    let a_h = make_complex_tensor(
+        vec![ad[0].conj(), ad[2].conj(), ad[1].conj(), ad[3].conj()],
+        &[2, 2],
+    );
+    let g = solve_triangular(&mut ctx, &a_h, &cot, false).unwrap();
+    let gd = complex_tensor_data(&g);
+    let xd = complex_tensor_data(&x);
+
+    // dA = triu(-G x^H), dB = G
+    let m00 = -(gd[0] * xd[0].conj());
+    let m10 = c(0.0, 0.0);
+    let m01 = -(gd[0] * xd[1].conj());
+    let m11 = -(gd[1] * xd[1].conj());
+    let expected_a = make_complex_tensor(vec![m00, m10, m01, m11], &[2, 2]);
+    let expected_b = make_complex_tensor(gd, &[2, 1]);
+
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.a),
+            &complex_tensor_data(&expected_a)
+        ) < 1e-10
+    );
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.b),
+            &complex_tensor_data(&expected_b)
+        ) < 1e-10
+    );
+}
+
+#[test]
+fn solve_rrule_complex64_matches_manual_formula() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_complex_tensor(
+        vec![c(3.0, 0.0), c(1.0, 0.5), c(0.2, -0.3), c(2.0, 0.0)],
+        &[2, 2],
+    );
+    let b = make_complex_tensor(vec![c(1.0, -0.2), c(0.5, 0.4)], &[2, 1]);
+    let cot = make_complex_tensor(vec![c(0.3, 0.1), c(-0.7, 0.2)], &[2, 1]);
+
+    let grad = solve_rrule(&mut ctx, &a, &b, &cot).unwrap();
+    let x = solve(&mut ctx, &a, &b).unwrap();
+
+    // G = solve(A^H, cot)
+    let ad = complex_tensor_data(&a);
+    let a_h = make_complex_tensor(
+        vec![ad[0].conj(), ad[2].conj(), ad[1].conj(), ad[3].conj()],
+        &[2, 2],
+    );
+    let g = solve(&mut ctx, &a_h, &cot).unwrap();
+    let gd = complex_tensor_data(&g);
+    let xd = complex_tensor_data(&x);
+
+    // dA = -G x^H, dB = G
+    let m00 = -(gd[0] * xd[0].conj());
+    let m10 = -(gd[1] * xd[0].conj());
+    let m01 = -(gd[0] * xd[1].conj());
+    let m11 = -(gd[1] * xd[1].conj());
+    let expected_a = make_complex_tensor(vec![m00, m10, m01, m11], &[2, 2]);
+    let expected_b = make_complex_tensor(gd, &[2, 1]);
+
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.a),
+            &complex_tensor_data(&expected_a)
+        ) < 1e-10
+    );
+    assert!(
+        complex_max_err(
+            &complex_tensor_data(&grad.b),
+            &complex_tensor_data(&expected_b)
+        ) < 1e-10
+    );
 }
 
 // ============================================================================
@@ -5189,18 +5411,44 @@ fn lstsq_rrule_full_execution() {
     }
 }
 
-// Note: solve_triangular does not have rrule/frule AD functions in the current API.
+// Note: solve_triangular now has frule support, but rrule is still not exposed.
 
 // ============================================================================
 // Coverage: additional validation error paths and branch coverage
 // ============================================================================
 
 #[test]
-fn lu_nopivot_returns_error() {
-    // Lines 1023-1025: LuPivot::NoPivot error branch.
+fn lu_nopivot_reconstruction() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+    // Matrix with nonzero leading pivots for stable NoPivot factorization.
+    let data = vec![4.0, 1.0, 0.0, 2.0, 3.0, 1.0, 0.0, 1.0, 2.0];
+    let a = make_tensor(data.clone(), &[3, 3]);
+    let result = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
+    assert!(result.p.is_none());
+
+    let l = tensor_data(&result.l);
+    let u = tensor_data(&result.u);
+    let n = 3;
+    let mut lu_prod = vec![0.0; n * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = 0.0;
+            for k in 0..n {
+                val += l[i + k * n] * u[k + j * n];
+            }
+            lu_prod[i + j * n] = val;
+        }
+    }
+
+    for i in 0..n {
+        for j in 0..n {
+            let err = (data[i + j * n] - lu_prod[i + j * n]).abs();
+            assert!(
+                err < 1e-10,
+                "NoPivot LU reconstruction error at ({i},{j}): {err}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -5223,39 +5471,63 @@ fn solve_triangular_rhs_2d_batch_mismatch() {
 }
 
 #[test]
-fn norm_rrule_l1_unsupported() {
-    // Lines 3955-3958: norm_rrule returns error for L1.
+fn norm_rrule_l1_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
-    assert!(norm_rrule(&mut ctx, &a, &co, NormKind::L1).is_err());
+    // Matrix [[1, -2], [3, 4]] => max column is 2nd.
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![2.0], &[], &[], 0).unwrap();
+    let grad = norm_rrule(&mut ctx, &a, &co, NormKind::L1).unwrap();
+    let gd = tensor_data(&grad);
+    let expected = vec![0.0, 0.0, -2.0, 2.0];
+    for (g, e) in gd.iter().zip(expected.iter()) {
+        assert!(
+            (g - e).abs() < 1e-12,
+            "L1 rrule mismatch: got {g}, expected {e}"
+        );
+    }
 }
 
 #[test]
-fn norm_rrule_inf_unsupported() {
-    // Lines 3955-3958: norm_rrule returns error for Inf.
+fn norm_rrule_inf_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let co: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
-    assert!(norm_rrule(&mut ctx, &a, &co, NormKind::Inf).is_err());
+    // Matrix [[1, -2], [3, 4]] => max row is 2nd.
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![2.0], &[], &[], 0).unwrap();
+    let grad = norm_rrule(&mut ctx, &a, &co, NormKind::Inf).unwrap();
+    let gd = tensor_data(&grad);
+    let expected = vec![0.0, 2.0, 0.0, 2.0];
+    for (g, e) in gd.iter().zip(expected.iter()) {
+        assert!(
+            (g - e).abs() < 1e-12,
+            "Inf rrule mismatch: got {g}, expected {e}"
+        );
+    }
 }
 
 #[test]
-fn norm_frule_l1_unsupported() {
-    // Lines 5194-5197: norm_frule returns error for L1.
+fn norm_frule_l1_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
-    assert!(norm_frule(&mut ctx, &a, &da, NormKind::L1).is_err());
+    // Matrix [[1, -2], [3, 4]] and tangent [[0.1, 0.2], [0.3, 0.4]].
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.3, 0.2, 0.4], &[2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::L1).unwrap();
+    let n = tensor_data(&nrm);
+    let dn = tensor_data(&dnrm);
+    assert!((n[0] - 6.0).abs() < 1e-12);
+    assert!((dn[0] - 0.2).abs() < 1e-12);
 }
 
 #[test]
-fn norm_frule_inf_unsupported() {
-    // Lines 5194-5197: norm_frule returns error for Inf.
+fn norm_frule_inf_supported() {
     let mut ctx = CpuContext::new(1);
-    let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
-    let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1], &[2, 2]);
-    assert!(norm_frule(&mut ctx, &a, &da, NormKind::Inf).is_err());
+    // Matrix [[1, -2], [3, 4]] and tangent [[0.1, 0.2], [0.3, 0.4]].
+    let a = make_tensor(vec![1.0, 3.0, -2.0, 4.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.3, 0.2, 0.4], &[2, 2]);
+    let (nrm, dnrm) = norm_frule(&mut ctx, &a, &da, NormKind::Inf).unwrap();
+    let n = tensor_data(&nrm);
+    let dn = tensor_data(&dnrm);
+    assert!((n[0] - 7.0).abs() < 1e-12);
+    assert!((dn[0] - 0.7).abs() < 1e-12);
 }
 
 #[test]
@@ -5709,4 +5981,157 @@ fn eigen_frule_near_repeated_eigenvalues_finite() {
             "eigen_frule repeated-spectrum dV not finite: {val}"
         );
     }
+}
+
+#[test]
+fn lu_nopivot_near_zero_pivot_returns_error() {
+    let mut ctx = CpuContext::new(1);
+    // First pivot is zero -> NoPivot LU must fail early.
+    let a = make_tensor(vec![0.0, 1.0, 1.0, 1.0], &[2, 2]);
+    assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+}
+
+#[test]
+fn lu_nopivot_requires_rank_at_least_two() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+    assert!(lu(&mut ctx, &a, LuPivot::NoPivot).is_err());
+}
+
+#[test]
+fn lstsq_rrule_rejects_cotangent_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+    let bad_dx = make_tensor(vec![1.0, 1.0, 1.0], &[3]);
+    assert!(lstsq_rrule(&mut ctx, &a, &b, &bad_dx).is_err());
+}
+
+#[test]
+fn lstsq_rrule_cuda_context_returns_cpu_only_error() {
+    let mut ctx = tenferro_prims::CudaContext::new();
+    let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+    let dx = make_tensor(vec![1.0, 1.0], &[2]);
+    let msg = match lstsq_rrule(&mut ctx, &a, &b, &dx) {
+        Ok(_) => panic!("expected CpuContext-only error"),
+        Err(err) => format!("{err}"),
+    };
+    assert!(
+        msg.contains("CpuContext"),
+        "unexpected error message: {msg}"
+    );
+}
+
+#[test]
+fn lu_rrule_nopivot_executes_without_permutation_path() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![4.0, 1.0, 0.0, 2.0, 3.0, 1.0, 0.0, 1.0, 2.0], &[3, 3]);
+    let result = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
+    let l_size: usize = result.l.dims().iter().product();
+    let u_size: usize = result.u.dims().iter().product();
+    let cotangent = LuCotangent {
+        l: Some(make_tensor(vec![0.2; l_size], result.l.dims())),
+        u: Some(make_tensor(vec![0.3; u_size], result.u.dims())),
+    };
+    let grad = lu_rrule(&mut ctx, &a, &cotangent, LuPivot::NoPivot).unwrap();
+    for &val in &tensor_data(&grad) {
+        assert!(val.is_finite(), "lu_rrule NoPivot grad not finite: {val}");
+    }
+}
+
+#[test]
+fn lu_frule_nopivot_executes_without_permutation_path() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![4.0, 1.0, 0.0, 2.0, 3.0, 1.0, 0.0, 1.0, 2.0], &[3, 3]);
+    let da = make_tensor(vec![0.1; 9], &[3, 3]);
+    let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::NoPivot).unwrap();
+    assert!(result.p.is_none());
+    for &val in &tensor_data(&dresult.l) {
+        assert!(val.is_finite(), "lu_frule NoPivot dL not finite: {val}");
+    }
+    for &val in &tensor_data(&dresult.u) {
+        assert!(val.is_finite(), "lu_frule NoPivot dU not finite: {val}");
+    }
+}
+
+#[test]
+fn solve_triangular_frule_reports_shape_mismatch_for_both_tangents() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 0.5, 3.0, 0.0, 0.2, -0.1, 4.0], &[3, 3]);
+    let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
+
+    let bad_da = make_tensor(vec![0.1; 4], &[2, 2]);
+    let db = make_tensor(vec![0.1; 3], &[3]);
+    assert!(solve_triangular_frule(&mut ctx, &a, &b, &bad_da, &db, true).is_err());
+
+    let da = make_tensor(vec![0.1; 9], &[3, 3]);
+    let bad_db = make_tensor(vec![0.1; 4], &[4]);
+    assert!(solve_triangular_frule(&mut ctx, &a, &b, &da, &bad_db, true).is_err());
+}
+
+#[test]
+fn solve_triangular_frule_uses_general_multi_rhs_branch() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.0, 0.0, 0.5, 3.0, 0.0, 0.2, -0.1, 4.0], &[3, 3]);
+    // nrhs = 2, and nrhs != n, so the general branch is used.
+    let b = make_tensor(vec![1.0, 2.0, 3.0, -1.0, 0.5, 2.0], &[3, 2]);
+    let da = make_tensor(vec![0.01; 9], &[3, 3]);
+    let db = make_tensor(vec![0.02; 6], &[3, 2]);
+    let (_x, dx) = solve_triangular_frule(&mut ctx, &a, &b, &da, &db, true).unwrap();
+    assert_eq!(dx.dims(), &[3, 2]);
+    for &val in &tensor_data(&dx) {
+        assert!(
+            val.is_finite(),
+            "solve_triangular_frule dX not finite: {val}"
+        );
+    }
+}
+
+#[test]
+fn norm_forward_l1_inf_empty_matrix_and_lp_error() {
+    let mut ctx = CpuContext::new(1);
+    let a: Tensor<f64> = Tensor::from_vec(vec![], &[0, 3], &[1, 0], 0).unwrap();
+    let l1 = norm(&mut ctx, &a, NormKind::L1).unwrap();
+    let inf = norm(&mut ctx, &a, NormKind::Inf).unwrap();
+    assert!((tensor_data(&l1)[0]).abs() < 1e-15);
+    assert!((tensor_data(&inf)[0]).abs() < 1e-15);
+    assert!(norm(
+        &mut ctx,
+        &make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]),
+        NormKind::Lp(3.0)
+    )
+    .is_err());
+}
+
+#[test]
+fn norm_rrule_empty_matrix_lp_error_and_sign_branches() {
+    let mut ctx = CpuContext::new(1);
+    let empty: Tensor<f64> = Tensor::from_vec(vec![], &[0, 3], &[1, 0], 0).unwrap();
+    let co_scalar: Tensor<f64> = Tensor::from_vec(vec![1.0], &[], &[], 0).unwrap();
+    let grad_empty_l1 = norm_rrule(&mut ctx, &empty, &co_scalar, NormKind::L1).unwrap();
+    let grad_empty_inf = norm_rrule(&mut ctx, &empty, &co_scalar, NormKind::Inf).unwrap();
+    assert_eq!(grad_empty_l1.dims(), &[0, 3]);
+    assert_eq!(grad_empty_inf.dims(), &[0, 3]);
+
+    let a = make_tensor(vec![0.0, 1.0, -2.0, 1.0], &[2, 2]);
+    let _ = norm_rrule(&mut ctx, &a, &co_scalar, NormKind::Inf).unwrap();
+    assert!(norm_rrule(&mut ctx, &a, &co_scalar, NormKind::Lp(2.0)).is_err());
+}
+
+#[test]
+fn norm_frule_empty_matrix_lp_error_and_sign_branches() {
+    let mut ctx = CpuContext::new(1);
+    let empty: Tensor<f64> = Tensor::from_vec(vec![], &[0, 3], &[1, 0], 0).unwrap();
+    let de: Tensor<f64> = Tensor::from_vec(vec![], &[0, 3], &[1, 0], 0).unwrap();
+    let (_nrm_l1, dn_l1) = norm_frule(&mut ctx, &empty, &de, NormKind::L1).unwrap();
+    let (_nrm_inf, dn_inf) = norm_frule(&mut ctx, &empty, &de, NormKind::Inf).unwrap();
+    assert!(tensor_data(&dn_l1)[0].is_finite());
+    assert!(tensor_data(&dn_inf)[0].is_finite());
+
+    let a = make_tensor(vec![0.0, 1.0, -2.0, 1.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.2, 0.3, 0.4], &[2, 2]);
+    let (_n, dn) = norm_frule(&mut ctx, &a, &da, NormKind::Inf).unwrap();
+    assert!(tensor_data(&dn)[0].is_finite());
+    assert!(norm_frule(&mut ctx, &a, &da, NormKind::Lp(2.0)).is_err());
 }

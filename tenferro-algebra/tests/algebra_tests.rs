@@ -54,12 +54,12 @@ fn scalar_contract_complex64() {
 
 #[test]
 fn conjugate_f32_identity() {
-    assert_eq!(3.14_f32.conj(), 3.14_f32);
+    assert_eq!(1.25_f32.conj(), 1.25_f32);
 }
 
 #[test]
 fn conjugate_f64_identity() {
-    assert_eq!(2.718_f64.conj(), 2.718_f64);
+    assert_eq!(1.75_f64.conj(), 1.75_f64);
 }
 
 #[test]

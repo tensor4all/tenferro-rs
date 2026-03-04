@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::marker::PhantomData;
 
-use tenferro_algebra::{Scalar, Standard};
+use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
@@ -42,6 +42,13 @@ impl CudaContext {
     }
 }
 
+#[cfg(not(feature = "cuda"))]
+impl Default for CudaContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// CUDA plan (stub) — placeholder when `cuda` feature is not enabled.
 ///
 /// **Status: Stub.** Enable the `cuda` feature for the real implementation.
@@ -76,12 +83,28 @@ pub struct CudaBackend {
 impl CudaBackend {
     /// Materialize a lazily-conjugated tensor on GPU.
     ///
-    /// **Status: Stub.** Currently panics with `unimplemented!`.
-    pub fn resolve_conj<T: Scalar>(
+    /// **Status: Stub fallback.** If data is CPU-accessible, this materializes
+    /// conjugation into a new non-conjugated tensor. Otherwise it returns a
+    /// clone of `src`.
+    pub fn resolve_conj<T: Scalar + Conjugate>(
         _ctx: &mut CudaContext,
-        _src: &tenferro_tensor::Tensor<T>,
+        src: &tenferro_tensor::Tensor<T>,
     ) -> tenferro_tensor::Tensor<T> {
-        unimplemented!("CUDA backend not available: load cuTENSOR library first")
+        if !src.is_conjugated() {
+            return src.clone();
+        }
+
+        let contiguous = src.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+        let Some(data) = contiguous.buffer().as_slice() else {
+            return src.clone();
+        };
+        let conjugated_data: Vec<T> = data.iter().map(|&v| v.conj()).collect();
+        tenferro_tensor::Tensor::from_slice(
+            &conjugated_data,
+            src.dims(),
+            tenferro_tensor::MemoryOrder::ColumnMajor,
+        )
+        .unwrap_or_else(|_| src.clone())
     }
 }
 
@@ -156,6 +179,12 @@ impl RocmContext {
     }
 }
 
+impl Default for RocmContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// ROCm plan — wraps a hipTENSOR plan handle.
 ///
 /// **Status: Not yet implemented.** This type exists as an API placeholder.
@@ -201,16 +230,31 @@ pub struct RocmBackend {
 impl RocmBackend {
     /// Materialize a lazily-conjugated tensor on GPU.
     ///
-    /// **Status: Not yet implemented.** Currently panics with
-    /// `unimplemented!`.
+    /// **Status: Stub fallback.** If data is CPU-accessible, this materializes
+    /// conjugation into a new non-conjugated tensor. Otherwise it returns a
+    /// clone of `src`.
     ///
     /// When implemented, will use `ElementwiseUnary(Conj)` via hipTENSOR
     /// to produce a new tensor with `conjugated = false`.
-    pub fn resolve_conj<T: Scalar>(
+    pub fn resolve_conj<T: Scalar + Conjugate>(
         _ctx: &mut RocmContext,
-        _src: &tenferro_tensor::Tensor<T>,
+        src: &tenferro_tensor::Tensor<T>,
     ) -> tenferro_tensor::Tensor<T> {
-        unimplemented!("ROCm backend not available: load hipTENSOR library first")
+        if !src.is_conjugated() {
+            return src.clone();
+        }
+
+        let contiguous = src.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+        let Some(data) = contiguous.buffer().as_slice() else {
+            return src.clone();
+        };
+        let conjugated_data: Vec<T> = data.iter().map(|&v| v.conj()).collect();
+        tenferro_tensor::Tensor::from_slice(
+            &conjugated_data,
+            src.dims(),
+            tenferro_tensor::MemoryOrder::ColumnMajor,
+        )
+        .unwrap_or_else(|_| src.clone())
     }
 }
 
@@ -250,16 +294,16 @@ impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
 
 #[cfg(test)]
 mod tests {
-    use std::panic::{catch_unwind, AssertUnwindSafe};
     use std::ptr;
 
+    use num_complex::Complex64;
     use tenferro_tensor::MemoryOrder;
 
     use super::*;
 
     #[cfg(not(feature = "cuda"))]
     #[test]
-    fn cuda_stub_reports_errors_and_panics_for_resolve_conj() {
+    fn cuda_stub_reports_errors_and_resolves_conj() {
         let mut ctx = CudaContext {
             _stream: std::ptr::null_mut(),
             _workspace: Vec::new(),
@@ -299,14 +343,23 @@ mod tests {
             !<CudaBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::Contract)
         );
 
-        let panic = catch_unwind(AssertUnwindSafe(|| {
-            CudaBackend::resolve_conj(&mut ctx, &input)
-        }));
-        assert!(panic.is_err());
+        let complex = Tensor::<Complex64>::from_slice(
+            &[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let complex_conj = complex.conj();
+        let resolved = CudaBackend::resolve_conj(&mut ctx, &complex_conj);
+        assert!(!resolved.is_conjugated());
+
+        let data = resolved.buffer().as_slice().unwrap();
+        assert_eq!(data[0], Complex64::new(1.0, -2.0));
+        assert_eq!(data[1], Complex64::new(-3.0, -4.0));
     }
 
     #[test]
-    fn rocm_stub_reports_errors_and_panics_for_resolve_conj() {
+    fn rocm_stub_reports_errors_and_resolves_conj() {
         let mut ctx = RocmContext {
             _stream: std::ptr::null_mut(),
             _workspace: Vec::new(),
@@ -348,9 +401,18 @@ mod tests {
             )
         );
 
-        let panic = catch_unwind(AssertUnwindSafe(|| {
-            RocmBackend::resolve_conj(&mut ctx, &input)
-        }));
-        assert!(panic.is_err());
+        let complex = Tensor::<Complex64>::from_slice(
+            &[Complex64::new(2.0, -1.0), Complex64::new(0.5, 3.0)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let complex_conj = complex.conj();
+        let resolved = RocmBackend::resolve_conj(&mut ctx, &complex_conj);
+        assert!(!resolved.is_conjugated());
+
+        let data = resolved.buffer().as_slice().unwrap();
+        assert_eq!(data[0], Complex64::new(2.0, 1.0));
+        assert_eq!(data[1], Complex64::new(0.5, -3.0));
     }
 }
