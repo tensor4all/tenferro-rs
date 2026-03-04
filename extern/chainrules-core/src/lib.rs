@@ -163,6 +163,18 @@ pub enum AutodiffError {
 /// ```
 pub type AdResult<T> = std::result::Result<T, AutodiffError>;
 
+/// Reverse-rule pullback output entry `(input_node, input_cotangent)`.
+pub type PullbackEntry<V> = (NodeId, <V as Differentiable>::Tangent);
+
+/// Reverse-rule pullback-with-tangents output entry.
+///
+/// Tuple layout: `(input_node, input_cotangent, input_cotangent_tangent)`.
+pub type PullbackWithTangentsEntry<V> = (
+    NodeId,
+    <V as Differentiable>::Tangent,
+    <V as Differentiable>::Tangent,
+);
+
 /// Stable identifier of an AD graph node.
 ///
 /// # Examples
@@ -269,7 +281,7 @@ pub enum SavePolicy {
 /// ```
 pub trait ReverseRule<V: Differentiable> {
     /// Computes input cotangents from an output cotangent (pullback).
-    fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<(NodeId, V::Tangent)>>;
+    fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<PullbackEntry<V>>>;
 
     /// Returns input node IDs this rule depends on.
     fn inputs(&self) -> Vec<NodeId>;
@@ -296,7 +308,7 @@ pub trait ReverseRule<V: Differentiable> {
         &self,
         cotangent: &V::Tangent,
         cotangent_tangent: &V::Tangent,
-    ) -> AdResult<Vec<(NodeId, V::Tangent, V::Tangent)>> {
+    ) -> AdResult<Vec<PullbackWithTangentsEntry<V>>> {
         let _ = (cotangent, cotangent_tangent);
         Err(AutodiffError::HvpNotSupported)
     }

@@ -103,6 +103,9 @@ Linalg uses only stateless `_rrule`/`_frule` functions — no `tracked_*` or
 - each alias is an explicit eager wrapper around existing builder paths
   (`*_ad(...).run()`), so no tape handle is exposed at call sites
   and no implicit `Drop`-driven execution is used
+- dyadtensor also exposes stateless local-rule helpers for integration paths:
+  `ad::einsum_rrule`, `ad::einsum_frule`, `ad::einsum_hvp`,
+  `ad::solve_triangular_rrule`
 
 ### Dyadtensor HVP Support Matrix (Current)
 
@@ -110,13 +113,14 @@ Linalg uses only stateless `_rrule`/`_frule` functions — no `tracked_*` or
 |---------|------------|------------------|
 | `chainrules::Tape::hvp` | Supported | Use tape-level forward-over-reverse API |
 | `tenferro-einsum::einsum_hvp` | Supported | Local einsum HVP helper exists |
-| `tenferro-dyadtensor::ad::*` eager API | Not yet exposed | No dedicated dyadtensor HVP entry point yet |
+| `tenferro-dyadtensor::ad::einsum_hvp` | Supported | Dyadtensor wrapper over local einsum HVP helper |
 | `tenferro-dyadtensor::solve_triangular_ad` | Forward supported | Uses `solve_triangular_frule` for JVP; dyadtensor reverse path still metadata-only |
+| `tenferro-dyadtensor::ad::solve_triangular_rrule` | Supported (stateless helper) | Explicit VJP helper without exposing tape handles |
 
-For migration work, dyadtensor-facing HVP is staged:
-1. Document currently available low-level paths (`Tape::hvp`, `einsum_hvp`).
-2. Keep explicit unsupported errors for missing AD/HVP paths.
-3. Add dyadtensor-level HVP entry points incrementally per operation family.
+For migration work, dyadtensor-facing higher-order AD is staged:
+1. Provide stateless wrappers first (`ad::einsum_hvp`, `ad::solve_triangular_rrule`).
+2. Keep explicit unsupported errors for operation families without local-rule coverage.
+3. Expand dyadtensor-level HVP/VJP wrappers incrementally per operation family.
 
 ---
 

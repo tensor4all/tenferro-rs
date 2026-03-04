@@ -22,11 +22,13 @@
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
+use tenferro_einsum as tf_einsum;
 use tenferro_linalg::backend::CpuLinalgScalar;
-use tenferro_linalg::{LinalgScalar, NormKind};
+use tenferro_linalg::{LinalgScalar, NormKind, SolveGrad};
 use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
+use tenferro_tensor::Tensor;
 
-use crate::{AdTensor, Result};
+use crate::{AdTensor, Error, Result};
 
 use super::{
     AdEigResult, AdEigenResult, AdLstsqResult, AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
@@ -290,6 +292,139 @@ where
     super::norm_ad(tensor).kind(NormKind::Fro).run()
 }
 
+/// Local reverse-mode rule (VJP) for einsum.
+///
+/// Stateless helper for interop/manual AD paths. Inputs are AD tensors, but
+/// derivatives are computed from their primal payloads.
+pub fn einsum_rrule<'a, T>(
+    subscripts: &'a str,
+    operands: &'a [&'a AdTensor<T>],
+    cotangent: &AdTensor<T>,
+) -> Result<Vec<Tensor<T>>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    let primals: Vec<&Tensor<T>> = operands.iter().map(|op| op.primal()).collect();
+    super::with_cpu_runtime("einsum_rrule", |ctx| {
+        tf_einsum::einsum_rrule::<Standard<T>, CpuBackend>(
+            ctx,
+            subscripts,
+            &primals,
+            cotangent.primal(),
+        )
+        .map_err(Error::from)
+    })
+}
+
+/// Local forward-mode rule (JVP) for einsum.
+///
+/// `tangents` must have the same length as `primals`.
+pub fn einsum_frule<'a, T>(
+    subscripts: &'a str,
+    primals: &'a [&'a AdTensor<T>],
+    tangents: &'a [Option<&'a AdTensor<T>>],
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    if primals.len() != tangents.len() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "einsum_frule requires tangents.len() == primals.len(), got {} vs {}",
+                tangents.len(),
+                primals.len()
+            ),
+        });
+    }
+
+    let primal_refs: Vec<&Tensor<T>> = primals.iter().map(|op| op.primal()).collect();
+    let tangent_refs: Vec<Option<&Tensor<T>>> = tangents
+        .iter()
+        .map(|opt| opt.as_ref().map(|t| t.primal()))
+        .collect();
+
+    super::with_cpu_runtime("einsum_frule", |ctx| {
+        tf_einsum::einsum_frule::<Standard<T>, CpuBackend>(
+            ctx,
+            subscripts,
+            &primal_refs,
+            &tangent_refs,
+        )
+        .map_err(Error::from)
+    })
+}
+
+/// Local Hessian-vector product helper for einsum.
+///
+/// Returns one `(grad_k, hvp_k)` pair per input operand.
+///
+/// `tangents` must have the same length as `primals`.
+pub fn einsum_hvp<'a, T>(
+    subscripts: &'a str,
+    primals: &'a [&'a AdTensor<T>],
+    tangents: &'a [Option<&'a AdTensor<T>>],
+    cotangent: &AdTensor<T>,
+    cotangent_tangent: &AdTensor<T>,
+) -> Result<Vec<(Tensor<T>, Tensor<T>)>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    if primals.len() != tangents.len() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "einsum_hvp requires tangents.len() == primals.len(), got {} vs {}",
+                tangents.len(),
+                primals.len()
+            ),
+        });
+    }
+
+    let primal_refs: Vec<&Tensor<T>> = primals.iter().map(|op| op.primal()).collect();
+    let tangent_refs: Vec<Option<&Tensor<T>>> = tangents
+        .iter()
+        .map(|opt| opt.as_ref().map(|t| t.primal()))
+        .collect();
+
+    super::with_cpu_runtime("einsum_hvp", |ctx| {
+        tf_einsum::einsum_hvp::<Standard<T>, CpuBackend>(
+            ctx,
+            subscripts,
+            &primal_refs,
+            &tangent_refs,
+            cotangent.primal(),
+            cotangent_tangent.primal(),
+        )
+        .map_err(Error::from)
+    })
+}
+
+/// Local reverse-mode rule (VJP) for triangular solve.
+///
+/// This is the stateless wrapper for `tenferro_linalg::solve_triangular_rrule`.
+pub fn solve_triangular_rrule<T: Scalar>(
+    a: &AdTensor<T>,
+    b: &AdTensor<T>,
+    cotangent: &AdTensor<T>,
+    upper: bool,
+) -> Result<SolveGrad<T>>
+where
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+{
+    super::with_cpu_runtime("solve_triangular_rrule", |ctx| {
+        tenferro_linalg::solve_triangular_rrule::<T>(
+            ctx,
+            a.primal(),
+            b.primal(),
+            cotangent.primal(),
+            upper,
+        )
+        .map_err(Error::from)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +510,60 @@ mod tests {
         let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None);
         let out_rev = einsum("ij,jk->ik", &[&ad_a_rev, &ad_b_rev]).unwrap();
         assert!(matches!(out_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11)));
+    }
+
+    #[test]
+    fn eager_local_einsum_rules_cover_rrule_frule_hvp() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+        let a = f64_2x2([1.0, 3.0, 2.0, 4.0]);
+        let b = f64_2x2([2.0, -1.0, 0.5, 1.5]);
+        let da = f64_2x2([0.1, 0.0, -0.2, 0.3]);
+        let grad_c = f64_2x2([1.0, 0.0, 0.0, 1.0]);
+        let dgrad_c = f64_2x2([0.5, 0.0, 0.0, 0.5]);
+
+        let ad_a = AdTensor::new_primal(a);
+        let ad_b = AdTensor::new_primal(b);
+        let ad_da = AdTensor::new_primal(da);
+        let ad_grad_c = AdTensor::new_primal(grad_c);
+        let ad_dgrad_c = AdTensor::new_primal(dgrad_c);
+
+        let grads = einsum_rrule("ij,jk->ik", &[&ad_a, &ad_b], &ad_grad_c).unwrap();
+        assert_eq!(grads.len(), 2);
+        assert_eq!(grads[0].dims(), &[2, 2]);
+        assert_eq!(grads[1].dims(), &[2, 2]);
+
+        let jvp = einsum_frule("ij,jk->ik", &[&ad_a, &ad_b], &[Some(&ad_da), None]).unwrap();
+        assert_eq!(jvp.dims(), &[2, 2]);
+
+        let hvp = einsum_hvp(
+            "ij,jk->ik",
+            &[&ad_a, &ad_b],
+            &[Some(&ad_da), None],
+            &ad_grad_c,
+            &ad_dgrad_c,
+        )
+        .unwrap();
+        assert_eq!(hvp.len(), 2);
+        assert_eq!(hvp[0].0.dims(), &[2, 2]);
+        assert_eq!(hvp[0].1.dims(), &[2, 2]);
+    }
+
+    #[test]
+    fn eager_local_solve_triangular_rrule_runs() {
+        let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+        let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
+        let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let cotangent =
+            Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+        let ad_a = AdTensor::new_primal(a);
+        let ad_b = AdTensor::new_primal(b);
+        let ad_cotangent = AdTensor::new_primal(cotangent);
+
+        let grad = solve_triangular_rrule(&ad_a, &ad_b, &ad_cotangent, true).unwrap();
+        assert_eq!(grad.a.dims(), &[2, 2]);
+        assert_eq!(grad.b.dims(), &[2, 1]);
     }
 }

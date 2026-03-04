@@ -89,6 +89,8 @@ These match the formulas above and are the compatibility target for tenferro.
 - `solve_rrule`: implemented (general solve)
 - `solve_triangular_frule`: implemented (triangular JVP with triangular projection)
 - `solve_triangular_rrule`: implemented (triangular VJP with triangular projection)
+- `tenferro-dyadtensor::ad::solve_triangular_rrule`: implemented as a
+  stateless dyadtensor-facing wrapper for integration code
 
 ## Right-side solve ($XA = B$)
 
