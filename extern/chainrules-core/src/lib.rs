@@ -150,6 +150,18 @@ pub enum AutodiffError {
     /// Generic AD argument error.
     #[error("invalid autodiff argument: {0}")]
     InvalidArgument(String),
+    /// Attempted to execute backward/grad on a graph that was already freed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules_core::AutodiffError;
+    ///
+    /// let err = AutodiffError::GraphFreed;
+    /// assert!(err.to_string().contains("freed"));
+    /// ```
+    #[error("computation graph has been freed")]
+    GraphFreed,
 }
 
 /// Result alias for AD APIs.

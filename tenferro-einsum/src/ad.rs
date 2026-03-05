@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use chainrules::{AdResult, Differentiable, DualTensor, NodeId, ReverseRule, TrackedTensor};
+use chainrules::{
+    autograd, AdResult, Differentiable, DualTensor, NodeId, ReverseRule, TrackedTensor, Variable,
+};
 use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
 use tenferro_device::{Error, Result};
 use tenferro_prims::TensorPrims;
@@ -25,6 +27,7 @@ where
     ctx: Rc<RefCell<Backend::Context>>,
     subscripts: Subscripts,
     primals: Vec<Tensor<Alg::Scalar>>,
+    input_tangents: Vec<Option<Tensor<Alg::Scalar>>>,
     input_node_ids: Vec<Option<NodeId>>,
     _phantom: PhantomData<Alg>,
 }
@@ -94,6 +97,55 @@ where
 
     fn inputs(&self) -> Vec<NodeId> {
         self.input_node_ids.iter().filter_map(|id| *id).collect()
+    }
+
+    fn pullback_with_tangents(
+        &self,
+        cotangent: &Tensor<Alg::Scalar>,
+        cotangent_tangent: &Tensor<Alg::Scalar>,
+    ) -> AdResult<Vec<(NodeId, Tensor<Alg::Scalar>, Tensor<Alg::Scalar>)>> {
+        let n = self.primals.len();
+        let mut results = Vec::new();
+        let mut ctx = self.ctx.borrow_mut();
+
+        for k in 0..n {
+            let node_id = match self.input_node_ids[k] {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let mut rev_inputs_subs = vec![self.subscripts.output.clone()];
+            let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
+            let mut rev_tangents: Vec<Option<&Tensor<Alg::Scalar>>> = vec![Some(cotangent_tangent)];
+
+            for (i, primal) in self.primals.iter().enumerate() {
+                if i != k {
+                    rev_inputs_subs.push(self.subscripts.inputs[i].clone());
+                    rev_operands.push(primal);
+                    rev_tangents.push(self.input_tangents[i].as_ref());
+                }
+            }
+
+            let rev_subs = Subscripts {
+                inputs: rev_inputs_subs,
+                output: self.subscripts.inputs[k].clone(),
+            };
+
+            let grad =
+                einsum_with_subscripts::<Alg, Backend>(&mut *ctx, &rev_subs, &rev_operands, None)
+                    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+            let grad_tangent = einsum_frule_impl::<Alg, Backend>(
+                &mut *ctx,
+                &rev_subs,
+                None,
+                &rev_operands,
+                &rev_tangents,
+            )
+            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+            results.push((node_id, grad, grad_tangent));
+        }
+
+        Ok(results)
     }
 }
 
@@ -183,6 +235,10 @@ where
         ctx: ctx.clone(),
         subscripts: subs,
         primals: primals.iter().map(|&t| t.clone()).collect(),
+        input_tangents: operands
+            .iter()
+            .map(|op| op.value().fw_grad().cloned())
+            .collect(),
         input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
         _phantom: PhantomData,
     };
@@ -191,6 +247,83 @@ where
     let result = tape.record_op(output, Box::new(rule), None);
 
     Ok(result)
+}
+
+/// Variable einsum (monomorphic reverse/forward-mode via `Variable` API).
+///
+/// This is the `Variable`-based counterpart of [`tracked_einsum`]. It records
+/// a custom reverse rule into the `AutogradContext` shared by tracked inputs.
+///
+/// # Examples
+///
+/// ```ignore
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
+/// use std::sync::Arc;
+/// use chainrules::{autograd, AutogradContext, BackwardOptions, Variable};
+/// use tenferro_einsum::variable_einsum;
+/// use tenferro_prims::{CpuBackend, CpuContext};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+/// let ad_ctx = AutogradContext::<Tensor<f64>>::new();
+/// let a = Variable::new_in(
+///     Tensor::ones(&[2, 3], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+///     Arc::clone(&ad_ctx),
+/// ).requires_grad_(true).unwrap();
+/// let b = Variable::new_in(
+///     Tensor::ones(&[3, 4], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+///     Arc::clone(&ad_ctx),
+/// ).requires_grad_(true).unwrap();
+/// let c = variable_einsum::<_, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+/// let loss = variable_einsum::<_, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
+/// loss.backward(BackwardOptions::default()).unwrap();
+/// ```
+pub fn variable_einsum<Alg: 'static, Backend>(
+    ctx: Rc<RefCell<Backend::Context>>,
+    subscripts: &str,
+    operands: &[&Variable<Tensor<Alg::Scalar>>],
+) -> AdResult<Variable<Tensor<Alg::Scalar>>>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg> + 'static,
+    Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>> + 'static,
+{
+    let subs = Subscripts::parse(subscripts)
+        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+
+    let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.value()).collect();
+    let output = einsum::<Alg, Backend>(&mut *ctx.borrow_mut(), subscripts, &primals, None)
+        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+
+    let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
+        operands.iter().map(|op| op.tangent()).collect();
+    let tangent_out = if tangents.iter().any(Option::is_some) {
+        Some(
+            einsum_frule_impl::<Alg, Backend>(
+                &mut *ctx.borrow_mut(),
+                &subs,
+                None,
+                &primals,
+                &tangents,
+            )
+            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?,
+        )
+    } else {
+        None
+    };
+
+    let rule = EinsumReverseRule::<Alg, Backend> {
+        ctx: ctx.clone(),
+        subscripts: subs,
+        primals: primals.iter().map(|&t| t.clone()).collect(),
+        input_tangents: operands.iter().map(|op| op.tangent().cloned()).collect(),
+        input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
+        _phantom: PhantomData,
+    };
+
+    autograd::record_op(output, operands, Box::new(rule), tangent_out)
 }
 
 /// Dual einsum (forward-mode JVP propagation).

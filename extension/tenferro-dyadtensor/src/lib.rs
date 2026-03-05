@@ -15,6 +15,7 @@ pub mod traits;
 
 pub use ad_value::{AdMode, AdScalar, AdTensor, AdValue, NodeId, TapeId};
 pub use api::ad;
+pub use api::chainrules_api;
 pub use api::{
     cholesky, cholesky_ad, det, det_ad, eig, eig_ad, eigen, eigen_ad, einsum, einsum_ad, inv,
     inv_ad, lstsq, lstsq_ad, lu, lu_ad, matrix_exp, matrix_exp_ad, norm, norm_ad, pinv, pinv_ad,

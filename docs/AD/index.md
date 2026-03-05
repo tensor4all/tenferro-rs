@@ -13,8 +13,7 @@ verification procedures (reconstruction checks, finite-difference gradient check
 
 | Location | Content |
 |----------|---------|
-| [`docs/design/autodiff-current.md`](../design/autodiff-current.md) | Architecture and API (current): crate split, trait definitions, explicit tape engine, algebra interaction |
-| [`docs/design/autodiff-next.md`](../design/autodiff-next.md) | Architecture and API (next): torch-like wrapper layer, `BackwardOptions`, `DynTape` coexistence |
+| [`docs/design/autodiff.md`](../design/autodiff.md) | Architecture and API: crate split, explicit tape engine, torch-like wrapper layer, `BackwardOptions`, `DynTape` coexistence |
 | [`docs/design/linalg.md`](../design/linalg.md) | Linalg API: function signatures, result types, cotangent types, rrule/frule tables |
 | `docs/AD/` (this directory) | Mathematical details: derivations, formulas, verification for each operation |
 

@@ -12,8 +12,7 @@
 | [tensor.md](./tensor.md) | `Tensor<T>`, `TensorView`, ownership model, async `CompletionEvent` |
 | [inplace-indexing.md](./inplace-indexing.md) | Design for partial in-place updates (`set_item_`, `IndexPut` extension, AD safety policy) |
 | [algebra.md](./algebra.md) | `HasAlgebra`, `Semiring`, tropical and user-defined algebra extensibility |
-| [autodiff-current.md](./autodiff-current.md) | Current AD architecture (`chainrules-core` / explicit `Tape<V>` engine), einsum/linalg integration, current usage examples |
-| [autodiff-next.md](./autodiff-next.md) | Next AD architecture (`Variable`, `BackwardOptions`, `DynTape` coexistence), including `retain_graph`/`create_graph` usage examples |
+| [autodiff.md](./autodiff.md) | AD architecture (`chainrules-core` contracts, `Tape<V>` + `Variable`/`DynTape` coexistence), including `retain_graph`/`create_graph` usage examples |
 | [linalg.md](./linalg.md) | `tenferro-linalg` decompositions, solvers, utilities, stateless AD rules |
 | [linalg-backend-api.md](./linalg-backend-api.md) | Proposed tensor-level backend layer for linalg decompositions and solves |
 | [linalg-gemm-prims.md](./linalg-gemm-prims.md) | Planned migration of `tenferro-linalg` GEMM paths onto `tenferro-prims::BatchedGemm` |

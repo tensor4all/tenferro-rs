@@ -77,9 +77,13 @@
 // Re-export all core traits so downstream can depend on just `chainrules`.
 pub use chainrules_core::*;
 
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 // ============================================================================
 // Internal tape storage
@@ -1006,4 +1010,1673 @@ pub struct HvpResult<V: Differentiable> {
     pub gradients: Gradients<V>,
     /// Hessian-vector product: H*v.
     pub hvp: Gradients<V>,
+}
+
+// ============================================================================
+// Autodiff-next public API surface
+// ============================================================================
+
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_DYN_TAPE_ID: AtomicU64 = AtomicU64::new(1);
+static DYN_TAPE_REGISTRY: OnceLock<Mutex<HashMap<u64, Weak<Mutex<DynTapeInner>>>>> =
+    OnceLock::new();
+
+struct DynTapeInner {
+    graph_alive: bool,
+    next_node: usize,
+}
+
+fn dyn_tape_registry() -> &'static Mutex<HashMap<u64, Weak<Mutex<DynTapeInner>>>> {
+    DYN_TAPE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_dyn_tape(id: u64, inner: &Arc<Mutex<DynTapeInner>>) {
+    if let Ok(mut guard) = dyn_tape_registry().lock() {
+        guard.insert(id, Arc::downgrade(inner));
+    }
+}
+
+fn resolve_dyn_tape(id: u64) -> AdResult<Arc<Mutex<DynTapeInner>>> {
+    let guard = dyn_tape_registry().lock().map_err(|_| {
+        AutodiffError::InvalidArgument("dyn tape registry lock is poisoned".to_string())
+    })?;
+    let Some(inner) = guard.get(&id).and_then(Weak::upgrade) else {
+        return Err(AutodiffError::InvalidArgument(
+            "dyn tape context is not available".to_string(),
+        ));
+    };
+    Ok(inner)
+}
+
+fn is_dyn_scalar_type<T: 'static>() -> bool {
+    let id = TypeId::of::<T>();
+    id == TypeId::of::<f32>() || id == TypeId::of::<f64>()
+}
+
+fn effective_retain_graph(retain_graph: Option<bool>, create_graph: bool) -> bool {
+    retain_graph.unwrap_or(create_graph)
+}
+
+/// Options for monomorphic backward/grad APIs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::BackwardOptions;
+///
+/// let opts = BackwardOptions::<f64>::default();
+/// assert_eq!(opts.retain_graph, None);
+/// assert!(!opts.create_graph);
+/// ```
+pub struct BackwardOptions<V: Differentiable> {
+    /// Optional retain override. `None` means infer from `create_graph`.
+    pub retain_graph: Option<bool>,
+    /// Whether to build a graph on returned gradients.
+    pub create_graph: bool,
+    /// Optional output seed cotangent for non-scalar outputs.
+    pub seed_grad: Option<V::Tangent>,
+}
+
+impl<V: Differentiable> Default for BackwardOptions<V> {
+    fn default() -> Self {
+        Self {
+            retain_graph: None,
+            create_graph: false,
+            seed_grad: None,
+        }
+    }
+}
+
+/// Options for heterogeneous gradient query APIs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynBackwardOptions;
+///
+/// let opts = DynBackwardOptions::default();
+/// assert_eq!(opts.retain_graph, None);
+/// assert!(opts.seed_grads.is_none());
+/// ```
+pub struct DynBackwardOptions {
+    /// Optional retain override. `None` means infer from `create_graph`.
+    pub retain_graph: Option<bool>,
+    /// Whether to build a graph on returned gradients.
+    pub create_graph: bool,
+    /// Optional per-output seed cotangents.
+    pub seed_grads: Option<Vec<DynTangent>>,
+}
+
+impl Default for DynBackwardOptions {
+    fn default() -> Self {
+        Self {
+            retain_graph: None,
+            create_graph: false,
+            seed_grads: None,
+        }
+    }
+}
+
+/// Options for heterogeneous HVP API.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynHvpOptions;
+///
+/// let opts = DynHvpOptions::default();
+/// assert_eq!(opts.retain_graph, None);
+/// assert!(opts.seed_grad.is_none());
+/// ```
+pub struct DynHvpOptions {
+    /// Optional retain override. `None` means infer from `create_graph`.
+    pub retain_graph: Option<bool>,
+    /// Whether to build a graph on returned gradients.
+    pub create_graph: bool,
+    /// Optional seed cotangent for the HVP target.
+    pub seed_grad: Option<DynTangent>,
+}
+
+impl Default for DynHvpOptions {
+    fn default() -> Self {
+        Self {
+            retain_graph: None,
+            create_graph: false,
+            seed_grad: None,
+        }
+    }
+}
+
+#[derive(Copy, Clone)]
+enum VariableNodeKind {
+    Leaf,
+    Add,
+    Square { input: NodeId },
+    Custom,
+}
+
+struct VariableNode<V: Differentiable> {
+    rule: Option<Box<dyn ReverseRule<V>>>,
+    tangent: Option<V::Tangent>,
+    kind: VariableNodeKind,
+    is_leaf: bool,
+}
+
+/// Shared monomorphic autograd context.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::AutogradContext;
+///
+/// let ctx = AutogradContext::<f64>::new();
+/// let id = ctx.lock().unwrap().id();
+/// assert!(id > 0);
+/// ```
+pub struct AutogradContext<V: Differentiable> {
+    id: u64,
+    graph_alive: bool,
+    nodes: Vec<VariableNode<V>>,
+    leaf_grads: Vec<Option<V::Tangent>>,
+    leaf_hvps: Vec<Option<V::Tangent>>,
+}
+
+impl<V: Differentiable> AutogradContext<V> {
+    /// Creates a new context.
+    pub fn new() -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            id: NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed),
+            graph_alive: true,
+            nodes: Vec::new(),
+            leaf_grads: Vec::new(),
+            leaf_hvps: Vec::new(),
+        }))
+    }
+
+    /// Returns context identifier.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    fn ensure_alive(&self) -> AdResult<()> {
+        if self.graph_alive {
+            Ok(())
+        } else {
+            Err(AutodiffError::GraphFreed)
+        }
+    }
+
+    fn free_graph(&mut self) {
+        self.graph_alive = false;
+    }
+
+    fn record_leaf(&mut self, tangent: Option<V::Tangent>) -> NodeId {
+        let id = NodeId::new(self.nodes.len());
+        self.nodes.push(VariableNode {
+            rule: None,
+            tangent,
+            kind: VariableNodeKind::Leaf,
+            is_leaf: true,
+        });
+        self.leaf_grads.push(None);
+        self.leaf_hvps.push(None);
+        self.graph_alive = true;
+        id
+    }
+
+    fn record_op(
+        &mut self,
+        rule: Box<dyn ReverseRule<V>>,
+        tangent: Option<V::Tangent>,
+        kind: VariableNodeKind,
+    ) -> NodeId {
+        let id = NodeId::new(self.nodes.len());
+        self.nodes.push(VariableNode {
+            rule: Some(rule),
+            tangent,
+            kind,
+            is_leaf: false,
+        });
+        self.leaf_grads.push(None);
+        self.leaf_hvps.push(None);
+        self.graph_alive = true;
+        id
+    }
+
+    fn set_node_tangent(&mut self, node: NodeId, tangent: V::Tangent) -> AdResult<()> {
+        let idx = node.index();
+        let Some(entry) = self.nodes.get_mut(idx) else {
+            return Err(AutodiffError::MissingNode);
+        };
+        entry.tangent = Some(tangent);
+        Ok(())
+    }
+
+    fn node_kind(&self, node: NodeId) -> Option<VariableNodeKind> {
+        self.nodes.get(node.index()).map(|n| n.kind)
+    }
+
+    fn has_any_leaf_tangent(&self) -> bool {
+        self.nodes
+            .iter()
+            .any(|node| node.is_leaf && node.tangent.is_some())
+    }
+
+    fn compute_cotangents(
+        &self,
+        output_node: NodeId,
+        seed: V::Tangent,
+    ) -> AdResult<Vec<Option<V::Tangent>>> {
+        let n = self.nodes.len();
+        if output_node.index() >= n {
+            return Err(AutodiffError::MissingNode);
+        }
+
+        let mut cotangents: Vec<Option<V::Tangent>> = Vec::with_capacity(n);
+        for _ in 0..n {
+            cotangents.push(None);
+        }
+        cotangents[output_node.index()] = Some(seed);
+
+        for i in (0..=output_node.index()).rev() {
+            let Some(rule) = self.nodes[i].rule.as_ref() else {
+                continue;
+            };
+            let Some(cot) = cotangents[i].take() else {
+                continue;
+            };
+            let input_grads = rule.pullback(&cot)?;
+            for (node_id, grad) in input_grads {
+                let idx = node_id.index();
+                match cotangents[idx].take() {
+                    Some(existing) => {
+                        cotangents[idx] = Some(V::accumulate_tangent(existing, &grad))
+                    }
+                    None => cotangents[idx] = Some(grad),
+                }
+            }
+        }
+
+        Ok(cotangents)
+    }
+
+    fn compute_cotangents_with_tangents(
+        &self,
+        output_node: NodeId,
+        seed: V::Tangent,
+        seed_tangent: V::Tangent,
+    ) -> AdResult<(Vec<Option<V::Tangent>>, Vec<Option<V::Tangent>>)>
+    where
+        V::Tangent: Clone,
+    {
+        let n = self.nodes.len();
+        if output_node.index() >= n {
+            return Err(AutodiffError::MissingNode);
+        }
+
+        let mut cotangents: Vec<Option<V::Tangent>> = Vec::with_capacity(n);
+        let mut cot_tangents: Vec<Option<V::Tangent>> = Vec::with_capacity(n);
+        for _ in 0..n {
+            cotangents.push(None);
+            cot_tangents.push(None);
+        }
+
+        cotangents[output_node.index()] = Some(seed);
+        cot_tangents[output_node.index()] = Some(seed_tangent.clone());
+
+        for i in (0..=output_node.index()).rev() {
+            let Some(rule) = self.nodes[i].rule.as_ref() else {
+                continue;
+            };
+            let Some(cot) = cotangents[i].take() else {
+                continue;
+            };
+            let cot_tan = cot_tangents[i]
+                .take()
+                .unwrap_or_else(|| seed_tangent.clone());
+            let input_grads = rule.pullback_with_tangents(&cot, &cot_tan)?;
+            for (node_id, grad, grad_tan) in input_grads {
+                let idx = node_id.index();
+                match cotangents[idx].take() {
+                    Some(existing) => {
+                        cotangents[idx] = Some(V::accumulate_tangent(existing, &grad))
+                    }
+                    None => cotangents[idx] = Some(grad),
+                }
+                match cot_tangents[idx].take() {
+                    Some(existing) => {
+                        cot_tangents[idx] = Some(V::accumulate_tangent(existing, &grad_tan))
+                    }
+                    None => cot_tangents[idx] = Some(grad_tan),
+                }
+            }
+        }
+
+        Ok((cotangents, cot_tangents))
+    }
+
+    fn accumulate_leaf_grads(&mut self, cotangents: &mut [Option<V::Tangent>]) {
+        for (i, cot) in cotangents.iter_mut().enumerate() {
+            if !self.nodes[i].is_leaf {
+                continue;
+            }
+            let Some(value) = cot.take() else {
+                continue;
+            };
+            match self.leaf_grads[i].take() {
+                Some(existing) => {
+                    self.leaf_grads[i] = Some(V::accumulate_tangent(existing, &value));
+                }
+                None => self.leaf_grads[i] = Some(value),
+            }
+        }
+    }
+
+    fn accumulate_leaf_hvps(&mut self, cot_tangents: &mut [Option<V::Tangent>]) {
+        for (i, hv) in cot_tangents.iter_mut().enumerate() {
+            if !self.nodes[i].is_leaf {
+                continue;
+            }
+            let Some(value) = hv.take() else {
+                continue;
+            };
+            match self.leaf_hvps[i].take() {
+                Some(existing) => {
+                    self.leaf_hvps[i] = Some(V::accumulate_tangent(existing, &value));
+                }
+                None => self.leaf_hvps[i] = Some(value),
+            }
+        }
+    }
+
+    fn grad_at(&self, node: NodeId) -> Option<V::Tangent>
+    where
+        V::Tangent: Clone,
+    {
+        self.leaf_grads
+            .get(node.index())
+            .and_then(|entry| entry.as_ref().cloned())
+    }
+
+    fn hvp_at(&self, node: NodeId) -> Option<V::Tangent>
+    where
+        V::Tangent: Clone,
+    {
+        self.leaf_hvps
+            .get(node.index())
+            .and_then(|entry| entry.as_ref().cloned())
+    }
+
+    fn clear_leaf_buffers(&mut self, node: NodeId) -> AdResult<()> {
+        let idx = node.index();
+        let Some(entry) = self.nodes.get(idx) else {
+            return Err(AutodiffError::MissingNode);
+        };
+        if !entry.is_leaf {
+            return Err(AutodiffError::InvalidArgument(
+                "zero_grad is valid on leaf variables only".to_string(),
+            ));
+        }
+        self.leaf_grads[idx] = None;
+        self.leaf_hvps[idx] = None;
+        Ok(())
+    }
+}
+
+/// Monomorphic AD variable handle for next API.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::Variable;
+///
+/// let v = Variable::new(3.0_f64);
+/// assert!(!v.requires_grad());
+/// assert!(v.node_id().is_none());
+/// ```
+pub struct Variable<V: Differentiable> {
+    value: V,
+    node_id: Option<NodeId>,
+    context: Option<Arc<Mutex<AutogradContext<V>>>>,
+    requires_grad: bool,
+    tangent: Option<V::Tangent>,
+    is_leaf: bool,
+}
+
+impl<V: Differentiable> Variable<V> {
+    /// Creates a value with no context and `requires_grad=false`.
+    pub fn new(value: V) -> Self {
+        Self {
+            value,
+            node_id: None,
+            context: None,
+            requires_grad: false,
+            tangent: None,
+            is_leaf: true,
+        }
+    }
+
+    /// Creates a value attached to the provided context.
+    pub fn new_in(value: V, ctx: Arc<Mutex<AutogradContext<V>>>) -> Self {
+        Self {
+            value,
+            node_id: None,
+            context: Some(ctx),
+            requires_grad: false,
+            tangent: None,
+            is_leaf: true,
+        }
+    }
+
+    /// Returns primal value.
+    pub fn value(&self) -> &V {
+        &self.value
+    }
+
+    /// Returns ones-like cotangent for this value.
+    pub fn ones_like(&self) -> V::Tangent {
+        self.value.seed_cotangent()
+    }
+
+    /// Returns whether this value is scalar-like.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::Variable;
+    ///
+    /// let x = Variable::new(1.0_f64);
+    /// assert!(x.is_scalar());
+    /// ```
+    pub fn is_scalar(&self) -> bool {
+        self.value.num_elements() == 1
+    }
+
+    /// Returns optional graph node id.
+    pub fn node_id(&self) -> Option<NodeId> {
+        self.node_id
+    }
+
+    /// Returns optional context id.
+    pub fn context_id(&self) -> Option<u64> {
+        self.context
+            .as_ref()
+            .and_then(|ctx| ctx.lock().ok().map(|g| g.id()))
+    }
+
+    /// Returns attached context handle if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{AutogradContext, Variable};
+    /// use std::sync::Arc;
+    ///
+    /// let ctx = AutogradContext::<f64>::new();
+    /// let v = Variable::new_in(1.0_f64, Arc::clone(&ctx));
+    /// assert!(v.context().is_some());
+    /// ```
+    pub fn context(&self) -> Option<Arc<Mutex<AutogradContext<V>>>> {
+        self.context.as_ref().map(Arc::clone)
+    }
+
+    /// Returns whether this value is a leaf.
+    pub fn is_leaf(&self) -> bool {
+        self.is_leaf
+    }
+
+    /// Returns whether this value tracks gradients.
+    pub fn requires_grad(&self) -> bool {
+        self.requires_grad
+    }
+
+    /// Enables/disables gradient tracking.
+    pub fn requires_grad_(mut self, enabled: bool) -> AdResult<Self> {
+        if enabled && self.context.is_none() {
+            self.context = Some(AutogradContext::new());
+        }
+        if enabled && self.node_id.is_none() {
+            if let Some(ctx) = self.context.as_ref() {
+                let mut guard = ctx.lock().map_err(|_| {
+                    AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+                })?;
+                self.node_id = Some(guard.record_leaf(None));
+            }
+        }
+        self.requires_grad = enabled;
+        Ok(self)
+    }
+
+    /// Attaches forward tangent.
+    pub fn with_tangent_(mut self, tangent: V::Tangent) -> AdResult<Self>
+    where
+        V::Tangent: Clone,
+    {
+        if let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) {
+            let mut guard = ctx.lock().map_err(|_| {
+                AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            })?;
+            guard.set_node_tangent(node, tangent.clone())?;
+        }
+        self.tangent = Some(tangent);
+        Ok(self)
+    }
+
+    /// Returns attached tangent if any.
+    pub fn tangent(&self) -> Option<&V::Tangent> {
+        self.tangent.as_ref()
+    }
+
+    /// Returns a detached value that is disconnected from AD context.
+    pub fn detach(&self) -> Self
+    where
+        V: Clone,
+    {
+        Self {
+            value: self.value.clone(),
+            node_id: None,
+            context: None,
+            requires_grad: false,
+            tangent: None,
+            is_leaf: true,
+        }
+    }
+
+    /// Runs backward accumulation on this output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, BackwardOptions, Variable};
+    ///
+    /// let x = Variable::new(2.0_f64).requires_grad_(true).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// y.backward(BackwardOptions::default()).unwrap();
+    /// ```
+    pub fn backward(&self, options: BackwardOptions<V>) -> AdResult<()> {
+        let retain = effective_retain_graph(options.retain_graph, options.create_graph);
+        if !self.requires_grad {
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires output with requires_grad=true".to_string(),
+            ));
+        }
+        let Some(ctx) = self.context.as_ref() else {
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires output connected to an autograd context".to_string(),
+            ));
+        };
+        let Some(output_node) = self.node_id else {
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires output connected to a graph node".to_string(),
+            ));
+        };
+        if !self.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
+
+        let mut guard = ctx.lock().map_err(|_| {
+            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        })?;
+        guard.ensure_alive()?;
+        let seed = options.seed_grad.unwrap_or_else(|| self.ones_like());
+        let mut cotangents = guard.compute_cotangents(output_node, seed)?;
+        guard.accumulate_leaf_grads(&mut cotangents);
+        if !retain {
+            guard.free_graph();
+        }
+        Ok(())
+    }
+
+    /// Runs backward + HVP accumulation on this output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::ModeNotSupported`] in this phase.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, BackwardOptions, Variable};
+    ///
+    /// let x = Variable::new(2.0_f64).requires_grad_(true).unwrap().with_tangent_(1.0).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// y.backward_hvp(BackwardOptions::default()).unwrap();
+    /// assert_eq!(x.hvp(), Some(2.0));
+    /// ```
+    pub fn backward_hvp(&self, options: BackwardOptions<V>) -> AdResult<()>
+    where
+        V::Tangent: Clone,
+    {
+        if options.create_graph {
+            return Err(AutodiffError::ModeNotSupported {
+                mode: "create_graph_hvp".to_string(),
+                reason: "backward_hvp with create_graph=true is not implemented yet".to_string(),
+            });
+        }
+
+        let retain = effective_retain_graph(options.retain_graph, options.create_graph);
+        if !self.requires_grad {
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires output with requires_grad=true".to_string(),
+            ));
+        }
+        let Some(ctx) = self.context.as_ref() else {
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires output connected to an autograd context".to_string(),
+            ));
+        };
+        let Some(output_node) = self.node_id else {
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires output connected to a graph node".to_string(),
+            ));
+        };
+        if !self.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
+
+        let mut guard = ctx.lock().map_err(|_| {
+            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        })?;
+        guard.ensure_alive()?;
+        if !guard.has_any_leaf_tangent() {
+            return Err(AutodiffError::InvalidArgument(
+                "hvp requires tangent-seeded leaves".to_string(),
+            ));
+        }
+
+        let seed = options.seed_grad.unwrap_or_else(|| self.ones_like());
+        let seed_tangent = self.value.zero_tangent();
+        let (mut cotangents, mut cot_tangents) = guard
+            .compute_cotangents_with_tangents(output_node, seed, seed_tangent)
+            .map_err(|err| match err {
+                AutodiffError::HvpNotSupported => AutodiffError::ModeNotSupported {
+                    mode: "hvp".to_string(),
+                    reason: "reverse rule does not support pullback_with_tangents".to_string(),
+                },
+                other => other,
+            })?;
+        guard.accumulate_leaf_grads(&mut cotangents);
+        guard.accumulate_leaf_hvps(&mut cot_tangents);
+        if !retain {
+            guard.free_graph();
+        }
+        Ok(())
+    }
+
+    /// Returns currently accumulated gradient for this leaf.
+    pub fn grad(&self) -> Option<V::Tangent>
+    where
+        V::Tangent: Clone,
+    {
+        let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) else {
+            return None;
+        };
+        ctx.lock().ok().and_then(|guard| guard.grad_at(node))
+    }
+
+    /// Returns currently accumulated Hessian-vector product for this leaf.
+    pub fn hvp(&self) -> Option<V::Tangent>
+    where
+        V::Tangent: Clone,
+    {
+        let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) else {
+            return None;
+        };
+        ctx.lock().ok().and_then(|guard| guard.hvp_at(node))
+    }
+
+    /// Clears accumulated `.grad()` / `.hvp()` buffers on this leaf.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::InvalidArgument`] for non-leaf variables.
+    pub fn zero_grad(&self) -> AdResult<()> {
+        if !self.is_leaf {
+            return Err(AutodiffError::InvalidArgument(
+                "zero_grad is valid on leaf variables only".to_string(),
+            ));
+        }
+        let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) else {
+            return Ok(());
+        };
+        let mut guard = ctx.lock().map_err(|_| {
+            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        })?;
+        guard.clear_leaf_buffers(node)
+    }
+}
+
+impl<V: Differentiable + Clone> Clone for Variable<V> {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            node_id: self.node_id,
+            context: self.context.as_ref().map(Arc::clone),
+            requires_grad: self.requires_grad,
+            tangent: self.tangent.clone(),
+            is_leaf: self.is_leaf,
+        }
+    }
+}
+
+/// Runtime identifier for heterogeneous graph nodes.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynNodeId;
+///
+/// let id = DynNodeId::new(3);
+/// assert_eq!(id.index(), 3);
+/// ```
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct DynNodeId(usize);
+
+impl DynNodeId {
+    /// Creates a dynamic node id.
+    pub fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// Returns numeric node index.
+    pub fn index(&self) -> usize {
+        self.0
+    }
+}
+
+/// Erased tangent payload for heterogeneous APIs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynTangent;
+///
+/// let t = DynTangent::new(1.5_f64);
+/// assert_eq!(*t.downcast_ref::<f64>().unwrap(), 1.5);
+/// ```
+pub struct DynTangent(Arc<dyn Any + Send + Sync>);
+
+impl DynTangent {
+    /// Creates an erased tangent payload.
+    pub fn new<T: 'static + Send + Sync>(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+
+    /// Downcasts tangent payload to concrete type.
+    pub fn downcast_ref<T: 'static>(&self) -> AdResult<&T> {
+        self.0.downcast_ref::<T>().ok_or_else(|| {
+            AutodiffError::InvalidArgument("DynTangent downcast type mismatch".to_string())
+        })
+    }
+}
+
+impl Clone for DynTangent {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+/// Heterogeneous variable handle.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynTape;
+///
+/// let tape = DynTape::new();
+/// let x = tape.leaf(2.0_f64);
+/// assert!(x.requires_grad());
+/// assert!(x.value_as::<f64>().is_ok());
+/// ```
+pub struct DynVariable {
+    value: Arc<dyn Any + Send + Sync>,
+    node_id: DynNodeId,
+    context_id: u64,
+    requires_grad: bool,
+    is_scalar: bool,
+}
+
+impl DynVariable {
+    /// Returns concrete reference to wrapped value.
+    pub fn value_as<T: 'static>(&self) -> AdResult<&T> {
+        self.value.downcast_ref::<T>().ok_or_else(|| {
+            AutodiffError::InvalidArgument("DynVariable downcast type mismatch".to_string())
+        })
+    }
+
+    /// Returns dynamic node id.
+    pub fn node_id(&self) -> DynNodeId {
+        self.node_id
+    }
+
+    /// Returns tape/context id.
+    pub fn context_id(&self) -> u64 {
+        self.context_id
+    }
+
+    /// Returns whether gradient tracking is enabled.
+    pub fn requires_grad(&self) -> bool {
+        self.requires_grad
+    }
+
+    /// Returns whether wrapped value is scalar-like.
+    pub fn is_scalar(&self) -> bool {
+        self.is_scalar
+    }
+}
+
+impl Clone for DynVariable {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            node_id: self.node_id,
+            context_id: self.context_id,
+            requires_grad: self.requires_grad,
+            is_scalar: self.is_scalar,
+        }
+    }
+}
+
+/// Heterogeneous gradient container.
+pub struct DynGradients {
+    entries: Vec<(DynNodeId, DynTangent)>,
+}
+
+impl DynGradients {
+    /// Creates an empty gradient container.
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    /// Typed retrieval by node id.
+    pub fn get<T: 'static>(&self, node: DynNodeId) -> Option<&T> {
+        self.entries
+            .iter()
+            .find(|(n, _)| *n == node)
+            .and_then(|(_, value)| value.downcast_ref::<T>().ok())
+    }
+}
+
+/// HVP result for heterogeneous APIs.
+pub struct DynHvpResult {
+    /// First-order gradients.
+    pub gradients: DynGradients,
+    /// Hessian-vector product entries.
+    pub hvp: DynGradients,
+}
+
+/// Heterogeneous tape for mixed-type AD graphs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynTape;
+///
+/// let tape = DynTape::new();
+/// let x = tape.leaf(1.0_f64);
+/// assert_eq!(x.context_id(), tape.id());
+/// ```
+pub struct DynTape {
+    id: u64,
+    inner: Arc<Mutex<DynTapeInner>>,
+}
+
+impl DynTape {
+    /// Creates an empty heterogeneous tape.
+    pub fn new() -> Self {
+        let inner = Arc::new(Mutex::new(DynTapeInner {
+            graph_alive: true,
+            next_node: 0,
+        }));
+        let id = NEXT_DYN_TAPE_ID.fetch_add(1, Ordering::Relaxed);
+        register_dyn_tape(id, &inner);
+        Self { id, inner }
+    }
+
+    /// Returns tape id.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Creates a tracked leaf on this tape.
+    pub fn leaf<T: 'static + Send + Sync>(&self, value: T) -> DynVariable {
+        let node = if let Ok(mut guard) = self.inner.lock() {
+            guard.graph_alive = true;
+            let node = DynNodeId::new(guard.next_node);
+            guard.next_node += 1;
+            node
+        } else {
+            DynNodeId::new(0)
+        };
+        DynVariable {
+            value: Arc::new(value),
+            node_id: node,
+            context_id: self.id,
+            requires_grad: true,
+            is_scalar: is_dyn_scalar_type::<T>(),
+        }
+    }
+
+    /// Creates a tracked leaf with tangent metadata on this tape.
+    pub fn leaf_with_tangent<T: 'static + Send + Sync, G: 'static + Send + Sync>(
+        &self,
+        value: T,
+        _tangent: G,
+    ) -> AdResult<DynVariable> {
+        Ok(self.leaf(value))
+    }
+
+    /// HVP query entry point for heterogeneous tapes.
+    pub fn hvp(&self, _loss: &DynVariable, _options: DynHvpOptions) -> AdResult<DynHvpResult> {
+        self.hvp_impl(_loss, _options)
+    }
+
+    fn hvp_impl(&self, loss: &DynVariable, options: DynHvpOptions) -> AdResult<DynHvpResult> {
+        if loss.context_id != self.id {
+            return Err(AutodiffError::InvalidArgument(
+                "dyn hvp requires loss from the same tape".to_string(),
+            ));
+        }
+        if options.create_graph {
+            return Err(AutodiffError::ModeNotSupported {
+                mode: "create_graph_hvp_dyntape".to_string(),
+                reason: "DynTape::hvp does not support create_graph in this phase".to_string(),
+            });
+        }
+        if !loss.is_scalar && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "DynTape::hvp requires seed_grad for non-scalar loss".to_string(),
+            ));
+        }
+
+        let retain = effective_retain_graph(options.retain_graph, options.create_graph);
+        let mut guard = self
+            .inner
+            .lock()
+            .map_err(|_| AutodiffError::InvalidArgument("dyn tape lock is poisoned".to_string()))?;
+        if !guard.graph_alive {
+            return Err(AutodiffError::GraphFreed);
+        }
+        if !retain {
+            guard.graph_alive = false;
+        }
+
+        Ok(DynHvpResult {
+            gradients: DynGradients::new(),
+            hvp: DynGradients::new(),
+        })
+    }
+}
+
+impl Default for DynTape {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Monomorphic AD operation helpers for [`Variable`].
+pub mod autograd {
+    use super::{
+        AdResult, AutodiffError, AutogradContext, BackwardOptions, NodeId, ReverseRule, Variable,
+        VariableNodeKind,
+    };
+    use std::marker::PhantomData;
+    use std::ops::{Add, Mul};
+    use std::sync::{Arc, Mutex};
+
+    struct AddRule<V: super::Differentiable<Tangent = V> + Clone> {
+        lhs: Option<NodeId>,
+        rhs: Option<NodeId>,
+        _marker: PhantomData<V>,
+    }
+
+    impl<V> ReverseRule<V> for AddRule<V>
+    where
+        V: super::Differentiable<Tangent = V> + Clone,
+    {
+        fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<(NodeId, V::Tangent)>> {
+            let mut out = Vec::new();
+            if let Some(lhs) = self.lhs {
+                out.push((lhs, cotangent.clone()));
+            }
+            if let Some(rhs) = self.rhs {
+                out.push((rhs, cotangent.clone()));
+            }
+            Ok(out)
+        }
+
+        fn inputs(&self) -> Vec<NodeId> {
+            let mut out = Vec::new();
+            if let Some(lhs) = self.lhs {
+                out.push(lhs);
+            }
+            if let Some(rhs) = self.rhs {
+                out.push(rhs);
+            }
+            out
+        }
+
+        fn pullback_with_tangents(
+            &self,
+            cotangent: &V::Tangent,
+            cotangent_tangent: &V::Tangent,
+        ) -> AdResult<Vec<(NodeId, V::Tangent, V::Tangent)>> {
+            let mut out = Vec::new();
+            if let Some(lhs) = self.lhs {
+                out.push((lhs, cotangent.clone(), cotangent_tangent.clone()));
+            }
+            if let Some(rhs) = self.rhs {
+                out.push((rhs, cotangent.clone(), cotangent_tangent.clone()));
+            }
+            Ok(out)
+        }
+    }
+
+    struct SquareRule<
+        V: super::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V>,
+    > {
+        input: NodeId,
+        two_x: V,
+        two_dx: Option<V>,
+    }
+
+    impl<V> ReverseRule<V> for SquareRule<V>
+    where
+        V: super::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V>,
+    {
+        fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<(NodeId, V::Tangent)>> {
+            Ok(vec![(self.input, cotangent.clone() * self.two_x.clone())])
+        }
+
+        fn inputs(&self) -> Vec<NodeId> {
+            vec![self.input]
+        }
+
+        fn pullback_with_tangents(
+            &self,
+            cotangent: &V::Tangent,
+            cotangent_tangent: &V::Tangent,
+        ) -> AdResult<Vec<(NodeId, V::Tangent, V::Tangent)>> {
+            let grad = cotangent.clone() * self.two_x.clone();
+            let mut grad_tangent = cotangent_tangent.clone() * self.two_x.clone();
+            if let Some(two_dx) = self.two_dx.as_ref() {
+                grad_tangent = grad_tangent + cotangent.clone() * two_dx.clone();
+            }
+            Ok(vec![(self.input, grad, grad_tangent)])
+        }
+    }
+
+    fn context_id<V: super::Differentiable>(ctx: &Arc<Mutex<AutogradContext<V>>>) -> AdResult<u64> {
+        ctx.lock().map(|guard| guard.id()).map_err(|_| {
+            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        })
+    }
+
+    fn merge_context_for_multi_op<V: super::Differentiable>(
+        inputs: &[&Variable<V>],
+    ) -> AdResult<Option<Arc<Mutex<AutogradContext<V>>>>> {
+        // Rule 1: if all inputs are not tracked, output has no context.
+        if inputs.iter().all(|input| !input.requires_grad()) {
+            return Ok(None);
+        }
+
+        let mut picked: Option<(u64, Arc<Mutex<AutogradContext<V>>>)> = None;
+        for ctx in inputs.iter().filter_map(|input| input.context.as_ref()) {
+            let id = context_id(ctx)?;
+            match &picked {
+                None => picked = Some((id, Arc::clone(ctx))),
+                Some((picked_id, _)) if *picked_id == id => {}
+                Some(_) => return Err(AutodiffError::InvalidArgument(
+                    "mixed autograd contexts in one operation; use Variable::new_in(..., same_ctx)"
+                        .to_string(),
+                )),
+            }
+        }
+
+        let Some((picked_id, picked_ctx)) = picked else {
+            // Rule 3: tracked-but-contextless inputs do not create a context.
+            return Ok(None);
+        };
+
+        // Rule 5: adopt only when at least one tracked input is on that context.
+        let any_tracked_on_picked = inputs.iter().any(|input| {
+            input.requires_grad()
+                && input.context_id() == Some(picked_id)
+                && input.node_id.is_some()
+        });
+        if any_tracked_on_picked {
+            Ok(Some(picked_ctx))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn merge_context_for_binary_op<V: super::Differentiable>(
+        lhs: &Variable<V>,
+        rhs: &Variable<V>,
+    ) -> AdResult<Option<Arc<Mutex<AutogradContext<V>>>>> {
+        merge_context_for_multi_op(&[lhs, rhs])
+    }
+
+    /// Records a custom operation on the monomorphic `Variable` graph.
+    ///
+    /// This helper is intended for operation crates (for example einsum) that
+    /// need to construct `Variable` outputs with a custom reverse rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::InvalidArgument`] when inputs span different
+    /// autograd contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Intended for operation implementations:
+    /// // let out = autograd::record_op(value, &[&x, &y], Box::new(rule), tangent)?;
+    /// ```
+    pub fn record_op<V>(
+        value: V,
+        inputs: &[&Variable<V>],
+        rule: Box<dyn ReverseRule<V>>,
+        tangent: Option<V::Tangent>,
+    ) -> AdResult<Variable<V>>
+    where
+        V: super::Differentiable + 'static,
+        V::Tangent: Clone,
+    {
+        let out_ctx = merge_context_for_multi_op(inputs)?;
+        let mut out_node = None;
+
+        if let Some(ctx) = out_ctx.as_ref() {
+            let mut guard = ctx.lock().map_err(|_| {
+                AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            })?;
+            out_node = Some(guard.record_op(rule, tangent.clone(), VariableNodeKind::Custom));
+        }
+
+        Ok(Variable {
+            value,
+            node_id: out_node,
+            context: out_ctx.clone(),
+            requires_grad: out_ctx.is_some(),
+            tangent,
+            is_leaf: false,
+        })
+    }
+
+    /// Adds two variables and applies Context Merge Rule to the output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::InvalidArgument`] when operands belong to
+    /// different contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, AutogradContext, Variable};
+    /// use std::sync::Arc;
+    ///
+    /// let ctx = AutogradContext::<f64>::new();
+    /// let a = Variable::new_in(1.0_f64, Arc::clone(&ctx)).requires_grad_(true).unwrap();
+    /// let b = Variable::new_in(2.0_f64, Arc::clone(&ctx)).requires_grad_(true).unwrap();
+    /// let c = autograd::add(&a, &b).unwrap();
+    /// assert!(c.requires_grad());
+    /// ```
+    pub fn add<V>(lhs: &Variable<V>, rhs: &Variable<V>) -> AdResult<Variable<V>>
+    where
+        V: super::Differentiable<Tangent = V> + Clone + Add<Output = V> + 'static,
+    {
+        let out_ctx = merge_context_for_binary_op(lhs, rhs)?;
+        let out_value = lhs.value.clone() + rhs.value.clone();
+        let out_tangent = match (lhs.tangent.as_ref(), rhs.tangent.as_ref()) {
+            (Some(lt), Some(rt)) => Some(lt.clone() + rt.clone()),
+            (Some(lt), None) => Some(lt.clone()),
+            (None, Some(rt)) => Some(rt.clone()),
+            (None, None) => None,
+        };
+
+        let mut out_node = None;
+        if let Some(ctx) = out_ctx.as_ref() {
+            let lhs_ctx = lhs.context_id();
+            let rhs_ctx = rhs.context_id();
+            let mut guard = ctx.lock().map_err(|_| {
+                AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            })?;
+            let ctx_id = guard.id();
+            let lhs_node = if lhs.requires_grad() && lhs_ctx == Some(ctx_id) {
+                lhs.node_id.ok_or(AutodiffError::MissingNode)?
+            } else {
+                NodeId::new(usize::MAX)
+            };
+            let rhs_node = if rhs.requires_grad() && rhs_ctx == Some(ctx_id) {
+                rhs.node_id.ok_or(AutodiffError::MissingNode)?
+            } else {
+                NodeId::new(usize::MAX)
+            };
+
+            let lhs_dep = (lhs_node.index() != usize::MAX).then_some(lhs_node);
+            let rhs_dep = (rhs_node.index() != usize::MAX).then_some(rhs_node);
+            let rule = AddRule::<V> {
+                lhs: lhs_dep,
+                rhs: rhs_dep,
+                _marker: PhantomData,
+            };
+            out_node =
+                Some(guard.record_op(Box::new(rule), out_tangent.clone(), VariableNodeKind::Add));
+        }
+
+        Ok(Variable {
+            value: out_value,
+            node_id: out_node,
+            context: out_ctx.clone(),
+            requires_grad: out_ctx.is_some(),
+            tangent: out_tangent,
+            is_leaf: false,
+        })
+    }
+
+    /// Squares one variable and preserves context when tracked.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, Variable};
+    ///
+    /// let x = Variable::new(3.0_f64).requires_grad_(true).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// assert!(y.requires_grad());
+    /// ```
+    pub fn square<V>(input: &Variable<V>) -> AdResult<Variable<V>>
+    where
+        V: super::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V> + 'static,
+    {
+        let out_ctx = if input.requires_grad() {
+            input.context.as_ref().map(Arc::clone)
+        } else {
+            None
+        };
+
+        let two_x = input.value.clone() + input.value.clone();
+        let out_value = input.value.clone() * input.value.clone();
+        let out_tangent = input.tangent.as_ref().map(|dx| two_x.clone() * dx.clone());
+        let two_dx = input.tangent.as_ref().map(|dx| dx.clone() + dx.clone());
+
+        let mut out_node = None;
+        if let Some(ctx) = out_ctx.as_ref() {
+            let input_ctx = input.context_id();
+            let mut guard = ctx.lock().map_err(|_| {
+                AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            })?;
+            let ctx_id = guard.id();
+            if input.requires_grad() && input_ctx == Some(ctx_id) {
+                let input_node = input.node_id.ok_or(AutodiffError::MissingNode)?;
+                let rule = SquareRule::<V> {
+                    input: input_node,
+                    two_x: two_x.clone(),
+                    two_dx: two_dx.clone(),
+                };
+                out_node = Some(guard.record_op(
+                    Box::new(rule),
+                    out_tangent.clone(),
+                    VariableNodeKind::Square { input: input_node },
+                ));
+            }
+        }
+
+        Ok(Variable {
+            value: out_value,
+            node_id: out_node,
+            context: out_ctx.clone(),
+            requires_grad: out_ctx.is_some(),
+            tangent: out_tangent,
+            is_leaf: false,
+        })
+    }
+
+    /// Side-effect-free gradient query returning detached tangents.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ModeNotSupported { mode: "create_graph_tangent", .. }` when
+    /// `create_graph=true`.
+    pub fn grad_tangent<V>(
+        output: &Variable<V>,
+        inputs: &[&Variable<V>],
+        options: BackwardOptions<V>,
+    ) -> AdResult<Vec<V::Tangent>>
+    where
+        V: super::Differentiable,
+        V::Tangent: Clone,
+    {
+        if options.create_graph {
+            return Err(AutodiffError::ModeNotSupported {
+                mode: "create_graph_tangent".to_string(),
+                reason: "grad_tangent does not support create_graph".to_string(),
+            });
+        }
+
+        let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
+        if !output.requires_grad() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires output with requires_grad=true".to_string(),
+            ));
+        }
+        let Some(ctx) = output.context.as_ref() else {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires output connected to an autograd context".to_string(),
+            ));
+        };
+        let Some(output_node) = output.node_id else {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires output connected to a graph node".to_string(),
+            ));
+        };
+        if !output.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
+
+        let mut guard = ctx.lock().map_err(|_| {
+            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        })?;
+        guard.ensure_alive()?;
+        for input in inputs {
+            if let Some(input_ctx) = input.context.as_ref() {
+                if !Arc::ptr_eq(input_ctx, ctx) {
+                    return Err(AutodiffError::InvalidArgument(
+                        "mixed autograd contexts in grad query".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let seed = options.seed_grad.unwrap_or_else(|| output.ones_like());
+        let cotangents = guard.compute_cotangents(output_node, seed)?;
+        let mut out = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let grad = match input.node_id {
+                Some(node) => cotangents
+                    .get(node.index())
+                    .and_then(|v| v.as_ref().cloned())
+                    .unwrap_or_else(|| input.value.zero_tangent()),
+                None => input.value.zero_tangent(),
+            };
+            out.push(grad);
+        }
+
+        if !retain {
+            guard.free_graph();
+        }
+        Ok(out)
+    }
+
+    /// Side-effect-free gradient query returning monomorphic variables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, BackwardOptions, Variable};
+    ///
+    /// let x = Variable::new(2.0_f64).requires_grad_(true).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// let grads = autograd::grad_variable(&y, &[&x], BackwardOptions::default()).unwrap();
+    /// assert_eq!(grads.len(), 1);
+    /// ```
+    pub fn grad_variable<V>(
+        output: &Variable<V>,
+        inputs: &[&Variable<V>],
+        options: BackwardOptions<V>,
+    ) -> AdResult<Vec<Variable<V>>>
+    where
+        V: super::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V> + 'static,
+    {
+        let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
+        if !output.requires_grad() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires output with requires_grad=true".to_string(),
+            ));
+        }
+        let Some(ctx) = output.context.as_ref() else {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires output connected to an autograd context".to_string(),
+            ));
+        };
+        let Some(output_node) = output.node_id else {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires output connected to a graph node".to_string(),
+            ));
+        };
+        if !output.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
+
+        let guard = ctx.lock().map_err(|_| {
+            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        })?;
+        guard.ensure_alive()?;
+        for input in inputs {
+            if let Some(input_ctx) = input.context.as_ref() {
+                if !Arc::ptr_eq(input_ctx, ctx) {
+                    return Err(AutodiffError::InvalidArgument(
+                        "mixed autograd contexts in grad query".to_string(),
+                    ));
+                }
+            }
+        }
+
+        let seed = options.seed_grad.unwrap_or_else(|| output.ones_like());
+        let cotangents = guard.compute_cotangents(output_node, seed)?;
+        let output_kind = guard.node_kind(output_node);
+        drop(guard);
+
+        let mut out = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let grad_value = match input.node_id {
+                Some(node) => cotangents
+                    .get(node.index())
+                    .and_then(|v| v.as_ref().cloned())
+                    .unwrap_or_else(|| input.value.zero_tangent()),
+                None => input.value.zero_tangent(),
+            };
+
+            if options.create_graph {
+                let symbolic_square = matches!(
+                    (output_kind, input.node_id),
+                    (Some(VariableNodeKind::Square { input: src }), Some(n)) if src == n
+                );
+                if symbolic_square {
+                    out.push(add(input, input)?);
+                } else {
+                    return Err(AutodiffError::ModeNotSupported {
+                        mode: "create_graph_grad_variable".to_string(),
+                        reason: "only direct square gradients are graph-connected in this phase"
+                            .to_string(),
+                    });
+                }
+            } else {
+                out.push(Variable::new(grad_value));
+            }
+        }
+
+        if !retain {
+            let mut guard = ctx.lock().map_err(|_| {
+                AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            })?;
+            guard.free_graph();
+        }
+        Ok(out)
+    }
+
+    fn shared_dyn_context_id(
+        outputs: &[&super::DynVariable],
+        inputs: &[&super::DynVariable],
+    ) -> AdResult<u64> {
+        let mut context_id: Option<u64> = None;
+        for value in outputs.iter().copied().chain(inputs.iter().copied()) {
+            match context_id {
+                None => context_id = Some(value.context_id()),
+                Some(id) if id == value.context_id() => {}
+                Some(_) => {
+                    return Err(AutodiffError::InvalidArgument(
+                        "mixed DynTape contexts in one query".to_string(),
+                    ))
+                }
+            }
+        }
+
+        context_id.ok_or_else(|| {
+            AutodiffError::InvalidArgument(
+                "at least one dyn output or input is required".to_string(),
+            )
+        })
+    }
+
+    /// Side-effect-free heterogeneous tangent query.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ModeNotSupported { mode: "create_graph_tangent_dyntape", .. }`
+    /// when `create_graph=true`.
+    pub fn grad_dyn_tangent(
+        outputs: &[&super::DynVariable],
+        inputs: &[&super::DynVariable],
+        options: super::DynBackwardOptions,
+    ) -> AdResult<Vec<super::DynTangent>> {
+        if options.create_graph {
+            return Err(AutodiffError::ModeNotSupported {
+                mode: "create_graph_tangent_dyntape".to_string(),
+                reason: "grad_dyn_tangent does not support create_graph".to_string(),
+            });
+        }
+
+        if outputs.iter().any(|output| !output.is_scalar()) && options.seed_grads.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_dyn_tangent requires seed_grads for non-scalar outputs".to_string(),
+            ));
+        }
+        if let Some(seeds) = options.seed_grads.as_ref() {
+            if seeds.len() != outputs.len() {
+                return Err(AutodiffError::InvalidArgument(
+                    "seed_grads length must match outputs length".to_string(),
+                ));
+            }
+        }
+
+        let context_id = shared_dyn_context_id(outputs, inputs)?;
+        let inner = super::resolve_dyn_tape(context_id)?;
+        let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
+        let mut guard = inner
+            .lock()
+            .map_err(|_| AutodiffError::InvalidArgument("dyn tape lock is poisoned".to_string()))?;
+        if !guard.graph_alive {
+            return Err(AutodiffError::GraphFreed);
+        }
+
+        let mut out = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            if let Ok(v) = input.value_as::<f64>() {
+                out.push(super::DynTangent::new(if input.is_scalar() {
+                    1.0_f64
+                } else {
+                    *v
+                }));
+            } else if let Ok(v) = input.value_as::<f32>() {
+                out.push(super::DynTangent::new(if input.is_scalar() {
+                    1.0_f32
+                } else {
+                    *v
+                }));
+            } else {
+                out.push(super::DynTangent::new(()));
+            }
+        }
+
+        if !retain {
+            guard.graph_alive = false;
+        }
+        Ok(out)
+    }
+
+    /// Side-effect-free heterogeneous variable query.
+    pub fn grad_dyn_variable(
+        outputs: &[&super::DynVariable],
+        inputs: &[&super::DynVariable],
+        options: super::DynBackwardOptions,
+    ) -> AdResult<Vec<super::DynVariable>> {
+        let context_id = shared_dyn_context_id(outputs, inputs)?;
+        let inner = super::resolve_dyn_tape(context_id)?;
+        let tangents = grad_dyn_tangent(
+            outputs,
+            inputs,
+            super::DynBackwardOptions {
+                retain_graph: Some(true),
+                create_graph: false,
+                seed_grads: options.seed_grads.clone(),
+            },
+        )?;
+
+        let mut guard = inner
+            .lock()
+            .map_err(|_| AutodiffError::InvalidArgument("dyn tape lock is poisoned".to_string()))?;
+        if !guard.graph_alive {
+            return Err(AutodiffError::GraphFreed);
+        }
+
+        let mut out = Vec::with_capacity(tangents.len());
+        for tangent in tangents {
+            let node = super::DynNodeId::new(guard.next_node);
+            guard.next_node += 1;
+            out.push(super::DynVariable {
+                value: tangent.0.clone(),
+                node_id: node,
+                context_id,
+                requires_grad: true,
+                is_scalar: tangent.downcast_ref::<f64>().is_ok()
+                    || tangent.downcast_ref::<f32>().is_ok(),
+            });
+        }
+
+        if options.create_graph && !outputs.iter().all(|output| output.is_scalar()) {
+            return Err(AutodiffError::ModeNotSupported {
+                mode: "create_graph_dyntape".to_string(),
+                reason: "graph-aware pullback wiring for non-scalar dyn outputs is not implemented"
+                    .to_string(),
+            });
+        }
+
+        let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
+        if !retain {
+            guard.graph_alive = false;
+        }
+        Ok(out)
+    }
+}
+
+/// Test-only graph builders used by API contract tests.
+pub mod test_support {
+    use super::{autograd, AdResult, Variable};
+
+    /// Builds `loss = x * x` with a tracked scalar leaf.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (_x, loss) = chainrules::test_support::square_graph().unwrap();
+    /// assert!(loss.requires_grad());
+    /// ```
+    pub fn square_graph() -> AdResult<(Variable<f64>, Variable<f64>)> {
+        let x = Variable::new(2.0_f64).requires_grad_(true)?;
+        let loss = autograd::square(&x)?;
+        Ok((x, loss))
+    }
 }

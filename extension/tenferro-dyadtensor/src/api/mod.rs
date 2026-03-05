@@ -22,6 +22,7 @@ use crate::{AdTensor, Error, Result, TapeId};
 
 pub mod ad;
 mod ad_results;
+pub mod chainrules_api;
 
 pub use ad_results::{
     AdEigResult, AdEigenResult, AdLstsqResult, AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,

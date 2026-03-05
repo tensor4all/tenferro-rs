@@ -398,7 +398,8 @@ fn map_ad_error(err: &chainrules_core::AutodiffError) -> tfe_status_t {
         AutodiffError::InvalidArgument(_)
         | AutodiffError::ModeNotSupported { .. }
         | AutodiffError::NonScalarLoss { .. }
-        | AutodiffError::HvpNotSupported => TFE_INVALID_ARGUMENT,
+        | AutodiffError::HvpNotSupported
+        | AutodiffError::GraphFreed => TFE_INVALID_ARGUMENT,
         AutodiffError::TangentShapeMismatch { .. } => TFE_SHAPE_MISMATCH,
         AutodiffError::MissingNode => TFE_INTERNAL_ERROR,
     }

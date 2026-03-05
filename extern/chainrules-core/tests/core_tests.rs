@@ -183,9 +183,27 @@ fn error_mode_not_supported_display() {
 }
 
 #[test]
+fn error_mode_not_supported_create_graph_tangent_display() {
+    let err = AutodiffError::ModeNotSupported {
+        mode: "create_graph_tangent".into(),
+        reason: "grad_tangent does not support create_graph".into(),
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("create_graph_tangent"));
+    assert!(msg.contains("grad_tangent"));
+}
+
+#[test]
 fn error_invalid_argument_display() {
     let err = AutodiffError::InvalidArgument("bad index".into());
     assert!(err.to_string().contains("bad index"));
+}
+
+#[test]
+fn error_graph_freed_display() {
+    let err = AutodiffError::GraphFreed;
+    let msg = err.to_string();
+    assert!(msg.contains("freed"));
 }
 
 // ============================================================================
