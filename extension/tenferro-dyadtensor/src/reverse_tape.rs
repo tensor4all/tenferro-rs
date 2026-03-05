@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use chainrules_core::Differentiable as _;
+use chainrules_scalarops::ScalarAd;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
@@ -11,6 +12,9 @@ use crate::{Error, NodeId, Result, TapeId};
 type PullbackRule<T> = Box<dyn Fn(&Tensor<T>) -> Result<Vec<(NodeId, Tensor<T>)>> + 'static>;
 type BridgeRule<TOut, TIn> =
     Box<dyn Fn(&Tensor<TOut>) -> Result<Vec<(NodeId, Tensor<TIn>)>> + 'static>;
+type ScalarBridgeRule<TOut, TIn> =
+    Box<dyn Fn(&Tensor<TOut>) -> Result<Vec<(NodeId, TIn)>> + 'static>;
+type ScalarPullbackRule<T> = Box<dyn Fn(&T) -> Result<Vec<(NodeId, T)>> + 'static>;
 
 struct TapeRules<T: Scalar> {
     rules: HashMap<NodeId, PullbackRule<T>>,
@@ -36,12 +40,40 @@ impl<TOut: Scalar, TIn: Scalar> TapeBridgeRules<TOut, TIn> {
     }
 }
 
+struct TapeScalarBridgeRules<TOut: Scalar, TIn: ScalarAd> {
+    rules: HashMap<NodeId, ScalarBridgeRule<TOut, TIn>>,
+}
+
+impl<TOut: Scalar, TIn: ScalarAd> TapeScalarBridgeRules<TOut, TIn> {
+    fn new() -> Self {
+        Self {
+            rules: HashMap::new(),
+        }
+    }
+}
+
+struct TapeScalarRules<T: ScalarAd> {
+    rules: HashMap<NodeId, ScalarPullbackRule<T>>,
+}
+
+impl<T: ScalarAd> TapeScalarRules<T> {
+    fn new() -> Self {
+        Self {
+            rules: HashMap::new(),
+        }
+    }
+}
+
 type RuleRegistry = HashMap<(u64, TypeId), Box<dyn Any>>;
 type BridgeRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
+type ScalarBridgeRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
+type ScalarRuleRegistry = HashMap<(u64, TypeId), Box<dyn Any>>;
 
 thread_local! {
     static REVERSE_RULE_REGISTRY: RefCell<RuleRegistry> = RefCell::new(HashMap::new());
     static REVERSE_BRIDGE_REGISTRY: RefCell<BridgeRegistry> = RefCell::new(HashMap::new());
+    static REVERSE_SCALAR_BRIDGE_REGISTRY: RefCell<ScalarBridgeRegistry> = RefCell::new(HashMap::new());
+    static REVERSE_SCALAR_RULE_REGISTRY: RefCell<ScalarRuleRegistry> = RefCell::new(HashMap::new());
 }
 
 pub(crate) fn register_rule<T: Scalar + 'static>(
@@ -86,6 +118,49 @@ pub(crate) fn register_bridge_rule<TOut: Scalar + 'static, TIn: Scalar + 'static
     })
 }
 
+pub(crate) fn register_scalar_bridge_rule<TOut: Scalar + 'static, TIn: ScalarAd + 'static>(
+    tape: TapeId,
+    node: NodeId,
+    rule: ScalarBridgeRule<TOut, TIn>,
+) -> Result<()> {
+    REVERSE_SCALAR_BRIDGE_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
+        let entry = registry
+            .entry(key)
+            .or_insert_with(|| Box::new(TapeScalarBridgeRules::<TOut, TIn>::new()));
+        let typed = entry
+            .downcast_mut::<TapeScalarBridgeRules<TOut, TIn>>()
+            .ok_or_else(|| Error::InvalidAdScalar {
+                message: "reverse scalar bridge registry type mismatch".to_string(),
+            })?;
+        typed.rules.insert(node, rule);
+        Ok(())
+    })
+}
+
+pub(crate) fn register_scalar_rule<T: ScalarAd + 'static>(
+    tape: TapeId,
+    node: NodeId,
+    rule: ScalarPullbackRule<T>,
+) -> Result<()> {
+    REVERSE_SCALAR_RULE_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let key = (tape.0, TypeId::of::<T>());
+        let entry = registry
+            .entry(key)
+            .or_insert_with(|| Box::new(TapeScalarRules::<T>::new()));
+        let typed =
+            entry
+                .downcast_mut::<TapeScalarRules<T>>()
+                .ok_or_else(|| Error::InvalidAdScalar {
+                    message: "reverse scalar tape registry type mismatch".to_string(),
+                })?;
+        typed.rules.insert(node, rule);
+        Ok(())
+    })
+}
+
 fn bridge_pullback<TOut: Scalar + 'static, TIn: Scalar + 'static>(
     tape: TapeId,
     output_node: NodeId,
@@ -109,6 +184,29 @@ fn bridge_pullback<TOut: Scalar + 'static, TIn: Scalar + 'static>(
     })
 }
 
+fn bridge_pullback_scalar<TOut: Scalar + 'static, TIn: ScalarAd + 'static>(
+    tape: TapeId,
+    output_node: NodeId,
+    cotangent: &Tensor<TOut>,
+) -> Result<Vec<(NodeId, TIn)>> {
+    REVERSE_SCALAR_BRIDGE_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
+        let Some(state_any) = registry.get(&key) else {
+            return Ok(Vec::new());
+        };
+        let state = state_any
+            .downcast_ref::<TapeScalarBridgeRules<TOut, TIn>>()
+            .ok_or_else(|| Error::InvalidAdScalar {
+                message: "reverse scalar bridge registry type mismatch".to_string(),
+            })?;
+        let Some(rule) = state.rules.get(&output_node) else {
+            return Ok(Vec::new());
+        };
+        rule(cotangent)
+    })
+}
+
 fn accumulate_into<T: Scalar>(
     totals: &mut HashMap<NodeId, Tensor<T>>,
     node: NodeId,
@@ -119,6 +217,13 @@ fn accumulate_into<T: Scalar>(
     } else {
         totals.insert(node, delta);
     }
+}
+
+fn accumulate_scalar_into<T: ScalarAd>(totals: &mut HashMap<NodeId, T>, node: NodeId, delta: T) {
+    totals
+        .entry(node)
+        .and_modify(|existing| *existing = *existing + delta)
+        .or_insert(delta);
 }
 
 pub(crate) fn pullback<T: Scalar + 'static>(
@@ -220,4 +325,178 @@ pub(crate) fn pullback_wrt_mixed<TOut: Scalar + 'static, TIn: Scalar + 'static>(
         .iter()
         .map(|node| node.and_then(|n| all_in_grads.get(&n).cloned()))
         .collect())
+}
+
+pub(crate) fn pullback_wrt_scalars<TOut: Scalar + 'static, TIn: ScalarAd + 'static>(
+    tape: TapeId,
+    output_node: NodeId,
+    cotangent: &Tensor<TOut>,
+    wrt_nodes: &[Option<NodeId>],
+) -> Result<Vec<Option<TIn>>> {
+    let all_out_grads = match pullback::<TOut>(tape, output_node, cotangent) {
+        Ok(grads) => grads,
+        Err(Error::InvalidAdTensor { message })
+            if message.starts_with("no reverse rules registered for tape")
+                || message.starts_with("no reverse rule registered for output node") =>
+        {
+            let mut seed = HashMap::new();
+            seed.insert(output_node, cotangent.clone());
+            seed
+        }
+        Err(e) => return Err(e),
+    };
+
+    let mut seed_in: HashMap<NodeId, TIn> = HashMap::new();
+    for (node, delta_out) in &all_out_grads {
+        let bridged = bridge_pullback_scalar::<TOut, TIn>(tape, *node, delta_out)?;
+        for (in_node, in_delta) in bridged {
+            accumulate_scalar_into(&mut seed_in, in_node, in_delta);
+        }
+    }
+
+    let mut all_in_grads: HashMap<NodeId, TIn> = HashMap::new();
+    for (seed_node, seed_delta) in seed_in {
+        let propagated = match pullback_scalar::<TIn>(tape, seed_node, &seed_delta) {
+            Ok(grads) => grads,
+            Err(Error::InvalidAdScalar { message })
+                if message.starts_with("no reverse scalar rules registered for tape")
+                    || message.starts_with("no reverse scalar rule registered for output node") =>
+            {
+                let mut seed = HashMap::new();
+                seed.insert(seed_node, seed_delta);
+                seed
+            }
+            Err(e) => return Err(e),
+        };
+        for (node, grad) in propagated {
+            accumulate_scalar_into(&mut all_in_grads, node, grad);
+        }
+    }
+
+    Ok(wrt_nodes
+        .iter()
+        .map(|node| node.and_then(|n| all_in_grads.get(&n).copied()))
+        .collect())
+}
+
+pub(crate) fn pullback_scalar<T: ScalarAd + 'static>(
+    tape: TapeId,
+    output_node: NodeId,
+    cotangent: &T,
+) -> Result<HashMap<NodeId, T>> {
+    REVERSE_SCALAR_RULE_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        let key = (tape.0, TypeId::of::<T>());
+        let state_any = registry.get(&key).ok_or_else(|| Error::InvalidAdScalar {
+            message: format!("no reverse scalar rules registered for tape {}", tape.0),
+        })?;
+        let state = state_any
+            .downcast_ref::<TapeScalarRules<T>>()
+            .ok_or_else(|| Error::InvalidAdScalar {
+                message: "reverse scalar tape registry type mismatch".to_string(),
+            })?;
+
+        if !state.rules.contains_key(&output_node) {
+            return Err(Error::InvalidAdScalar {
+                message: format!(
+                    "no reverse scalar rule registered for output node {} on tape {}",
+                    output_node.0, tape.0
+                ),
+            });
+        }
+
+        let mut totals: HashMap<NodeId, T> = HashMap::new();
+        let mut worklist: Vec<(NodeId, T)> = vec![(output_node, *cotangent)];
+
+        while let Some((node, delta)) = worklist.pop() {
+            totals
+                .entry(node)
+                .and_modify(|existing| *existing = *existing + delta)
+                .or_insert(delta);
+
+            if let Some(rule) = state.rules.get(&node) {
+                let input_deltas = rule(&delta)?;
+                for (in_node, in_delta) in input_deltas {
+                    worklist.push((in_node, in_delta));
+                }
+            }
+        }
+
+        Ok(totals)
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tenferro_tensor::{MemoryOrder, Tensor};
+
+    fn f64_vec(values: &[f64]) -> Tensor<f64> {
+        Tensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+    }
+
+    #[test]
+    fn pullback_wrt_scalars_seeds_output_when_only_scalar_bridge_is_registered() {
+        let tape = TapeId(701);
+        let output_node = NodeId(11);
+        let scalar_node = NodeId(12);
+
+        register_scalar_bridge_rule::<f64, f64>(
+            tape,
+            output_node,
+            Box::new(move |cotangent| {
+                let sum = cotangent.buffer().as_slice().unwrap().iter().copied().sum();
+                Ok(vec![(scalar_node, sum)])
+            }),
+        )
+        .unwrap();
+
+        let grads = pullback_wrt_scalars::<f64, f64>(
+            tape,
+            output_node,
+            &f64_vec(&[0.5, 1.25]),
+            &[Some(scalar_node)],
+        )
+        .unwrap();
+        assert_eq!(grads, vec![Some(1.75)]);
+    }
+
+    #[test]
+    fn pullback_wrt_scalars_propagates_registered_scalar_rule_chain() {
+        let tape = TapeId(702);
+        let output_node = NodeId(21);
+        let intermediate = NodeId(22);
+        let leaf_a = NodeId(23);
+        let leaf_b = NodeId(24);
+
+        register_scalar_bridge_rule::<f64, f64>(
+            tape,
+            output_node,
+            Box::new(move |_| Ok(vec![(intermediate, 2.0_f64)])),
+        )
+        .unwrap();
+        register_scalar_rule::<f64>(
+            tape,
+            intermediate,
+            Box::new(move |cotangent| Ok(vec![(leaf_a, *cotangent), (leaf_b, *cotangent * 3.0)])),
+        )
+        .unwrap();
+
+        let grads = pullback_wrt_scalars::<f64, f64>(
+            tape,
+            output_node,
+            &f64_vec(&[1.0]),
+            &[Some(leaf_a), Some(leaf_b), Some(NodeId(999))],
+        )
+        .unwrap();
+        assert_eq!(grads, vec![Some(2.0), Some(6.0), None]);
+    }
+
+    #[test]
+    fn pullback_scalar_reports_missing_registry() {
+        let err = pullback_scalar::<f64>(TapeId(703), NodeId(31), &1.0_f64).unwrap_err();
+        assert!(
+            matches!(err, Error::InvalidAdScalar { message } if message.contains("no reverse scalar rules registered"))
+        );
+    }
 }
