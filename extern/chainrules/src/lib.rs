@@ -1152,6 +1152,7 @@ enum VariableNodeKind {
     Leaf,
     Add,
     Square { input: NodeId },
+    Custom,
 }
 
 struct VariableNode<V: Differentiable> {
@@ -2117,30 +2118,24 @@ pub mod autograd {
         })
     }
 
-    fn merge_context_for_binary_op<V: super::Differentiable>(
-        lhs: &Variable<V>,
-        rhs: &Variable<V>,
+    fn merge_context_for_multi_op<V: super::Differentiable>(
+        inputs: &[&Variable<V>],
     ) -> AdResult<Option<Arc<Mutex<AutogradContext<V>>>>> {
         // Rule 1: if all inputs are not tracked, output has no context.
-        if !lhs.requires_grad() && !rhs.requires_grad() {
+        if inputs.iter().all(|input| !input.requires_grad()) {
             return Ok(None);
         }
 
         let mut picked: Option<(u64, Arc<Mutex<AutogradContext<V>>>)> = None;
-        for ctx in [lhs.context.as_ref(), rhs.context.as_ref()]
-            .into_iter()
-            .flatten()
-        {
+        for ctx in inputs.iter().filter_map(|input| input.context.as_ref()) {
             let id = context_id(ctx)?;
             match &picked {
                 None => picked = Some((id, Arc::clone(ctx))),
                 Some((picked_id, _)) if *picked_id == id => {}
-                Some(_) => {
-                    return Err(AutodiffError::InvalidArgument(
-                        "mixed autograd contexts in one operation; use Variable::new_in(..., same_ctx)"
-                            .to_string(),
-                    ));
-                }
+                Some(_) => return Err(AutodiffError::InvalidArgument(
+                    "mixed autograd contexts in one operation; use Variable::new_in(..., same_ctx)"
+                        .to_string(),
+                )),
             }
         }
 
@@ -2150,13 +2145,69 @@ pub mod autograd {
         };
 
         // Rule 5: adopt only when at least one tracked input is on that context.
-        let lhs_tracked_on_picked = lhs.requires_grad() && lhs.context_id() == Some(picked_id);
-        let rhs_tracked_on_picked = rhs.requires_grad() && rhs.context_id() == Some(picked_id);
-        if lhs_tracked_on_picked || rhs_tracked_on_picked {
+        let any_tracked_on_picked = inputs.iter().any(|input| {
+            input.requires_grad()
+                && input.context_id() == Some(picked_id)
+                && input.node_id.is_some()
+        });
+        if any_tracked_on_picked {
             Ok(Some(picked_ctx))
         } else {
             Ok(None)
         }
+    }
+
+    fn merge_context_for_binary_op<V: super::Differentiable>(
+        lhs: &Variable<V>,
+        rhs: &Variable<V>,
+    ) -> AdResult<Option<Arc<Mutex<AutogradContext<V>>>>> {
+        merge_context_for_multi_op(&[lhs, rhs])
+    }
+
+    /// Records a custom operation on the monomorphic `Variable` graph.
+    ///
+    /// This helper is intended for operation crates (for example einsum) that
+    /// need to construct `Variable` outputs with a custom reverse rule.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::InvalidArgument`] when inputs span different
+    /// autograd contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Intended for operation implementations:
+    /// // let out = autograd::record_op(value, &[&x, &y], Box::new(rule), tangent)?;
+    /// ```
+    pub fn record_op<V>(
+        value: V,
+        inputs: &[&Variable<V>],
+        rule: Box<dyn ReverseRule<V>>,
+        tangent: Option<V::Tangent>,
+    ) -> AdResult<Variable<V>>
+    where
+        V: super::Differentiable + 'static,
+        V::Tangent: Clone,
+    {
+        let out_ctx = merge_context_for_multi_op(inputs)?;
+        let mut out_node = None;
+
+        if let Some(ctx) = out_ctx.as_ref() {
+            let mut guard = ctx.lock().map_err(|_| {
+                AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            })?;
+            out_node = Some(guard.record_op(rule, tangent.clone(), VariableNodeKind::Custom));
+        }
+
+        Ok(Variable {
+            value,
+            node_id: out_node,
+            context: out_ctx.clone(),
+            requires_grad: out_ctx.is_some(),
+            tangent,
+            is_leaf: false,
+        })
     }
 
     /// Adds two variables and applies Context Merge Rule to the output.

@@ -262,7 +262,9 @@ pub use binary::{
     einsum_binary_with_subscripts_into,
 };
 
-pub use ad::{dual_einsum, einsum_frule, einsum_hvp, einsum_rrule, tracked_einsum};
+pub use ad::{
+    dual_einsum, einsum_frule, einsum_hvp, einsum_rrule, tracked_einsum, variable_einsum,
+};
 
 #[cfg(feature = "profile-dispatch")]
 pub use dispatch::print_and_reset_profile;
