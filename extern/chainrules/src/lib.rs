@@ -1477,6 +1477,20 @@ impl<V: Differentiable> Variable<V> {
         self.value.seed_cotangent()
     }
 
+    /// Returns whether this value is scalar-like.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::Variable;
+    ///
+    /// let x = Variable::new(1.0_f64);
+    /// assert!(x.is_scalar());
+    /// ```
+    pub fn is_scalar(&self) -> bool {
+        self.value.num_elements() == 1
+    }
+
     /// Returns optional graph node id.
     pub fn node_id(&self) -> Option<NodeId> {
         self.node_id
@@ -1580,12 +1594,26 @@ impl<V: Differentiable> Variable<V> {
     /// ```
     pub fn backward(&self, options: BackwardOptions<V>) -> AdResult<()> {
         let retain = effective_retain_graph(options.retain_graph, options.create_graph);
+        if !self.requires_grad {
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires output with requires_grad=true".to_string(),
+            ));
+        }
         let Some(ctx) = self.context.as_ref() else {
-            return Ok(());
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires output connected to an autograd context".to_string(),
+            ));
         };
         let Some(output_node) = self.node_id else {
-            return Ok(());
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires output connected to a graph node".to_string(),
+            ));
         };
+        if !self.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "backward requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
 
         let mut guard = ctx.lock().map_err(|_| {
             AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
@@ -1628,12 +1656,26 @@ impl<V: Differentiable> Variable<V> {
         }
 
         let retain = effective_retain_graph(options.retain_graph, options.create_graph);
+        if !self.requires_grad {
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires output with requires_grad=true".to_string(),
+            ));
+        }
         let Some(ctx) = self.context.as_ref() else {
-            return Ok(());
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires output connected to an autograd context".to_string(),
+            ));
         };
         let Some(output_node) = self.node_id else {
-            return Ok(());
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires output connected to a graph node".to_string(),
+            ));
         };
+        if !self.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "backward_hvp requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
 
         let mut guard = ctx.lock().map_err(|_| {
             AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
@@ -2270,12 +2312,26 @@ pub mod autograd {
         }
 
         let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
+        if !output.requires_grad() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires output with requires_grad=true".to_string(),
+            ));
+        }
         let Some(ctx) = output.context.as_ref() else {
-            return Ok(inputs.iter().map(|v| v.value.zero_tangent()).collect());
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires output connected to an autograd context".to_string(),
+            ));
         };
         let Some(output_node) = output.node_id else {
-            return Ok(inputs.iter().map(|v| v.value.zero_tangent()).collect());
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires output connected to a graph node".to_string(),
+            ));
         };
+        if !output.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_tangent requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
 
         let mut guard = ctx.lock().map_err(|_| {
             AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
@@ -2332,20 +2388,26 @@ pub mod autograd {
         V: super::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V> + 'static,
     {
         let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
+        if !output.requires_grad() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires output with requires_grad=true".to_string(),
+            ));
+        }
         let Some(ctx) = output.context.as_ref() else {
-            let mut out = Vec::with_capacity(inputs.len());
-            for input in inputs {
-                out.push(Variable::new(input.value.zero_tangent()));
-            }
-            return Ok(out);
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires output connected to an autograd context".to_string(),
+            ));
         };
         let Some(output_node) = output.node_id else {
-            let mut out = Vec::with_capacity(inputs.len());
-            for input in inputs {
-                out.push(Variable::new(input.value.zero_tangent()));
-            }
-            return Ok(out);
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires output connected to a graph node".to_string(),
+            ));
         };
+        if !output.is_scalar() && options.seed_grad.is_none() {
+            return Err(AutodiffError::InvalidArgument(
+                "grad_variable requires seed_grad for non-scalar output".to_string(),
+            ));
+        }
 
         let guard = ctx.lock().map_err(|_| {
             AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
