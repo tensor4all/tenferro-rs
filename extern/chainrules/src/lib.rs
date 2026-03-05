@@ -77,9 +77,12 @@
 // Re-export all core traits so downstream can depend on just `chainrules`.
 pub use chainrules_core::*;
 
+use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 // ============================================================================
 // Internal tape storage
@@ -1006,4 +1009,425 @@ pub struct HvpResult<V: Differentiable> {
     pub gradients: Gradients<V>,
     /// Hessian-vector product: H*v.
     pub hvp: Gradients<V>,
+}
+
+// ============================================================================
+// Autodiff-next public API surface
+// ============================================================================
+
+static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_DYN_TAPE_ID: AtomicU64 = AtomicU64::new(1);
+
+fn is_dyn_scalar_type<T: 'static>() -> bool {
+    let id = TypeId::of::<T>();
+    id == TypeId::of::<f32>() || id == TypeId::of::<f64>()
+}
+
+/// Options for monomorphic backward/grad APIs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::BackwardOptions;
+///
+/// let opts = BackwardOptions::<f64>::default();
+/// assert_eq!(opts.retain_graph, None);
+/// assert!(!opts.create_graph);
+/// ```
+pub struct BackwardOptions<V: Differentiable> {
+    /// Optional retain override. `None` means infer from `create_graph`.
+    pub retain_graph: Option<bool>,
+    /// Whether to build a graph on returned gradients.
+    pub create_graph: bool,
+    /// Optional output seed cotangent for non-scalar outputs.
+    pub seed_grad: Option<V::Tangent>,
+}
+
+impl<V: Differentiable> Default for BackwardOptions<V> {
+    fn default() -> Self {
+        Self {
+            retain_graph: None,
+            create_graph: false,
+            seed_grad: None,
+        }
+    }
+}
+
+/// Options for heterogeneous gradient query APIs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynBackwardOptions;
+///
+/// let opts = DynBackwardOptions::default();
+/// assert_eq!(opts.retain_graph, None);
+/// assert!(opts.seed_grads.is_none());
+/// ```
+pub struct DynBackwardOptions {
+    /// Optional retain override. `None` means infer from `create_graph`.
+    pub retain_graph: Option<bool>,
+    /// Whether to build a graph on returned gradients.
+    pub create_graph: bool,
+    /// Optional per-output seed cotangents.
+    pub seed_grads: Option<Vec<DynTangent>>,
+}
+
+impl Default for DynBackwardOptions {
+    fn default() -> Self {
+        Self {
+            retain_graph: None,
+            create_graph: false,
+            seed_grads: None,
+        }
+    }
+}
+
+/// Options for heterogeneous HVP API.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynHvpOptions;
+///
+/// let opts = DynHvpOptions::default();
+/// assert_eq!(opts.retain_graph, None);
+/// assert!(opts.seed_grad.is_none());
+/// ```
+pub struct DynHvpOptions {
+    /// Optional retain override. `None` means infer from `create_graph`.
+    pub retain_graph: Option<bool>,
+    /// Whether to build a graph on returned gradients.
+    pub create_graph: bool,
+    /// Optional seed cotangent for the HVP target.
+    pub seed_grad: Option<DynTangent>,
+}
+
+impl Default for DynHvpOptions {
+    fn default() -> Self {
+        Self {
+            retain_graph: None,
+            create_graph: false,
+            seed_grad: None,
+        }
+    }
+}
+
+/// Shared monomorphic autograd context.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::AutogradContext;
+///
+/// let ctx = AutogradContext::<f64>::new();
+/// let id = ctx.lock().unwrap().id();
+/// assert!(id > 0);
+/// ```
+pub struct AutogradContext<V: Differentiable> {
+    id: u64,
+    _marker: PhantomData<V>,
+}
+
+impl<V: Differentiable> AutogradContext<V> {
+    /// Creates a new context.
+    pub fn new() -> Arc<Mutex<Self>> {
+        Arc::new(Mutex::new(Self {
+            id: NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed),
+            _marker: PhantomData,
+        }))
+    }
+
+    /// Returns context identifier.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+}
+
+/// Monomorphic AD variable handle for next API.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::Variable;
+///
+/// let v = Variable::new(3.0_f64);
+/// assert!(!v.requires_grad());
+/// assert!(v.node_id().is_none());
+/// ```
+pub struct Variable<V: Differentiable> {
+    value: V,
+    node_id: Option<NodeId>,
+    context: Option<Arc<Mutex<AutogradContext<V>>>>,
+    requires_grad: bool,
+    tangent: Option<V::Tangent>,
+    is_leaf: bool,
+}
+
+impl<V: Differentiable> Variable<V> {
+    /// Creates a value with no context and `requires_grad=false`.
+    pub fn new(value: V) -> Self {
+        Self {
+            value,
+            node_id: None,
+            context: None,
+            requires_grad: false,
+            tangent: None,
+            is_leaf: true,
+        }
+    }
+
+    /// Creates a value attached to the provided context.
+    pub fn new_in(value: V, ctx: Arc<Mutex<AutogradContext<V>>>) -> Self {
+        Self {
+            value,
+            node_id: None,
+            context: Some(ctx),
+            requires_grad: false,
+            tangent: None,
+            is_leaf: true,
+        }
+    }
+
+    /// Returns primal value.
+    pub fn value(&self) -> &V {
+        &self.value
+    }
+
+    /// Returns ones-like cotangent for this value.
+    pub fn ones_like(&self) -> V::Tangent {
+        self.value.seed_cotangent()
+    }
+
+    /// Returns optional graph node id.
+    pub fn node_id(&self) -> Option<NodeId> {
+        self.node_id
+    }
+
+    /// Returns optional context id.
+    pub fn context_id(&self) -> Option<u64> {
+        self.context
+            .as_ref()
+            .and_then(|ctx| ctx.lock().ok().map(|g| g.id()))
+    }
+
+    /// Returns whether this value is a leaf.
+    pub fn is_leaf(&self) -> bool {
+        self.is_leaf
+    }
+
+    /// Returns whether this value tracks gradients.
+    pub fn requires_grad(&self) -> bool {
+        self.requires_grad
+    }
+
+    /// Enables/disables gradient tracking.
+    pub fn requires_grad_(mut self, enabled: bool) -> AdResult<Self> {
+        if enabled && self.context.is_none() {
+            self.context = Some(AutogradContext::new());
+        }
+        self.requires_grad = enabled;
+        Ok(self)
+    }
+
+    /// Attaches forward tangent.
+    pub fn with_tangent_(mut self, tangent: V::Tangent) -> AdResult<Self> {
+        self.tangent = Some(tangent);
+        Ok(self)
+    }
+
+    /// Returns attached tangent if any.
+    pub fn tangent(&self) -> Option<&V::Tangent> {
+        self.tangent.as_ref()
+    }
+}
+
+/// Runtime identifier for heterogeneous graph nodes.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynNodeId;
+///
+/// let id = DynNodeId::new(3);
+/// assert_eq!(id.index(), 3);
+/// ```
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub struct DynNodeId(usize);
+
+impl DynNodeId {
+    /// Creates a dynamic node id.
+    pub fn new(index: usize) -> Self {
+        Self(index)
+    }
+
+    /// Returns numeric node index.
+    pub fn index(&self) -> usize {
+        self.0
+    }
+}
+
+/// Erased tangent payload for heterogeneous APIs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynTangent;
+///
+/// let t = DynTangent::new(1.5_f64);
+/// assert_eq!(*t.downcast_ref::<f64>().unwrap(), 1.5);
+/// ```
+pub struct DynTangent(Arc<dyn Any + Send + Sync>);
+
+impl DynTangent {
+    /// Creates an erased tangent payload.
+    pub fn new<T: 'static + Send + Sync>(value: T) -> Self {
+        Self(Arc::new(value))
+    }
+
+    /// Downcasts tangent payload to concrete type.
+    pub fn downcast_ref<T: 'static>(&self) -> AdResult<&T> {
+        self.0.downcast_ref::<T>().ok_or_else(|| {
+            AutodiffError::InvalidArgument("DynTangent downcast type mismatch".to_string())
+        })
+    }
+}
+
+/// Heterogeneous variable handle.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynTape;
+///
+/// let tape = DynTape::new();
+/// let x = tape.leaf(2.0_f64);
+/// assert!(x.requires_grad());
+/// assert!(x.value_as::<f64>().is_ok());
+/// ```
+pub struct DynVariable {
+    value: Arc<dyn Any + Send + Sync>,
+    node_id: DynNodeId,
+    context_id: u64,
+    requires_grad: bool,
+    is_scalar: bool,
+}
+
+impl DynVariable {
+    /// Returns concrete reference to wrapped value.
+    pub fn value_as<T: 'static>(&self) -> AdResult<&T> {
+        self.value.downcast_ref::<T>().ok_or_else(|| {
+            AutodiffError::InvalidArgument("DynVariable downcast type mismatch".to_string())
+        })
+    }
+
+    /// Returns dynamic node id.
+    pub fn node_id(&self) -> DynNodeId {
+        self.node_id
+    }
+
+    /// Returns tape/context id.
+    pub fn context_id(&self) -> u64 {
+        self.context_id
+    }
+
+    /// Returns whether gradient tracking is enabled.
+    pub fn requires_grad(&self) -> bool {
+        self.requires_grad
+    }
+
+    /// Returns whether wrapped value is scalar-like.
+    pub fn is_scalar(&self) -> bool {
+        self.is_scalar
+    }
+}
+
+impl Clone for DynVariable {
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            node_id: self.node_id,
+            context_id: self.context_id,
+            requires_grad: self.requires_grad,
+            is_scalar: self.is_scalar,
+        }
+    }
+}
+
+/// Heterogeneous gradient container.
+pub struct DynGradients;
+
+impl DynGradients {
+    /// Typed retrieval by node id.
+    pub fn get<T: 'static>(&self, _node: DynNodeId) -> Option<&T> {
+        None
+    }
+}
+
+/// HVP result for heterogeneous APIs.
+pub struct DynHvpResult {
+    /// First-order gradients.
+    pub gradients: DynGradients,
+    /// Hessian-vector product entries.
+    pub hvp: DynGradients,
+}
+
+/// Heterogeneous tape for mixed-type AD graphs.
+///
+/// # Examples
+///
+/// ```
+/// use chainrules::DynTape;
+///
+/// let tape = DynTape::new();
+/// let x = tape.leaf(1.0_f64);
+/// assert_eq!(x.context_id(), tape.id());
+/// ```
+pub struct DynTape {
+    id: u64,
+    next_node: Arc<AtomicUsize>,
+}
+
+impl DynTape {
+    /// Creates an empty heterogeneous tape.
+    pub fn new() -> Self {
+        Self {
+            id: NEXT_DYN_TAPE_ID.fetch_add(1, Ordering::Relaxed),
+            next_node: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    /// Returns tape id.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Creates a tracked leaf on this tape.
+    pub fn leaf<T: 'static + Send + Sync>(&self, value: T) -> DynVariable {
+        let node = DynNodeId::new(self.next_node.fetch_add(1, Ordering::Relaxed));
+        DynVariable {
+            value: Arc::new(value),
+            node_id: node,
+            context_id: self.id,
+            requires_grad: true,
+            is_scalar: is_dyn_scalar_type::<T>(),
+        }
+    }
+
+    /// Creates a tracked leaf with tangent metadata on this tape.
+    pub fn leaf_with_tangent<T: 'static + Send + Sync, G: 'static + Send + Sync>(
+        &self,
+        value: T,
+        _tangent: G,
+    ) -> AdResult<DynVariable> {
+        Ok(self.leaf(value))
+    }
+
+    /// HVP query entry point for heterogeneous tapes.
+    pub fn hvp(&self, _loss: &DynVariable, _options: DynHvpOptions) -> AdResult<DynHvpResult> {
+        Err(AutodiffError::ModeNotSupported {
+            mode: "hvp".to_string(),
+            reason: "DynTape::hvp is not implemented yet in this phase".to_string(),
+        })
+    }
 }
