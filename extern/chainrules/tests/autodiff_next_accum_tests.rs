@@ -62,3 +62,27 @@ fn backward_hvp_requires_tangent_seed() {
     let err = y.backward_hvp(BackwardOptions::default()).unwrap_err();
     assert!(matches!(err, AutodiffError::InvalidArgument(_)));
 }
+
+#[test]
+fn backward_hvp_create_graph_is_not_supported_yet() {
+    let x = Variable::new(2.0_f64)
+        .requires_grad_(true)
+        .unwrap()
+        .with_tangent_(1.0)
+        .unwrap();
+    let y = autograd::square(&x).unwrap();
+    let err = y
+        .backward_hvp(BackwardOptions {
+            create_graph: true,
+            ..Default::default()
+        })
+        .unwrap_err();
+    assert!(matches!(err, AutodiffError::ModeNotSupported { .. }));
+}
+
+#[test]
+fn grad_and_hvp_are_none_for_untracked_variable() {
+    let x = Variable::new(3.0_f64);
+    assert!(x.grad().is_none());
+    assert!(x.hvp().is_none());
+}
