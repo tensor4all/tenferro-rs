@@ -1,12 +1,15 @@
-use chainrules_scalarops::ScalarAd;
+use chainrules_scalarops::{self, ScalarAd};
 use core::fmt;
 use core::ops::{Add, Div, Mul, Neg, Sub};
 use num_complex::{Complex32, Complex64};
 use num_traits::{One, Zero};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{AdMode, AdScalar, AdTensor, AdValue, Error, NodeId, Result, TapeId};
+use crate::{reverse_tape, AdMode, AdScalar, AdTensor, AdValue, Error, NodeId, Result, TapeId};
+
+static NEXT_AD_TENSOR_NODE_ID: AtomicU64 = AtomicU64::new(1_u64 << 61);
 
 /// Runtime scalar type tag used by all `Dyn*` wrappers.
 ///
@@ -725,13 +728,13 @@ impl From<Tensor<Complex64>> for DynTensor {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::{AdMode, AdValue, DynAdValue};
+/// use tenferro_dyadtensor::{AdMode, AdValue, DynAdScalar};
 ///
-/// let x: DynAdValue = AdValue::forward(2.0_f64, 1.0_f64).into();
+/// let x: DynAdScalar = AdValue::forward(2.0_f64, 1.0_f64).into();
 /// assert_eq!(x.mode(), AdMode::Forward);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
-pub enum DynAdValue {
+pub enum DynAdScalar {
     F32(AdValue<f32>),
     F64(AdValue<f64>),
     C32(AdValue<Complex32>),
@@ -765,7 +768,11 @@ fn promote_f64_to_c64(value: AdValue<f64>) -> AdValue<Complex64> {
     value.map(|x| Complex64::new(x, 0.0))
 }
 
-fn apply_binary_ad<T: ScalarAd>(lhs: AdValue<T>, rhs: AdValue<T>, op: BinaryOp) -> AdValue<T> {
+fn apply_binary_ad<T: ScalarAd + 'static>(
+    lhs: AdValue<T>,
+    rhs: AdValue<T>,
+    op: BinaryOp,
+) -> AdValue<T> {
     let lhs = AdScalar::from(lhs);
     let rhs = AdScalar::from(rhs);
     match op {
@@ -794,7 +801,7 @@ fn check_reverse_tape_compatibility<T>(
     }
 }
 
-fn checked_apply_binary_ad<T: ScalarAd>(
+fn checked_apply_binary_ad<T: ScalarAd + 'static>(
     lhs: AdValue<T>,
     rhs: AdValue<T>,
     op: BinaryOp,
@@ -812,47 +819,39 @@ fn unsupported_binary_pair(op: BinaryOp, lhs: ScalarType, rhs: ScalarType) -> Er
     }
 }
 
-fn try_binary_dyn(lhs: DynAdValue, rhs: DynAdValue, op: BinaryOp) -> Result<DynAdValue> {
+fn try_binary_dyn(lhs: DynAdScalar, rhs: DynAdScalar, op: BinaryOp) -> Result<DynAdScalar> {
     let lhs_ty = lhs.scalar_type();
     let rhs_ty = rhs.scalar_type();
     match (lhs, rhs) {
-        (DynAdValue::F32(a), DynAdValue::F32(b)) => {
-            Ok(DynAdValue::F32(checked_apply_binary_ad(a, b, op)?))
+        (DynAdScalar::F32(a), DynAdScalar::F32(b)) => {
+            Ok(DynAdScalar::F32(checked_apply_binary_ad(a, b, op)?))
         }
-        (DynAdValue::F64(a), DynAdValue::F64(b)) => {
-            Ok(DynAdValue::F64(checked_apply_binary_ad(a, b, op)?))
+        (DynAdScalar::F64(a), DynAdScalar::F64(b)) => {
+            Ok(DynAdScalar::F64(checked_apply_binary_ad(a, b, op)?))
         }
-        (DynAdValue::C32(a), DynAdValue::C32(b)) => {
-            Ok(DynAdValue::C32(checked_apply_binary_ad(a, b, op)?))
+        (DynAdScalar::C32(a), DynAdScalar::C32(b)) => {
+            Ok(DynAdScalar::C32(checked_apply_binary_ad(a, b, op)?))
         }
-        (DynAdValue::C64(a), DynAdValue::C64(b)) => {
-            Ok(DynAdValue::C64(checked_apply_binary_ad(a, b, op)?))
+        (DynAdScalar::C64(a), DynAdScalar::C64(b)) => {
+            Ok(DynAdScalar::C64(checked_apply_binary_ad(a, b, op)?))
         }
-        (DynAdValue::F32(a), DynAdValue::C32(b)) => Ok(DynAdValue::C32(checked_apply_binary_ad(
-            promote_f32_to_c32(a),
-            b,
-            op,
-        )?)),
-        (DynAdValue::C32(a), DynAdValue::F32(b)) => Ok(DynAdValue::C32(checked_apply_binary_ad(
-            a,
-            promote_f32_to_c32(b),
-            op,
-        )?)),
-        (DynAdValue::F64(a), DynAdValue::C64(b)) => Ok(DynAdValue::C64(checked_apply_binary_ad(
-            promote_f64_to_c64(a),
-            b,
-            op,
-        )?)),
-        (DynAdValue::C64(a), DynAdValue::F64(b)) => Ok(DynAdValue::C64(checked_apply_binary_ad(
-            a,
-            promote_f64_to_c64(b),
-            op,
-        )?)),
+        (DynAdScalar::F32(a), DynAdScalar::C32(b)) => Ok(DynAdScalar::C32(
+            checked_apply_binary_ad(promote_f32_to_c32(a), b, op)?,
+        )),
+        (DynAdScalar::C32(a), DynAdScalar::F32(b)) => Ok(DynAdScalar::C32(
+            checked_apply_binary_ad(a, promote_f32_to_c32(b), op)?,
+        )),
+        (DynAdScalar::F64(a), DynAdScalar::C64(b)) => Ok(DynAdScalar::C64(
+            checked_apply_binary_ad(promote_f64_to_c64(a), b, op)?,
+        )),
+        (DynAdScalar::C64(a), DynAdScalar::F64(b)) => Ok(DynAdScalar::C64(
+            checked_apply_binary_ad(a, promote_f64_to_c64(b), op)?,
+        )),
         _ => Err(unsupported_binary_pair(op, lhs_ty, rhs_ty)),
     }
 }
 
-impl DynAdValue {
+impl DynAdScalar {
     /// Creates a real scalar (`f64`) in primal mode.
     pub fn new_real(x: f64) -> Self {
         Self::from(x)
@@ -868,9 +867,9 @@ impl DynAdValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue, ScalarType};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar, ScalarType};
     ///
-    /// let x: DynAdValue = AdValue::primal(1.0_f32).into();
+    /// let x: DynAdScalar = AdValue::primal(1.0_f32).into();
     /// assert_eq!(x.scalar_type(), ScalarType::F32);
     /// ```
     pub fn scalar_type(&self) -> ScalarType {
@@ -887,9 +886,9 @@ impl DynAdValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdMode, AdValue, DynAdScalar};
     ///
-    /// let x: DynAdValue = AdValue::forward(2.0_f64, 1.0_f64).into();
+    /// let x: DynAdScalar = AdValue::forward(2.0_f64, 1.0_f64).into();
     /// assert_eq!(x.mode(), AdMode::Forward);
     /// ```
     pub fn mode(&self) -> AdMode {
@@ -901,14 +900,52 @@ impl DynAdValue {
         }
     }
 
+    /// Returns reverse-mode node id when available.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar, NodeId, TapeId};
+    ///
+    /// let x: DynAdScalar = AdValue::reverse(1.0_f64, NodeId(4), TapeId(6), None).into();
+    /// assert_eq!(x.node_id(), Some(NodeId(4)));
+    /// ```
+    pub fn node_id(&self) -> Option<NodeId> {
+        match self {
+            Self::F32(v) => v.node_id(),
+            Self::F64(v) => v.node_id(),
+            Self::C32(v) => v.node_id(),
+            Self::C64(v) => v.node_id(),
+        }
+    }
+
+    /// Returns reverse-mode tape id when available.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar, NodeId, TapeId};
+    ///
+    /// let x: DynAdScalar = AdValue::reverse(1.0_f64, NodeId(4), TapeId(6), None).into();
+    /// assert_eq!(x.tape_id(), Some(TapeId(6)));
+    /// ```
+    pub fn tape_id(&self) -> Option<TapeId> {
+        match self {
+            Self::F32(v) => v.tape_id(),
+            Self::F64(v) => v.tape_id(),
+            Self::C32(v) => v.tape_id(),
+            Self::C64(v) => v.tape_id(),
+        }
+    }
+
     /// Returns primal part as dynamic scalar.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue, DynScalar};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar, DynScalar};
     ///
-    /// let x: DynAdValue = AdValue::primal(3.0_f64).into();
+    /// let x: DynAdScalar = AdValue::primal(3.0_f64).into();
     /// assert_eq!(x.primal(), DynScalar::F64(3.0));
     /// ```
     pub fn primal(&self) -> DynScalar {
@@ -920,14 +957,49 @@ impl DynAdValue {
         }
     }
 
+    /// Consumes this scalar and returns the primal value, explicitly dropping AD metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar, DynScalar};
+    ///
+    /// let x: DynAdScalar = AdValue::forward(2.0_f64, 0.5_f64).into();
+    /// assert_eq!(x.primal_into(), DynScalar::F64(2.0));
+    /// ```
+    pub fn primal_into(self) -> DynScalar {
+        match self {
+            Self::F32(v) => DynScalar::F32(match v {
+                AdValue::Primal(primal) => primal,
+                AdValue::Forward { primal, .. } => primal,
+                AdValue::Reverse { primal, .. } => primal,
+            }),
+            Self::F64(v) => DynScalar::F64(match v {
+                AdValue::Primal(primal) => primal,
+                AdValue::Forward { primal, .. } => primal,
+                AdValue::Reverse { primal, .. } => primal,
+            }),
+            Self::C32(v) => DynScalar::C32(match v {
+                AdValue::Primal(primal) => primal,
+                AdValue::Forward { primal, .. } => primal,
+                AdValue::Reverse { primal, .. } => primal,
+            }),
+            Self::C64(v) => DynScalar::C64(match v {
+                AdValue::Primal(primal) => primal,
+                AdValue::Forward { primal, .. } => primal,
+                AdValue::Reverse { primal, .. } => primal,
+            }),
+        }
+    }
+
     /// Returns tangent part as dynamic scalar when available.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue, DynScalar};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar, DynScalar};
     ///
-    /// let x: DynAdValue = AdValue::forward(3.0_f64, 0.5_f64).into();
+    /// let x: DynAdScalar = AdValue::forward(3.0_f64, 0.5_f64).into();
     /// assert_eq!(x.tangent(), Some(DynScalar::F64(0.5)));
     /// ```
     pub fn tangent(&self) -> Option<DynScalar> {
@@ -939,14 +1011,28 @@ impl DynAdValue {
         }
     }
 
+    /// Returns the primal value while intentionally dropping AD metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar, DynScalar};
+    ///
+    /// let x: DynAdScalar = AdValue::reverse(3.0_f64, tenferro_dyadtensor::NodeId(1), tenferro_dyadtensor::TapeId(2), None).into();
+    /// assert_eq!(x.detach(), DynScalar::F64(3.0));
+    /// ```
+    pub fn detach(&self) -> DynScalar {
+        self.primal()
+    }
+
     /// Returns typed AD value ref when dtype is `f32`.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     ///
-    /// let x: DynAdValue = AdValue::primal(1.0_f32).into();
+    /// let x: DynAdScalar = AdValue::primal(1.0_f32).into();
     /// assert!(x.as_f32().is_some());
     /// ```
     pub fn as_f32(&self) -> Option<&AdValue<f32>> {
@@ -962,9 +1048,9 @@ impl DynAdValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     ///
-    /// let x: DynAdValue = AdValue::primal(1.0_f64).into();
+    /// let x: DynAdScalar = AdValue::primal(1.0_f64).into();
     /// assert!(x.as_f64().is_some());
     /// ```
     pub fn as_f64(&self) -> Option<&AdValue<f64>> {
@@ -980,10 +1066,10 @@ impl DynAdValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     /// use num_complex::Complex32;
     ///
-    /// let x: DynAdValue = AdValue::primal(Complex32::new(1.0, 0.0)).into();
+    /// let x: DynAdScalar = AdValue::primal(Complex32::new(1.0, 0.0)).into();
     /// assert!(x.as_c32().is_some());
     /// ```
     pub fn as_c32(&self) -> Option<&AdValue<Complex32>> {
@@ -999,10 +1085,10 @@ impl DynAdValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     /// use num_complex::Complex64;
     ///
-    /// let x: DynAdValue = AdValue::primal(Complex64::new(1.0, 0.0)).into();
+    /// let x: DynAdScalar = AdValue::primal(Complex64::new(1.0, 0.0)).into();
     /// assert!(x.as_c64().is_some());
     /// ```
     pub fn as_c64(&self) -> Option<&AdValue<Complex64>> {
@@ -1195,10 +1281,10 @@ impl DynAdValue {
     ///
     /// ```rust
     /// use num_complex::Complex64;
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     ///
-    /// let x: DynAdValue = AdValue::primal(2.0_f64).into();
-    /// let y: DynAdValue = AdValue::primal(Complex64::new(1.0, -3.0)).into();
+    /// let x: DynAdScalar = AdValue::primal(2.0_f64).into();
+    /// let y: DynAdScalar = AdValue::primal(Complex64::new(1.0, -3.0)).into();
     /// let z = x.try_add(y).unwrap();
     /// assert_eq!(z.scalar_type(), tenferro_dyadtensor::ScalarType::C64);
     /// ```
@@ -1211,10 +1297,10 @@ impl DynAdValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     ///
-    /// let x: DynAdValue = AdValue::primal(5.0_f64).into();
-    /// let y: DynAdValue = AdValue::primal(2.0_f64).into();
+    /// let x: DynAdScalar = AdValue::primal(5.0_f64).into();
+    /// let y: DynAdScalar = AdValue::primal(2.0_f64).into();
     /// let z = x.try_sub(y).unwrap();
     /// assert_eq!(z.primal(), tenferro_dyadtensor::DynScalar::F64(3.0));
     /// ```
@@ -1228,10 +1314,10 @@ impl DynAdValue {
     ///
     /// ```rust
     /// use num_complex::Complex64;
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     ///
-    /// let x: DynAdValue = AdValue::primal(2.0_f64).into();
-    /// let y: DynAdValue = AdValue::primal(Complex64::new(1.0, 2.0)).into();
+    /// let x: DynAdScalar = AdValue::primal(2.0_f64).into();
+    /// let y: DynAdScalar = AdValue::primal(Complex64::new(1.0, 2.0)).into();
     /// let z = x.try_mul(y).unwrap();
     /// assert_eq!(z.scalar_type(), tenferro_dyadtensor::ScalarType::C64);
     /// ```
@@ -1244,10 +1330,10 @@ impl DynAdValue {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdValue, DynAdValue};
+    /// use tenferro_dyadtensor::{AdValue, DynAdScalar};
     ///
-    /// let x: DynAdValue = AdValue::primal(8.0_f64).into();
-    /// let y: DynAdValue = AdValue::primal(2.0_f64).into();
+    /// let x: DynAdScalar = AdValue::primal(8.0_f64).into();
+    /// let y: DynAdScalar = AdValue::primal(2.0_f64).into();
     /// let z = x.try_div(y).unwrap();
     /// assert_eq!(z.primal(), tenferro_dyadtensor::DynScalar::F64(4.0));
     /// ```
@@ -1256,118 +1342,118 @@ impl DynAdValue {
     }
 }
 
-impl From<AdValue<f32>> for DynAdValue {
+impl From<AdValue<f32>> for DynAdScalar {
     fn from(value: AdValue<f32>) -> Self {
         Self::F32(value)
     }
 }
 
-impl From<AdValue<f64>> for DynAdValue {
+impl From<AdValue<f64>> for DynAdScalar {
     fn from(value: AdValue<f64>) -> Self {
         Self::F64(value)
     }
 }
 
-impl From<AdValue<Complex32>> for DynAdValue {
+impl From<AdValue<Complex32>> for DynAdScalar {
     fn from(value: AdValue<Complex32>) -> Self {
         Self::C32(value)
     }
 }
 
-impl From<AdValue<Complex64>> for DynAdValue {
+impl From<AdValue<Complex64>> for DynAdScalar {
     fn from(value: AdValue<Complex64>) -> Self {
         Self::C64(value)
     }
 }
 
-impl From<f32> for DynAdValue {
+impl From<f32> for DynAdScalar {
     fn from(value: f32) -> Self {
         Self::F32(AdValue::primal(value))
     }
 }
 
-impl From<f64> for DynAdValue {
+impl From<f64> for DynAdScalar {
     fn from(value: f64) -> Self {
         Self::F64(AdValue::primal(value))
     }
 }
 
-impl From<Complex32> for DynAdValue {
+impl From<Complex32> for DynAdScalar {
     fn from(value: Complex32) -> Self {
         Self::C32(AdValue::primal(value))
     }
 }
 
-impl From<Complex64> for DynAdValue {
+impl From<Complex64> for DynAdScalar {
     fn from(value: Complex64) -> Self {
         Self::C64(AdValue::primal(value))
     }
 }
 
-impl Add for DynAdValue {
-    type Output = DynAdValue;
+impl Add for DynAdScalar {
+    type Output = DynAdScalar;
 
     fn add(self, rhs: Self) -> Self::Output {
         self.try_add(rhs)
-            .unwrap_or_else(|e| panic!("DynAdValue add failed: {e}"))
+            .unwrap_or_else(|e| panic!("DynAdScalar add failed: {e}"))
     }
 }
 
-impl Sub for DynAdValue {
-    type Output = DynAdValue;
+impl Sub for DynAdScalar {
+    type Output = DynAdScalar;
 
     fn sub(self, rhs: Self) -> Self::Output {
         self.try_sub(rhs)
-            .unwrap_or_else(|e| panic!("DynAdValue sub failed: {e}"))
+            .unwrap_or_else(|e| panic!("DynAdScalar sub failed: {e}"))
     }
 }
 
-impl Mul for DynAdValue {
-    type Output = DynAdValue;
+impl Mul for DynAdScalar {
+    type Output = DynAdScalar;
 
     fn mul(self, rhs: Self) -> Self::Output {
         self.try_mul(rhs)
-            .unwrap_or_else(|e| panic!("DynAdValue mul failed: {e}"))
+            .unwrap_or_else(|e| panic!("DynAdScalar mul failed: {e}"))
     }
 }
 
-impl Div for DynAdValue {
-    type Output = DynAdValue;
+impl Div for DynAdScalar {
+    type Output = DynAdScalar;
 
     fn div(self, rhs: Self) -> Self::Output {
         self.try_div(rhs)
-            .unwrap_or_else(|e| panic!("DynAdValue div failed: {e}"))
+            .unwrap_or_else(|e| panic!("DynAdScalar div failed: {e}"))
     }
 }
 
-impl Neg for DynAdValue {
-    type Output = DynAdValue;
+impl Neg for DynAdScalar {
+    type Output = DynAdScalar;
 
     fn neg(self) -> Self::Output {
         match self {
-            DynAdValue::F32(v) => DynAdValue::F32(v.map(|x| -x)),
-            DynAdValue::F64(v) => DynAdValue::F64(v.map(|x| -x)),
-            DynAdValue::C32(v) => DynAdValue::C32(v.map(|x| -x)),
-            DynAdValue::C64(v) => DynAdValue::C64(v.map(|x| -x)),
+            DynAdScalar::F32(v) => DynAdScalar::F32(v.map(|x| -x)),
+            DynAdScalar::F64(v) => DynAdScalar::F64(v.map(|x| -x)),
+            DynAdScalar::C32(v) => DynAdScalar::C32(v.map(|x| -x)),
+            DynAdScalar::C64(v) => DynAdScalar::C64(v.map(|x| -x)),
         }
     }
 }
 
 macro_rules! impl_dynadvalue_scalar_binop {
     ($trait:ident, $method:ident, $scalar:ty) => {
-        impl $trait<$scalar> for DynAdValue {
-            type Output = DynAdValue;
+        impl $trait<$scalar> for DynAdScalar {
+            type Output = DynAdScalar;
 
             fn $method(self, rhs: $scalar) -> Self::Output {
-                $trait::$method(self, DynAdValue::from(rhs))
+                $trait::$method(self, DynAdScalar::from(rhs))
             }
         }
 
-        impl $trait<DynAdValue> for $scalar {
-            type Output = DynAdValue;
+        impl $trait<DynAdScalar> for $scalar {
+            type Output = DynAdScalar;
 
-            fn $method(self, rhs: DynAdValue) -> Self::Output {
-                $trait::$method(DynAdValue::from(self), rhs)
+            fn $method(self, rhs: DynAdScalar) -> Self::Output {
+                $trait::$method(DynAdScalar::from(self), rhs)
             }
         }
     };
@@ -1390,65 +1476,69 @@ impl_dynadvalue_scalar_binop!(Div, div, f64);
 impl_dynadvalue_scalar_binop!(Div, div, Complex32);
 impl_dynadvalue_scalar_binop!(Div, div, Complex64);
 
-impl TryFrom<DynAdValue> for f64 {
+impl TryFrom<DynAdScalar> for f64 {
     type Error = &'static str;
 
-    fn try_from(value: DynAdValue) -> core::result::Result<Self, Self::Error> {
+    fn try_from(value: DynAdScalar) -> core::result::Result<Self, Self::Error> {
         match value {
-            DynAdValue::F32(v) => Ok(*v.primal_ref() as f64),
-            DynAdValue::F64(v) => Ok(*v.primal_ref()),
-            DynAdValue::C32(_) | DynAdValue::C64(_) => {
-                Err("Cannot convert complex DynAdValue to f64")
+            DynAdScalar::F32(v) => Ok(*v.primal_ref() as f64),
+            DynAdScalar::F64(v) => Ok(*v.primal_ref()),
+            DynAdScalar::C32(_) | DynAdScalar::C64(_) => {
+                Err("Cannot convert complex DynAdScalar to f64")
             }
         }
     }
 }
 
-impl From<DynAdValue> for Complex64 {
-    fn from(value: DynAdValue) -> Self {
+impl From<DynAdScalar> for Complex64 {
+    fn from(value: DynAdScalar) -> Self {
         match value {
-            DynAdValue::F32(v) => Complex64::new(*v.primal_ref() as f64, 0.0),
-            DynAdValue::F64(v) => Complex64::new(*v.primal_ref(), 0.0),
-            DynAdValue::C32(v) => {
+            DynAdScalar::F32(v) => Complex64::new(*v.primal_ref() as f64, 0.0),
+            DynAdScalar::F64(v) => Complex64::new(*v.primal_ref(), 0.0),
+            DynAdScalar::C32(v) => {
                 let z = v.primal_ref();
                 Complex64::new(z.re as f64, z.im as f64)
             }
-            DynAdValue::C64(v) => *v.primal_ref(),
+            DynAdScalar::C64(v) => *v.primal_ref(),
         }
     }
 }
 
-impl Default for DynAdValue {
+impl Default for DynAdScalar {
     fn default() -> Self {
         Self::new_real(0.0)
     }
 }
 
-impl Zero for DynAdValue {
+impl Zero for DynAdScalar {
     fn zero() -> Self {
         Self::new_real(0.0)
     }
 
     fn is_zero(&self) -> bool {
-        DynAdValue::is_zero(self)
+        DynAdScalar::is_zero(self)
     }
 }
 
-impl One for DynAdValue {
+impl One for DynAdScalar {
     fn one() -> Self {
         Self::new_real(1.0)
     }
 }
 
-impl PartialOrd for DynAdValue {
+impl PartialOrd for DynAdScalar {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         match (self, other) {
-            (DynAdValue::F32(a), DynAdValue::F32(b)) => a.primal_ref().partial_cmp(b.primal_ref()),
-            (DynAdValue::F64(a), DynAdValue::F64(b)) => a.primal_ref().partial_cmp(b.primal_ref()),
-            (DynAdValue::F32(a), DynAdValue::F64(b)) => {
+            (DynAdScalar::F32(a), DynAdScalar::F32(b)) => {
+                a.primal_ref().partial_cmp(b.primal_ref())
+            }
+            (DynAdScalar::F64(a), DynAdScalar::F64(b)) => {
+                a.primal_ref().partial_cmp(b.primal_ref())
+            }
+            (DynAdScalar::F32(a), DynAdScalar::F64(b)) => {
                 (*a.primal_ref() as f64).partial_cmp(b.primal_ref())
             }
-            (DynAdValue::F64(a), DynAdValue::F32(b)) => {
+            (DynAdScalar::F64(a), DynAdScalar::F32(b)) => {
                 a.primal_ref().partial_cmp(&(*b.primal_ref() as f64))
             }
             _ => None,
@@ -1456,14 +1546,30 @@ impl PartialOrd for DynAdValue {
     }
 }
 
-impl fmt::Display for DynAdValue {
+impl fmt::Display for DynAdScalar {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DynAdValue::F32(v) => write!(f, "{}", v.primal_ref()),
-            DynAdValue::F64(v) => write!(f, "{}", v.primal_ref()),
-            DynAdValue::C32(v) => write!(f, "{}", v.primal_ref()),
-            DynAdValue::C64(v) => write!(f, "{}", v.primal_ref()),
+            DynAdScalar::F32(v) => write!(f, "{}", v.primal_ref()),
+            DynAdScalar::F64(v) => write!(f, "{}", v.primal_ref()),
+            DynAdScalar::C32(v) => write!(f, "{}", v.primal_ref()),
+            DynAdScalar::C64(v) => write!(f, "{}", v.primal_ref()),
         }
+    }
+}
+
+impl Mul<&DynAdTensor> for &DynAdScalar {
+    type Output = Result<DynAdTensor>;
+
+    fn mul(self, rhs: &DynAdTensor) -> Self::Output {
+        rhs.scale(self)
+    }
+}
+
+impl Div<&DynAdScalar> for &DynAdTensor {
+    type Output = Result<DynAdTensor>;
+
+    fn div(self, rhs: &DynAdScalar) -> Self::Output {
+        self.div_scalar(rhs)
     }
 }
 
@@ -1560,7 +1666,7 @@ fn merge_add_ad_tensors<T>(
     rhs: AdValue<Tensor<T>>,
 ) -> Result<AdValue<Tensor<T>>>
 where
-    T: Scalar + Copy + Add<Output = T>,
+    T: Scalar + Copy + Add<Output = T> + 'static,
 {
     let lhs_state = split_ad_tensor_state(lhs);
     let rhs_state = split_ad_tensor_state(rhs);
@@ -1578,35 +1684,244 @@ where
             Some(tangent) => Ok(AdValue::Forward { primal, tangent }),
             None => Ok(AdValue::Primal(primal)),
         },
-        (Some((node, tape)), None) => Ok(AdValue::Reverse {
-            primal,
-            node,
-            tape,
-            tangent,
-        }),
-        (None, Some((node, tape))) => Ok(AdValue::Reverse {
-            primal,
-            node,
-            tape,
-            tangent,
-        }),
-        (Some((lhs_node, lhs_tape)), Some((_, rhs_tape))) => {
-            if lhs_tape != rhs_tape {
-                return Err(Error::InvalidAdTensor {
-                    message: format!(
-                        "compose_complex: reverse-mode tape mismatch (lhs={}, rhs={})",
-                        lhs_tape.0, rhs_tape.0
-                    ),
-                });
+        (Some((lhs_node, lhs_tape)), rhs_reverse) => {
+            if let Some((_, rhs_tape)) = rhs_reverse {
+                if lhs_tape != rhs_tape {
+                    return Err(Error::InvalidAdTensor {
+                        message: format!(
+                            "reverse-mode tape mismatch in tensor add (lhs={}, rhs={})",
+                            lhs_tape.0, rhs_tape.0
+                        ),
+                    });
+                }
             }
+            let rhs_node = rhs_reverse.map(|(node, _)| node);
+            let output_node = NodeId(NEXT_AD_TENSOR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            reverse_tape::register_rule::<T>(
+                lhs_tape,
+                output_node,
+                Box::new(move |cotangent: &Tensor<T>| {
+                    let mut input_grads = Vec::new();
+                    input_grads.push((lhs_node, cotangent.clone()));
+                    if let Some(node) = rhs_node {
+                        input_grads.push((node, cotangent.clone()));
+                    }
+                    Ok(input_grads)
+                }),
+            )?;
             Ok(AdValue::Reverse {
                 primal,
-                node: lhs_node,
+                node: output_node,
                 tape: lhs_tape,
                 tangent,
             })
         }
+        (None, Some((rhs_node, rhs_tape))) => {
+            let output_node = NodeId(NEXT_AD_TENSOR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            reverse_tape::register_rule::<T>(
+                rhs_tape,
+                output_node,
+                Box::new(move |cotangent: &Tensor<T>| Ok(vec![(rhs_node, cotangent.clone())])),
+            )?;
+            Ok(AdValue::Reverse {
+                primal,
+                node: output_node,
+                tape: rhs_tape,
+                tangent,
+            })
+        }
     }
+}
+
+fn tensor_scalar_rrule_typed<T>(
+    tensor_primal: &Tensor<T>,
+    scalar_primal: T,
+    cotangent: &Tensor<T>,
+    rrule: fn(T, T, T) -> (T, T),
+) -> Result<(Tensor<T>, T)>
+where
+    T: Scalar + ScalarAd + Copy,
+{
+    if tensor_primal.dims() != cotangent.dims() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "shape mismatch in mixed reverse pullback: primal={:?}, cotangent={:?}",
+                tensor_primal.dims(),
+                cotangent.dims()
+            ),
+        });
+    }
+
+    let dims = tensor_primal.dims().to_vec();
+    let total: usize = dims.iter().product();
+    let mut idx = vec![0usize; dims.len()];
+    let mut tensor_grad = Vec::with_capacity(total);
+    let mut scalar_grad = T::from_i32(0);
+
+    for flat in 0..total {
+        unflatten_index_column_major(flat, &dims, &mut idx);
+        let x = tensor_element(tensor_primal, &idx)?;
+        let dy = tensor_element(cotangent, &idx)?;
+        let (dx, da) = rrule(x, scalar_primal, dy);
+        tensor_grad.push(dx);
+        scalar_grad = scalar_grad + da;
+    }
+
+    Ok((
+        Tensor::from_slice(&tensor_grad, &dims, MemoryOrder::ColumnMajor).map_err(Error::from)?,
+        scalar_grad,
+    ))
+}
+
+fn tensor_binary_scalar_ad_typed<T>(
+    primal: &Tensor<T>,
+    tensor_tangent: Option<&Tensor<T>>,
+    scalar_primal: T,
+    scalar_tangent: Option<T>,
+    primal_rule: fn(T, T) -> T,
+    frule: fn(T, T, T, T) -> (T, T),
+) -> Result<(Tensor<T>, Option<Tensor<T>>)>
+where
+    T: Scalar + ScalarAd + Copy,
+{
+    let primal_out = tensor_map_unary_typed(primal, |x| primal_rule(x, scalar_primal))?;
+    let tangent_out = match (tensor_tangent, scalar_tangent) {
+        (None, None) => None,
+        (Some(dt), maybe_ds) => Some(tensor_map_binary_typed(primal, dt, |x, dx| {
+            let (_, tangent) = frule(
+                x,
+                scalar_primal,
+                dx,
+                maybe_ds.unwrap_or_else(|| T::from_i32(0)),
+            );
+            tangent
+        })?),
+        (None, Some(ds)) => Some(tensor_map_unary_typed(primal, |x| {
+            let (_, tangent) = frule(x, scalar_primal, T::from_i32(0), ds);
+            tangent
+        })?),
+    };
+    Ok((primal_out, tangent_out))
+}
+
+fn merge_tensor_scalar_output<T>(
+    tensor: &AdTensor<T>,
+    scalar: &AdValue<T>,
+    primal: Tensor<T>,
+    tangent: Option<Tensor<T>>,
+    rrule: fn(T, T, T) -> (T, T),
+) -> Result<AdTensor<T>>
+where
+    T: Scalar + ScalarAd + Copy + 'static,
+{
+    let tensor_reverse = match tensor.as_value() {
+        AdValue::Reverse { node, tape, .. } => Some((*node, *tape)),
+        _ => None,
+    };
+    let scalar_reverse = match scalar {
+        AdValue::Reverse { node, tape, .. } => Some((*node, *tape)),
+        _ => None,
+    };
+
+    let reverse = match (tensor_reverse, scalar_reverse) {
+        (Some((lhs_node, lhs_tape)), Some((_, rhs_tape))) if lhs_tape != rhs_tape => {
+            return Err(Error::MixedReverseTape {
+                expected: lhs_tape.0,
+                found: rhs_tape.0,
+            })
+        }
+        (Some((node, tape)), Some(_)) => Some((node, tape)),
+        (Some((node, tape)), None) => Some((node, tape)),
+        (None, Some((node, tape))) => Some((node, tape)),
+        (None, None) => None,
+    };
+
+    if let Some((_, tape)) = reverse {
+        let output_node = NodeId(NEXT_AD_TENSOR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+        let tensor_node = tensor_reverse.map(|(node, _)| node);
+        let scalar_node = scalar_reverse.map(|(node, _)| node);
+        let tensor_primal = tensor.primal().clone();
+        let tensor_primal_for_scalar = tensor_primal.clone();
+        let scalar_primal = *scalar.primal_ref();
+
+        reverse_tape::register_rule::<T>(
+            tape,
+            output_node,
+            Box::new(move |cotangent| {
+                let mut input_grads = Vec::new();
+                if let Some(node) = tensor_node {
+                    let (tensor_grad, _) =
+                        tensor_scalar_rrule_typed(&tensor_primal, scalar_primal, cotangent, rrule)?;
+                    input_grads.push((node, tensor_grad));
+                }
+                Ok(input_grads)
+            }),
+        )?;
+
+        if let Some(node) = scalar_node {
+            reverse_tape::register_scalar_bridge_rule::<T, T>(
+                tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    let (_, scalar_grad) = tensor_scalar_rrule_typed(
+                        &tensor_primal_for_scalar,
+                        scalar_primal,
+                        cotangent,
+                        rrule,
+                    )?;
+                    Ok(vec![(node, scalar_grad)])
+                }),
+            )?;
+        }
+
+        return Ok(AdTensor::new_reverse(primal, output_node, tape, tangent));
+    }
+    if let Some(tangent) = tangent {
+        return Ok(AdTensor::new_forward(primal, tangent));
+    }
+    Ok(AdTensor::new_primal(primal))
+}
+
+fn scale_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdValue<T>) -> Result<AdTensor<T>>
+where
+    T: Scalar + ScalarAd + Copy + 'static,
+{
+    let (primal, tangent) = tensor_binary_scalar_ad_typed(
+        tensor.primal(),
+        tensor.tangent(),
+        *scalar.primal_ref(),
+        scalar.tangent_ref().copied(),
+        chainrules_scalarops::mul,
+        chainrules_scalarops::mul_frule,
+    )?;
+    merge_tensor_scalar_output(
+        tensor,
+        scalar,
+        primal,
+        tangent,
+        chainrules_scalarops::mul_rrule,
+    )
+}
+
+fn div_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdValue<T>) -> Result<AdTensor<T>>
+where
+    T: Scalar + ScalarAd + Copy + 'static,
+{
+    let (primal, tangent) = tensor_binary_scalar_ad_typed(
+        tensor.primal(),
+        tensor.tangent(),
+        *scalar.primal_ref(),
+        scalar.tangent_ref().copied(),
+        chainrules_scalarops::div,
+        chainrules_scalarops::div_frule,
+    )?;
+    merge_tensor_scalar_output(
+        tensor,
+        scalar,
+        primal,
+        tangent,
+        chainrules_scalarops::div_rrule,
+    )
 }
 
 impl DynAdTensor {
@@ -1876,6 +2191,132 @@ impl DynAdTensor {
         }
     }
 
+    /// Scalar multiply with AD preservation for scalar and tensor inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdScalar, DynAdTensor, ScalarType};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let a = DynAdScalar::from(2.0_f64);
+    /// let y = x.scale(&a).unwrap();
+    /// assert_eq!(y.scalar_type(), ScalarType::F64);
+    /// ```
+    pub fn scale(&self, scalar: &DynAdScalar) -> Result<Self> {
+        match (self, scalar) {
+            (Self::F32(tensor), DynAdScalar::F32(alpha)) => {
+                Ok(Self::F32(scale_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::F64(tensor), DynAdScalar::F64(alpha)) => {
+                Ok(Self::F64(scale_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::C32(tensor), DynAdScalar::C32(alpha)) => {
+                Ok(Self::C32(scale_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::C64(tensor), DynAdScalar::C64(alpha)) => {
+                Ok(Self::C64(scale_ad_tensor_typed(tensor, alpha)?))
+            }
+            _ => Err(Error::InvalidAdTensor {
+                message: format!(
+                    "dtype mismatch in scale: tensor={:?}, scalar={:?}",
+                    self.scalar_type(),
+                    scalar.scalar_type()
+                ),
+            }),
+        }
+    }
+
+    /// Affine combination `a * self + b * other`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdScalar, DynAdTensor, ScalarType};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let y = x.clone();
+    /// let a = DynAdScalar::from(2.0_f64);
+    /// let b = DynAdScalar::from(-1.0_f64);
+    /// let z = x.axpby(&a, &y, &b).unwrap();
+    /// assert_eq!(z.scalar_type(), ScalarType::F64);
+    /// ```
+    pub fn axpby(&self, a: &DynAdScalar, other: &Self, b: &DynAdScalar) -> Result<Self> {
+        match (self.scale(a)?, other.scale(b)?) {
+            (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(AdTensor(merge_add_ad_tensors(
+                lhs.into_value(),
+                rhs.into_value(),
+            )?))),
+            (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64(AdTensor(merge_add_ad_tensors(
+                lhs.into_value(),
+                rhs.into_value(),
+            )?))),
+            (Self::C32(lhs), Self::C32(rhs)) => Ok(Self::C32(AdTensor(merge_add_ad_tensors(
+                lhs.into_value(),
+                rhs.into_value(),
+            )?))),
+            (Self::C64(lhs), Self::C64(rhs)) => Ok(Self::C64(AdTensor(merge_add_ad_tensors(
+                lhs.into_value(),
+                rhs.into_value(),
+            )?))),
+            (lhs, rhs) => Err(Error::InvalidAdTensor {
+                message: format!(
+                    "dtype mismatch in axpby after scaling: lhs={:?}, rhs={:?}",
+                    lhs.scalar_type(),
+                    rhs.scalar_type()
+                ),
+            }),
+        }
+    }
+
+    /// Division by an AD-aware scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdScalar, DynAdTensor, ScalarType};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[2.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let a = DynAdScalar::from(2.0_f64);
+    /// let y = x.div_scalar(&a).unwrap();
+    /// assert_eq!(y.scalar_type(), ScalarType::F64);
+    /// ```
+    pub fn div_scalar(&self, scalar: &DynAdScalar) -> Result<Self> {
+        match (self, scalar) {
+            (Self::F32(tensor), DynAdScalar::F32(alpha)) => {
+                Ok(Self::F32(div_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::F64(tensor), DynAdScalar::F64(alpha)) => {
+                Ok(Self::F64(div_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::C32(tensor), DynAdScalar::C32(alpha)) => {
+                Ok(Self::C32(div_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::C64(tensor), DynAdScalar::C64(alpha)) => {
+                Ok(Self::C64(div_ad_tensor_typed(tensor, alpha)?))
+            }
+            _ => Err(Error::InvalidAdTensor {
+                message: format!(
+                    "dtype mismatch in div_scalar: tensor={:?}, scalar={:?}",
+                    self.scalar_type(),
+                    scalar.scalar_type()
+                ),
+            }),
+        }
+    }
+
     /// Computes `max(abs(primal(self) - primal(rhs)))`.
     ///
     /// AD metadata is preserved in the operands and not modified; this utility
@@ -1954,7 +2395,7 @@ mod tests {
 
     #[test]
     fn dyn_ad_value_mode_and_tangent() {
-        let x: DynAdValue = AdValue::forward(2.0_f32, 0.5_f32).into();
+        let x: DynAdScalar = AdValue::forward(2.0_f32, 0.5_f32).into();
         assert_eq!(x.scalar_type(), ScalarType::F32);
         assert_eq!(x.mode(), AdMode::Forward);
         assert_eq!(x.tangent(), Some(DynScalar::F32(0.5)));
@@ -1974,8 +2415,8 @@ mod tests {
 
     #[test]
     fn dyn_ad_value_mul_mixed_real_complex_promotes_to_complex() {
-        let lhs = DynAdValue::from(2.0_f64);
-        let rhs = DynAdValue::from(Complex64::new(1.0, -3.0));
+        let lhs = DynAdScalar::from(2.0_f64);
+        let rhs = DynAdScalar::from(Complex64::new(1.0, -3.0));
         let out = lhs * rhs;
         assert_eq!(out.scalar_type(), ScalarType::C64);
         assert_eq!(out.primal(), DynScalar::C64(Complex64::new(2.0, -6.0)));
@@ -1983,7 +2424,7 @@ mod tests {
 
     #[test]
     fn dyn_ad_value_div_with_scalar_lhs_is_supported() {
-        let rhs = DynAdValue::from(2.0_f64);
+        let rhs = DynAdScalar::from(2.0_f64);
         let out = Complex64::new(4.0, -2.0) / rhs;
         assert_eq!(out.scalar_type(), ScalarType::C64);
         assert_eq!(out.primal(), DynScalar::C64(Complex64::new(2.0, -1.0)));
@@ -1991,16 +2432,16 @@ mod tests {
 
     #[test]
     fn dyn_ad_value_try_add_rejects_cross_precision_pairs() {
-        let lhs = DynAdValue::from(1.0_f32);
-        let rhs = DynAdValue::from(2.0_f64);
+        let lhs = DynAdScalar::from(1.0_f32);
+        let rhs = DynAdScalar::from(2.0_f64);
         let err = lhs.try_add(rhs).unwrap_err();
         assert!(matches!(err, Error::InvalidAdScalar { .. }));
     }
 
     #[test]
     fn dyn_ad_value_try_mul_checks_reverse_tape_compatibility() {
-        let lhs: DynAdValue = AdValue::reverse(2.0_f64, crate::NodeId(1), TapeId(7), None).into();
-        let rhs: DynAdValue = AdValue::reverse(3.0_f64, crate::NodeId(2), TapeId(8), None).into();
+        let lhs: DynAdScalar = AdValue::reverse(2.0_f64, crate::NodeId(1), TapeId(7), None).into();
+        let rhs: DynAdScalar = AdValue::reverse(3.0_f64, crate::NodeId(2), TapeId(8), None).into();
         let err = lhs.try_mul(rhs).unwrap_err();
         assert!(
             matches!(err, Error::InvalidAdScalar { message } if message.contains("reverse-mode tape mismatch"))

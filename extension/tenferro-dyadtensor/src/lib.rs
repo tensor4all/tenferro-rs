@@ -26,7 +26,7 @@ pub use api::{
 pub use context::{
     set_global_context, try_with_global_context, with_global_context, GlobalContextGuard,
 };
-pub use dyn_types::{DynAdTensor, DynAdValue, DynScalar, DynTensor, ScalarType};
+pub use dyn_types::{DynAdScalar, DynAdTensor, DynScalar, DynTensor, ScalarType};
 pub use error::{Error, Result};
 pub use partial_diag::{
     plan_axis_classes_for_subscripts, AxisClassMergePlan, AxisClassPlanError, OperandAxisClassPlan,

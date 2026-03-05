@@ -1,9 +1,10 @@
 use chainrules_scalarops as scalarops;
 use core::ops::{Add, Div, Mul, Sub};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
-use crate::{Error, Result};
+use crate::{reverse_tape, Error, Result};
 
 /// Automatic differentiation mode.
 ///
@@ -439,30 +440,15 @@ impl<T> AdScalar<T> {
     /// ```
     pub fn conj(self) -> Self
     where
-        T: scalarops::ScalarAd,
+        T: scalarops::ScalarAd + 'static,
     {
-        match self.0 {
-            AdValue::Primal(primal) => Self::new_primal(scalarops::conj(primal)),
-            AdValue::Forward { primal, tangent } => {
-                let (primal, tangent) = scalarops::conj_frule(primal, tangent);
-                Self::new_forward(primal, tangent)
-            }
-            AdValue::Reverse {
-                primal,
-                node,
-                tape,
-                tangent,
-            } => {
-                let (primal, tangent) = match tangent {
-                    Some(tangent) => {
-                        let (primal, tangent) = scalarops::conj_frule(primal, tangent);
-                        (primal, Some(tangent))
-                    }
-                    None => (scalarops::conj(primal), None),
-                };
-                Self::new_reverse(primal, node, tape, tangent)
-            }
-        }
+        unary_ad_scalar_op(
+            self,
+            "conj",
+            scalarops::conj,
+            scalarops::conj_frule,
+            |_input, _output, cotangent| scalarops::conj_rrule(cotangent),
+        )
     }
 
     /// Applies scalar square-root with AD propagation.
@@ -479,30 +465,15 @@ impl<T> AdScalar<T> {
     /// ```
     pub fn sqrt(self) -> Self
     where
-        T: scalarops::ScalarAd,
+        T: scalarops::ScalarAd + 'static,
     {
-        match self.0 {
-            AdValue::Primal(primal) => Self::new_primal(scalarops::sqrt(primal)),
-            AdValue::Forward { primal, tangent } => {
-                let (primal, tangent) = scalarops::sqrt_frule(primal, tangent);
-                Self::new_forward(primal, tangent)
-            }
-            AdValue::Reverse {
-                primal,
-                node,
-                tape,
-                tangent,
-            } => {
-                let (primal, tangent) = match tangent {
-                    Some(tangent) => {
-                        let (primal, tangent) = scalarops::sqrt_frule(primal, tangent);
-                        (primal, Some(tangent))
-                    }
-                    None => (scalarops::sqrt(primal), None),
-                };
-                Self::new_reverse(primal, node, tape, tangent)
-            }
-        }
+        unary_ad_scalar_op(
+            self,
+            "sqrt",
+            scalarops::sqrt,
+            scalarops::sqrt_frule,
+            |_input, output, cotangent| scalarops::sqrt_rrule(output, cotangent),
+        )
     }
 
     /// Applies scalar real-exponent power with AD propagation.
@@ -519,30 +490,16 @@ impl<T> AdScalar<T> {
     /// ```
     pub fn powf(self, exponent: <T as scalarops::ScalarAd>::Real) -> Self
     where
-        T: scalarops::ScalarAd,
+        T: scalarops::ScalarAd + 'static,
+        <T as scalarops::ScalarAd>::Real: 'static,
     {
-        match self.0 {
-            AdValue::Primal(primal) => Self::new_primal(scalarops::powf(primal, exponent)),
-            AdValue::Forward { primal, tangent } => {
-                let (primal, tangent) = scalarops::powf_frule(primal, exponent, tangent);
-                Self::new_forward(primal, tangent)
-            }
-            AdValue::Reverse {
-                primal,
-                node,
-                tape,
-                tangent,
-            } => {
-                let (primal, tangent) = match tangent {
-                    Some(tangent) => {
-                        let (primal, tangent) = scalarops::powf_frule(primal, exponent, tangent);
-                        (primal, Some(tangent))
-                    }
-                    None => (scalarops::powf(primal, exponent), None),
-                };
-                Self::new_reverse(primal, node, tape, tangent)
-            }
-        }
+        unary_ad_scalar_op(
+            self,
+            "powf",
+            move |primal| scalarops::powf(primal, exponent),
+            move |primal, tangent| scalarops::powf_frule(primal, exponent, tangent),
+            move |input, _output, cotangent| scalarops::powf_rrule(input, exponent, cotangent),
+        )
     }
 
     /// Applies scalar integer-exponent power with AD propagation.
@@ -559,30 +516,15 @@ impl<T> AdScalar<T> {
     /// ```
     pub fn powi(self, exponent: i32) -> Self
     where
-        T: scalarops::ScalarAd,
+        T: scalarops::ScalarAd + 'static,
     {
-        match self.0 {
-            AdValue::Primal(primal) => Self::new_primal(scalarops::powi(primal, exponent)),
-            AdValue::Forward { primal, tangent } => {
-                let (primal, tangent) = scalarops::powi_frule(primal, exponent, tangent);
-                Self::new_forward(primal, tangent)
-            }
-            AdValue::Reverse {
-                primal,
-                node,
-                tape,
-                tangent,
-            } => {
-                let (primal, tangent) = match tangent {
-                    Some(tangent) => {
-                        let (primal, tangent) = scalarops::powi_frule(primal, exponent, tangent);
-                        (primal, Some(tangent))
-                    }
-                    None => (scalarops::powi(primal, exponent), None),
-                };
-                Self::new_reverse(primal, node, tape, tangent)
-            }
-        }
+        unary_ad_scalar_op(
+            self,
+            "powi",
+            move |primal| scalarops::powi(primal, exponent),
+            move |primal, tangent| scalarops::powi_frule(primal, exponent, tangent),
+            move |input, _output, cotangent| scalarops::powi_rrule(input, exponent, cotangent),
+        )
     }
 }
 
@@ -601,6 +543,57 @@ impl<T> From<AdValue<T>> for AdScalar<T> {
 impl<T> From<AdScalar<T>> for AdValue<T> {
     fn from(value: AdScalar<T>) -> Self {
         value.0
+    }
+}
+
+static NEXT_AD_SCALAR_NODE_ID: AtomicU64 = AtomicU64::new(1_u64 << 62);
+
+fn unary_ad_scalar_op<T, P, F, R>(
+    value: AdScalar<T>,
+    op_name: &'static str,
+    primal_rule: P,
+    frule: F,
+    rrule: R,
+) -> AdScalar<T>
+where
+    T: scalarops::ScalarAd + 'static,
+    P: Fn(T) -> T,
+    F: Fn(T, T) -> (T, T),
+    R: Fn(T, T, T) -> T + 'static,
+{
+    match value.into_value() {
+        AdValue::Primal(primal) => AdScalar::new_primal(primal_rule(primal)),
+        AdValue::Forward { primal, tangent } => {
+            let (primal, tangent) = frule(primal, tangent);
+            AdScalar::new_forward(primal, tangent)
+        }
+        AdValue::Reverse {
+            primal: input_primal,
+            node: input_node,
+            tape,
+            tangent,
+        } => {
+            let (output_primal, tangent) = match tangent {
+                Some(tangent) => {
+                    let (primal, tangent) = frule(input_primal, tangent);
+                    (primal, Some(tangent))
+                }
+                None => (primal_rule(input_primal), None),
+            };
+            let output_node = NodeId(NEXT_AD_SCALAR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            reverse_tape::register_scalar_rule(
+                tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    Ok(vec![(
+                        input_node,
+                        rrule(input_primal, output_primal, *cotangent),
+                    )])
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            AdScalar::new_reverse(output_primal, output_node, tape, tangent)
+        }
     }
 }
 
@@ -636,12 +629,29 @@ fn split_binary_state<T: scalarops::ScalarAd>(value: AdScalar<T>) -> BinaryScala
     }
 }
 
-fn binary_ad_scalar_try_op<T: scalarops::ScalarAd>(
+fn add_rrule_wrapped<T: scalarops::ScalarAd>(_lhs: T, _rhs: T, cotangent: T) -> (T, T) {
+    scalarops::add_rrule(cotangent)
+}
+
+fn sub_rrule_wrapped<T: scalarops::ScalarAd>(_lhs: T, _rhs: T, cotangent: T) -> (T, T) {
+    scalarops::sub_rrule(cotangent)
+}
+
+fn mul_rrule_wrapped<T: scalarops::ScalarAd>(lhs: T, rhs: T, cotangent: T) -> (T, T) {
+    scalarops::mul_rrule(lhs, rhs, cotangent)
+}
+
+fn div_rrule_wrapped<T: scalarops::ScalarAd>(lhs: T, rhs: T, cotangent: T) -> (T, T) {
+    scalarops::div_rrule(lhs, rhs, cotangent)
+}
+
+fn binary_ad_scalar_try_op<T: scalarops::ScalarAd + 'static>(
     lhs: AdScalar<T>,
     rhs: AdScalar<T>,
     _op_name: &'static str,
     primal_rule: fn(T, T) -> T,
     frule: fn(T, T, T, T) -> (T, T),
+    rrule: fn(T, T, T) -> (T, T),
 ) -> Result<AdScalar<T>> {
     let lhs_state = split_binary_state(lhs);
     let rhs_state = split_binary_state(rhs);
@@ -665,97 +675,181 @@ fn binary_ad_scalar_try_op<T: scalarops::ScalarAd>(
                 Ok(AdScalar::new_primal(primal))
             }
         }
-        (Some((node, tape)), None) => Ok(AdScalar::new_reverse(primal, node, tape, tangent)),
-        (None, Some((node, tape))) => Ok(AdScalar::new_reverse(primal, node, tape, tangent)),
-        (Some((lhs_node, lhs_tape)), Some((_, rhs_tape))) => {
-            if lhs_tape != rhs_tape {
-                return Err(Error::MixedReverseTape {
-                    expected: lhs_tape.0,
-                    found: rhs_tape.0,
-                });
-            }
-            Ok(AdScalar::new_reverse(primal, lhs_node, lhs_tape, tangent))
+        (lhs_reverse, rhs_reverse) => {
+            let tape = match (lhs_reverse, rhs_reverse) {
+                (Some((_, lhs_tape)), Some((_, rhs_tape))) if lhs_tape != rhs_tape => {
+                    return Err(Error::MixedReverseTape {
+                        expected: lhs_tape.0,
+                        found: rhs_tape.0,
+                    })
+                }
+                (Some((_, lhs_tape)), Some(_)) => lhs_tape,
+                (Some((_, lhs_tape)), None) => lhs_tape,
+                (None, Some((_, rhs_tape))) => rhs_tape,
+                (None, None) => unreachable!("non-reverse case handled above"),
+            };
+
+            let output_node = NodeId(NEXT_AD_SCALAR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            let lhs_primal = lhs_state.primal;
+            let rhs_primal = rhs_state.primal;
+            let lhs_node = lhs_reverse.map(|(node, _)| node);
+            let rhs_node = rhs_reverse.map(|(node, _)| node);
+
+            reverse_tape::register_scalar_rule(
+                tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    let (dlhs, drhs) = rrule(lhs_primal, rhs_primal, *cotangent);
+                    let mut grads = Vec::new();
+                    if let Some(node) = lhs_node {
+                        grads.push((node, dlhs));
+                    }
+                    if let Some(node) = rhs_node {
+                        grads.push((node, drhs));
+                    }
+                    Ok(grads)
+                }),
+            )?;
+
+            Ok(AdScalar::new_reverse(primal, output_node, tape, tangent))
         }
     }
 }
 
-fn binary_ad_scalar_op<T: scalarops::ScalarAd>(
+fn binary_ad_scalar_op<T: scalarops::ScalarAd + 'static>(
     lhs: AdScalar<T>,
     rhs: AdScalar<T>,
     op_name: &'static str,
     primal_rule: fn(T, T) -> T,
     frule: fn(T, T, T, T) -> (T, T),
+    rrule: fn(T, T, T) -> (T, T),
 ) -> AdScalar<T> {
-    binary_ad_scalar_try_op(lhs, rhs, op_name, primal_rule, frule)
+    binary_ad_scalar_try_op(lhs, rhs, op_name, primal_rule, frule, rrule)
         .unwrap_or_else(|e| panic!("{op_name}: {e}"))
 }
 
 impl<T> AdScalar<T>
 where
-    T: scalarops::ScalarAd,
+    T: scalarops::ScalarAd + 'static,
 {
     /// Checked addition for AD scalars.
     pub fn try_add(self, rhs: Self) -> Result<Self> {
-        binary_ad_scalar_try_op(self, rhs, "add", scalarops::add, scalarops::add_frule)
+        binary_ad_scalar_try_op(
+            self,
+            rhs,
+            "add",
+            scalarops::add,
+            scalarops::add_frule,
+            add_rrule_wrapped,
+        )
     }
 
     /// Checked subtraction for AD scalars.
     pub fn try_sub(self, rhs: Self) -> Result<Self> {
-        binary_ad_scalar_try_op(self, rhs, "sub", scalarops::sub, scalarops::sub_frule)
+        binary_ad_scalar_try_op(
+            self,
+            rhs,
+            "sub",
+            scalarops::sub,
+            scalarops::sub_frule,
+            sub_rrule_wrapped,
+        )
     }
 
     /// Checked multiplication for AD scalars.
     pub fn try_mul(self, rhs: Self) -> Result<Self> {
-        binary_ad_scalar_try_op(self, rhs, "mul", scalarops::mul, scalarops::mul_frule)
+        binary_ad_scalar_try_op(
+            self,
+            rhs,
+            "mul",
+            scalarops::mul,
+            scalarops::mul_frule,
+            mul_rrule_wrapped,
+        )
     }
 
     /// Checked division for AD scalars.
     pub fn try_div(self, rhs: Self) -> Result<Self> {
-        binary_ad_scalar_try_op(self, rhs, "div", scalarops::div, scalarops::div_frule)
+        binary_ad_scalar_try_op(
+            self,
+            rhs,
+            "div",
+            scalarops::div,
+            scalarops::div_frule,
+            div_rrule_wrapped,
+        )
     }
 }
 
 impl<T> Add for AdScalar<T>
 where
-    T: scalarops::ScalarAd,
+    T: scalarops::ScalarAd + 'static,
 {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(self, rhs, "add", scalarops::add, scalarops::add_frule)
+        binary_ad_scalar_op(
+            self,
+            rhs,
+            "add",
+            scalarops::add,
+            scalarops::add_frule,
+            add_rrule_wrapped,
+        )
     }
 }
 
 impl<T> Sub for AdScalar<T>
 where
-    T: scalarops::ScalarAd,
+    T: scalarops::ScalarAd + 'static,
 {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(self, rhs, "sub", scalarops::sub, scalarops::sub_frule)
+        binary_ad_scalar_op(
+            self,
+            rhs,
+            "sub",
+            scalarops::sub,
+            scalarops::sub_frule,
+            sub_rrule_wrapped,
+        )
     }
 }
 
 impl<T> Mul for AdScalar<T>
 where
-    T: scalarops::ScalarAd,
+    T: scalarops::ScalarAd + 'static,
 {
     type Output = Self;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(self, rhs, "mul", scalarops::mul, scalarops::mul_frule)
+        binary_ad_scalar_op(
+            self,
+            rhs,
+            "mul",
+            scalarops::mul,
+            scalarops::mul_frule,
+            mul_rrule_wrapped,
+        )
     }
 }
 
 impl<T> Div for AdScalar<T>
 where
-    T: scalarops::ScalarAd,
+    T: scalarops::ScalarAd + 'static,
 {
     type Output = Self;
 
     fn div(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(self, rhs, "div", scalarops::div, scalarops::div_frule)
+        binary_ad_scalar_op(
+            self,
+            rhs,
+            "div",
+            scalarops::div,
+            scalarops::div_frule,
+            div_rrule_wrapped,
+        )
     }
 }
 
@@ -1060,7 +1154,7 @@ mod tests {
     }
 
     #[test]
-    fn ad_scalar_conj_reverse_preserves_tape_metadata() {
+    fn ad_scalar_conj_reverse_allocates_fresh_output_node() {
         let x = AdScalar::new_reverse(
             Complex64::new(1.0, 2.0),
             NodeId(11),
@@ -1069,10 +1163,23 @@ mod tests {
         );
         let y = x.conj();
         assert_eq!(y.mode(), AdMode::Reverse);
-        assert_eq!(y.as_value().node_id(), Some(NodeId(11)));
         assert_eq!(y.as_value().tape_id(), Some(TapeId(7)));
+        assert_ne!(y.as_value().node_id(), Some(NodeId(11)));
         assert_eq!(*y.primal(), Complex64::new(1.0, -2.0));
         assert_eq!(*y.tangent().unwrap(), Complex64::new(-1.0, -0.5));
+    }
+
+    #[test]
+    fn ad_scalar_sqrt_reverse_registers_pullback_chain() {
+        let x = AdScalar::new_reverse(4.0_f64, NodeId(21), TapeId(17), None);
+        let y = x.sqrt();
+        let grads = crate::reverse_tape::pullback_scalar::<f64>(
+            TapeId(17),
+            y.as_value().node_id().unwrap(),
+            &3.0_f64,
+        )
+        .unwrap();
+        assert_eq!(grads.get(&NodeId(21)).copied(), Some(0.75));
     }
 
     #[test]

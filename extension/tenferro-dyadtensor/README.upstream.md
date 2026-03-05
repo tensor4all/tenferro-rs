@@ -12,7 +12,7 @@ This repository currently provides:
   - `AdTensor<T>`
 - Runtime dtype wrappers:
   - `DynScalar`, `DynTensor`
-  - `DynAdValue`, `DynAdTensor`
+  - `DynAdScalar`, `DynAdTensor`
   - `ScalarType` (`F32`, `F64`, `C32`, `C64`)
 - AD boundary traits:
   - `Differentiable`, `TensorKernel`, `OpRule`

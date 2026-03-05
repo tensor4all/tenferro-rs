@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use chainrules_scalarops::ScalarAd;
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
@@ -30,7 +31,7 @@ use tenferro_linalg::{LinalgScalar, NormKind, SolveGrad};
 use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::Tensor;
 
-use crate::{reverse_tape, AdTensor, AdValue, Error, NodeId, Result};
+use crate::{reverse_tape, AdScalar, AdTensor, AdValue, Error, NodeId, Result};
 
 use super::{
     AdEigResult, AdEigenResult, AdLstsqResult, AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
@@ -391,6 +392,81 @@ pub fn pullback_wrt_mixed<TOut: Scalar + 'static, TWrt: Scalar + 'static>(
     }
 
     reverse_tape::pullback_wrt_mixed::<TOut, TWrt>(
+        tape,
+        output_node,
+        cotangent.primal(),
+        &wrt_nodes,
+    )
+}
+
+/// Reverse pullback projected to requested scalar inputs.
+///
+/// This is used by tensor outputs whose reverse rule depends on scalar
+/// coefficients, such as `DynAdTensor::scale` and `DynAdTensor::axpby`.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_dyadtensor::{ad, AdScalar, AdTensor, AdValue, DynAdScalar, DynAdTensor, NodeId, TapeId};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let x: DynAdTensor = AdTensor::new_reverse(
+///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+///     NodeId(1),
+///     TapeId(7),
+///     None,
+/// )
+/// .into();
+/// let a = DynAdScalar::from(AdValue::reverse(3.0_f64, NodeId(2), TapeId(7), None));
+/// let y = x.scale(&a).unwrap();
+/// let cotangent = AdTensor::new_primal(
+///     Tensor::<f64>::from_slice(&[0.5, 1.25], &[2], MemoryOrder::ColumnMajor).unwrap(),
+/// );
+/// let a_typed = AdScalar::from(a.as_f64().unwrap().clone());
+/// let grads = ad::pullback_wrt_scalars(y.as_f64().unwrap(), &cotangent, &[&a_typed]).unwrap();
+/// assert_eq!(grads, vec![Some(3.0)]);
+/// ```
+pub fn pullback_wrt_scalars<TOut: Scalar + 'static, TWrt: ScalarAd + 'static>(
+    output: &AdTensor<TOut>,
+    cotangent: &AdTensor<TOut>,
+    wrt: &[&AdScalar<TWrt>],
+) -> Result<Vec<Option<TWrt>>> {
+    let (output_node, tape) = match output.as_value() {
+        AdValue::Reverse { node, tape, .. } => (*node, *tape),
+        _ => {
+            return Err(Error::InvalidAdTensor {
+                message: "ad::pullback_wrt_scalars requires reverse-mode output tensor".to_string(),
+            })
+        }
+    };
+
+    if cotangent.dims() != output.dims() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "ad::pullback_wrt_scalars cotangent shape mismatch: expected {:?}, got {:?}",
+                output.dims(),
+                cotangent.dims()
+            ),
+        });
+    }
+
+    let mut wrt_nodes = Vec::with_capacity(wrt.len());
+    for wrt_scalar in wrt {
+        match wrt_scalar.as_value() {
+            AdValue::Reverse { node, tape: t, .. } => {
+                if *t != tape {
+                    return Err(Error::MixedReverseTape {
+                        expected: tape.0,
+                        found: t.0,
+                    });
+                }
+                wrt_nodes.push(Some(*node));
+            }
+            _ => wrt_nodes.push(None),
+        }
+    }
+
+    reverse_tape::pullback_wrt_scalars::<TOut, TWrt>(
         tape,
         output_node,
         cotangent.primal(),
