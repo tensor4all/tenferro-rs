@@ -13,6 +13,7 @@
 | [inplace-indexing.md](./inplace-indexing.md) | Design for partial in-place updates (`set_item_`, `IndexPut` extension, AD safety policy) |
 | [algebra.md](./algebra.md) | `HasAlgebra`, `Semiring`, tropical and user-defined algebra extensibility |
 | [autodiff.md](./autodiff.md) | AD architecture (`chainrules-core` contracts, `Tape<V>` + `Variable`/`DynTape` coexistence), including `retain_graph`/`create_graph` usage examples |
+| [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration design for `tenferro-einsum` + `tenferro-dyadtensor` (`forward`/`backward`/`hvp`, `retain_graph`/`create_graph`, contract test matrix) |
 | [linalg.md](./linalg.md) | `tenferro-linalg` decompositions, solvers, utilities, stateless AD rules |
 | [linalg-backend-api.md](./linalg-backend-api.md) | Proposed tensor-level backend layer for linalg decompositions and solves |
 | [linalg-gemm-prims.md](./linalg-gemm-prims.md) | Planned migration of `tenferro-linalg` GEMM paths onto `tenferro-prims::BatchedGemm` |

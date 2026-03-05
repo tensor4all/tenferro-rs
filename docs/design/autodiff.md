@@ -3,6 +3,8 @@
 This document defines the AD architecture for tenferro-rs.
 
 For math derivations, see [AD Formula Notes](../AD/index.md).
+For einsum/dyadtensor-specific integration details and test-contract mapping, see
+[einsum-dyadtensor.md](./einsum-dyadtensor.md).
 
 ## Design Goals
 
