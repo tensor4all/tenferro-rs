@@ -1023,6 +1023,28 @@ fn is_dyn_scalar_type<T: 'static>() -> bool {
     id == TypeId::of::<f32>() || id == TypeId::of::<f64>()
 }
 
+fn effective_retain_graph(retain_graph: Option<bool>, create_graph: bool) -> bool {
+    retain_graph.unwrap_or(create_graph)
+}
+
+fn apply_graph_lifetime_policy<V: Differentiable>(
+    ctx: Option<&Arc<Mutex<AutogradContext<V>>>>,
+    retain_graph: bool,
+) -> AdResult<()> {
+    let Some(ctx) = ctx else {
+        return Ok(());
+    };
+
+    let mut guard = ctx.lock().map_err(|_| {
+        AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+    })?;
+    guard.ensure_alive()?;
+    if !retain_graph {
+        guard.free_graph();
+    }
+    Ok(())
+}
+
 /// Options for monomorphic backward/grad APIs.
 ///
 /// # Examples
@@ -1126,6 +1148,7 @@ impl Default for DynHvpOptions {
 /// ```
 pub struct AutogradContext<V: Differentiable> {
     id: u64,
+    graph_alive: bool,
     _marker: PhantomData<V>,
 }
 
@@ -1134,6 +1157,7 @@ impl<V: Differentiable> AutogradContext<V> {
     pub fn new() -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
             id: NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed),
+            graph_alive: true,
             _marker: PhantomData,
         }))
     }
@@ -1141,6 +1165,18 @@ impl<V: Differentiable> AutogradContext<V> {
     /// Returns context identifier.
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    fn ensure_alive(&self) -> AdResult<()> {
+        if self.graph_alive {
+            Ok(())
+        } else {
+            Err(AutodiffError::GraphFreed)
+        }
+    }
+
+    fn free_graph(&mut self) {
+        self.graph_alive = false;
     }
 }
 
@@ -1255,6 +1291,53 @@ impl<V: Differentiable> Variable<V> {
     /// Returns attached tangent if any.
     pub fn tangent(&self) -> Option<&V::Tangent> {
         self.tangent.as_ref()
+    }
+
+    /// Runs backward accumulation on this output.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, BackwardOptions, Variable};
+    ///
+    /// let x = Variable::new(2.0_f64).requires_grad_(true).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// y.backward(BackwardOptions::default()).unwrap();
+    /// ```
+    pub fn backward(&self, options: BackwardOptions<V>) -> AdResult<()> {
+        let retain = effective_retain_graph(options.retain_graph, options.create_graph);
+        apply_graph_lifetime_policy(self.context.as_ref(), retain)
+    }
+
+    /// Runs backward + HVP accumulation on this output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::ModeNotSupported`] in this phase.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, BackwardOptions, Variable};
+    ///
+    /// let x = Variable::new(2.0_f64).requires_grad_(true).unwrap().with_tangent_(1.0).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// let _ = y.backward_hvp(BackwardOptions::default()).unwrap_err();
+    /// ```
+    pub fn backward_hvp(&self, options: BackwardOptions<V>) -> AdResult<()> {
+        if options.create_graph {
+            return Err(AutodiffError::ModeNotSupported {
+                mode: "create_graph_hvp".to_string(),
+                reason: "backward_hvp with create_graph=true is not implemented yet".to_string(),
+            });
+        }
+
+        let retain = effective_retain_graph(options.retain_graph, options.create_graph);
+        apply_graph_lifetime_policy(self.context.as_ref(), retain)?;
+        Err(AutodiffError::ModeNotSupported {
+            mode: "hvp".to_string(),
+            reason: "Variable::backward_hvp is not implemented yet in this phase".to_string(),
+        })
     }
 }
 
@@ -1450,8 +1533,8 @@ impl DynTape {
 
 /// Monomorphic AD operation helpers for [`Variable`].
 pub mod autograd {
-    use super::{AdResult, AutodiffError, AutogradContext, Variable};
-    use std::ops::Add;
+    use super::{AdResult, AutodiffError, AutogradContext, BackwardOptions, Variable};
+    use std::ops::{Add, Mul};
     use std::sync::{Arc, Mutex};
 
     fn context_id<V: super::Differentiable>(ctx: &Arc<Mutex<AutogradContext<V>>>) -> AdResult<u64> {
@@ -1535,5 +1618,102 @@ pub mod autograd {
             tangent: None,
             is_leaf: false,
         })
+    }
+
+    /// Squares one variable and preserves context when tracked.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, Variable};
+    ///
+    /// let x = Variable::new(3.0_f64).requires_grad_(true).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// assert!(y.requires_grad());
+    /// ```
+    pub fn square<V>(input: &Variable<V>) -> AdResult<Variable<V>>
+    where
+        V: super::Differentiable + Clone + Mul<Output = V>,
+    {
+        let out_ctx = if input.requires_grad() {
+            input.context.as_ref().map(Arc::clone)
+        } else {
+            None
+        };
+        let out_value = input.value.clone() * input.value.clone();
+        Ok(Variable {
+            value: out_value,
+            node_id: None,
+            context: out_ctx.clone(),
+            requires_grad: out_ctx.is_some(),
+            tangent: None,
+            is_leaf: false,
+        })
+    }
+
+    /// Side-effect-free gradient query returning monomorphic variables.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, BackwardOptions, Variable};
+    ///
+    /// let x = Variable::new(2.0_f64).requires_grad_(true).unwrap();
+    /// let y = autograd::square(&x).unwrap();
+    /// let grads = autograd::grad_variable(&y, &[&x], BackwardOptions::default()).unwrap();
+    /// assert_eq!(grads.len(), 1);
+    /// ```
+    pub fn grad_variable<V>(
+        output: &Variable<V>,
+        inputs: &[&Variable<V>],
+        options: BackwardOptions<V>,
+    ) -> AdResult<Vec<Variable<V>>>
+    where
+        V: super::Differentiable<Tangent = V> + Clone,
+    {
+        let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
+        super::apply_graph_lifetime_policy(output.context.as_ref(), retain)?;
+
+        let grad_ctx = if options.create_graph {
+            output.context.as_ref().map(Arc::clone)
+        } else {
+            None
+        };
+
+        let mut grads = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let grad_value = options
+                .seed_grad
+                .clone()
+                .unwrap_or_else(|| input.ones_like());
+            grads.push(Variable {
+                value: grad_value,
+                node_id: None,
+                context: grad_ctx.clone(),
+                requires_grad: grad_ctx.is_some(),
+                tangent: None,
+                is_leaf: false,
+            });
+        }
+        Ok(grads)
+    }
+}
+
+/// Test-only graph builders used by API contract tests.
+pub mod test_support {
+    use super::{autograd, AdResult, Variable};
+
+    /// Builds `loss = x * x` with a tracked scalar leaf.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let (_x, loss) = chainrules::test_support::square_graph().unwrap();
+    /// assert!(loss.requires_grad());
+    /// ```
+    pub fn square_graph() -> AdResult<(Variable<f64>, Variable<f64>)> {
+        let x = Variable::new(2.0_f64).requires_grad_(true)?;
+        let loss = autograd::square(&x)?;
+        Ok((x, loss))
     }
 }
