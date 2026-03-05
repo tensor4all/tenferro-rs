@@ -191,7 +191,7 @@ automatically.
 `tenferro-linalg` depends on **`chainrules-core` only** (not the full
 `chainrules` engine). It uses `AdResult` and the `Differentiable` trait from
 `chainrules-core`; it never creates tapes or `TrackedTensor` values. See
-[autodiff-current.md](./autodiff-current.md) for the current AD crate split and
+[autodiff.md](./autodiff.md) for the AD crate split and
 the algebra
 interaction model. For how the algebra type `A` (e.g., `Standard<T>`) affects
 which backend primitives are dispatched during the AD formulas, see
@@ -297,7 +297,7 @@ same type for both.
 
 ### Key AD Formulas
 
-**SVD rrule** (Mathieu 2019): see [autodiff-current.md](./autodiff-current.md) for the
+**SVD rrule** (Mathieu 2019): see [autodiff.md](./autodiff.md) for the
 8-step algorithm. All steps use `tenferro-prims` operations (BatchedGemm,
 ElementwiseMul, ElementwiseUnary, Permute, AntiTrace) plus tensor-level
 additions (eye, tril/triu).

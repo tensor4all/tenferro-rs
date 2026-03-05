@@ -134,8 +134,7 @@ AD must remain algebra-aware:
 - API design keeps this extensible by relying on `HasAlgebra` and
   `TensorPrims<A>` rather than hard-coding only standard arithmetic.
 
-See [autodiff-current.md](./autodiff-current.md) for the current AD architecture
-and [autodiff-next.md](./autodiff-next.md) for the next architecture design.
+See [autodiff.md](./autodiff.md) for the AD architecture design.
 
 ---
 
