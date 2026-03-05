@@ -1211,6 +1211,22 @@ impl<V: Differentiable> Variable<V> {
             .and_then(|ctx| ctx.lock().ok().map(|g| g.id()))
     }
 
+    /// Returns attached context handle if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{AutogradContext, Variable};
+    /// use std::sync::Arc;
+    ///
+    /// let ctx = AutogradContext::<f64>::new();
+    /// let v = Variable::new_in(1.0_f64, Arc::clone(&ctx));
+    /// assert!(v.context().is_some());
+    /// ```
+    pub fn context(&self) -> Option<Arc<Mutex<AutogradContext<V>>>> {
+        self.context.as_ref().map(Arc::clone)
+    }
+
     /// Returns whether this value is a leaf.
     pub fn is_leaf(&self) -> bool {
         self.is_leaf
@@ -1428,6 +1444,96 @@ impl DynTape {
         Err(AutodiffError::ModeNotSupported {
             mode: "hvp".to_string(),
             reason: "DynTape::hvp is not implemented yet in this phase".to_string(),
+        })
+    }
+}
+
+/// Monomorphic AD operation helpers for [`Variable`].
+pub mod autograd {
+    use super::{AdResult, AutodiffError, AutogradContext, Variable};
+    use std::ops::Add;
+    use std::sync::{Arc, Mutex};
+
+    fn context_id<V: super::Differentiable>(ctx: &Arc<Mutex<AutogradContext<V>>>) -> AdResult<u64> {
+        ctx.lock().map(|guard| guard.id()).map_err(|_| {
+            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        })
+    }
+
+    fn merge_context_for_binary_op<V: super::Differentiable>(
+        lhs: &Variable<V>,
+        rhs: &Variable<V>,
+    ) -> AdResult<Option<Arc<Mutex<AutogradContext<V>>>>> {
+        // Rule 1: if all inputs are not tracked, output has no context.
+        if !lhs.requires_grad() && !rhs.requires_grad() {
+            return Ok(None);
+        }
+
+        let mut picked: Option<(u64, Arc<Mutex<AutogradContext<V>>>)> = None;
+        for ctx in [lhs.context.as_ref(), rhs.context.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            let id = context_id(ctx)?;
+            match &picked {
+                None => picked = Some((id, Arc::clone(ctx))),
+                Some((picked_id, _)) if *picked_id == id => {}
+                Some(_) => {
+                    return Err(AutodiffError::InvalidArgument(
+                        "mixed autograd contexts in one operation; use Variable::new_in(..., same_ctx)"
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
+        let Some((picked_id, picked_ctx)) = picked else {
+            // Rule 3: tracked-but-contextless inputs do not create a context.
+            return Ok(None);
+        };
+
+        // Rule 5: adopt only when at least one tracked input is on that context.
+        let lhs_tracked_on_picked = lhs.requires_grad() && lhs.context_id() == Some(picked_id);
+        let rhs_tracked_on_picked = rhs.requires_grad() && rhs.context_id() == Some(picked_id);
+        if lhs_tracked_on_picked || rhs_tracked_on_picked {
+            Ok(Some(picked_ctx))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Adds two variables and applies Context Merge Rule to the output.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AutodiffError::InvalidArgument`] when operands belong to
+    /// different contexts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use chainrules::{autograd, AutogradContext, Variable};
+    /// use std::sync::Arc;
+    ///
+    /// let ctx = AutogradContext::<f64>::new();
+    /// let a = Variable::new_in(1.0_f64, Arc::clone(&ctx)).requires_grad_(true).unwrap();
+    /// let b = Variable::new_in(2.0_f64, Arc::clone(&ctx)).requires_grad_(true).unwrap();
+    /// let c = autograd::add(&a, &b).unwrap();
+    /// assert!(c.requires_grad());
+    /// ```
+    pub fn add<V>(lhs: &Variable<V>, rhs: &Variable<V>) -> AdResult<Variable<V>>
+    where
+        V: super::Differentiable + Clone + Add<Output = V>,
+    {
+        let out_ctx = merge_context_for_binary_op(lhs, rhs)?;
+        let out_value = lhs.value.clone() + rhs.value.clone();
+        Ok(Variable {
+            value: out_value,
+            node_id: None,
+            context: out_ctx.clone(),
+            requires_grad: out_ctx.is_some(),
+            tangent: None,
+            is_leaf: false,
         })
     }
 }
