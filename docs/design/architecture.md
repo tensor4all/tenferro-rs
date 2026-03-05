@@ -16,6 +16,7 @@ Per-crate API details are in companion documents:
 [tensor](./tensor.md),
 [algebra](./algebra.md),
 [autodiff](./autodiff.md),
+[einsum-dyadtensor](./einsum-dyadtensor.md),
 [linalg](./linalg.md),
 [capi](./capi.md),
 [contraction-pipeline](./contraction-pipeline.md).
