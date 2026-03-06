@@ -2123,6 +2123,73 @@ impl DynAdTensor {
         }
     }
 
+    /// Returns axis classes of the structured primal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let payload =
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let x: DynAdTensor =
+    ///     AdTensor::new_primal(StructuredTensor::from_diagonal_vector(payload, 2).unwrap()).into();
+    /// assert_eq!(x.axis_classes(), &[0, 0]);
+    /// ```
+    pub fn axis_classes(&self) -> &[usize] {
+        match self {
+            Self::F32(v) => v.axis_classes(),
+            Self::F64(v) => v.axis_classes(),
+            Self::C32(v) => v.axis_classes(),
+            Self::C64(v) => v.axis_classes(),
+        }
+    }
+
+    /// Returns `true` when the structured primal is dense.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let x: DynAdTensor = AdTensor::new_primal(t).into();
+    /// assert!(x.is_dense());
+    /// ```
+    pub fn is_dense(&self) -> bool {
+        match self {
+            Self::F32(v) => v.is_dense(),
+            Self::F64(v) => v.is_dense(),
+            Self::C32(v) => v.is_dense(),
+            Self::C64(v) => v.is_dense(),
+        }
+    }
+
+    /// Returns `true` when the structured primal is diagonal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let payload =
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let x: DynAdTensor =
+    ///     AdTensor::new_primal(StructuredTensor::from_diagonal_vector(payload, 2).unwrap()).into();
+    /// assert!(x.is_diag());
+    /// ```
+    pub fn is_diag(&self) -> bool {
+        match self {
+            Self::F32(v) => v.is_diag(),
+            Self::F64(v) => v.is_diag(),
+            Self::C32(v) => v.is_diag(),
+            Self::C64(v) => v.is_diag(),
+        }
+    }
+
     /// Returns primal tensor rank.
     ///
     /// # Examples

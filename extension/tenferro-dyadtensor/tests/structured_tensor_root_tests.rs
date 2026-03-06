@@ -1,5 +1,4 @@
-use tenferro_dyadtensor::AdTensor;
-use tenferro_dyadtensor::StructuredTensor;
+use tenferro_dyadtensor::{AdTensor, DynAdTensor, StructuredTensor};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn vector(values: &[f64]) -> Tensor<f64> {
@@ -30,4 +29,14 @@ fn ad_tensor_wraps_structured_payload_and_reports_logical_dims() {
     assert_eq!(x.dims(), &[2, 2]);
     assert!(x.structured_primal().is_diag());
     assert_eq!(x.primal().dims(), &[2]);
+}
+
+#[test]
+fn dyn_ad_tensor_carries_diag_payload_without_dense_materialization() {
+    let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
+    let x: DynAdTensor = AdTensor::new_primal(diag).into();
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(x.axis_classes(), &[0, 0]);
+    assert!(x.is_diag());
+    assert_eq!(x.as_f64().unwrap().primal().dims(), &[2]);
 }
