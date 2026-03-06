@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use chainrules_core::Differentiable as _;
 use chainrules_scalarops::ScalarAd;
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
@@ -14,6 +15,7 @@ type BridgeRule<TOut, TIn> =
     Box<dyn Fn(&Tensor<TOut>) -> Result<Vec<(NodeId, Tensor<TIn>)>> + 'static>;
 type ScalarBridgeRule<TOut, TIn> =
     Box<dyn Fn(&Tensor<TOut>) -> Result<Vec<(NodeId, TIn)>> + 'static>;
+type ScalarMixedRule<TOut, TIn> = Box<dyn Fn(&TOut) -> Result<Vec<(NodeId, TIn)>> + 'static>;
 type ScalarPullbackRule<T> = Box<dyn Fn(&T) -> Result<Vec<(NodeId, T)>> + 'static>;
 
 struct TapeRules<T: Scalar> {
@@ -52,6 +54,18 @@ impl<TOut: Scalar, TIn: ScalarAd> TapeScalarBridgeRules<TOut, TIn> {
     }
 }
 
+struct TapeScalarMixedRules<TOut: ScalarAd, TIn: ScalarAd> {
+    rules: HashMap<NodeId, ScalarMixedRule<TOut, TIn>>,
+}
+
+impl<TOut: ScalarAd, TIn: ScalarAd> TapeScalarMixedRules<TOut, TIn> {
+    fn new() -> Self {
+        Self {
+            rules: HashMap::new(),
+        }
+    }
+}
+
 struct TapeScalarRules<T: ScalarAd> {
     rules: HashMap<NodeId, ScalarPullbackRule<T>>,
 }
@@ -67,12 +81,14 @@ impl<T: ScalarAd> TapeScalarRules<T> {
 type RuleRegistry = HashMap<(u64, TypeId), Box<dyn Any>>;
 type BridgeRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
 type ScalarBridgeRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
+type ScalarMixedRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
 type ScalarRuleRegistry = HashMap<(u64, TypeId), Box<dyn Any>>;
 
 thread_local! {
     static REVERSE_RULE_REGISTRY: RefCell<RuleRegistry> = RefCell::new(HashMap::new());
     static REVERSE_BRIDGE_REGISTRY: RefCell<BridgeRegistry> = RefCell::new(HashMap::new());
     static REVERSE_SCALAR_BRIDGE_REGISTRY: RefCell<ScalarBridgeRegistry> = RefCell::new(HashMap::new());
+    static REVERSE_SCALAR_MIXED_REGISTRY: RefCell<ScalarMixedRegistry> = RefCell::new(HashMap::new());
     static REVERSE_SCALAR_RULE_REGISTRY: RefCell<ScalarRuleRegistry> = RefCell::new(HashMap::new());
 }
 
@@ -139,6 +155,27 @@ pub(crate) fn register_scalar_bridge_rule<TOut: Scalar + 'static, TIn: ScalarAd 
     })
 }
 
+pub(crate) fn register_scalar_mixed_rule<TOut: ScalarAd + 'static, TIn: ScalarAd + 'static>(
+    tape: TapeId,
+    node: NodeId,
+    rule: ScalarMixedRule<TOut, TIn>,
+) -> Result<()> {
+    REVERSE_SCALAR_MIXED_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
+        let entry = registry
+            .entry(key)
+            .or_insert_with(|| Box::new(TapeScalarMixedRules::<TOut, TIn>::new()));
+        let typed = entry
+            .downcast_mut::<TapeScalarMixedRules<TOut, TIn>>()
+            .ok_or_else(|| Error::InvalidAdScalar {
+                message: "reverse scalar mixed registry type mismatch".to_string(),
+            })?;
+        typed.rules.insert(node, rule);
+        Ok(())
+    })
+}
+
 pub(crate) fn register_scalar_rule<T: ScalarAd + 'static>(
     tape: TapeId,
     node: NodeId,
@@ -199,6 +236,29 @@ fn bridge_pullback_scalar<TOut: Scalar + 'static, TIn: ScalarAd + 'static>(
             .downcast_ref::<TapeScalarBridgeRules<TOut, TIn>>()
             .ok_or_else(|| Error::InvalidAdScalar {
                 message: "reverse scalar bridge registry type mismatch".to_string(),
+            })?;
+        let Some(rule) = state.rules.get(&output_node) else {
+            return Ok(Vec::new());
+        };
+        rule(cotangent)
+    })
+}
+
+fn bridge_pullback_scalar_mixed<TOut: ScalarAd + 'static, TIn: ScalarAd + 'static>(
+    tape: TapeId,
+    output_node: NodeId,
+    cotangent: &TOut,
+) -> Result<Vec<(NodeId, TIn)>> {
+    REVERSE_SCALAR_MIXED_REGISTRY.with(|registry| {
+        let registry = registry.borrow();
+        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
+        let Some(state_any) = registry.get(&key) else {
+            return Ok(Vec::new());
+        };
+        let state = state_any
+            .downcast_ref::<TapeScalarMixedRules<TOut, TIn>>()
+            .ok_or_else(|| Error::InvalidAdScalar {
+                message: "reverse scalar mixed registry type mismatch".to_string(),
             })?;
         let Some(rule) = state.rules.get(&output_node) else {
             return Ok(Vec::new());
@@ -346,17 +406,52 @@ pub(crate) fn pullback_wrt_scalars<TOut: Scalar + 'static, TIn: ScalarAd + 'stat
         Err(e) => return Err(e),
     };
 
+    let mut all_in_grads: HashMap<NodeId, TIn> = HashMap::new();
+    let direct_seed_in = collect_tensor_scalar_bridge_seeds::<TOut, TIn>(tape, &all_out_grads)?;
+    for (node, grad) in propagate_scalar_seeds(tape, direct_seed_in)? {
+        accumulate_scalar_into(&mut all_in_grads, node, grad);
+    }
+
+    accumulate_tensor_scalar_mixed_path::<TOut, f32, TIn>(tape, &all_out_grads, &mut all_in_grads)?;
+    accumulate_tensor_scalar_mixed_path::<TOut, f64, TIn>(tape, &all_out_grads, &mut all_in_grads)?;
+    accumulate_tensor_scalar_mixed_path::<TOut, Complex32, TIn>(
+        tape,
+        &all_out_grads,
+        &mut all_in_grads,
+    )?;
+    accumulate_tensor_scalar_mixed_path::<TOut, Complex64, TIn>(
+        tape,
+        &all_out_grads,
+        &mut all_in_grads,
+    )?;
+
+    Ok(wrt_nodes
+        .iter()
+        .map(|node| node.and_then(|n| all_in_grads.get(&n).copied()))
+        .collect())
+}
+
+fn collect_tensor_scalar_bridge_seeds<TOut: Scalar + 'static, TIn: ScalarAd + 'static>(
+    tape: TapeId,
+    all_out_grads: &HashMap<NodeId, Tensor<TOut>>,
+) -> Result<HashMap<NodeId, TIn>> {
     let mut seed_in: HashMap<NodeId, TIn> = HashMap::new();
-    for (node, delta_out) in &all_out_grads {
+    for (node, delta_out) in all_out_grads {
         let bridged = bridge_pullback_scalar::<TOut, TIn>(tape, *node, delta_out)?;
         for (in_node, in_delta) in bridged {
             accumulate_scalar_into(&mut seed_in, in_node, in_delta);
         }
     }
+    Ok(seed_in)
+}
 
-    let mut all_in_grads: HashMap<NodeId, TIn> = HashMap::new();
+fn propagate_scalar_seeds<T: ScalarAd + 'static>(
+    tape: TapeId,
+    seed_in: HashMap<NodeId, T>,
+) -> Result<HashMap<NodeId, T>> {
+    let mut all_in_grads: HashMap<NodeId, T> = HashMap::new();
     for (seed_node, seed_delta) in seed_in {
-        let propagated = match pullback_scalar::<TIn>(tape, seed_node, &seed_delta) {
+        let propagated = match pullback_scalar::<T>(tape, seed_node, &seed_delta) {
             Ok(grads) => grads,
             Err(Error::InvalidAdScalar { message })
                 if message.starts_with("no reverse scalar rules registered for tape")
@@ -372,11 +467,59 @@ pub(crate) fn pullback_wrt_scalars<TOut: Scalar + 'static, TIn: ScalarAd + 'stat
             accumulate_scalar_into(&mut all_in_grads, node, grad);
         }
     }
+    Ok(all_in_grads)
+}
 
-    Ok(wrt_nodes
-        .iter()
-        .map(|node| node.and_then(|n| all_in_grads.get(&n).copied()))
-        .collect())
+fn pullback_scalar_wrt_mixed<TOut: ScalarAd + 'static, TIn: ScalarAd + 'static>(
+    tape: TapeId,
+    output_node: NodeId,
+    cotangent: &TOut,
+) -> Result<HashMap<NodeId, TIn>> {
+    let all_out_grads = match pullback_scalar::<TOut>(tape, output_node, cotangent) {
+        Ok(grads) => grads,
+        Err(Error::InvalidAdScalar { message })
+            if message.starts_with("no reverse scalar rules registered for tape")
+                || message.starts_with("no reverse scalar rule registered for output node") =>
+        {
+            let mut seed = HashMap::new();
+            seed.insert(output_node, *cotangent);
+            seed
+        }
+        Err(e) => return Err(e),
+    };
+
+    let mut seed_in: HashMap<NodeId, TIn> = HashMap::new();
+    for (node, delta_out) in &all_out_grads {
+        let bridged = bridge_pullback_scalar_mixed::<TOut, TIn>(tape, *node, delta_out)?;
+        for (in_node, in_delta) in bridged {
+            accumulate_scalar_into(&mut seed_in, in_node, in_delta);
+        }
+    }
+
+    propagate_scalar_seeds(tape, seed_in)
+}
+
+fn accumulate_tensor_scalar_mixed_path<
+    TOut: Scalar + 'static,
+    TSeed: ScalarAd + 'static,
+    TIn: ScalarAd + 'static,
+>(
+    tape: TapeId,
+    all_out_grads: &HashMap<NodeId, Tensor<TOut>>,
+    all_in_grads: &mut HashMap<NodeId, TIn>,
+) -> Result<()> {
+    if TypeId::of::<TSeed>() == TypeId::of::<TIn>() {
+        return Ok(());
+    }
+
+    let seed_in = collect_tensor_scalar_bridge_seeds::<TOut, TSeed>(tape, all_out_grads)?;
+    for (seed_node, seed_delta) in seed_in {
+        let propagated = pullback_scalar_wrt_mixed::<TSeed, TIn>(tape, seed_node, &seed_delta)?;
+        for (node, grad) in propagated {
+            accumulate_scalar_into(all_in_grads, node, grad);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn pullback_scalar<T: ScalarAd + 'static>(

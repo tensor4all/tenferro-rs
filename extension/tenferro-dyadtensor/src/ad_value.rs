@@ -1,5 +1,5 @@
 use chainrules_scalarops as scalarops;
-use core::ops::{Add, Div, Mul, Sub};
+use core::ops::{Add, Div, Mul, Neg, Sub};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
@@ -239,7 +239,12 @@ impl<T> AdValue<T> {
         }
     }
 
-    /// Maps the payload type while preserving AD mode.
+    /// Maps the payload type while preserving AD metadata.
+    ///
+    /// In reverse mode this preserves the existing `node` / `tape` metadata, so
+    /// it is only appropriate for identity-same-cotangent-space transforms.
+    /// Dtype-changing or otherwise graph-changing reverse transforms must
+    /// register explicit pullback rules instead of using this helper directly.
     ///
     /// # Examples
     ///
@@ -247,11 +252,11 @@ impl<T> AdValue<T> {
     /// use tenferro_dyadtensor::AdValue;
     ///
     /// let x = AdValue::forward(2_i32, 3_i32);
-    /// let y = x.map(|v| v as f64);
+    /// let y = x.map_preserving_metadata(|v| v as f64);
     /// assert_eq!(y.primal_ref(), &2.0_f64);
     /// assert_eq!(y.tangent_ref(), Some(&3.0_f64));
     /// ```
-    pub fn map<U>(self, mut f: impl FnMut(T) -> U) -> AdValue<U> {
+    pub fn map_preserving_metadata<U>(self, mut f: impl FnMut(T) -> U) -> AdValue<U> {
         match self {
             Self::Primal(value) => AdValue::Primal(f(value)),
             Self::Forward { primal, tangent } => AdValue::Forward {
@@ -597,6 +602,89 @@ where
     }
 }
 
+pub(crate) fn map_ad_value_same_type_linear<T, M>(
+    value: AdValue<T>,
+    op_name: &'static str,
+    map: M,
+) -> AdValue<T>
+where
+    T: scalarops::ScalarAd + 'static,
+    M: Fn(T) -> T + Copy + 'static,
+{
+    match value {
+        AdValue::Primal(primal) => AdValue::Primal(map(primal)),
+        AdValue::Forward { primal, tangent } => AdValue::Forward {
+            primal: map(primal),
+            tangent: map(tangent),
+        },
+        AdValue::Reverse {
+            primal,
+            node: input_node,
+            tape,
+            tangent,
+        } => {
+            let output_primal = map(primal);
+            let output_tangent = tangent.map(map);
+            let output_node = NodeId(NEXT_AD_SCALAR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            reverse_tape::register_scalar_rule(
+                tape,
+                output_node,
+                Box::new(move |cotangent| Ok(vec![(input_node, map(*cotangent))])),
+            )
+            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            AdValue::Reverse {
+                primal: output_primal,
+                node: output_node,
+                tape,
+                tangent: output_tangent,
+            }
+        }
+    }
+}
+
+pub(crate) fn map_ad_value_mixed_linear<TIn, TOut, P, R>(
+    value: AdValue<TIn>,
+    op_name: &'static str,
+    primal_map: P,
+    reverse_map: R,
+) -> AdValue<TOut>
+where
+    TIn: scalarops::ScalarAd + 'static,
+    TOut: scalarops::ScalarAd + 'static,
+    P: Fn(TIn) -> TOut + Copy,
+    R: Fn(TOut) -> TIn + Copy + 'static,
+{
+    match value {
+        AdValue::Primal(primal) => AdValue::Primal(primal_map(primal)),
+        AdValue::Forward { primal, tangent } => AdValue::Forward {
+            primal: primal_map(primal),
+            tangent: primal_map(tangent),
+        },
+        AdValue::Reverse {
+            primal,
+            node: input_node,
+            tape,
+            tangent,
+        } => {
+            let output_primal = primal_map(primal);
+            let output_tangent = tangent.map(primal_map);
+            let output_node = NodeId(NEXT_AD_SCALAR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            reverse_tape::register_scalar_mixed_rule(
+                tape,
+                output_node,
+                Box::new(move |cotangent| Ok(vec![(input_node, reverse_map(*cotangent))])),
+            )
+            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            AdValue::Reverse {
+                primal: output_primal,
+                node: output_node,
+                tape,
+                tangent: output_tangent,
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct BinaryScalarState<T> {
     primal: T,
@@ -853,6 +941,23 @@ where
     }
 }
 
+impl<T> Neg for AdScalar<T>
+where
+    T: scalarops::ScalarAd + Neg<Output = T> + 'static,
+{
+    type Output = Self;
+
+    fn neg(self) -> Self::Output {
+        unary_ad_scalar_op(
+            self,
+            "neg",
+            |primal| -primal,
+            |primal, tangent| (-primal, -tangent),
+            |_input, _output, cotangent| -cotangent,
+        )
+    }
+}
+
 /// Tensor newtype carrying AD mode information.
 ///
 /// # Examples
@@ -1094,9 +1199,9 @@ mod tests {
     use tenferro_tensor::MemoryOrder;
 
     #[test]
-    fn ad_value_map_preserves_mode() {
+    fn ad_value_map_preserving_metadata_preserves_mode() {
         let x = AdValue::forward(2_i32, 3_i32);
-        let y = x.map(|v| v as f64);
+        let y = x.map_preserving_metadata(|v| v as f64);
         assert_eq!(y.mode(), AdMode::Forward);
         assert_eq!(y.primal_ref(), &2.0_f64);
         assert_eq!(y.tangent_ref(), Some(&3.0_f64));

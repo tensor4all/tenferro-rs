@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
+use crate::ad_value::{map_ad_value_mixed_linear, map_ad_value_same_type_linear};
 use crate::{reverse_tape, AdMode, AdScalar, AdTensor, AdValue, Error, NodeId, Result, TapeId};
 
 static NEXT_AD_TENSOR_NODE_ID: AtomicU64 = AtomicU64::new(1_u64 << 61);
@@ -760,12 +761,20 @@ impl BinaryOp {
     }
 }
 
-fn promote_f32_to_c32(value: AdValue<f32>) -> AdValue<Complex32> {
-    value.map(|x| Complex32::new(x, 0.0))
+fn promote_f32_to_c32(value: AdValue<f32>, op_name: &'static str) -> AdValue<Complex32> {
+    map_ad_value_mixed_linear(value, op_name, |x| Complex32::new(x, 0.0), |z| z.re)
 }
 
-fn promote_f64_to_c64(value: AdValue<f64>) -> AdValue<Complex64> {
-    value.map(|x| Complex64::new(x, 0.0))
+fn promote_f64_to_c64(value: AdValue<f64>, op_name: &'static str) -> AdValue<Complex64> {
+    map_ad_value_mixed_linear(value, op_name, |x| Complex64::new(x, 0.0), |z| z.re)
+}
+
+fn embed_f32_to_c32_imag(value: AdValue<f32>, op_name: &'static str) -> AdValue<Complex32> {
+    map_ad_value_mixed_linear(value, op_name, |y| Complex32::new(0.0, y), |z| z.im)
+}
+
+fn embed_f64_to_c64_imag(value: AdValue<f64>, op_name: &'static str) -> AdValue<Complex64> {
+    map_ad_value_mixed_linear(value, op_name, |y| Complex64::new(0.0, y), |z| z.im)
 }
 
 fn apply_binary_ad<T: ScalarAd + 'static>(
@@ -836,16 +845,16 @@ fn try_binary_dyn(lhs: DynAdScalar, rhs: DynAdScalar, op: BinaryOp) -> Result<Dy
             Ok(DynAdScalar::C64(checked_apply_binary_ad(a, b, op)?))
         }
         (DynAdScalar::F32(a), DynAdScalar::C32(b)) => Ok(DynAdScalar::C32(
-            checked_apply_binary_ad(promote_f32_to_c32(a), b, op)?,
+            checked_apply_binary_ad(promote_f32_to_c32(a, op.name()), b, op)?,
         )),
         (DynAdScalar::C32(a), DynAdScalar::F32(b)) => Ok(DynAdScalar::C32(
-            checked_apply_binary_ad(a, promote_f32_to_c32(b), op)?,
+            checked_apply_binary_ad(a, promote_f32_to_c32(b, op.name()), op)?,
         )),
         (DynAdScalar::F64(a), DynAdScalar::C64(b)) => Ok(DynAdScalar::C64(
-            checked_apply_binary_ad(promote_f64_to_c64(a), b, op)?,
+            checked_apply_binary_ad(promote_f64_to_c64(a, op.name()), b, op)?,
         )),
         (DynAdScalar::C64(a), DynAdScalar::F64(b)) => Ok(DynAdScalar::C64(
-            checked_apply_binary_ad(a, promote_f64_to_c64(b), op)?,
+            checked_apply_binary_ad(a, promote_f64_to_c64(b, op.name()), op)?,
         )),
         _ => Err(unsupported_binary_pair(op, lhs_ty, rhs_ty)),
     }
@@ -1167,7 +1176,7 @@ impl DynAdScalar {
                 if *v.primal_ref() >= 0.0 {
                     Self::F32(AdScalar::from(v).sqrt().into_value())
                 } else {
-                    let promoted = v.map(|x| Complex32::new(x, 0.0));
+                    let promoted = promote_f32_to_c32(v, "sqrt");
                     Self::C32(AdScalar::from(promoted).sqrt().into_value())
                 }
             }
@@ -1175,7 +1184,7 @@ impl DynAdScalar {
                 if *v.primal_ref() >= 0.0 {
                     Self::F64(AdScalar::from(v).sqrt().into_value())
                 } else {
-                    let promoted = v.map(|x| Complex64::new(x, 0.0));
+                    let promoted = promote_f64_to_c64(v, "sqrt");
                     Self::C64(AdScalar::from(promoted).sqrt().into_value())
                 }
             }
@@ -1193,7 +1202,7 @@ impl DynAdScalar {
                 if *v.primal_ref() >= 0.0 {
                     Self::F32(AdScalar::from(v).powf(exponent as f32).into_value())
                 } else {
-                    let promoted = v.map(|x| Complex32::new(x, 0.0));
+                    let promoted = promote_f32_to_c32(v, "powf");
                     Self::C32(AdScalar::from(promoted).powf(exponent as f32).into_value())
                 }
             }
@@ -1201,7 +1210,7 @@ impl DynAdScalar {
                 if *v.primal_ref() >= 0.0 {
                     Self::F64(AdScalar::from(v).powf(exponent).into_value())
                 } else {
-                    let promoted = v.map(|x| Complex64::new(x, 0.0));
+                    let promoted = promote_f64_to_c64(v, "powf");
                     Self::C64(AdScalar::from(promoted).powf(exponent).into_value())
                 }
             }
@@ -1228,8 +1237,18 @@ impl DynAdScalar {
         match self.clone() {
             Self::F32(v) => Self::F32(v),
             Self::F64(v) => Self::F64(v),
-            Self::C32(v) => Self::F32(v.map(|z| z.re)),
-            Self::C64(v) => Self::F64(v.map(|z| z.re)),
+            Self::C32(v) => Self::F32(map_ad_value_mixed_linear(
+                v,
+                "real_part",
+                |z| z.re,
+                |cotangent| Complex32::new(cotangent, 0.0),
+            )),
+            Self::C64(v) => Self::F64(map_ad_value_mixed_linear(
+                v,
+                "real_part",
+                |z| z.re,
+                |cotangent| Complex64::new(cotangent, 0.0),
+            )),
         }
     }
 
@@ -1239,10 +1258,20 @@ impl DynAdScalar {
     /// - Complex dtype: returns real dtype (`C32->F32`, `C64->F64`).
     pub fn imag_part(&self) -> Self {
         match self.clone() {
-            Self::F32(v) => Self::F32(v.map(|_| 0.0_f32)),
-            Self::F64(v) => Self::F64(v.map(|_| 0.0_f64)),
-            Self::C32(v) => Self::F32(v.map(|z| z.im)),
-            Self::C64(v) => Self::F64(v.map(|z| z.im)),
+            Self::F32(v) => Self::F32(map_ad_value_same_type_linear(v, "imag_part", |_| 0.0_f32)),
+            Self::F64(v) => Self::F64(map_ad_value_same_type_linear(v, "imag_part", |_| 0.0_f64)),
+            Self::C32(v) => Self::F32(map_ad_value_mixed_linear(
+                v,
+                "imag_part",
+                |z| z.im,
+                |cotangent| Complex32::new(0.0, cotangent),
+            )),
+            Self::C64(v) => Self::F64(map_ad_value_mixed_linear(
+                v,
+                "imag_part",
+                |z| z.im,
+                |cotangent| Complex64::new(0.0, cotangent),
+            )),
         }
     }
 
@@ -1252,13 +1281,13 @@ impl DynAdScalar {
     pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
         match (real, imag) {
             (Self::F32(re), Self::F32(im)) => Ok(Self::C32(checked_apply_binary_ad(
-                re.map(|x| Complex32::new(x, 0.0)),
-                im.map(|y| Complex32::new(0.0, y)),
+                promote_f32_to_c32(re, "compose_complex"),
+                embed_f32_to_c32_imag(im, "compose_complex"),
                 BinaryOp::Add,
             )?)),
             (Self::F64(re), Self::F64(im)) => Ok(Self::C64(checked_apply_binary_ad(
-                re.map(|x| Complex64::new(x, 0.0)),
-                im.map(|y| Complex64::new(0.0, y)),
+                promote_f64_to_c64(re, "compose_complex"),
+                embed_f64_to_c64_imag(im, "compose_complex"),
                 BinaryOp::Add,
             )?)),
             (lhs, rhs) => Err(Error::InvalidAdScalar {
@@ -1431,10 +1460,10 @@ impl Neg for DynAdScalar {
 
     fn neg(self) -> Self::Output {
         match self {
-            DynAdScalar::F32(v) => DynAdScalar::F32(v.map(|x| -x)),
-            DynAdScalar::F64(v) => DynAdScalar::F64(v.map(|x| -x)),
-            DynAdScalar::C32(v) => DynAdScalar::C32(v.map(|x| -x)),
-            DynAdScalar::C64(v) => DynAdScalar::C64(v.map(|x| -x)),
+            DynAdScalar::F32(v) => DynAdScalar::F32((-AdScalar::from(v)).into_value()),
+            DynAdScalar::F64(v) => DynAdScalar::F64((-AdScalar::from(v)).into_value()),
+            DynAdScalar::C32(v) => DynAdScalar::C32((-AdScalar::from(v)).into_value()),
+            DynAdScalar::C64(v) => DynAdScalar::C64((-AdScalar::from(v)).into_value()),
         }
     }
 }
@@ -1593,32 +1622,100 @@ pub enum DynAdTensor {
     C64(AdTensor<Complex64>),
 }
 
-fn map_ad_tensor_unary_typed<T, U, F>(input: &AdTensor<T>, f: F) -> Result<AdTensor<U>>
+fn map_ad_tensor_same_type_linear_typed<T, F>(
+    input: &AdTensor<T>,
+    op_name: &'static str,
+    map: F,
+) -> Result<AdTensor<T>>
 where
-    T: Scalar + Copy,
-    U: Scalar + Copy,
-    F: Fn(T) -> U + Copy,
+    T: Scalar + ScalarAd + Copy + 'static,
+    F: Fn(T) -> T + Copy + 'static,
 {
     let mapped = match input.as_value().clone() {
-        AdValue::Primal(primal) => AdValue::Primal(tensor_map_unary_typed(&primal, f)?),
+        AdValue::Primal(primal) => AdValue::Primal(tensor_map_unary_typed(&primal, map)?),
         AdValue::Forward { primal, tangent } => AdValue::Forward {
-            primal: tensor_map_unary_typed(&primal, f)?,
-            tangent: tensor_map_unary_typed(&tangent, f)?,
+            primal: tensor_map_unary_typed(&primal, map)?,
+            tangent: tensor_map_unary_typed(&tangent, map)?,
         },
         AdValue::Reverse {
             primal,
-            node,
+            node: input_node,
             tape,
             tangent,
-        } => AdValue::Reverse {
-            primal: tensor_map_unary_typed(&primal, f)?,
-            node,
-            tape,
-            tangent: tangent
+        } => {
+            let output_primal = tensor_map_unary_typed(&primal, map)?;
+            let output_tangent = tangent
                 .as_ref()
-                .map(|t| tensor_map_unary_typed(t, f))
-                .transpose()?,
+                .map(|t| tensor_map_unary_typed(t, map))
+                .transpose()?;
+            let output_node = NodeId(NEXT_AD_TENSOR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            reverse_tape::register_rule::<T>(
+                tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    Ok(vec![(input_node, tensor_map_unary_typed(cotangent, map)?)])
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            AdValue::Reverse {
+                primal: output_primal,
+                node: output_node,
+                tape,
+                tangent: output_tangent,
+            }
+        }
+    };
+    Ok(AdTensor(mapped))
+}
+
+fn map_ad_tensor_mixed_linear_typed<TIn, TOut, P, R>(
+    input: &AdTensor<TIn>,
+    op_name: &'static str,
+    primal_map: P,
+    reverse_map: R,
+) -> Result<AdTensor<TOut>>
+where
+    TIn: Scalar + ScalarAd + Copy + 'static,
+    TOut: Scalar + ScalarAd + Copy + 'static,
+    P: Fn(TIn) -> TOut + Copy,
+    R: Fn(TOut) -> TIn + Copy + 'static,
+{
+    let mapped = match input.as_value().clone() {
+        AdValue::Primal(primal) => AdValue::Primal(tensor_map_unary_typed(&primal, primal_map)?),
+        AdValue::Forward { primal, tangent } => AdValue::Forward {
+            primal: tensor_map_unary_typed(&primal, primal_map)?,
+            tangent: tensor_map_unary_typed(&tangent, primal_map)?,
         },
+        AdValue::Reverse {
+            primal,
+            node: input_node,
+            tape,
+            tangent,
+        } => {
+            let output_primal = tensor_map_unary_typed(&primal, primal_map)?;
+            let output_tangent = tangent
+                .as_ref()
+                .map(|t| tensor_map_unary_typed(t, primal_map))
+                .transpose()?;
+            let output_node = NodeId(NEXT_AD_TENSOR_NODE_ID.fetch_add(1, Ordering::Relaxed));
+            reverse_tape::register_bridge_rule::<TOut, TIn>(
+                tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    Ok(vec![(
+                        input_node,
+                        tensor_map_unary_typed(cotangent, reverse_map)?,
+                    )])
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            AdValue::Reverse {
+                primal: output_primal,
+                node: output_node,
+                tape,
+                tangent: output_tangent,
+            }
+        }
     };
     Ok(AdTensor(mapped))
 }
@@ -2146,8 +2243,18 @@ impl DynAdTensor {
         match self {
             Self::F32(v) => Ok(Self::F32(v.clone())),
             Self::F64(v) => Ok(Self::F64(v.clone())),
-            Self::C32(v) => Ok(Self::F32(map_ad_tensor_unary_typed(v, |z| z.re)?)),
-            Self::C64(v) => Ok(Self::F64(map_ad_tensor_unary_typed(v, |z| z.re)?)),
+            Self::C32(v) => Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
+                v,
+                "real_part",
+                |z| z.re,
+                |cotangent| Complex32::new(cotangent, 0.0),
+            )?)),
+            Self::C64(v) => Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
+                v,
+                "real_part",
+                |z| z.re,
+                |cotangent| Complex64::new(cotangent, 0.0),
+            )?)),
         }
     }
 
@@ -2157,10 +2264,28 @@ impl DynAdTensor {
     /// - Complex dtype: returns real dtype (`C32->F32`, `C64->F64`).
     pub fn imag_part(&self) -> Result<Self> {
         match self {
-            Self::F32(v) => Ok(Self::F32(map_ad_tensor_unary_typed(v, |_| 0.0_f32)?)),
-            Self::F64(v) => Ok(Self::F64(map_ad_tensor_unary_typed(v, |_| 0.0_f64)?)),
-            Self::C32(v) => Ok(Self::F32(map_ad_tensor_unary_typed(v, |z| z.im)?)),
-            Self::C64(v) => Ok(Self::F64(map_ad_tensor_unary_typed(v, |z| z.im)?)),
+            Self::F32(v) => Ok(Self::F32(map_ad_tensor_same_type_linear_typed(
+                v,
+                "imag_part",
+                |_| 0.0_f32,
+            )?)),
+            Self::F64(v) => Ok(Self::F64(map_ad_tensor_same_type_linear_typed(
+                v,
+                "imag_part",
+                |_| 0.0_f64,
+            )?)),
+            Self::C32(v) => Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
+                v,
+                "imag_part",
+                |z| z.im,
+                |cotangent| Complex32::new(0.0, cotangent),
+            )?)),
+            Self::C64(v) => Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
+                v,
+                "imag_part",
+                |z| z.im,
+                |cotangent| Complex64::new(0.0, cotangent),
+            )?)),
         }
     }
 
@@ -2170,14 +2295,34 @@ impl DynAdTensor {
     pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
         match (real, imag) {
             (Self::F32(re), Self::F32(im)) => {
-                let re_c = map_ad_tensor_unary_typed(&re, |x| Complex32::new(x, 0.0))?;
-                let im_c = map_ad_tensor_unary_typed(&im, |y| Complex32::new(0.0, y))?;
+                let re_c = map_ad_tensor_mixed_linear_typed(
+                    &re,
+                    "compose_complex",
+                    |x| Complex32::new(x, 0.0),
+                    |cotangent| cotangent.re,
+                )?;
+                let im_c = map_ad_tensor_mixed_linear_typed(
+                    &im,
+                    "compose_complex",
+                    |y| Complex32::new(0.0, y),
+                    |cotangent| cotangent.im,
+                )?;
                 let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
                 Ok(Self::C32(AdTensor(merged)))
             }
             (Self::F64(re), Self::F64(im)) => {
-                let re_c = map_ad_tensor_unary_typed(&re, |x| Complex64::new(x, 0.0))?;
-                let im_c = map_ad_tensor_unary_typed(&im, |y| Complex64::new(0.0, y))?;
+                let re_c = map_ad_tensor_mixed_linear_typed(
+                    &re,
+                    "compose_complex",
+                    |x| Complex64::new(x, 0.0),
+                    |cotangent| cotangent.re,
+                )?;
+                let im_c = map_ad_tensor_mixed_linear_typed(
+                    &im,
+                    "compose_complex",
+                    |y| Complex64::new(0.0, y),
+                    |cotangent| cotangent.im,
+                )?;
                 let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
                 Ok(Self::C64(AdTensor(merged)))
             }
@@ -2218,8 +2363,16 @@ impl DynAdTensor {
             (Self::C32(tensor), DynAdScalar::C32(alpha)) => {
                 Ok(Self::C32(scale_ad_tensor_typed(tensor, alpha)?))
             }
+            (Self::C32(tensor), DynAdScalar::F32(alpha)) => {
+                let promoted = promote_f32_to_c32(alpha.clone(), "scale");
+                Ok(Self::C32(scale_ad_tensor_typed(tensor, &promoted)?))
+            }
             (Self::C64(tensor), DynAdScalar::C64(alpha)) => {
                 Ok(Self::C64(scale_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::C64(tensor), DynAdScalar::F64(alpha)) => {
+                let promoted = promote_f64_to_c64(alpha.clone(), "scale");
+                Ok(Self::C64(scale_ad_tensor_typed(tensor, &promoted)?))
             }
             _ => Err(Error::InvalidAdTensor {
                 message: format!(
@@ -2304,8 +2457,16 @@ impl DynAdTensor {
             (Self::C32(tensor), DynAdScalar::C32(alpha)) => {
                 Ok(Self::C32(div_ad_tensor_typed(tensor, alpha)?))
             }
+            (Self::C32(tensor), DynAdScalar::F32(alpha)) => {
+                let promoted = promote_f32_to_c32(alpha.clone(), "div_scalar");
+                Ok(Self::C32(div_ad_tensor_typed(tensor, &promoted)?))
+            }
             (Self::C64(tensor), DynAdScalar::C64(alpha)) => {
                 Ok(Self::C64(div_ad_tensor_typed(tensor, alpha)?))
+            }
+            (Self::C64(tensor), DynAdScalar::F64(alpha)) => {
+                let promoted = promote_f64_to_c64(alpha.clone(), "div_scalar");
+                Ok(Self::C64(div_ad_tensor_typed(tensor, &promoted)?))
             }
             _ => Err(Error::InvalidAdTensor {
                 message: format!(

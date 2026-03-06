@@ -1,3 +1,4 @@
+use num_complex::Complex64;
 use tenferro_dyadtensor::{
     ad, AdMode, AdScalar, AdTensor, AdValue, DynAdScalar, DynAdTensor, NodeId, TapeId,
 };
@@ -5,6 +6,10 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn f64_vec(values: &[f64]) -> Tensor<f64> {
     Tensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn c64_vec(values: &[Complex64]) -> Tensor<Complex64> {
+    Tensor::<Complex64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
 fn scalar_from_dyn(value: &DynAdScalar) -> AdScalar<f64> {
@@ -143,4 +148,45 @@ fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
         &[1.0, 2.5]
     );
     assert_eq!(scalar_grads, vec![Some(0.75)]);
+}
+
+#[test]
+fn scale_propagates_reverse_gradients_through_negated_scalar_coefficients() {
+    let x: DynAdTensor = AdTensor::new_primal(f64_vec(&[2.0, -1.0])).into();
+    let a = DynAdScalar::from(AdValue::reverse(3.0_f64, NodeId(41), TapeId(61), None));
+    let coeff = -a.clone();
+
+    let out = x.scale(&coeff).unwrap();
+    assert_eq!(out.mode(), AdMode::Reverse);
+
+    let out_t = out.as_f64().unwrap();
+    let cotangent = AdTensor::new_primal(f64_vec(&[0.5, -1.25]));
+    let scalar_grads =
+        ad::pullback_wrt_scalars(out_t, &cotangent, &[&scalar_from_dyn(&a)]).unwrap();
+
+    assert_eq!(scalar_grads, vec![Some(-2.25)]);
+}
+
+#[test]
+fn scale_propagates_reverse_gradients_through_negative_real_sqrt_promotion() {
+    let x: DynAdTensor = AdTensor::new_primal(c64_vec(&[
+        Complex64::new(1.0, 0.0),
+        Complex64::new(2.0, 0.0),
+    ]))
+    .into();
+    let a = DynAdScalar::from(AdValue::reverse(-4.0_f64, NodeId(51), TapeId(62), None));
+    let coeff = a.sqrt();
+
+    let out = x.scale(&coeff).unwrap();
+    assert_eq!(out.mode(), AdMode::Reverse);
+
+    let out_t = out.as_c64().unwrap();
+    let cotangent = AdTensor::new_primal(c64_vec(&[
+        Complex64::new(0.0, 1.0),
+        Complex64::new(0.0, 2.0),
+    ]));
+    let scalar_grads =
+        ad::pullback_wrt_scalars(out_t, &cotangent, &[&scalar_from_dyn(&a)]).unwrap();
+
+    assert_eq!(scalar_grads, vec![Some(-1.25)]);
 }
