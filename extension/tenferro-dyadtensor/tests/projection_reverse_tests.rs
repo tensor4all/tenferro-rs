@@ -97,7 +97,7 @@ fn tensor_complex_real_part_reverse_via_pullback_wrt_mixed() {
         c64_vec(&[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)]),
         NodeId(11),
         TapeId(81),
-        None,
+        None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
     .into();
 
@@ -106,8 +106,15 @@ fn tensor_complex_real_part_reverse_via_pullback_wrt_mixed() {
     let grads =
         ad::pullback_wrt_mixed(out.as_f64().unwrap(), &cotangent, &[x.as_c64().unwrap()]).unwrap();
 
+    assert!(grads[0].as_ref().unwrap().is_dense());
     assert_eq!(
-        grads[0].as_ref().unwrap().buffer().as_slice().unwrap(),
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .payload()
+            .buffer()
+            .as_slice()
+            .unwrap(),
         &[Complex64::new(0.5, 0.0), Complex64::new(-1.25, 0.0)]
     );
 }
@@ -118,7 +125,7 @@ fn tensor_complex_imag_part_reverse_via_pullback_wrt_mixed() {
         c64_vec(&[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)]),
         NodeId(12),
         TapeId(82),
-        None,
+        None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
     .into();
 
@@ -127,18 +134,35 @@ fn tensor_complex_imag_part_reverse_via_pullback_wrt_mixed() {
     let grads =
         ad::pullback_wrt_mixed(out.as_f64().unwrap(), &cotangent, &[x.as_c64().unwrap()]).unwrap();
 
+    assert!(grads[0].as_ref().unwrap().is_dense());
     assert_eq!(
-        grads[0].as_ref().unwrap().buffer().as_slice().unwrap(),
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .payload()
+            .buffer()
+            .as_slice()
+            .unwrap(),
         &[Complex64::new(0.0, 0.5), Complex64::new(0.0, -1.25)]
     );
 }
 
 #[test]
 fn tensor_compose_complex_reverse_via_pullback_wrt_mixed() {
-    let re: DynAdTensor =
-        AdTensor::new_reverse(f64_vec(&[1.0, -3.0]), NodeId(13), TapeId(83), None).into();
-    let im: DynAdTensor =
-        AdTensor::new_reverse(f64_vec(&[2.0, 4.0]), NodeId(14), TapeId(83), None).into();
+    let re: DynAdTensor = AdTensor::new_reverse(
+        f64_vec(&[1.0, -3.0]),
+        NodeId(13),
+        TapeId(83),
+        None::<tenferro_dyadtensor::StructuredTensor<f64>>,
+    )
+    .into();
+    let im: DynAdTensor = AdTensor::new_reverse(
+        f64_vec(&[2.0, 4.0]),
+        NodeId(14),
+        TapeId(83),
+        None::<tenferro_dyadtensor::StructuredTensor<f64>>,
+    )
+    .into();
 
     let out = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();
     let cotangent = AdTensor::new_primal(c64_vec(&[
@@ -152,12 +176,26 @@ fn tensor_compose_complex_reverse_via_pullback_wrt_mixed() {
     )
     .unwrap();
 
+    assert!(grads[0].as_ref().unwrap().is_dense());
+    assert!(grads[1].as_ref().unwrap().is_dense());
     assert_eq!(
-        grads[0].as_ref().unwrap().buffer().as_slice().unwrap(),
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .payload()
+            .buffer()
+            .as_slice()
+            .unwrap(),
         &[0.5, 1.0]
     );
     assert_eq!(
-        grads[1].as_ref().unwrap().buffer().as_slice().unwrap(),
+        grads[1]
+            .as_ref()
+            .unwrap()
+            .payload()
+            .buffer()
+            .as_slice()
+            .unwrap(),
         &[-0.25, 0.75]
     );
 }

@@ -1,8 +1,8 @@
 use std::hash::Hash;
 
 use tenferro_algebra::Scalar;
-use tenferro_tensor::Tensor;
 
+use crate::structured::StructuredTensor;
 use crate::{AdScalar, AdTensor, AdValue, DiffPolicy, DynScalar, Result};
 
 /// AD rule method result type alias.
@@ -74,9 +74,9 @@ impl<T: Clone> Differentiable for AdScalar<T> {
 }
 
 impl<T: Clone + Scalar> Differentiable for AdTensor<T> {
-    type Primal = Tensor<T>;
+    type Primal = StructuredTensor<T>;
 
-    fn ad_value(&self) -> &AdValue<Tensor<T>> {
+    fn ad_value(&self) -> &AdValue<StructuredTensor<T>> {
         self.as_value()
     }
 }

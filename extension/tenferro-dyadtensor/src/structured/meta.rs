@@ -11,7 +11,7 @@ use tenferro_einsum::Subscripts;
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::partial_diag::OperandAxisClasses;
+/// use tenferro_dyadtensor::OperandAxisClasses;
 ///
 /// let operand = OperandAxisClasses::new(vec![3, 3], vec![0, 0]).unwrap();
 /// assert_eq!(operand.dims.len(), 2);
@@ -30,7 +30,7 @@ impl OperandAxisClasses {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::partial_diag::OperandAxisClasses;
+    /// use tenferro_dyadtensor::OperandAxisClasses;
     ///
     /// let x = OperandAxisClasses::new(vec![2, 2], vec![0, 0]).unwrap();
     /// assert_eq!(x.axis_classes, vec![0, 0]);
@@ -55,7 +55,7 @@ impl OperandAxisClasses {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::partial_diag::OperandAxisClassPlan;
+/// use tenferro_dyadtensor::OperandAxisClassPlan;
 ///
 /// let plan = OperandAxisClassPlan {
 ///     class_roots: vec![0, 1],
@@ -80,7 +80,7 @@ pub struct OperandAxisClassPlan {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::partial_diag::AxisClassMergePlan;
+/// use tenferro_dyadtensor::AxisClassMergePlan;
 ///
 /// let plan = AxisClassMergePlan {
 ///     operand_plans: vec![],
@@ -157,9 +157,7 @@ pub enum AxisClassPlanError {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::partial_diag::{
-///     plan_axis_classes_for_subscripts, OperandAxisClasses,
-/// };
+/// use tenferro_dyadtensor::{plan_axis_classes_for_subscripts, OperandAxisClasses};
 /// use tenferro_einsum::Subscripts;
 ///
 /// let operands = vec![
