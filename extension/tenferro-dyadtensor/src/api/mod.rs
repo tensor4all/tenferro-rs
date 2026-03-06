@@ -171,6 +171,38 @@ fn normalize_pullback_shape<T: Scalar>(
         })
 }
 
+fn normalize_output_tangent_shape<T: Scalar>(
+    tangent: Tensor<T>,
+    expected_dims: &[usize],
+    op_name: &'static str,
+) -> Result<Tensor<T>> {
+    if tangent.dims() == expected_dims {
+        return Ok(tangent);
+    }
+
+    let expected_len: usize = expected_dims.iter().product();
+    if tangent.len() != expected_len {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} tangent shape mismatch: expected {:?} (len={expected_len}), got {:?} (len={})",
+                expected_dims,
+                tangent.dims(),
+                tangent.len()
+            ),
+        });
+    }
+
+    tangent
+        .reshape(expected_dims)
+        .map_err(|e| Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} tangent reshape failed from {:?} to {:?}: {e}",
+                tangent.dims(),
+                expected_dims
+            ),
+        })
+}
+
 fn dense_input_snapshot_in_ctx<T>(
     ctx: &mut CpuContext,
     input: &AdTensor<T>,
@@ -284,6 +316,9 @@ fn wrap_dense_ad_output<TIn: Scalar, TOut: Scalar>(
     tangent: Option<Tensor<TOut>>,
     output_tag: u64,
 ) -> Result<AdTensor<TOut>> {
+    let tangent = tangent
+        .map(|tangent| normalize_output_tangent_shape(tangent, primal.dims(), op_name))
+        .transpose()?;
     wrap_structured_ad_output(
         op_name,
         inputs,
@@ -305,14 +340,14 @@ fn wrap_structured_ad_output<TIn: Scalar, TOut: Scalar>(
             message: "reverse-mode output requested but no reverse tape found".to_string(),
         })?;
         let node = derive_reverse_node(op_name, inputs, primal.logical_dims(), output_tag, tape);
-        return Ok(AdTensor::new_reverse(primal, node, tape, tangent));
+        return AdTensor::new_reverse(primal, node, tape, tangent);
     }
 
     if has_forward(inputs) {
         let tangent = tangent.ok_or_else(|| Error::InvalidAdTensor {
             message: "forward-mode inputs must provide tangent output".to_string(),
         })?;
-        return Ok(AdTensor::new_forward(primal, tangent));
+        return AdTensor::new_forward(primal, tangent);
     }
 
     Ok(AdTensor::new_primal(primal))
@@ -3120,8 +3155,8 @@ mod tests {
                 .unwrap();
         let db = Tensor::<f64>::from_slice(&[0.2, -0.1], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-        let ad_a = AdTensor::new_forward(a, da);
-        let ad_b = AdTensor::new_forward(b, db);
+        let ad_a = AdTensor::new_forward(a, da).unwrap();
+        let ad_b = AdTensor::new_forward(b, db).unwrap();
         let out = solve_triangular_ad(&ad_a, &ad_b).run().unwrap();
         assert!(matches!(out.as_value(), AdValue::Forward { .. }));
         assert_eq!(out.dims(), &[2]);
@@ -3278,7 +3313,7 @@ mod tests {
                 .unwrap();
         let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-        let ad_a_fwd = AdTensor::new_forward(a.clone(), da);
+        let ad_a_fwd = AdTensor::new_forward(a.clone(), da).unwrap();
         let ad_b = AdTensor::new_primal(b);
         let out_fwd = solve_ad(&ad_a_fwd, &ad_b).run().unwrap();
         assert!(matches!(out_fwd.as_value(), AdValue::Forward { .. }));
@@ -3286,8 +3321,8 @@ mod tests {
         let out_tri_fwd = solve_triangular_ad(&ad_a_fwd, &ad_b).run().unwrap();
         assert!(matches!(out_tri_fwd.as_value(), AdValue::Forward { .. }));
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None);
-        let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None).unwrap();
+        let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None).unwrap();
         let out_rev = einsum_ad("ij,jk->ik", &[&ad_a_rev, &ad_b_rev])
             .run()
             .unwrap();

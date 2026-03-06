@@ -18,6 +18,7 @@ fn c64_tensor_scale_accepts_f64_scalar_in_forward_mode() {
         c64_vec(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::forward(2.0_f64, 0.25_f64));
 
@@ -41,6 +42,7 @@ fn c64_tensor_div_scalar_accepts_f64_scalar_in_forward_mode() {
         c64_vec(&[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::forward(2.0_f64, 0.5_f64));
 
@@ -64,11 +66,13 @@ fn c64_tensor_axpby_accepts_real_coefficients() {
         c64_vec(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
     )
+    .unwrap()
     .into();
     let y: DynAdTensor = AdTensor::new_forward(
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(2.0, 0.0)]),
         c64_vec(&[Complex64::new(-0.5, 0.0), Complex64::new(0.25, 0.0)]),
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::forward(2.0_f64, 0.25_f64));
     let b = DynAdScalar::from(AdValue::forward(-0.5_f64, 1.0_f64));
@@ -95,6 +99,7 @@ fn c64_tensor_scale_pullback_reaches_real_scalar_input() {
         TapeId(91),
         None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::reverse(2.0_f64, NodeId(22), TapeId(91), None));
 
@@ -130,6 +135,7 @@ fn c64_tensor_div_scalar_pullback_reaches_real_scalar_input() {
         TapeId(92),
         None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::reverse(2.0_f64, NodeId(32), TapeId(92), None));
 

@@ -26,6 +26,7 @@ fn diag_scale_reverse_keeps_diag_cotangent_space() {
         TapeId(7),
         None::<StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(2.0_f64);
     let y = x.scale(&a).unwrap();
@@ -47,6 +48,7 @@ fn diag_axpby_reverse_keeps_diag_cotangent_space() {
         TapeId(17),
         None::<StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let y: DynAdTensor = AdTensor::new_reverse(
         StructuredTensor::from_diagonal_vector(vector(&[5.0, 7.0]), 2).unwrap(),
@@ -54,6 +56,7 @@ fn diag_axpby_reverse_keeps_diag_cotangent_space() {
         TapeId(17),
         None::<StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(2.0_f64);
     let b = DynAdScalar::from(-1.0_f64);
@@ -87,6 +90,7 @@ fn diag_complex_real_part_reverse_keeps_diag_cotangent_space() {
         TapeId(27),
         None::<StructuredTensor<Complex64>>,
     )
+    .unwrap()
     .into();
 
     let out = x.real_part().unwrap();
@@ -109,6 +113,7 @@ fn diag_complex_compose_complex_reverse_keeps_diag_cotangent_space() {
         TapeId(37),
         None::<StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let im: DynAdTensor = AdTensor::new_reverse(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 4.0]), 2).unwrap(),
@@ -116,6 +121,7 @@ fn diag_complex_compose_complex_reverse_keeps_diag_cotangent_space() {
         TapeId(37),
         None::<StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
 
     let out = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();
@@ -164,13 +170,15 @@ fn root_einsum_reverse_keeps_diag_cotangent_space() {
         NodeId(41),
         TapeId(47),
         None,
-    );
+    )
+    .unwrap();
     let b = AdTensor::new_reverse(
         StructuredTensor::from_diagonal_vector(vector(&[3.0, 4.0]), 2).unwrap(),
         NodeId(42),
         TapeId(47),
         None,
-    );
+    )
+    .unwrap();
 
     let out = ad::einsum("ij,jk->ik", &[&a, &b]).unwrap();
     let cotangent = AdTensor::new_primal(
@@ -193,7 +201,8 @@ fn root_sum_reverse_keeps_diag_cotangent_space() {
         NodeId(51),
         TapeId(57),
         None,
-    );
+    )
+    .unwrap();
 
     let out = ad::sum(&x).unwrap();
     let cotangent = AdTensor::new_primal(scalar(1.5));

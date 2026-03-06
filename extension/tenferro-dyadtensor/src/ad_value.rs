@@ -971,8 +971,52 @@ where
 /// let x: AdTensor<f64> = t.into();
 /// assert_eq!(x.mode(), AdMode::Primal);
 /// ```
-#[derive(Clone)]
-pub struct AdTensor<T: Scalar>(pub AdValue<StructuredTensor<T>>);
+#[derive(Debug, Clone)]
+pub struct AdTensor<T: Scalar>(AdValue<StructuredTensor<T>>);
+
+fn ensure_same_structured_layout<T: Scalar>(
+    op_name: &'static str,
+    primal: &StructuredTensor<T>,
+    tangent: &StructuredTensor<T>,
+) -> Result<()> {
+    if primal.logical_dims() != tangent.logical_dims() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires tangent.logical_dims == primal.logical_dims, got primal={:?}, tangent={:?}",
+                primal.logical_dims(),
+                tangent.logical_dims()
+            ),
+        });
+    }
+    if primal.axis_classes() != tangent.axis_classes() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires tangent.axis_classes == primal.axis_classes, got primal={:?}, tangent={:?}",
+                primal.axis_classes(),
+                tangent.axis_classes()
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_ad_tensor_value<T: Scalar>(
+    op_name: &'static str,
+    value: &AdValue<StructuredTensor<T>>,
+) -> Result<()> {
+    match value {
+        AdValue::Primal(_) => Ok(()),
+        AdValue::Forward { primal, tangent } => {
+            ensure_same_structured_layout(op_name, primal, tangent)
+        }
+        AdValue::Reverse {
+            primal,
+            tangent: Some(tangent),
+            ..
+        } => ensure_same_structured_layout(op_name, primal, tangent),
+        AdValue::Reverse { tangent: None, .. } => Ok(()),
+    }
+}
 
 impl<T: Scalar> AdTensor<T> {
     /// Creates a primal tensor.
@@ -1001,14 +1045,15 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// let primal = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
     /// let tangent = Tensor::<f64>::from_slice(&[0.1], &[1], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = AdTensor::new_forward(primal, tangent);
+    /// let x = AdTensor::new_forward(primal, tangent).unwrap();
     /// assert_eq!(x.mode(), AdMode::Forward);
     /// ```
     pub fn new_forward(
         primal: impl Into<StructuredTensor<T>>,
         tangent: impl Into<StructuredTensor<T>>,
-    ) -> Self {
-        Self(AdValue::forward(primal.into(), tangent.into()))
+    ) -> Result<Self> {
+        let value = AdValue::forward(primal.into(), tangent.into());
+        Self::try_from(value)
     }
 
     /// Creates a reverse-mode tensor.
@@ -1020,7 +1065,7 @@ impl<T: Scalar> AdTensor<T> {
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let primal = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = AdTensor::new_reverse(primal, NodeId(8), TapeId(3), None);
+    /// let x = AdTensor::new_reverse(primal, NodeId(8), TapeId(3), None).unwrap();
     /// assert_eq!(x.mode(), AdMode::Reverse);
     /// ```
     pub fn new_reverse(
@@ -1028,8 +1073,9 @@ impl<T: Scalar> AdTensor<T> {
         node: NodeId,
         tape: TapeId,
         tangent: Option<StructuredTensor<T>>,
-    ) -> Self {
-        Self(AdValue::reverse(primal.into(), node, tape, tangent))
+    ) -> Result<Self> {
+        let value = AdValue::reverse(primal.into(), node, tape, tangent);
+        Self::try_from(value)
     }
 
     /// Returns AD mode.
@@ -1080,6 +1126,10 @@ impl<T: Scalar> AdTensor<T> {
         self.0
     }
 
+    pub(crate) fn from_value_unchecked(value: AdValue<StructuredTensor<T>>) -> Self {
+        Self(value)
+    }
+
     /// Returns structured primal payload reference.
     ///
     /// # Examples
@@ -1122,7 +1172,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// let primal = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
     /// let tangent = Tensor::<f64>::from_slice(&[0.5], &[1], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = AdTensor::new_forward(primal, tangent);
+    /// let x = AdTensor::new_forward(primal, tangent).unwrap();
     /// assert_eq!(x.structured_tangent().unwrap().logical_dims(), &[1]);
     /// ```
     pub fn structured_tangent(&self) -> Option<&StructuredTensor<T>> {
@@ -1139,7 +1189,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// let primal = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
     /// let tangent = Tensor::<f64>::from_slice(&[0.5], &[1], MemoryOrder::ColumnMajor).unwrap();
-    /// let x = AdTensor::new_forward(primal, tangent);
+    /// let x = AdTensor::new_forward(primal, tangent).unwrap();
     /// assert_eq!(x.tangent().unwrap().dims(), &[1]);
     /// ```
     pub fn tangent(&self) -> Option<&Tensor<T>> {
@@ -1273,9 +1323,12 @@ impl<T: Scalar> From<StructuredTensor<T>> for AdTensor<T> {
     }
 }
 
-impl<T: Scalar> From<AdValue<StructuredTensor<T>>> for AdTensor<T> {
-    fn from(value: AdValue<StructuredTensor<T>>) -> Self {
-        Self(value)
+impl<T: Scalar> TryFrom<AdValue<StructuredTensor<T>>> for AdTensor<T> {
+    type Error = Error;
+
+    fn try_from(value: AdValue<StructuredTensor<T>>) -> Result<Self> {
+        validate_ad_tensor_value("AdTensor::try_from", &value)?;
+        Ok(Self(value))
     }
 }
 
@@ -1299,7 +1352,7 @@ impl<T: Scalar> From<AdValue<Tensor<T>>> for AdTensor<T> {
                 tangent: tangent.map(StructuredTensor::from_dense),
             },
         };
-        Self(mapped)
+        Self::from_value_unchecked(mapped)
     }
 }
 
@@ -1308,6 +1361,18 @@ mod tests {
     use super::*;
     use num_complex::Complex64;
     use tenferro_tensor::MemoryOrder;
+
+    fn dense_matrix(values: &[f64; 4]) -> Tensor<f64> {
+        Tensor::<f64>::from_slice(values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
+    }
+
+    fn diag2(values: &[f64; 2]) -> StructuredTensor<f64> {
+        StructuredTensor::from_diagonal_vector(
+            Tensor::<f64>::from_slice(values, &[2], MemoryOrder::ColumnMajor).unwrap(),
+            2,
+        )
+        .unwrap()
+    }
 
     #[test]
     fn ad_value_map_preserving_metadata_preserves_mode() {
@@ -1327,6 +1392,35 @@ mod tests {
         assert_eq!(ad.dims(), &[2]);
         assert_eq!(ad.ndim(), 1);
         assert_eq!(ad.len(), 2);
+    }
+
+    #[test]
+    fn ad_tensor_new_forward_rejects_tangent_layout_mismatch() {
+        let err = AdTensor::new_forward(dense_matrix(&[1.0, 2.0, 3.0, 4.0]), diag2(&[5.0, 6.0]))
+            .unwrap_err();
+        assert!(matches!(err, Error::InvalidAdTensor { .. }));
+    }
+
+    #[test]
+    fn ad_tensor_new_reverse_rejects_tangent_layout_mismatch() {
+        let err = AdTensor::new_reverse(
+            dense_matrix(&[1.0, 2.0, 3.0, 4.0]),
+            NodeId(1),
+            TapeId(7),
+            Some(diag2(&[5.0, 6.0])),
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::InvalidAdTensor { .. }));
+    }
+
+    #[test]
+    fn ad_tensor_try_from_structured_value_rejects_tangent_layout_mismatch() {
+        let value = AdValue::Forward {
+            primal: StructuredTensor::from_dense(dense_matrix(&[1.0, 2.0, 3.0, 4.0])),
+            tangent: diag2(&[5.0, 6.0]),
+        };
+        let err = AdTensor::try_from(value).unwrap_err();
+        assert!(matches!(err, Error::InvalidAdTensor { .. }));
     }
 
     #[test]

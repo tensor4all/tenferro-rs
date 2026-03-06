@@ -8,6 +8,7 @@ fn scale_preserves_forward_tensor_and_scalar_ad() {
         Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
         Tensor::<f64>::from_slice(&[0.5, 0.25], &[2], MemoryOrder::ColumnMajor).unwrap(),
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::forward(3.0_f64, 0.1_f64));
 

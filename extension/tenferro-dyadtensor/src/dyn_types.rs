@@ -1669,7 +1669,7 @@ where
             }
         }
     };
-    Ok(AdTensor(mapped))
+    AdTensor::try_from(mapped)
 }
 
 fn map_ad_tensor_mixed_linear_typed<TIn, TOut, P, R>(
@@ -1743,7 +1743,7 @@ where
             }
         }
     };
-    Ok(AdTensor(mapped))
+    AdTensor::try_from(mapped)
 }
 
 fn tensor_add_typed<T>(lhs: &Tensor<T>, rhs: &Tensor<T>) -> Result<Tensor<T>>
@@ -2048,15 +2048,10 @@ where
             )?;
         }
 
-        return Ok(AdTensor::new_reverse(
-            structured_primal,
-            output_node,
-            tape,
-            structured_tangent,
-        ));
+        return AdTensor::new_reverse(structured_primal, output_node, tape, structured_tangent);
     }
     if let Some(tangent) = structured_tangent {
-        return Ok(AdTensor::new_forward(structured_primal, tangent));
+        return AdTensor::new_forward(structured_primal, tangent);
     }
     Ok(AdTensor::new_primal(structured_primal))
 }
@@ -2457,7 +2452,7 @@ impl DynAdTensor {
                     |cotangent| cotangent.im,
                 )?;
                 let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
-                Ok(Self::C32(AdTensor(merged)))
+                Ok(Self::C32(AdTensor::try_from(merged)?))
             }
             (Self::F64(re), Self::F64(im)) => {
                 let re_c = map_ad_tensor_mixed_linear_typed(
@@ -2473,7 +2468,7 @@ impl DynAdTensor {
                     |cotangent| cotangent.im,
                 )?;
                 let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
-                Ok(Self::C64(AdTensor(merged)))
+                Ok(Self::C64(AdTensor::try_from(merged)?))
             }
             (lhs, rhs) => Err(Error::InvalidAdTensor {
                 message: format!(
@@ -2553,22 +2548,18 @@ impl DynAdTensor {
     /// ```
     pub fn axpby(&self, a: &DynAdScalar, other: &Self, b: &DynAdScalar) -> Result<Self> {
         match (self.scale(a)?, other.scale(b)?) {
-            (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(AdTensor(merge_add_ad_tensors(
-                lhs.into_value(),
-                rhs.into_value(),
-            )?))),
-            (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64(AdTensor(merge_add_ad_tensors(
-                lhs.into_value(),
-                rhs.into_value(),
-            )?))),
-            (Self::C32(lhs), Self::C32(rhs)) => Ok(Self::C32(AdTensor(merge_add_ad_tensors(
-                lhs.into_value(),
-                rhs.into_value(),
-            )?))),
-            (Self::C64(lhs), Self::C64(rhs)) => Ok(Self::C64(AdTensor(merge_add_ad_tensors(
-                lhs.into_value(),
-                rhs.into_value(),
-            )?))),
+            (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(AdTensor::try_from(
+                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+            )?)),
+            (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64(AdTensor::try_from(
+                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+            )?)),
+            (Self::C32(lhs), Self::C32(rhs)) => Ok(Self::C32(AdTensor::try_from(
+                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+            )?)),
+            (Self::C64(lhs), Self::C64(rhs)) => Ok(Self::C64(AdTensor::try_from(
+                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+            )?)),
             (lhs, rhs) => Err(Error::InvalidAdTensor {
                 message: format!(
                     "dtype mismatch in axpby after scaling: lhs={:?}, rhs={:?}",
@@ -2898,7 +2889,7 @@ mod tests {
             MemoryOrder::ColumnMajor,
         )
         .unwrap();
-        let x: DynAdTensor = AdTensor::new_forward(primal, tangent).into();
+        let x: DynAdTensor = AdTensor::new_forward(primal, tangent).unwrap().into();
         assert!(x.is_complex());
         assert!(!x.is_real());
 
@@ -2929,11 +2920,13 @@ mod tests {
         let re = AdTensor::new_forward(
             Tensor::<f64>::from_slice(&[1.5], &[1], MemoryOrder::ColumnMajor).unwrap(),
             Tensor::<f64>::from_slice(&[0.25], &[1], MemoryOrder::ColumnMajor).unwrap(),
-        );
+        )
+        .unwrap();
         let im = AdTensor::new_forward(
             Tensor::<f64>::from_slice(&[-2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
             Tensor::<f64>::from_slice(&[0.75], &[1], MemoryOrder::ColumnMajor).unwrap(),
-        );
+        )
+        .unwrap();
         let z = DynAdTensor::compose_complex(DynAdTensor::F64(re), DynAdTensor::F64(im)).unwrap();
         assert_eq!(z.scalar_type(), ScalarType::C64);
         assert_eq!(z.mode(), AdMode::Forward);
@@ -2972,13 +2965,15 @@ mod tests {
             crate::NodeId(1),
             TapeId(7),
             None,
-        );
+        )
+        .unwrap();
         let im = AdTensor::new_reverse(
             Tensor::<f64>::from_slice(&[2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
             crate::NodeId(2),
             TapeId(8),
             None,
-        );
+        )
+        .unwrap();
         let err = match DynAdTensor::compose_complex(DynAdTensor::F64(re), DynAdTensor::F64(im)) {
             Ok(_) => panic!("compose_complex should reject mixed reverse tapes"),
             Err(err) => err,

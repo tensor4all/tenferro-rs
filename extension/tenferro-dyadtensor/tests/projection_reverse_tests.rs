@@ -99,6 +99,7 @@ fn tensor_complex_real_part_reverse_via_pullback_wrt_mixed() {
         TapeId(81),
         None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
+    .unwrap()
     .into();
 
     let out = x.real_part().unwrap();
@@ -127,6 +128,7 @@ fn tensor_complex_imag_part_reverse_via_pullback_wrt_mixed() {
         TapeId(82),
         None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
+    .unwrap()
     .into();
 
     let out = x.imag_part().unwrap();
@@ -155,6 +157,7 @@ fn tensor_compose_complex_reverse_via_pullback_wrt_mixed() {
         TapeId(83),
         None::<tenferro_dyadtensor::StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let im: DynAdTensor = AdTensor::new_reverse(
         f64_vec(&[2.0, 4.0]),
@@ -162,6 +165,7 @@ fn tensor_compose_complex_reverse_via_pullback_wrt_mixed() {
         TapeId(83),
         None::<tenferro_dyadtensor::StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
 
     let out = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();

@@ -67,13 +67,15 @@ fn structured_diag_qr_pullback_matches_dense_projection() {
         tenferro_dyadtensor::NodeId(11),
         tenferro_dyadtensor::TapeId(91),
         None,
-    );
+    )
+    .unwrap();
     let dense_x = AdTensor::new_reverse(
         matrix2(&[2.0, 0.0, 0.0, 3.0]),
         tenferro_dyadtensor::NodeId(12),
         tenferro_dyadtensor::TapeId(92),
         None,
-    );
+    )
+    .unwrap();
 
     let structured_out = ad::qr(&structured_x).unwrap();
     let dense_out = ad::qr(&dense_x).unwrap();
@@ -110,13 +112,15 @@ fn structured_diag_inv_pullback_matches_dense_projection() {
         tenferro_dyadtensor::NodeId(21),
         tenferro_dyadtensor::TapeId(93),
         None,
-    );
+    )
+    .unwrap();
     let dense_x = AdTensor::new_reverse(
         matrix2(&[2.0, 0.0, 0.0, 4.0]),
         tenferro_dyadtensor::NodeId(22),
         tenferro_dyadtensor::TapeId(94),
         None,
-    );
+    )
+    .unwrap();
 
     let structured_out = ad::inv(&structured_x).unwrap();
     let dense_out = ad::inv(&dense_x).unwrap();
@@ -153,25 +157,29 @@ fn structured_diag_solve_pullback_matches_dense_projection() {
         tenferro_dyadtensor::NodeId(31),
         tenferro_dyadtensor::TapeId(95),
         None,
-    );
+    )
+    .unwrap();
     let dense_a = AdTensor::new_reverse(
         matrix2(&[2.0, 0.0, 0.0, 4.0]),
         tenferro_dyadtensor::NodeId(32),
         tenferro_dyadtensor::TapeId(96),
         None,
-    );
+    )
+    .unwrap();
     let structured_b = AdTensor::new_reverse(
         vector(&[6.0, 8.0]),
         tenferro_dyadtensor::NodeId(33),
         tenferro_dyadtensor::TapeId(95),
         None,
-    );
+    )
+    .unwrap();
     let dense_b = AdTensor::new_reverse(
         vector(&[6.0, 8.0]),
         tenferro_dyadtensor::NodeId(34),
         tenferro_dyadtensor::TapeId(96),
         None,
-    );
+    )
+    .unwrap();
 
     let structured_out = ad::solve(&structured_a, &structured_b).unwrap();
     let dense_out = ad::solve(&dense_a, &dense_b).unwrap();
