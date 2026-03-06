@@ -87,7 +87,11 @@ fn axpby_accepts_matching_structured_layouts() {
     .into();
 
     let out = lhs
-        .axpby(&DynAdScalar::from(2.0_f64), &rhs, &DynAdScalar::from(-1.0_f64))
+        .axpby(
+            &DynAdScalar::from(2.0_f64),
+            &rhs,
+            &DynAdScalar::from(-1.0_f64),
+        )
         .unwrap();
 
     assert!(out.is_diag());
@@ -122,8 +126,11 @@ fn compose_complex_accepts_matching_structured_layouts() {
         .buffer()
         .as_slice()
         .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"));
-    assert_eq!(values, c64_vector(&[Complex64::new(1.0, 3.0), Complex64::new(2.0, 4.0)])
-        .buffer()
-        .as_slice()
-        .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor")));
+    assert_eq!(
+        values,
+        c64_vector(&[Complex64::new(1.0, 3.0), Complex64::new(2.0, 4.0)])
+            .buffer()
+            .as_slice()
+            .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"))
+    );
 }
