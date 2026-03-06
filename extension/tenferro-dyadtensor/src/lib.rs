@@ -11,6 +11,7 @@ pub mod partial_diag;
 pub mod policy;
 mod reverse_tape;
 pub mod runtime;
+mod structured;
 pub mod traits;
 
 pub use ad_value::{AdMode, AdScalar, AdTensor, AdValue, NodeId, TapeId};
@@ -34,6 +35,7 @@ pub use partial_diag::{
 };
 pub use policy::DiffPolicy;
 pub use runtime::{set_default_runtime, with_default_runtime, RuntimeContext};
+pub use structured::StructuredTensor;
 pub use traits::{
     AdResult, AllowedPairs, Differentiable, FactorizeOptions, FactorizeResult, IndexLike, OpRule,
     TensorKernel,
