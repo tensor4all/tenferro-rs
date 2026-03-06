@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
+use crate::structured::StructuredTensor;
 use crate::{reverse_tape, Error, Result};
 
 /// Automatic differentiation mode.
@@ -971,7 +972,7 @@ where
 /// assert_eq!(x.mode(), AdMode::Primal);
 /// ```
 #[derive(Clone)]
-pub struct AdTensor<T: Scalar>(pub AdValue<Tensor<T>>);
+pub struct AdTensor<T: Scalar>(pub AdValue<StructuredTensor<T>>);
 
 impl<T: Scalar> AdTensor<T> {
     /// Creates a primal tensor.
@@ -986,8 +987,8 @@ impl<T: Scalar> AdTensor<T> {
     /// let x = AdTensor::new_primal(t);
     /// assert_eq!(x.dims(), &[1]);
     /// ```
-    pub fn new_primal(tensor: Tensor<T>) -> Self {
-        Self(AdValue::primal(tensor))
+    pub fn new_primal(tensor: impl Into<StructuredTensor<T>>) -> Self {
+        Self(AdValue::primal(tensor.into()))
     }
 
     /// Creates a forward-mode tensor.
@@ -1003,8 +1004,11 @@ impl<T: Scalar> AdTensor<T> {
     /// let x = AdTensor::new_forward(primal, tangent);
     /// assert_eq!(x.mode(), AdMode::Forward);
     /// ```
-    pub fn new_forward(primal: Tensor<T>, tangent: Tensor<T>) -> Self {
-        Self(AdValue::forward(primal, tangent))
+    pub fn new_forward(
+        primal: impl Into<StructuredTensor<T>>,
+        tangent: impl Into<StructuredTensor<T>>,
+    ) -> Self {
+        Self(AdValue::forward(primal.into(), tangent.into()))
     }
 
     /// Creates a reverse-mode tensor.
@@ -1020,12 +1024,12 @@ impl<T: Scalar> AdTensor<T> {
     /// assert_eq!(x.mode(), AdMode::Reverse);
     /// ```
     pub fn new_reverse(
-        primal: Tensor<T>,
+        primal: impl Into<StructuredTensor<T>>,
         node: NodeId,
         tape: TapeId,
-        tangent: Option<Tensor<T>>,
+        tangent: Option<impl Into<StructuredTensor<T>>>,
     ) -> Self {
-        Self(AdValue::reverse(primal, node, tape, tangent))
+        Self(AdValue::reverse(primal.into(), node, tape, tangent.map(Into::into)))
     }
 
     /// Returns AD mode.
@@ -1056,7 +1060,7 @@ impl<T: Scalar> AdTensor<T> {
     /// let x = AdTensor::new_primal(t);
     /// assert!(matches!(x.as_value(), AdValue::Primal(_)));
     /// ```
-    pub fn as_value(&self) -> &AdValue<Tensor<T>> {
+    pub fn as_value(&self) -> &AdValue<StructuredTensor<T>> {
         &self.0
     }
 
@@ -1072,11 +1076,27 @@ impl<T: Scalar> AdTensor<T> {
     /// let x = AdTensor::new_primal(t).into_value();
     /// assert!(matches!(x, AdValue::Primal(_)));
     /// ```
-    pub fn into_value(self) -> AdValue<Tensor<T>> {
+    pub fn into_value(self) -> AdValue<StructuredTensor<T>> {
         self.0
     }
 
-    /// Returns primal tensor reference.
+    /// Returns structured primal payload reference.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdTensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let x = AdTensor::new_primal(t);
+    /// assert_eq!(x.structured_primal().logical_dims(), &[2]);
+    /// ```
+    pub fn structured_primal(&self) -> &StructuredTensor<T> {
+        self.0.primal_ref()
+    }
+
+    /// Returns compressed primal payload tensor reference.
     ///
     /// # Examples
     ///
@@ -1089,10 +1109,27 @@ impl<T: Scalar> AdTensor<T> {
     /// assert_eq!(x.primal().dims(), &[2]);
     /// ```
     pub fn primal(&self) -> &Tensor<T> {
-        self.0.primal_ref()
+        self.structured_primal().payload()
     }
 
-    /// Returns tangent tensor reference when available.
+    /// Returns structured tangent reference when available.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdTensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let primal = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
+    /// let tangent = Tensor::<f64>::from_slice(&[0.5], &[1], MemoryOrder::ColumnMajor).unwrap();
+    /// let x = AdTensor::new_forward(primal, tangent);
+    /// assert_eq!(x.structured_tangent().unwrap().logical_dims(), &[1]);
+    /// ```
+    pub fn structured_tangent(&self) -> Option<&StructuredTensor<T>> {
+        self.0.tangent_ref()
+    }
+
+    /// Returns compressed tangent payload tensor reference when available.
     ///
     /// # Examples
     ///
@@ -1106,7 +1143,7 @@ impl<T: Scalar> AdTensor<T> {
     /// assert_eq!(x.tangent().unwrap().dims(), &[1]);
     /// ```
     pub fn tangent(&self) -> Option<&Tensor<T>> {
-        self.0.tangent_ref()
+        self.structured_tangent().map(StructuredTensor::payload)
     }
 
     /// Returns dimensions of the primal tensor.
@@ -1122,7 +1159,7 @@ impl<T: Scalar> AdTensor<T> {
     /// assert_eq!(x.dims(), &[2]);
     /// ```
     pub fn dims(&self) -> &[usize] {
-        self.primal().dims()
+        self.structured_primal().logical_dims()
     }
 
     /// Returns number of dimensions of the primal tensor.
@@ -1172,23 +1209,97 @@ impl<T: Scalar> AdTensor<T> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Returns axis classes of the structured primal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let payload =
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let x = AdTensor::new_primal(StructuredTensor::from_diagonal_vector(payload, 2).unwrap());
+    /// assert_eq!(x.axis_classes(), &[0, 0]);
+    /// ```
+    pub fn axis_classes(&self) -> &[usize] {
+        self.structured_primal().axis_classes()
+    }
+
+    /// Returns `true` when the structured primal is dense.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdTensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let x = AdTensor::new_primal(t);
+    /// assert!(x.is_dense());
+    /// ```
+    pub fn is_dense(&self) -> bool {
+        self.structured_primal().is_dense()
+    }
+
+    /// Returns `true` when the structured primal is diagonal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let payload =
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let x = AdTensor::new_primal(StructuredTensor::from_diagonal_vector(payload, 2).unwrap());
+    /// assert!(x.is_diag());
+    /// ```
+    pub fn is_diag(&self) -> bool {
+        self.structured_primal().is_diag()
+    }
 }
 
 impl<T: Scalar> From<Tensor<T>> for AdTensor<T> {
     fn from(value: Tensor<T>) -> Self {
+        Self(AdValue::Primal(StructuredTensor::from_dense(value)))
+    }
+}
+
+impl<T: Scalar> From<StructuredTensor<T>> for AdTensor<T> {
+    fn from(value: StructuredTensor<T>) -> Self {
         Self(AdValue::Primal(value))
+    }
+}
+
+impl<T: Scalar> From<AdValue<StructuredTensor<T>>> for AdTensor<T> {
+    fn from(value: AdValue<StructuredTensor<T>>) -> Self {
+        Self(value)
     }
 }
 
 impl<T: Scalar> From<AdValue<Tensor<T>>> for AdTensor<T> {
     fn from(value: AdValue<Tensor<T>>) -> Self {
-        Self(value)
-    }
-}
-
-impl<T: Scalar> From<AdTensor<T>> for AdValue<Tensor<T>> {
-    fn from(value: AdTensor<T>) -> Self {
-        value.0
+        let mapped = match value {
+            AdValue::Primal(primal) => AdValue::Primal(StructuredTensor::from_dense(primal)),
+            AdValue::Forward { primal, tangent } => AdValue::Forward {
+                primal: StructuredTensor::from_dense(primal),
+                tangent: StructuredTensor::from_dense(tangent),
+            },
+            AdValue::Reverse {
+                primal,
+                node,
+                tape,
+                tangent,
+            } => AdValue::Reverse {
+                primal: StructuredTensor::from_dense(primal),
+                node,
+                tape,
+                tangent: tangent.map(StructuredTensor::from_dense),
+            },
+        };
+        Self(mapped)
     }
 }
 

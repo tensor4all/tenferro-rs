@@ -1,3 +1,4 @@
+use tenferro_dyadtensor::AdTensor;
 use tenferro_dyadtensor::StructuredTensor;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -20,4 +21,13 @@ fn root_structured_tensor_supports_dense_and_diag_layouts() {
     assert_eq!(diag.logical_dims(), &[2, 2]);
     assert_eq!(diag.axis_classes(), &[0, 0]);
     assert!(diag.is_diag());
+}
+
+#[test]
+fn ad_tensor_wraps_structured_payload_and_reports_logical_dims() {
+    let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
+    let x = AdTensor::new_primal(diag);
+    assert_eq!(x.dims(), &[2, 2]);
+    assert!(x.structured_primal().is_diag());
+    assert_eq!(x.primal().dims(), &[2]);
 }

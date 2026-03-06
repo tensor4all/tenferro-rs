@@ -205,8 +205,8 @@ fn collect_ad_tangents<'a, S: Scalar>(operands: &[&'a AdTensor<S>]) -> Vec<Optio
         .iter()
         .map(|op| match op.as_value() {
             AdValue::Primal(_) => None,
-            AdValue::Forward { tangent, .. } => Some(tangent),
-            AdValue::Reverse { tangent, .. } => tangent.as_ref(),
+            AdValue::Forward { tangent, .. } => Some(tangent.payload()),
+            AdValue::Reverse { tangent, .. } => tangent.as_ref().map(|t| t.payload()),
         })
         .collect()
 }

@@ -253,6 +253,20 @@ impl<T: Scalar> StructuredTensor<T> {
             && self.payload.dims().len() == 1
             && self.payload.dims()[0] == first_dim
     }
+
+    pub(crate) fn with_payload_like(&self, payload: Tensor<T>) -> Result<Self> {
+        Self::new(
+            self.logical_dims.clone(),
+            self.axis_classes.clone(),
+            payload,
+        )
+    }
+}
+
+impl<T: Scalar> From<Tensor<T>> for StructuredTensor<T> {
+    fn from(value: Tensor<T>) -> Self {
+        Self::from_dense(value)
+    }
 }
 
 pub(crate) fn canonicalize_axis_classes(classes: &[usize]) -> Vec<usize> {
