@@ -1784,6 +1784,32 @@ fn split_ad_tensor_state<T: Scalar>(value: AdValue<StructuredTensor<T>>) -> AdTe
     }
 }
 
+fn ensure_same_structured_layout<T: Scalar>(
+    op_name: &'static str,
+    lhs: &StructuredTensor<T>,
+    rhs: &StructuredTensor<T>,
+) -> Result<()> {
+    if lhs.logical_dims() != rhs.logical_dims() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires matching logical_dims, got lhs={:?}, rhs={:?}",
+                lhs.logical_dims(),
+                rhs.logical_dims()
+            ),
+        });
+    }
+    if lhs.axis_classes() != rhs.axis_classes() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires matching axis_classes, got lhs={:?}, rhs={:?}",
+                lhs.axis_classes(),
+                rhs.axis_classes()
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn merge_add_ad_tensors<T>(
     lhs: AdValue<StructuredTensor<T>>,
     rhs: AdValue<StructuredTensor<T>>,
@@ -1793,6 +1819,7 @@ where
 {
     let lhs_state = split_ad_tensor_state(lhs);
     let rhs_state = split_ad_tensor_state(rhs);
+    ensure_same_structured_layout("tensor add merge", &lhs_state.primal, &rhs_state.primal)?;
 
     let primal = StructuredTensor::new(
         lhs_state.primal.logical_dims().to_vec(),
@@ -1800,13 +1827,24 @@ where
         tensor_add_typed(lhs_state.primal.payload(), rhs_state.primal.payload())?,
     )?;
     let tangent = match (lhs_state.tangent, rhs_state.tangent) {
-        (Some(a), Some(b)) => Some(StructuredTensor::new(
-            a.logical_dims().to_vec(),
-            a.axis_classes().to_vec(),
-            tensor_add_typed(a.payload(), b.payload())?,
-        )?),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
+        (Some(a), Some(b)) => {
+            ensure_same_structured_layout("tensor add merge tangent/lhs", &a, &lhs_state.primal)?;
+            ensure_same_structured_layout("tensor add merge tangent/rhs", &b, &rhs_state.primal)?;
+            ensure_same_structured_layout("tensor add merge tangent", &a, &b)?;
+            Some(StructuredTensor::new(
+                a.logical_dims().to_vec(),
+                a.axis_classes().to_vec(),
+                tensor_add_typed(a.payload(), b.payload())?,
+            )?)
+        }
+        (Some(a), None) => {
+            ensure_same_structured_layout("tensor add merge tangent/lhs", &a, &lhs_state.primal)?;
+            Some(a)
+        }
+        (None, Some(b)) => {
+            ensure_same_structured_layout("tensor add merge tangent/rhs", &b, &rhs_state.primal)?;
+            Some(b)
+        }
         (None, None) => None,
     };
 
