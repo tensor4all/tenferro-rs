@@ -5,7 +5,8 @@ use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::Tensor;
 
-use crate::partial_diag::meta::{plan_axis_classes_for_subscripts, OperandAxisClasses};
+use crate::structured::meta::{plan_axis_classes_for_subscripts, OperandAxisClasses};
+use crate::structured::{canonicalize_axis_classes, validate_layout};
 use crate::runtime::{with_default_runtime, RuntimeContext};
 use crate::{Error, Result};
 
@@ -365,87 +366,6 @@ fn with_cpu_runtime<R>(
             runtime: "rocm",
         }),
     })
-}
-
-fn canonicalize_axis_classes(classes: &[usize]) -> Vec<usize> {
-    let mut map: HashMap<usize, usize> = HashMap::new();
-    let mut next = 0usize;
-    classes
-        .iter()
-        .map(|&class_id| {
-            if let Some(&mapped) = map.get(&class_id) {
-                mapped
-            } else {
-                let mapped = next;
-                next += 1;
-                map.insert(class_id, mapped);
-                mapped
-            }
-        })
-        .collect()
-}
-
-fn validate_layout<T: Scalar>(
-    logical_dims: &[usize],
-    axis_classes: &[usize],
-    payload: &Tensor<T>,
-) -> Result<()> {
-    if logical_dims.len() != axis_classes.len() {
-        return Err(Error::InvalidAdTensor {
-            message: format!(
-                "logical_dims length ({}) must match axis_classes length ({})",
-                logical_dims.len(),
-                axis_classes.len()
-            ),
-        });
-    }
-    if logical_dims.is_empty() && payload.dims().is_empty() {
-        return Ok(());
-    }
-
-    let class_count = axis_classes
-        .iter()
-        .copied()
-        .max()
-        .map(|x| x + 1)
-        .unwrap_or(0);
-    if payload.dims().len() != class_count {
-        return Err(Error::InvalidAdTensor {
-            message: format!(
-                "payload rank {} must equal number of classes {}",
-                payload.dims().len(),
-                class_count
-            ),
-        });
-    }
-
-    let mut class_dims: Vec<Option<usize>> = vec![None; class_count];
-    for (&dim, &class_id) in logical_dims.iter().zip(axis_classes.iter()) {
-        if let Some(existing) = class_dims[class_id] {
-            if existing != dim {
-                return Err(Error::InvalidAdTensor {
-                    message: format!(
-                        "axis class {class_id} has inconsistent logical dims: {existing} vs {dim}"
-                    ),
-                });
-            }
-        } else {
-            class_dims[class_id] = Some(dim);
-        }
-    }
-
-    for (class_id, maybe_dim) in class_dims.iter().enumerate() {
-        let expected = maybe_dim.unwrap_or(0);
-        let got = payload.dims()[class_id];
-        if expected != got {
-            return Err(Error::InvalidAdTensor {
-                message: format!(
-                    "payload dim mismatch for class {class_id}: expected {expected}, got {got}"
-                ),
-            });
-        }
-    }
-    Ok(())
 }
 
 fn unique_ids_first_appearance(ids: &[usize]) -> Vec<usize> {

@@ -29,12 +29,12 @@ pub use context::{
 };
 pub use dyn_types::{DynAdScalar, DynAdTensor, DynScalar, DynTensor, ScalarType};
 pub use error::{Error, Result};
-pub use partial_diag::{
+pub use policy::DiffPolicy;
+pub use runtime::{set_default_runtime, with_default_runtime, RuntimeContext};
+pub use structured::meta::{
     plan_axis_classes_for_subscripts, AxisClassMergePlan, AxisClassPlanError, OperandAxisClassPlan,
     OperandAxisClasses,
 };
-pub use policy::DiffPolicy;
-pub use runtime::{set_default_runtime, with_default_runtime, RuntimeContext};
 pub use structured::StructuredTensor;
 pub use traits::{
     AdResult, AllowedPairs, Differentiable, FactorizeOptions, FactorizeResult, IndexLike, OpRule,
