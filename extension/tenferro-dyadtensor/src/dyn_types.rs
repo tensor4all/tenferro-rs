@@ -1633,9 +1633,9 @@ where
     F: Fn(T) -> T + Copy + 'static,
 {
     let mapped = match input.as_value().clone() {
-        AdValue::Primal(primal) => {
-            AdValue::Primal(primal.with_payload_like(tensor_map_unary_typed(primal.payload(), map)?)?)
-        }
+        AdValue::Primal(primal) => AdValue::Primal(
+            primal.with_payload_like(tensor_map_unary_typed(primal.payload(), map)?)?,
+        ),
         AdValue::Forward { primal, tangent } => AdValue::Forward {
             primal: primal.with_payload_like(tensor_map_unary_typed(primal.payload(), map)?)?,
             tangent: tangent.with_payload_like(tensor_map_unary_typed(tangent.payload(), map)?)?,
@@ -1685,13 +1685,11 @@ where
     R: Fn(TOut) -> TIn + Copy + 'static,
 {
     let mapped = match input.as_value().clone() {
-        AdValue::Primal(primal) => AdValue::Primal(
-            StructuredTensor::new(
-                primal.logical_dims().to_vec(),
-                primal.axis_classes().to_vec(),
-                tensor_map_unary_typed(primal.payload(), primal_map)?,
-            )?,
-        ),
+        AdValue::Primal(primal) => AdValue::Primal(StructuredTensor::new(
+            primal.logical_dims().to_vec(),
+            primal.axis_classes().to_vec(),
+            tensor_map_unary_typed(primal.payload(), primal_map)?,
+        )?),
         AdValue::Forward { primal, tangent } => AdValue::Forward {
             primal: StructuredTensor::new(
                 primal.logical_dims().to_vec(),
@@ -1761,9 +1759,7 @@ struct AdTensorBinaryState<T: Scalar> {
     reverse: Option<(NodeId, TapeId)>,
 }
 
-fn split_ad_tensor_state<T: Scalar>(
-    value: AdValue<StructuredTensor<T>>,
-) -> AdTensorBinaryState<T> {
+fn split_ad_tensor_state<T: Scalar>(value: AdValue<StructuredTensor<T>>) -> AdTensorBinaryState<T> {
     match value {
         AdValue::Primal(primal) => AdTensorBinaryState {
             primal,
@@ -1971,6 +1967,11 @@ where
         (None, None) => None,
     };
 
+    let structured_primal = tensor.structured_primal().with_payload_like(primal)?;
+    let structured_tangent = tangent
+        .map(|payload| tensor.structured_primal().with_payload_like(payload))
+        .transpose()?;
+
     if let Some((_, tape)) = reverse {
         let output_node = NodeId(NEXT_AD_TENSOR_NODE_ID.fetch_add(1, Ordering::Relaxed));
         let tensor_node = tensor_reverse.map(|(node, _)| node);
@@ -2009,12 +2010,17 @@ where
             )?;
         }
 
-        return Ok(AdTensor::new_reverse(primal, output_node, tape, tangent));
+        return Ok(AdTensor::new_reverse(
+            structured_primal,
+            output_node,
+            tape,
+            structured_tangent,
+        ));
     }
-    if let Some(tangent) = tangent {
-        return Ok(AdTensor::new_forward(primal, tangent));
+    if let Some(tangent) = structured_tangent {
+        return Ok(AdTensor::new_forward(structured_primal, tangent));
     }
-    Ok(AdTensor::new_primal(primal))
+    Ok(AdTensor::new_primal(structured_primal))
 }
 
 fn scale_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdValue<T>) -> Result<AdTensor<T>>

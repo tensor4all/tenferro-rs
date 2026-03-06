@@ -31,7 +31,7 @@ use tenferro_linalg::{LinalgScalar, NormKind, SolveGrad};
 use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::Tensor;
 
-use crate::{reverse_tape, AdScalar, AdTensor, AdValue, Error, NodeId, Result};
+use crate::{reverse_tape, AdScalar, AdTensor, AdValue, Error, NodeId, Result, StructuredTensor};
 
 use super::{
     AdEigResult, AdEigenResult, AdLstsqResult, AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
@@ -54,6 +54,23 @@ where
     super::einsum_ad(subscripts, operands).run()
 }
 
+/// Eager AD full reduction / sum.
+///
+/// Equivalent to `crate::sum_ad(...).run()`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = tenferro_dyadtensor::ad::sum(&x)?;
+/// ```
+pub fn sum<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>> + Copy,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    super::sum_ad(tensor).run()
+}
+
 /// Eager AD SVD.
 ///
 /// Equivalent to `crate::svd_ad(...).run()`.
@@ -65,7 +82,7 @@ where
 /// ```
 pub fn svd<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdSvdResult<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::svd_ad(tensor).run()
 }
@@ -81,7 +98,7 @@ where
 /// ```
 pub fn qr<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdQrResult<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::qr_ad(tensor).run()
 }
@@ -97,7 +114,7 @@ where
 /// ```
 pub fn lu<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdLuResult<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::lu_ad(tensor).run()
 }
@@ -113,7 +130,7 @@ where
 /// ```
 pub fn eigen<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdEigenResult<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::eigen_ad(tensor).run()
 }
@@ -129,7 +146,7 @@ where
 /// ```
 pub fn lstsq<T: Scalar>(a: &AdTensor<T>, b: &AdTensor<T>) -> Result<AdLstsqResult<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::lstsq_ad(a, b).run()
 }
@@ -145,7 +162,7 @@ where
 /// ```
 pub fn cholesky<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::cholesky_ad(tensor).run()
 }
@@ -161,7 +178,7 @@ where
 /// ```
 pub fn solve<T: Scalar>(a: &AdTensor<T>, b: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::solve_ad(a, b).run()
 }
@@ -177,7 +194,7 @@ where
 /// ```
 pub fn inv<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::inv_ad(tensor).run()
 }
@@ -193,7 +210,7 @@ where
 /// ```
 pub fn det<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::det_ad(tensor).run()
 }
@@ -209,7 +226,7 @@ where
 /// ```
 pub fn slogdet<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdSlogdetResult<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::slogdet_ad(tensor).run()
 }
@@ -225,7 +242,10 @@ where
 /// ```
 pub fn eig<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdEigResult<T>>
 where
-    T: LinalgScalar<Real = T, Complex = Complex<T>> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T, Complex = Complex<T>>
+        + Float
+        + CpuLinalgScalar
+        + HasAlgebra<Algebra = Standard<T>>,
     Complex<T>: Scalar,
 {
     super::eig_ad(tensor).run()
@@ -242,7 +262,7 @@ where
 /// ```
 pub fn pinv<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::pinv_ad(tensor).run()
 }
@@ -258,7 +278,7 @@ where
 /// ```
 pub fn matrix_exp<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::matrix_exp_ad(tensor).run()
 }
@@ -274,7 +294,7 @@ where
 /// ```
 pub fn solve_triangular<T: Scalar>(a: &AdTensor<T>, b: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgScalar + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::solve_triangular_ad(a, b).run()
 }
@@ -316,7 +336,7 @@ pub fn pullback_wrt<T: Scalar + 'static>(
     output: &AdTensor<T>,
     cotangent: &AdTensor<T>,
     wrt: &[&AdTensor<T>],
-) -> Result<Vec<Option<Tensor<T>>>> {
+) -> Result<Vec<Option<StructuredTensor<T>>>> {
     let tape = match output.as_value() {
         AdValue::Reverse { tape, .. } => *tape,
         _ => {
@@ -338,7 +358,17 @@ pub fn pullback_wrt<T: Scalar + 'static>(
                         found: t.0,
                     });
                 }
-                out.push(all_grads.get(node).cloned());
+                let grad = all_grads
+                    .get(node)
+                    .map(|payload| {
+                        StructuredTensor::new(
+                            wrt_tensor.dims().to_vec(),
+                            wrt_tensor.axis_classes().to_vec(),
+                            payload.clone(),
+                        )
+                    })
+                    .transpose()?;
+                out.push(grad);
             }
             _ => out.push(None),
         }
@@ -355,7 +385,7 @@ pub fn pullback_wrt_mixed<TOut: Scalar + 'static, TWrt: Scalar + 'static>(
     output: &AdTensor<TOut>,
     cotangent: &AdTensor<TOut>,
     wrt: &[&AdTensor<TWrt>],
-) -> Result<Vec<Option<Tensor<TWrt>>>> {
+) -> Result<Vec<Option<StructuredTensor<TWrt>>>> {
     let (output_node, tape) = match output.as_value() {
         AdValue::Reverse { node, tape, .. } => (*node, *tape),
         _ => {
@@ -391,12 +421,27 @@ pub fn pullback_wrt_mixed<TOut: Scalar + 'static, TWrt: Scalar + 'static>(
         }
     }
 
-    reverse_tape::pullback_wrt_mixed::<TOut, TWrt>(
+    let grads = reverse_tape::pullback_wrt_mixed::<TOut, TWrt>(
         tape,
         output_node,
         cotangent.primal(),
         &wrt_nodes,
-    )
+    )?;
+
+    grads
+        .into_iter()
+        .zip(wrt.iter())
+        .map(|(grad, wrt_tensor)| {
+            grad.map(|payload| {
+                StructuredTensor::new(
+                    wrt_tensor.dims().to_vec(),
+                    wrt_tensor.axis_classes().to_vec(),
+                    payload,
+                )
+            })
+            .transpose()
+        })
+        .collect()
 }
 
 /// Reverse pullback projected to requested scalar inputs.
@@ -485,7 +530,7 @@ pub fn pullback_wrt_scalars<TOut: Scalar + 'static, TWrt: ScalarAd + 'static>(
 /// ```
 pub fn norm<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     super::norm_ad(tensor).kind(NormKind::Fro).run()
 }
@@ -628,22 +673,46 @@ mod tests {
     use num_complex::Complex64;
 
     use super::*;
-    use crate::{AdValue, NodeId, RuntimeContext, TapeId};
+    use crate::{AdValue, NodeId, RuntimeContext, StructuredTensor, TapeId};
     use tenferro_prims::CpuContext;
     use tenferro_tensor::{MemoryOrder, Tensor};
+
+    trait TensorLike<T: Scalar> {
+        fn tensor_ref(&self) -> &Tensor<T>;
+    }
+
+    impl<T: Scalar> TensorLike<T> for Tensor<T> {
+        fn tensor_ref(&self) -> &Tensor<T> {
+            self
+        }
+    }
+
+    impl<T: Scalar> TensorLike<T> for StructuredTensor<T> {
+        fn tensor_ref(&self) -> &Tensor<T> {
+            self.payload()
+        }
+    }
 
     fn f64_2x2(values: [f64; 4]) -> Tensor<f64> {
         Tensor::<f64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
     }
 
-    fn as_slice(t: &Tensor<f64>) -> &[f64] {
-        t.buffer()
+    fn as_slice<T>(t: &T) -> &[f64]
+    where
+        T: TensorLike<f64> + ?Sized,
+    {
+        t.tensor_ref()
+            .buffer()
             .as_slice()
             .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"))
     }
 
-    fn max_abs_diff(a: &Tensor<f64>, b: &Tensor<f64>) -> f64 {
-        assert_eq!(a.dims(), b.dims());
+    fn max_abs_diff<A, B>(a: &A, b: &B) -> f64
+    where
+        A: TensorLike<f64> + ?Sized,
+        B: TensorLike<f64> + ?Sized,
+    {
+        assert_eq!(a.tensor_ref().dims(), b.tensor_ref().dims());
         tensor_to_vec_f64(a)
             .iter()
             .zip(tensor_to_vec_f64(b).iter())
@@ -651,10 +720,14 @@ mod tests {
             .fold(0.0_f64, f64::max)
     }
 
-    fn complex_max_abs_diff(a: &Tensor<Complex64>, b: &Tensor<Complex64>) -> f64 {
-        assert_eq!(a.dims(), b.dims());
-        let a = a.contiguous(MemoryOrder::ColumnMajor);
-        let b = b.contiguous(MemoryOrder::ColumnMajor);
+    fn complex_max_abs_diff<A, B>(a: &A, b: &B) -> f64
+    where
+        A: TensorLike<Complex64> + ?Sized,
+        B: TensorLike<Complex64> + ?Sized,
+    {
+        assert_eq!(a.tensor_ref().dims(), b.tensor_ref().dims());
+        let a = a.tensor_ref().contiguous(MemoryOrder::ColumnMajor);
+        let b = b.tensor_ref().contiguous(MemoryOrder::ColumnMajor);
         let a_off = a.offset() as usize;
         let b_off = b.offset() as usize;
         let len: usize = a.dims().iter().product();
@@ -677,8 +750,11 @@ mod tests {
         Tensor::<Complex64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
     }
 
-    fn tensor_to_vec_f64(t: &Tensor<f64>) -> Vec<f64> {
-        let t = t.contiguous(MemoryOrder::ColumnMajor);
+    fn tensor_to_vec_f64<T>(t: &T) -> Vec<f64>
+    where
+        T: TensorLike<f64> + ?Sized,
+    {
+        let t = t.tensor_ref().contiguous(MemoryOrder::ColumnMajor);
         let off = t.offset() as usize;
         let len: usize = t.dims().iter().product();
         t.buffer()
@@ -687,8 +763,11 @@ mod tests {
             .to_vec()
     }
 
-    fn tensor_to_vec_c64(t: &Tensor<Complex64>) -> Vec<Complex64> {
-        let t = t.contiguous(MemoryOrder::ColumnMajor);
+    fn tensor_to_vec_c64<T>(t: &T) -> Vec<Complex64>
+    where
+        T: TensorLike<Complex64> + ?Sized,
+    {
+        let t = t.tensor_ref().contiguous(MemoryOrder::ColumnMajor);
         let off = t.offset() as usize;
         let len: usize = t.dims().iter().product();
         t.buffer()
@@ -779,8 +858,12 @@ mod tests {
         tensor_from_vec_c64(&out, &dims)
     }
 
-    fn sum_mul_f64(a: &Tensor<f64>, b: &Tensor<f64>) -> f64 {
-        assert_eq!(a.dims(), b.dims());
+    fn sum_mul_f64<A, B>(a: &A, b: &B) -> f64
+    where
+        A: TensorLike<f64> + ?Sized,
+        B: TensorLike<f64> + ?Sized,
+    {
+        assert_eq!(a.tensor_ref().dims(), b.tensor_ref().dims());
         tensor_to_vec_f64(a)
             .iter()
             .zip(tensor_to_vec_f64(b).iter())
@@ -788,8 +871,12 @@ mod tests {
             .sum()
     }
 
-    fn sum_mul_c64(a: &Tensor<Complex64>, b: &Tensor<Complex64>) -> Complex64 {
-        assert_eq!(a.dims(), b.dims());
+    fn sum_mul_c64<A, B>(a: &A, b: &B) -> Complex64
+    where
+        A: TensorLike<Complex64> + ?Sized,
+        B: TensorLike<Complex64> + ?Sized,
+    {
+        assert_eq!(a.tensor_ref().dims(), b.tensor_ref().dims());
         tensor_to_vec_c64(a)
             .iter()
             .zip(tensor_to_vec_c64(b).iter())
@@ -797,8 +884,12 @@ mod tests {
             .sum()
     }
 
-    fn sum_conj_mul_real_c64(a: &Tensor<Complex64>, b: &Tensor<Complex64>) -> f64 {
-        assert_eq!(a.dims(), b.dims());
+    fn sum_conj_mul_real_c64<A, B>(a: &A, b: &B) -> f64
+    where
+        A: TensorLike<Complex64> + ?Sized,
+        B: TensorLike<Complex64> + ?Sized,
+    {
+        assert_eq!(a.tensor_ref().dims(), b.tensor_ref().dims());
         tensor_to_vec_c64(a)
             .iter()
             .zip(tensor_to_vec_c64(b).iter())

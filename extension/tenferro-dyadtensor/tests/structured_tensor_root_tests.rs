@@ -1,4 +1,7 @@
-use tenferro_dyadtensor::{AdTensor, DynAdTensor, StructuredTensor};
+use tenferro_dyadtensor::{
+    plan_axis_classes_for_subscripts, AdTensor, DynAdTensor, OperandAxisClasses, StructuredTensor,
+};
+use tenferro_einsum::Subscripts;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn vector(values: &[f64]) -> Tensor<f64> {
@@ -39,4 +42,16 @@ fn dyn_ad_tensor_carries_diag_payload_without_dense_materialization() {
     assert_eq!(x.axis_classes(), &[0, 0]);
     assert!(x.is_diag());
     assert_eq!(x.as_f64().unwrap().primal().dims(), &[2]);
+}
+
+#[test]
+fn root_metadata_planning_api_is_exposed_from_crate_root() {
+    let operands = vec![
+        OperandAxisClasses::new(vec![3, 3], vec![0, 0]).unwrap(),
+        OperandAxisClasses::new(vec![3, 3], vec![0, 0]).unwrap(),
+    ];
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let plan = plan_axis_classes_for_subscripts(&operands, &subs).unwrap();
+    assert_eq!(plan.output_axis_classes, vec![0, 0]);
+    assert_eq!(plan.output_dims, vec![3, 3]);
 }

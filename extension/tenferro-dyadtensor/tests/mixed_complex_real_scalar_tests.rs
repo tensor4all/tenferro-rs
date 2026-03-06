@@ -93,7 +93,7 @@ fn c64_tensor_scale_pullback_reaches_real_scalar_input() {
         c64_vec(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]),
         NodeId(21),
         TapeId(91),
-        None,
+        None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
     .into();
     let a = DynAdScalar::from(AdValue::reverse(2.0_f64, NodeId(22), TapeId(91), None));
@@ -113,6 +113,7 @@ fn c64_tensor_scale_pullback_reaches_real_scalar_input() {
         tensor_grads[0]
             .as_ref()
             .unwrap()
+            .payload()
             .buffer()
             .as_slice()
             .unwrap(),
@@ -127,7 +128,7 @@ fn c64_tensor_div_scalar_pullback_reaches_real_scalar_input() {
         c64_vec(&[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)]),
         NodeId(31),
         TapeId(92),
-        None,
+        None::<tenferro_dyadtensor::StructuredTensor<Complex64>>,
     )
     .into();
     let a = DynAdScalar::from(AdValue::reverse(2.0_f64, NodeId(32), TapeId(92), None));
@@ -147,6 +148,7 @@ fn c64_tensor_div_scalar_pullback_reaches_real_scalar_input() {
         tensor_grads[0]
             .as_ref()
             .unwrap()
+            .payload()
             .buffer()
             .as_slice()
             .unwrap(),

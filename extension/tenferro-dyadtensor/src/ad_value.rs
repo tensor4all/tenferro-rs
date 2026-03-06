@@ -1027,9 +1027,9 @@ impl<T: Scalar> AdTensor<T> {
         primal: impl Into<StructuredTensor<T>>,
         node: NodeId,
         tape: TapeId,
-        tangent: Option<impl Into<StructuredTensor<T>>>,
+        tangent: Option<StructuredTensor<T>>,
     ) -> Self {
-        Self(AdValue::reverse(primal.into(), node, tape, tangent.map(Into::into)))
+        Self(AdValue::reverse(primal.into(), node, tape, tangent))
     }
 
     /// Returns AD mode.

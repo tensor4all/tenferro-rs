@@ -6,7 +6,7 @@ use chainrules_core::Differentiable as _;
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
-use tenferro_einsum as tf_einsum;
+use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_linalg::backend::CpuLinalgScalar;
 use tenferro_linalg::{
     EigResult, EigenResult, LinalgScalar, LstsqResult, LuPivot, LuResult, NormKind, QrResult,
@@ -18,6 +18,10 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 use crate::ad_value::{AdValue, NodeId};
 use crate::reverse_tape;
 use crate::runtime::{with_default_runtime, RuntimeContext};
+use crate::structured::{
+    accumulate_structured_tangent, compress_dense_to_layout_in_ctx, einsum_with_subscripts_in_ctx,
+    reverse_subscripts, to_dense_in_ctx, StructuredTensor,
+};
 use crate::{AdTensor, Error, Result, TapeId};
 
 pub mod ad;
@@ -116,20 +120,20 @@ fn derive_reverse_node<S: Scalar>(
 }
 
 #[derive(Clone)]
-struct ReverseInputSpec {
+struct ReverseInputSpec<T: Scalar> {
     node: NodeId,
-    dims: Vec<usize>,
+    layout: StructuredTensor<T>,
 }
 
 fn collect_reverse_input_specs<S: Scalar>(
     operands: &[&AdTensor<S>],
-) -> Vec<Option<ReverseInputSpec>> {
+) -> Vec<Option<ReverseInputSpec<S>>> {
     operands
         .iter()
         .map(|op| match op.as_value() {
             AdValue::Reverse { node, .. } => Some(ReverseInputSpec {
                 node: *node,
-                dims: op.dims().to_vec(),
+                layout: op.structured_primal().clone(),
             }),
             _ => None,
         })
@@ -167,6 +171,46 @@ fn normalize_pullback_shape<T: Scalar>(
         })
 }
 
+fn dense_input_snapshot_in_ctx<T>(
+    ctx: &mut CpuContext,
+    input: &AdTensor<T>,
+    needs_tangent: bool,
+) -> Result<(Tensor<T>, Option<Tensor<T>>)>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    let primal = to_dense_in_ctx(ctx, input.structured_primal())?;
+    let tangent = if needs_tangent {
+        Some(match input.structured_tangent() {
+            Some(tangent) => to_dense_in_ctx(ctx, tangent)?,
+            None => zero_like(&primal),
+        })
+    } else {
+        None
+    };
+    Ok((primal, tangent))
+}
+
+fn compress_pullback_like<T>(
+    op_name: &'static str,
+    grad: Tensor<T>,
+    layout: &StructuredTensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    let dense = normalize_pullback_shape(grad, layout.logical_dims(), op_name)?;
+    if layout.is_dense() {
+        return Ok(dense);
+    }
+
+    with_cpu_runtime(op_name, |ctx| {
+        compress_dense_to_layout_in_ctx(ctx, &dense, layout).map(StructuredTensor::into_payload)
+    })
+}
+
 fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
     Tensor::zeros(
         tensor.dims(),
@@ -175,18 +219,92 @@ fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
     )
 }
 
-fn wrap_ad_output<TIn: Scalar, TOut: Scalar>(
+fn payload_sum_in_ctx<T>(ctx: &mut CpuContext, payload: &Tensor<T>) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    if payload.dims().is_empty() {
+        return Ok(payload.clone());
+    }
+
+    let labels: Vec<u32> = (0..payload.dims().len())
+        .map(|idx| {
+            u32::try_from(idx).map_err(|_| Error::InvalidAdTensor {
+                message: format!(
+                    "payload rank {} exceeds u32 label space",
+                    payload.dims().len()
+                ),
+            })
+        })
+        .collect::<Result<_>>()?;
+    let inputs = [labels.as_slice()];
+    let subs = Subscripts::new(&inputs, &[]);
+    tf_einsum::einsum_with_subscripts::<Standard<T>, CpuBackend>(ctx, &subs, &[payload], None)
+        .map_err(Error::from)
+}
+
+fn scalar_from_rank0_tensor<T>(tensor: &Tensor<T>, op_name: &'static str) -> Result<T>
+where
+    T: Scalar + Copy,
+{
+    if !tensor.dims().is_empty() || tensor.len() != 1 {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} expects rank-0 cotangent, got dims {:?}",
+                tensor.dims()
+            ),
+        });
+    }
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let off = contiguous.offset() as usize;
+    contiguous
+        .buffer()
+        .as_slice()
+        .and_then(|values| values.get(off))
+        .copied()
+        .ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("{op_name} expects CPU-backed scalar cotangent"),
+        })
+}
+
+fn broadcast_scalar_like<T>(value: T, template: &Tensor<T>) -> Result<Tensor<T>>
+where
+    T: Scalar + Copy,
+{
+    let len = template.len();
+    let data = vec![value; len];
+    Tensor::from_slice(&data, template.dims(), MemoryOrder::ColumnMajor).map_err(Error::from)
+}
+
+fn wrap_dense_ad_output<TIn: Scalar, TOut: Scalar>(
     op_name: &'static str,
     inputs: &[&AdTensor<TIn>],
     primal: Tensor<TOut>,
     tangent: Option<Tensor<TOut>>,
     output_tag: u64,
 ) -> Result<AdTensor<TOut>> {
+    wrap_structured_ad_output(
+        op_name,
+        inputs,
+        StructuredTensor::from_dense(primal),
+        tangent.map(StructuredTensor::from_dense),
+        output_tag,
+    )
+}
+
+fn wrap_structured_ad_output<TIn: Scalar, TOut: Scalar>(
+    op_name: &'static str,
+    inputs: &[&AdTensor<TIn>],
+    primal: StructuredTensor<TOut>,
+    tangent: Option<StructuredTensor<TOut>>,
+    output_tag: u64,
+) -> Result<AdTensor<TOut>> {
     if has_reverse(inputs) {
         let tape = derive_reverse_tape(inputs)?.ok_or_else(|| Error::InvalidAdTensor {
             message: "reverse-mode output requested but no reverse tape found".to_string(),
         })?;
-        let node = derive_reverse_node(op_name, inputs, primal.dims(), output_tag, tape);
+        let node = derive_reverse_node(op_name, inputs, primal.logical_dims(), output_tag, tape);
         return Ok(AdTensor::new_reverse(primal, node, tape, tangent));
     }
 
@@ -200,13 +318,25 @@ fn wrap_ad_output<TIn: Scalar, TOut: Scalar>(
     Ok(AdTensor::new_primal(primal))
 }
 
-fn collect_ad_tangents<'a, S: Scalar>(operands: &[&'a AdTensor<S>]) -> Vec<Option<&'a Tensor<S>>> {
+fn collect_structured_ad_tangents<'a, S: Scalar>(
+    operands: &[&'a AdTensor<S>],
+) -> Vec<Option<&'a StructuredTensor<S>>> {
     operands
         .iter()
         .map(|op| match op.as_value() {
             AdValue::Primal(_) => None,
-            AdValue::Forward { tangent, .. } => Some(tangent.payload()),
-            AdValue::Reverse { tangent, .. } => tangent.as_ref().map(|t| t.payload()),
+            AdValue::Forward { tangent, .. } => Some(tangent),
+            AdValue::Reverse { tangent, .. } => tangent.as_ref(),
+        })
+        .collect()
+}
+
+fn collect_reverse_input_nodes<S: Scalar>(operands: &[&AdTensor<S>]) -> Vec<Option<NodeId>> {
+    operands
+        .iter()
+        .map(|op| match op.as_value() {
+            AdValue::Reverse { node, .. } => Some(*node),
+            _ => None,
         })
         .collect()
 }
@@ -242,6 +372,36 @@ where
         out_tangent = Some(match out_tangent {
             None => term,
             Some(existing) => Tensor::<T>::accumulate_tangent(existing, &term),
+        });
+    }
+
+    Ok(out_tangent)
+}
+
+fn sum_structured_einsum_tangent_terms<T>(
+    ctx: &mut CpuContext,
+    subscripts: &Subscripts,
+    primals: &[&StructuredTensor<T>],
+    tangents: &[Option<&StructuredTensor<T>>],
+) -> Result<Option<StructuredTensor<T>>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    let mut out_tangent: Option<StructuredTensor<T>> = None;
+
+    for (k, tangent_opt) in tangents.iter().enumerate() {
+        let Some(tangent_k) = tangent_opt else {
+            continue;
+        };
+
+        let mut term_operands: Vec<&StructuredTensor<T>> = primals.to_vec();
+        term_operands[k] = tangent_k;
+        let term = einsum_with_subscripts_in_ctx(ctx, subscripts, &term_operands)?;
+
+        out_tangent = Some(match out_tangent {
+            None => term,
+            Some(existing) => accumulate_structured_tangent(existing, &term)?,
         });
     }
 
@@ -369,7 +529,89 @@ where
         T: 'static,
     {
         with_cpu_runtime("einsum_ad", |ctx| {
-            let primals: Vec<&Tensor<T>> = self.operands.iter().map(|op| op.primal()).collect();
+            if self.size_dict.is_none() && !self.subscripts.contains('(') {
+                let subs = Subscripts::parse(self.subscripts).map_err(Error::from)?;
+                let primals: Vec<&StructuredTensor<T>> = self
+                    .operands
+                    .iter()
+                    .map(|op| op.structured_primal())
+                    .collect();
+                let primal_out = einsum_with_subscripts_in_ctx(ctx, &subs, &primals)?;
+
+                let tangents = collect_structured_ad_tangents(self.operands);
+                let tangent_out = if has_forward(self.operands) || has_any_tangent(self.operands) {
+                    sum_structured_einsum_tangent_terms(ctx, &subs, &primals, &tangents)?
+                } else {
+                    None
+                };
+
+                let out = wrap_structured_ad_output(
+                    "einsum_ad",
+                    self.operands,
+                    primal_out,
+                    tangent_out,
+                    0,
+                )?;
+
+                if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+                    let subscripts = subs.clone();
+                    let reverse_nodes = collect_reverse_input_nodes(self.operands);
+                    let primal_owned: Vec<StructuredTensor<T>> =
+                        primals.iter().map(|tensor| (*tensor).clone()).collect();
+                    let output_layout = out.structured_primal().clone();
+                    let output_node = *node;
+                    let tape_id = *tape;
+
+                    reverse_tape::register_rule::<T>(
+                        tape_id,
+                        output_node,
+                        Box::new(move |cotangent| {
+                            let cotangent = output_layout.with_payload_like(cotangent.clone())?;
+                            let mut input_grads = Vec::new();
+
+                            for (k, maybe_node) in reverse_nodes.iter().enumerate() {
+                                let Some(node) = maybe_node else {
+                                    continue;
+                                };
+                                let rev_subs = reverse_subscripts(&subscripts, k);
+                                let mut rev_operands: Vec<&StructuredTensor<T>> =
+                                    Vec::with_capacity(primal_owned.len());
+                                rev_operands.push(&cotangent);
+                                for (idx, operand) in primal_owned.iter().enumerate() {
+                                    if idx != k {
+                                        rev_operands.push(operand);
+                                    }
+                                }
+                                let grad =
+                                    with_cpu_runtime("einsum_ad_pullback_structured", |ctx| {
+                                        einsum_with_subscripts_in_ctx(ctx, &rev_subs, &rev_operands)
+                                    })?;
+                                input_grads.push((*node, grad.into_payload()));
+                            }
+
+                            Ok(input_grads)
+                        }),
+                    )?;
+                }
+
+                return Ok(out);
+            }
+
+            let needs_tangent = has_forward(self.operands) || has_any_tangent(self.operands);
+            let dense_inputs: Vec<(Tensor<T>, Option<Tensor<T>>)> = self
+                .operands
+                .iter()
+                .map(|op| dense_input_snapshot_in_ctx(ctx, op, needs_tangent))
+                .collect::<Result<_>>()?;
+            let primal_owned: Vec<Tensor<T>> = dense_inputs
+                .iter()
+                .map(|(primal, _)| primal.clone())
+                .collect();
+            let tangent_owned: Vec<Option<Tensor<T>>> = dense_inputs
+                .iter()
+                .map(|(_, tangent)| tangent.clone())
+                .collect();
+            let primals: Vec<&Tensor<T>> = primal_owned.iter().collect();
             let primal_out = tf_einsum::einsum::<Standard<T>, CpuBackend>(
                 ctx,
                 self.subscripts,
@@ -378,20 +620,21 @@ where
             )
             .map_err(Error::from)?;
 
-            let tangents = collect_ad_tangents(self.operands);
-            let tangent_out = if has_forward(self.operands) || has_any_tangent(self.operands) {
+            let tangents: Vec<Option<&Tensor<T>>> = tangent_owned
+                .iter()
+                .map(|tangent| tangent.as_ref())
+                .collect();
+            let tangent_out = if needs_tangent {
                 sum_einsum_tangent_terms(ctx, self.subscripts, &primals, &tangents, self.size_dict)?
             } else {
                 None
             };
 
-            let out = wrap_ad_output("einsum_ad", self.operands, primal_out, tangent_out, 0)?;
+            let out = wrap_dense_ad_output("einsum_ad", self.operands, primal_out, tangent_out, 0)?;
 
             if let AdValue::Reverse { node, tape, .. } = out.as_value() {
                 let subscripts = self.subscripts.to_string();
                 let reverse_specs = collect_reverse_input_specs(self.operands);
-                let primal_owned: Vec<Tensor<T>> =
-                    primals.iter().map(|tensor| (*tensor).clone()).collect();
                 let output_node = *node;
                 let tape_id = *tape;
 
@@ -425,7 +668,7 @@ where
                             let Some(spec) = &reverse_specs[k] else {
                                 continue;
                             };
-                            let grad = normalize_pullback_shape(grad, &spec.dims, "einsum_ad")?;
+                            let grad = compress_pullback_like("einsum_ad", grad, &spec.layout)?;
                             input_grads.push((spec.node, grad));
                         }
                         Ok(input_grads)
@@ -468,6 +711,98 @@ where
         operands,
         size_dict: None,
     }
+}
+
+/// Builder for AD full reduction / sum.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = tenferro_dyadtensor::sum_ad(&x).run()?;
+/// ```
+pub struct SumAdBuilder<'a, T>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    tensor: &'a AdTensor<T>,
+}
+
+impl<'a, T> SumAdBuilder<'a, T>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    /// Executes AD full reduction / sum with mode propagation.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let out = builder.run()?;
+    /// ```
+    pub fn run(self) -> Result<AdTensor<T>>
+    where
+        T: Copy + 'static,
+    {
+        let operands = [self.tensor];
+        with_cpu_runtime("sum_ad", |ctx| {
+            let primal =
+                StructuredTensor::from_dense(payload_sum_in_ctx(ctx, self.tensor.primal())?);
+            let tangent = if has_forward(&operands) || has_any_tangent(&operands) {
+                let tangent_payload = if let Some(tangent) = self.tensor.structured_tangent() {
+                    payload_sum_in_ctx(ctx, tangent.payload())?
+                } else {
+                    payload_sum_in_ctx(ctx, &zero_like(self.tensor.primal()))?
+                };
+                Some(StructuredTensor::from_dense(tangent_payload))
+            } else {
+                None
+            };
+
+            let out = wrap_structured_ad_output("sum_ad", &operands, primal, tangent, 0)?;
+
+            if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+                let input_node = collect_reverse_input_nodes(&operands)
+                    .into_iter()
+                    .next()
+                    .flatten();
+                let input_layout = self.tensor.structured_primal().clone();
+                let output_node = *node;
+                let tape_id = *tape;
+
+                reverse_tape::register_rule::<T>(
+                    tape_id,
+                    output_node,
+                    Box::new(move |cotangent| {
+                        let Some(input_node) = input_node else {
+                            return Ok(Vec::new());
+                        };
+                        let scalar = scalar_from_rank0_tensor(cotangent, "sum_ad")?;
+                        let payload = broadcast_scalar_like(scalar, input_layout.payload())?;
+                        let grad = input_layout.with_payload_like(payload)?;
+                        Ok(vec![(input_node, grad.into_payload())])
+                    }),
+                )?;
+            }
+
+            Ok(out)
+        })
+    }
+}
+
+/// Creates a builder for AD full reduction / sum.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = tenferro_dyadtensor::sum_ad(&x).run()?;
+/// ```
+pub fn sum_ad<'a, T>(tensor: &'a AdTensor<T>) -> SumAdBuilder<'a, T>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+{
+    SumAdBuilder { tensor }
 }
 
 /// Builder for SVD.
@@ -1115,7 +1450,7 @@ fn run_unary_tensor_ad<T, FPrimal, FFrule, FRrule>(
     rrule_fn: FRrule,
 ) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
     FPrimal: FnOnce(&mut CpuContext, &Tensor<T>) -> Result<Tensor<T>>,
     FFrule: FnOnce(
         &mut CpuContext,
@@ -1132,27 +1467,28 @@ where
 {
     let operands = [input];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+    let (input_primal, input_tangent) = with_cpu_runtime(op_name, |ctx| {
+        dense_input_snapshot_in_ctx(ctx, input, needs_tangent)
+    })?;
 
     let (primal, tangent) = if needs_tangent {
-        let in_tangent = input
-            .tangent()
-            .cloned()
-            .unwrap_or_else(|| zero_like(input.primal()));
+        let in_tangent = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("{op_name} missing materialized tangent"),
+        })?;
         let (p, d) = with_cpu_runtime(op_name, |ctx| {
-            frule_fn(ctx, input.primal(), &in_tangent).map_err(Error::from)
+            frule_fn(ctx, &input_primal, &in_tangent).map_err(Error::from)
         })?;
         (p, Some(d))
     } else {
         (
-            with_cpu_runtime(op_name, |ctx| primal_fn(ctx, input.primal()))?,
+            with_cpu_runtime(op_name, |ctx| primal_fn(ctx, &input_primal))?,
             None,
         )
     };
 
-    let out = wrap_ad_output(op_name, &operands, primal, tangent, 0)?;
+    let out = wrap_dense_ad_output(op_name, &operands, primal, tangent, 0)?;
 
     if let AdValue::Reverse { node, tape, .. } = out.as_value() {
-        let input_primal = input.primal().clone();
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
             .next()
@@ -1171,7 +1507,7 @@ where
                 let Some(spec) = &input_spec else {
                     return Ok(Vec::new());
                 };
-                let grad = normalize_pullback_shape(grad, &spec.dims, op_name)?;
+                let grad = compress_pullback_like(op_name, grad, &spec.layout)?;
                 Ok(vec![(spec.node, grad)])
             }),
         )?;
@@ -1190,7 +1526,7 @@ fn run_binary_tensor_ad<T, FPrimal, FFrule, FRrule>(
     rrule_fn: FRrule,
 ) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
     FPrimal: FnOnce(&mut CpuContext, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
     FFrule: FnOnce(
         &mut CpuContext,
@@ -1210,32 +1546,34 @@ where
 {
     let operands = [a, b];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+    let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_cpu_runtime(op_name, |ctx| {
+        Ok((
+            dense_input_snapshot_in_ctx(ctx, a, needs_tangent)?,
+            dense_input_snapshot_in_ctx(ctx, b, needs_tangent)?,
+        ))
+    })?;
 
     let (primal, tangent) = if needs_tangent {
-        let ta = a
-            .tangent()
-            .cloned()
-            .unwrap_or_else(|| zero_like(a.primal()));
-        let tb = b
-            .tangent()
-            .cloned()
-            .unwrap_or_else(|| zero_like(b.primal()));
+        let ta = a_tangent.ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("{op_name} missing materialized lhs tangent"),
+        })?;
+        let tb = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("{op_name} missing materialized rhs tangent"),
+        })?;
         let (p, d) = with_cpu_runtime(op_name, |ctx| {
-            frule_fn(ctx, a.primal(), b.primal(), &ta, &tb).map_err(Error::from)
+            frule_fn(ctx, &a_primal, &b_primal, &ta, &tb).map_err(Error::from)
         })?;
         (p, Some(d))
     } else {
         (
-            with_cpu_runtime(op_name, |ctx| primal_fn(ctx, a.primal(), b.primal()))?,
+            with_cpu_runtime(op_name, |ctx| primal_fn(ctx, &a_primal, &b_primal))?,
             None,
         )
     };
 
-    let out = wrap_ad_output(op_name, &operands, primal, tangent, 0)?;
+    let out = wrap_dense_ad_output(op_name, &operands, primal, tangent, 0)?;
 
     if let AdValue::Reverse { node, tape, .. } = out.as_value() {
-        let a_primal = a.primal().clone();
-        let b_primal = b.primal().clone();
         let reverse_specs = collect_reverse_input_specs(&operands);
         let output_node = *node;
         let tape_id = *tape;
@@ -1250,11 +1588,11 @@ where
 
                 let mut input_grads = Vec::new();
                 if let Some(spec) = &reverse_specs[0] {
-                    let grad_a = normalize_pullback_shape(grad_a, &spec.dims, op_name)?;
+                    let grad_a = compress_pullback_like(op_name, grad_a, &spec.layout)?;
                     input_grads.push((spec.node, grad_a));
                 }
                 if let Some(spec) = &reverse_specs[1] {
-                    let grad_b = normalize_pullback_shape(grad_b, &spec.dims, op_name)?;
+                    let grad_b = compress_pullback_like(op_name, grad_b, &spec.layout)?;
                     input_grads.push((spec.node, grad_b));
                 }
                 Ok(input_grads)
@@ -1278,7 +1616,7 @@ pub struct SvdAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SvdAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Sets optional SVD options.
     /// # Examples
@@ -1300,22 +1638,23 @@ where
     pub fn run(self) -> Result<AdSvdResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let (input_primal, input_tangent) = with_cpu_runtime("svd_ad", |ctx| {
+            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
+        })?;
 
         let (primal, tangent) = if needs_tangent {
-            let dt = self
-                .tensor
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.tensor.primal()));
+            let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "svd_ad missing materialized tangent".to_string(),
+            })?;
             let (p, d) = with_cpu_runtime("svd_ad", |ctx| {
-                tenferro_linalg::svd_frule::<T>(ctx, self.tensor.primal(), &dt, self.options)
+                tenferro_linalg::svd_frule::<T>(ctx, &input_primal, &dt, self.options)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
                 with_cpu_runtime("svd_ad", |ctx| {
-                    tenferro_linalg::svd::<T, CpuContext>(ctx, self.tensor.primal(), self.options)
+                    tenferro_linalg::svd::<T, CpuContext>(ctx, &input_primal, self.options)
                         .map_err(Error::from)
                 })?,
                 None,
@@ -1328,16 +1667,16 @@ where
             (None, None, None)
         };
 
-        let out_u = wrap_ad_output("svd_ad", &operands, primal.u, du, 1)?;
-        let out_s = wrap_ad_output("svd_ad", &operands, primal.s, ds, 2)?;
-        let out_vt = wrap_ad_output("svd_ad", &operands, primal.vt, dvt, 3)?;
+        let out_u = wrap_dense_ad_output("svd_ad", &operands, primal.u, du, 1)?;
+        let out_s = wrap_dense_ad_output("svd_ad", &operands, primal.s, ds, 2)?;
+        let out_vt = wrap_dense_ad_output("svd_ad", &operands, primal.vt, dvt, 3)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
             .next()
             .flatten();
         if let Some(spec) = input_spec {
-            let a_primal = self.tensor.primal().clone();
+            let a_primal = input_primal.clone();
             let options = self.options.cloned();
 
             if let AdValue::Reverse { node, tape, .. } = out_u.as_value() {
@@ -1362,7 +1701,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "svd_ad")?;
+                        let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1373,7 +1712,7 @@ where
                 let tape_id = *tape;
                 let spec = spec.clone();
                 let options = options.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -1391,7 +1730,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "svd_ad")?;
+                        let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1402,7 +1741,7 @@ where
                 let tape_id = *tape;
                 let spec = spec.clone();
                 let options = options.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -1420,7 +1759,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "svd_ad")?;
+                        let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1460,7 +1799,7 @@ pub struct QrAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> QrAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD QR.
     /// # Examples
@@ -1471,22 +1810,22 @@ where
     pub fn run(self) -> Result<AdQrResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let (input_primal, input_tangent) = with_cpu_runtime("qr_ad", |ctx| {
+            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
+        })?;
 
         let (primal, tangent) = if needs_tangent {
-            let dt = self
-                .tensor
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.tensor.primal()));
+            let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "qr_ad missing materialized tangent".to_string(),
+            })?;
             let (p, d) = with_cpu_runtime("qr_ad", |ctx| {
-                tenferro_linalg::qr_frule::<T>(ctx, self.tensor.primal(), &dt).map_err(Error::from)
+                tenferro_linalg::qr_frule::<T>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
                 with_cpu_runtime("qr_ad", |ctx| {
-                    tenferro_linalg::qr::<T, CpuContext>(ctx, self.tensor.primal())
-                        .map_err(Error::from)
+                    tenferro_linalg::qr::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
                 })?,
                 None,
             )
@@ -1498,8 +1837,8 @@ where
             (None, None)
         };
 
-        let out_q = wrap_ad_output("qr_ad", &operands, primal.q, dq, 1)?;
-        let out_r = wrap_ad_output("qr_ad", &operands, primal.r, dr, 2)?;
+        let out_q = wrap_dense_ad_output("qr_ad", &operands, primal.q, dq, 1)?;
+        let out_r = wrap_dense_ad_output("qr_ad", &operands, primal.r, dr, 2)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
@@ -1510,7 +1849,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -1526,7 +1865,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "qr_ad")?;
+                        let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1536,7 +1875,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -1552,7 +1891,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "qr_ad")?;
+                        let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1586,7 +1925,7 @@ pub struct LuAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LuAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Sets LU pivot policy.
     /// # Examples
@@ -1608,22 +1947,23 @@ where
     pub fn run(self) -> Result<AdLuResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let (input_primal, input_tangent) = with_cpu_runtime("lu_ad", |ctx| {
+            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
+        })?;
 
         let (primal, tangent) = if needs_tangent {
-            let dt = self
-                .tensor
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.tensor.primal()));
+            let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "lu_ad missing materialized tangent".to_string(),
+            })?;
             let (p, d) = with_cpu_runtime("lu_ad", |ctx| {
-                tenferro_linalg::lu_frule::<T>(ctx, self.tensor.primal(), &dt, self.pivot)
+                tenferro_linalg::lu_frule::<T>(ctx, &input_primal, &dt, self.pivot)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
                 with_cpu_runtime("lu_ad", |ctx| {
-                    tenferro_linalg::lu::<T, CpuContext>(ctx, self.tensor.primal(), self.pivot)
+                    tenferro_linalg::lu::<T, CpuContext>(ctx, &input_primal, self.pivot)
                         .map_err(Error::from)
                 })?,
                 None,
@@ -1636,8 +1976,8 @@ where
             (None, None)
         };
 
-        let out_l = wrap_ad_output("lu_ad", &operands, primal.l, dl, 1)?;
-        let out_u = wrap_ad_output("lu_ad", &operands, primal.u, du, 2)?;
+        let out_l = wrap_dense_ad_output("lu_ad", &operands, primal.l, dl, 1)?;
+        let out_u = wrap_dense_ad_output("lu_ad", &operands, primal.u, du, 2)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
@@ -1648,7 +1988,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 let pivot = self.pivot;
                 reverse_tape::register_rule::<T>(
                     tape_id,
@@ -1666,7 +2006,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "lu_ad")?;
+                        let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1676,7 +2016,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 let pivot = self.pivot;
                 reverse_tape::register_rule::<T>(
                     tape_id,
@@ -1694,7 +2034,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "lu_ad")?;
+                        let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1734,7 +2074,7 @@ pub struct EigenAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> EigenAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD eigen decomposition.
     /// # Examples
@@ -1745,23 +2085,22 @@ where
     pub fn run(self) -> Result<AdEigenResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let (input_primal, input_tangent) = with_cpu_runtime("eigen_ad", |ctx| {
+            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
+        })?;
 
         let (primal, tangent) = if needs_tangent {
-            let dt = self
-                .tensor
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.tensor.primal()));
+            let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "eigen_ad missing materialized tangent".to_string(),
+            })?;
             let (p, d) = with_cpu_runtime("eigen_ad", |ctx| {
-                tenferro_linalg::eigen_frule::<T>(ctx, self.tensor.primal(), &dt)
-                    .map_err(Error::from)
+                tenferro_linalg::eigen_frule::<T>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
                 with_cpu_runtime("eigen_ad", |ctx| {
-                    tenferro_linalg::eigen::<T, CpuContext>(ctx, self.tensor.primal())
-                        .map_err(Error::from)
+                    tenferro_linalg::eigen::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
                 })?,
                 None,
             )
@@ -1773,8 +2112,8 @@ where
             (None, None)
         };
 
-        let out_values = wrap_ad_output("eigen_ad", &operands, primal.values, dvalues, 1)?;
-        let out_vectors = wrap_ad_output("eigen_ad", &operands, primal.vectors, dvectors, 2)?;
+        let out_values = wrap_dense_ad_output("eigen_ad", &operands, primal.values, dvalues, 1)?;
+        let out_vectors = wrap_dense_ad_output("eigen_ad", &operands, primal.vectors, dvectors, 2)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
@@ -1785,7 +2124,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -1801,7 +2140,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "eigen_ad")?;
+                        let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1811,7 +2150,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -1827,7 +2166,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "eigen_ad")?;
+                        let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -1864,7 +2203,7 @@ pub struct LstsqAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LstsqAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD least squares.
     /// # Examples
@@ -1875,33 +2214,29 @@ where
     pub fn run(self) -> Result<AdLstsqResult<T>> {
         let operands = [self.a, self.b];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_cpu_runtime("lstsq_ad", |ctx| {
+            Ok((
+                dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
+                dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
+            ))
+        })?;
 
         let (primal, tangent) = if needs_tangent {
-            let da = self
-                .a
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.a.primal()));
-            let db = self
-                .b
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.b.primal()));
+            let da = a_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "lstsq_ad missing materialized lhs tangent".to_string(),
+            })?;
+            let db = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "lstsq_ad missing materialized rhs tangent".to_string(),
+            })?;
             let (p, d) = with_cpu_runtime("lstsq_ad", |ctx| {
-                tenferro_linalg::lstsq_frule::<T, CpuContext>(
-                    ctx,
-                    self.a.primal(),
-                    self.b.primal(),
-                    &da,
-                    &db,
-                )
-                .map_err(Error::from)
+                tenferro_linalg::lstsq_frule::<T, CpuContext>(ctx, &a_primal, &b_primal, &da, &db)
+                    .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
                 with_cpu_runtime("lstsq_ad", |ctx| {
-                    tenferro_linalg::lstsq::<T, CpuContext>(ctx, self.a.primal(), self.b.primal())
+                    tenferro_linalg::lstsq::<T, CpuContext>(ctx, &a_primal, &b_primal)
                         .map_err(Error::from)
                 })?,
                 None,
@@ -1914,8 +2249,9 @@ where
             (None, None)
         };
 
-        let out_x = wrap_ad_output("lstsq_ad", &operands, primal.x, dx, 1)?;
-        let out_residual = wrap_ad_output("lstsq_ad", &operands, primal.residual, dresidual, 2)?;
+        let out_x = wrap_dense_ad_output("lstsq_ad", &operands, primal.x, dx, 1)?;
+        let out_residual =
+            wrap_dense_ad_output("lstsq_ad", &operands, primal.residual, dresidual, 2)?;
 
         let reverse_specs = collect_reverse_input_specs(&operands);
         if has_reverse(&operands) {
@@ -1923,8 +2259,8 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let reverse_specs = reverse_specs.clone();
-                let a_primal = self.a.primal().clone();
-                let b_primal = self.b.primal().clone();
+                let a_primal = a_primal.clone();
+                let b_primal = b_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -1938,11 +2274,11 @@ where
 
                         let mut input_grads = Vec::new();
                         if let Some(spec) = &reverse_specs[0] {
-                            let grad_a = normalize_pullback_shape(grad.a, &spec.dims, "lstsq_ad")?;
+                            let grad_a = compress_pullback_like("lstsq_ad", grad.a, &spec.layout)?;
                             input_grads.push((spec.node, grad_a));
                         }
                         if let Some(spec) = &reverse_specs[1] {
-                            let grad_b = normalize_pullback_shape(grad.b, &spec.dims, "lstsq_ad")?;
+                            let grad_b = compress_pullback_like("lstsq_ad", grad.b, &spec.layout)?;
                             input_grads.push((spec.node, grad_b));
                         }
                         Ok(input_grads)
@@ -1954,22 +2290,18 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let reverse_specs = reverse_specs.clone();
-                let zero_a = zero_like(self.a.primal());
-                let zero_b = zero_like(self.b.primal());
+                let zero_a = zero_like(self.a.structured_primal().payload());
+                let zero_b = zero_like(self.b.structured_primal().payload());
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
                     Box::new(move |_cotangent| {
                         let mut input_grads = Vec::new();
                         if let Some(spec) = &reverse_specs[0] {
-                            let grad_a =
-                                normalize_pullback_shape(zero_a.clone(), &spec.dims, "lstsq_ad")?;
-                            input_grads.push((spec.node, grad_a));
+                            input_grads.push((spec.node, zero_a.clone()));
                         }
                         if let Some(spec) = &reverse_specs[1] {
-                            let grad_b =
-                                normalize_pullback_shape(zero_b.clone(), &spec.dims, "lstsq_ad")?;
-                            input_grads.push((spec.node, grad_b));
+                            input_grads.push((spec.node, zero_b.clone()));
                         }
                         Ok(input_grads)
                     }),
@@ -2006,7 +2338,7 @@ pub struct CholeskyAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> CholeskyAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD Cholesky.
     /// # Examples
@@ -2049,7 +2381,7 @@ pub struct SolveAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SolveAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD solve.
     /// # Examples
@@ -2095,7 +2427,7 @@ pub struct InvAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> InvAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD inverse.
     /// # Examples
@@ -2137,7 +2469,7 @@ pub struct DetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> DetAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD determinant.
     /// # Examples
@@ -2179,7 +2511,7 @@ pub struct SlogdetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SlogdetAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD slogdet.
     /// # Examples
@@ -2190,22 +2522,23 @@ where
     pub fn run(self) -> Result<AdSlogdetResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let (input_primal, input_tangent) = with_cpu_runtime("slogdet_ad", |ctx| {
+            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
+        })?;
 
         let (primal, tangent) = if needs_tangent {
-            let dt = self
-                .tensor
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.tensor.primal()));
+            let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "slogdet_ad missing materialized tangent".to_string(),
+            })?;
             let (p, d) = with_cpu_runtime("slogdet_ad", |ctx| {
-                tenferro_linalg::slogdet_frule::<T, CpuContext>(ctx, self.tensor.primal(), &dt)
+                tenferro_linalg::slogdet_frule::<T, CpuContext>(ctx, &input_primal, &dt)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
                 with_cpu_runtime("slogdet_ad", |ctx| {
-                    tenferro_linalg::slogdet::<T, CpuContext>(ctx, self.tensor.primal())
+                    tenferro_linalg::slogdet::<T, CpuContext>(ctx, &input_primal)
                         .map_err(Error::from)
                 })?,
                 None,
@@ -2218,9 +2551,9 @@ where
             (None, None)
         };
 
-        let out_sign = wrap_ad_output("slogdet_ad", &operands, primal.sign, dsign, 1)?;
+        let out_sign = wrap_dense_ad_output("slogdet_ad", &operands, primal.sign, dsign, 1)?;
         let out_logabsdet =
-            wrap_ad_output("slogdet_ad", &operands, primal.logabsdet, dlogabsdet, 2)?;
+            wrap_dense_ad_output("slogdet_ad", &operands, primal.logabsdet, dlogabsdet, 2)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
@@ -2231,15 +2564,11 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let zero = zero_like(self.tensor.primal());
+                let zero = zero_like(spec.layout.payload());
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
-                    Box::new(move |_cotangent| {
-                        let grad =
-                            normalize_pullback_shape(zero.clone(), &spec.dims, "slogdet_ad")?;
-                        Ok(vec![(spec.node, grad)])
-                    }),
+                    Box::new(move |_cotangent| Ok(vec![(spec.node, zero.clone())])),
                 )?;
             }
 
@@ -2247,7 +2576,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_rule::<T>(
                     tape_id,
                     output_node,
@@ -2262,7 +2591,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "slogdet_ad")?;
+                        let grad = compress_pullback_like("slogdet_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -2298,7 +2627,10 @@ pub struct EigAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> EigAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T, Complex = Complex<T>> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T, Complex = Complex<T>>
+        + Float
+        + CpuLinalgScalar
+        + HasAlgebra<Algebra = Standard<T>>,
     Complex<T>: Scalar,
 {
     /// Executes AD eig.
@@ -2310,22 +2642,22 @@ where
     pub fn run(self) -> Result<AdEigResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let (input_primal, input_tangent) = with_cpu_runtime("eig_ad", |ctx| {
+            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
+        })?;
 
         let (primal, tangent) = if needs_tangent {
-            let dt = self
-                .tensor
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.tensor.primal()));
+            let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "eig_ad missing materialized tangent".to_string(),
+            })?;
             let (p, d) = with_cpu_runtime("eig_ad", |ctx| {
-                tenferro_linalg::eig_frule::<T>(ctx, self.tensor.primal(), &dt).map_err(Error::from)
+                tenferro_linalg::eig_frule::<T>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
                 with_cpu_runtime("eig_ad", |ctx| {
-                    tenferro_linalg::eig::<T, CpuContext>(ctx, self.tensor.primal())
-                        .map_err(Error::from)
+                    tenferro_linalg::eig::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
                 })?,
                 None,
             )
@@ -2337,8 +2669,8 @@ where
             (None, None)
         };
 
-        let out_values = wrap_ad_output("eig_ad", &operands, primal.values, dvalues, 1)?;
-        let out_vectors = wrap_ad_output("eig_ad", &operands, primal.vectors, dvectors, 2)?;
+        let out_values = wrap_dense_ad_output("eig_ad", &operands, primal.values, dvalues, 1)?;
+        let out_vectors = wrap_dense_ad_output("eig_ad", &operands, primal.vectors, dvectors, 2)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
@@ -2349,7 +2681,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_bridge_rule::<Complex<T>, T>(
                     tape_id,
                     output_node,
@@ -2365,7 +2697,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "eig_ad")?;
+                        let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -2375,7 +2707,7 @@ where
                 let output_node = *node;
                 let tape_id = *tape;
                 let spec = spec.clone();
-                let a_primal = self.tensor.primal().clone();
+                let a_primal = input_primal.clone();
                 reverse_tape::register_bridge_rule::<Complex<T>, T>(
                     tape_id,
                     output_node,
@@ -2391,7 +2723,7 @@ where
                             )
                             .map_err(Error::from)
                         })?;
-                        let grad = normalize_pullback_shape(grad, &spec.dims, "eig_ad")?;
+                        let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 )?;
@@ -2428,7 +2760,7 @@ pub struct PinvAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> PinvAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Sets rcond.
     /// # Examples
@@ -2488,7 +2820,7 @@ pub struct MatrixExpAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> MatrixExpAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Executes AD matrix exponential.
     /// # Examples
@@ -2534,7 +2866,7 @@ pub struct SolveTriangularAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SolveTriangularAdBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgScalar + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Sets whether the matrix is upper triangular.
     /// # Examples
@@ -2559,27 +2891,25 @@ where
     {
         let operands = [self.a, self.b];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let ((a_primal, a_tangent), (b_primal, b_tangent)) =
+            with_cpu_runtime("solve_triangular_ad", |ctx| {
+                Ok((
+                    dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
+                    dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
+                ))
+            })?;
 
         let (primal, tangent) = if needs_tangent {
-            let ta = self
-                .a
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.a.primal()));
-            let tb = self
-                .b
-                .tangent()
-                .cloned()
-                .unwrap_or_else(|| zero_like(self.b.primal()));
+            let ta = a_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "solve_triangular_ad missing materialized lhs tangent".to_string(),
+            })?;
+            let tb = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: "solve_triangular_ad missing materialized rhs tangent".to_string(),
+            })?;
 
             let (p, d) = with_cpu_runtime("solve_triangular_ad", |ctx| {
                 tenferro_linalg::solve_triangular_frule::<T>(
-                    ctx,
-                    self.a.primal(),
-                    self.b.primal(),
-                    &ta,
-                    &tb,
-                    self.upper,
+                    ctx, &a_primal, &b_primal, &ta, &tb, self.upper,
                 )
                 .map_err(Error::from)
             })?;
@@ -2588,10 +2918,7 @@ where
             (
                 with_cpu_runtime("solve_triangular_ad", |ctx| {
                     tenferro_linalg::solve_triangular::<T, CpuContext>(
-                        ctx,
-                        self.a.primal(),
-                        self.b.primal(),
-                        self.upper,
+                        ctx, &a_primal, &b_primal, self.upper,
                     )
                     .map_err(Error::from)
                 })?,
@@ -2599,11 +2926,9 @@ where
             )
         };
 
-        let out = wrap_ad_output("solve_triangular_ad", &operands, primal, tangent, 0)?;
+        let out = wrap_dense_ad_output("solve_triangular_ad", &operands, primal, tangent, 0)?;
 
         if let AdValue::Reverse { node, tape, .. } = out.as_value() {
-            let a_primal = self.a.primal().clone();
-            let b_primal = self.b.primal().clone();
             let reverse_specs = collect_reverse_input_specs(&operands);
             let upper = self.upper;
             let output_node = *node;
@@ -2623,12 +2948,12 @@ where
                     let mut input_grads = Vec::new();
                     if let Some(spec) = &reverse_specs[0] {
                         let grad_a =
-                            normalize_pullback_shape(grad.a, &spec.dims, "solve_triangular_ad")?;
+                            compress_pullback_like("solve_triangular_ad", grad.a, &spec.layout)?;
                         input_grads.push((spec.node, grad_a));
                     }
                     if let Some(spec) = &reverse_specs[1] {
                         let grad_b =
-                            normalize_pullback_shape(grad.b, &spec.dims, "solve_triangular_ad")?;
+                            compress_pullback_like("solve_triangular_ad", grad.b, &spec.layout)?;
                         input_grads.push((spec.node, grad_b));
                     }
                     Ok(input_grads)
@@ -2666,7 +2991,7 @@ pub struct NormAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> NormAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
 {
     /// Sets norm kind.
     /// # Examples
