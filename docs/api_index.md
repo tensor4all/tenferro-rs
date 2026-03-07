@@ -138,11 +138,14 @@ tensor type. `Differentiable` trait defines the tangent space; concrete types
 <a id="chainrules"></a>
 ### [chainrules](chainrules/index.html) <small>(Extern)</small>
 
-AD engine (like Zygote.jl in Julia's ecosystem). Provides `Tape<V>`
-(explicit tape, TensorFlow GradientTape style), `TrackedTensor<V>`
-(reverse-mode wrapper), `DualTensor<V>` (forward-mode wrapper).
-Gradient computation via `tape.pullback()`, HVP via `tape.hvp()`.
-Depends only on `chainrules-core`. Re-exports all of `chainrules-core`
+AD engine (like Zygote.jl in Julia's ecosystem). Provides homogeneous
+`Tape<V>` graphs (explicit tape, TensorFlow GradientTape style),
+`TrackedTensor<V>` (reverse-mode wrapper), `DualTensor<V>` (forward-mode
+wrapper), and `Variable<V>` for torch-like gradient queries and accumulation.
+Gradient computation uses `tape.pullback()` / `tape.hvp()` or the
+`Variable<V>` / `autograd::grad_*` surface. Tensor scalar semantics follow
+PyTorch: scalar tensors are rank-0, while implicit reverse seeds still depend
+on `num_elements() == 1`. Depends only on `chainrules-core` and re-exports it
 so downstream crates can depend on just `chainrules` for both traits and engine.
 
 Operation-specific AD rules live with their operations, not here.

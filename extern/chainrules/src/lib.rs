@@ -11,6 +11,15 @@
 //! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate
 //! that defines the operation. See `tenferro-einsum` for einsum AD functions.
 //!
+//! The reverse-mode graph model is homogeneous: one [`Tape`] carries one value
+//! type `V`. This supports both tensor graphs such as `Tape<Tensor<f64>>` and
+//! downstream custom-type graphs such as `Tape<MyType>`, as long as
+//! `MyType: Differentiable`.
+//!
+//! For tensor-valued APIs, scalar semantics follow PyTorch conventions:
+//! scalar tensors are rank-0 (`shape=[]`), not shape `[1]`. Implicit reverse
+//! seed creation remains based on `Differentiable::num_elements() == 1`.
+//!
 //! # Examples
 //!
 //! Reverse-mode usage (with operation-specific AD functions from other crates):
@@ -36,6 +45,31 @@
 //! let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
 //! let grads = tape.pullback(&loss).unwrap();
 //! let _ga = grads.get(a.node_id().unwrap()).unwrap();
+//! ```
+//!
+//! Reverse-mode with a downstream custom type:
+//!
+//! ```ignore
+//! use chainrules::{Differentiable, Tape};
+//!
+//! #[derive(Clone, Copy, Debug, PartialEq)]
+//! struct MyScalar(f64);
+//!
+//! impl Differentiable for MyScalar {
+//!     type Tangent = Self;
+//!
+//!     fn zero_tangent(&self) -> Self::Tangent { Self(0.0) }
+//!     fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent {
+//!         Self(a.0 + b.0)
+//!     }
+//!     fn num_elements(&self) -> usize { 1 }
+//!     fn seed_cotangent(&self) -> Self::Tangent { Self(1.0) }
+//! }
+//!
+//! let tape = Tape::<MyScalar>::new();
+//! let x = tape.leaf(MyScalar(2.0));
+//! let grads = tape.pullback(&x).unwrap();
+//! assert_eq!(grads.get(x.node_id().unwrap()).unwrap().0, 1.0);
 //! ```
 //!
 //! Forward-mode usage:

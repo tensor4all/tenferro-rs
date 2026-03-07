@@ -13,8 +13,8 @@ verification procedures (reconstruction checks, finite-difference gradient check
 
 | Location | Content |
 |----------|---------|
-| [`docs/design/autodiff.md`](../design/autodiff.md) | Architecture and API: crate split, explicit tape engine, torch-like wrapper layer, `BackwardOptions`, `DynTape` coexistence |
-| [`docs/design/einsum-dyadtensor.md`](../design/einsum-dyadtensor.md) | Einsum/dyadtensor-focused AD design details: API contracts, retain/create semantics, and test pattern contract |
+| [`docs/design/autodiff.md`](../design/autodiff.md) | Architecture and API: crate split, homogeneous `Tape<V>` engine, torch-like `Variable<V>` wrapper layer, `BackwardOptions`, and rank-0 tensor scalar semantics |
+| [`docs/design/einsum-dyadtensor.md`](../design/einsum-dyadtensor.md) | Einsum/dyadtensor-focused AD integration details on top of homogeneous `Tape<V>`, including retain/create semantics and tensor scalar conventions |
 | [`docs/design/linalg.md`](../design/linalg.md) | Linalg API: function signatures, result types, cotangent types, rrule/frule tables |
 | `docs/AD/` (this directory) | Mathematical details: derivations, formulas, verification for each operation |
 
