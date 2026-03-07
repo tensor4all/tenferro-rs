@@ -1,9 +1,6 @@
 use std::sync::Arc;
 
-use chainrules::{
-    autograd, AutodiffError, AutogradContext, BackwardOptions, DynBackwardOptions, DynHvpOptions,
-    DynTape, DynVariable, Variable,
-};
+use chainrules::{autograd, AutodiffError, AutogradContext, BackwardOptions, Tape, Variable};
 
 #[test]
 fn new_in_shared_context_allows_binary_ops() {
@@ -42,8 +39,7 @@ fn all_requires_grad_false_drops_output_context() {
 #[test]
 fn variable_api_surface_exists() {
     let _ = BackwardOptions::<f64>::default();
-    let _ = DynBackwardOptions::default();
-    let _ = DynHvpOptions::default();
+    let _ = Tape::<f64>::new();
 
     let v = Variable::new(1.0_f64);
     assert!(!v.requires_grad());
@@ -51,10 +47,11 @@ fn variable_api_surface_exists() {
 }
 
 #[test]
-fn dyn_api_surface_exists() {
-    let tape = DynTape::new();
-    let x: DynVariable = tape.leaf(3.0_f64);
+fn tape_and_variable_surfaces_cover_remaining_public_entry_points() {
+    let tape = Tape::<f64>::new();
+    let x = tape.leaf(3.0_f64);
     assert!(x.requires_grad());
-    assert_eq!(x.context_id(), tape.id());
-    assert!(x.value_as::<f64>().is_ok());
+
+    let grads = tape.pullback(&x).unwrap();
+    assert_eq!(*grads.get(x.node_id().unwrap()).unwrap(), 1.0);
 }

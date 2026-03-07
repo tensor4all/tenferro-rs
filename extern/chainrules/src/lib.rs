@@ -11,6 +11,15 @@
 //! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate
 //! that defines the operation. See `tenferro-einsum` for einsum AD functions.
 //!
+//! The reverse-mode graph model is homogeneous: one [`Tape`] carries one value
+//! type `V`. This supports both tensor graphs such as `Tape<Tensor<f64>>` and
+//! downstream custom-type graphs such as `Tape<MyType>`, as long as
+//! `MyType: Differentiable`.
+//!
+//! For tensor-valued APIs, scalar semantics follow PyTorch conventions:
+//! scalar tensors are rank-0 (`shape=[]`), not shape `[1]`. Implicit reverse
+//! seed creation remains based on `Differentiable::num_elements() == 1`.
+//!
 //! # Examples
 //!
 //! Reverse-mode usage (with operation-specific AD functions from other crates):
@@ -36,6 +45,31 @@
 //! let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
 //! let grads = tape.pullback(&loss).unwrap();
 //! let _ga = grads.get(a.node_id().unwrap()).unwrap();
+//! ```
+//!
+//! Reverse-mode with a downstream custom type:
+//!
+//! ```ignore
+//! use chainrules::{Differentiable, Tape};
+//!
+//! #[derive(Clone, Copy, Debug, PartialEq)]
+//! struct MyScalar(f64);
+//!
+//! impl Differentiable for MyScalar {
+//!     type Tangent = Self;
+//!
+//!     fn zero_tangent(&self) -> Self::Tangent { Self(0.0) }
+//!     fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent {
+//!         Self(a.0 + b.0)
+//!     }
+//!     fn num_elements(&self) -> usize { 1 }
+//!     fn seed_cotangent(&self) -> Self::Tangent { Self(1.0) }
+//! }
+//!
+//! let tape = Tape::<MyScalar>::new();
+//! let x = tape.leaf(MyScalar(2.0));
+//! let grads = tape.pullback(&x).unwrap();
+//! assert_eq!(grads.get(x.node_id().unwrap()).unwrap().0, 1.0);
 //! ```
 //!
 //! Forward-mode usage:
@@ -77,13 +111,11 @@
 // Re-export all core traits so downstream can depend on just `chainrules`.
 pub use chainrules_core::*;
 
-use std::any::{Any, TypeId};
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex};
 
 // ============================================================================
 // Internal tape storage
@@ -1017,41 +1049,6 @@ pub struct HvpResult<V: Differentiable> {
 // ============================================================================
 
 static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_DYN_TAPE_ID: AtomicU64 = AtomicU64::new(1);
-static DYN_TAPE_REGISTRY: OnceLock<Mutex<HashMap<u64, Weak<Mutex<DynTapeInner>>>>> =
-    OnceLock::new();
-
-struct DynTapeInner {
-    graph_alive: bool,
-    next_node: usize,
-}
-
-fn dyn_tape_registry() -> &'static Mutex<HashMap<u64, Weak<Mutex<DynTapeInner>>>> {
-    DYN_TAPE_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn register_dyn_tape(id: u64, inner: &Arc<Mutex<DynTapeInner>>) {
-    if let Ok(mut guard) = dyn_tape_registry().lock() {
-        guard.insert(id, Arc::downgrade(inner));
-    }
-}
-
-fn resolve_dyn_tape(id: u64) -> AdResult<Arc<Mutex<DynTapeInner>>> {
-    let guard = dyn_tape_registry().lock().map_err(|_| {
-        AutodiffError::InvalidArgument("dyn tape registry lock is poisoned".to_string())
-    })?;
-    let Some(inner) = guard.get(&id).and_then(Weak::upgrade) else {
-        return Err(AutodiffError::InvalidArgument(
-            "dyn tape context is not available".to_string(),
-        ));
-    };
-    Ok(inner)
-}
-
-fn is_dyn_scalar_type<T: 'static>() -> bool {
-    let id = TypeId::of::<T>();
-    id == TypeId::of::<f32>() || id == TypeId::of::<f64>()
-}
 
 fn effective_retain_graph(retain_graph: Option<bool>, create_graph: bool) -> bool {
     retain_graph.unwrap_or(create_graph)
@@ -1078,66 +1075,6 @@ pub struct BackwardOptions<V: Differentiable> {
 }
 
 impl<V: Differentiable> Default for BackwardOptions<V> {
-    fn default() -> Self {
-        Self {
-            retain_graph: None,
-            create_graph: false,
-            seed_grad: None,
-        }
-    }
-}
-
-/// Options for heterogeneous gradient query APIs.
-///
-/// # Examples
-///
-/// ```
-/// use chainrules::DynBackwardOptions;
-///
-/// let opts = DynBackwardOptions::default();
-/// assert_eq!(opts.retain_graph, None);
-/// assert!(opts.seed_grads.is_none());
-/// ```
-pub struct DynBackwardOptions {
-    /// Optional retain override. `None` means infer from `create_graph`.
-    pub retain_graph: Option<bool>,
-    /// Whether to build a graph on returned gradients.
-    pub create_graph: bool,
-    /// Optional per-output seed cotangents.
-    pub seed_grads: Option<Vec<DynTangent>>,
-}
-
-impl Default for DynBackwardOptions {
-    fn default() -> Self {
-        Self {
-            retain_graph: None,
-            create_graph: false,
-            seed_grads: None,
-        }
-    }
-}
-
-/// Options for heterogeneous HVP API.
-///
-/// # Examples
-///
-/// ```
-/// use chainrules::DynHvpOptions;
-///
-/// let opts = DynHvpOptions::default();
-/// assert_eq!(opts.retain_graph, None);
-/// assert!(opts.seed_grad.is_none());
-/// ```
-pub struct DynHvpOptions {
-    /// Optional retain override. `None` means infer from `create_graph`.
-    pub retain_graph: Option<bool>,
-    /// Whether to build a graph on returned gradients.
-    pub create_graph: bool,
-    /// Optional seed cotangent for the HVP target.
-    pub seed_grad: Option<DynTangent>,
-}
-
-impl Default for DynHvpOptions {
     fn default() -> Self {
         Self {
             retain_graph: None,
@@ -1763,263 +1700,6 @@ impl<V: Differentiable + Clone> Clone for Variable<V> {
     }
 }
 
-/// Runtime identifier for heterogeneous graph nodes.
-///
-/// # Examples
-///
-/// ```
-/// use chainrules::DynNodeId;
-///
-/// let id = DynNodeId::new(3);
-/// assert_eq!(id.index(), 3);
-/// ```
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
-pub struct DynNodeId(usize);
-
-impl DynNodeId {
-    /// Creates a dynamic node id.
-    pub fn new(index: usize) -> Self {
-        Self(index)
-    }
-
-    /// Returns numeric node index.
-    pub fn index(&self) -> usize {
-        self.0
-    }
-}
-
-/// Erased tangent payload for heterogeneous APIs.
-///
-/// # Examples
-///
-/// ```
-/// use chainrules::DynTangent;
-///
-/// let t = DynTangent::new(1.5_f64);
-/// assert_eq!(*t.downcast_ref::<f64>().unwrap(), 1.5);
-/// ```
-pub struct DynTangent(Arc<dyn Any + Send + Sync>);
-
-impl DynTangent {
-    /// Creates an erased tangent payload.
-    pub fn new<T: 'static + Send + Sync>(value: T) -> Self {
-        Self(Arc::new(value))
-    }
-
-    /// Downcasts tangent payload to concrete type.
-    pub fn downcast_ref<T: 'static>(&self) -> AdResult<&T> {
-        self.0.downcast_ref::<T>().ok_or_else(|| {
-            AutodiffError::InvalidArgument("DynTangent downcast type mismatch".to_string())
-        })
-    }
-}
-
-impl Clone for DynTangent {
-    fn clone(&self) -> Self {
-        Self(self.0.clone())
-    }
-}
-
-/// Heterogeneous variable handle.
-///
-/// # Examples
-///
-/// ```
-/// use chainrules::DynTape;
-///
-/// let tape = DynTape::new();
-/// let x = tape.leaf(2.0_f64);
-/// assert!(x.requires_grad());
-/// assert!(x.value_as::<f64>().is_ok());
-/// ```
-pub struct DynVariable {
-    value: Arc<dyn Any + Send + Sync>,
-    node_id: DynNodeId,
-    context_id: u64,
-    requires_grad: bool,
-    is_scalar: bool,
-}
-
-impl DynVariable {
-    /// Returns concrete reference to wrapped value.
-    pub fn value_as<T: 'static>(&self) -> AdResult<&T> {
-        self.value.downcast_ref::<T>().ok_or_else(|| {
-            AutodiffError::InvalidArgument("DynVariable downcast type mismatch".to_string())
-        })
-    }
-
-    /// Returns dynamic node id.
-    pub fn node_id(&self) -> DynNodeId {
-        self.node_id
-    }
-
-    /// Returns tape/context id.
-    pub fn context_id(&self) -> u64 {
-        self.context_id
-    }
-
-    /// Returns whether gradient tracking is enabled.
-    pub fn requires_grad(&self) -> bool {
-        self.requires_grad
-    }
-
-    /// Returns whether wrapped value is scalar-like.
-    pub fn is_scalar(&self) -> bool {
-        self.is_scalar
-    }
-}
-
-impl Clone for DynVariable {
-    fn clone(&self) -> Self {
-        Self {
-            value: self.value.clone(),
-            node_id: self.node_id,
-            context_id: self.context_id,
-            requires_grad: self.requires_grad,
-            is_scalar: self.is_scalar,
-        }
-    }
-}
-
-/// Heterogeneous gradient container.
-pub struct DynGradients {
-    entries: Vec<(DynNodeId, DynTangent)>,
-}
-
-impl DynGradients {
-    /// Creates an empty gradient container.
-    pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-
-    /// Typed retrieval by node id.
-    pub fn get<T: 'static>(&self, node: DynNodeId) -> Option<&T> {
-        self.entries
-            .iter()
-            .find(|(n, _)| *n == node)
-            .and_then(|(_, value)| value.downcast_ref::<T>().ok())
-    }
-}
-
-/// HVP result for heterogeneous APIs.
-pub struct DynHvpResult {
-    /// First-order gradients.
-    pub gradients: DynGradients,
-    /// Hessian-vector product entries.
-    pub hvp: DynGradients,
-}
-
-/// Heterogeneous tape for mixed-type AD graphs.
-///
-/// # Examples
-///
-/// ```
-/// use chainrules::DynTape;
-///
-/// let tape = DynTape::new();
-/// let x = tape.leaf(1.0_f64);
-/// assert_eq!(x.context_id(), tape.id());
-/// ```
-pub struct DynTape {
-    id: u64,
-    inner: Arc<Mutex<DynTapeInner>>,
-}
-
-impl DynTape {
-    /// Creates an empty heterogeneous tape.
-    pub fn new() -> Self {
-        let inner = Arc::new(Mutex::new(DynTapeInner {
-            graph_alive: true,
-            next_node: 0,
-        }));
-        let id = NEXT_DYN_TAPE_ID.fetch_add(1, Ordering::Relaxed);
-        register_dyn_tape(id, &inner);
-        Self { id, inner }
-    }
-
-    /// Returns tape id.
-    pub fn id(&self) -> u64 {
-        self.id
-    }
-
-    /// Creates a tracked leaf on this tape.
-    pub fn leaf<T: 'static + Send + Sync>(&self, value: T) -> DynVariable {
-        let node = if let Ok(mut guard) = self.inner.lock() {
-            guard.graph_alive = true;
-            let node = DynNodeId::new(guard.next_node);
-            guard.next_node += 1;
-            node
-        } else {
-            DynNodeId::new(0)
-        };
-        DynVariable {
-            value: Arc::new(value),
-            node_id: node,
-            context_id: self.id,
-            requires_grad: true,
-            is_scalar: is_dyn_scalar_type::<T>(),
-        }
-    }
-
-    /// Creates a tracked leaf with tangent metadata on this tape.
-    pub fn leaf_with_tangent<T: 'static + Send + Sync, G: 'static + Send + Sync>(
-        &self,
-        value: T,
-        _tangent: G,
-    ) -> AdResult<DynVariable> {
-        Ok(self.leaf(value))
-    }
-
-    /// HVP query entry point for heterogeneous tapes.
-    pub fn hvp(&self, _loss: &DynVariable, _options: DynHvpOptions) -> AdResult<DynHvpResult> {
-        self.hvp_impl(_loss, _options)
-    }
-
-    fn hvp_impl(&self, loss: &DynVariable, options: DynHvpOptions) -> AdResult<DynHvpResult> {
-        if loss.context_id != self.id {
-            return Err(AutodiffError::InvalidArgument(
-                "dyn hvp requires loss from the same tape".to_string(),
-            ));
-        }
-        if options.create_graph {
-            return Err(AutodiffError::ModeNotSupported {
-                mode: "create_graph_hvp_dyntape".to_string(),
-                reason: "DynTape::hvp does not support create_graph in this phase".to_string(),
-            });
-        }
-        if !loss.is_scalar && options.seed_grad.is_none() {
-            return Err(AutodiffError::InvalidArgument(
-                "DynTape::hvp requires seed_grad for non-scalar loss".to_string(),
-            ));
-        }
-
-        let retain = effective_retain_graph(options.retain_graph, options.create_graph);
-        let mut guard = self
-            .inner
-            .lock()
-            .map_err(|_| AutodiffError::InvalidArgument("dyn tape lock is poisoned".to_string()))?;
-        if !guard.graph_alive {
-            return Err(AutodiffError::GraphFreed);
-        }
-        if !retain {
-            guard.graph_alive = false;
-        }
-
-        Ok(DynHvpResult {
-            gradients: DynGradients::new(),
-            hvp: DynGradients::new(),
-        })
-    }
-}
-
-impl Default for DynTape {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Monomorphic AD operation helpers for [`Variable`].
 pub mod autograd {
     use super::{
@@ -2513,150 +2193,6 @@ pub mod autograd {
                 AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
             })?;
             guard.free_graph();
-        }
-        Ok(out)
-    }
-
-    fn shared_dyn_context_id(
-        outputs: &[&super::DynVariable],
-        inputs: &[&super::DynVariable],
-    ) -> AdResult<u64> {
-        let mut context_id: Option<u64> = None;
-        for value in outputs.iter().copied().chain(inputs.iter().copied()) {
-            match context_id {
-                None => context_id = Some(value.context_id()),
-                Some(id) if id == value.context_id() => {}
-                Some(_) => {
-                    return Err(AutodiffError::InvalidArgument(
-                        "mixed DynTape contexts in one query".to_string(),
-                    ))
-                }
-            }
-        }
-
-        context_id.ok_or_else(|| {
-            AutodiffError::InvalidArgument(
-                "at least one dyn output or input is required".to_string(),
-            )
-        })
-    }
-
-    /// Side-effect-free heterogeneous tangent query.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ModeNotSupported { mode: "create_graph_tangent_dyntape", .. }`
-    /// when `create_graph=true`.
-    pub fn grad_dyn_tangent(
-        outputs: &[&super::DynVariable],
-        inputs: &[&super::DynVariable],
-        options: super::DynBackwardOptions,
-    ) -> AdResult<Vec<super::DynTangent>> {
-        if options.create_graph {
-            return Err(AutodiffError::ModeNotSupported {
-                mode: "create_graph_tangent_dyntape".to_string(),
-                reason: "grad_dyn_tangent does not support create_graph".to_string(),
-            });
-        }
-
-        if outputs.iter().any(|output| !output.is_scalar()) && options.seed_grads.is_none() {
-            return Err(AutodiffError::InvalidArgument(
-                "grad_dyn_tangent requires seed_grads for non-scalar outputs".to_string(),
-            ));
-        }
-        if let Some(seeds) = options.seed_grads.as_ref() {
-            if seeds.len() != outputs.len() {
-                return Err(AutodiffError::InvalidArgument(
-                    "seed_grads length must match outputs length".to_string(),
-                ));
-            }
-        }
-
-        let context_id = shared_dyn_context_id(outputs, inputs)?;
-        let inner = super::resolve_dyn_tape(context_id)?;
-        let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
-        let mut guard = inner
-            .lock()
-            .map_err(|_| AutodiffError::InvalidArgument("dyn tape lock is poisoned".to_string()))?;
-        if !guard.graph_alive {
-            return Err(AutodiffError::GraphFreed);
-        }
-
-        let mut out = Vec::with_capacity(inputs.len());
-        for input in inputs {
-            if let Ok(v) = input.value_as::<f64>() {
-                out.push(super::DynTangent::new(if input.is_scalar() {
-                    1.0_f64
-                } else {
-                    *v
-                }));
-            } else if let Ok(v) = input.value_as::<f32>() {
-                out.push(super::DynTangent::new(if input.is_scalar() {
-                    1.0_f32
-                } else {
-                    *v
-                }));
-            } else {
-                out.push(super::DynTangent::new(()));
-            }
-        }
-
-        if !retain {
-            guard.graph_alive = false;
-        }
-        Ok(out)
-    }
-
-    /// Side-effect-free heterogeneous variable query.
-    pub fn grad_dyn_variable(
-        outputs: &[&super::DynVariable],
-        inputs: &[&super::DynVariable],
-        options: super::DynBackwardOptions,
-    ) -> AdResult<Vec<super::DynVariable>> {
-        let context_id = shared_dyn_context_id(outputs, inputs)?;
-        let inner = super::resolve_dyn_tape(context_id)?;
-        let tangents = grad_dyn_tangent(
-            outputs,
-            inputs,
-            super::DynBackwardOptions {
-                retain_graph: Some(true),
-                create_graph: false,
-                seed_grads: options.seed_grads.clone(),
-            },
-        )?;
-
-        let mut guard = inner
-            .lock()
-            .map_err(|_| AutodiffError::InvalidArgument("dyn tape lock is poisoned".to_string()))?;
-        if !guard.graph_alive {
-            return Err(AutodiffError::GraphFreed);
-        }
-
-        let mut out = Vec::with_capacity(tangents.len());
-        for tangent in tangents {
-            let node = super::DynNodeId::new(guard.next_node);
-            guard.next_node += 1;
-            out.push(super::DynVariable {
-                value: tangent.0.clone(),
-                node_id: node,
-                context_id,
-                requires_grad: true,
-                is_scalar: tangent.downcast_ref::<f64>().is_ok()
-                    || tangent.downcast_ref::<f32>().is_ok(),
-            });
-        }
-
-        if options.create_graph && !outputs.iter().all(|output| output.is_scalar()) {
-            return Err(AutodiffError::ModeNotSupported {
-                mode: "create_graph_dyntape".to_string(),
-                reason: "graph-aware pullback wiring for non-scalar dyn outputs is not implemented"
-                    .to_string(),
-            });
-        }
-
-        let retain = super::effective_retain_graph(options.retain_graph, options.create_graph);
-        if !retain {
-            guard.graph_alive = false;
         }
         Ok(out)
     }
