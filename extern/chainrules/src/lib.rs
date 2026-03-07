@@ -2196,7 +2196,6 @@ pub mod autograd {
         }
         Ok(out)
     }
-
 }
 
 /// Test-only graph builders used by API contract tests.
