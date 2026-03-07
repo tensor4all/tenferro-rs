@@ -9,7 +9,7 @@
       "cargo test (ubuntu-latest)",
       "cargo test (macos-latest)",
       "coverage",
-      "cargo doc"
+      "docs-site"
     ]
   }
 }

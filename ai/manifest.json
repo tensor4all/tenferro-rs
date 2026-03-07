@@ -44,9 +44,24 @@
       "target": ".claude/commands/sync-agent-assets.md"
     },
     {
+      "id": "docs-workflow",
+      "source": ".github/workflows/docs.yml",
+      "target": ".github/workflows/docs.yml"
+    },
+    {
       "id": "create-pr-script",
       "source": "scripts/create-pr.sh",
       "target": "scripts/create-pr.sh"
+    },
+    {
+      "id": "build-docs-site-script",
+      "source": "scripts/build_docs_site.sh",
+      "target": "scripts/build_docs_site.sh"
+    },
+    {
+      "id": "check-docs-site-script",
+      "source": "scripts/check-docs-site.py",
+      "target": "scripts/check-docs-site.py"
     },
     {
       "id": "check-agent-assets-script",

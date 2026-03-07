@@ -50,12 +50,13 @@ ensure_body_file() {
     git log --format='- %s' "${BASE_BRANCH}..HEAD" 2>/dev/null || true
     printf '\n## Verification\n\n'
     printf -- '- `cargo fmt --all --check`\n'
-    printf -- '- `cargo test --workspace`\n'
+    printf -- '- `cargo test --workspace --release`\n'
     printf -- '- `cargo llvm-cov --workspace --json --output-path coverage.json`\n'
     printf -- '- `python3 scripts/check-coverage.py coverage.json`\n'
-    printf -- '- `cargo doc --no-deps`\n'
+    printf -- '- `cargo doc --workspace --no-deps`\n'
+    printf -- '- `python3 scripts/check-docs-site.py`\n'
     printf '\n## Documentation\n\n'
-    printf -- '- Reviewed `README.md`, `docs/design/**`, and public rustdoc for consistency.\n'
+    printf -- '- Reviewed `README.md`, `docs/design/**`, `docs/api_index.md`, and public rustdoc for consistency.\n'
   } >"$BODY_FILE"
 }
 
@@ -73,10 +74,11 @@ append_ai_attribution() {
 
 run_required_checks() {
   cargo fmt --all --check
-  cargo test --workspace
+  cargo test --workspace --release
   cargo llvm-cov --workspace --json --output-path coverage.json
   python3 scripts/check-coverage.py coverage.json
-  cargo doc --no-deps
+  cargo doc --workspace --no-deps
+  python3 scripts/check-docs-site.py
 }
 
 while [[ $# -gt 0 ]]; do
@@ -148,7 +150,7 @@ fi
 
 bash scripts/check-repo-settings.sh --quiet
 
-log "docs gate: review README.md, docs/design/**, and public rustdoc before continuing"
+log "docs gate: review README.md, docs/design/**, docs/api_index.md, and public rustdoc before continuing"
 run_required_checks
 
 if [[ -z "$TITLE" ]]; then

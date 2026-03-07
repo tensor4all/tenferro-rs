@@ -62,13 +62,17 @@ Project-local PR and agent-asset workflows live in:
 - `scripts/create-pr.sh`
 - `scripts/check-agent-assets.sh`
 - `scripts/sync-agent-assets.sh`
+- `.github/workflows/docs.yml`
+- `scripts/build_docs_site.sh`
+- `scripts/check-docs-site.py`
 
 ## Documentation
 
 Generate a unified local docs site (design docs + Rust API docs):
 
 ```bash
-./scripts/build_docs_site.sh
+bash scripts/build_docs_site.sh
+python3 scripts/check-docs-site.py
 ```
 
 Output:
@@ -76,6 +80,8 @@ Output:
 - `target/docs-site/index.html` (top page)
 - `target/docs-site/design/` (formal design docs)
 - `target/docs-site/api/` (`cargo doc --workspace` output)
+
+The shared docs deploy workflow publishes the same `target/docs-site` tree to GitHub Pages on pushes to `main`.
 
 ## Coverage
 

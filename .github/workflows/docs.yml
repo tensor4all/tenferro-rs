@@ -20,23 +20,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
-
       - name: Install Quarto
         uses: quarto-dev/quarto-actions/setup@v2
-
       - name: Install pandoc and graphviz
         run: sudo apt-get update && sudo apt-get install -y pandoc graphviz
-
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
-
       - name: Build unified docs site
         run: ./scripts/build_docs_site.sh
-
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

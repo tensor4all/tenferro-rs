@@ -1,5 +1,9 @@
 {
   "assets": {
+    "build-docs-site-script": {
+      "path": "scripts/build_docs_site.sh",
+      "sha256": "f2240cf0ecedc6bdf3bb94d9e21ae323145a2c1856053e0bbe8453ab118a219d"
+    },
     "check-agent-assets-command": {
       "path": ".claude/commands/check-agent-assets.md",
       "sha256": "511460d9a4d284513c147a10765e5e135c1a24ad5354f8fc181eb4b49832a977"
@@ -7,6 +11,10 @@
     "check-agent-assets-script": {
       "path": "scripts/check-agent-assets.sh",
       "sha256": "da0d4eb54a4b751518b3dae32bf6ba8af454707fcf149467cb5c46dc15d3d66a"
+    },
+    "check-docs-site-script": {
+      "path": "scripts/check-docs-site.py",
+      "sha256": "6d5a7b057cd11f78d6a80482b70f91cd730049c50462b86d0291de12ddbdcc18"
     },
     "check-repo-settings-script": {
       "path": "scripts/check-repo-settings.sh",
@@ -22,15 +30,19 @@
     },
     "create-pr-script": {
       "path": "scripts/create-pr.sh",
-      "sha256": "abc2871423c72e11f6adfddc2dbf79cfa8f8a9d8e2529a4364d0737555f41ddd"
+      "sha256": "9acaad4b33a8c42127671b6dac7cb74f51542de0fb604c30a25a0fde385edd71"
     },
     "createpr-command": {
       "path": ".claude/commands/createpr.md",
       "sha256": "207fcce47d243aa879c2398f6e08f8883d59f75f556d24740c396bcdea6d09c2"
     },
+    "docs-workflow": {
+      "path": ".github/workflows/docs.yml",
+      "sha256": "50d5c944e9a9f4a4ff186e7aa2c7983ebef090764c30b215f3325641a70cd653"
+    },
     "manifest": {
       "path": "ai/manifest.json",
-      "sha256": "4b30188cb6b972ad439048bab1975a59a5f13095a57967eb71e094c54a2bff22"
+      "sha256": "88cd889a7e4adadf19aae11ca81ddb3fbd71631b298578bd28ee37fe7e39d73c"
     },
     "numerical-rust-rules": {
       "path": "ai/vendor/template-rs/numerical-rust-rules.md",
@@ -38,11 +50,11 @@
     },
     "pr-workflow-rules": {
       "path": "ai/vendor/template-rs/pr-workflow-rules.md",
-      "sha256": "7044e22f1eda44abedf0fa05546d488d6f6bc3ed882061e6d1eb44abe250da57"
+      "sha256": "1ae70dbd94c81b9ac667e59693793c48bcabb09de6bad6c8e2eb8efcc1734687"
     },
     "repo-settings": {
       "path": "ai/repo-settings.json",
-      "sha256": "7b3545d570d7ab49f539ff5abb69061bae482dd5250983f5cbcd02108da20209"
+      "sha256": "1eef492b84047cbf149e5681ff402a8b3eb6269f2690be3c0ad2f74ff8d92ff6"
     },
     "sync-agent-assets-command": {
       "path": ".claude/commands/sync-agent-assets.md",
@@ -53,8 +65,8 @@
       "sha256": "be53e83a9ba57bd99f9d2fdde48d9c3262ee80e93b1ee802b34231329080e269"
     }
   },
-  "bundle_revision": "3753909fd2441aa9bb01a20221bf12b0b809566a",
+  "bundle_revision": "3c5d4e9",
   "source_ref": "main",
   "source_repo": "tensor4all/template-rs",
-  "synced_at": "2026-03-07T20:30:35Z"
+  "synced_at": "2026-03-07T20:41:01Z"
 }

@@ -11,10 +11,11 @@ Before pushing or creating a PR, all of these must pass:
 
 ```bash
 cargo fmt --all --check
-cargo test --workspace
+cargo test --workspace --release
 cargo llvm-cov --workspace --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
-cargo doc --no-deps
+cargo doc --workspace --no-deps
+python3 scripts/check-docs-site.py
 ```
 
 If formatting fails, run `cargo fmt --all` and rerun the checks.
@@ -32,8 +33,10 @@ PR readiness always includes a docs gate:
 
 - `README.md`
 - `docs/design/**`
+- `docs/api_index.md`
 - public rustdoc comments
-- generated docs from `cargo doc --no-deps`
+- generated docs from `cargo doc --workspace --no-deps`
+- docs-site deployment content from `./scripts/build_docs_site.sh`
 
 If an implementation changes behavior or public API, update the relevant docs before creating the PR.
 

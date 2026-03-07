@@ -106,10 +106,11 @@ Before pushing or creating a pull request, **all** of the following must pass:
 
 ```bash
 cargo fmt --all --check   # formatting
-cargo test --workspace    # all tests
+cargo test --workspace --release   # all tests
 cargo llvm-cov --workspace --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
-cargo doc --no-deps
+cargo doc --workspace --no-deps
+python3 scripts/check-docs-site.py
 ```
 
 If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting automatically.

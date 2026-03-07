@@ -10,7 +10,7 @@
       "cargo test (prims inject)",
       "cargo test (linalg inject)",
       "coverage",
-      "cargo doc"
+      "docs-site"
     ]
   }
 }
