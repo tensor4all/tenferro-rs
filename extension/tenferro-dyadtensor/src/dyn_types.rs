@@ -2307,7 +2307,7 @@ where
     };
 
     let reverse = match (tensor_reverse, scalar_reverse) {
-        (Some((lhs_node, lhs_tape)), Some((_, rhs_tape))) if lhs_tape != rhs_tape => {
+        (Some((_lhs_node, lhs_tape)), Some((_, rhs_tape))) if lhs_tape != rhs_tape => {
             return Err(Error::MixedReverseTape {
                 expected: lhs_tape.0,
                 found: rhs_tape.0,

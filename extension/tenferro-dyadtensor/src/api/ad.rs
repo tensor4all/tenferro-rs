@@ -461,6 +461,7 @@ pub fn pullback_wrt_mixed<TOut: Scalar + 'static, TWrt: Scalar + 'static>(
 ///     TapeId(7),
 ///     None,
 /// )
+/// .unwrap()
 /// .into();
 /// let a = DynAdScalar::from(AdValue::reverse(3.0_f64, NodeId(2), TapeId(7), None));
 /// let y = x.scale(&a).unwrap();
