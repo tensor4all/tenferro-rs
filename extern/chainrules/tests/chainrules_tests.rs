@@ -6,6 +6,29 @@ use chainrules::{
     ReverseRule, Tape, TrackedTensor,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ScalarBox(f64);
+
+impl Differentiable for ScalarBox {
+    type Tangent = Self;
+
+    fn zero_tangent(&self) -> Self::Tangent {
+        Self(0.0)
+    }
+
+    fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent {
+        Self(a.0 + b.0)
+    }
+
+    fn num_elements(&self) -> usize {
+        1
+    }
+
+    fn seed_cotangent(&self) -> Self::Tangent {
+        Self(1.0)
+    }
+}
+
 // ============================================================================
 // Tape creation
 // ============================================================================
@@ -274,6 +297,14 @@ fn pullback_leaf_identity() {
     let x = tape.leaf(2.0);
     let grads = tape.pullback(&x).unwrap();
     assert_eq!(*grads.get(x.node_id().unwrap()).unwrap(), 1.0);
+}
+
+#[test]
+fn pullback_leaf_identity_custom_type() {
+    let tape = Tape::<ScalarBox>::new();
+    let x = tape.leaf(ScalarBox(2.0));
+    let grads = tape.pullback(&x).unwrap();
+    assert_eq!(*grads.get(x.node_id().unwrap()).unwrap(), ScalarBox(1.0));
 }
 
 #[test]
