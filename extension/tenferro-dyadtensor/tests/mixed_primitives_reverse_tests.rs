@@ -24,6 +24,7 @@ fn scale_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
         TapeId(21),
         None::<tenferro_dyadtensor::StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::reverse(3.0_f64, NodeId(2), TapeId(21), None));
 
@@ -58,6 +59,7 @@ fn axpby_registers_reverse_gradients_for_all_inputs() {
         TapeId(31),
         None::<tenferro_dyadtensor::StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let y: DynAdTensor = AdTensor::new_reverse(
         f64_vec(&[3.0, -1.0]),
@@ -65,6 +67,7 @@ fn axpby_registers_reverse_gradients_for_all_inputs() {
         TapeId(31),
         None::<tenferro_dyadtensor::StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::reverse(2.0_f64, NodeId(13), TapeId(31), None));
     let b = DynAdScalar::from(AdValue::reverse(-1.0_f64, NodeId(14), TapeId(31), None));
@@ -119,6 +122,7 @@ fn div_scalar_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
         TapeId(41),
         None::<tenferro_dyadtensor::StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::reverse(2.0_f64, NodeId(22), TapeId(41), None));
 
@@ -153,6 +157,7 @@ fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
         TapeId(51),
         None::<tenferro_dyadtensor::StructuredTensor<f64>>,
     )
+    .unwrap()
     .into();
     let a = DynAdScalar::from(AdValue::reverse(4.0_f64, NodeId(32), TapeId(51), None));
     let coeff = a.sqrt();

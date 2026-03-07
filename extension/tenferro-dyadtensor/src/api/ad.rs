@@ -461,6 +461,7 @@ pub fn pullback_wrt_mixed<TOut: Scalar + 'static, TWrt: Scalar + 'static>(
 ///     TapeId(7),
 ///     None,
 /// )
+/// .unwrap()
 /// .into();
 /// let a = DynAdScalar::from(AdValue::reverse(3.0_f64, NodeId(2), TapeId(7), None));
 /// let y = x.scale(&a).unwrap();
@@ -962,13 +963,13 @@ mod tests {
         let da = f64_2x2([0.1, 0.0, 0.0, 0.1]);
         let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-        let ad_a_fwd = AdTensor::new_forward(a.clone(), da);
+        let ad_a_fwd = AdTensor::new_forward(a.clone(), da).unwrap();
         let ad_b = AdTensor::new_primal(b);
         let out_fwd = solve(&ad_a_fwd, &ad_b).unwrap();
         assert!(matches!(out_fwd.as_value(), AdValue::Forward { .. }));
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None);
-        let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None).unwrap();
+        let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None).unwrap();
         let out_rev = einsum("ij,jk->ik", &[&ad_a_rev, &ad_b_rev]).unwrap();
         assert!(matches!(out_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11)));
     }
@@ -1416,7 +1417,7 @@ mod tests {
         let eps = 1e-6;
 
         let out = {
-            let ad_a = AdTensor::new_forward(a.clone(), da.clone());
+            let ad_a = AdTensor::new_forward(a.clone(), da.clone()).unwrap();
             let ad_b = AdTensor::new_primal(b.clone());
             let ad_c = AdTensor::new_primal(c.clone());
             let y1 = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
@@ -1459,9 +1460,9 @@ mod tests {
         let node_b = NodeId(902);
         let node_c = NodeId(903);
         let (grad_a, grad_b) = {
-            let ad_a = AdTensor::new_reverse(a.clone(), node_a, tape, None);
-            let ad_b = AdTensor::new_reverse(b.clone(), node_b, tape, None);
-            let ad_c = AdTensor::new_reverse(c.clone(), node_c, tape, None);
+            let ad_a = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+            let ad_b = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
+            let ad_c = AdTensor::new_reverse(c.clone(), node_c, tape, None).unwrap();
             let y1 = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
             let y2 = einsum("ij,jk->ik", &[&y1, &ad_c]).unwrap();
             let grads = pullback_wrt(
@@ -1561,7 +1562,7 @@ mod tests {
         let eps = 1e-6;
 
         let out = {
-            let ad_a = AdTensor::new_forward(a.clone(), da.clone());
+            let ad_a = AdTensor::new_forward(a.clone(), da.clone()).unwrap();
             let ad_b = AdTensor::new_primal(b.clone());
             let ad_c = AdTensor::new_primal(c.clone());
             let y1 = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
@@ -1633,9 +1634,9 @@ mod tests {
         let node_b = NodeId(912);
         let node_c = NodeId(913);
         let grad_a = {
-            let ad_a = AdTensor::new_reverse(a.clone(), node_a, tape, None);
-            let ad_b = AdTensor::new_reverse(b.clone(), node_b, tape, None);
-            let ad_c = AdTensor::new_reverse(c.clone(), node_c, tape, None);
+            let ad_a = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+            let ad_b = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
+            let ad_c = AdTensor::new_reverse(c.clone(), node_c, tape, None).unwrap();
             let y1 = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
             let y2 = einsum("ij,jk->ik", &[&y1, &ad_c]).unwrap();
             let grads =
@@ -1673,15 +1674,12 @@ mod tests {
         let eps = 1e-6;
 
         let out = {
-            let ad_a = AdTensor::new_forward(a.clone(), da.clone());
+            let ad_a = AdTensor::new_forward(a.clone(), da.clone()).unwrap();
             let ad_b = AdTensor::new_primal(b.clone());
             solve_triangular(&ad_a, &ad_b).unwrap()
         };
-        let tangent = out
-            .tangent()
-            .expect("forward tangent missing")
-            .reshape(out.primal().dims())
-            .unwrap();
+        let tangent = out.tangent().expect("forward tangent missing");
+        assert_eq!(tangent.dims(), out.primal().dims());
 
         let out_plus = {
             let ad_a = AdTensor::new_primal(add_scaled_f64(&a, &da, eps));
@@ -1695,7 +1693,7 @@ mod tests {
         };
 
         let fd = central_diff_f64(&out_plus, &out_minus, eps);
-        let err = max_abs_diff(&tangent, &fd);
+        let err = max_abs_diff(tangent, &fd);
         assert!(err < 2e-6, "solve_triangular forward fd mismatch: {err}");
     }
 
@@ -1768,15 +1766,12 @@ mod tests {
         let eps = 1e-6;
 
         let out = {
-            let ad_a = AdTensor::new_forward(a.clone(), da.clone());
+            let ad_a = AdTensor::new_forward(a.clone(), da.clone()).unwrap();
             let ad_b = AdTensor::new_primal(b.clone());
             solve_triangular(&ad_a, &ad_b).unwrap()
         };
-        let tangent = out
-            .tangent()
-            .expect("forward tangent missing")
-            .reshape(out.primal().dims())
-            .unwrap();
+        let tangent = out.tangent().expect("forward tangent missing");
+        assert_eq!(tangent.dims(), out.primal().dims());
 
         let out_plus = {
             let ad_a = AdTensor::new_primal(add_scaled_c64(&a, &da, eps));
@@ -1790,7 +1785,7 @@ mod tests {
         };
 
         let fd = central_diff_c64(&out_plus, &out_minus, eps);
-        let err = complex_max_abs_diff(&tangent, &fd);
+        let err = complex_max_abs_diff(tangent, &fd);
         assert!(
             err < 3e-6,
             "solve_triangular complex forward fd mismatch: {err}"
@@ -1885,8 +1880,8 @@ mod tests {
         let cotangent =
             Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
-        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
         let out = solve_triangular(&ad_a_rev, &ad_b_rev).unwrap();
         assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
 
@@ -1924,8 +1919,8 @@ mod tests {
         let cotangent =
             Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
-        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
         let out = solve(&ad_a_rev, &ad_b_rev).unwrap();
         assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
 
@@ -1961,7 +1956,7 @@ mod tests {
                 .unwrap();
         let cotangent: Tensor<f64> = Tensor::from_vec(vec![1.5], &[], &[], 0).unwrap();
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
         let out = crate::norm_ad(&ad_a_rev).kind(NormKind::L1).run().unwrap();
         assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
 
@@ -1990,8 +1985,8 @@ mod tests {
         let b = f64_2x2([2.0, -1.0, 0.5, 1.5]);
         let cotangent = f64_2x2([1.0, 0.0, 0.0, 1.0]);
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
-        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
         let out = einsum("ij,jk->ik", &[&ad_a_rev, &ad_b_rev]).unwrap();
         assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
 
@@ -2043,8 +2038,8 @@ mod tests {
         )
         .unwrap();
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
-        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
         let out = solve_triangular(&ad_a_rev, &ad_b_rev).unwrap();
         let grads = pullback(&out, &AdTensor::new_primal(cotangent.clone())).unwrap();
         let grad_a = grads.get(&node_a).expect("missing complex dA");
@@ -2071,7 +2066,7 @@ mod tests {
         let node_a = NodeId(71);
         let a = f64_2x2([3.0, 1.0, 0.5, 2.0]);
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
         let out = svd(&ad_a_rev).unwrap();
         assert!(matches!(out.s.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
 
@@ -2115,8 +2110,8 @@ mod tests {
         let b =
             Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
-        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+        let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
         let out = lstsq(&ad_a_rev, &ad_b_rev).unwrap();
         assert!(matches!(out.x.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
 
@@ -2146,7 +2141,7 @@ mod tests {
             Tensor::<f64>::from_slice(&[0.0, -1.0, 1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
                 .unwrap();
 
-        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
         let out = eig(&ad_a_rev).unwrap();
         assert!(matches!(out.values.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
 
@@ -2184,7 +2179,7 @@ mod tests {
         let tape = TapeId(404);
         let node_a = NodeId(75);
         let a = f64_2x2([4.0, 1.0, 1.0, 3.0]);
-        let ad_a_rev = AdTensor::new_reverse(a, node_a, tape, None);
+        let ad_a_rev = AdTensor::new_reverse(a, node_a, tape, None).unwrap();
 
         let qr_out = qr(&ad_a_rev).unwrap();
         let qr_cot_q = AdTensor::new_primal(Tensor::<f64>::ones(
@@ -2265,8 +2260,8 @@ mod tests {
         .unwrap();
         let b_ls =
             Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-        let ad_ls_a = AdTensor::new_reverse(a_ls, node_ls_a, tape, None);
-        let ad_ls_b = AdTensor::new_reverse(b_ls, node_ls_b, tape, None);
+        let ad_ls_a = AdTensor::new_reverse(a_ls, node_ls_a, tape, None).unwrap();
+        let ad_ls_b = AdTensor::new_reverse(b_ls, node_ls_b, tape, None).unwrap();
         let lstsq_out = lstsq(&ad_ls_a, &ad_ls_b).unwrap();
         let lstsq_cot_x = AdTensor::new_primal(Tensor::<f64>::ones(
             lstsq_out.x.dims(),
