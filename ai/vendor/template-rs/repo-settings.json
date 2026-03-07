@@ -1,0 +1,15 @@
+{
+  "default_branch": "main",
+  "allow_auto_merge": true,
+  "delete_branch_on_merge": true,
+  "required_status_checks": {
+    "strict": true,
+    "contexts": [
+      "rustfmt",
+      "cargo test (ubuntu-latest)",
+      "cargo test (macos-latest)",
+      "coverage",
+      "cargo doc"
+    ]
+  }
+}

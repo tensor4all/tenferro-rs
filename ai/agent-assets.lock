@@ -1,0 +1,72 @@
+{
+  "assets": {
+    "build-docs-site-script": {
+      "path": "scripts/build_docs_site.sh",
+      "sha256": "f2240cf0ecedc6bdf3bb94d9e21ae323145a2c1856053e0bbe8453ab118a219d"
+    },
+    "check-agent-assets-command": {
+      "path": ".claude/commands/check-agent-assets.md",
+      "sha256": "511460d9a4d284513c147a10765e5e135c1a24ad5354f8fc181eb4b49832a977"
+    },
+    "check-agent-assets-script": {
+      "path": "scripts/check-agent-assets.sh",
+      "sha256": "da0d4eb54a4b751518b3dae32bf6ba8af454707fcf149467cb5c46dc15d3d66a"
+    },
+    "check-docs-site-script": {
+      "path": "scripts/check-docs-site.py",
+      "sha256": "6d5a7b057cd11f78d6a80482b70f91cd730049c50462b86d0291de12ddbdcc18"
+    },
+    "check-repo-settings-script": {
+      "path": "scripts/check-repo-settings.sh",
+      "sha256": "314bdf4253dce6293531ed8b613f836f94ee6fe1a859b314a7c510e273c3a953"
+    },
+    "common-agent-rules": {
+      "path": "ai/vendor/template-rs/common-agent-rules.md",
+      "sha256": "4437f421624645329d8584afc06d98ce850cdccc877a78342db653863247f7a4"
+    },
+    "configure-repo-settings-script": {
+      "path": "scripts/configure-repo-settings.sh",
+      "sha256": "31b59af7268ee1d949bd5526727ca116542b43c757570044799425df7c53f5ea"
+    },
+    "create-pr-script": {
+      "path": "scripts/create-pr.sh",
+      "sha256": "9acaad4b33a8c42127671b6dac7cb74f51542de0fb604c30a25a0fde385edd71"
+    },
+    "createpr-command": {
+      "path": ".claude/commands/createpr.md",
+      "sha256": "207fcce47d243aa879c2398f6e08f8883d59f75f556d24740c396bcdea6d09c2"
+    },
+    "docs-workflow": {
+      "path": ".github/workflows/docs.yml",
+      "sha256": "50d5c944e9a9f4a4ff186e7aa2c7983ebef090764c30b215f3325641a70cd653"
+    },
+    "manifest": {
+      "path": "ai/manifest.json",
+      "sha256": "88cd889a7e4adadf19aae11ca81ddb3fbd71631b298578bd28ee37fe7e39d73c"
+    },
+    "numerical-rust-rules": {
+      "path": "ai/vendor/template-rs/numerical-rust-rules.md",
+      "sha256": "a11fbe4b2d42aa0da7ea1bacb643d2d25a953fe4b7f8b0d81c8689de9227e56e"
+    },
+    "pr-workflow-rules": {
+      "path": "ai/vendor/template-rs/pr-workflow-rules.md",
+      "sha256": "1ae70dbd94c81b9ac667e59693793c48bcabb09de6bad6c8e2eb8efcc1734687"
+    },
+    "repo-settings": {
+      "path": "ai/repo-settings.json",
+      "sha256": "1eef492b84047cbf149e5681ff402a8b3eb6269f2690be3c0ad2f74ff8d92ff6"
+    },
+    "sync-agent-assets-command": {
+      "path": ".claude/commands/sync-agent-assets.md",
+      "sha256": "46c7102ddb6d9277cd6984750cff05c0d1d04c054f67d12e16466ea1f9a4875b"
+    },
+    "sync-agent-assets-script": {
+      "path": "scripts/sync-agent-assets.sh",
+      "sha256": "be53e83a9ba57bd99f9d2fdde48d9c3262ee80e93b1ee802b34231329080e269"
+    }
+  },
+  "bundle_revision": "3c5d4e9",
+  "source_ref": "main",
+  "source_repo": "tensor4all/template-rs",
+  "synced_at": "2026-03-07T20:41:01Z"
+}

@@ -33,6 +33,7 @@ Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
          chainrules          AD engine: Tape<V>, TrackedTensor<V>,
                              DualTensor<V> (← chainrules-core)
+         chainrules-scalarops Scalar AD rules for primitive real/complex operations
 
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
@@ -41,6 +42,7 @@ Extension:  tenferro-tropical       Tropical semiring operations (MaxPlus, MinPl
             tenferro-tropical-capi  C-API for tropical einsum
             tenferro-burn           Burn deep learning framework bridge
             tenferro-mdarray        mdarray multidimensional array bridge
+            tenferro-dyadtensor     Dynamic dyadic tensor API and AD runtime bridge
 ```
 
 ### Dependency Graph
@@ -150,6 +152,14 @@ so downstream crates can depend on just `chainrules` for both traits and engine.
 
 Operation-specific AD rules live with their operations, not here.
 
+<a id="chainrules-scalarops"></a>
+### [chainrules-scalarops](chainrules_scalarops/index.html) <small>(Extern)</small>
+
+Scalar-focused AD rules layered on top of `chainrules` and `chainrules-core`.
+Provides `rrule` and `frule` implementations for primitive scalar arithmetic,
+projection, conjugation, powers, and related real/complex helper operations so
+tensor crates can reuse the same scalar differentiation behavior.
+
 ## Extension Crates (extension/)
 
 <a id="tenferro-tropical"></a>
@@ -187,3 +197,12 @@ Bridge between [mdarray](https://crates.io/crates/mdarray) multidimensional
 arrays and tenferro tensors. Provides `mdarray_to_tensor` and `tensor_to_mdarray`
 conversion functions for bidirectional data exchange between
 `Array<T, DynRank>` and `Tensor<T>`.
+
+<a id="tenferro-dyadtensor"></a>
+### [tenferro-dyadtensor](tenferro_dyadtensor/index.html) <small>(Extension)</small>
+
+Dynamic dyadic tensor API that layers runtime-selected scalar/tensor types,
+structured tensor layouts, and AD-aware operation builders on top of the core
+tenferro crates. It provides the higher-level builder surface used by eager
+einsum and linalg flows, plus dynamic wrappers for forward- and reverse-mode
+execution.

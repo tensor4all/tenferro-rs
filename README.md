@@ -51,12 +51,28 @@ See [`docs/design/`](docs/design/) for architecture and design documents, includ
 - [Architecture](docs/design/architecture.md) — workspace layers, crate dependency graph, device layer
 - [Design Documents](docs/design/README.md) — per-crate API designs (tensor, prims, einsum, algebra, autodiff, etc.)
 
+## AI Workflows
+
+This repository vendors shared agent rules from `template-rs` under `ai/vendor/template-rs/`.
+Project-local PR and agent-asset workflows live in:
+
+- `.claude/commands/createpr.md`
+- `.claude/commands/check-agent-assets.md`
+- `.claude/commands/sync-agent-assets.md`
+- `scripts/create-pr.sh`
+- `scripts/check-agent-assets.sh`
+- `scripts/sync-agent-assets.sh`
+- `.github/workflows/docs.yml`
+- `scripts/build_docs_site.sh`
+- `scripts/check-docs-site.py`
+
 ## Documentation
 
 Generate a unified local docs site (design docs + Rust API docs):
 
 ```bash
-./scripts/build_docs_site.sh
+bash scripts/build_docs_site.sh
+python3 scripts/check-docs-site.py
 ```
 
 Output:
@@ -64,6 +80,8 @@ Output:
 - `target/docs-site/index.html` (top page)
 - `target/docs-site/design/` (formal design docs)
 - `target/docs-site/api/` (`cargo doc --workspace` output)
+
+The shared docs deploy workflow publishes the same `target/docs-site` tree to GitHub Pages on pushes to `main`.
 
 ## Coverage
 
