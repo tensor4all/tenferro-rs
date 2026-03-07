@@ -6,7 +6,7 @@
     },
     "check-agent-assets-script": {
       "path": "scripts/check-agent-assets.sh",
-      "sha256": "1fa29f6fa72eaa81a0b2507eb3a16dd239f2c7355d246532da7071138655c483"
+      "sha256": "da0d4eb54a4b751518b3dae32bf6ba8af454707fcf149467cb5c46dc15d3d66a"
     },
     "check-repo-settings-script": {
       "path": "scripts/check-repo-settings.sh",
@@ -53,8 +53,8 @@
       "sha256": "be53e83a9ba57bd99f9d2fdde48d9c3262ee80e93b1ee802b34231329080e269"
     }
   },
-  "bundle_revision": "303b195",
+  "bundle_revision": "3753909fd2441aa9bb01a20221bf12b0b809566a",
   "source_ref": "main",
   "source_repo": "tensor4all/template-rs",
-  "synced_at": "2026-03-07T20:23:23Z"
+  "synced_at": "2026-03-07T20:30:35Z"
 }

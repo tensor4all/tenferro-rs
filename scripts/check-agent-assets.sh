@@ -93,6 +93,17 @@ for asset_id, info in sorted(data.get("assets", {}).items()):
 PY
 }
 
+revisions_match() {
+  local lhs="$1"
+  local rhs="$2"
+
+  if [[ -z "$lhs" || -z "$rhs" ]]; then
+    return 1
+  fi
+
+  [[ "$lhs" == "$rhs" || "$lhs" == "$rhs"* || "$rhs" == "$lhs"* ]]
+}
+
 fetch_remote_file() {
   gh api "repos/${SOURCE_REPO}/contents/$1?ref=${SOURCE_REF}" --jq .content \
     | python3 -c 'import base64, sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))'
@@ -209,7 +220,7 @@ if [[ ! -f "$LOCK_PATH" ]]; then
 fi
 
 LOCAL_REVISION="$(json_get "$LOCK_PATH" "bundle_revision")"
-if [[ "$LOCAL_REVISION" != "$UPSTREAM_REVISION" ]]; then
+if ! revisions_match "$LOCAL_REVISION" "$UPSTREAM_REVISION"; then
   log "update-available: local=${LOCAL_REVISION} upstream=${UPSTREAM_REVISION}"
   exit 10
 fi
