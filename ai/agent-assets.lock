@@ -1,0 +1,60 @@
+{
+  "assets": {
+    "check-agent-assets-command": {
+      "path": ".claude/commands/check-agent-assets.md",
+      "sha256": "511460d9a4d284513c147a10765e5e135c1a24ad5354f8fc181eb4b49832a977"
+    },
+    "check-agent-assets-script": {
+      "path": "scripts/check-agent-assets.sh",
+      "sha256": "1fa29f6fa72eaa81a0b2507eb3a16dd239f2c7355d246532da7071138655c483"
+    },
+    "check-repo-settings-script": {
+      "path": "scripts/check-repo-settings.sh",
+      "sha256": "314bdf4253dce6293531ed8b613f836f94ee6fe1a859b314a7c510e273c3a953"
+    },
+    "common-agent-rules": {
+      "path": "ai/vendor/template-rs/common-agent-rules.md",
+      "sha256": "4437f421624645329d8584afc06d98ce850cdccc877a78342db653863247f7a4"
+    },
+    "configure-repo-settings-script": {
+      "path": "scripts/configure-repo-settings.sh",
+      "sha256": "31b59af7268ee1d949bd5526727ca116542b43c757570044799425df7c53f5ea"
+    },
+    "create-pr-script": {
+      "path": "scripts/create-pr.sh",
+      "sha256": "abc2871423c72e11f6adfddc2dbf79cfa8f8a9d8e2529a4364d0737555f41ddd"
+    },
+    "createpr-command": {
+      "path": ".claude/commands/createpr.md",
+      "sha256": "207fcce47d243aa879c2398f6e08f8883d59f75f556d24740c396bcdea6d09c2"
+    },
+    "manifest": {
+      "path": "ai/manifest.json",
+      "sha256": "4b30188cb6b972ad439048bab1975a59a5f13095a57967eb71e094c54a2bff22"
+    },
+    "numerical-rust-rules": {
+      "path": "ai/vendor/template-rs/numerical-rust-rules.md",
+      "sha256": "a11fbe4b2d42aa0da7ea1bacb643d2d25a953fe4b7f8b0d81c8689de9227e56e"
+    },
+    "pr-workflow-rules": {
+      "path": "ai/vendor/template-rs/pr-workflow-rules.md",
+      "sha256": "7044e22f1eda44abedf0fa05546d488d6f6bc3ed882061e6d1eb44abe250da57"
+    },
+    "repo-settings": {
+      "path": "ai/repo-settings.json",
+      "sha256": "7b3545d570d7ab49f539ff5abb69061bae482dd5250983f5cbcd02108da20209"
+    },
+    "sync-agent-assets-command": {
+      "path": ".claude/commands/sync-agent-assets.md",
+      "sha256": "46c7102ddb6d9277cd6984750cff05c0d1d04c054f67d12e16466ea1f9a4875b"
+    },
+    "sync-agent-assets-script": {
+      "path": "scripts/sync-agent-assets.sh",
+      "sha256": "be53e83a9ba57bd99f9d2fdde48d9c3262ee80e93b1ee802b34231329080e269"
+    }
+  },
+  "bundle_revision": "303b195",
+  "source_ref": "main",
+  "source_repo": "tensor4all/template-rs",
+  "synced_at": "2026-03-07T20:23:23Z"
+}

@@ -1,0 +1,12 @@
+Create a pull request using the repository-local PR workflow.
+
+Workflow:
+
+1. Re-read `README.md`, `AGENTS.md`, and the referenced `ai/*.md` rule files.
+2. Review docs consistency across `README.md`, `docs/design/**`, and public rustdoc for the current diff.
+3. Confirm the repository still has auto-merge enabled and the required branch protection checks configured.
+4. Draft a concise PR title and body.
+5. Run `bash scripts/create-pr.sh --ai-tool-name "Claude Code" --ai-tool-url "https://claude.com/claude-code" --title "<title>" --body-file <temp-file> "$@"`.
+6. Use `--allow-stale` only when the user explicitly accepts creating a PR with stale or unverified agent assets.
+
+Do not skip the script's verification steps. The script is responsible for freshness checks, formatting, tests, coverage, docs, PR creation, and optional auto-merge.

@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+Before acting, read the vendored shared rules from `template-rs`:
+
+- `ai/vendor/template-rs/common-agent-rules.md`
+- `ai/vendor/template-rs/numerical-rust-rules.md`
+- `ai/vendor/template-rs/pr-workflow-rules.md`
+
+The sections below are tenferro-specific additions and overrides.
+
 ## Current Implementation Status
 
 The workspace contains active implementations alongside evolving APIs. Implementation work is allowed unless a task explicitly says otherwise.
@@ -68,9 +76,9 @@ When a file grows large, split it by functionality (e.g., parsing, plan computat
 For Rust modules, keep production source files focused on production code.
 Do not keep inline `#[cfg(test)]` blocks in normal modules unless the file is a
 genuinely tiny leaf module and the test is trivially small. Prefer
-module-local test directories (`foo/tests/...`) and leave only
+module-local test directories such as `src/<module>/tests/*.rs` and leave only
 `#[cfg(test)] mod tests;` in the source file. Reserve crate-root `tests/` for
-integration tests.
+integration tests. Do not use `include!` to inject test files into modules.
 
 When splitting tests, optimize for keeping AI and human reading context clean:
 a developer reading `src/**` should not need to scroll through large unit-test
@@ -101,6 +109,7 @@ cargo fmt --all --check   # formatting
 cargo test --workspace    # all tests
 cargo llvm-cov --workspace --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
+cargo doc --no-deps
 ```
 
 If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting automatically.
@@ -111,6 +120,7 @@ If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting auto
 - AI-generated PRs must include `Generated with [Claude Code](https://claude.com/claude-code)` in the body
 - Do not include AI-generated analysis reports as standalone files in PRs
 - Enable auto-merge after creating a PR: `gh pr merge --auto --squash --delete-branch`
+- `createpr` must confirm auto-merge remains enabled and the required branch protection checks are still configured
 
 ## Build Commands
 
