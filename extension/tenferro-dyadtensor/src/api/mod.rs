@@ -212,10 +212,11 @@ where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
 {
-    let primal = to_dense_in_ctx(ctx, input.structured_primal())?;
+    let primal =
+        to_dense_in_ctx(ctx, input.structured_primal())?.contiguous(MemoryOrder::ColumnMajor);
     let tangent = if needs_tangent {
         Some(match input.structured_tangent() {
-            Some(tangent) => to_dense_in_ctx(ctx, tangent)?,
+            Some(tangent) => to_dense_in_ctx(ctx, tangent)?.contiguous(MemoryOrder::ColumnMajor),
             None => zero_like(&primal),
         })
     } else {
