@@ -63,6 +63,20 @@ Keep source files **small and focused** — one logical concern per file. Avoid 
 
 When a file grows large, split it by functionality (e.g., parsing, plan computation, execution, public API, AD rules) rather than by arbitrary line count.
 
+### Unit Test Organization
+
+For Rust modules, keep production source files focused on production code.
+Do not keep inline `#[cfg(test)]` blocks in normal modules unless the file is a
+genuinely tiny leaf module and the test is trivially small. Prefer
+module-local test directories (`foo/tests/...`) and leave only
+`#[cfg(test)] mod tests;` in the source file. Reserve crate-root `tests/` for
+integration tests.
+
+When splitting tests, optimize for keeping AI and human reading context clean:
+a developer reading `src/**` should not need to scroll through large unit-test
+blocks to understand the implementation. Prefer splitting larger extracted test
+suites by concern rather than keeping one monolithic test module.
+
 ### ASCII Diagrams
 
 When writing ASCII flow diagrams or box diagrams in documentation or design docs:
