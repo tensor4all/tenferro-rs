@@ -177,7 +177,9 @@ pub(crate) fn compute_diag_plan(subs: &[u32]) -> Result<Option<DiagPlan>, String
 ///   1. Diagonal extraction (if repeated labels in operand)
 ///   2. Pre-reduction (if unique-only axes)
 ///   3. GEMM (always, after steps 1-2 make all labels unique)
-pub(crate) fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
+pub(crate) fn compile_step_plans(
+    tree: &ContractionTree,
+) -> std::result::Result<Vec<StepPlan>, String> {
     let n_inputs = tree.subscripts.inputs.len();
     let size_dict = &tree.size_dict;
 
@@ -195,10 +197,8 @@ pub(crate) fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
             };
 
             // 1. Diagonal extraction for repeated labels
-            let diag_a = compute_diag_plan(subs_a)
-                .expect("3+ way label repetition not supported in binary einsum");
-            let diag_b = compute_diag_plan(subs_b)
-                .expect("3+ way label repetition not supported in binary einsum");
+            let diag_a = compute_diag_plan(subs_a)?;
+            let diag_b = compute_diag_plan(subs_b)?;
 
             let eff_subs_a = diag_a
                 .as_ref()
@@ -277,7 +277,7 @@ pub(crate) fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
 
             let needs_final_permute = canonical_modes.as_slice() != subs_c;
 
-            StepPlan {
+            Ok(StepPlan {
                 diag_a,
                 diag_b,
                 gemm: GemmPlan {
@@ -301,7 +301,7 @@ pub(crate) fn compile_step_plans(tree: &ContractionTree) -> Vec<StepPlan> {
                     a_gemm_shape,
                     b_gemm_shape,
                 },
-            }
+            })
         })
         .collect()
 }

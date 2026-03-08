@@ -69,7 +69,7 @@ pub(crate) fn manual_einsum<T: Scalar>(
         let mut product = T::one();
         for (op_idx, input_subs) in subs.inputs.iter().enumerate() {
             let in_idx: Vec<usize> = input_subs.iter().map(|l| idx[label_to_pos[l]]).collect();
-            product = product * tensor_get(&operands[op_idx], &in_idx);
+            product = product * tensor_get(&operands[op_idx], &in_idx)?;
         }
 
         // Accumulate into output

@@ -32,6 +32,6 @@ fn tensor_get_and_unflatten_index_follow_column_major_order() {
     let t = tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
 
     assert_eq!(unflatten_index(4, &[2, 3]), vec![0, 2]);
-    assert!((tensor_get(&t, &[0, 2]) - 5.0).abs() < 1e-10);
-    assert!((tensor_get(&t, &[1, 1]) - 4.0).abs() < 1e-10);
+    assert!((tensor_get(&t, &[0, 2]).unwrap() - 5.0).abs() < 1e-10);
+    assert!((tensor_get(&t, &[1, 1]).unwrap() - 4.0).abs() < 1e-10);
 }
