@@ -1,4 +1,5 @@
-use std::any::TypeId;
+use std::any::{Any, TypeId};
+use std::cmp::Ordering;
 use std::marker::PhantomData;
 
 #[cfg(feature = "gemm-blas")]
@@ -632,6 +633,19 @@ impl CpuContext {
 pub struct CpuBackend;
 
 impl CpuBackend {
+    fn supports_batched_gemm_type<T: Scalar>() -> bool {
+        let tid = TypeId::of::<T>();
+        tid == TypeId::of::<f32>()
+            || tid == TypeId::of::<f64>()
+            || tid == TypeId::of::<Complex32>()
+            || tid == TypeId::of::<Complex64>()
+    }
+
+    fn supports_ordered_reduce_type<T: Scalar>() -> bool {
+        let tid = TypeId::of::<T>();
+        tid == TypeId::of::<f32>() || tid == TypeId::of::<f64>()
+    }
+
     /// Materialize a lazily-conjugated tensor.
     ///
     /// If `src.is_conjugated()` is `false`, returns a shallow clone.
@@ -690,6 +704,12 @@ impl CpuBackend {
                 // BatchedGemm expects 3 shapes: A, B, C
                 // Layout: [m/k, k/n, batch...] — batch dims are trailing
                 validate_shape_count(shapes, 3, "BatchedGemm")?;
+                if !Self::supports_batched_gemm_type::<T>() {
+                    return Err(Error::InvalidArgument(format!(
+                        "BatchedGemm supports only f32, f64, Complex32, and Complex64 (got {})",
+                        std::any::type_name::<T>()
+                    )));
+                }
                 let expected_a: Vec<usize> = [*m, *k]
                     .iter()
                     .copied()
@@ -726,6 +746,14 @@ impl CpuBackend {
                 validate_shape_count(shapes, 2, "Reduce")?;
                 validate_rank(shapes[0], modes_a.len(), "Reduce input A")?;
                 validate_rank(shapes[1], modes_c.len(), "Reduce output C")?;
+                if matches!(op, ReduceOp::Max | ReduceOp::Min)
+                    && !Self::supports_ordered_reduce_type::<T>()
+                {
+                    return Err(Error::InvalidArgument(format!(
+                        "Reduce Max/Min supports only f32 and f64 on CpuBackend (got {})",
+                        std::any::type_name::<T>()
+                    )));
+                }
                 // reduced_axes = positions in modes_a not present in modes_c
                 let reduced_axes: Vec<usize> = modes_a
                     .iter()
@@ -1578,6 +1606,122 @@ fn execute_reduce_sum<T: Scalar>(
     Ok(())
 }
 
+fn extrema_prefers_candidate<T: Scalar>(candidate: T, current: T, op: ReduceOp) -> Result<bool> {
+    fn compare_ordered<T: PartialOrd>(candidate: &T, current: &T, op: ReduceOp) -> Result<bool> {
+        match candidate.partial_cmp(current) {
+            Some(Ordering::Greater) => Ok(matches!(op, ReduceOp::Max)),
+            Some(Ordering::Less) => Ok(matches!(op, ReduceOp::Min)),
+            Some(Ordering::Equal) => Ok(false),
+            None => Err(Error::InvalidArgument(format!(
+                "Reduce {:?} encountered unordered values (for example NaN)",
+                op
+            ))),
+        }
+    }
+
+    let candidate_any = &candidate as &dyn Any;
+    let current_any = &current as &dyn Any;
+
+    if let (Some(candidate), Some(current)) = (
+        candidate_any.downcast_ref::<f32>(),
+        current_any.downcast_ref::<f32>(),
+    ) {
+        return compare_ordered(candidate, current, op);
+    }
+    if let (Some(candidate), Some(current)) = (
+        candidate_any.downcast_ref::<f64>(),
+        current_any.downcast_ref::<f64>(),
+    ) {
+        return compare_ordered(candidate, current, op);
+    }
+
+    Err(Error::InvalidArgument(format!(
+        "Reduce Max/Min supports only f32 and f64 on CpuBackend (got {})",
+        std::any::type_name::<T>()
+    )))
+}
+
+fn execute_reduce_extrema<T: Scalar>(
+    alpha: T,
+    input: &StridedView<T>,
+    beta: T,
+    output: &mut StridedViewMut<T>,
+    reduced_axes: &[usize],
+    op: ReduceOp,
+) -> Result<()> {
+    let in_dims = input.dims().to_vec();
+    let out_dims = output.dims().to_vec();
+    let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
+    let reduced_total: usize = reduced_dims.iter().product();
+    if reduced_total == 0 {
+        return Err(Error::InvalidArgument(format!(
+            "Reduce {:?} requires a non-empty reduction domain",
+            op
+        )));
+    }
+
+    let mut red_idx = vec![0usize; reduced_dims.len()];
+    let mut in_idx = vec![0usize; in_dims.len()];
+    let mut error = None;
+
+    for_each_index(&out_dims, |out_idx| {
+        if error.is_some() {
+            return;
+        }
+
+        let mut best = None;
+        for red_flat in 0..reduced_total {
+            unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
+            let mut out_pos = 0;
+            let mut red_pos = 0;
+            for (ax, in_slot) in in_idx.iter_mut().enumerate().take(in_dims.len()) {
+                if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
+                    *in_slot = red_idx[red_pos];
+                    red_pos += 1;
+                } else {
+                    *in_slot = out_idx[out_pos];
+                    out_pos += 1;
+                }
+            }
+
+            let candidate = input.get(&in_idx);
+            match best {
+                None => best = Some(candidate),
+                Some(current) => match extrema_prefers_candidate(candidate, current, op) {
+                    Ok(true) => best = Some(candidate),
+                    Ok(false) => best = Some(current),
+                    Err(err) => {
+                        error = Some(err);
+                        return;
+                    }
+                },
+            }
+        }
+
+        let best = match best {
+            Some(best) => best,
+            None => {
+                error = Some(Error::InvalidArgument(format!(
+                    "Reduce {:?} requires a non-empty reduction domain",
+                    op
+                )));
+                return;
+            }
+        };
+        let old = if beta == T::zero() {
+            T::zero()
+        } else {
+            beta * output.get(out_idx)
+        };
+        output.set(out_idx, alpha * best + old);
+    });
+
+    if let Some(err) = error {
+        return Err(err);
+    }
+    Ok(())
+}
+
 /// Unflatten a linear index into a pre-allocated buffer (column-major).
 fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
     debug_assert!(
@@ -2032,17 +2176,26 @@ fn execute_contract<T: Scalar>(
         return Ok(done);
     }
 
-    // Determine contracted modes: in both A and B but not in C
-    let contracted_modes: Vec<u32> = modes_a
-        .iter()
-        .filter(|m| modes_b.contains(m) && !modes_c.contains(m))
-        .copied()
-        .collect();
+    // Determine reduction modes: any mode absent from C is summed over, whether it
+    // appears in both inputs or only in one operand.
+    let mut contracted_modes = Vec::new();
+    for &mode in modes_a.iter().chain(modes_b.iter()) {
+        if !modes_c.contains(&mode) && !contracted_modes.contains(&mode) {
+            contracted_modes.push(mode);
+        }
+    }
     let contracted_dims: Vec<usize> = contracted_modes
         .iter()
         .map(|&m| {
-            let a_pos = modes_a.iter().position(|&mm| mm == m).unwrap();
-            a.dims()[a_pos]
+            if let Some(a_pos) = modes_a.iter().position(|&mm| mm == m) {
+                a.dims()[a_pos]
+            } else {
+                let b_pos = modes_b
+                    .iter()
+                    .position(|&mm| mm == m)
+                    .expect("contracted mode must appear in at least one operand");
+                b.dims()[b_pos]
+            }
         })
         .collect();
     let contracted_total: usize = if contracted_dims.is_empty() {
@@ -2052,7 +2205,7 @@ fn execute_contract<T: Scalar>(
     };
 
     // Precompute where each A/B axis value comes from in the inner loop.
-    // 0 => from output index (c_idx), 1 => from contracted index (k_idx), 2 => constant 0
+    // 0 => from output index (c_idx), 1 => from contracted index (k_idx)
     let a_axis_map: Vec<(u8, usize)> = modes_a
         .iter()
         .map(|&mode| {
@@ -2061,8 +2214,7 @@ fn execute_contract<T: Scalar>(
             } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
                 (1, k_pos)
             } else {
-                // Keep legacy behavior: modes that are only in A are fixed at index 0.
-                (2, 0)
+                unreachable!("every A-only mode absent from C must be reduced")
             }
         })
         .collect();
@@ -2074,8 +2226,7 @@ fn execute_contract<T: Scalar>(
             } else if let Some(k_pos) = contracted_modes.iter().position(|&m| m == mode) {
                 (1, k_pos)
             } else {
-                // Keep legacy behavior: modes that are only in B are fixed at index 0.
-                (2, 0)
+                unreachable!("every B-only mode absent from C must be reduced")
             }
         })
         .collect();
@@ -2112,14 +2263,14 @@ fn execute_contract<T: Scalar>(
                 a_idx[ax] = match src {
                     0 => c_idx[pos],
                     1 => k_idx[pos],
-                    _ => 0,
+                    _ => unreachable!("contract axis source must be output or reduction index"),
                 };
             }
             for (ax, &(src, pos)) in b_axis_map.iter().enumerate() {
                 b_idx[ax] = match src {
                     0 => c_idx[pos],
                     1 => k_idx[pos],
-                    _ => 0,
+                    _ => unreachable!("contract axis source must be output or reduction index"),
                 };
             }
             sum = sum + a.get(&a_idx) * b.get(&b_idx);
@@ -2666,9 +2817,14 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
                     ReduceOp::Sum => {
                         execute_reduce_sum(alpha, view_refs[0], beta, &mut out_view, reduced_axes)
                     }
-                    ReduceOp::Max | ReduceOp::Min => Err(Error::InvalidArgument(
-                        "Max/Min reduction requires PartialOrd, not available via Scalar".into(),
-                    )),
+                    ReduceOp::Max | ReduceOp::Min => execute_reduce_extrema(
+                        alpha,
+                        view_refs[0],
+                        beta,
+                        &mut out_view,
+                        reduced_axes,
+                        *op,
+                    ),
                 }
             }
 

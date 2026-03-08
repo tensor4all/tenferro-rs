@@ -2,7 +2,7 @@ use chainrules_scalarops::{self, ScalarAd};
 use core::fmt;
 use core::ops::{Add, Div, Mul, Neg, Sub};
 use num_complex::{Complex32, Complex64};
-use num_traits::{One, Zero};
+use num_traits::Zero;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -1055,6 +1055,9 @@ impl From<Tensor<Complex64>> for DynTensor {
 
 /// Runtime AD scalar value wrapper.
 ///
+/// Binary operator overloads (`+`, `-`, `*`, `/`) are fallible and return
+/// [`Result`] so mixed reverse-tape validation follows the checked API.
+///
 /// # Examples
 ///
 /// ```rust
@@ -1110,14 +1113,14 @@ fn apply_binary_ad<T: ScalarAd + 'static>(
     lhs: AdValue<T>,
     rhs: AdValue<T>,
     op: BinaryOp,
-) -> AdValue<T> {
+) -> Result<AdValue<T>> {
     let lhs = AdScalar::from(lhs);
     let rhs = AdScalar::from(rhs);
     match op {
-        BinaryOp::Add => (lhs + rhs).into_value(),
-        BinaryOp::Sub => (lhs - rhs).into_value(),
-        BinaryOp::Mul => (lhs * rhs).into_value(),
-        BinaryOp::Div => (lhs / rhs).into_value(),
+        BinaryOp::Add => (lhs + rhs).map(AdScalar::into_value),
+        BinaryOp::Sub => (lhs - rhs).map(AdScalar::into_value),
+        BinaryOp::Mul => (lhs * rhs).map(AdScalar::into_value),
+        BinaryOp::Div => (lhs / rhs).map(AdScalar::into_value),
     }
 }
 
@@ -1145,7 +1148,7 @@ fn checked_apply_binary_ad<T: ScalarAd + 'static>(
     op: BinaryOp,
 ) -> Result<AdValue<T>> {
     check_reverse_tape_compatibility(&lhs, &rhs, op)?;
-    Ok(apply_binary_ad(lhs, rhs, op))
+    apply_binary_ad(lhs, rhs, op)
 }
 
 fn unsupported_binary_pair(op: BinaryOp, lhs: ScalarType, rhs: ScalarType) -> Error {
@@ -1749,38 +1752,34 @@ impl From<Complex64> for DynAdScalar {
 }
 
 impl Add for DynAdScalar {
-    type Output = DynAdScalar;
+    type Output = Result<DynAdScalar>;
 
     fn add(self, rhs: Self) -> Self::Output {
         self.try_add(rhs)
-            .unwrap_or_else(|e| panic!("DynAdScalar add failed: {e}"))
     }
 }
 
 impl Sub for DynAdScalar {
-    type Output = DynAdScalar;
+    type Output = Result<DynAdScalar>;
 
     fn sub(self, rhs: Self) -> Self::Output {
         self.try_sub(rhs)
-            .unwrap_or_else(|e| panic!("DynAdScalar sub failed: {e}"))
     }
 }
 
 impl Mul for DynAdScalar {
-    type Output = DynAdScalar;
+    type Output = Result<DynAdScalar>;
 
     fn mul(self, rhs: Self) -> Self::Output {
         self.try_mul(rhs)
-            .unwrap_or_else(|e| panic!("DynAdScalar mul failed: {e}"))
     }
 }
 
 impl Div for DynAdScalar {
-    type Output = DynAdScalar;
+    type Output = Result<DynAdScalar>;
 
     fn div(self, rhs: Self) -> Self::Output {
         self.try_div(rhs)
-            .unwrap_or_else(|e| panic!("DynAdScalar div failed: {e}"))
     }
 }
 
@@ -1800,7 +1799,7 @@ impl Neg for DynAdScalar {
 macro_rules! impl_dynadvalue_scalar_binop {
     ($trait:ident, $method:ident, $scalar:ty) => {
         impl $trait<$scalar> for DynAdScalar {
-            type Output = DynAdScalar;
+            type Output = Result<DynAdScalar>;
 
             fn $method(self, rhs: $scalar) -> Self::Output {
                 $trait::$method(self, DynAdScalar::from(rhs))
@@ -1808,7 +1807,7 @@ macro_rules! impl_dynadvalue_scalar_binop {
         }
 
         impl $trait<DynAdScalar> for $scalar {
-            type Output = DynAdScalar;
+            type Output = Result<DynAdScalar>;
 
             fn $method(self, rhs: DynAdScalar) -> Self::Output {
                 $trait::$method(DynAdScalar::from(self), rhs)
@@ -1865,22 +1864,6 @@ impl From<DynAdScalar> for Complex64 {
 impl Default for DynAdScalar {
     fn default() -> Self {
         Self::new_real(0.0)
-    }
-}
-
-impl Zero for DynAdScalar {
-    fn zero() -> Self {
-        Self::new_real(0.0)
-    }
-
-    fn is_zero(&self) -> bool {
-        DynAdScalar::is_zero(self)
-    }
-}
-
-impl One for DynAdScalar {
-    fn one() -> Self {
-        Self::new_real(1.0)
     }
 }
 

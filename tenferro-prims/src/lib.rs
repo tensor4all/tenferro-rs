@@ -43,6 +43,10 @@
 //!
 //! Example (runtime-injected provider):
 //! `cargo test -p tenferro-prims --no-default-features --features "gemm-blas,provider-inject"`
+//!
+//! On [`CpuBackend`], [`PrimDescriptor::BatchedGemm`] supports `f32`, `f64`,
+//! `Complex32`, and `Complex64`. [`ReduceOp::Max`] and [`ReduceOp::Min`]
+//! require ordered real scalars (`f32` or `f64`).
 
 //! # Algebra parameterization
 //!
@@ -323,6 +327,9 @@ pub enum PrimDescriptor {
     /// Batched matrix multiplication.
     ///
     /// `C[batch, m, n] = alpha * A[batch, m, k] * B[batch, k, n] + beta * C`
+    ///
+    /// On [`CpuBackend`], this descriptor currently supports `f32`, `f64`,
+    /// `Complex32`, and `Complex64`.
     BatchedGemm {
         /// Batch dimension sizes.
         batch_dims: Vec<usize>,
@@ -337,6 +344,9 @@ pub enum PrimDescriptor {
     /// Reduction over modes not present in the output.
     ///
     /// `C[modes_c] = alpha * reduce_op(A[modes_a]) + beta * C[modes_c]`
+    ///
+    /// On [`CpuBackend`], [`ReduceOp::Sum`] is generic over all scalar types.
+    /// [`ReduceOp::Max`] and [`ReduceOp::Min`] require `f32` or `f64`.
     Reduce {
         /// Mode labels for input tensor A.
         modes_a: Vec<u32>,

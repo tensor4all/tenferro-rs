@@ -459,22 +459,52 @@ fn reduce_sum_full() {
 }
 
 #[test]
-fn reduce_max_returns_error() {
+fn reduce_max_f64_executes() {
     let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] as f64) - (idx[1] as f64));
+    let mut c = tensor_zeros::<f64>(&[3]);
     let desc = PrimDescriptor::Reduce {
         modes_a: vec![0, 1],
         modes_c: vec![0],
         op: ReduceOp::Max,
     };
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
-    let a = tensor_zeros::<f64>(&[3, 4]);
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
+
+    for i in 0..3 {
+        let expected = (0..4)
+            .map(|j| tensor_get(&a, &[i, j]))
+            .fold(f64::NEG_INFINITY, f64::max);
+        assert!(
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            tensor_get(&c, &[i])
+        );
+    }
+}
+
+#[test]
+fn reduce_min_f64_executes() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] as f64) - (idx[1] as f64));
     let mut c = tensor_zeros::<f64>(&[3]);
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c);
-    match result {
-        Err(tenferro_device::Error::InvalidArgument(msg)) => {
-            assert!(msg.contains("Max"), "error should mention Max, got: {msg}");
-        }
-        other => panic!("expected InvalidArgument about Max, got: {other:?}"),
+    let desc = PrimDescriptor::Reduce {
+        modes_a: vec![0, 1],
+        modes_c: vec![0],
+        op: ReduceOp::Min,
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
+
+    for i in 0..3 {
+        let expected = (0..4)
+            .map(|j| tensor_get(&a, &[i, j]))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            tensor_get(&c, &[i])
+        );
     }
 }
 
@@ -611,16 +641,47 @@ fn contract_generic_fallback_with_a_only_mode() {
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 2], &[2]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
-    // Mode 0 appears only in A, so the generic fallback keeps that axis fixed at 0.
     for j in 0..2 {
         let mut expected = 0.0;
-        for k in 0..4 {
-            expected += tensor_get(&a, &[0, k]) * tensor_get(&b, &[k, j]);
+        for i in 0..3 {
+            for k in 0..4 {
+                expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+            }
         }
         assert!(
             (tensor_get(&c, &[j]) - expected).abs() < 1e-10,
             "C[{j}] = {}, expected {expected}",
             tensor_get(&c, &[j])
+        );
+    }
+}
+
+#[test]
+fn contract_generic_fallback_with_b_only_mode() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
+    let b = tensor_from_fn(&[4, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[3]);
+
+    let desc = PrimDescriptor::Contract {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 2],
+        modes_c: vec![0],
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 2], &[3]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
+
+    for i in 0..3 {
+        let mut expected = 0.0;
+        for k in 0..4 {
+            for j in 0..2 {
+                expected += tensor_get(&a, &[i, k]) * tensor_get(&b, &[k, j]);
+            }
+        }
+        assert!(
+            (tensor_get(&c, &[i]) - expected).abs() < 1e-10,
+            "C[{i}] = {}, expected {expected}",
+            tensor_get(&c, &[i])
         );
     }
 }
@@ -1336,6 +1397,43 @@ fn plan_batched_gemm_shape_mismatch() {
         matches!(err, tenferro_device::Error::ShapeMismatch { .. }),
         "expected ShapeMismatch, got: {err:?}"
     );
+}
+
+#[test]
+fn plan_batched_gemm_rejects_unsupported_scalar_type() {
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::BatchedGemm {
+        batch_dims: vec![],
+        m: 2,
+        n: 3,
+        k: 4,
+    };
+    let err = cpu_plan::<i32>(&mut ctx, &desc, &[&[2, 4], &[4, 3], &[2, 3]]).unwrap_err();
+    match err {
+        tenferro_device::Error::InvalidArgument(msg) => {
+            assert!(msg.contains("BatchedGemm supports only f32, f64, Complex32, and Complex64"));
+        }
+        other => panic!("expected InvalidArgument, got: {other:?}"),
+    }
+}
+
+#[test]
+fn plan_reduce_max_rejects_unsupported_scalar_type() {
+    use num_complex::Complex64;
+
+    let mut ctx = CpuContext::new(1);
+    let desc = PrimDescriptor::Reduce {
+        modes_a: vec![0, 1],
+        modes_c: vec![0],
+        op: ReduceOp::Max,
+    };
+    let err = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap_err();
+    match err {
+        tenferro_device::Error::InvalidArgument(msg) => {
+            assert!(msg.contains("Reduce Max/Min supports only f32 and f64"));
+        }
+        other => panic!("expected InvalidArgument, got: {other:?}"),
+    }
 }
 
 #[test]

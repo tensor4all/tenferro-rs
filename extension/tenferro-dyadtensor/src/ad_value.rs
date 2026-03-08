@@ -287,6 +287,10 @@ impl<T> From<T> for AdValue<T> {
 
 /// Scalar newtype carrying AD mode information.
 ///
+/// Binary operator overloads (`+`, `-`, `*`, `/`) are fallible and return
+/// [`Result`] so mixed reverse-tape validation is reported as a recoverable
+/// error instead of panicking.
+///
 /// # Examples
 ///
 /// ```rust
@@ -805,18 +809,6 @@ fn binary_ad_scalar_try_op<T: scalarops::ScalarAd + 'static>(
     }
 }
 
-fn binary_ad_scalar_op<T: scalarops::ScalarAd + 'static>(
-    lhs: AdScalar<T>,
-    rhs: AdScalar<T>,
-    op_name: &'static str,
-    primal_rule: fn(T, T) -> T,
-    frule: fn(T, T, T, T) -> (T, T),
-    rrule: fn(T, T, T) -> (T, T),
-) -> AdScalar<T> {
-    binary_ad_scalar_try_op(lhs, rhs, op_name, primal_rule, frule, rrule)
-        .unwrap_or_else(|e| panic!("{op_name}: {e}"))
-}
-
 impl<T> AdScalar<T>
 where
     T: scalarops::ScalarAd + 'static,
@@ -874,17 +866,10 @@ impl<T> Add for AdScalar<T>
 where
     T: scalarops::ScalarAd + 'static,
 {
-    type Output = Self;
+    type Output = Result<Self>;
 
     fn add(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(
-            self,
-            rhs,
-            "add",
-            scalarops::add,
-            scalarops::add_frule,
-            add_rrule_wrapped,
-        )
+        self.try_add(rhs)
     }
 }
 
@@ -892,17 +877,10 @@ impl<T> Sub for AdScalar<T>
 where
     T: scalarops::ScalarAd + 'static,
 {
-    type Output = Self;
+    type Output = Result<Self>;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(
-            self,
-            rhs,
-            "sub",
-            scalarops::sub,
-            scalarops::sub_frule,
-            sub_rrule_wrapped,
-        )
+        self.try_sub(rhs)
     }
 }
 
@@ -910,17 +888,10 @@ impl<T> Mul for AdScalar<T>
 where
     T: scalarops::ScalarAd + 'static,
 {
-    type Output = Self;
+    type Output = Result<Self>;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(
-            self,
-            rhs,
-            "mul",
-            scalarops::mul,
-            scalarops::mul_frule,
-            mul_rrule_wrapped,
-        )
+        self.try_mul(rhs)
     }
 }
 
@@ -928,17 +899,10 @@ impl<T> Div for AdScalar<T>
 where
     T: scalarops::ScalarAd + 'static,
 {
-    type Output = Self;
+    type Output = Result<Self>;
 
     fn div(self, rhs: Self) -> Self::Output {
-        binary_ad_scalar_op(
-            self,
-            rhs,
-            "div",
-            scalarops::div,
-            scalarops::div_frule,
-            div_rrule_wrapped,
-        )
+        self.try_div(rhs)
     }
 }
 
