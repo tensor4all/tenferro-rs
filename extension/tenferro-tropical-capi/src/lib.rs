@@ -57,8 +57,62 @@
 #![allow(non_camel_case_types)]
 
 use std::os::raw::c_char;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use tenferro_capi::{tfe_status_t, TfeTensorF64};
+use tenferro_capi::{
+    tfe_status_t, TfeTensorF64, TFE_INTERNAL_ERROR, TFE_INVALID_ARGUMENT, TFE_SUCCESS,
+};
+
+/// Finalize a `catch_unwind` result for functions returning a pointer via status.
+unsafe fn finalize_ptr(
+    result: std::thread::Result<std::result::Result<*mut TfeTensorF64, tfe_status_t>>,
+    status: *mut tfe_status_t,
+) -> *mut TfeTensorF64 {
+    match result {
+        Ok(Ok(ptr)) => {
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
+            ptr
+        }
+        Ok(Err(code)) => {
+            if !status.is_null() {
+                *status = code;
+            }
+            std::ptr::null_mut()
+        }
+        Err(_panic) => {
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
+            std::ptr::null_mut()
+        }
+    }
+}
+
+/// Finalize a `catch_unwind` result for functions returning void via status.
+unsafe fn finalize_void(
+    result: std::thread::Result<std::result::Result<(), tfe_status_t>>,
+    status: *mut tfe_status_t,
+) {
+    match result {
+        Ok(Ok(())) => {
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
+        }
+        Ok(Err(code)) => {
+            if !status.is_null() {
+                *status = code;
+            }
+        }
+        Err(_panic) => {
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
+        }
+    }
+}
 
 // ============================================================================
 // MaxPlus einsum
@@ -90,12 +144,20 @@ use tenferro_capi::{tfe_status_t, TfeTensorF64};
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_maxplus_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
     _num_operands: usize,
-    _status: *mut tfe_status_t,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
+            if subscripts.is_null() || operands.is_null() {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_ptr(result, status)
 }
 
 /// Reverse-mode rule (VJP) for MaxPlus tropical einsum.
@@ -125,14 +187,26 @@ pub unsafe extern "C" fn tfe_tropical_einsum_maxplus_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxplus_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
     _num_operands: usize,
-    _cotangent: *const TfeTensorF64,
-    _grads_out: *mut *mut TfeTensorF64,
-    _status: *mut tfe_status_t,
+    cotangent: *const TfeTensorF64,
+    grads_out: *mut *mut TfeTensorF64,
+    status: *mut tfe_status_t,
 ) {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<(), tfe_status_t> {
+            if subscripts.is_null()
+                || operands.is_null()
+                || cotangent.is_null()
+                || grads_out.is_null()
+            {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_void(result, status)
 }
 
 /// Forward-mode rule (JVP) for MaxPlus tropical einsum.
@@ -160,13 +234,21 @@ pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxplus_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_frule_maxplus_f64(
-    _subscripts: *const c_char,
-    _primals: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    primals: *const *const TfeTensorF64,
     _num_operands: usize,
-    _tangents: *const *const TfeTensorF64,
-    _status: *mut tfe_status_t,
+    tangents: *const *const TfeTensorF64,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
+            if subscripts.is_null() || primals.is_null() || tangents.is_null() {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_ptr(result, status)
 }
 
 // ============================================================================
@@ -193,12 +275,20 @@ pub unsafe extern "C" fn tfe_tropical_einsum_frule_maxplus_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_minplus_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
     _num_operands: usize,
-    _status: *mut tfe_status_t,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
+            if subscripts.is_null() || operands.is_null() {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_ptr(result, status)
 }
 
 /// Reverse-mode rule (VJP) for MinPlus tropical einsum.
@@ -208,14 +298,26 @@ pub unsafe extern "C" fn tfe_tropical_einsum_minplus_f64(
 /// Same as [`tfe_tropical_einsum_rrule_maxplus_f64`].
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_rrule_minplus_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
     _num_operands: usize,
-    _cotangent: *const TfeTensorF64,
-    _grads_out: *mut *mut TfeTensorF64,
-    _status: *mut tfe_status_t,
+    cotangent: *const TfeTensorF64,
+    grads_out: *mut *mut TfeTensorF64,
+    status: *mut tfe_status_t,
 ) {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<(), tfe_status_t> {
+            if subscripts.is_null()
+                || operands.is_null()
+                || cotangent.is_null()
+                || grads_out.is_null()
+            {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_void(result, status)
 }
 
 /// Forward-mode rule (JVP) for MinPlus tropical einsum.
@@ -225,13 +327,21 @@ pub unsafe extern "C" fn tfe_tropical_einsum_rrule_minplus_f64(
 /// Same as [`tfe_tropical_einsum_frule_maxplus_f64`].
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_frule_minplus_f64(
-    _subscripts: *const c_char,
-    _primals: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    primals: *const *const TfeTensorF64,
     _num_operands: usize,
-    _tangents: *const *const TfeTensorF64,
-    _status: *mut tfe_status_t,
+    tangents: *const *const TfeTensorF64,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
+            if subscripts.is_null() || primals.is_null() || tangents.is_null() {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_ptr(result, status)
 }
 
 // ============================================================================
@@ -258,12 +368,20 @@ pub unsafe extern "C" fn tfe_tropical_einsum_frule_minplus_f64(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_maxmul_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
     _num_operands: usize,
-    _status: *mut tfe_status_t,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
+            if subscripts.is_null() || operands.is_null() {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_ptr(result, status)
 }
 
 /// Reverse-mode rule (VJP) for MaxMul tropical einsum.
@@ -273,14 +391,26 @@ pub unsafe extern "C" fn tfe_tropical_einsum_maxmul_f64(
 /// Same as [`tfe_tropical_einsum_rrule_maxplus_f64`].
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxmul_f64(
-    _subscripts: *const c_char,
-    _operands: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
     _num_operands: usize,
-    _cotangent: *const TfeTensorF64,
-    _grads_out: *mut *mut TfeTensorF64,
-    _status: *mut tfe_status_t,
+    cotangent: *const TfeTensorF64,
+    grads_out: *mut *mut TfeTensorF64,
+    status: *mut tfe_status_t,
 ) {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<(), tfe_status_t> {
+            if subscripts.is_null()
+                || operands.is_null()
+                || cotangent.is_null()
+                || grads_out.is_null()
+            {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_void(result, status)
 }
 
 /// Forward-mode rule (JVP) for MaxMul tropical einsum.
@@ -290,11 +420,19 @@ pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxmul_f64(
 /// Same as [`tfe_tropical_einsum_frule_maxplus_f64`].
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tropical_einsum_frule_maxmul_f64(
-    _subscripts: *const c_char,
-    _primals: *const *const TfeTensorF64,
+    subscripts: *const c_char,
+    primals: *const *const TfeTensorF64,
     _num_operands: usize,
-    _tangents: *const *const TfeTensorF64,
-    _status: *mut tfe_status_t,
+    tangents: *const *const TfeTensorF64,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
+            if subscripts.is_null() || primals.is_null() || tangents.is_null() {
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            Err(TFE_INVALID_ARGUMENT)
+        },
+    ));
+    finalize_ptr(result, status)
 }
