@@ -15,8 +15,8 @@ fn assert_tensor_close(lhs: &Tensor<f64>, rhs: &Tensor<f64>) {
     let numel: usize = lhs.dims().iter().product();
     for flat in 0..numel {
         let idx = unflatten_index(flat, lhs.dims());
-        let l = tensor_get(lhs, &idx);
-        let r = tensor_get(rhs, &idx);
+        let l = tensor_get(lhs, &idx).unwrap();
+        let r = tensor_get(rhs, &idx).unwrap();
         assert!(
             (l - r).abs() < 1e-10,
             "mismatch at {:?}: left={} right={}",
@@ -136,10 +136,10 @@ fn permute_or_copy_transpose_materializes_contiguous_copy() {
 
     assert_eq!(prepared.dims(), &[3, 2]);
     assert!(prepared.is_contiguous());
-    assert!((tensor_get(&prepared, &[0, 0]) - 1.0).abs() < 1e-10);
-    assert!((tensor_get(&prepared, &[1, 0]) - 3.0).abs() < 1e-10);
-    assert!((tensor_get(&prepared, &[2, 0]) - 5.0).abs() < 1e-10);
-    assert!((tensor_get(&prepared, &[0, 1]) - 2.0).abs() < 1e-10);
+    assert!((tensor_get(&prepared, &[0, 0]).unwrap() - 1.0).abs() < 1e-10);
+    assert!((tensor_get(&prepared, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
+    assert!((tensor_get(&prepared, &[2, 0]).unwrap() - 5.0).abs() < 1e-10);
+    assert!((tensor_get(&prepared, &[0, 1]).unwrap() - 2.0).abs() < 1e-10);
 }
 
 #[test]
@@ -178,7 +178,7 @@ fn make_contiguous_if_needed_copies_only_when_required() {
         copied.logical_memory_space(),
         LogicalMemorySpace::MainMemory
     );
-    assert!((tensor_get(&copied, &[0, 0]) - 1.0).abs() < 1e-10);
-    assert!((tensor_get(&copied, &[1, 0]) - 3.0).abs() < 1e-10);
-    assert!((tensor_get(&copied, &[0, 1]) - 2.0).abs() < 1e-10);
+    assert!((tensor_get(&copied, &[0, 0]).unwrap() - 1.0).abs() < 1e-10);
+    assert!((tensor_get(&copied, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
+    assert!((tensor_get(&copied, &[0, 1]).unwrap() - 2.0).abs() < 1e-10);
 }
