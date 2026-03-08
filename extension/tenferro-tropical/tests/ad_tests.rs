@@ -65,10 +65,7 @@ fn promote_extract_roundtrip_preserves_non_contiguous_view_order() {
     let tropical = promote_to_tropical::<MaxPlus<f64>>(&view).unwrap();
     let back = extract_inner::<MaxPlus<f64>>(&tropical).unwrap();
     let contiguous = view.contiguous(MemoryOrder::ColumnMajor);
-    let expected = contiguous
-        .buffer()
-        .as_slice()
-        .unwrap();
+    let expected = contiguous.buffer().as_slice().unwrap();
     assert_eq!(back.buffer().as_slice().unwrap(), expected);
 }
 
@@ -813,7 +810,9 @@ fn rrule_rejects_cotangent_shape_mismatch() {
         tenferro_prims::CpuBackend,
     >(&mut ctx, "ij,jk->ik", &[&a, &b], &bad_cotangent);
 
-    assert!(matches!(result, Err(Error::InvalidArgument(message)) if message.contains("cotangent")));
+    assert!(
+        matches!(result, Err(Error::InvalidArgument(message)) if message.contains("cotangent"))
+    );
 }
 
 #[test]

@@ -58,9 +58,12 @@ fn tensor_value_at<T: Scalar>(tensor: &Tensor<T>, indices: &[usize]) -> Result<T
         });
     }
 
-    let data = tensor.buffer().as_slice().ok_or_else(|| Error::InvalidAdTensor {
-        message: "reverse cotangent normalization requires CPU-backed tensors".to_string(),
-    })?;
+    let data = tensor
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| Error::InvalidAdTensor {
+            message: "reverse cotangent normalization requires CPU-backed tensors".to_string(),
+        })?;
 
     let mut offset = tensor.offset();
     for (axis, &idx) in indices.iter().enumerate() {

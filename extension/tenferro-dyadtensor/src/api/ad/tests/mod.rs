@@ -1,7 +1,9 @@
 use num_complex::Complex64;
 
 use super::*;
-use crate::{AdScalar, AdValue, DynAdScalar, DynAdTensor, NodeId, RuntimeContext, StructuredTensor, TapeId};
+use crate::{
+    AdScalar, AdValue, DynAdScalar, DynAdTensor, NodeId, RuntimeContext, StructuredTensor, TapeId,
+};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -1635,12 +1637,18 @@ fn structured_reverse_pullback_accepts_dense_cotangent() {
 
     let all_grads = pullback(y, &dense_cotangent).unwrap();
     assert_eq!(
-        tensor_to_vec_f64(all_grads.get(&node_x).expect("missing reverse payload gradient")),
+        tensor_to_vec_f64(
+            all_grads
+                .get(&node_x)
+                .expect("missing reverse payload gradient")
+        ),
         vec![2.0, 2.0]
     );
 
     let wrt_tensor = pullback_wrt(y, &dense_cotangent, &[&x]).unwrap();
-    let grad_x = wrt_tensor[0].as_ref().expect("missing structured wrt gradient");
+    let grad_x = wrt_tensor[0]
+        .as_ref()
+        .expect("missing structured wrt gradient");
     assert_eq!(tensor_to_vec_f64(grad_x), vec![2.0, 2.0]);
     assert_eq!(grad_x.axis_classes(), &[0, 0]);
 
@@ -1658,8 +1666,7 @@ fn reshape_reverse_pullback_accepts_non_contiguous_cotangent_view() {
 
     let base = Tensor::<f64>::from_slice(
         &[
-            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-            16.0,
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
         &[4, 4],
         MemoryOrder::ColumnMajor,
@@ -1671,12 +1678,7 @@ fn reshape_reverse_pullback_accepts_non_contiguous_cotangent_view() {
         .reshape(&[2, 2])
         .unwrap();
 
-    let grads = pullback_wrt(
-        reshaped,
-        &AdTensor::new_primal(cotangent_view),
-        &[&x],
-    )
-    .unwrap();
+    let grads = pullback_wrt(reshaped, &AdTensor::new_primal(cotangent_view), &[&x]).unwrap();
     let grad_x = grads[0].as_ref().expect("missing reshape gradient");
     assert_eq!(tensor_to_vec_f64(grad_x), tensor_to_vec_f64(&expected));
 }

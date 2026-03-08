@@ -607,7 +607,10 @@ fn einsum_with_path_rejects_structurally_invalid_paths() {
     for (pairs, desc) in invalid_paths {
         let with_path =
             einsum_with_path::<S, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None);
-        assert!(with_path.is_err(), "{desc} must be rejected by einsum_with_path");
+        assert!(
+            with_path.is_err(),
+            "{desc} must be rejected by einsum_with_path"
+        );
 
         let mut out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
         let with_path_into = einsum_with_path_into::<S, CpuBackend>(
