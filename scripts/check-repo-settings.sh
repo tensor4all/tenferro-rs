@@ -21,6 +21,12 @@ log() {
   printf '%s\n' "$*"
 }
 
+gh_api_optional() {
+  local output
+  if output="$(gh api "$@" 2>/dev/null)"; then
+    printf '%s\n' "$output"
+  fi
+}
 resolve_settings_path() {
   if [[ "$SETTINGS_PATH" == "ai/repo-settings.json" && -f "ai/repo-settings.local.json" ]]; then
     printf '%s\n' "ai/repo-settings.local.json"
@@ -53,6 +59,24 @@ print(data)
 PY
 }
 
+json_get_optional() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+
+path, key, default = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+for part in key.split("."):
+    if not isinstance(data, dict) or part not in data:
+        print(default)
+        raise SystemExit(0)
+    data = data[part]
+if isinstance(data, (dict, list)):
+    raise SystemExit(f"key {key} does not resolve to a scalar")
+print(data)
+PY
+}
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo)
@@ -94,21 +118,35 @@ DEFAULT_BRANCH="$(json_get "$SETTINGS_PATH" "default_branch")"
 EXPECTED_AUTO_MERGE="$(json_get "$SETTINGS_PATH" "allow_auto_merge")"
 EXPECTED_DELETE_BRANCH="$(json_get "$SETTINGS_PATH" "delete_branch_on_merge")"
 EXPECTED_STRICT="$(json_get "$SETTINGS_PATH" "required_status_checks.strict")"
+EXPECTED_PAGES_ENABLED="$(json_get_optional "$SETTINGS_PATH" "pages.enabled" "False")"
+EXPECTED_PAGES_BUILD_TYPE="$(json_get_optional "$SETTINGS_PATH" "pages.build_type" "")"
 
 REPO_JSON="$(gh api "repos/$REPO")"
-PROTECTION_JSON="$(gh api "repos/$REPO/branches/$DEFAULT_BRANCH/protection" 2>/dev/null || true)"
+PROTECTION_JSON="$(gh_api_optional "repos/$REPO/branches/$DEFAULT_BRANCH/protection")"
+PAGES_JSON="$(gh_api_optional "repos/$REPO/pages")"
 
-python3 - "$SETTINGS_PATH" "$REPO_JSON" "$PROTECTION_JSON" "$EXPECTED_AUTO_MERGE" "$EXPECTED_DELETE_BRANCH" "$EXPECTED_STRICT" <<'PY'
+python3 - "$SETTINGS_PATH" "$REPO_JSON" "$PROTECTION_JSON" "$PAGES_JSON" "$EXPECTED_AUTO_MERGE" "$EXPECTED_DELETE_BRANCH" "$EXPECTED_STRICT" "$EXPECTED_PAGES_ENABLED" "$EXPECTED_PAGES_BUILD_TYPE" <<'PY'
 import json
 import sys
 
-settings_path, repo_json, protection_json, expected_auto_merge, expected_delete_branch, expected_strict = sys.argv[1:]
+(
+    settings_path,
+    repo_json,
+    protection_json,
+    pages_json,
+    expected_auto_merge,
+    expected_delete_branch,
+    expected_strict,
+    expected_pages_enabled,
+    expected_pages_build_type,
+) = sys.argv[1:]
 
 with open(settings_path, "r", encoding="utf-8") as handle:
     settings = json.load(handle)
 
 repo = json.loads(repo_json)
 protection = json.loads(protection_json) if protection_json.strip() else None
+pages = json.loads(pages_json) if pages_json.strip() else None
 
 errors = []
 if repo.get("allow_auto_merge") != (expected_auto_merge == "True"):
@@ -131,6 +169,14 @@ else:
         if extra:
             errors.append("unexpected protected checks: " + ", ".join(extra))
 
+if expected_pages_enabled == "True":
+    if pages is None:
+        errors.append("pages is not enabled")
+    elif expected_pages_build_type and pages.get("build_type") != expected_pages_build_type:
+        errors.append(
+            "pages.build_type mismatch: "
+            f"expected {expected_pages_build_type}, got {pages.get('build_type')!r}"
+        )
 if errors:
     for error in errors:
         print(error)

@@ -175,5 +175,8 @@ pr_url="$(gh "${create_args[@]}")"
 log "$pr_url"
 
 if [[ "$AUTO_MERGE" -eq 1 ]]; then
-  gh pr merge --auto --squash --delete-branch
+  gh pr merge --auto --squash --delete-branch "$pr_url"
 fi
+
+log "monitoring required PR checks every 30 seconds"
+bash scripts/monitor-pr-checks.sh "$pr_url" --interval 30
