@@ -299,11 +299,9 @@ fn plan_cache_complex64_separate_from_f64() {
 // ============================================================================
 
 #[test]
-fn cpu_has_no_extension_contract() {
-    // CPU backend does not advertise Contract — einsum always uses
-    // the GEMM fallback path (prepare + BatchedGemm) which handles
-    // non-fusible strides via copy instead of O(n^rank) naive loop.
-    assert!(!cpu_has_ext::<f64>(Extension::Contract));
+fn cpu_has_extension_contract() {
+    // CPU backend now advertises Contract support (#296).
+    assert!(cpu_has_ext::<f64>(Extension::Contract));
 }
 
 #[test]
@@ -595,6 +593,35 @@ fn contract_outer_product() {
                 tensor_get(&c, &[i, j])
             );
         }
+    }
+}
+
+#[test]
+fn contract_generic_fallback_with_a_only_mode() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
+    let b = tensor_from_fn(&[4, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
+    let mut c = tensor_zeros::<f64>(&[2]);
+
+    let desc = PrimDescriptor::Contract {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 2],
+        modes_c: vec![2],
+    };
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 2], &[2]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
+
+    // Mode 0 appears only in A, so the generic fallback keeps that axis fixed at 0.
+    for j in 0..2 {
+        let mut expected = 0.0;
+        for k in 0..4 {
+            expected += tensor_get(&a, &[0, k]) * tensor_get(&b, &[k, j]);
+        }
+        assert!(
+            (tensor_get(&c, &[j]) - expected).abs() < 1e-10,
+            "C[{j}] = {}, expected {expected}",
+            tensor_get(&c, &[j])
+        );
     }
 }
 

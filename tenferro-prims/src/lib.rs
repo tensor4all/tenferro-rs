@@ -277,8 +277,13 @@ pub enum UnaryOp {
 /// ```ignore
 /// use tenferro_prims::{CpuBackend, TensorPrims, Extension};
 ///
+/// // Check if contraction is available for f64
+/// let contract = <CpuBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::Contract);
+/// assert!(contract);
+///
 /// // Check if element-wise multiplication is available for f64
-/// let available = <CpuBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::ElementwiseMul);
+/// let ewmul = <CpuBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::ElementwiseMul);
+/// assert!(ewmul);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Extension {
