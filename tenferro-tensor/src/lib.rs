@@ -952,7 +952,15 @@ impl<T: Scalar> Tensor<T> {
                 if dims[k] == 0 {
                     continue;
                 }
-                let extent = (dims[k] - 1) as isize * strides[k];
+                let extent = isize::try_from(dims[k] - 1)
+                    .ok()
+                    .and_then(|d| d.checked_mul(strides[k]))
+                    .ok_or_else(|| {
+                        Error::StrideError(format!(
+                            "extent overflow for dimension {k} (size={}, stride={})",
+                            dims[k], strides[k]
+                        ))
+                    })?;
                 if extent >= 0 {
                     max_pos += extent;
                 } else {
@@ -1567,7 +1575,15 @@ impl<T: Scalar> Tensor<T> {
                 if new_dims[k] == 0 {
                     continue;
                 }
-                let extent = (new_dims[k] - 1) as isize * new_strides[k];
+                let extent = isize::try_from(new_dims[k] - 1)
+                    .ok()
+                    .and_then(|d| d.checked_mul(new_strides[k]))
+                    .ok_or_else(|| {
+                        Error::StrideError(format!(
+                            "extent overflow for dimension {k} (size={}, stride={})",
+                            new_dims[k], new_strides[k]
+                        ))
+                    })?;
                 if extent >= 0 {
                     max_pos += extent;
                 } else {
@@ -1630,7 +1646,14 @@ impl<T: Scalar> Tensor<T> {
                 self.dims[dim]
             )));
         }
-        let new_offset = self.offset + index as isize * self.strides[dim];
+        let new_offset = (index as isize)
+            .checked_mul(self.strides[dim])
+            .and_then(|v| self.offset.checked_add(v))
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "select offset overflow for index {index} in dimension {dim}"
+                ))
+            })?;
         let mut new_dims = self.dims.to_vec();
         let mut new_strides = self.strides.to_vec();
         new_dims.remove(dim);
@@ -1678,11 +1701,12 @@ impl<T: Scalar> Tensor<T> {
                 "dim {dim} out of range for tensor with {ndim} dimensions"
             )));
         }
-        if start + length > self.dims[dim] {
+        if start
+            .checked_add(length)
+            .map_or(true, |sum| sum > self.dims[dim])
+        {
             return Err(Error::InvalidArgument(format!(
-                "narrow range {}..{} out of bounds for dimension {dim} with size {}",
-                start,
-                start + length,
+                "narrow range out of bounds for dimension {dim} with size {}",
                 self.dims[dim]
             )));
         }
@@ -1730,7 +1754,10 @@ impl<T: Scalar> Tensor<T> {
         let dst_strides = compute_contiguous_strides(&self.dims, order);
         let mut data = vec![T::zero(); n_elements];
         if n_elements > 0 {
-            let src = self.buffer.as_slice().expect("CPU-only: contiguous");
+            let src = self
+                .buffer
+                .as_slice()
+                .expect("contiguous: CPU-only operation; GPU tensors are not supported");
             copy_strided(
                 src,
                 &self.dims,
@@ -1932,7 +1959,23 @@ impl<T: Scalar> Tensor<T> {
         let out_strides = compute_contiguous_strides(&self.dims, order);
         let total = self.len();
         let mut data = vec![T::zero(); total];
-        let src = self.buffer.as_slice().expect("CPU-only: tril");
+        if total == 0 {
+            return Tensor {
+                buffer: DataBuffer::from_vec(data),
+                dims: self.dims.clone(),
+                strides: Arc::from(out_strides),
+                offset: 0,
+                logical_memory_space: self.logical_memory_space,
+                preferred_compute_device: self.preferred_compute_device,
+                event: None,
+                conjugated: self.conjugated,
+                fw_grad: None,
+            };
+        }
+        let src = self
+            .buffer
+            .as_slice()
+            .expect("tril: CPU-only operation; GPU tensors are not supported");
         let batch_dims = &self.dims[2..];
         let n_batch: usize = batch_dims.iter().product();
         let n_batch = if n_batch == 0 { 1 } else { n_batch };
@@ -2018,7 +2061,23 @@ impl<T: Scalar> Tensor<T> {
         let out_strides = compute_contiguous_strides(&self.dims, order);
         let total = self.len();
         let mut data = vec![T::zero(); total];
-        let src = self.buffer.as_slice().expect("CPU-only: triu");
+        if total == 0 {
+            return Tensor {
+                buffer: DataBuffer::from_vec(data),
+                dims: self.dims.clone(),
+                strides: Arc::from(out_strides),
+                offset: 0,
+                logical_memory_space: self.logical_memory_space,
+                preferred_compute_device: self.preferred_compute_device,
+                event: None,
+                conjugated: self.conjugated,
+                fw_grad: None,
+            };
+        }
+        let src = self
+            .buffer
+            .as_slice()
+            .expect("triu: CPU-only operation; GPU tensors are not supported");
         let batch_dims = &self.dims[2..];
         let n_batch: usize = batch_dims.iter().product();
         let n_batch = if n_batch == 0 { 1 } else { n_batch };
@@ -2215,8 +2274,14 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
         let dst_strides = compute_contiguous_strides(&a.dims, order);
         let mut data = vec![T::zero(); n_elements];
         if n_elements > 0 {
-            let a_src = a.buffer.as_slice().expect("CPU-only: accumulate_tangent");
-            let b_src = b.buffer.as_slice().expect("CPU-only: accumulate_tangent");
+            let a_src = a
+                .buffer
+                .as_slice()
+                .expect("accumulate_tangent: CPU-only operation; GPU tensors are not supported");
+            let b_src = b
+                .buffer
+                .as_slice()
+                .expect("accumulate_tangent: CPU-only operation; GPU tensors are not supported");
             add_strided(
                 &a.dims,
                 StridedInput {
