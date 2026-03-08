@@ -189,6 +189,39 @@ fn clone_creates_independent_copy() {
 }
 
 #[test]
+fn clone_materializes_non_contiguous_view_in_logical_order() {
+    unsafe {
+        let base = Tensor::<f64>::from_slice(
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let view = base.permute(&[1, 0]).unwrap();
+        let expected = view
+            .contiguous(MemoryOrder::ColumnMajor)
+            .buffer()
+            .as_slice()
+            .unwrap()
+            .to_vec();
+        let handle = Box::into_raw(Box::new(view)) as *mut TfeTensorF64;
+        let mut status: tfe_status_t = -999;
+
+        let clone = tfe_tensor_f64_clone(handle, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+        assert!(!clone.is_null());
+
+        let (dims, data) = handle_dims_data(clone, &mut status);
+        assert_eq!(status, TFE_SUCCESS);
+        assert_eq!(dims, vec![3, 2]);
+        assert_eq!(data, expected);
+
+        tfe_tensor_f64_release(handle);
+        tfe_tensor_f64_release(clone);
+    }
+}
+
+#[test]
 fn release_null_is_noop() {
     unsafe {
         // Should not crash
