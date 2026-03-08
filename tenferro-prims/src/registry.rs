@@ -111,3 +111,6 @@ impl Default for BackendRegistry {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests;
