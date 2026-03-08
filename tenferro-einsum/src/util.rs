@@ -159,21 +159,30 @@ pub(crate) fn contraction_cost(
     let out_subs = intermediate_subs(subs_a, subs_b, needed);
     out_subs
         .iter()
-        .map(|l| size_dict.get(l).copied().unwrap_or(1))
+        .map(|l| {
+            debug_assert!(
+                size_dict.contains_key(l),
+                "contraction_cost: label {l} missing from size_dict"
+            );
+            size_dict.get(l).copied().unwrap_or(1)
+        })
         .product::<usize>()
         .max(1)
 }
 
 /// Read a tensor element at the given multi-index.
-pub(crate) fn tensor_get<T: Scalar>(t: &Tensor<T>, indices: &[usize]) -> T {
-    let data = t.buffer().as_slice().expect("CPU only");
+pub(crate) fn tensor_get<T: Scalar>(t: &Tensor<T>, indices: &[usize]) -> Result<T> {
+    let data = t
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| Error::InvalidArgument("tensor_get requires CPU-resident tensor".into()))?;
     let pos = t.offset()
         + indices
             .iter()
             .zip(t.strides())
             .map(|(&i, &s)| i as isize * s)
             .sum::<isize>();
-    data[pos as usize]
+    Ok(data[pos as usize])
 }
 
 /// Unflatten a flat index into multi-dimensional indices (column-major order).

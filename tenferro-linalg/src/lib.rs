@@ -522,8 +522,11 @@ fn validate_hermitian_batches<T: LinalgScalar>(
     op_name: &str,
 ) -> Result<()> {
     let mat_size = n * n;
-    let tol_scale = <T::Real as num_traits::NumCast>::from(128.0)
-        .unwrap_or(<T::Real as num_traits::One>::one());
+    let tol_scale = <T::Real as num_traits::NumCast>::from(128.0).ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "{op_name}: cannot convert tolerance scale 128.0 to real type"
+        ))
+    })?;
 
     for b in 0..bc {
         let start = offset + b * mat_size;
@@ -1746,6 +1749,9 @@ where
 
     let k = m.min(n);
     let bc = batch_count(batch_dims);
+    // Default threshold: 1e-15 matches NumPy/Julia convention for f64
+    // (approximately 4.5 × machine epsilon). Singular values below
+    // `s_max * threshold` are treated as zero.
     let threshold: T = scalar_from(rcond.unwrap_or(1e-15))?;
 
     let mut result_data = vec![T::zero(); n * m * bc];
@@ -1764,6 +1770,8 @@ where
         // Build diag(1/S) U^T (k × m): element [i,j] = (1/s_i) * U[j,i]
         let mut sinv_ut = vec![T::zero(); k * m];
         for i in 0..k {
+            // Division is safe: s_b[i] > cutoff > 0 guarantees s_b[i] is
+            // bounded away from zero by at least `s_max * threshold`.
             if s_b[i] > cutoff {
                 let sinv = T::one() / s_b[i];
                 for j in 0..m {
@@ -1933,7 +1941,9 @@ where
 
     // Special case: 1x1 matrix
     if n == 1 {
-        let a_f64: f64 = num_traits::NumCast::from(a[0]).unwrap_or(0.0);
+        let a_f64: f64 = num_traits::NumCast::from(a[0]).ok_or_else(|| {
+            Error::InvalidArgument("matrix_exp: cannot convert 1×1 element to f64".into())
+        })?;
         let exp_val = a_f64.exp();
         let result_val = T::from(exp_val).ok_or_else(|| {
             Error::InvalidArgument("cannot convert exp result to target type".into())
@@ -1943,7 +1953,8 @@ where
 
     // 1. Compute ||A||_1
     let norm_a = matrix_1_norm(a, n);
-    let norm_f64: f64 = num_traits::NumCast::from(norm_a).unwrap_or(0.0);
+    let norm_f64: f64 = num_traits::NumCast::from(norm_a)
+        .ok_or_else(|| Error::InvalidArgument("matrix_exp: cannot convert 1-norm to f64".into()))?;
 
     // 2. Determine scaling factor s
     let s: usize = if norm_f64 <= THETA_13 {
@@ -2787,7 +2798,18 @@ where
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let k = m.min(n);
     let bc = batch_count(batch_dims);
-    let eta: T = scalar_from(1e-40).map_err(to_ad_err)?;
+    // Regularization for the F-matrix: prevents division by zero when two
+    // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
+    // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
+    let eta: T = {
+        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::epsilon();
+        if raw < eps {
+            eps
+        } else {
+            raw
+        }
+    };
 
     let (u_data, _) = extract_data(&result.u)?;
     let (s_data, _) = extract_data(&result.s)?;
@@ -3019,7 +3041,9 @@ where
             }
             rs
         } else {
-            r_b[..k * k].to_vec()
+            // When n <= k, we have k = min(m,n) = n, so k*n == k*k
+            // and the full R block is already the square factor.
+            r_b[..k * n].to_vec()
         };
 
         // dA[:, :k] = B R_square^{-T} (m×k solve)
@@ -3312,7 +3336,18 @@ where
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
-    let eta: T = scalar_from(1e-40).map_err(to_ad_err)?;
+    // Regularization for the F-matrix: prevents division by zero when two
+    // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
+    // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
+    let eta: T = {
+        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::epsilon();
+        if raw < eps {
+            eps
+        } else {
+            raw
+        }
+    };
 
     let (v_data, _) = extract_data(&result.vectors)?;
     let (e_data, _) = extract_data(&result.values)?;
@@ -4346,7 +4381,18 @@ where
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let k = m.min(n);
     let bc = batch_count(batch_dims);
-    let eta: T = scalar_from(1e-40).map_err(to_ad_err)?;
+    // Regularization for the F-matrix: prevents division by zero when two
+    // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
+    // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
+    let eta: T = {
+        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::epsilon();
+        if raw < eps {
+            eps
+        } else {
+            raw
+        }
+    };
 
     let (u_data, _) = extract_data(&result.u)?;
     let (s_data, _) = extract_data(&result.s)?;
@@ -4553,7 +4599,8 @@ where
             (dq, dr)
         } else {
             let qhda = backend_mat_mul(ctx, &transpose(q_b, m, k), k, m, da_b, n)?;
-            let r1 = r_b[..k * k].to_vec();
+            // k = min(m,n) so k*n == k*k when n == k (the only case reaching here)
+            let r1 = r_b[..k * n].to_vec();
 
             let mut qhda1 = vec![T::zero(); k * k];
             for j in 0..k {
@@ -4758,7 +4805,18 @@ where
     let (n, batch_dims) = validate_square(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
-    let eta: T = scalar_from(1e-40).map_err(to_ad_err)?;
+    // Regularization for the F-matrix: prevents division by zero when two
+    // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
+    // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
+    let eta: T = {
+        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::epsilon();
+        if raw < eps {
+            eps
+        } else {
+            raw
+        }
+    };
 
     let (v_data, _) = extract_data(&result.vectors)?;
     let (e_data, _) = extract_data(&result.values)?;

@@ -372,12 +372,14 @@ where
     let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
         operands.iter().map(|op| op.tangent()).collect();
 
-    let tangent = einsum_frule::<Alg, Backend>(ctx, subscripts, &primals, &tangents);
-
-    match tangent {
-        Ok(t) => DualTensor::with_tangent(output, t),
-        Err(_) => Ok(DualTensor::new(output)),
+    // If no operand carries a tangent, skip frule and return primal only.
+    if tangents.iter().all(|t| t.is_none()) {
+        return Ok(DualTensor::new(output));
     }
+
+    let tangent = einsum_frule::<Alg, Backend>(ctx, subscripts, &primals, &tangents)
+        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+    DualTensor::with_tangent(output, tangent)
 }
 
 /// Reverse-mode rule (rrule) for einsum without building a global tape.
@@ -527,7 +529,22 @@ where
         }
     }
 
-    result.ok_or_else(|| Error::InvalidArgument("no tangents provided".into()))
+    match result {
+        Some(r) => Ok(r),
+        None => {
+            // No tangents provided — return a zero tensor with the correct output shape.
+            let primal_out = if let Some(nested) = nested {
+                execute_nested::<Alg, Backend>(ctx, nested, primals, None)?
+            } else {
+                einsum_with_subscripts::<Alg, Backend>(ctx, subs, primals, None)?
+            };
+            Ok(Tensor::<Alg::Scalar>::zeros(
+                primal_out.dims(),
+                primal_out.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            ))
+        }
+    }
 }
 
 /// Local HVP rule for einsum without building a global tape.
