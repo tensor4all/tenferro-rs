@@ -248,7 +248,20 @@ fn tensor_element<T: Scalar + Copy>(tensor: &Tensor<T>, indices: &[usize]) -> Re
                 ),
             });
         }
-        offset += (idx as isize) * tensor.strides()[axis];
+        let stride = tensor.strides()[axis];
+        let step = (idx as isize)
+            .checked_mul(stride)
+            .ok_or_else(|| Error::InvalidAdTensor {
+                message: format!(
+                    "offset overflow on axis {}: idx={} * stride={}",
+                    axis, idx, stride
+                ),
+            })?;
+        offset = offset
+            .checked_add(step)
+            .ok_or_else(|| Error::InvalidAdTensor {
+                message: format!("offset overflow: {} + {} on axis {}", offset, step, axis),
+            })?;
     }
 
     let buffer = tensor
