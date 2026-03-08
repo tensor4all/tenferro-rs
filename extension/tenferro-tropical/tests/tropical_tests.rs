@@ -519,6 +519,24 @@ fn argmax_tracker_winner_index() {
     assert_eq!(tracker.winner_index(&[1, 1]), 7);
 }
 
+#[test]
+fn argmax_tracker_winner_index_rejects_wrong_rank() {
+    use tenferro_tropical::ArgmaxTracker;
+
+    let tracker = ArgmaxTracker::new(&[2, 3]);
+    let result = std::panic::catch_unwind(|| tracker.winner_index(&[1]));
+    assert!(result.is_err());
+}
+
+#[test]
+fn argmax_tracker_winner_index_rejects_out_of_bounds_position() {
+    use tenferro_tropical::ArgmaxTracker;
+
+    let tracker = ArgmaxTracker::new(&[2, 3]);
+    let result = std::panic::catch_unwind(|| tracker.winner_index(&[2, 0]));
+    assert!(result.is_err());
+}
+
 // ============================================================================
 // Tropical matmul tests (hand-computed)
 // ============================================================================

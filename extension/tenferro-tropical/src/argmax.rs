@@ -81,11 +81,31 @@ impl ArgmaxTracker {
     /// let k = tracker.winner_index(&[1, 2]);
     /// assert_eq!(k, 0); // initialized to 0
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `position` has the wrong rank or any index is out of bounds
+    /// for the tracked output shape.
     pub fn winner_index(&self, position: &[usize]) -> usize {
+        assert_eq!(
+            position.len(),
+            self.output_shape.len(),
+            "winner_index: expected {} indices, got {}",
+            self.output_shape.len(),
+            position.len()
+        );
+
         // Column-major linear index
         let mut linear = 0;
         let mut stride = 1;
         for (i, &p) in position.iter().enumerate() {
+            assert!(
+                p < self.output_shape[i],
+                "winner_index: index {} out of bounds for axis {} with size {}",
+                p,
+                i,
+                self.output_shape[i]
+            );
             linear += p * stride;
             stride *= self.output_shape[i];
         }
