@@ -11,5 +11,9 @@
       "coverage",
       "docs-site"
     ]
+  },
+  "pages": {
+    "enabled": true,
+    "build_type": "workflow"
   }
 }

@@ -51,6 +51,15 @@ If an implementation changes behavior or public API, update the relevant docs be
 gh pr merge --auto --squash --delete-branch
 ```
 
+- After creating the PR, poll required checks every 30 seconds:
+
+```bash
+bash scripts/monitor-pr-checks.sh <pr-url-or-number> --interval 30
+```
+
+- If any required check fails, inspect that failure immediately instead of waiting for the rest of the jobs.
+- Fix the failure locally, rerun the relevant local verification, push, and resume the monitoring command until all required checks pass.
+
 ## Agent Asset Freshness
 
 - Check for upstream agent-asset updates at startup when possible.

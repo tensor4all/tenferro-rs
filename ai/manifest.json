@@ -54,6 +54,11 @@
       "target": "scripts/create-pr.sh"
     },
     {
+      "id": "monitor-pr-checks-script",
+      "source": "scripts/monitor-pr-checks.sh",
+      "target": "scripts/monitor-pr-checks.sh"
+    },
+    {
       "id": "build-docs-site-script",
       "source": "scripts/build_docs_site.sh",
       "target": "scripts/build_docs_site.sh"
