@@ -33,7 +33,7 @@ fn dyn_tensor_and_dyn_ad_tensor_dims() {
 fn dyn_ad_value_mul_mixed_real_complex_promotes_to_complex() {
     let lhs = DynAdScalar::from(2.0_f64);
     let rhs = DynAdScalar::from(Complex64::new(1.0, -3.0));
-    let out = lhs * rhs;
+    let out = (lhs * rhs).unwrap();
     assert_eq!(out.scalar_type(), ScalarType::C64);
     assert_eq!(out.primal(), DynScalar::C64(Complex64::new(2.0, -6.0)));
 }
@@ -41,7 +41,7 @@ fn dyn_ad_value_mul_mixed_real_complex_promotes_to_complex() {
 #[test]
 fn dyn_ad_value_div_with_scalar_lhs_is_supported() {
     let rhs = DynAdScalar::from(2.0_f64);
-    let out = Complex64::new(4.0, -2.0) / rhs;
+    let out = (Complex64::new(4.0, -2.0) / rhs).unwrap();
     assert_eq!(out.scalar_type(), ScalarType::C64);
     assert_eq!(out.primal(), DynScalar::C64(Complex64::new(2.0, -1.0)));
 }
@@ -59,6 +59,16 @@ fn dyn_ad_value_try_mul_checks_reverse_tape_compatibility() {
     let lhs: DynAdScalar = AdValue::reverse(2.0_f64, crate::NodeId(1), TapeId(7), None).into();
     let rhs: DynAdScalar = AdValue::reverse(3.0_f64, crate::NodeId(2), TapeId(8), None).into();
     let err = lhs.try_mul(rhs).unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidAdScalar { message } if message.contains("reverse-mode tape mismatch"))
+    );
+}
+
+#[test]
+fn dyn_ad_value_operator_mul_checks_reverse_tape_compatibility() {
+    let lhs: DynAdScalar = AdValue::reverse(2.0_f64, crate::NodeId(1), TapeId(7), None).into();
+    let rhs: DynAdScalar = AdValue::reverse(3.0_f64, crate::NodeId(2), TapeId(8), None).into();
+    let err = (lhs * rhs).unwrap_err();
     assert!(
         matches!(err, Error::InvalidAdScalar { message } if message.contains("reverse-mode tape mismatch"))
     );

@@ -88,7 +88,7 @@ fn ad_scalar_powi_forward_propagates_tangent() {
 fn ad_scalar_mul_forward_propagates_tangent() {
     let x = AdScalar::new_forward(2.0_f64, 0.5_f64);
     let y = AdScalar::new_forward(4.0_f64, 0.25_f64);
-    let z = x * y;
+    let z = (x * y).unwrap();
     assert_eq!(*z.primal(), 8.0_f64);
     assert_eq!(*z.tangent().unwrap(), 2.5_f64);
 }
@@ -97,7 +97,7 @@ fn ad_scalar_mul_forward_propagates_tangent() {
 fn ad_scalar_div_forward_propagates_tangent() {
     let x = AdScalar::new_forward(8.0_f64, 0.5_f64);
     let y = AdScalar::new_forward(2.0_f64, 0.25_f64);
-    let z = x / y;
+    let z = (x / y).unwrap();
     assert_eq!(*z.primal(), 4.0_f64);
     assert_eq!(*z.tangent().unwrap(), -0.25_f64);
 }
@@ -132,11 +132,17 @@ fn ad_scalar_sqrt_reverse_registers_pullback_chain() {
 }
 
 #[test]
-#[should_panic(expected = "reverse-mode operands must share one tape")]
-fn ad_scalar_binary_op_panics_on_mixed_reverse_tapes() {
+fn ad_scalar_binary_op_returns_error_on_mixed_reverse_tapes() {
     let x = AdScalar::new_reverse(2.0_f64, NodeId(1), TapeId(7), None);
     let y = AdScalar::new_reverse(3.0_f64, NodeId(2), TapeId(8), None);
-    let _ = x * y;
+    let err = (x * y).unwrap_err();
+    assert!(matches!(
+        err,
+        Error::MixedReverseTape {
+            expected: 7,
+            found: 8
+        }
+    ));
 }
 
 #[test]
