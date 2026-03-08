@@ -123,14 +123,21 @@ pub enum OpKind {
     ElementwiseMul,
 }
 
-/// Return the preferred compute devices for a given operation on a memory space.
+/// Return the preferred compute devices for a given memory space.
+///
+/// Currently returns a single CPU device (`cpu:0`) for
+/// [`MainMemory`](LogicalMemorySpace::MainMemory) and an error for all
+/// GPU / pinned / managed memory spaces. The `op_kind` parameter is
+/// accepted for forward compatibility but is not yet used for device
+/// selection.
 ///
 /// The returned list is ordered by preference (most preferred first).
 ///
 /// # Errors
 ///
 /// Returns [`Error::NoCompatibleComputeDevice`] if no compute device can
-/// execute the given operation on the specified memory space.
+/// execute the given operation on the specified memory space (currently
+/// all non-`MainMemory` spaces).
 ///
 /// # Examples
 ///
@@ -149,15 +156,19 @@ pub enum OpKind {
 /// ```
 pub fn preferred_compute_devices(
     space: LogicalMemorySpace,
-    op_kind: OpKind,
+    _op_kind: OpKind, // TODO: specialize device selection by operation kind
 ) -> Result<Vec<ComputeDevice>> {
+    // NOTE: Currently only a single CPU device (cpu:0) is supported.
+    // Future versions will enumerate available devices and select based on
+    // operation kind, memory affinity, and runtime device discovery.
     match space {
         LogicalMemorySpace::MainMemory => Ok(vec![ComputeDevice::Cpu { device_id: 0 }]),
         LogicalMemorySpace::PinnedMemory
         | LogicalMemorySpace::GpuMemory { .. }
-        | LogicalMemorySpace::ManagedMemory => {
-            Err(Error::NoCompatibleComputeDevice { space, op: op_kind })
-        }
+        | LogicalMemorySpace::ManagedMemory => Err(Error::NoCompatibleComputeDevice {
+            space,
+            op: _op_kind,
+        }),
     }
 }
 
@@ -207,6 +218,9 @@ pub enum Error {
 
     /// Operations on tensors in different memory spaces are not supported
     /// without explicit transfer.
+    ///
+    /// Reserved for future cross-device operations (e.g., GPU-CPU transfers).
+    #[allow(dead_code)]
     #[error("cross-memory-space operation between {left:?} and {right:?}")]
     CrossMemorySpaceOperation {
         /// Memory space of the first operand.
