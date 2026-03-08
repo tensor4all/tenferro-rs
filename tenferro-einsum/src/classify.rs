@@ -54,9 +54,17 @@ pub(crate) fn classify_modes(
 }
 
 /// Compute a permutation that reorders `current` labels to match `target` order.
-pub(crate) fn compute_permutation(current: &[u32], target: &[u32]) -> Vec<usize> {
+pub(crate) fn compute_permutation(
+    current: &[u32],
+    target: &[u32],
+) -> std::result::Result<Vec<usize>, String> {
     target
         .iter()
-        .map(|t| current.iter().position(|c| c == t).unwrap())
+        .map(|t| {
+            current
+                .iter()
+                .position(|c| c == t)
+                .ok_or_else(|| format!("label {t} not found in current labels {current:?}"))
+        })
         .collect()
 }
