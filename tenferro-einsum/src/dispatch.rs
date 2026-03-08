@@ -4,7 +4,7 @@
 #[allow(unused_imports)]
 use num_traits::{One, Zero};
 use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
-use tenferro_device::Result;
+use tenferro_device::{Error, Result};
 use tenferro_prims::{Extension, PrimDescriptor, ReduceOp, TensorPrims};
 use tenferro_tensor::Tensor;
 
@@ -403,7 +403,8 @@ where
             if !plan.needs_final_permute {
                 *output = temp_expanded;
             } else {
-                let perm = compute_permutation(&plan.canonical_modes, subs_c);
+                let perm = compute_permutation(&plan.canonical_modes, subs_c)
+                    .map_err(|e| Error::InvalidArgument(e))?;
                 *output = temp_expanded.permute(&perm)?;
             }
         } else {

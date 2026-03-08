@@ -195,7 +195,7 @@ impl ContractionTree {
             step_output_shapes,
             step_plans: Vec::new(),
         };
-        tree.step_plans = compile_step_plans(&tree);
+        tree.step_plans = compile_step_plans(&tree).map_err(|e| Error::InvalidArgument(e))?;
         Ok(tree)
     }
 }
