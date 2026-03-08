@@ -10,6 +10,7 @@ description = "Bridge between Burn deep learning framework and tenferro tensor n
 [dependencies]
 tenferro-tensor = { path = "../../tenferro-tensor" }
 tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-prims = { path = "../../tenferro-prims" }
 tenferro-device = { path = "../../tenferro-device" }
 tenferro-algebra = { path = "../../tenferro-algebra" }
 

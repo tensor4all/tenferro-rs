@@ -1,0 +1,119 @@
+use std::os::raw::c_void;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+
+use tenferro_tensor::{MemoryOrder, Tensor};
+
+use super::*;
+
+struct ImportFixture {
+    data: Vec<f64>,
+    shape: Box<[i64]>,
+    strides: Box<[i64]>,
+    calls: Arc<AtomicUsize>,
+}
+
+unsafe extern "C" fn import_fixture_deleter(managed: *mut DLManagedTensorVersioned) {
+    let managed = unsafe { Box::from_raw(managed) };
+    let fixture = unsafe { Box::from_raw(managed.manager_ctx as *mut ImportFixture) };
+    fixture.calls.fetch_add(1, Ordering::SeqCst);
+}
+
+#[test]
+fn dlpack_export_import_roundtrip_preserves_strides_and_values() {
+    let base = Tensor::from_slice(
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        &[2, 3],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let view = base.permute(&[1, 0]).unwrap();
+    let handle = tensor_to_handle(view);
+
+    let mut status = TFE_INTERNAL_ERROR;
+    let dl = unsafe { tfe_tensor_f64_to_dlpack(handle, &mut status) };
+    assert_eq!(status, TFE_SUCCESS);
+    assert!(!dl.is_null());
+
+    let managed = unsafe { &*dl };
+    assert_eq!(managed.version.major, 1);
+    assert_eq!(managed.dl_tensor.ndim, 2);
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(managed.dl_tensor.shape, 2) },
+        &[3, 2]
+    );
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(managed.dl_tensor.strides, 2) },
+        &[2, 1]
+    );
+    assert_eq!(managed.dl_tensor.byte_offset, 0);
+
+    let imported = unsafe { tfe_tensor_f64_from_dlpack(dl, &mut status) };
+    assert_eq!(status, TFE_SUCCESS);
+    assert!(!imported.is_null());
+
+    let imported_tensor = unsafe { handle_to_ref(imported) };
+    assert_eq!(imported_tensor.dims(), &[3, 2]);
+    assert_eq!(imported_tensor.strides(), &[2, 1]);
+    let row_major = imported_tensor.contiguous(MemoryOrder::RowMajor);
+    assert_eq!(
+        row_major.buffer().as_slice().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+
+    unsafe { tfe_tensor_f64_release(imported) };
+}
+
+#[test]
+fn dlpack_import_calls_producer_deleter_on_release() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut fixture = Box::new(ImportFixture {
+        data: vec![1.0, 2.0, 3.0, 4.0],
+        shape: vec![2, 2].into_boxed_slice(),
+        strides: vec![2, 1].into_boxed_slice(),
+        calls: calls.clone(),
+    });
+    let data_ptr = fixture.data.as_mut_ptr();
+    let shape_ptr = fixture.shape.as_mut_ptr();
+    let strides_ptr = fixture.strides.as_mut_ptr();
+    let manager_ctx = Box::into_raw(fixture);
+
+    let managed = Box::into_raw(Box::new(DLManagedTensorVersioned {
+        version: DLPackVersion { major: 1, minor: 0 },
+        manager_ctx: manager_ctx as *mut c_void,
+        deleter: Some(import_fixture_deleter),
+        flags: 0,
+        dl_tensor: DLTensor {
+            data: data_ptr as *mut c_void,
+            device: DLDevice {
+                device_type: KDLCPU,
+                device_id: 0,
+            },
+            ndim: 2,
+            dtype: DLDataType {
+                code: KDLFLOAT,
+                bits: 64,
+                lanes: 1,
+            },
+            shape: shape_ptr,
+            strides: strides_ptr,
+            byte_offset: 0,
+        },
+    }));
+
+    let mut status = TFE_INTERNAL_ERROR;
+    let handle = unsafe { tfe_tensor_f64_from_dlpack(managed, &mut status) };
+    assert_eq!(status, TFE_SUCCESS);
+    assert!(!handle.is_null());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    let tensor = unsafe { handle_to_ref(handle) };
+    assert_eq!(tensor.dims(), &[2, 2]);
+    assert_eq!(tensor.strides(), &[2, 1]);
+    assert_eq!(tensor.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+
+    unsafe { tfe_tensor_f64_release(handle) };
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}

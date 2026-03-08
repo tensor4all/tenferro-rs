@@ -1,18 +1,30 @@
 # tenferro-rs
 
-A general-purpose tensor computation library in Rust with CPU/GPU support.
+A general-purpose tensor computation library in Rust with CPU support today and planned GPU support later.
+
+> [!WARNING]
+> GPU support is currently stubbed and not implemented. The repository contains
+> CUDA/HIP-facing types and API surfaces, but production GPU allocation,
+> transfer, and execution are still future work.
 
 ## Overview
 
 `tenferro-rs` is a Rust workspace providing:
 
-- Dense tensor types with CPU/GPU support
+- Dense tensor types with CPU support today and planned GPU support later
 - cuTENSOR/hipTensor-compatible operation protocol (`TensorPrims<A>` trait)
 - High-level einsum with N-ary contraction tree optimization
 - Automatic differentiation (VJP/JVP)
 - C FFI for Julia/Python integration
 
 Built on top of [strided-rs](https://github.com/tensor4all/strided-rs) for cache-optimized strided array operations.
+
+## GPU Status
+
+CPU functionality is actively implemented and tested. GPU-facing modules exist
+to stabilize the future API shape, but the current CUDA/HIP path is still a
+stub. Outside explicit bug exploration or implementation work, do not assume a
+GPU code path works just because the type, trait, or FFI entrypoint exists.
 
 ### Influences
 

@@ -60,8 +60,18 @@ use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_capi::{
-    tfe_status_t, TfeTensorF64, TFE_INTERNAL_ERROR, TFE_INVALID_ARGUMENT, TFE_SUCCESS,
+    tfe_status_t, TfeTensorF64, TFE_INTERNAL_ERROR, TFE_INVALID_ARGUMENT, TFE_SHAPE_MISMATCH,
+    TFE_SUCCESS,
 };
+use tenferro_device::Error as DeviceError;
+use tenferro_einsum::einsum;
+use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
+use tenferro_tensor::Tensor;
+use tenferro_tropical::ad::{
+    extract_inner, promote_to_tropical, tropical_einsum_frule, tropical_einsum_rrule,
+    TropicalScalar,
+};
+use tenferro_tropical::{MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra};
 
 /// Finalize a `catch_unwind` result for functions returning a pointer via status.
 unsafe fn finalize_ptr(
@@ -114,6 +124,173 @@ unsafe fn finalize_void(
     }
 }
 
+fn tensor_to_handle(tensor: Tensor<f64>) -> *mut TfeTensorF64 {
+    Box::into_raw(Box::new(tensor)) as *mut TfeTensorF64
+}
+
+unsafe fn handle_to_ref<'a>(handle: *const TfeTensorF64) -> &'a Tensor<f64> {
+    &*(handle as *const Tensor<f64>)
+}
+
+fn map_device_error(err: &DeviceError) -> tfe_status_t {
+    match err {
+        DeviceError::ShapeMismatch { .. } | DeviceError::RankMismatch { .. } => TFE_SHAPE_MISMATCH,
+        DeviceError::InvalidArgument(_)
+        | DeviceError::StrideError(_)
+        | DeviceError::CrossMemorySpaceOperation { .. } => TFE_INVALID_ARGUMENT,
+        DeviceError::DeviceError(_) | DeviceError::NoCompatibleComputeDevice { .. } => {
+            TFE_INTERNAL_ERROR
+        }
+    }
+}
+
+unsafe fn parse_subscripts<'a>(
+    subscripts: *const c_char,
+) -> std::result::Result<&'a str, tfe_status_t> {
+    if subscripts.is_null() {
+        return Err(TFE_INVALID_ARGUMENT);
+    }
+    std::ffi::CStr::from_ptr(subscripts)
+        .to_str()
+        .map_err(|_| TFE_INVALID_ARGUMENT)
+}
+
+unsafe fn collect_operand_handles<'a>(
+    operands: *const *const TfeTensorF64,
+    num_operands: usize,
+) -> std::result::Result<Vec<&'a Tensor<f64>>, tfe_status_t> {
+    if operands.is_null() {
+        return Err(TFE_INVALID_ARGUMENT);
+    }
+    std::slice::from_raw_parts(operands, num_operands)
+        .iter()
+        .map(|&ptr| {
+            if ptr.is_null() {
+                Err(TFE_INVALID_ARGUMENT)
+            } else {
+                Ok(handle_to_ref(ptr))
+            }
+        })
+        .collect()
+}
+
+unsafe fn collect_optional_tangent_handles<'a>(
+    tangents: *const *const TfeTensorF64,
+    num_operands: usize,
+) -> std::result::Result<Vec<Option<&'a Tensor<f64>>>, tfe_status_t> {
+    if tangents.is_null() {
+        return Err(TFE_INVALID_ARGUMENT);
+    }
+    Ok(std::slice::from_raw_parts(tangents, num_operands)
+        .iter()
+        .map(|&ptr| {
+            if ptr.is_null() {
+                None
+            } else {
+                Some(handle_to_ref(ptr))
+            }
+        })
+        .collect())
+}
+
+unsafe fn tropical_einsum_impl<T, Alg>(
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
+    num_operands: usize,
+) -> std::result::Result<*mut TfeTensorF64, tfe_status_t>
+where
+    T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
+    Alg: tenferro_algebra::Algebra<Scalar = T>,
+    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+{
+    let subscripts = parse_subscripts(subscripts)?;
+    let operands = collect_operand_handles(operands, num_operands)?;
+    let tropical_operands: Vec<Tensor<T>> = operands
+        .iter()
+        .map(|tensor| promote_to_tropical::<T>(*tensor).map_err(|err| map_device_error(&err)))
+        .collect::<std::result::Result<_, _>>()?;
+    let tropical_refs: Vec<&Tensor<T>> = tropical_operands.iter().collect();
+    let mut ctx = CpuContext::new(1);
+    let output = einsum::<Alg, CpuBackend>(&mut ctx, subscripts, &tropical_refs, None)
+        .map_err(|err| map_device_error(&err))?;
+    let output = extract_inner::<T>(&output).map_err(|err| map_device_error(&err))?;
+    Ok(tensor_to_handle(output))
+}
+
+unsafe fn tropical_einsum_rrule_impl<T, Alg>(
+    subscripts: *const c_char,
+    operands: *const *const TfeTensorF64,
+    num_operands: usize,
+    cotangent: *const TfeTensorF64,
+    grads_out: *mut *mut TfeTensorF64,
+) -> std::result::Result<(), tfe_status_t>
+where
+    T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
+    Alg: tenferro_algebra::Algebra<Scalar = T>,
+    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+{
+    if cotangent.is_null() || grads_out.is_null() {
+        return Err(TFE_INVALID_ARGUMENT);
+    }
+
+    let subscripts = parse_subscripts(subscripts)?;
+    let operands = collect_operand_handles(operands, num_operands)?;
+    let tropical_operands: Vec<Tensor<T>> = operands
+        .iter()
+        .map(|tensor| promote_to_tropical::<T>(*tensor).map_err(|err| map_device_error(&err)))
+        .collect::<std::result::Result<_, _>>()?;
+    let tropical_refs: Vec<&Tensor<T>> = tropical_operands.iter().collect();
+    let cotangent = handle_to_ref(cotangent);
+    let mut ctx = CpuContext::new(1);
+    let grads = tropical_einsum_rrule::<T, Alg, CpuBackend>(
+        &mut ctx,
+        subscripts,
+        &tropical_refs,
+        cotangent,
+    )
+    .map_err(|err| map_device_error(&err))?;
+
+    if grads.len() != num_operands {
+        return Err(TFE_INTERNAL_ERROR);
+    }
+
+    let out = std::slice::from_raw_parts_mut(grads_out, num_operands);
+    for (slot, grad) in out.iter_mut().zip(grads.into_iter()) {
+        *slot = tensor_to_handle(grad);
+    }
+    Ok(())
+}
+
+unsafe fn tropical_einsum_frule_impl<T, Alg>(
+    subscripts: *const c_char,
+    primals: *const *const TfeTensorF64,
+    num_operands: usize,
+    tangents: *const *const TfeTensorF64,
+) -> std::result::Result<*mut TfeTensorF64, tfe_status_t>
+where
+    T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
+    Alg: tenferro_algebra::Algebra<Scalar = T>,
+    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+{
+    let subscripts = parse_subscripts(subscripts)?;
+    let primals = collect_operand_handles(primals, num_operands)?;
+    let tangents = collect_optional_tangent_handles(tangents, num_operands)?;
+    let tropical_primals: Vec<Tensor<T>> = primals
+        .iter()
+        .map(|tensor| promote_to_tropical::<T>(*tensor).map_err(|err| map_device_error(&err)))
+        .collect::<std::result::Result<_, _>>()?;
+    let tropical_refs: Vec<&Tensor<T>> = tropical_primals.iter().collect();
+    let mut ctx = CpuContext::new(1);
+    let output = tropical_einsum_frule::<T, Alg, CpuBackend>(
+        &mut ctx,
+        subscripts,
+        &tropical_refs,
+        &tangents,
+    )
+    .map_err(|err| map_device_error(&err))?;
+    Ok(tensor_to_handle(output))
+}
+
 // ============================================================================
 // MaxPlus einsum
 // ============================================================================
@@ -146,15 +323,16 @@ unsafe fn finalize_void(
 pub unsafe extern "C" fn tfe_tropical_einsum_maxplus_f64(
     subscripts: *const c_char,
     operands: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
-            if subscripts.is_null() || operands.is_null() {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_impl::<MaxPlus<f64>, MaxPlusAlgebra<f64>>(
+                subscripts,
+                operands,
+                num_operands,
+            )
         },
     ));
     finalize_ptr(result, status)
@@ -189,21 +367,20 @@ pub unsafe extern "C" fn tfe_tropical_einsum_maxplus_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxplus_f64(
     subscripts: *const c_char,
     operands: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     cotangent: *const TfeTensorF64,
     grads_out: *mut *mut TfeTensorF64,
     status: *mut tfe_status_t,
 ) {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<(), tfe_status_t> {
-            if subscripts.is_null()
-                || operands.is_null()
-                || cotangent.is_null()
-                || grads_out.is_null()
-            {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_rrule_impl::<MaxPlus<f64>, MaxPlusAlgebra<f64>>(
+                subscripts,
+                operands,
+                num_operands,
+                cotangent,
+                grads_out,
+            )
         },
     ));
     finalize_void(result, status)
@@ -236,16 +413,18 @@ pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxplus_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_frule_maxplus_f64(
     subscripts: *const c_char,
     primals: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     tangents: *const *const TfeTensorF64,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
-            if subscripts.is_null() || primals.is_null() || tangents.is_null() {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_frule_impl::<MaxPlus<f64>, MaxPlusAlgebra<f64>>(
+                subscripts,
+                primals,
+                num_operands,
+                tangents,
+            )
         },
     ));
     finalize_ptr(result, status)
@@ -277,15 +456,16 @@ pub unsafe extern "C" fn tfe_tropical_einsum_frule_maxplus_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_minplus_f64(
     subscripts: *const c_char,
     operands: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
-            if subscripts.is_null() || operands.is_null() {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_impl::<MinPlus<f64>, MinPlusAlgebra<f64>>(
+                subscripts,
+                operands,
+                num_operands,
+            )
         },
     ));
     finalize_ptr(result, status)
@@ -300,21 +480,20 @@ pub unsafe extern "C" fn tfe_tropical_einsum_minplus_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_rrule_minplus_f64(
     subscripts: *const c_char,
     operands: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     cotangent: *const TfeTensorF64,
     grads_out: *mut *mut TfeTensorF64,
     status: *mut tfe_status_t,
 ) {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<(), tfe_status_t> {
-            if subscripts.is_null()
-                || operands.is_null()
-                || cotangent.is_null()
-                || grads_out.is_null()
-            {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_rrule_impl::<MinPlus<f64>, MinPlusAlgebra<f64>>(
+                subscripts,
+                operands,
+                num_operands,
+                cotangent,
+                grads_out,
+            )
         },
     ));
     finalize_void(result, status)
@@ -329,16 +508,18 @@ pub unsafe extern "C" fn tfe_tropical_einsum_rrule_minplus_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_frule_minplus_f64(
     subscripts: *const c_char,
     primals: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     tangents: *const *const TfeTensorF64,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
-            if subscripts.is_null() || primals.is_null() || tangents.is_null() {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_frule_impl::<MinPlus<f64>, MinPlusAlgebra<f64>>(
+                subscripts,
+                primals,
+                num_operands,
+                tangents,
+            )
         },
     ));
     finalize_ptr(result, status)
@@ -370,15 +551,16 @@ pub unsafe extern "C" fn tfe_tropical_einsum_frule_minplus_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_maxmul_f64(
     subscripts: *const c_char,
     operands: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
-            if subscripts.is_null() || operands.is_null() {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_impl::<MaxMul<f64>, MaxMulAlgebra<f64>>(
+                subscripts,
+                operands,
+                num_operands,
+            )
         },
     ));
     finalize_ptr(result, status)
@@ -393,21 +575,20 @@ pub unsafe extern "C" fn tfe_tropical_einsum_maxmul_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxmul_f64(
     subscripts: *const c_char,
     operands: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     cotangent: *const TfeTensorF64,
     grads_out: *mut *mut TfeTensorF64,
     status: *mut tfe_status_t,
 ) {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<(), tfe_status_t> {
-            if subscripts.is_null()
-                || operands.is_null()
-                || cotangent.is_null()
-                || grads_out.is_null()
-            {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_rrule_impl::<MaxMul<f64>, MaxMulAlgebra<f64>>(
+                subscripts,
+                operands,
+                num_operands,
+                cotangent,
+                grads_out,
+            )
         },
     ));
     finalize_void(result, status)
@@ -422,17 +603,22 @@ pub unsafe extern "C" fn tfe_tropical_einsum_rrule_maxmul_f64(
 pub unsafe extern "C" fn tfe_tropical_einsum_frule_maxmul_f64(
     subscripts: *const c_char,
     primals: *const *const TfeTensorF64,
-    _num_operands: usize,
+    num_operands: usize,
     tangents: *const *const TfeTensorF64,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     let result = catch_unwind(AssertUnwindSafe(
         || -> std::result::Result<*mut TfeTensorF64, tfe_status_t> {
-            if subscripts.is_null() || primals.is_null() || tangents.is_null() {
-                return Err(TFE_INVALID_ARGUMENT);
-            }
-            Err(TFE_INVALID_ARGUMENT)
+            tropical_einsum_frule_impl::<MaxMul<f64>, MaxMulAlgebra<f64>>(
+                subscripts,
+                primals,
+                num_operands,
+                tangents,
+            )
         },
     ));
     finalize_ptr(result, status)
 }
+
+#[cfg(test)]
+mod tests;

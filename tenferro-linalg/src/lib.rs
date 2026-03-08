@@ -6278,16 +6278,16 @@ mod internal_tests {
         );
     }
 
-    #[cfg(feature = "linalg-lapack")]
+    #[cfg(all(feature = "linalg-lapack", feature = "provider-src"))]
     #[test]
-    fn solve_dispatch_cpu_context_returns_device_error_in_lapack_stub() {
+    fn solve_dispatch_is_generic_over_cpu_context_and_scalar_with_lapack_provider() {
         run_generic_context_solve_dispatch_smoke::<f64, _>(
             tenferro_prims::CpuContext::new(1),
-            true,
+            false,
         );
         run_generic_context_solve_dispatch_smoke::<Complex64, _>(
             tenferro_prims::CpuContext::new(1),
-            true,
+            false,
         );
     }
 

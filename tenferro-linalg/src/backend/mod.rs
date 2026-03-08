@@ -55,9 +55,9 @@ pub(crate) mod blas_lapack_backend;
 pub(crate) mod faer_backend;
 
 // Tensor-level API and types
+pub(crate) mod cpu_tensor_impl;
 pub mod tensor_api;
 pub mod tensor_context;
-#[cfg(feature = "linalg-faer")]
 pub(crate) mod tensor_helpers;
 
 // Device backends
@@ -81,6 +81,8 @@ pub use tensor_api::{
 pub use tensor_context::TensorLinalgContextFor;
 
 // CPU backend (public)
+#[cfg(feature = "linalg-lapack")]
+pub use blas_lapack_backend::BlasLapackBackend;
 pub use cpu::CpuLinalgScalar;
 pub use cpu::CpuTensorLinalgBackend;
 
