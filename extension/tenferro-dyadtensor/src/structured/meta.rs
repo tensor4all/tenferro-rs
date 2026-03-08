@@ -231,6 +231,24 @@ pub fn plan_axis_classes_for_subscripts(
     // Canonical global root ids in deterministic first-appearance order.
     let node_root_ids = canonicalize_roots(&mut uf, total_axes);
 
+    // Validate: all axes in the same local class must have the same canonical root.
+    for (operand_idx, operand) in operands.iter().enumerate() {
+        let mut class_root_map: HashMap<usize, usize> = HashMap::new();
+        for (axis, &class_id) in operand.axis_classes.iter().enumerate() {
+            let node = node_offsets[operand_idx] + axis;
+            let root = node_root_ids[node];
+            if let Some(&expected_root) = class_root_map.get(&class_id) {
+                debug_assert_eq!(
+                    expected_root, root,
+                    "operand {} class {} has inconsistent canonical roots: {} vs {}",
+                    operand_idx, class_id, expected_root, root
+                );
+            } else {
+                class_root_map.insert(class_id, root);
+            }
+        }
+    }
+
     // Step 2: merged-class dimension validation.
     validate_merged_dims(operands, &node_offsets, &node_root_ids)?;
 

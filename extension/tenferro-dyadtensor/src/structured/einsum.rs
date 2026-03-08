@@ -299,6 +299,12 @@ where
 
     while let Some((pos_a, pos_b)) = first_duplicate_pair(&current_roots) {
         let rank = current_roots.len();
+        debug_assert!(
+            pos_b < rank,
+            "pos_b ({}) must be less than current_roots length ({})",
+            pos_b,
+            rank
+        );
         let base = 1_000_000u32.saturating_add(round.saturating_mul(10_000));
         let mut input_labels: Vec<u32> = (0..rank).map(|i| base + i as u32).collect();
         input_labels[pos_b] = input_labels[pos_a];

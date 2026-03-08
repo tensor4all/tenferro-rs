@@ -233,7 +233,7 @@ impl<T: Scalar> Algebra for Standard<T> {
 /// assert_eq!(z, 0.0);
 /// assert_eq!(o, 1.0);
 /// ```
-impl<T: Scalar> Semiring for Standard<T> {
+impl<T: Scalar + num_traits::Zero + num_traits::One> Semiring for Standard<T> {
     fn zero() -> T {
         T::zero()
     }
