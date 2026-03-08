@@ -1,7 +1,7 @@
 use num_complex::Complex64;
 
 use super::*;
-use crate::{AdValue, NodeId, RuntimeContext, StructuredTensor, TapeId};
+use crate::{AdScalar, AdValue, DynAdScalar, DynAdTensor, NodeId, RuntimeContext, StructuredTensor, TapeId};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -1606,4 +1606,77 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
         .expect("missing lstsq residual gradient for b");
     assert!(as_slice(grad_res_a).iter().all(|x| x.abs() < 1e-12));
     assert!(as_slice(grad_res_b).iter().all(|x| x.abs() < 1e-12));
+}
+
+#[test]
+fn structured_reverse_pullback_accepts_dense_cotangent() {
+    let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let tape = TapeId(501);
+    let node_x = NodeId(601);
+    let node_alpha = NodeId(602);
+    let x = AdTensor::new_reverse(
+        StructuredTensor::from_diagonal_vector(
+            Tensor::<f64>::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+            2,
+        )
+        .unwrap(),
+        node_x,
+        tape,
+        None,
+    )
+    .unwrap();
+    let alpha = AdScalar::new_reverse(2.0_f64, node_alpha, tape, None);
+    let y = DynAdTensor::from(x.clone())
+        .scale(&DynAdScalar::from(alpha.as_value().clone()))
+        .unwrap();
+    let y = y.as_f64().unwrap();
+    let dense_cotangent = AdTensor::new_primal(f64_2x2([1.0, 0.0, 0.0, 1.0]));
+
+    let all_grads = pullback(y, &dense_cotangent).unwrap();
+    assert_eq!(
+        tensor_to_vec_f64(all_grads.get(&node_x).expect("missing reverse payload gradient")),
+        vec![2.0, 2.0]
+    );
+
+    let wrt_tensor = pullback_wrt(y, &dense_cotangent, &[&x]).unwrap();
+    let grad_x = wrt_tensor[0].as_ref().expect("missing structured wrt gradient");
+    assert_eq!(tensor_to_vec_f64(grad_x), vec![2.0, 2.0]);
+    assert_eq!(grad_x.axis_classes(), &[0, 0]);
+
+    let wrt_scalar = pullback_wrt_scalars(y, &dense_cotangent, &[&alpha]).unwrap();
+    assert_eq!(wrt_scalar, vec![Some(5.0)]);
+}
+
+#[test]
+fn reshape_reverse_pullback_accepts_non_contiguous_cotangent_view() {
+    let tape = TapeId(502);
+    let node_x = NodeId(603);
+    let x = AdTensor::new_reverse(f64_2x2([1.0, 2.0, 3.0, 4.0]), node_x, tape, None).unwrap();
+    let reshaped = DynAdTensor::from(x.clone()).reshape(&[4]).unwrap();
+    let reshaped = reshaped.as_f64().unwrap();
+
+    let base = Tensor::<f64>::from_slice(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+            16.0,
+        ],
+        &[4, 4],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let cotangent_view = base.diagonal(&[(0, 1)]).unwrap();
+    let expected = cotangent_view
+        .contiguous(MemoryOrder::ColumnMajor)
+        .reshape(&[2, 2])
+        .unwrap();
+
+    let grads = pullback_wrt(
+        reshaped,
+        &AdTensor::new_primal(cotangent_view),
+        &[&x],
+    )
+    .unwrap();
+    let grad_x = grads[0].as_ref().expect("missing reshape gradient");
+    assert_eq!(tensor_to_vec_f64(grad_x), tensor_to_vec_f64(&expected));
 }
