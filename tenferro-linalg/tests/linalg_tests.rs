@@ -20,6 +20,11 @@ fn make_tensor(data: Vec<f64>, dims: &[usize]) -> Tensor<f64> {
     Tensor::from_vec(data, dims, &strides, 0).unwrap()
 }
 
+/// Create a row-major tensor from a flat vec and shape.
+fn make_tensor_row_major(data: Vec<f64>, dims: &[usize]) -> Tensor<f64> {
+    Tensor::from_slice(&data, dims, MemoryOrder::RowMajor).unwrap()
+}
+
 /// Extract flat data from a Tensor.
 fn tensor_data(t: &Tensor<f64>) -> Vec<f64> {
     let c = t.contiguous(COL);
@@ -350,6 +355,39 @@ fn svd_reconstruction() {
 }
 
 #[test]
+fn svd_accepts_row_major_dense_input() {
+    let mut ctx = CpuContext::new(1);
+    let logical_col_major = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+    let a = make_tensor_row_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let result = svd(&mut ctx, &a, None).unwrap();
+
+    let u = tensor_data(&result.u);
+    let s = tensor_data(&result.s);
+    let vt = tensor_data(&result.vt);
+    let m = 2;
+    let n = 3;
+    let k = 2;
+
+    let mut recon = vec![0.0; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut val = 0.0;
+            for l in 0..k {
+                val += u[i + l * m] * s[l] * vt[l + j * k];
+            }
+            recon[i + j * m] = val;
+        }
+    }
+
+    let err = logical_col_major
+        .iter()
+        .zip(recon.iter())
+        .map(|(a, r)| (a - r).abs())
+        .fold(0.0, f64::max);
+    assert!(err < 1e-10, "row-major SVD reconstruction error: {err}");
+}
+
+#[test]
 fn svd_tall_matrix() {
     let mut ctx = CpuContext::new(1);
     // 4x2 matrix
@@ -414,6 +452,38 @@ fn qr_reconstruction() {
         .map(|(a, r)| (a - r).abs())
         .fold(0.0, f64::max);
     assert!(err < 1e-10, "QR reconstruction error: {err}");
+}
+
+#[test]
+fn qr_accepts_row_major_dense_input() {
+    let mut ctx = CpuContext::new(1);
+    let logical_col_major = vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0];
+    let a = make_tensor_row_major(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let result = qr(&mut ctx, &a).unwrap();
+
+    let q = tensor_data(&result.q);
+    let r = tensor_data(&result.r);
+    let m = 2;
+    let n = 3;
+    let k = 2;
+
+    let mut recon = vec![0.0; m * n];
+    for i in 0..m {
+        for j in 0..n {
+            let mut val = 0.0;
+            for l in 0..k {
+                val += q[i + l * m] * r[l + j * k];
+            }
+            recon[i + j * m] = val;
+        }
+    }
+
+    let err = logical_col_major
+        .iter()
+        .zip(recon.iter())
+        .map(|(a, r)| (a - r).abs())
+        .fold(0.0, f64::max);
+    assert!(err < 1e-10, "row-major QR reconstruction error: {err}");
 }
 
 #[test]
@@ -567,6 +637,19 @@ fn solve_identity() {
 }
 
 #[test]
+fn solve_accepts_row_major_dense_input() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor_row_major(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let b = make_tensor_row_major(vec![17.0, 39.0], &[2, 1]);
+    let x = solve(&mut ctx, &a, &b).unwrap();
+    let xd = tensor_data(&x);
+    let res0 = 1.0 * xd[0] + 2.0 * xd[1] - 17.0;
+    let res1 = 3.0 * xd[0] + 4.0 * xd[1] - 39.0;
+    assert!(res0.abs() < 1e-10, "row-major solve residual[0] = {res0}");
+    assert!(res1.abs() < 1e-10, "row-major solve residual[1] = {res1}");
+}
+
+#[test]
 fn solve_general() {
     let mut ctx = CpuContext::new(1);
     // A = [[2, 1], [1, 3]], b = [5, 10]
@@ -579,6 +662,14 @@ fn solve_general() {
     let res1 = 1.0 * xd[0] + 3.0 * xd[1] - 10.0;
     assert!(res0.abs() < 1e-10, "residual[0] = {res0}");
     assert!(res1.abs() < 1e-10, "residual[1] = {res1}");
+}
+
+#[test]
+fn solve_singular_matrix_returns_error() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![1.0, 2.0, 2.0, 4.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0], &[2, 1]);
+    assert!(solve(&mut ctx, &a, &b).is_err());
 }
 
 #[test]
@@ -609,6 +700,14 @@ fn solve_triangular_batch_mismatch_returns_error() {
     ];
     let a = make_tensor(a_data, &[2, 2, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    assert!(solve_triangular(&mut ctx, &a, &b, true).is_err());
+}
+
+#[test]
+fn solve_triangular_zero_diagonal_returns_error() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0], &[2, 1]);
     assert!(solve_triangular(&mut ctx, &a, &b, true).is_err());
 }
 
@@ -647,6 +746,13 @@ fn inv_2x2() {
             );
         }
     }
+}
+
+#[test]
+fn inv_singular_matrix_returns_error() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![1.0, 2.0, 2.0, 4.0], &[2, 2]);
+    assert!(inv(&mut ctx, &a).is_err());
 }
 
 // ============================================================================
@@ -819,6 +925,30 @@ fn eig_2x2_real_eigenvalues() {
     // Imaginary parts should be zero
     for v in &vals {
         assert!(v.im.abs() < 1e-10, "expected im=0.0, got {}", v.im);
+    }
+}
+
+#[test]
+fn eig_accepts_row_major_dense_input() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor_row_major(vec![1.0, 1.0, 0.0, 0.0, 2.0, 1.0, 0.0, 0.0, 3.0], &[3, 3]);
+    let result = eig(&mut ctx, &a).unwrap();
+    let vals = tensor_data_complex(&result.values);
+    let vecs = tensor_data_complex(&result.vectors);
+    let n = 3;
+    let a_data = tensor_data(&a);
+
+    for j in 0..n {
+        for i in 0..n {
+            let mut av = num_complex::Complex64::new(0.0, 0.0);
+            for k in 0..n {
+                let a_ik = num_complex::Complex64::new(a_data[i + k * n], 0.0);
+                av += a_ik * vecs[k + j * n];
+            }
+            let lv = vals[j] * vecs[i + j * n];
+            let diff = (av - lv).norm();
+            assert!(diff < 1e-10, "row-major eig residual at ({i},{j}) = {diff}");
+        }
     }
 }
 
@@ -1913,6 +2043,17 @@ fn test_solve_complex64() {
     }
     let err = complex_max_err(&ax, &b_data);
     assert!(err < 1e-10, "solve residual: {err}");
+}
+
+#[test]
+fn test_solve_complex64_singular_returns_error() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_complex_tensor(
+        vec![c(1.0, 1.0), c(2.0, 2.0), c(2.0, 0.0), c(4.0, 0.0)],
+        &[2, 2],
+    );
+    let b = make_complex_tensor(vec![c(1.0, 0.0), c(2.0, 0.0)], &[2, 1]);
+    assert!(solve(&mut ctx, &a, &b).is_err());
 }
 
 #[test]
@@ -4054,6 +4195,34 @@ fn norm_l1_inf_supported() {
     assert!((inf_data[0] - 6.0).abs() < 1e-12);
 }
 
+#[test]
+fn norm_vector_kinds_supported() {
+    let mut ctx = CpuContext::new(1);
+    let x = make_tensor(vec![3.0, -4.0], &[2]);
+
+    let fro = norm(&mut ctx, &x, NormKind::Fro).unwrap();
+    let l1 = norm(&mut ctx, &x, NormKind::L1).unwrap();
+    let inf = norm(&mut ctx, &x, NormKind::Inf).unwrap();
+    let lp = norm(&mut ctx, &x, NormKind::Lp(3.0)).unwrap();
+
+    assert!((tensor_data(&fro)[0] - 5.0).abs() < 1e-12);
+    assert!((tensor_data(&l1)[0] - 7.0).abs() < 1e-12);
+    assert!((tensor_data(&inf)[0] - 4.0).abs() < 1e-12);
+    assert!((tensor_data(&lp)[0] - 91.0_f64.powf(1.0 / 3.0)).abs() < 1e-12);
+}
+
+#[test]
+fn norm_vector_error_cases_return_errors() {
+    let mut ctx = CpuContext::new(1);
+    let x = make_tensor(vec![4.0, -4.0, 0.0], &[3]);
+
+    let lp1 = norm(&mut ctx, &x, NormKind::Lp(1.0)).unwrap();
+    assert!((tensor_data(&lp1)[0] - 8.0).abs() < 1e-12);
+
+    assert!(norm(&mut ctx, &x, NormKind::Lp(0.5)).is_err());
+    assert!(norm(&mut ctx, &x, NormKind::Spectral).is_err());
+}
+
 // ============================================================================
 // Coverage: Non-square SVD rrule with full cotangent (dU, dS, dVt)
 // ============================================================================
@@ -5505,6 +5674,48 @@ fn norm_rrule_inf_supported() {
 }
 
 #[test]
+fn norm_rrule_vector_kinds_supported() {
+    let mut ctx = CpuContext::new(1);
+    let x = make_tensor(vec![3.0, -4.0], &[2]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![2.0], &[], &[], 0).unwrap();
+
+    let fro = norm_rrule(&mut ctx, &x, &co, NormKind::Fro).unwrap();
+    let l1 = norm_rrule(&mut ctx, &x, &co, NormKind::L1).unwrap();
+    let inf = norm_rrule(&mut ctx, &x, &co, NormKind::Inf).unwrap();
+    let lp = norm_rrule(&mut ctx, &x, &co, NormKind::Lp(3.0)).unwrap();
+
+    let fro_data = tensor_data(&fro);
+    let l1_data = tensor_data(&l1);
+    let inf_data = tensor_data(&inf);
+    let lp_data = tensor_data(&lp);
+    let lp_norm = 91.0_f64.powf(1.0 / 3.0);
+    let lp_scale = 2.0 / lp_norm.powi(2);
+
+    assert!((fro_data[0] - 1.2).abs() < 1e-12);
+    assert!((fro_data[1] + 1.6).abs() < 1e-12);
+    assert_eq!(l1_data, vec![2.0, -2.0]);
+    assert_eq!(inf_data, vec![0.0, -2.0]);
+    assert!((lp_data[0] - 9.0 * lp_scale).abs() < 1e-12);
+    assert!((lp_data[1] + 16.0 * lp_scale).abs() < 1e-12);
+}
+
+#[test]
+fn norm_rrule_vector_edge_cases_supported() {
+    let mut ctx = CpuContext::new(1);
+    let x = make_tensor(vec![4.0, -4.0, 0.0], &[3]);
+    let co: Tensor<f64> = Tensor::from_vec(vec![6.0], &[], &[], 0).unwrap();
+
+    let lp1 = norm_rrule(&mut ctx, &x, &co, NormKind::Lp(1.0)).unwrap();
+    let inf = norm_rrule(&mut ctx, &x, &co, NormKind::Inf).unwrap();
+
+    assert_eq!(tensor_data(&lp1), vec![6.0, -6.0, 0.0]);
+    assert_eq!(tensor_data(&inf), vec![3.0, -3.0, 0.0]);
+
+    assert!(norm_rrule(&mut ctx, &x, &co, NormKind::Lp(0.5)).is_err());
+    assert!(norm_rrule(&mut ctx, &x, &co, NormKind::Spectral).is_err());
+}
+
+#[test]
 fn norm_frule_l1_supported() {
     let mut ctx = CpuContext::new(1);
     // Matrix [[1, -2], [3, 4]] and tangent [[0.1, 0.2], [0.3, 0.4]].
@@ -5528,6 +5739,48 @@ fn norm_frule_inf_supported() {
     let dn = tensor_data(&dnrm);
     assert!((n[0] - 7.0).abs() < 1e-12);
     assert!((dn[0] - 0.7).abs() < 1e-12);
+}
+
+#[test]
+fn norm_frule_vector_kinds_supported() {
+    let mut ctx = CpuContext::new(1);
+    let x = make_tensor(vec![3.0, -4.0], &[2]);
+    let dx = make_tensor(vec![0.1, 0.2], &[2]);
+
+    let (fro, dfro) = norm_frule(&mut ctx, &x, &dx, NormKind::Fro).unwrap();
+    let (l1, dl1) = norm_frule(&mut ctx, &x, &dx, NormKind::L1).unwrap();
+    let (inf, dinf) = norm_frule(&mut ctx, &x, &dx, NormKind::Inf).unwrap();
+    let (lp, dlp) = norm_frule(&mut ctx, &x, &dx, NormKind::Lp(3.0)).unwrap();
+
+    let lp_norm = 91.0_f64.powf(1.0 / 3.0);
+    let lp_derivative = (9.0 * 0.1 - 16.0 * 0.2) / lp_norm.powi(2);
+
+    assert!((tensor_data(&fro)[0] - 5.0).abs() < 1e-12);
+    assert!((tensor_data(&dfro)[0] + 0.1).abs() < 1e-12);
+    assert!((tensor_data(&l1)[0] - 7.0).abs() < 1e-12);
+    assert!((tensor_data(&dl1)[0] + 0.1).abs() < 1e-12);
+    assert!((tensor_data(&inf)[0] - 4.0).abs() < 1e-12);
+    assert!((tensor_data(&dinf)[0] + 0.2).abs() < 1e-12);
+    assert!((tensor_data(&lp)[0] - lp_norm).abs() < 1e-12);
+    assert!((tensor_data(&dlp)[0] - lp_derivative).abs() < 1e-12);
+}
+
+#[test]
+fn norm_frule_vector_edge_cases_supported() {
+    let mut ctx = CpuContext::new(1);
+    let x = make_tensor(vec![4.0, -4.0, 0.0], &[3]);
+    let dx = make_tensor(vec![1.0, 2.0, 5.0], &[3]);
+
+    let (lp1, dlp1) = norm_frule(&mut ctx, &x, &dx, NormKind::Lp(1.0)).unwrap();
+    let (inf, dinf) = norm_frule(&mut ctx, &x, &dx, NormKind::Inf).unwrap();
+
+    assert!((tensor_data(&lp1)[0] - 8.0).abs() < 1e-12);
+    assert!((tensor_data(&dlp1)[0] + 1.0).abs() < 1e-12);
+    assert!((tensor_data(&inf)[0] - 4.0).abs() < 1e-12);
+    assert!((tensor_data(&dinf)[0] + 0.5).abs() < 1e-12);
+
+    assert!(norm_frule(&mut ctx, &x, &dx, NormKind::Lp(0.5)).is_err());
+    assert!(norm_frule(&mut ctx, &x, &dx, NormKind::Spectral).is_err());
 }
 
 #[test]

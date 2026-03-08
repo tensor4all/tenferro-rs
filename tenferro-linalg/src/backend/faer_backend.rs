@@ -45,6 +45,22 @@ impl Default for FaerBackend {
     }
 }
 
+fn singular_matrix_error(op: &str) -> Error {
+    Error::InvalidArgument(format!("{op}: matrix is singular"))
+}
+
+fn non_finite_result_error(op: &str) -> Error {
+    Error::InvalidArgument(format!("{op}: solution contains non-finite values"))
+}
+
+fn zero_diagonal_error(op: &str, index: usize) -> Error {
+    Error::InvalidArgument(format!("{op}: zero diagonal at index {index}"))
+}
+
+fn complex_is_finite<T: num_traits::Float>(value: num_complex::Complex<T>) -> bool {
+    value.re.is_finite() && value.im.is_finite()
+}
+
 macro_rules! impl_linalg_backend {
     ($ty:ty) => {
         impl LinalgBackend<$ty> for FaerBackend {
@@ -396,11 +412,22 @@ macro_rules! impl_linalg_backend {
                 let a_mat = faer::MatRef::from_column_major_slice(a, n, n);
                 let b_mat = faer::MatRef::from_column_major_slice(b, n, nrhs);
                 let lu = a_mat.partial_piv_lu();
+                let u_mat = lu.U();
+                for i in 0..n {
+                    let diag = u_mat[(i, i)];
+                    if !diag.is_finite() || diag == 0.0 {
+                        return Err(singular_matrix_error("solve"));
+                    }
+                }
                 let result = lu.solve(&b_mat);
 
                 for j in 0..nrhs {
                     for i in 0..n {
-                        x[i + j * n] = result[(i, j)];
+                        let value = result[(i, j)];
+                        if !value.is_finite() {
+                            return Err(non_finite_result_error("solve"));
+                        }
+                        x[i + j * n] = value;
                     }
                 }
 
@@ -450,7 +477,15 @@ macro_rules! impl_linalg_backend {
                             for j in (i + 1)..n {
                                 sum -= a_mat[(i, j)] * x_col[j];
                             }
-                            x_col[i] = sum / a_mat[(i, i)];
+                            let diag = a_mat[(i, i)];
+                            if !diag.is_finite() || diag == 0.0 {
+                                return Err(zero_diagonal_error("solve_triangular", i));
+                            }
+                            let value = sum / diag;
+                            if !value.is_finite() {
+                                return Err(non_finite_result_error("solve_triangular"));
+                            }
+                            x_col[i] = value;
                         }
                     } else {
                         // Forward substitution for lower triangular
@@ -459,7 +494,15 @@ macro_rules! impl_linalg_backend {
                             for j in 0..i {
                                 sum -= a_mat[(i, j)] * x_col[j];
                             }
-                            x_col[i] = sum / a_mat[(i, i)];
+                            let diag = a_mat[(i, i)];
+                            if !diag.is_finite() || diag == 0.0 {
+                                return Err(zero_diagonal_error("solve_triangular", i));
+                            }
+                            let value = sum / diag;
+                            if !value.is_finite() {
+                                return Err(non_finite_result_error("solve_triangular"));
+                            }
+                            x_col[i] = value;
                         }
                     }
                 }
@@ -924,9 +967,24 @@ macro_rules! impl_complex_linalg_backend {
                 let a_mat = faer::MatRef::from_column_major_slice(&a_faer, n, n);
                 let b_mat = faer::MatRef::from_column_major_slice(&b_faer, n, nrhs);
                 let lu = a_mat.partial_piv_lu();
+                let u_mat = lu.U();
+                for i in 0..n {
+                    let diag = u_mat[(i, i)];
+                    if !diag.re.is_finite()
+                        || !diag.im.is_finite()
+                        || (diag.re == 0.0 && diag.im == 0.0)
+                    {
+                        return Err(singular_matrix_error("solve"));
+                    }
+                }
                 let result = lu.solve(&b_mat);
 
                 $from_faer_mat(result.as_ref(), x, n, nrhs);
+                for value in x.iter().copied() {
+                    if !complex_is_finite(value) {
+                        return Err(non_finite_result_error("solve"));
+                    }
+                }
 
                 Ok(())
             }
@@ -975,7 +1033,15 @@ macro_rules! impl_complex_linalg_backend {
                             for j in (i + 1)..n {
                                 sum -= a[i + j * n] * x_col[j];
                             }
-                            x_col[i] = sum / a[i + i * n];
+                            let diag = a[i + i * n];
+                            if !complex_is_finite(diag) || (diag.re == 0.0 && diag.im == 0.0) {
+                                return Err(zero_diagonal_error("solve_triangular", i));
+                            }
+                            let value = sum / diag;
+                            if !complex_is_finite(value) {
+                                return Err(non_finite_result_error("solve_triangular"));
+                            }
+                            x_col[i] = value;
                         }
                     } else {
                         // Forward substitution for lower triangular
@@ -984,7 +1050,15 @@ macro_rules! impl_complex_linalg_backend {
                             for j in 0..i {
                                 sum -= a[i + j * n] * x_col[j];
                             }
-                            x_col[i] = sum / a[i + i * n];
+                            let diag = a[i + i * n];
+                            if !complex_is_finite(diag) || (diag.re == 0.0 && diag.im == 0.0) {
+                                return Err(zero_diagonal_error("solve_triangular", i));
+                            }
+                            let value = sum / diag;
+                            if !complex_is_finite(value) {
+                                return Err(non_finite_result_error("solve_triangular"));
+                            }
+                            x_col[i] = value;
                         }
                     }
                 }

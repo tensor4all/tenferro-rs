@@ -51,6 +51,15 @@ fn ensure_col_major_contiguous() {
 }
 
 #[test]
+fn ensure_col_major_row_major_input_is_repacked() {
+    let a = Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::RowMajor).unwrap();
+    let b = ensure_col_major(&a);
+    assert!(b.is_contiguous());
+    assert_eq!(b.strides(), &[1, 2]);
+    assert_eq!(extract_contiguous_slice(&b).unwrap(), &[1.0, 3.0, 2.0, 4.0]);
+}
+
+#[test]
 fn extract_contiguous_slice_ok() {
     let a = make(&[1.0, 2.0], &[2]);
     let s = extract_contiguous_slice(&a).unwrap();

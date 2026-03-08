@@ -11,8 +11,7 @@ Before pushing or creating a PR, all of these must pass:
 
 ```bash
 cargo fmt --all --check
-cargo test --workspace --release
-cargo llvm-cov --workspace --json --output-path coverage.json
+cargo llvm-cov --workspace --release --json --output-path coverage.json
 python3 scripts/check-coverage.py coverage.json
 cargo doc --workspace --no-deps
 python3 scripts/check-docs-site.py

@@ -124,3 +124,6 @@ define_tropical_algebra!(
     zero_f32: MaxMul(0.0f32), one_f32: MaxMul(1.0f32),
     zero_f64: MaxMul(0.0f64), one_f64: MaxMul(1.0f64)
 );
+
+#[cfg(test)]
+mod tests;

@@ -11,4 +11,4 @@ Workflow:
 7. Fix the failure locally, rerun the relevant local verification, push, and resume with `bash scripts/monitor-pr-checks.sh <pr-url-or-number> --interval 30` until all required checks pass.
 8. Use `--allow-stale` only when the user explicitly accepts creating a PR with stale or unverified agent assets.
 
-Do not skip the script's verification steps. The script is responsible for freshness checks, formatting, tests, coverage, docs, PR creation, optional auto-merge, and fail-fast PR polling.
+Do not skip the script's verification steps. The script is responsible for freshness checks, formatting, release-mode coverage verification, docs, PR creation, optional auto-merge, and fail-fast PR polling.

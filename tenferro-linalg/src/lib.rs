@@ -509,6 +509,26 @@ fn validate_norm_cotangent<T: LinalgScalar>(
     Ok(())
 }
 
+fn invalid_vector_lp_exponent_error(p: f64) -> Error {
+    Error::InvalidArgument(format!("vector Lp norm requires p >= 1, got {p}"))
+}
+
+fn matrix_only_norm_kind_error(kind: NormKind) -> Error {
+    Error::InvalidArgument(format!("norm kind {kind:?} expects matrix input"))
+}
+
+fn invalid_vector_lp_exponent_ad_error(p: f64) -> chainrules_core::AutodiffError {
+    chainrules_core::AutodiffError::InvalidArgument(format!(
+        "vector Lp norm requires p >= 1, got {p}"
+    ))
+}
+
+fn matrix_only_norm_kind_ad_error(kind: NormKind) -> chainrules_core::AutodiffError {
+    chainrules_core::AutodiffError::InvalidArgument(format!(
+        "norm kind {kind:?} expects matrix input"
+    ))
+}
+
 /// Validate Hermitian/symmetric structure for batched square matrices stored
 /// in column-major contiguous layout.
 ///
@@ -861,8 +881,8 @@ pub struct SlogdetResult<T: Scalar, R: Scalar = T> {
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
+/// let b = Tensor::<f64>::ones(&[3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// // grad.a: shape [3, 3], grad.b: shape [3]
@@ -1257,8 +1277,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
-/// let b = Tensor::<f64>::zeros(&[10], mem, col);
+/// let a = Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0, 1.0, 1.0], &[3, 2], col).unwrap();
+/// let b = Tensor::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
 /// let result = lstsq(&mut ctx, &a, &b).unwrap();
 /// ```
 ///
@@ -1388,8 +1408,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
+/// let b = Tensor::<f64>::ones(&[3], mem, col);
 /// let x = solve(&mut ctx, &a, &b).unwrap();
 /// ```
 pub fn solve<T: LinalgScalar, C>(ctx: &mut C, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
@@ -1412,7 +1432,7 @@ where
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3],
+/// let a = Tensor::<f64>::eye(3,
 ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 /// let a_inv = inv(&mut ctx, &a).unwrap();
 /// ```
@@ -2069,8 +2089,12 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let a = Tensor::from_slice(
+///     &[2.0, 0.0, 0.0, 1.0, 3.0, 0.0, 0.0, 1.0, 4.0],
+///     &[3, 3],
+///     col,
+/// ).unwrap();
+/// let b = Tensor::<f64>::ones(&[3], mem, col);
 /// let x = solve_triangular(&mut ctx, &a, &b, true).unwrap(); // upper=true
 /// ```
 pub fn solve_triangular<T: LinalgScalar, C>(
@@ -2085,9 +2109,12 @@ where
     <C::Backend as backend::TensorLinalgBackend<T>>::solve_triangular(ctx, a, b, upper)
 }
 
-/// Compute a matrix norm.
+/// Compute a norm.
 ///
-/// Input shape: `(m, n, *)`.
+/// Supported input shapes:
+/// - rank-1 vectors `(n)` for `NormKind::Fro`, `NormKind::L1`, `NormKind::Inf`,
+///   and `NormKind::Lp(p)`
+/// - matrices `(m, n, *)` for all currently implemented matrix norms
 ///
 /// Supported kinds in the current implementation:
 /// - `NormKind::Fro`
@@ -2095,9 +2122,10 @@ where
 /// - `NormKind::Spectral`
 /// - `NormKind::L1` (max absolute column sum)
 /// - `NormKind::Inf` (max absolute row sum)
+/// - `NormKind::Lp(p)` for vectors
 ///
-/// Return shape is `(*)` (batch dimensions). For non-batched input this is
-/// a scalar tensor `[]`.
+/// Return shape is `(*)` (batch dimensions) for matrices. For vectors and
+/// non-batched matrices, the result is a scalar tensor `[]`.
 ///
 /// # Examples
 ///
@@ -2122,6 +2150,40 @@ where
     C: backend::TensorLinalgContextFor<T>,
 {
     ensure_cpu_backend::<T, C>("norm")?;
+
+    if tensor.ndim() == 1 {
+        let input = ensure_col_major(tensor);
+        let offset = input.offset() as usize;
+        let len = tensor.dims()[0];
+        let vec_data = &extract_slice(&input)?[offset..offset + len];
+
+        let value = match kind {
+            NormKind::Fro => {
+                let mut sum = T::zero();
+                for &v in vec_data {
+                    sum = sum + v * v;
+                }
+                sum.sqrt()
+            }
+            NormKind::L1 => vec_data.iter().fold(T::zero(), |acc, &v| acc + v.abs()),
+            NormKind::Inf => vec_data.iter().fold(T::zero(), |acc, &v| acc.max(v.abs())),
+            NormKind::Lp(p) => {
+                if p < 1.0 {
+                    return Err(invalid_vector_lp_exponent_error(p));
+                }
+                let (p_t, mut sum) = (scalar_from::<T>(p)?, T::zero());
+                for &v in vec_data {
+                    sum = sum + v.abs().powf(p_t);
+                }
+                sum.powf(T::one() / p_t)
+            }
+            NormKind::Nuclear | NormKind::Spectral => {
+                return Err(matrix_only_norm_kind_error(kind));
+            }
+        };
+
+        return tensor_from_data(vec![value], &[]);
+    }
 
     let (m, n, batch_dims) = validate_2d(tensor)?;
     let bc = batch_count(batch_dims);
@@ -2250,10 +2312,10 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
-/// let b = Tensor::<f64>::zeros(&[10], mem, col);
+/// let a = Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0, 1.0, 1.0], &[3, 2], col).unwrap();
+/// let b = Tensor::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
 /// let result = lstsq(&mut ctx, &a, &b).unwrap();
-/// assert_eq!(result.x.dims(), &[5]);
+/// assert_eq!(result.x.dims(), &[2]);
 /// ```
 pub struct LstsqResult<T: Scalar> {
     /// Least-squares solution. Shape: `(n, *)`.
@@ -2275,9 +2337,9 @@ pub struct LstsqResult<T: Scalar> {
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
-/// let b = Tensor::<f64>::zeros(&[10], mem, col);
-/// let dx = Tensor::<f64>::ones(&[5], mem, col);
+/// let a = Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0, 1.0, 1.0], &[3, 2], col).unwrap();
+/// let b = Tensor::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
+/// let dx = Tensor::<f64>::ones(&[2], mem, col);
 /// let grad = lstsq_rrule(&mut ctx, &a, &b, &dx).unwrap();
 /// // grad.a: shape [10, 5], grad.b: shape [10]
 /// ```
@@ -2971,7 +3033,11 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[4, 3], mem, col);
+/// let a = Tensor::from_slice(
+///     &[1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0],
+///     &[4, 3],
+///     col,
+/// ).unwrap();
 /// let cotangent = QrCotangent {
 ///     q: Some(Tensor::ones(&[4, 3], mem, col)),
 ///     r: None,
@@ -3093,7 +3159,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::from_slice(&[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0], &[3, 3], col)
+///     .unwrap();
 /// let cotangent = LuCotangent {
 ///     l: Some(Tensor::ones(&[3, 3], mem, col)),
 ///     u: None,
@@ -3427,9 +3494,9 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
-/// let b = Tensor::<f64>::zeros(&[10], mem, col);
-/// let dx = Tensor::<f64>::ones(&[5], mem, col);
+/// let a = Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0, 1.0, 1.0], &[3, 2], col).unwrap();
+/// let b = Tensor::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
+/// let dx = Tensor::<f64>::ones(&[2], mem, col);
 /// let grad = lstsq_rrule(&mut ctx, &a, &b, &dx).unwrap();
 /// // grad.a: cotangent for A, grad.b: cotangent for b
 /// ```
@@ -3577,8 +3644,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
+/// let b = Tensor::<f64>::ones(&[3], mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
@@ -3723,7 +3790,7 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = inv_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
@@ -3781,7 +3848,7 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
 /// let grad_a = det_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
@@ -3843,7 +3910,7 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
 /// let cotangent = SlogdetCotangent {
 ///     logabsdet: Some(Tensor::ones(&[], mem, col)),
 /// };
@@ -4182,6 +4249,105 @@ where
     C: backend::TensorLinalgContextFor<T>,
 {
     ensure_cpu_backend::<T, C>("norm_rrule").map_err(to_ad_err)?;
+
+    if tensor.ndim() == 1 {
+        validate_norm_cotangent(cotangent, &[]).map_err(to_ad_err)?;
+        let (a_data, _) = extract_data(tensor)?;
+        let (dn_data, _) = extract_data(cotangent)?;
+        let dn = dn_data[0];
+        let len = tensor.dims()[0];
+        let mut grad_a = vec![T::zero(); len];
+
+        match kind {
+            NormKind::Fro => {
+                let nrm = norm(ctx, tensor, NormKind::Fro).map_err(to_ad_err)?;
+                let (nrm_data, _) = extract_data(&nrm)?;
+                let nv = nrm_data[0];
+                let scale = if nv > T::zero() { dn / nv } else { T::zero() };
+                for i in 0..len {
+                    grad_a[i] = scale * a_data[i];
+                }
+            }
+            NormKind::L1 => {
+                for i in 0..len {
+                    let v = a_data[i];
+                    let sign = if v > T::zero() {
+                        T::one()
+                    } else if v < T::zero() {
+                        -T::one()
+                    } else {
+                        T::zero()
+                    };
+                    grad_a[i] = dn * sign;
+                }
+            }
+            NormKind::Inf => {
+                let max_abs = a_data.iter().fold(T::zero(), |acc, &v| acc.max(v.abs()));
+                let active: Vec<usize> = a_data
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &v)| if v.abs() == max_abs { Some(i) } else { None })
+                    .collect();
+                if !active.is_empty() {
+                    let active_count = scalar_from::<T>(active.len() as f64).map_err(to_ad_err)?;
+                    let scale = dn / active_count;
+                    for i in active {
+                        let v = a_data[i];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        grad_a[i] = scale * sign;
+                    }
+                }
+            }
+            NormKind::Lp(p) => {
+                if p < 1.0 {
+                    return Err(invalid_vector_lp_exponent_ad_error(p));
+                }
+                if p == 1.0 {
+                    for i in 0..len {
+                        let v = a_data[i];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        grad_a[i] = dn * sign;
+                    }
+                } else {
+                    let nrm = norm(ctx, tensor, kind).map_err(to_ad_err)?;
+                    let (nrm_data, _) = extract_data(&nrm)?;
+                    let nv = nrm_data[0];
+                    if nv > T::zero() {
+                        let p_minus_one = scalar_from::<T>(p - 1.0).map_err(to_ad_err)?;
+                        let scale = dn / nv.powf(p_minus_one);
+                        for i in 0..len {
+                            let v = a_data[i];
+                            let sign = if v > T::zero() {
+                                T::one()
+                            } else if v < T::zero() {
+                                -T::one()
+                            } else {
+                                T::zero()
+                            };
+                            grad_a[i] = scale * sign * v.abs().powf(p_minus_one);
+                        }
+                    }
+                }
+            }
+            NormKind::Nuclear | NormKind::Spectral => {
+                return Err(matrix_only_norm_kind_ad_error(kind));
+            }
+        }
+
+        return tensor_from_data(grad_a, &[len]).map_err(to_ad_err);
+    }
 
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -4537,7 +4703,11 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[4, 3], mem, col);
+/// let a = Tensor::from_slice(
+///     &[1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0],
+///     &[4, 3],
+///     col,
+/// ).unwrap();
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
 /// ```
@@ -4655,7 +4825,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::from_slice(&[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0], &[3, 3], col)
+///     .unwrap();
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
@@ -4885,10 +5056,10 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[10, 5], mem, col);
-/// let b = Tensor::<f64>::zeros(&[10], mem, col);
-/// let da = Tensor::<f64>::ones(&[10, 5], mem, col);
-/// let db = Tensor::<f64>::ones(&[10], mem, col);
+/// let a = Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0, 1.0, 1.0], &[3, 2], col).unwrap();
+/// let b = Tensor::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 2], mem, col);
+/// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
 pub fn lstsq_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
@@ -5028,8 +5199,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let b = Tensor::<f64>::zeros(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
+/// let b = Tensor::<f64>::ones(&[3], mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
@@ -5181,7 +5352,7 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (a_inv, da_inv) = inv_frule(&mut ctx, &a, &da).unwrap();
 /// ```
@@ -5237,7 +5408,7 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (d, dd) = det_frule(&mut ctx, &a, &da).unwrap();
 /// ```
@@ -5297,7 +5468,7 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col);
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
 /// ```
@@ -5646,6 +5817,104 @@ where
 
     let nrm = norm(ctx, tensor, kind)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
+
+    if tensor.ndim() == 1 {
+        let (a_data, _) = extract_data(tensor)?;
+        let (nrm_data, _) = extract_data(&nrm)?;
+        let (da_data, _) = extract_data(tangent)?;
+        let len = tensor.dims()[0];
+        let mut dnrm = T::zero();
+
+        match kind {
+            NormKind::Fro => {
+                let nv = nrm_data[0];
+                if nv > T::zero() {
+                    for i in 0..len {
+                        dnrm = dnrm + a_data[i] * da_data[i];
+                    }
+                    dnrm = dnrm / nv;
+                }
+            }
+            NormKind::L1 => {
+                for i in 0..len {
+                    let v = a_data[i];
+                    let sign = if v > T::zero() {
+                        T::one()
+                    } else if v < T::zero() {
+                        -T::one()
+                    } else {
+                        T::zero()
+                    };
+                    dnrm = dnrm + sign * da_data[i];
+                }
+            }
+            NormKind::Inf => {
+                let max_abs = a_data.iter().fold(T::zero(), |acc, &v| acc.max(v.abs()));
+                let active: Vec<usize> = a_data
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, &v)| if v.abs() == max_abs { Some(i) } else { None })
+                    .collect();
+                if !active.is_empty() {
+                    for i in active.iter().copied() {
+                        let v = a_data[i];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        dnrm = dnrm + sign * da_data[i];
+                    }
+                    let active_count = scalar_from::<T>(active.len() as f64).map_err(to_ad_err)?;
+                    dnrm = dnrm / active_count;
+                }
+            }
+            NormKind::Lp(p) => {
+                if p < 1.0 {
+                    return Err(invalid_vector_lp_exponent_ad_error(p));
+                }
+                if p == 1.0 {
+                    for i in 0..len {
+                        let v = a_data[i];
+                        let sign = if v > T::zero() {
+                            T::one()
+                        } else if v < T::zero() {
+                            -T::one()
+                        } else {
+                            T::zero()
+                        };
+                        dnrm = dnrm + sign * da_data[i];
+                    }
+                } else {
+                    let nv = nrm_data[0];
+                    if nv > T::zero() {
+                        let p_minus_one = scalar_from::<T>(p - 1.0).map_err(to_ad_err)?;
+                        for i in 0..len {
+                            let v = a_data[i];
+                            let sign = if v > T::zero() {
+                                T::one()
+                            } else if v < T::zero() {
+                                -T::one()
+                            } else {
+                                T::zero()
+                            };
+                            dnrm = dnrm + sign * v.abs().powf(p_minus_one) * da_data[i];
+                        }
+                        dnrm = dnrm / nv.powf(p_minus_one);
+                    }
+                }
+            }
+            NormKind::Nuclear | NormKind::Spectral => {
+                return Err(matrix_only_norm_kind_ad_error(kind));
+            }
+        }
+
+        let dnrm = tensor_from_data(vec![dnrm], &[]).map_err(to_ad_err)?;
+        return Ok((nrm, dnrm));
+    }
+
     let (m, n, batch_dims) = validate_2d(tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
@@ -5810,6 +6079,9 @@ where
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((nrm, dnrm))
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 mod eig_scalar_tests {

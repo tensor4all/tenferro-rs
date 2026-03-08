@@ -1,0 +1,139 @@
+use super::*;
+use num_complex::{Complex32, Complex64};
+use tenferro_prims::CpuContext;
+
+fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.dims().iter().product::<usize>().max(1);
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
+}
+
+#[test]
+fn vector_norm_paths_are_covered_in_crate_unit_tests() {
+    let mut ctx = CpuContext::new(1);
+    let x = Tensor::from_slice(&[3.0_f64, -4.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let dx = Tensor::from_slice(&[0.25_f64, -0.5], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let cotangent = Tensor::from_vec(vec![2.0_f64], &[], &[], 0).unwrap();
+
+    let lp = norm(&mut ctx, &x, NormKind::Lp(2.0)).unwrap();
+    assert!((tensor_data(&lp)[0] - 5.0).abs() < 1e-12);
+
+    let grad = norm_rrule(&mut ctx, &x, &cotangent, NormKind::Fro).unwrap();
+    let grad_data = tensor_data(&grad);
+    assert!((grad_data[0] - 1.2).abs() < 1e-12);
+    assert!((grad_data[1] + 1.6).abs() < 1e-12);
+
+    let (nrm, dnrm) = norm_frule(&mut ctx, &x, &dx, NormKind::Lp(2.0)).unwrap();
+    assert!((tensor_data(&nrm)[0] - 5.0).abs() < 1e-12);
+    assert!((tensor_data(&dnrm)[0] - 0.55).abs() < 1e-12);
+}
+
+#[test]
+fn private_scalar_and_validation_helpers_are_covered_in_crate_unit_tests() {
+    assert_eq!(<f64 as LinalgScalar>::conj(&1.5), 1.5);
+    assert_eq!(<f32 as LinalgScalar>::conj(&1.5_f32), 1.5_f32);
+
+    let z64 = Complex64::new(3.0, -4.0);
+    assert_eq!(<Complex64 as LinalgScalar>::abs_real(&z64), 5.0);
+    assert!(<Complex64 as LinalgScalar>::real_epsilon() > 0.0);
+    assert_eq!(
+        <Complex64 as LinalgScalar>::conj(&z64),
+        Complex64::new(3.0, 4.0)
+    );
+
+    let z32 = Complex32::new(-2.0, 1.5);
+    assert_eq!(<Complex32 as LinalgScalar>::abs_real(&z32), z32.norm());
+    assert!(<Complex32 as LinalgScalar>::real_epsilon() > 0.0);
+    assert_eq!(
+        <Complex32 as LinalgScalar>::conj(&z32),
+        Complex32::new(-2.0, -1.5)
+    );
+
+    assert_eq!(<f64 as LinalgScalar>::eig_buffer_sizes(2), (4, 8));
+    assert_eq!(<f32 as LinalgScalar>::eig_buffer_sizes(2), (4, 8));
+    assert_eq!(<Complex64 as LinalgScalar>::eig_buffer_sizes(2), (2, 4));
+    assert_eq!(<Complex32 as LinalgScalar>::eig_buffer_sizes(2), (2, 4));
+
+    let mut real_vals = vec![Complex64::new(0.0, 0.0); 2];
+    let mut real_vecs = vec![Complex64::new(0.0, 0.0); 4];
+    <f64 as LinalgScalar>::eig_ri_to_complex(
+        2,
+        &[1.0, 0.5, -2.0, 1.25],
+        &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+        &mut real_vals,
+        &mut real_vecs,
+    );
+    assert_eq!(
+        real_vals,
+        vec![Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.25)]
+    );
+    assert_eq!(
+        real_vecs,
+        vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ]
+    );
+
+    let mut complex_vals = vec![Complex32::new(0.0, 0.0); 2];
+    let mut complex_vecs = vec![Complex32::new(0.0, 0.0); 4];
+    <Complex32 as LinalgScalar>::eig_ri_to_complex(
+        2,
+        &[Complex32::new(1.0, -0.5), Complex32::new(-2.0, 0.25)],
+        &[
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, 1.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, 0.0),
+        ],
+        &mut complex_vals,
+        &mut complex_vecs,
+    );
+    assert_eq!(
+        complex_vals,
+        vec![Complex32::new(1.0, -0.5), Complex32::new(-2.0, 0.25)]
+    );
+    assert_eq!(
+        complex_vecs,
+        vec![
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, 1.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, 0.0),
+        ]
+    );
+
+    let square =
+        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let (n, batch) = validate_square(&square).unwrap();
+    assert_eq!(n, 2);
+    assert!(batch.is_empty());
+
+    let rhs = Tensor::from_slice(&[1.0_f64, -2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    validate_lstsq_rhs(&rhs, 2, &[]).unwrap();
+
+    let scalar_cotangent = Tensor::from_vec(vec![1.0_f64], &[], &[], 0).unwrap();
+    validate_norm_cotangent(&scalar_cotangent, &[]).unwrap();
+
+    let hermitian = [
+        Complex64::new(2.0, 0.0),
+        Complex64::new(1.0, -2.0),
+        Complex64::new(1.0, 2.0),
+        Complex64::new(3.0, 0.0),
+    ];
+    validate_hermitian_batches(&hermitian, 0, 2, 1, "eigh").unwrap();
+
+    let slice = extract_slice(&square).unwrap();
+    assert_eq!(slice, &[1.0, 0.0, 0.0, 1.0]);
+
+    let scalar = scalar_from::<f32>(1.25).unwrap();
+    assert_eq!(scalar, 1.25_f32);
+
+    let ad_err = to_ad_err(Error::InvalidArgument("coverage".into()));
+    assert!(
+        matches!(ad_err, chainrules_core::AutodiffError::InvalidArgument(msg) if msg.contains("coverage"))
+    );
+}
