@@ -42,7 +42,7 @@ use num_traits::{Float, One, Zero};
 /// takes_scalar(1.0_f64);
 /// ```
 pub trait ScalarAd:
-    Copy + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Div<Output = Self>
+    Copy + PartialEq + Add<Output = Self> + Sub<Output = Self> + Mul<Output = Self> + Div<Output = Self>
 {
     /// Real exponent type for `powf`.
     type Real: Copy + Float;
@@ -371,6 +371,9 @@ pub fn div<S: ScalarAd>(x: S, y: S) -> S {
 ///
 /// Returns `(primal, tangent)`.
 ///
+/// When `y` is zero, the derivative produces NaN/Inf following IEEE 754
+/// semantics, consistent with standard AD behavior for division by zero.
+///
 /// # Examples
 ///
 /// ```rust
@@ -392,6 +395,9 @@ pub fn div_frule<S: ScalarAd>(x: S, y: S, dx: S, dy: S) -> (S, S) {
 /// Reverse rule for `div`.
 ///
 /// Returns cotangents with respect to `(x, y)`.
+///
+/// When `y` is zero, the derivatives produce NaN/Inf following IEEE 754
+/// semantics, consistent with standard AD behavior for division by zero.
 ///
 /// # Examples
 ///
@@ -484,13 +490,21 @@ pub fn sqrt<S: ScalarAd>(x: S) -> S {
 /// ```
 pub fn sqrt_frule<S: ScalarAd>(x: S, dx: S) -> (S, S) {
     let y = x.sqrt();
-    let dy = dx / (S::from_i32(2) * y.conj());
+    let zero = S::from_i32(0);
+    let dy = if y == zero {
+        zero
+    } else {
+        dx / (S::from_i32(2) * y.conj())
+    };
     (y, dy)
 }
 
 /// Reverse rule for `sqrt`.
 ///
 /// `result` is the primal output `sqrt(x)`.
+///
+/// When `result` (i.e. `sqrt(x)`) is zero, returns zero instead of
+/// dividing by zero.
 ///
 /// # Examples
 ///
@@ -502,7 +516,12 @@ pub fn sqrt_frule<S: ScalarAd>(x: S, dx: S) -> (S, S) {
 /// assert!((dx - (1.0 / 6.0)).abs() < 1e-12);
 /// ```
 pub fn sqrt_rrule<S: ScalarAd>(result: S, cotangent: S) -> S {
-    cotangent / (S::from_i32(2) * result.conj())
+    let zero = S::from_i32(0);
+    if result == zero {
+        zero
+    } else {
+        cotangent / (S::from_i32(2) * result.conj())
+    }
 }
 
 /// Primal `powf`.

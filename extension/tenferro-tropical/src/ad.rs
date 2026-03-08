@@ -329,7 +329,41 @@ fn tropical_forward_with_argmax<T: TropicalScalar>(
             )))
         })
         .collect::<Result<Vec<_>>>()?;
+
+    // Build a dimension map and validate all operand dimensions match (#346)
+    let mut dim_map: std::collections::HashMap<u32, usize> = std::collections::HashMap::new();
+    for (pos, &m) in output_modes.iter().enumerate() {
+        dim_map.insert(m, output_shape[pos]);
+    }
+    for (c_pos, &m) in contracted.iter().enumerate() {
+        dim_map.insert(m, contracted_dims[c_pos]);
+    }
+    for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
+        let op_dims = operands[op_idx].dims();
+        for (pos, &m) in input_modes.iter().enumerate() {
+            if let Some(&expected) = dim_map.get(&m) {
+                if op_dims[pos] != expected {
+                    return Err(Error::InvalidArgument(format!(
+                        "dimension mismatch for mode {m}: operand {op_idx} has size {} but expected {expected}",
+                        op_dims[pos]
+                    )));
+                }
+            }
+        }
+    }
+
     let contracted_total: usize = contracted_dims.iter().product::<usize>().max(1);
+
+    // Pre-validate that all input modes are in output or contracted (#343)
+    for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
+        for m in input_modes.iter() {
+            if !output_modes.contains(m) && !contracted.contains(m) {
+                return Err(Error::InvalidArgument(format!(
+                    "mode {m} in operand {op_idx} not found in output or contracted modes"
+                )));
+            }
+        }
+    }
 
     let total_output: usize = output_shape.iter().product::<usize>().max(1);
     let mut output_data = vec![T::zero(); total_output];
@@ -356,12 +390,16 @@ fn tropical_forward_with_argmax<T: TropicalScalar>(
                 mode_values.insert(c_mode, k_idx[c_pos]);
             }
 
-            // Compute product of all operands at resolved indices
+            // All modes pre-validated; lookup cannot fail
             let mut product = T::one();
             for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
                 let idx: Vec<usize> = input_modes
                     .iter()
-                    .map(|m| *mode_values.get(m).unwrap_or(&0))
+                    .map(|m| {
+                        *mode_values
+                            .get(m)
+                            .expect("mode pre-validated to exist in map")
+                    })
                     .collect();
                 product = product * views[op_idx].get(&idx);
             }
@@ -430,9 +468,22 @@ fn tropical_backward_unary<T: TropicalScalar>(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Pre-validate that all input modes exist in output or contracted (#344)
+    for m in input_modes.iter() {
+        if !output_modes.contains(m) && !contracted.contains(m) {
+            return Err(Error::InvalidArgument(format!(
+                "mode {m} not found in output or contracted modes"
+            )));
+        }
+    }
+
     let mut grad_data = vec![T::Inner::zero(); operand.len()];
+    let mut backward_error: Option<Error> = None;
 
     for_each_index(output_shape, |out_idx| {
+        if backward_error.is_some() {
+            return;
+        }
         let mut mode_values: std::collections::HashMap<u32, usize> =
             std::collections::HashMap::new();
         for (pos, &m) in output_modes.iter().enumerate() {
@@ -456,12 +507,28 @@ fn tropical_backward_unary<T: TropicalScalar>(
 
         let input_idx: Vec<usize> = input_modes
             .iter()
-            .map(|m| *mode_values.get(m).unwrap_or(&0))
+            .map(|m| {
+                *mode_values
+                    .get(m)
+                    .expect("mode pre-validated to exist in map")
+            })
             .collect();
 
         let input_flat = col_major_flat_index(operand.dims(), &input_idx);
-        grad_data[input_flat] += dout;
+        // Bounds check on flat index (#348)
+        if let Some(slot) = grad_data.get_mut(input_flat) {
+            *slot += dout;
+        } else {
+            backward_error = Some(Error::InvalidArgument(format!(
+                "flat index {input_flat} out of bounds for gradient buffer of size {}",
+                grad_data.len()
+            )));
+        }
     });
+
+    if let Some(err) = backward_error {
+        return Err(err);
+    }
 
     let grad = Tensor::<T::Inner>::from_slice(&grad_data, operand.dims(), MemoryOrder::ColumnMajor)
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
@@ -502,10 +569,23 @@ fn tropical_backward_binary<T: TropicalScalar>(
         })
         .collect::<Result<Vec<_>>>()?;
 
+    // Pre-validate that all input modes exist in output or contracted (#345)
+    for m in input_modes_a.iter().chain(input_modes_b.iter()) {
+        if !output_modes.contains(m) && !contracted.contains(m) {
+            return Err(Error::InvalidArgument(format!(
+                "mode {m} not found in output or contracted modes"
+            )));
+        }
+    }
+
     let mut da_data = vec![T::Inner::zero(); a.len()];
     let mut db_data = vec![T::Inner::zero(); b.len()];
+    let mut backward_error: Option<Error> = None;
 
     for_each_index(output_shape, |out_idx| {
+        if backward_error.is_some() {
+            return;
+        }
         let mut mode_values: std::collections::HashMap<u32, usize> =
             std::collections::HashMap::new();
         for (pos, &m) in output_modes.iter().enumerate() {
@@ -529,11 +609,19 @@ fn tropical_backward_binary<T: TropicalScalar>(
 
         let a_idx: Vec<usize> = input_modes_a
             .iter()
-            .map(|m| *mode_values.get(m).unwrap_or(&0))
+            .map(|m| {
+                *mode_values
+                    .get(m)
+                    .expect("mode pre-validated to exist in map")
+            })
             .collect();
         let b_idx: Vec<usize> = input_modes_b
             .iter()
-            .map(|m| *mode_values.get(m).unwrap_or(&0))
+            .map(|m| {
+                *mode_values
+                    .get(m)
+                    .expect("mode pre-validated to exist in map")
+            })
             .collect();
 
         let a_val = a_view.get(&a_idx).inner();
@@ -545,9 +633,29 @@ fn tropical_backward_binary<T: TropicalScalar>(
         let a_flat = col_major_flat_index(a.dims(), &a_idx);
         let b_flat = col_major_flat_index(b.dims(), &b_idx);
 
-        da_data[a_flat] += da_contrib;
-        db_data[b_flat] += db_contrib;
+        // Bounds check on flat indices (#348)
+        if let Some(slot) = da_data.get_mut(a_flat) {
+            *slot += da_contrib;
+        } else {
+            backward_error = Some(Error::InvalidArgument(format!(
+                "flat index {a_flat} out of bounds for da buffer of size {}",
+                da_data.len()
+            )));
+            return;
+        }
+        if let Some(slot) = db_data.get_mut(b_flat) {
+            *slot += db_contrib;
+        } else {
+            backward_error = Some(Error::InvalidArgument(format!(
+                "flat index {b_flat} out of bounds for db buffer of size {}",
+                db_data.len()
+            )));
+        }
     });
+
+    if let Some(err) = backward_error {
+        return Err(err);
+    }
 
     let da = Tensor::<T::Inner>::from_slice(&da_data, a.dims(), MemoryOrder::ColumnMajor)
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
