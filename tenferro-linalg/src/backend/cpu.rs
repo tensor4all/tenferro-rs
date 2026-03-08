@@ -223,12 +223,10 @@ pub(crate) fn lu_slices<T: CpuLinalgScalar>(
     <T as private::CpuLinalgOps>::lu_slices(a, m, n, perm, l, u_out)
 }
 
-#[cfg(feature = "linalg-faer")]
 pub(crate) fn cholesky_slices<T: CpuLinalgScalar>(a: &[T], n: usize, l: &mut [T]) -> Result<()> {
     <T as private::CpuLinalgOps>::cholesky_slices(a, n, l)
 }
 
-#[cfg(feature = "linalg-faer")]
 pub(crate) fn eigen_sym_slices<T: CpuLinalgScalar>(
     a: &[T],
     n: usize,
@@ -238,7 +236,6 @@ pub(crate) fn eigen_sym_slices<T: CpuLinalgScalar>(
     <T as private::CpuLinalgOps>::eigen_sym_slices(a, n, values, vectors)
 }
 
-#[cfg(feature = "linalg-faer")]
 pub(crate) fn eig_slices<T: CpuLinalgScalar>(
     a: &[T],
     n: usize,

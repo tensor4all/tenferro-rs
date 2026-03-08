@@ -327,6 +327,12 @@ pub struct TfeTensorF64 {
     _private: [u8; 0],
 }
 
+struct ExportedDLPackTensor {
+    tensor: Box<Tensor<f64>>,
+    shape: Box<[i64]>,
+    strides: Box<[i64]>,
+}
+
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -377,6 +383,99 @@ unsafe fn handle_to_ref<'a>(handle: *const TfeTensorF64) -> &'a Tensor<f64> {
 /// Must not be used after this call.
 unsafe fn handle_take(handle: *mut TfeTensorF64) -> Box<Tensor<f64>> {
     Box::from_raw(handle as *mut Tensor<f64>)
+}
+
+fn row_major_strides(dims: &[usize]) -> Vec<isize> {
+    let ndim = dims.len();
+    if ndim == 0 {
+        return vec![];
+    }
+    let mut strides = vec![0isize; ndim];
+    strides[ndim - 1] = 1;
+    for i in (0..ndim - 1).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1] as isize;
+    }
+    strides
+}
+
+fn required_buffer_len(
+    dims: &[usize],
+    strides: &[isize],
+    offset: isize,
+) -> tenferro_device::Result<usize> {
+    if dims.len() != strides.len() {
+        return Err(tenferro_device::Error::InvalidArgument(format!(
+            "strides length {} doesn't match dims length {}",
+            strides.len(),
+            dims.len()
+        )));
+    }
+    if dims.iter().product::<usize>() == 0 {
+        return Ok(0);
+    }
+
+    let mut min_pos = offset;
+    let mut max_pos = offset;
+    for (axis, (&dim, &stride)) in dims.iter().zip(strides.iter()).enumerate() {
+        if dim == 0 {
+            continue;
+        }
+        let extent = isize::try_from(dim - 1)
+            .ok()
+            .and_then(|d| d.checked_mul(stride))
+            .ok_or_else(|| {
+                tenferro_device::Error::StrideError(format!(
+                    "extent overflow for dimension {axis} (size={dim}, stride={stride})"
+                ))
+            })?;
+        if extent >= 0 {
+            max_pos += extent;
+        } else {
+            min_pos += extent;
+        }
+    }
+
+    if min_pos < 0 {
+        return Err(tenferro_device::Error::StrideError(format!(
+            "layout accesses negative buffer position {min_pos}"
+        )));
+    }
+
+    Ok(max_pos as usize + 1)
+}
+
+fn logical_memory_space_to_dl_device(space: LogicalMemorySpace) -> DLDevice {
+    match space {
+        LogicalMemorySpace::MainMemory => DLDevice {
+            device_type: KDLCPU,
+            device_id: 0,
+        },
+        LogicalMemorySpace::PinnedMemory => DLDevice {
+            device_type: KDLCUDA_HOST,
+            device_id: 0,
+        },
+        LogicalMemorySpace::GpuMemory { device_id } => DLDevice {
+            device_type: KDLCUDA,
+            device_id: device_id as i32,
+        },
+        LogicalMemorySpace::ManagedMemory => DLDevice {
+            device_type: KDLCUDA_MANAGED,
+            device_id: 0,
+        },
+    }
+}
+
+unsafe extern "C" fn exported_dlpack_tensor_deleter(managed: *mut DLManagedTensorVersioned) {
+    if managed.is_null() {
+        return;
+    }
+
+    let managed = Box::from_raw(managed);
+    if !managed.manager_ctx.is_null() {
+        drop(Box::from_raw(
+            managed.manager_ctx as *mut ExportedDLPackTensor,
+        ));
+    }
 }
 
 /// Build `SvdOptions` from C-API parameters.
@@ -1073,13 +1172,97 @@ pub unsafe extern "C" fn tfe_tensor_f64_data(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_to_dlpack(
-    _tensor: *mut TfeTensorF64,
+    tensor: *mut TfeTensorF64,
     status: *mut tfe_status_t,
 ) -> *mut DLManagedTensorVersioned {
     let result = catch_unwind(AssertUnwindSafe(
         || -> Result<*mut DLManagedTensorVersioned, tfe_status_t> {
-            set_last_error("tfe_tensor_f64_to_dlpack is not yet implemented");
-            Err(TFE_INTERNAL_ERROR)
+            if tensor.is_null() {
+                set_last_error("to_dlpack: tensor pointer is null");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+
+            let tensor = handle_take(tensor);
+            let shape = tensor
+                .dims()
+                .iter()
+                .map(|&dim| i64::try_from(dim))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    set_last_error("to_dlpack: shape dimension does not fit into i64");
+                    TFE_INVALID_ARGUMENT
+                })?
+                .into_boxed_slice();
+            let strides = tensor
+                .strides()
+                .iter()
+                .map(|&stride| i64::try_from(stride))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    set_last_error("to_dlpack: stride does not fit into i64");
+                    TFE_INVALID_ARGUMENT
+                })?
+                .into_boxed_slice();
+
+            let data_ptr = if let Some(ptr) = tensor.buffer().as_ptr() {
+                ptr as *mut c_void
+            } else if let Some(ptr) = tensor.buffer().as_device_ptr() {
+                ptr as *mut c_void
+            } else {
+                set_last_error("to_dlpack: tensor buffer has no exported pointer");
+                return Err(TFE_INTERNAL_ERROR);
+            };
+
+            let byte_offset =
+                u64::try_from((tensor.offset() as i128) * (std::mem::size_of::<f64>() as i128))
+                    .map_err(|_| {
+                        set_last_error("to_dlpack: byte offset overflow");
+                        TFE_INVALID_ARGUMENT
+                    })?;
+
+            let mut ctx = Box::new(ExportedDLPackTensor {
+                tensor,
+                shape,
+                strides,
+            });
+
+            let shape_ptr = if ctx.shape.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                ctx.shape.as_mut_ptr()
+            };
+            let strides_ptr = if ctx.strides.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                ctx.strides.as_mut_ptr()
+            };
+            let ndim = i32::try_from(ctx.shape.len()).map_err(|_| {
+                set_last_error("to_dlpack: rank does not fit into i32");
+                TFE_INVALID_ARGUMENT
+            })?;
+            let device = logical_memory_space_to_dl_device(ctx.tensor.logical_memory_space());
+
+            let managed = Box::new(DLManagedTensorVersioned {
+                version: DLPackVersion { major: 1, minor: 0 },
+                manager_ctx: Box::into_raw(ctx) as *mut c_void,
+                deleter: Some(exported_dlpack_tensor_deleter),
+                flags: 0,
+                dl_tensor: DLTensor {
+                    data: data_ptr,
+                    device,
+                    ndim,
+                    dtype: DLDataType {
+                        code: KDLFLOAT,
+                        bits: 64,
+                        lanes: 1,
+                    },
+                    shape: shape_ptr,
+                    strides: strides_ptr,
+                    byte_offset,
+                },
+            });
+
+            Ok(Box::into_raw(managed))
         },
     ));
     match result {
@@ -1139,13 +1322,99 @@ pub unsafe extern "C" fn tfe_tensor_f64_to_dlpack(
 /// ```
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
-    _managed: *mut DLManagedTensorVersioned,
+    managed: *mut DLManagedTensorVersioned,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     let result = catch_unwind(AssertUnwindSafe(
         || -> Result<*mut TfeTensorF64, tfe_status_t> {
-            set_last_error("tfe_tensor_f64_from_dlpack is not yet implemented");
-            Err(TFE_INTERNAL_ERROR)
+            if managed.is_null() {
+                set_last_error("from_dlpack: managed tensor pointer is null");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+
+            let managed_ref = &*managed;
+            if managed_ref.version.major != 1 {
+                set_last_error("from_dlpack: unsupported DLPack major version");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+
+            let dl = &managed_ref.dl_tensor;
+            if dl.device.device_type != KDLCPU || dl.device.device_id != 0 {
+                set_last_error("from_dlpack: only kDLCPU device_id=0 is supported");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            if dl.dtype.code != KDLFLOAT || dl.dtype.bits != 64 || dl.dtype.lanes != 1 {
+                set_last_error("from_dlpack: only float64 tensors are supported");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            if dl.ndim < 0 {
+                set_last_error("from_dlpack: negative ndim is invalid");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+
+            let ndim = dl.ndim as usize;
+            if ndim > 0 && dl.shape.is_null() {
+                set_last_error("from_dlpack: shape pointer is null for non-scalar tensor");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+
+            let dims_i64 = if ndim == 0 {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(dl.shape, ndim)
+            };
+            let dims = dims_i64
+                .iter()
+                .map(|&dim| usize::try_from(dim))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|_| {
+                    set_last_error("from_dlpack: shape contains negative or oversized dimension");
+                    TFE_INVALID_ARGUMENT
+                })?;
+
+            let strides = if dl.strides.is_null() {
+                row_major_strides(&dims)
+            } else {
+                std::slice::from_raw_parts(dl.strides, ndim)
+                    .iter()
+                    .map(|&stride| isize::try_from(stride))
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|_| {
+                        set_last_error("from_dlpack: stride does not fit into isize");
+                        TFE_INVALID_ARGUMENT
+                    })?
+            };
+
+            let elem_size = std::mem::size_of::<f64>() as u64;
+            if dl.byte_offset % elem_size != 0 {
+                set_last_error("from_dlpack: byte offset is not aligned to f64 elements");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            let offset = isize::try_from(dl.byte_offset / elem_size).map_err(|_| {
+                set_last_error("from_dlpack: element offset does not fit into isize");
+                TFE_INVALID_ARGUMENT
+            })?;
+            let len = required_buffer_len(&dims, &strides, offset)
+                .map_err(|err| map_device_error(&err))?;
+
+            let data = dl.data as *const f64;
+            if data.is_null() && len > 0 {
+                set_last_error("from_dlpack: data pointer is null for non-empty tensor");
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+
+            let managed_addr = managed as usize;
+            let release = move || unsafe {
+                let managed = managed_addr as *mut DLManagedTensorVersioned;
+                if let Some(deleter) = (*managed).deleter {
+                    deleter(managed);
+                } else {
+                    drop(Box::from_raw(managed));
+                }
+            };
+            let tensor = Tensor::from_external_parts(data, len, &dims, &strides, offset, release)
+                .map_err(|err| map_device_error(&err))?;
+            Ok(tensor_to_handle(tensor))
         },
     ));
     finalize_ptr(result, status)
@@ -1698,3 +1967,6 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
 
     finalize_void(result, status)
 }
+
+#[cfg(test)]
+mod tests;

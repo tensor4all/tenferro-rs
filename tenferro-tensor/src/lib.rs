@@ -150,6 +150,57 @@ fn is_contiguous_in_order(dims: &[usize], strides: &[isize], order: MemoryOrder)
     true
 }
 
+fn validate_layout_against_len(
+    dims: &[usize],
+    strides: &[isize],
+    offset: isize,
+    data_len: usize,
+) -> Result<()> {
+    let ndim = dims.len();
+    if strides.len() != ndim {
+        return Err(Error::InvalidArgument(format!(
+            "strides length {} doesn't match dims length {}",
+            strides.len(),
+            ndim
+        )));
+    }
+
+    let n_elements: usize = dims.iter().product();
+    if n_elements == 0 {
+        return Ok(());
+    }
+
+    let mut min_pos = offset;
+    let mut max_pos = offset;
+    for k in 0..ndim {
+        if dims[k] == 0 {
+            continue;
+        }
+        let extent = isize::try_from(dims[k] - 1)
+            .ok()
+            .and_then(|d| d.checked_mul(strides[k]))
+            .ok_or_else(|| {
+                Error::StrideError(format!(
+                    "extent overflow for dimension {k} (size={}, stride={})",
+                    dims[k], strides[k]
+                ))
+            })?;
+        if extent >= 0 {
+            max_pos += extent;
+        } else {
+            min_pos += extent;
+        }
+    }
+    if min_pos < 0 || max_pos >= data_len as isize {
+        return Err(Error::StrideError(format!(
+            "layout accesses buffer positions {}..={} but buffer length is {}",
+            min_pos, max_pos, data_len
+        )));
+    }
+
+    Ok(())
+}
+
 /// Copy elements from strided source to a destination with different strides.
 fn copy_strided<T: Copy>(
     src: &[T],
@@ -936,48 +987,56 @@ impl<T: Scalar> Tensor<T> {
         strides: &[isize],
         offset: isize,
     ) -> Result<Self> {
-        let ndim = dims.len();
-        if strides.len() != ndim {
-            return Err(Error::InvalidArgument(format!(
-                "strides length {} doesn't match dims length {}",
-                strides.len(),
-                ndim
-            )));
-        }
-        let n_elements: usize = dims.iter().product();
-        if n_elements > 0 {
-            let mut min_pos = offset;
-            let mut max_pos = offset;
-            for k in 0..ndim {
-                if dims[k] == 0 {
-                    continue;
-                }
-                let extent = isize::try_from(dims[k] - 1)
-                    .ok()
-                    .and_then(|d| d.checked_mul(strides[k]))
-                    .ok_or_else(|| {
-                        Error::StrideError(format!(
-                            "extent overflow for dimension {k} (size={}, stride={})",
-                            dims[k], strides[k]
-                        ))
-                    })?;
-                if extent >= 0 {
-                    max_pos += extent;
-                } else {
-                    min_pos += extent;
-                }
-            }
-            if min_pos < 0 || max_pos >= data.len() as isize {
-                return Err(Error::StrideError(format!(
-                    "layout accesses buffer positions {}..={} but buffer length is {}",
-                    min_pos,
-                    max_pos,
-                    data.len()
-                )));
-            }
-        }
+        validate_layout_against_len(dims, strides, offset, data.len())?;
         Ok(Tensor {
             buffer: DataBuffer::from_vec(data),
+            dims: Arc::from(dims),
+            strides: Arc::from(strides),
+            offset,
+            logical_memory_space: LogicalMemorySpace::MainMemory,
+            preferred_compute_device: None,
+            event: None,
+            conjugated: false,
+            fw_grad: None,
+        })
+    }
+
+    /// Create a tensor from externally-owned CPU-accessible memory.
+    ///
+    /// The tensor borrows `ptr` for its element storage and runs `release`
+    /// exactly once when the final tensor owner is dropped.
+    ///
+    /// # Safety
+    ///
+    /// - `ptr` must remain valid for at least `len` elements until `release`
+    ///   is called.
+    /// - The storage layout described by `dims`, `strides`, and `offset` must
+    ///   access only elements within `[0, len)`.
+    /// - `release` must safely reclaim or notify the external owner exactly once.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    ///
+    /// let data = vec![1.0, 2.0, 3.0, 4.0];
+    /// let ptr = data.as_ptr();
+    /// let tensor = unsafe {
+    ///     Tensor::from_external_parts(ptr, data.len(), &[2, 2], &[1, 2], 0, move || drop(data))
+    /// }.unwrap();
+    /// assert_eq!(tensor.dims(), &[2, 2]);
+    /// ```
+    pub unsafe fn from_external_parts(
+        ptr: *const T,
+        len: usize,
+        dims: &[usize],
+        strides: &[isize],
+        offset: isize,
+        release: impl FnOnce() + Send + 'static,
+    ) -> Result<Self> {
+        validate_layout_against_len(dims, strides, offset, len)?;
+        Ok(Tensor {
+            buffer: DataBuffer::from_external(ptr, len, release),
             dims: Arc::from(dims),
             strides: Arc::from(strides),
             offset,

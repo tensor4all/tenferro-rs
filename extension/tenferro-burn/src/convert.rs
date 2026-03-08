@@ -7,14 +7,30 @@
 
 use burn::tensor::backend::Backend;
 use burn::tensor::ops::FloatTensor;
+use burn::tensor::{Tensor as BurnTensor, TensorData, TensorPrimitive};
+use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
+
+fn row_major_strides(dims: &[usize]) -> Vec<isize> {
+    let ndim = dims.len();
+    if ndim == 0 {
+        return vec![];
+    }
+
+    let mut strides = vec![0isize; ndim];
+    strides[ndim - 1] = 1;
+    for i in (0..ndim - 1).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1] as isize;
+    }
+    strides
+}
 
 /// Convert a Burn backend tensor primitive into a tenferro `Tensor<f64>`.
 ///
 /// # Current Limitations
 ///
-/// This function currently always returns `Tensor<f64>` regardless of the
-/// backend's float element type. Support for other element types (e.g., `f32`)
-/// will be added in future versions.
+/// This function currently supports only Burn backends whose float element
+/// type is `f64`. Support for other element types (e.g., `f32`) will be added
+/// in future versions.
 ///
 /// # Examples
 ///
@@ -26,8 +42,15 @@ use burn::tensor::ops::FloatTensor;
 ///     todo!();
 /// let tenferro_t: tenferro_tensor::Tensor<f64> = burn_to_tenferro::<NdArray<f64>>(burn_prim);
 /// ```
-pub fn burn_to_tenferro<B: Backend>(_tensor: FloatTensor<B>) -> tenferro_tensor::Tensor<f64> {
-    todo!()
+pub fn burn_to_tenferro<B: Backend<FloatElem = f64>>(tensor: FloatTensor<B>) -> TfTensor<f64> {
+    let data = BurnTensor::<B, 1>::from_primitive(TensorPrimitive::Float(tensor)).into_data();
+    let dims = data.shape.clone();
+    let values = data
+        .into_vec::<f64>()
+        .expect("burn_to_tenferro only supports f64 float tensors");
+
+    TfTensor::from_vec(values, &dims, &row_major_strides(&dims), 0)
+        .expect("Burn TensorData always provides a dense row-major layout")
 }
 
 /// Convert a tenferro `Tensor<f64>` into a Burn backend tensor primitive.
@@ -38,8 +61,9 @@ pub fn burn_to_tenferro<B: Backend>(_tensor: FloatTensor<B>) -> tenferro_tensor:
 ///
 /// # Current Limitations
 ///
-/// This function currently only accepts `Tensor<f64>`. Support for other
-/// element types will be added in future versions.
+/// This function currently supports only Burn backends whose float element
+/// type is `f64`. Support for other element types will be added in future
+/// versions.
 ///
 /// # Examples
 ///
@@ -52,9 +76,15 @@ pub fn burn_to_tenferro<B: Backend>(_tensor: FloatTensor<B>) -> tenferro_tensor:
 /// let device = NdArrayDevice::Cpu;
 /// let burn_prim = tenferro_to_burn::<NdArray<f64>>(tenferro_t, &device);
 /// ```
-pub fn tenferro_to_burn<B: Backend>(
-    _tensor: tenferro_tensor::Tensor<f64>,
-    _device: &B::Device,
+pub fn tenferro_to_burn<B: Backend<FloatElem = f64>>(
+    tensor: TfTensor<f64>,
+    device: &B::Device,
 ) -> FloatTensor<B> {
-    todo!()
+    let row_major = tensor.into_contiguous(MemoryOrder::RowMajor);
+    let dims = row_major.dims().to_vec();
+    let data = row_major
+        .try_into_data_vec()
+        .expect("into_contiguous returns a uniquely-owned CPU buffer");
+
+    B::float_from_data(TensorData::new(data, dims), device)
 }

@@ -11,6 +11,10 @@ description = "C-API (FFI) for tropical semiring tensor operations (MaxPlus, Min
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
+tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-device = { path = "../../tenferro-device" }
 tenferro-capi = { path = "../../tenferro-capi" }
 tenferro-tropical = { path = "../tenferro-tropical" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-prims = { path = "../../tenferro-prims" }
+tenferro-tensor = { path = "../../tenferro-tensor" }

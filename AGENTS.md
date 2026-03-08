@@ -14,6 +14,14 @@ The sections below are tenferro-specific additions and overrides.
 
 The workspace contains active implementations alongside evolving APIs. Implementation work is allowed unless a task explicitly says otherwise.
 
+### GPU Status
+
+GPU support is currently stubbed and not implemented. CUDA/HIP-facing types,
+traits, and C API entrypoints may exist to preserve the intended future API
+shape, but they should not be treated as working execution paths yet. Outside
+explicit bug exploration or GPU implementation tasks, do not assume a GPU path
+works just because the symbol is present.
+
 ### Documentation Requirements
 
 Every public type, trait, and function **must** include minimal but sufficient usage examples in its doc comments (`/// # Examples`). The examples should help a human quickly understand how to use the API. Use `ignore` attribute on examples that cannot run in docs. Crate-level docs (`//!`) should include typical end-to-end usage examples.

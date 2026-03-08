@@ -292,6 +292,101 @@ where
     tropical_backward(operands, cotangent, &tracker, &subs, &contracted)
 }
 
+/// Forward-mode rule (frule) for tropical einsum.
+///
+/// Given tropical primals and optional standard-real tangents, compute the
+/// output tangent by routing each tangent contribution through the winner
+/// selected during the tropical forward pass.
+///
+/// Currently supports unary (1 operand) and binary (2 operand) contractions.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_tropical::ad::tropical_einsum_frule;
+/// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+/// use tenferro_prims::{CpuBackend, CpuContext};
+/// use tenferro_tensor::{Tensor, MemoryOrder};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::<MaxPlus<f64>>::from_slice(
+///     &[MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)],
+///     &[2, 2], MemoryOrder::ColumnMajor,
+/// ).unwrap();
+/// let b = Tensor::<MaxPlus<f64>>::from_slice(
+///     &[MaxPlus(5.0), MaxPlus(6.0), MaxPlus(7.0), MaxPlus(8.0)],
+///     &[2, 2], MemoryOrder::ColumnMajor,
+/// ).unwrap();
+/// let da = Tensor::<f64>::from_slice(
+///     &[1.0, 0.0, 0.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor,
+/// ).unwrap();
+///
+/// let dc = tropical_einsum_frule::<MaxPlus<f64>, MaxPlusAlgebra<f64>, CpuBackend>(
+///     &mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None],
+/// ).unwrap();
+/// assert_eq!(dc.dims(), &[2, 2]);
+/// ```
+pub fn tropical_einsum_frule<T, Alg, Backend>(
+    _ctx: &mut Backend::Context,
+    subscripts: &str,
+    primals: &[&Tensor<T>],
+    tangents: &[Option<&Tensor<T::Inner>>],
+) -> Result<Tensor<T::Inner>>
+where
+    Alg: tenferro_algebra::Algebra,
+    T: TropicalScalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorPrims<Alg>,
+{
+    let subs = Subscripts::parse(subscripts)?;
+
+    if primals.is_empty() || primals.len() > 2 {
+        return Err(Error::InvalidArgument(
+            "tropical_einsum_frule supports 1 or 2 operands".into(),
+        ));
+    }
+    if tangents.len() != primals.len() {
+        return Err(Error::InvalidArgument(format!(
+            "tropical_einsum_frule expects {} tangents, got {}",
+            primals.len(),
+            tangents.len()
+        )));
+    }
+    for (idx, (primal, tangent)) in primals.iter().zip(tangents.iter()).enumerate() {
+        if let Some(tangent) = tangent {
+            if tangent.dims() != primal.dims() {
+                return Err(Error::InvalidArgument(format!(
+                    "tangent shape mismatch for operand {idx}: expected {:?}, got {:?}",
+                    primal.dims(),
+                    tangent.dims()
+                )));
+            }
+        }
+    }
+
+    let contracted: Vec<u32> = {
+        let all_input_labels: std::collections::HashSet<u32> = subs
+            .inputs
+            .iter()
+            .flat_map(|inp| inp.iter())
+            .copied()
+            .collect();
+        all_input_labels
+            .into_iter()
+            .filter(|m| !subs.output.contains(m))
+            .collect()
+    };
+
+    let (output, tracker) = tropical_forward_with_argmax(primals, &subs, &contracted)?;
+    tropical_forward_tangent(
+        primals,
+        tangents,
+        &tracker,
+        &subs,
+        &contracted,
+        output.dims(),
+    )
+}
+
 /// Forward pass for tropical N-ary einsum with argmax tracking.
 ///
 /// Handles arbitrary subscript patterns by iterating over output indices
@@ -428,6 +523,186 @@ fn tropical_forward_with_argmax<T: TropicalScalar>(
     let output = Tensor::<T>::from_slice(&output_data, &output_shape, MemoryOrder::ColumnMajor)
         .map_err(|e| Error::InvalidArgument(format!("{e}")))?;
     Ok((output, tracker))
+}
+
+fn tropical_forward_tangent<T: TropicalScalar>(
+    primals: &[&Tensor<T>],
+    tangents: &[Option<&Tensor<T::Inner>>],
+    tracker: &ArgmaxTracker,
+    subs: &Subscripts,
+    contracted: &[u32],
+    output_shape: &[usize],
+) -> Result<Tensor<T::Inner>> {
+    match primals.len() {
+        1 => tropical_forward_tangent_unary(
+            primals[0],
+            tangents[0],
+            tracker,
+            subs,
+            contracted,
+            output_shape,
+        ),
+        2 => tropical_forward_tangent_binary(
+            primals,
+            tangents,
+            tracker,
+            subs,
+            contracted,
+            output_shape,
+        ),
+        n => Err(Error::InvalidArgument(format!(
+            "tropical forward tangent supports 1 or 2 operands, got {n}"
+        ))),
+    }
+}
+
+fn tropical_forward_tangent_unary<T: TropicalScalar>(
+    primal: &Tensor<T>,
+    tangent: Option<&Tensor<T::Inner>>,
+    tracker: &ArgmaxTracker,
+    subs: &Subscripts,
+    contracted: &[u32],
+    output_shape: &[usize],
+) -> Result<Tensor<T::Inner>> {
+    let input_modes = &subs.inputs[0];
+    let output_modes = &subs.output;
+    let tangent_view = tangent.map(crate::prims::tensor_to_view).transpose()?;
+
+    let contracted_dims: Vec<usize> = contracted
+        .iter()
+        .map(|m| {
+            let pos = input_modes.iter().position(|x| x == m).ok_or_else(|| {
+                Error::InvalidArgument(format!("contracted mode {m} not in input"))
+            })?;
+            Ok(primal.dims()[pos])
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut output_data = vec![T::Inner::zero(); output_shape.iter().product::<usize>().max(1)];
+
+    for_each_index(output_shape, |out_idx| {
+        let mut mode_values: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
+        for (pos, &m) in output_modes.iter().enumerate() {
+            mode_values.insert(m, out_idx[pos]);
+        }
+
+        let out_flat = col_major_flat_index(output_shape, out_idx);
+        let k_winner = tracker.indices()[out_flat];
+        let k_idx = if contracted_dims.is_empty() {
+            vec![]
+        } else {
+            unflatten_index(k_winner, &contracted_dims)
+        };
+
+        for (c_pos, &c_mode) in contracted.iter().enumerate() {
+            mode_values.insert(c_mode, k_idx[c_pos]);
+        }
+
+        let input_idx: Vec<usize> = input_modes
+            .iter()
+            .map(|m| {
+                *mode_values
+                    .get(m)
+                    .expect("mode pre-validated to exist in map")
+            })
+            .collect();
+
+        output_data[out_flat] = tangent_view
+            .as_ref()
+            .map(|view| view.get(&input_idx))
+            .unwrap_or_else(T::Inner::zero);
+    });
+
+    Tensor::<T::Inner>::from_slice(&output_data, output_shape, MemoryOrder::ColumnMajor)
+        .map_err(|e| Error::InvalidArgument(format!("{e}")))
+}
+
+fn tropical_forward_tangent_binary<T: TropicalScalar>(
+    primals: &[&Tensor<T>],
+    tangents: &[Option<&Tensor<T::Inner>>],
+    tracker: &ArgmaxTracker,
+    subs: &Subscripts,
+    contracted: &[u32],
+    output_shape: &[usize],
+) -> Result<Tensor<T::Inner>> {
+    let a = primals[0];
+    let b = primals[1];
+    let da_view = tangents[0].map(crate::prims::tensor_to_view).transpose()?;
+    let db_view = tangents[1].map(crate::prims::tensor_to_view).transpose()?;
+    let a_view = crate::prims::tensor_to_view(a)?;
+    let b_view = crate::prims::tensor_to_view(b)?;
+    let input_modes_a = &subs.inputs[0];
+    let input_modes_b = &subs.inputs[1];
+    let output_modes = &subs.output;
+
+    let contracted_dims: Vec<usize> = contracted
+        .iter()
+        .map(|m| {
+            for (op_idx, input_modes) in subs.inputs.iter().enumerate() {
+                if let Some(pos) = input_modes.iter().position(|x| x == m) {
+                    return Ok(primals[op_idx].dims()[pos]);
+                }
+            }
+            Err(Error::InvalidArgument(format!(
+                "contracted mode {m} not in any operand"
+            )))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut output_data = vec![T::Inner::zero(); output_shape.iter().product::<usize>().max(1)];
+
+    for_each_index(output_shape, |out_idx| {
+        let mut mode_values: std::collections::HashMap<u32, usize> =
+            std::collections::HashMap::new();
+        for (pos, &m) in output_modes.iter().enumerate() {
+            mode_values.insert(m, out_idx[pos]);
+        }
+
+        let out_flat = col_major_flat_index(output_shape, out_idx);
+        let k_winner = tracker.indices()[out_flat];
+        let k_idx = if contracted_dims.is_empty() {
+            vec![]
+        } else {
+            unflatten_index(k_winner, &contracted_dims)
+        };
+
+        for (c_pos, &c_mode) in contracted.iter().enumerate() {
+            mode_values.insert(c_mode, k_idx[c_pos]);
+        }
+
+        let a_idx: Vec<usize> = input_modes_a
+            .iter()
+            .map(|m| {
+                *mode_values
+                    .get(m)
+                    .expect("mode pre-validated to exist in map")
+            })
+            .collect();
+        let b_idx: Vec<usize> = input_modes_b
+            .iter()
+            .map(|m| {
+                *mode_values
+                    .get(m)
+                    .expect("mode pre-validated to exist in map")
+            })
+            .collect();
+
+        let a_inner = a_view.get(&a_idx).inner();
+        let b_inner = b_view.get(&b_idx).inner();
+
+        let mut dout = T::Inner::zero();
+        if let Some(view) = da_view.as_ref() {
+            dout += T::mul_backward_a(a_inner, b_inner, view.get(&a_idx));
+        }
+        if let Some(view) = db_view.as_ref() {
+            dout += T::mul_backward_b(a_inner, b_inner, view.get(&b_idx));
+        }
+        output_data[out_flat] = dout;
+    });
+
+    Tensor::<T::Inner>::from_slice(&output_data, output_shape, MemoryOrder::ColumnMajor)
+        .map_err(|e| Error::InvalidArgument(format!("{e}")))
 }
 
 /// Backward pass dispatcher for tropical N-ary einsum using argmax routing.

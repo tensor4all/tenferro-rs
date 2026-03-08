@@ -6,6 +6,9 @@ use std::sync::Once;
 
 use num_traits::Zero;
 use tenferro_linalg::inject::{register_blas_lapack_fn_ptrs, BlasLapackFnPtrSet};
+use tenferro_linalg::solve;
+use tenferro_prims::CpuContext;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 static REGISTER_ONCE: Once = Once::new();
 
@@ -17,6 +20,7 @@ fn register_test_ptrs_once() {
             cgemm: Some(test_cgemm),
             zgemm: Some(test_zgemm),
             dgesvd: Some(test_dgesvd),
+            dgesv: Some(test_dgesv),
             ..BlasLapackFnPtrSet::new()
         });
     });
@@ -226,6 +230,77 @@ unsafe extern "C" fn test_dgesvd(
     }
 }
 
+unsafe extern "C" fn test_dgesv(
+    n: *const lapack_inject::lapackint,
+    nrhs: *const lapack_inject::lapackint,
+    a: *mut f64,
+    lda: *const lapack_inject::lapackint,
+    ipiv: *mut lapack_inject::lapackint,
+    b: *mut f64,
+    ldb: *const lapack_inject::lapackint,
+    info: *mut lapack_inject::lapackint,
+) {
+    unsafe {
+        let n = *n as usize;
+        let nrhs = *nrhs as usize;
+        let lda = *lda as usize;
+        let ldb = *ldb as usize;
+
+        *info = 0;
+
+        for k in 0..n {
+            let mut pivot = k;
+            let mut pivot_abs = (*a.add(k + k * lda)).abs();
+            for i in (k + 1)..n {
+                let candidate = (*a.add(i + k * lda)).abs();
+                if candidate > pivot_abs {
+                    pivot = i;
+                    pivot_abs = candidate;
+                }
+            }
+
+            if pivot_abs == 0.0 {
+                *info = (k + 1) as lapack_inject::lapackint;
+                return;
+            }
+
+            *ipiv.add(k) = (pivot + 1) as lapack_inject::lapackint;
+            if pivot != k {
+                for col in 0..n {
+                    std::ptr::swap(a.add(k + col * lda), a.add(pivot + col * lda));
+                }
+                for rhs in 0..nrhs {
+                    std::ptr::swap(b.add(k + rhs * ldb), b.add(pivot + rhs * ldb));
+                }
+            }
+
+            let pivot_val = *a.add(k + k * lda);
+            for i in (k + 1)..n {
+                let factor = *a.add(i + k * lda) / pivot_val;
+                *a.add(i + k * lda) = factor;
+                for col in (k + 1)..n {
+                    let pos = i + col * lda;
+                    *a.add(pos) -= factor * *a.add(k + col * lda);
+                }
+                for rhs in 0..nrhs {
+                    let pos = i + rhs * ldb;
+                    *b.add(pos) -= factor * *b.add(k + rhs * ldb);
+                }
+            }
+        }
+
+        for rhs in 0..nrhs {
+            for i in (0..n).rev() {
+                let mut acc = *b.add(i + rhs * ldb);
+                for col in (i + 1)..n {
+                    acc -= *a.add(i + col * lda) * *b.add(col + rhs * ldb);
+                }
+                *b.add(i + rhs * ldb) = acc / *a.add(i + i * lda);
+            }
+        }
+    }
+}
+
 #[test]
 fn provider_inject_mat_mul_f64() {
     register_test_ptrs_once();
@@ -299,4 +374,18 @@ fn provider_inject_thin_svd_f64() {
     assert_eq!(s, [1.0, 1.0]);
     assert_eq!(u, [1.0, 0.0, 0.0, 1.0]);
     assert_eq!(vt, [1.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn provider_inject_tensor_solve_f64() {
+    register_test_ptrs_once();
+
+    let mut ctx = CpuContext::new(1);
+    let a =
+        Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&[4.0_f64, 8.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+    let x = solve(&mut ctx, &a, &b).unwrap();
+    assert_eq!(x.dims(), &[2]);
+    assert_eq!(x.try_into_data_vec().unwrap(), vec![2.0, 2.0]);
 }
