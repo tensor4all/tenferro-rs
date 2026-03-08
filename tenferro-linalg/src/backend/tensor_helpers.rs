@@ -46,14 +46,9 @@ pub(crate) fn validate_square<T: LinalgScalar>(a: &Tensor<T>) -> Result<(usize, 
     Ok((n, batch_dims))
 }
 
-/// Ensure a tensor is column-major contiguous. Returns the tensor as-is if
-/// already contiguous, otherwise creates a contiguous copy.
+/// Ensure a tensor is column-major contiguous.
 pub(crate) fn ensure_col_major<T: LinalgScalar>(a: &Tensor<T>) -> Tensor<T> {
-    if a.is_contiguous() {
-        a.clone()
-    } else {
-        a.contiguous(MemoryOrder::ColumnMajor)
-    }
+    a.contiguous(MemoryOrder::ColumnMajor)
 }
 
 /// Compute the total number of elements in batch dimensions.
