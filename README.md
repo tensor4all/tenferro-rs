@@ -44,6 +44,16 @@ semirings (e.g., tropical).
 For a detailed feature-by-feature mapping, see
 [`docs/design/reference/libtorch.md`](docs/design/reference/libtorch.md).
 
+## `tenferro-dyadtensor` AD Status
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Multi-input backward | Strong | `einsum`, `solve`, `solve_triangular`, `lstsq` |
+| Forward mode | Strong | Best supported when only a few inputs carry tangents |
+| Multi-input HVP | Partial | Explicitly exposed for `einsum` |
+| Linalg AD surface | Available | Broad op coverage, but validation depth is uneven across ops |
+| Complex/real matrices | Strong | Complex `einsum`, complex `solve_triangular`, and real-to-complex `eig` are covered |
+
 ## Design
 
 See [`docs/design/`](docs/design/) for architecture and design documents, including:
