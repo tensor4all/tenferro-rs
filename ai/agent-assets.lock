@@ -30,11 +30,11 @@
     },
     "create-pr-script": {
       "path": "scripts/create-pr.sh",
-      "sha256": "681324bdf555b03997df2a158ab1f1a70a880dc5d5cf1d6eabdd6341fe3cdb2d"
+      "sha256": "4cea89ab85a44f541c4a55d2cf9de011b05be79a23bc1ee5b6e7d7778be147ce"
     },
     "createpr-command": {
       "path": ".claude/commands/createpr.md",
-      "sha256": "bed5a87269cc91daef5cda09a53d1acdcaad40ae216053cd87ca39616cb418d7"
+      "sha256": "fcd08e9b2c05318be80c85309165972f49c6d2a7df9e7e3e8a96884d29fa7108"
     },
     "docs-workflow": {
       "path": ".github/workflows/docs.yml",
@@ -54,7 +54,7 @@
     },
     "pr-workflow-rules": {
       "path": "ai/vendor/template-rs/pr-workflow-rules.md",
-      "sha256": "dc3c90b1de539c754d9a7fa96beb5bd09be4850dc5b8ae2a72c2ff3ebd3ef9e2"
+      "sha256": "fcce0a20b7b6234420574bc71e251001958e74626adda97b6c5ea183c1c4d20c"
     },
     "repo-settings": {
       "path": "ai/repo-settings.json",
@@ -69,8 +69,8 @@
       "sha256": "be53e83a9ba57bd99f9d2fdde48d9c3262ee80e93b1ee802b34231329080e269"
     }
   },
-  "bundle_revision": "f593fa04b13c669eaaf930b26d2edb4bdec01be3",
+  "bundle_revision": "b8e9542e7123cb845b887de604269eaa228eaf41",
   "source_ref": "main",
   "source_repo": "tensor4all/template-rs",
-  "synced_at": "2026-03-08T02:08:12Z"
+  "synced_at": "2026-03-08T11:20:20Z"
 }
