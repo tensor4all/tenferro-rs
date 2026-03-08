@@ -84,6 +84,29 @@ type ScalarBridgeRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
 type ScalarMixedRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
 type ScalarRuleRegistry = HashMap<(u64, TypeId), Box<dyn Any>>;
 
+/// Check whether an `InvalidAdTensor` error indicates that no reverse rules
+/// are registered (tape-level or node-level). This matches on error message
+/// prefixes — fragile if the messages in `pullback()` change. Kept as a
+/// named helper so the coupling is explicit and easy to find.
+fn is_no_tensor_rules_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::InvalidAdTensor { message }
+            if message.starts_with("no reverse rules registered for tape")
+                || message.starts_with("no reverse rule registered for output node")
+    )
+}
+
+/// Same as [`is_no_tensor_rules_error`] but for scalar-typed rules.
+fn is_no_scalar_rules_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::InvalidAdScalar { message }
+            if message.starts_with("no reverse scalar rules registered for tape")
+                || message.starts_with("no reverse scalar rule registered for output node")
+    )
+}
+
 thread_local! {
     static REVERSE_RULE_REGISTRY: RefCell<RuleRegistry> = RefCell::new(HashMap::new());
     static REVERSE_BRIDGE_REGISTRY: RefCell<BridgeRegistry> = RefCell::new(HashMap::new());
@@ -341,12 +364,13 @@ pub(crate) fn pullback_wrt_mixed<TOut: Scalar + 'static, TIn: Scalar + 'static>(
     cotangent: &Tensor<TOut>,
     wrt_nodes: &[Option<NodeId>],
 ) -> Result<Vec<Option<Tensor<TIn>>>> {
+    // Limitation: when pullback returns a "no rules" error we fall back to
+    // using the output cotangent as a seed. This means gradient paths that
+    // were not recorded on the tape are silently treated as identity,
+    // which may cause gradient path loss for unregistered nodes.
     let all_out_grads = match pullback::<TOut>(tape, output_node, cotangent) {
         Ok(grads) => grads,
-        Err(Error::InvalidAdTensor { message })
-            if message.starts_with("no reverse rules registered for tape")
-                || message.starts_with("no reverse rule registered for output node") =>
-        {
+        Err(e) if is_no_tensor_rules_error(&e) => {
             let mut seed = HashMap::new();
             seed.insert(output_node, cotangent.clone());
             seed
@@ -366,10 +390,7 @@ pub(crate) fn pullback_wrt_mixed<TOut: Scalar + 'static, TIn: Scalar + 'static>(
     for (seed_node, seed_delta) in seed_in {
         let propagated = match pullback::<TIn>(tape, seed_node, &seed_delta) {
             Ok(grads) => grads,
-            Err(Error::InvalidAdTensor { message })
-                if message.starts_with("no reverse rules registered for tape")
-                    || message.starts_with("no reverse rule registered for output node") =>
-            {
+            Err(e) if is_no_tensor_rules_error(&e) => {
                 let mut seed = HashMap::new();
                 seed.insert(seed_node, seed_delta.clone());
                 seed
@@ -395,10 +416,7 @@ pub(crate) fn pullback_wrt_scalars<TOut: Scalar + 'static, TIn: ScalarAd + 'stat
 ) -> Result<Vec<Option<TIn>>> {
     let all_out_grads = match pullback::<TOut>(tape, output_node, cotangent) {
         Ok(grads) => grads,
-        Err(Error::InvalidAdTensor { message })
-            if message.starts_with("no reverse rules registered for tape")
-                || message.starts_with("no reverse rule registered for output node") =>
-        {
+        Err(e) if is_no_tensor_rules_error(&e) => {
             let mut seed = HashMap::new();
             seed.insert(output_node, cotangent.clone());
             seed
@@ -412,6 +430,10 @@ pub(crate) fn pullback_wrt_scalars<TOut: Scalar + 'static, TIn: ScalarAd + 'stat
         accumulate_scalar_into(&mut all_in_grads, node, grad);
     }
 
+    // Supported scalar types for mixed-path gradient propagation.
+    // If new scalar types are added to the crate (beyond f32, f64, Complex32,
+    // Complex64), a corresponding `accumulate_tensor_scalar_mixed_path` call
+    // must be added here to ensure gradients flow through the new type.
     accumulate_tensor_scalar_mixed_path::<TOut, f32, TIn>(tape, &all_out_grads, &mut all_in_grads)?;
     accumulate_tensor_scalar_mixed_path::<TOut, f64, TIn>(tape, &all_out_grads, &mut all_in_grads)?;
     accumulate_tensor_scalar_mixed_path::<TOut, Complex32, TIn>(
@@ -453,10 +475,7 @@ fn propagate_scalar_seeds<T: ScalarAd + 'static>(
     for (seed_node, seed_delta) in seed_in {
         let propagated = match pullback_scalar::<T>(tape, seed_node, &seed_delta) {
             Ok(grads) => grads,
-            Err(Error::InvalidAdScalar { message })
-                if message.starts_with("no reverse scalar rules registered for tape")
-                    || message.starts_with("no reverse scalar rule registered for output node") =>
-            {
+            Err(e) if is_no_scalar_rules_error(&e) => {
                 let mut seed = HashMap::new();
                 seed.insert(seed_node, seed_delta);
                 seed
@@ -477,10 +496,7 @@ fn pullback_scalar_wrt_mixed<TOut: ScalarAd + 'static, TIn: ScalarAd + 'static>(
 ) -> Result<HashMap<NodeId, TIn>> {
     let all_out_grads = match pullback_scalar::<TOut>(tape, output_node, cotangent) {
         Ok(grads) => grads,
-        Err(Error::InvalidAdScalar { message })
-            if message.starts_with("no reverse scalar rules registered for tape")
-                || message.starts_with("no reverse scalar rule registered for output node") =>
-        {
+        Err(e) if is_no_scalar_rules_error(&e) => {
             let mut seed = HashMap::new();
             seed.insert(output_node, *cotangent);
             seed
