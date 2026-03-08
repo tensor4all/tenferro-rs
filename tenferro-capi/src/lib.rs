@@ -236,13 +236,37 @@ pub struct DLTensor {
 ///
 /// This is the primary type for DLPack tensor exchange. The `deleter`
 /// callback must be called by the consumer when the data is no longer needed.
+///
+/// # Lifetime and ownership semantics
+///
+/// The **producer** creates the `DLManagedTensorVersioned` and hands it to a
+/// **consumer**. Ownership of the struct (and responsibility for calling the
+/// deleter) transfers to the consumer at that point.
+///
+/// - The **consumer** must call `deleter` exactly once when it no longer needs
+///   the tensor data. Calling `deleter` more than once is undefined behavior.
+/// - The **producer** must keep the underlying data alive until `deleter` is
+///   called. The `manager_ctx` field typically holds the producer's allocation
+///   (e.g., a `Box<Tensor>`) so that `deleter` can free it.
+/// - After `deleter` is called, the `DLManagedTensorVersioned` pointer and its
+///   `dl_tensor.data` are invalid and must not be accessed.
+/// - If the consumer never calls `deleter`, the producer's resources leak.
 #[repr(C)]
 pub struct DLManagedTensorVersioned {
     /// DLPack version.
     pub version: DLPackVersion,
-    /// Opaque pointer for the producer's use (e.g., Box<Tensor>).
+    /// Opaque pointer for the producer's use (e.g., `Box<Tensor>`).
     pub manager_ctx: *mut c_void,
-    /// Callback to free resources. Must be called exactly once by the consumer.
+    /// Callback to free the producer's resources.
+    ///
+    /// Must be called **exactly once** by the consumer when the tensor data is
+    /// no longer needed. The callback receives a pointer to this
+    /// `DLManagedTensorVersioned` struct, allowing the producer to recover
+    /// `manager_ctx` and free all associated allocations (data buffer, shape
+    /// array, strides array, and the struct itself).
+    ///
+    /// `None` indicates that no cleanup is needed (rare; typically used for
+    /// statically allocated test data).
     pub deleter: Option<unsafe extern "C" fn(*mut DLManagedTensorVersioned)>,
     /// Bitmask flags (see `DLPACK_FLAG_*` constants).
     pub flags: u64,
@@ -409,23 +433,30 @@ fn map_ad_error(err: &chainrules_core::AutodiffError) -> tfe_status_t {
 ///
 /// # Safety
 ///
-/// `status` must be a valid, non-null pointer.
+/// If `status` is non-null it is written with the result code; if null,
+/// the status is silently discarded.
 unsafe fn finalize_ptr(
     result: std::thread::Result<Result<*mut TfeTensorF64, tfe_status_t>>,
     status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
     match result {
         Ok(Ok(ptr)) => {
-            *status = TFE_SUCCESS;
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
             ptr
         }
         Ok(Err(code)) => {
-            *status = code;
+            if !status.is_null() {
+                *status = code;
+            }
             std::ptr::null_mut()
         }
         Err(panic) => {
             set_last_error(&panic_message(&*panic));
-            *status = TFE_INTERNAL_ERROR;
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
             std::ptr::null_mut()
         }
     }
@@ -435,21 +466,28 @@ unsafe fn finalize_ptr(
 ///
 /// # Safety
 ///
-/// `status` must be a valid, non-null pointer.
+/// If `status` is non-null it is written with the result code; if null,
+/// the status is silently discarded.
 unsafe fn finalize_void(
     result: std::thread::Result<Result<(), tfe_status_t>>,
     status: *mut tfe_status_t,
 ) {
     match result {
         Ok(Ok(())) => {
-            *status = TFE_SUCCESS;
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
         }
         Ok(Err(code)) => {
-            *status = code;
+            if !status.is_null() {
+                *status = code;
+            }
         }
         Err(panic) => {
             set_last_error(&panic_message(&*panic));
-            *status = TFE_INTERNAL_ERROR;
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
         }
     }
 }
@@ -771,7 +809,10 @@ pub unsafe extern "C" fn tfe_tensor_f64_clone(
             return Err(TFE_INVALID_ARGUMENT);
         }
         let src = handle_to_ref(tensor);
-        let src_data = src.buffer().as_slice().unwrap();
+        let src_data = src.buffer().as_slice().ok_or_else(|| {
+            set_last_error("clone: tensor buffer is not contiguous host memory");
+            TFE_INTERNAL_ERROR
+        })?;
         let n = src.len();
         let off = src.offset() as usize;
         let copy = Tensor::from_slice(
@@ -822,18 +863,24 @@ pub unsafe extern "C" fn tfe_tensor_f64_ndim(
     status: *mut tfe_status_t,
 ) -> usize {
     if tensor.is_null() {
-        *status = TFE_INVALID_ARGUMENT;
+        if !status.is_null() {
+            *status = TFE_INVALID_ARGUMENT;
+        }
         return 0;
     }
     let result = catch_unwind(AssertUnwindSafe(|| handle_to_ref(tensor).ndim()));
     match result {
         Ok(n) => {
-            *status = TFE_SUCCESS;
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
             n
         }
         Err(panic) => {
             set_last_error(&panic_message(&*panic));
-            *status = TFE_INTERNAL_ERROR;
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
             0
         }
     }
@@ -842,12 +889,16 @@ pub unsafe extern "C" fn tfe_tensor_f64_ndim(
 /// Write the shape of the tensor into the caller-provided buffer.
 ///
 /// The caller must allocate `out_shape` with at least
-/// `tfe_tensor_f64_ndim(tensor)` elements.
+/// `tfe_tensor_f64_ndim(tensor)` elements. **Providing a buffer smaller
+/// than `ndim` elements causes undefined behavior** (buffer overflow).
 ///
 /// # Safety
 ///
 /// - `tensor` must be a valid, non-null tensor pointer.
-/// - `out_shape` must point to a buffer with at least `ndim` `usize` slots.
+/// - `out_shape` must point to a buffer with at least
+///   `tfe_tensor_f64_ndim(tensor)` elements. Writing beyond the buffer
+///   is undefined behavior; callers must query `ndim` first and allocate
+///   accordingly.
 /// - `status` must be a valid, non-null pointer.
 ///
 /// # Examples (C)
@@ -867,7 +918,9 @@ pub unsafe extern "C" fn tfe_tensor_f64_shape(
     status: *mut tfe_status_t,
 ) {
     if tensor.is_null() || out_shape.is_null() {
-        *status = TFE_INVALID_ARGUMENT;
+        if !status.is_null() {
+            *status = TFE_INVALID_ARGUMENT;
+        }
         return;
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
@@ -877,11 +930,15 @@ pub unsafe extern "C" fn tfe_tensor_f64_shape(
     }));
     match result {
         Ok(()) => {
-            *status = TFE_SUCCESS;
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
         }
         Err(panic) => {
             set_last_error(&panic_message(&*panic));
-            *status = TFE_INTERNAL_ERROR;
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
         }
     }
 }
@@ -900,18 +957,24 @@ pub unsafe extern "C" fn tfe_tensor_f64_len(
     status: *mut tfe_status_t,
 ) -> usize {
     if tensor.is_null() {
-        *status = TFE_INVALID_ARGUMENT;
+        if !status.is_null() {
+            *status = TFE_INVALID_ARGUMENT;
+        }
         return 0;
     }
     let result = catch_unwind(AssertUnwindSafe(|| handle_to_ref(tensor).len()));
     match result {
         Ok(n) => {
-            *status = TFE_SUCCESS;
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
             n
         }
         Err(panic) => {
             set_last_error(&panic_message(&*panic));
-            *status = TFE_INTERNAL_ERROR;
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
             0
         }
     }
@@ -944,22 +1007,37 @@ pub unsafe extern "C" fn tfe_tensor_f64_data(
     status: *mut tfe_status_t,
 ) -> *const f64 {
     if tensor.is_null() {
-        *status = TFE_INVALID_ARGUMENT;
+        if !status.is_null() {
+            *status = TFE_INVALID_ARGUMENT;
+        }
         return std::ptr::null();
     }
     let result = catch_unwind(AssertUnwindSafe(|| {
         let t = handle_to_ref(tensor);
-        let slice = t.buffer().as_slice().unwrap();
-        slice.as_ptr().add(t.offset() as usize)
+        let slice = t.buffer().as_slice().ok_or_else(|| {
+            set_last_error("data: tensor buffer is not contiguous host memory");
+            TFE_INTERNAL_ERROR
+        })?;
+        Ok(slice.as_ptr().add(t.offset() as usize))
     }));
     match result {
-        Ok(ptr) => {
-            *status = TFE_SUCCESS;
+        Ok(Ok(ptr)) => {
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
             ptr
+        }
+        Ok(Err(code)) => {
+            if !status.is_null() {
+                *status = code;
+            }
+            std::ptr::null()
         }
         Err(panic) => {
             set_last_error(&panic_message(&*panic));
-            *status = TFE_INTERNAL_ERROR;
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
             std::ptr::null()
         }
     }
@@ -1001,9 +1079,35 @@ pub unsafe extern "C" fn tfe_tensor_f64_data(
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_to_dlpack(
     _tensor: *mut TfeTensorF64,
-    _status: *mut tfe_status_t,
+    status: *mut tfe_status_t,
 ) -> *mut DLManagedTensorVersioned {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> Result<*mut DLManagedTensorVersioned, tfe_status_t> {
+            set_last_error("tfe_tensor_f64_to_dlpack is not yet implemented");
+            Err(TFE_INTERNAL_ERROR)
+        },
+    ));
+    match result {
+        Ok(Ok(ptr)) => {
+            if !status.is_null() {
+                *status = TFE_SUCCESS;
+            }
+            ptr
+        }
+        Ok(Err(code)) => {
+            if !status.is_null() {
+                *status = code;
+            }
+            std::ptr::null_mut()
+        }
+        Err(panic) => {
+            set_last_error(&panic_message(&*panic));
+            if !status.is_null() {
+                *status = TFE_INTERNAL_ERROR;
+            }
+            std::ptr::null_mut()
+        }
+    }
 }
 
 /// Import a DLPack managed tensor as a tenferro tensor (zero-copy).
@@ -1041,9 +1145,15 @@ pub unsafe extern "C" fn tfe_tensor_f64_to_dlpack(
 #[no_mangle]
 pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
     _managed: *mut DLManagedTensorVersioned,
-    _status: *mut tfe_status_t,
+    status: *mut tfe_status_t,
 ) -> *mut TfeTensorF64 {
-    todo!()
+    let result = catch_unwind(AssertUnwindSafe(
+        || -> Result<*mut TfeTensorF64, tfe_status_t> {
+            set_last_error("tfe_tensor_f64_from_dlpack is not yet implemented");
+            Err(TFE_INTERNAL_ERROR)
+        },
+    ));
+    finalize_ptr(result, status)
 }
 
 // ============================================================================
