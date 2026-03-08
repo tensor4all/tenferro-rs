@@ -22,6 +22,8 @@ pub mod backward;
 pub mod convert;
 pub mod forward;
 
+pub use convert::{burn_to_tenferro, tenferro_to_burn};
+
 use burn::tensor::backend::Backend;
 use burn::tensor::ops::FloatTensor;
 use burn::tensor::Tensor;
