@@ -14,4 +14,4 @@ tenferro-prims = { path = "../../tenferro-prims" }
 tenferro-device = { path = "../../tenferro-device" }
 tenferro-algebra = { path = "../../tenferro-algebra" }
 
-burn = { version = "0.21.0-pre.1", default-features = false, features = ["ndarray", "autodiff"] }
+burn = { version = "=0.21.0-pre.1", default-features = false, features = ["ndarray", "autodiff"] }
