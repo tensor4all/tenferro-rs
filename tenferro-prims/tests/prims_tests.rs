@@ -299,11 +299,9 @@ fn plan_cache_complex64_separate_from_f64() {
 // ============================================================================
 
 #[test]
-fn cpu_has_no_extension_contract() {
-    // CPU backend does not advertise Contract — einsum always uses
-    // the GEMM fallback path (prepare + BatchedGemm) which handles
-    // non-fusible strides via copy instead of O(n^rank) naive loop.
-    assert!(!cpu_has_ext::<f64>(Extension::Contract));
+fn cpu_has_extension_contract() {
+    // CPU backend now advertises Contract support (#296).
+    assert!(cpu_has_ext::<f64>(Extension::Contract));
 }
 
 #[test]

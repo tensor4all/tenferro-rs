@@ -402,6 +402,10 @@ pub struct CpuContext {
 #[cfg(feature = "gemm-blas")]
 const SCRATCH_ALIGN: usize = 64;
 
+// Compile-time guarantee: scratch alignment is sufficient for the widest scalar type.
+#[cfg(feature = "gemm-blas")]
+const _: () = assert!(SCRATCH_ALIGN >= std::mem::align_of::<f64>());
+
 /// Raw byte buffer stored in the pool. Does NOT impl Drop — the pool
 /// handles deallocation in its own Drop impl.
 #[cfg(feature = "gemm-blas")]
@@ -729,6 +733,22 @@ impl CpuBackend {
                     .filter(|(_, m)| !modes_c.contains(m))
                     .map(|(i, _)| i)
                     .collect();
+                // Validate: reduced_axes must be sorted, unique, and within rank
+                for w in reduced_axes.windows(2) {
+                    if w[0] >= w[1] {
+                        return Err(Error::InvalidArgument(format!(
+                            "Reduce: reduced_axes must be sorted and unique, got {reduced_axes:?}"
+                        )));
+                    }
+                }
+                if let Some(&last) = reduced_axes.last() {
+                    if last >= modes_a.len() {
+                        return Err(Error::InvalidArgument(format!(
+                            "Reduce: reduced axis {last} out of range for rank {}",
+                            modes_a.len()
+                        )));
+                    }
+                }
                 Ok(CpuPlan::Reduce {
                     reduced_axes,
                     op: *op,
@@ -881,7 +901,12 @@ impl CpuBackend {
                 modes_b,
                 modes_c,
             } => {
-                // Contract expects 3 shapes: A, B, C
+                // Contract expects 3 shapes: A, B, C.
+                // When GEMM acceleration is available (gemm-blas feature), the
+                // plan builder tries to map the contraction to a batched GEMM.
+                // If the mode layout is incompatible with GEMM (e.g. non-trivial
+                // batch alignment), the plan falls back to the generic O(m·n·k)
+                // loop in execute_contract_generic. This is correct but slower.
                 validate_shape_count(shapes, 3, "Contract")?;
                 validate_rank(shapes[0], modes_a.len(), "Contract input A")?;
                 validate_rank(shapes[1], modes_b.len(), "Contract input B")?;
@@ -1022,6 +1047,16 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     let b_ptr = b.ptr();
     let c_ptr = output.as_mut_ptr();
 
+    // Validate that batch strides are non-zero when batch dims are > 1,
+    // ensuring that each batch slice accesses distinct memory.
+    debug_assert!(
+        batch_dims
+            .iter()
+            .enumerate()
+            .all(|(i, &d)| d <= 1 || (a_batch[i] != 0 && b_batch[i] != 0 && c_batch[i] != 0)),
+        "batch GEMM stride must be non-zero for batch dims > 1"
+    );
+
     // Fast path: contiguous column-major → no packing needed
     if nb == 0
         && a_row == 1
@@ -1049,6 +1084,11 @@ fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
                     b_mat: &mut [T],
                     c_mat: &mut [T]|
      -> Result<()> {
+        // SAFETY: All pointer offsets below are within the allocation bounds of
+        // their respective tensors. The plan validation (validate_shape_eq) ensures
+        // that m, k, n match the tensor dimensions, and batch offsets are computed
+        // from strides that were validated at tensor construction time. The product
+        // of dims is bounded by the allocation size of each tensor's data buffer.
         for kk in 0..k {
             for i in 0..m {
                 let src_off = a_off + i as isize * a_row + kk as isize * a_col;
@@ -1540,6 +1580,10 @@ fn execute_reduce_sum<T: Scalar>(
 
 /// Unflatten a linear index into a pre-allocated buffer (column-major).
 fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
+    debug_assert!(
+        flat < dims.iter().product::<usize>(),
+        "flat index {flat} out of range for dims {dims:?}"
+    );
     for d in 0..dims.len() {
         out[d] = flat % dims[d];
         flat /= dims[d];
@@ -2039,13 +2083,17 @@ fn execute_contract<T: Scalar>(
     // Unflatten helper that writes into a reusable buffer (no allocation).
     fn unflatten_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
         debug_assert_eq!(dims.len(), out.len());
+        debug_assert!(
+            dims.iter().all(|&d| d > 0),
+            "unflatten_into: zero dimension in dims {dims:?}"
+        );
+        debug_assert!(
+            flat < dims.iter().product::<usize>(),
+            "flat index {flat} out of range for dims {dims:?}"
+        );
         for (i, &d) in dims.iter().enumerate() {
-            if d == 0 {
-                out[i] = 0;
-            } else {
-                out[i] = flat % d;
-                flat /= d;
-            }
+            out[i] = flat % d;
+            flat /= d;
         }
     }
 
@@ -2713,7 +2761,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
     }
 
     fn has_extension_for(_ext: Extension) -> bool {
-        matches!(_ext, Extension::ElementwiseMul)
+        matches!(_ext, Extension::Contract | Extension::ElementwiseMul)
     }
 }
 
