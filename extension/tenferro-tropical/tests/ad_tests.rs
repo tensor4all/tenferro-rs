@@ -4,9 +4,11 @@
 //! operations to only the winning elements.
 
 use chainrules::Tape;
+use tenferro_device::Error;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tenferro_tropical::ad::{
     extract_inner, promote_to_tropical, tracked_tropical_einsum, tropical_einsum_rrule,
+    TropicalScalar,
 };
 use tenferro_tropical::{MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra};
 
@@ -54,6 +56,45 @@ fn promote_extract_maxmul_roundtrip() {
     for i in 0..4 {
         assert_eq!(orig[i], result[i]);
     }
+}
+
+#[test]
+fn promote_extract_roundtrip_preserves_non_contiguous_view_order() {
+    let base = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
+    let view = base.permute(&[1, 0]).unwrap();
+    let tropical = promote_to_tropical::<MaxPlus<f64>>(&view).unwrap();
+    let back = extract_inner::<MaxPlus<f64>>(&tropical).unwrap();
+    let contiguous = view.contiguous(MemoryOrder::ColumnMajor);
+    let expected = contiguous.buffer().as_slice().unwrap();
+    assert_eq!(back.buffer().as_slice().unwrap(), expected);
+}
+
+#[test]
+fn extract_inner_preserves_non_contiguous_tropical_view_order() {
+    let base = Tensor::<MaxPlus<f64>>::from_slice(
+        &[
+            MaxPlus(1.0),
+            MaxPlus(2.0),
+            MaxPlus(3.0),
+            MaxPlus(4.0),
+            MaxPlus(5.0),
+            MaxPlus(6.0),
+        ],
+        &[2, 3],
+        COL,
+    )
+    .unwrap();
+    let view = base.permute(&[1, 0]).unwrap();
+    let inner = extract_inner::<MaxPlus<f64>>(&view).unwrap();
+    let expected = view
+        .contiguous(MemoryOrder::ColumnMajor)
+        .buffer()
+        .as_slice()
+        .unwrap()
+        .iter()
+        .map(|v| v.inner())
+        .collect::<Vec<_>>();
+    assert_eq!(inner.buffer().as_slice().unwrap(), expected);
 }
 
 // ============================================================================
@@ -743,6 +784,35 @@ fn rrule_rejects_three_operands() {
         tenferro_prims::CpuBackend,
     >(&mut ctx, "i,i,i->", &[&a, &b, &c], &grad);
     assert!(result.is_err());
+}
+
+#[test]
+fn rrule_rejects_cotangent_shape_mismatch() {
+    let mut ctx = ctx();
+
+    let a = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let b = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(5.0), MaxPlus(6.0), MaxPlus(7.0), MaxPlus(8.0)],
+        &[2, 2],
+        COL,
+    )
+    .unwrap();
+    let bad_cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], COL).unwrap();
+
+    let result = tropical_einsum_rrule::<
+        MaxPlus<f64>,
+        MaxPlusAlgebra<f64>,
+        tenferro_prims::CpuBackend,
+    >(&mut ctx, "ij,jk->ik", &[&a, &b], &bad_cotangent);
+
+    assert!(
+        matches!(result, Err(Error::InvalidArgument(message)) if message.contains("cotangent"))
+    );
 }
 
 #[test]

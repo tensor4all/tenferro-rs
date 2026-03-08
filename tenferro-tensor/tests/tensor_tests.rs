@@ -247,10 +247,40 @@ fn effective_compute_devices_default() {
 #[test]
 fn effective_compute_devices_override() {
     let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let dev = ComputeDevice::Cpu { device_id: 1 };
+    let dev = ComputeDevice::Cpu { device_id: 0 };
     t.set_preferred_compute_device(Some(dev));
     let devs = t.effective_compute_devices(OpKind::Contract).unwrap();
     assert_eq!(devs, vec![dev]);
+}
+
+#[test]
+fn effective_compute_devices_rejects_invalid_cpu_override() {
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    t.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 99 }));
+    let err = t.effective_compute_devices(OpKind::Contract).unwrap_err();
+    assert!(matches!(
+        err,
+        tenferro_device::Error::NoCompatibleComputeDevice {
+            space: LogicalMemorySpace::MainMemory,
+            op: OpKind::Contract,
+        }
+    ));
+}
+
+#[test]
+fn effective_compute_devices_rejects_invalid_cuda_override() {
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    t.set_preferred_compute_device(Some(ComputeDevice::Cuda { device_id: 1 }));
+    let err = t
+        .effective_compute_devices(OpKind::BatchedGemm)
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        tenferro_device::Error::NoCompatibleComputeDevice {
+            space: LogicalMemorySpace::MainMemory,
+            op: OpKind::BatchedGemm,
+        }
+    ));
 }
 
 #[test]
@@ -724,6 +754,22 @@ fn tril_triu_complementary() {
     for i in 0..9 {
         assert_eq!(l_data[i] + u_data[i], 1.0, "mismatch at index {i}");
     }
+}
+
+#[test]
+fn tril_rank1_returns_vector_unchanged() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+    let lower = t.tril(0);
+    assert_eq!(lower.dims(), &[3]);
+    assert_eq!(lower.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0]);
+}
+
+#[test]
+fn triu_rank1_returns_vector_unchanged() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], COL).unwrap();
+    let upper = t.triu(0);
+    assert_eq!(upper.dims(), &[3]);
+    assert_eq!(upper.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0]);
 }
 
 // ============================================================================

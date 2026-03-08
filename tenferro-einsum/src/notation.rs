@@ -2,13 +2,14 @@ use tenferro_device::{Error, Result};
 
 /// Convert a notation label character to internal `u32`.
 ///
-/// Any Unicode scalar except control characters is accepted and mapped to
-/// its scalar value (`char as u32`). This enables einsum benchmark instances
-/// that use characters like `×`, `ë`, `ð` as index labels.
+/// Unicode alphanumeric scalars are accepted and mapped to their scalar value
+/// (`char as u32`). This keeps label syntax aligned with the documented
+/// "Unicode alphanumeric label" contract while still allowing digits,
+/// accented letters, Greek, and CJK characters.
 pub(crate) fn char_to_label(c: char) -> Result<u32> {
-    if c.is_control() {
+    if !c.is_alphanumeric() {
         return Err(Error::InvalidArgument(format!(
-            "invalid einsum label character: control character U+{:04X}",
+            "invalid einsum label character: {c:?} (U+{:04X}); labels must be Unicode alphanumeric",
             c as u32
         )));
     }

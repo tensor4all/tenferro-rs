@@ -276,8 +276,17 @@ where
             .collect()
     };
 
-    // Run forward with argmax tracking
-    let (_output, tracker) = tropical_forward_with_argmax(operands, &subs, &contracted)?;
+    // Run forward with argmax tracking so we can validate the cotangent against
+    // the logical output shape before any backward indexing happens.
+    let (output, tracker) = tropical_forward_with_argmax(operands, &subs, &contracted)?;
+
+    if cotangent.dims() != output.dims() {
+        return Err(Error::InvalidArgument(format!(
+            "cotangent shape mismatch: expected {:?}, got {:?}",
+            output.dims(),
+            cotangent.dims()
+        )));
+    }
 
     // Compute backward using the tracker
     tropical_backward(operands, cotangent, &tracker, &subs, &contracted)
@@ -865,10 +874,15 @@ where
 /// let tropical = promote_to_tropical::<MaxPlus<f64>>(&t).unwrap();
 /// ```
 pub fn promote_to_tropical<T: TropicalScalar>(tensor: &Tensor<T::Inner>) -> Result<Tensor<T>> {
-    let data = tensor
+    tensor
         .buffer()
         .as_slice()
         .ok_or_else(|| Error::DeviceError("GPU tensor passed to CPU backend".into()))?;
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let data = contiguous
+        .buffer()
+        .as_slice()
+        .expect("CPU tensor must remain CPU-backed after materialization");
 
     let tropical_data: Vec<T> = data.iter().map(|&v| T::from_inner(v)).collect();
     Tensor::<T>::from_slice(&tropical_data, tensor.dims(), MemoryOrder::ColumnMajor)
@@ -890,10 +904,15 @@ pub fn promote_to_tropical<T: TropicalScalar>(tensor: &Tensor<T::Inner>) -> Resu
 /// let inner = extract_inner::<MaxPlus<f64>>(&t).unwrap();
 /// ```
 pub fn extract_inner<T: TropicalScalar>(tensor: &Tensor<T>) -> Result<Tensor<T::Inner>> {
-    let data = tensor
+    tensor
         .buffer()
         .as_slice()
         .ok_or_else(|| Error::DeviceError("GPU tensor passed to CPU backend".into()))?;
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let data = contiguous
+        .buffer()
+        .as_slice()
+        .expect("CPU tensor must remain CPU-backed after materialization");
 
     let inner_data: Vec<T::Inner> = data.iter().map(|v| v.inner()).collect();
     Tensor::<T::Inner>::from_slice(&inner_data, tensor.dims(), MemoryOrder::ColumnMajor)

@@ -77,6 +77,28 @@ fn ad_next_043_requires_grad_false_keeps_context_linkage() {
 }
 
 #[test]
+fn ad_next_044_requires_grad_false_foreign_context_is_treated_as_constant() {
+    let tracked_ctx = AutogradContext::<f64>::new();
+    let foreign_ctx = AutogradContext::<f64>::new();
+    let a = Variable::new_in(1.0_f64, Arc::clone(&tracked_ctx))
+        .requires_grad_(true)
+        .unwrap();
+    let b = Variable::new_in(2.0_f64, Arc::clone(&foreign_ctx))
+        .requires_grad_(true)
+        .unwrap()
+        .requires_grad_(false)
+        .unwrap();
+
+    let y = autograd::add(&a, &b).unwrap();
+    assert_eq!(y.context_id(), a.context_id());
+    assert!(y.requires_grad());
+
+    y.backward(Default::default()).unwrap();
+    assert_eq!(a.grad(), Some(1.0));
+    assert_eq!(b.grad(), None);
+}
+
+#[test]
 fn ad_next_047_zero_grad_leaf_only_manual_reset() {
     let x = Variable::new(2.0_f64)
         .requires_grad_(true)

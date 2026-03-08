@@ -1806,7 +1806,11 @@ pub mod autograd {
         }
 
         let mut picked: Option<(u64, Arc<Mutex<AutogradContext<V>>>)> = None;
-        for ctx in inputs.iter().filter_map(|input| input.context.as_ref()) {
+        for ctx in inputs
+            .iter()
+            .filter(|input| input.requires_grad())
+            .filter_map(|input| input.context.as_ref())
+        {
             let id = context_id(ctx)?;
             match &picked {
                 None => picked = Some((id, Arc::clone(ctx))),

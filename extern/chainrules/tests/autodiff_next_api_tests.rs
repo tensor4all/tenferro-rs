@@ -37,6 +37,22 @@ fn all_requires_grad_false_drops_output_context() {
 }
 
 #[test]
+fn foreign_context_constant_is_ignored_for_binary_ops() {
+    let tracked_ctx = AutogradContext::<f64>::new();
+    let foreign_ctx = AutogradContext::<f64>::new();
+    let tracked = Variable::new_in(1.0_f64, Arc::clone(&tracked_ctx))
+        .requires_grad_(true)
+        .unwrap();
+    let constant = Variable::new_in(2.0_f64, Arc::clone(&foreign_ctx))
+        .requires_grad_(false)
+        .unwrap();
+
+    let out = autograd::add(&tracked, &constant).unwrap();
+    assert_eq!(out.context_id(), tracked.context_id());
+    assert!(out.requires_grad());
+}
+
+#[test]
 fn variable_api_surface_exists() {
     let _ = BackwardOptions::<f64>::default();
     let _ = Tape::<f64>::new();

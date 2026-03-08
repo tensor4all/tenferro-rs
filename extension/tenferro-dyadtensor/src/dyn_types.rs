@@ -439,9 +439,10 @@ where
                 tape,
                 output_node,
                 Box::new(move |cotangent| {
+                    let contiguous = cotangent.contiguous(MemoryOrder::ColumnMajor);
                     Ok(vec![(
                         input_node,
-                        cotangent.reshape(&old_dims).map_err(Error::from)?,
+                        contiguous.reshape(&old_dims).map_err(Error::from)?,
                     )])
                 }),
             )?;

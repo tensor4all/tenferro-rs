@@ -809,18 +809,13 @@ pub unsafe extern "C" fn tfe_tensor_f64_clone(
             return Err(TFE_INVALID_ARGUMENT);
         }
         let src = handle_to_ref(tensor);
-        let src_data = src.buffer().as_slice().ok_or_else(|| {
+        let materialized = src.contiguous(MemoryOrder::ColumnMajor);
+        let src_data = materialized.buffer().as_slice().ok_or_else(|| {
             set_last_error("clone: tensor buffer is not contiguous host memory");
             TFE_INTERNAL_ERROR
         })?;
-        let n = src.len();
-        let off = src.offset() as usize;
-        let copy = Tensor::from_slice(
-            &src_data[off..off + n],
-            src.dims(),
-            MemoryOrder::ColumnMajor,
-        )
-        .map_err(|e| map_device_error(&e))?;
+        let copy = Tensor::from_slice(src_data, materialized.dims(), MemoryOrder::ColumnMajor)
+            .map_err(|e| map_device_error(&e))?;
         Ok(tensor_to_handle(copy))
     }));
 

@@ -1265,7 +1265,8 @@ impl<T: Scalar> Tensor<T> {
     /// Return the effective compute devices for a given operation kind.
     ///
     /// If a preferred compute device is set, returns a single-element vector
-    /// containing that device. Otherwise, delegates to
+    /// containing that device when it is compatible with the tensor's logical
+    /// memory space for the requested operation. Otherwise, delegates to
     /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
     ///
     /// # Errors
@@ -1284,10 +1285,18 @@ impl<T: Scalar> Tensor<T> {
         &self,
         op_kind: OpKind,
     ) -> tenferro_device::Result<Vec<ComputeDevice>> {
+        let compatible = preferred_compute_devices(self.logical_memory_space, op_kind)?;
         if let Some(device) = self.preferred_compute_device {
-            Ok(vec![device])
+            if compatible.contains(&device) {
+                Ok(vec![device])
+            } else {
+                Err(Error::NoCompatibleComputeDevice {
+                    space: self.logical_memory_space,
+                    op: op_kind,
+                })
+            }
         } else {
-            preferred_compute_devices(self.logical_memory_space, op_kind)
+            Ok(compatible)
         }
     }
 
@@ -1930,7 +1939,7 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Returns a new tensor with elements above the `diagonal`-th diagonal
     /// set to zero. For batched tensors `(m, n, *)`, applies independently
-    /// to each batch element.
+    /// to each batch element. Scalars and vectors are returned unchanged.
     ///
     /// - `diagonal = 0`: main diagonal (default)
     /// - `diagonal > 0`: above main diagonal
@@ -1952,7 +1961,9 @@ impl<T: Scalar> Tensor<T> {
     pub fn tril(&self, diagonal: isize) -> Tensor<T> {
         self.wait();
         let ndim = self.ndim();
-        assert!(ndim >= 2, "tril requires at least 2 dimensions");
+        if ndim <= 1 {
+            return self.contiguous(MemoryOrder::ColumnMajor);
+        }
         let m = self.dims[0];
         let n = self.dims[1];
         let order = MemoryOrder::ColumnMajor;
@@ -2032,7 +2043,7 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// Returns a new tensor with elements below the `diagonal`-th diagonal
     /// set to zero. For batched tensors `(m, n, *)`, applies independently
-    /// to each batch element.
+    /// to each batch element. Scalars and vectors are returned unchanged.
     ///
     /// - `diagonal = 0`: main diagonal (default)
     /// - `diagonal > 0`: above main diagonal
@@ -2054,7 +2065,9 @@ impl<T: Scalar> Tensor<T> {
     pub fn triu(&self, diagonal: isize) -> Tensor<T> {
         self.wait();
         let ndim = self.ndim();
-        assert!(ndim >= 2, "triu requires at least 2 dimensions");
+        if ndim <= 1 {
+            return self.contiguous(MemoryOrder::ColumnMajor);
+        }
         let m = self.dims[0];
         let n = self.dims[1];
         let order = MemoryOrder::ColumnMajor;
