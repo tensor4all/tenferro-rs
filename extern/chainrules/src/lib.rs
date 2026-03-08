@@ -430,7 +430,10 @@ impl<V: Differentiable> Tape<V> {
     /// let _grad = result.gradients;
     /// let _hv = result.hvp;
     /// ```
-    pub fn hvp(&self, loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>> {
+    pub fn hvp(&self, loss: &TrackedTensor<V>) -> AdResult<HvpResult<V>>
+    where
+        V::Tangent: Differentiable<Tangent = V::Tangent>,
+    {
         let loss_node = loss.node_id.ok_or(AutodiffError::MissingNode)?;
         let n = loss.value.num_elements();
         if n != 1 {
@@ -463,10 +466,8 @@ impl<V: Differentiable> Tape<V> {
                 None => continue,
             };
             let cot_tan = cot_tangents[i].take().unwrap_or_else(|| {
-                // If no cotangent-tangent accumulated, use zero
-                // (We need a zero tangent but don't have the value; use the cotangent's zero)
-                // Since V::Tangent == V for most types, zero_tangent works on cot
-                loss.value.zero_tangent()
+                // If no cotangent-tangent accumulated, use zero matching this node's shape
+                cot.zero_tangent()
             });
 
             let results = inner.nodes[i]
@@ -1244,7 +1245,7 @@ impl<V: Differentiable> AutogradContext<V> {
         seed_tangent: V::Tangent,
     ) -> AdResult<(Vec<Option<V::Tangent>>, Vec<Option<V::Tangent>>)>
     where
-        V::Tangent: Clone,
+        V::Tangent: Clone + Differentiable<Tangent = V::Tangent>,
     {
         let n = self.nodes.len();
         if output_node.index() >= n {
@@ -1259,7 +1260,7 @@ impl<V: Differentiable> AutogradContext<V> {
         }
 
         cotangents[output_node.index()] = Some(seed);
-        cot_tangents[output_node.index()] = Some(seed_tangent.clone());
+        cot_tangents[output_node.index()] = Some(seed_tangent);
 
         for i in (0..=output_node.index()).rev() {
             let Some(rule) = self.nodes[i].rule.as_ref() else {
@@ -1268,9 +1269,7 @@ impl<V: Differentiable> AutogradContext<V> {
             let Some(cot) = cotangents[i].take() else {
                 continue;
             };
-            let cot_tan = cot_tangents[i]
-                .take()
-                .unwrap_or_else(|| seed_tangent.clone());
+            let cot_tan = cot_tangents[i].take().unwrap_or_else(|| cot.zero_tangent());
             let input_grads = rule.pullback_with_tangents(&cot, &cot_tan)?;
             for (node_id, grad, grad_tan) in input_grads {
                 let idx = node_id.index();
@@ -1584,7 +1583,7 @@ impl<V: Differentiable> Variable<V> {
     /// ```
     pub fn backward_hvp(&self, options: BackwardOptions<V>) -> AdResult<()>
     where
-        V::Tangent: Clone,
+        V::Tangent: Clone + Differentiable<Tangent = V::Tangent>,
     {
         if options.create_graph {
             return Err(AutodiffError::ModeNotSupported {
@@ -1930,19 +1929,16 @@ pub mod autograd {
                 AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
             })?;
             let ctx_id = guard.id();
-            let lhs_node = if lhs.requires_grad() && lhs_ctx == Some(ctx_id) {
-                lhs.node_id.ok_or(AutodiffError::MissingNode)?
+            let lhs_dep = if lhs.requires_grad() && lhs_ctx == Some(ctx_id) {
+                Some(lhs.node_id.ok_or(AutodiffError::MissingNode)?)
             } else {
-                NodeId::new(usize::MAX)
+                None
             };
-            let rhs_node = if rhs.requires_grad() && rhs_ctx == Some(ctx_id) {
-                rhs.node_id.ok_or(AutodiffError::MissingNode)?
+            let rhs_dep = if rhs.requires_grad() && rhs_ctx == Some(ctx_id) {
+                Some(rhs.node_id.ok_or(AutodiffError::MissingNode)?)
             } else {
-                NodeId::new(usize::MAX)
+                None
             };
-
-            let lhs_dep = (lhs_node.index() != usize::MAX).then_some(lhs_node);
-            let rhs_dep = (rhs_node.index() != usize::MAX).then_some(rhs_node);
             let rule = AddRule::<V> {
                 lhs: lhs_dep,
                 rhs: rhs_dep,
