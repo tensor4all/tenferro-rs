@@ -215,6 +215,29 @@ fn contraction_tree_from_pairs() {
     assert_eq!(d.dims(), &[2, 5]);
 }
 
+#[test]
+fn contraction_tree_from_pairs_rejects_wrong_step_count() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let result = ContractionTree::from_pairs(&subs, &[&[2, 2], &[2, 2], &[2, 2]], &[(1, 2)]);
+    assert!(result.is_err(), "wrong number of path steps must error");
+}
+
+#[test]
+fn contraction_tree_from_pairs_rejects_self_pair() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let result =
+        ContractionTree::from_pairs(&subs, &[&[2, 2], &[2, 2], &[2, 2]], &[(0, 0), (1, 3)]);
+    assert!(result.is_err(), "self-pair contraction must error");
+}
+
+#[test]
+fn contraction_tree_from_pairs_rejects_reused_consumed_operand() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let result =
+        ContractionTree::from_pairs(&subs, &[&[2, 2], &[2, 2], &[2, 2]], &[(0, 1), (0, 2)]);
+    assert!(result.is_err(), "reusing a consumed operand must error");
+}
+
 // ============================================================================
 // einsum: single-tensor operations
 // ============================================================================
@@ -566,6 +589,42 @@ fn einsum_with_path_invalid_pairs_errors() {
     let result =
         einsum_with_path::<S, CpuBackend>(&mut ctx, &subs, &bad_pairs, &[&a, &b, &c], None);
     assert!(result.is_err(), "invalid contraction path must error");
+}
+
+#[test]
+fn einsum_with_path_rejects_structurally_invalid_paths() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
+    let c = Tensor::<f64>::from_slice(&[9.0, 10.0, 11.0, 12.0], &[2, 2], COL).unwrap();
+    let invalid_paths = [
+        (vec![(1, 2)], "wrong step count"),
+        (vec![(0, 0), (1, 3)], "self pair"),
+        (vec![(0, 1), (0, 2)], "reused consumed operand"),
+    ];
+
+    for (pairs, desc) in invalid_paths {
+        let with_path =
+            einsum_with_path::<S, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None);
+        assert!(with_path.is_err(), "{desc} must be rejected by einsum_with_path");
+
+        let mut out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+        let with_path_into = einsum_with_path_into::<S, CpuBackend>(
+            &mut ctx,
+            &subs,
+            &pairs,
+            &[&a, &b, &c],
+            1.0,
+            0.0,
+            &mut out,
+            None,
+        );
+        assert!(
+            with_path_into.is_err(),
+            "{desc} must be rejected by einsum_with_path_into"
+        );
+    }
 }
 
 #[test]
@@ -1994,12 +2053,31 @@ fn parse_various_invalid_chars() {
     let invalid_cases = [
         ("i\u{0},\u{0}j->ij", "null byte"),
         ("i\u{000A}j->ij", "newline"),
+        ("i!,!j->ij", "punctuation"),
+        ("i j,jk->ik", "space"),
     ];
     for (notation, desc) in &invalid_cases {
         let result = Subscripts::parse(notation);
         assert!(
             result.is_err(),
             "should reject {desc} in notation '{notation}', got: {:?}",
+            result
+        );
+    }
+}
+
+#[test]
+fn nested_einsum_parse_rejects_punctuation_and_whitespace_labels() {
+    let invalid_cases = [
+        ("(i!,jk),kl->il", "punctuation"),
+        ("(ij,j k),kl->il", "space"),
+        ("(ij,jk),kl->i l", "output space"),
+    ];
+    for (notation, desc) in &invalid_cases {
+        let result = tenferro_einsum::NestedEinsum::parse(notation);
+        assert!(
+            result.is_err(),
+            "should reject {desc} in nested notation '{notation}', got: {:?}",
             result
         );
     }

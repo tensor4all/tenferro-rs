@@ -6,7 +6,7 @@ use chainrules::{
     autograd, AdResult, Differentiable, DualTensor, NodeId, ReverseRule, TrackedTensor, Variable,
 };
 use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
-use tenferro_device::{Error, Result};
+use tenferro_device::Result;
 use tenferro_prims::TensorPrims;
 use tenferro_tensor::{MemoryOrder, Tensor};
 

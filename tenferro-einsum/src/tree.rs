@@ -151,32 +151,61 @@ impl ContractionTree {
         pairs: &[(usize, usize)],
     ) -> Result<Self> {
         let n_inputs = subscripts.inputs.len();
+        let required_steps = n_inputs.saturating_sub(1);
+        if pairs.len() != required_steps {
+            return Err(Error::InvalidArgument(format!(
+                "explicit contraction path for {n_inputs} operands must have {required_steps} steps, got {}",
+                pairs.len()
+            )));
+        }
         let size_dict = build_size_dict(subscripts, shapes, None)?;
 
         let mut operand_subs: Vec<Vec<u32>> = subscripts.inputs.clone();
-        let mut consumed = vec![false; n_inputs + pairs.len()];
+        let mut live = vec![false; n_inputs + pairs.len()];
+        for slot in live.iter_mut().take(n_inputs) {
+            *slot = true;
+        }
         let mut steps = Vec::new();
 
-        for &(left, right) in pairs {
-            if left >= operand_subs.len() || right >= operand_subs.len() {
+        for (step_idx, &(left, right)) in pairs.iter().enumerate() {
+            let next_idx = n_inputs + step_idx;
+            if left == right {
+                return Err(Error::InvalidArgument(format!(
+                    "pair ({left}, {right}) must reference two distinct live operands"
+                )));
+            }
+            if left >= next_idx || right >= next_idx {
                 return Err(Error::InvalidArgument(format!(
                     "pair ({left}, {right}) references non-existent operand"
                 )));
             }
-            consumed[left] = true;
-            consumed[right] = true;
+            if !live[left] || !live[right] {
+                return Err(Error::InvalidArgument(format!(
+                    "pair ({left}, {right}) references an operand or intermediate that is no longer live"
+                )));
+            }
 
-            // Labels needed by unconsumed operands + final output
+            // Labels needed by other live operands + final output
             let mut needed: HashSet<u32> = subscripts.output.iter().copied().collect();
             for (idx, subs) in operand_subs.iter().enumerate() {
-                if !consumed[idx] {
+                if idx != left && idx != right && live[idx] {
                     needed.extend(subs.iter().copied());
                 }
             }
 
             let new_subs = intermediate_subs(&operand_subs[left], &operand_subs[right], &needed);
             operand_subs.push(new_subs);
+            live[left] = false;
+            live[right] = false;
+            live[next_idx] = true;
             steps.push(ContractionStep { left, right });
+        }
+
+        let live_count = live.iter().filter(|&&is_live| is_live).count();
+        if live_count != 1 {
+            return Err(Error::InvalidArgument(format!(
+                "explicit contraction path must leave exactly one live result, got {live_count}"
+            )));
         }
 
         // Pre-compute output shapes for each intermediate step.
