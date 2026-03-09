@@ -202,7 +202,7 @@ pub struct RocmPlan<T: Scalar> {
 /// **Status: Not yet implemented.** All methods currently return errors.
 /// The type exists to define the intended API surface. `plan()` and
 /// `execute()` return `Err(DeviceError)`. `load_hiptensor()` on
-/// [`BackendRegistry`] also returns an error.
+/// [`crate::BackendRegistry`] also returns an error.
 ///
 /// When implemented, will be loaded at runtime from a user-provided `.so`
 /// path with no compile-time ROCm SDK dependency. Will implement

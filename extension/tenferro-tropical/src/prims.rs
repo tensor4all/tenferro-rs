@@ -115,7 +115,7 @@ pub enum TropicalPlan<T: Scalar> {
     },
     /// Plan for permutation.
     Permute {
-        /// Permutation mapping: perm[out_axis] = in_axis.
+        /// Permutation mapping: `perm[out_axis] = in_axis`.
         perm: Vec<usize>,
         _marker: PhantomData<T>,
     },
