@@ -1188,7 +1188,7 @@ fn eager_local_solve_triangular_rrule_runs() {
 
     let grad = solve_triangular_rrule(&ad_a, &ad_b, &ad_cotangent, true).unwrap();
     assert_eq!(grad.a.dims(), &[2, 2]);
-    assert_eq!(grad.b.dims(), &[2, 1]);
+    assert_eq!(grad.b.dims(), &[2]);
 }
 
 #[test]

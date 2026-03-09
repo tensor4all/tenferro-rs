@@ -94,3 +94,32 @@ fn autodiff_binary_einsum_propagates_matmul_gradients() {
         vec![4.0, 4.0, 6.0, 6.0]
     );
 }
+
+#[test]
+fn autodiff_three_input_einsum_propagates_gradients() {
+    type Backend = Autodiff<NdArray<f64>>;
+
+    let device = Default::default();
+    let a = Tensor::<Backend, 2>::from_data([[1.0, 2.0], [3.0, 4.0]], &device).require_grad();
+    let b = Tensor::<Backend, 2>::from_data([[5.0, 6.0], [7.0, 8.0]], &device).require_grad();
+    let c = Tensor::<Backend, 2>::from_data([[2.0, 3.0], [4.0, 5.0]], &device).require_grad();
+
+    let loss = einsum("ij,ij,ij->ij", vec![a.clone(), b.clone(), c.clone()]).sum();
+    let grads = loss.backward();
+    let grad_a = a.grad(&grads).unwrap();
+    let grad_b = b.grad(&grads).unwrap();
+    let grad_c = c.grad(&grads).unwrap();
+
+    assert_eq!(
+        grad_a.into_data().to_vec::<f64>().unwrap(),
+        vec![10.0, 18.0, 28.0, 40.0]
+    );
+    assert_eq!(
+        grad_b.into_data().to_vec::<f64>().unwrap(),
+        vec![2.0, 6.0, 12.0, 20.0]
+    );
+    assert_eq!(
+        grad_c.into_data().to_vec::<f64>().unwrap(),
+        vec![5.0, 12.0, 21.0, 32.0]
+    );
+}

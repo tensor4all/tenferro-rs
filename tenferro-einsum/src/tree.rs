@@ -227,4 +227,83 @@ impl ContractionTree {
         tree.step_plans = compile_step_plans(&tree).map_err(|e| Error::InvalidArgument(e))?;
         Ok(tree)
     }
+
+    /// Return the number of pairwise contraction steps in this tree.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    /// let tree = ContractionTree::from_pairs(
+    ///     &subs,
+    ///     &[&[2, 2], &[2, 2], &[2, 2]],
+    ///     &[(1, 2), (0, 3)],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tree.step_count(), 2);
+    /// ```
+    #[must_use]
+    pub fn step_count(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Return the operand indices for a pairwise contraction step.
+    ///
+    /// The returned indices refer to the original inputs (`0..n_inputs`) and
+    /// then to intermediates (`n_inputs..`) produced by earlier steps.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    /// let tree = ContractionTree::from_pairs(
+    ///     &subs,
+    ///     &[&[2, 2], &[2, 2], &[2, 2]],
+    ///     &[(1, 2), (0, 3)],
+    /// )
+    /// .unwrap();
+    /// assert_eq!(tree.step_pair(0), Some((1, 2)));
+    /// ```
+    #[must_use]
+    pub fn step_pair(&self, step_idx: usize) -> Option<(usize, usize)> {
+        self.steps.get(step_idx).map(|step| (step.left, step.right))
+    }
+
+    /// Return the `(lhs, rhs, output)` subscripts for a pairwise step.
+    ///
+    /// The output subscripts are the intermediate labels preserved after the
+    /// contraction, or the final output labels on the last step.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_einsum::{ContractionTree, Subscripts};
+    ///
+    /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    /// let tree = ContractionTree::from_pairs(
+    ///     &subs,
+    ///     &[&[2, 2], &[2, 2], &[2, 2]],
+    ///     &[(1, 2), (0, 3)],
+    /// )
+    /// .unwrap();
+    /// let (lhs, rhs, out) = tree.step_subscripts(0).unwrap();
+    /// assert_eq!(lhs, &[1, 2]);
+    /// assert_eq!(rhs, &[2, 3]);
+    /// assert_eq!(out, &[1, 3]);
+    /// ```
+    #[must_use]
+    pub fn step_subscripts(&self, step_idx: usize) -> Option<(&[u32], &[u32], &[u32])> {
+        let n_inputs = self.subscripts.inputs.len();
+        let step = self.steps.get(step_idx)?;
+        let result_idx = n_inputs + step_idx;
+        Some((
+            &self.operand_subs[step.left],
+            &self.operand_subs[step.right],
+            &self.operand_subs[result_idx],
+        ))
+    }
 }

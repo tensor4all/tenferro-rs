@@ -4829,6 +4829,28 @@ fn eig_rrule_with_both_values_and_vectors() {
 // Coverage: solve_rrule and solve_frule with multi-RHS
 // ============================================================================
 
+fn assert_close_slices(label: &str, got: &[f64], expected: &[f64], atol: f64) {
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "{label}: length mismatch (got {}, expected {})",
+        got.len(),
+        expected.len()
+    );
+    for (idx, (&g, &e)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (g - e).abs() <= atol,
+            "{label}[{idx}] mismatch: got {g}, expected {e}, atol={atol}"
+        );
+    }
+}
+
+fn assemble_two_rhs_columns(col0: &Tensor<f64>, col1: &Tensor<f64>) -> Vec<f64> {
+    let mut data = tensor_data(col0);
+    data.extend(tensor_data(col1));
+    data
+}
+
 #[test]
 fn solve_rrule_multi_rhs() {
     // Exercise nrhs > 1 path in solve_rrule.
@@ -4852,6 +4874,45 @@ fn solve_rrule_multi_rhs() {
 }
 
 #[test]
+fn solve_rrule_square_rhs_matches_columnwise_reference() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let cot = make_tensor(vec![0.25, -0.5, 0.75, 1.25], &[2, 2]);
+
+    let grad = solve_rrule(&mut ctx, &a, &b, &cot).unwrap();
+    assert_eq!(grad.a.dims(), &[2, 2]);
+    assert_eq!(grad.b.dims(), &[2, 2]);
+
+    let b0 = make_tensor(vec![1.0, 0.0], &[2, 1]);
+    let b1 = make_tensor(vec![0.0, 1.0], &[2, 1]);
+    let cot0 = make_tensor(vec![0.25, -0.5], &[2, 1]);
+    let cot1 = make_tensor(vec![0.75, 1.25], &[2, 1]);
+    let grad0 = solve_rrule(&mut ctx, &a, &b0, &cot0).unwrap();
+    let grad1 = solve_rrule(&mut ctx, &a, &b1, &cot1).unwrap();
+
+    let expected_a: Vec<f64> = tensor_data(&grad0.a)
+        .into_iter()
+        .zip(tensor_data(&grad1.a))
+        .map(|(x, y)| x + y)
+        .collect();
+    let expected_b = assemble_two_rhs_columns(&grad0.b, &grad1.b);
+
+    assert_close_slices(
+        "solve_rrule grad_a",
+        &tensor_data(&grad.a),
+        &expected_a,
+        1e-10,
+    );
+    assert_close_slices(
+        "solve_rrule grad_b",
+        &tensor_data(&grad.b),
+        &expected_b,
+        1e-10,
+    );
+}
+
+#[test]
 fn solve_frule_multi_rhs() {
     // Exercise nrhs > 1 path in solve_frule.
     let mut ctx = CpuContext::new(1);
@@ -4866,6 +4927,32 @@ fn solve_frule_multi_rhs() {
     for &val in &dxd {
         assert!(val.is_finite(), "solve_frule dx not finite: {val}");
     }
+}
+
+#[test]
+fn solve_frule_square_rhs_matches_columnwise_reference() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.5, 0.5, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, -0.2, 0.3, 0.4], &[2, 2]);
+    let db = make_tensor(vec![0.05, -0.1, 0.2, 0.3], &[2, 2]);
+
+    let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(dx.dims(), &[2, 2]);
+
+    let b0 = make_tensor(vec![1.0, 0.0], &[2, 1]);
+    let b1 = make_tensor(vec![0.0, 1.0], &[2, 1]);
+    let db0 = make_tensor(vec![0.05, -0.1], &[2, 1]);
+    let db1 = make_tensor(vec![0.2, 0.3], &[2, 1]);
+    let (x0, dx0) = solve_frule(&mut ctx, &a, &b0, &da, &db0).unwrap();
+    let (x1, dx1) = solve_frule(&mut ctx, &a, &b1, &da, &db1).unwrap();
+
+    let expected_x = assemble_two_rhs_columns(&x0, &x1);
+    let expected_dx = assemble_two_rhs_columns(&dx0, &dx1);
+
+    assert_close_slices("solve_frule x", &tensor_data(&x), &expected_x, 1e-10);
+    assert_close_slices("solve_frule dx", &tensor_data(&dx), &expected_dx, 1e-10);
 }
 
 #[test]
@@ -4928,6 +5015,42 @@ fn solve_triangular_frule_upper_fd() {
     assert!(
         max_err < 1e-5,
         "solve_triangular_frule FD check failed: max_err={max_err}"
+    );
+}
+
+#[test]
+fn solve_triangular_frule_upper_square_rhs_matches_columnwise_reference() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 0.5, -1.0], &[2, 2]);
+    let da = make_tensor(vec![0.1, 0.2, -0.3, 0.4], &[2, 2]);
+    let db = make_tensor(vec![0.05, -0.1, 0.2, 0.3], &[2, 2]);
+
+    let (x, dx) = solve_triangular_frule(&mut ctx, &a, &b, &da, &db, true).unwrap();
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(dx.dims(), &[2, 2]);
+
+    let b0 = make_tensor(vec![1.0, 2.0], &[2, 1]);
+    let b1 = make_tensor(vec![0.5, -1.0], &[2, 1]);
+    let db0 = make_tensor(vec![0.05, -0.1], &[2, 1]);
+    let db1 = make_tensor(vec![0.2, 0.3], &[2, 1]);
+    let (x0, dx0) = solve_triangular_frule(&mut ctx, &a, &b0, &da, &db0, true).unwrap();
+    let (x1, dx1) = solve_triangular_frule(&mut ctx, &a, &b1, &da, &db1, true).unwrap();
+
+    let expected_x = assemble_two_rhs_columns(&x0, &x1);
+    let expected_dx = assemble_two_rhs_columns(&dx0, &dx1);
+
+    assert_close_slices(
+        "solve_triangular_frule x",
+        &tensor_data(&x),
+        &expected_x,
+        1e-10,
+    );
+    assert_close_slices(
+        "solve_triangular_frule dx",
+        &tensor_data(&dx),
+        &expected_dx,
+        1e-10,
     );
 }
 
@@ -4996,6 +5119,45 @@ fn solve_triangular_rrule_upper_fd() {
             grad_b[idx]
         );
     }
+}
+
+#[test]
+fn solve_triangular_rrule_upper_square_rhs_matches_columnwise_reference() {
+    let mut ctx = CpuContext::new(1);
+    let a = make_tensor(vec![2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    let b = make_tensor(vec![1.0, 2.0, 0.5, -1.0], &[2, 2]);
+    let cot = make_tensor(vec![0.7, -1.2, 0.5, 0.25], &[2, 2]);
+
+    let grad = solve_triangular_rrule(&mut ctx, &a, &b, &cot, true).unwrap();
+    assert_eq!(grad.a.dims(), &[2, 2]);
+    assert_eq!(grad.b.dims(), &[2, 2]);
+
+    let b0 = make_tensor(vec![1.0, 2.0], &[2, 1]);
+    let b1 = make_tensor(vec![0.5, -1.0], &[2, 1]);
+    let cot0 = make_tensor(vec![0.7, -1.2], &[2, 1]);
+    let cot1 = make_tensor(vec![0.5, 0.25], &[2, 1]);
+    let grad0 = solve_triangular_rrule(&mut ctx, &a, &b0, &cot0, true).unwrap();
+    let grad1 = solve_triangular_rrule(&mut ctx, &a, &b1, &cot1, true).unwrap();
+
+    let expected_a: Vec<f64> = tensor_data(&grad0.a)
+        .into_iter()
+        .zip(tensor_data(&grad1.a))
+        .map(|(x, y)| x + y)
+        .collect();
+    let expected_b = assemble_two_rhs_columns(&grad0.b, &grad1.b);
+
+    assert_close_slices(
+        "solve_triangular_rrule grad_a",
+        &tensor_data(&grad.a),
+        &expected_a,
+        1e-10,
+    );
+    assert_close_slices(
+        "solve_triangular_rrule grad_b",
+        &tensor_data(&grad.b),
+        &expected_b,
+        1e-10,
+    );
 }
 
 #[test]

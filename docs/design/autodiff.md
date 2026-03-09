@@ -223,17 +223,23 @@ assert_eq!(grads.get(x.node_id().unwrap()).unwrap().0, 1.0);
 
 ```rust,ignore
 use chainrules::Tape;
+use std::cell::RefCell;
+use std::rc::Rc;
+use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::tracked_einsum;
+use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 let tape = Tape::<Tensor<f64>>::new();
+let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 let x = tape.leaf(Tensor::ones(
     &[3],
     LogicalMemorySpace::MainMemory,
     MemoryOrder::ColumnMajor,
 ));
-let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap(); // rank-0 tensor
+let loss =
+    tracked_einsum::<Standard<f64>, CpuBackend>(ctx, "i,i->", &[&x, &x]).unwrap(); // rank-0 tensor
 let grads = tape.pullback(&loss).unwrap();
 let _gx = grads.get(x.node_id().unwrap()).unwrap();
 ```
@@ -242,12 +248,16 @@ let _gx = grads.get(x.node_id().unwrap()).unwrap();
 
 ```rust,ignore
 use chainrules::DualTensor;
+use tenferro_algebra::Standard;
 use tenferro_einsum::dual_einsum;
+use tenferro_prims::{CpuBackend, CpuContext};
 
+let mut ctx = CpuContext::new(1);
 let x = /* Tensor<f64> */;
 let dx = /* Tensor<f64> tangent */;
 let x_dual = DualTensor::with_tangent(x, dx).unwrap();
-let y_dual = dual_einsum("i,i->", &[&x_dual, &x_dual]).unwrap();
+let y_dual = dual_einsum::<Standard<f64>, CpuBackend>(&mut ctx, "i,i->", &[&x_dual, &x_dual])
+    .unwrap();
 let _dy = y_dual.tangent();
 ```
 

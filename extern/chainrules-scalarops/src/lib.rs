@@ -490,21 +490,13 @@ pub fn sqrt<S: ScalarAd>(x: S) -> S {
 /// ```
 pub fn sqrt_frule<S: ScalarAd>(x: S, dx: S) -> (S, S) {
     let y = x.sqrt();
-    let zero = S::from_i32(0);
-    let dy = if y == zero {
-        zero
-    } else {
-        dx / (S::from_i32(2) * y.conj())
-    };
+    let dy = dx / (S::from_i32(2) * y.conj());
     (y, dy)
 }
 
 /// Reverse rule for `sqrt`.
 ///
 /// `result` is the primal output `sqrt(x)`.
-///
-/// When `result` (i.e. `sqrt(x)`) is zero, returns zero instead of
-/// dividing by zero.
 ///
 /// # Examples
 ///
@@ -516,12 +508,7 @@ pub fn sqrt_frule<S: ScalarAd>(x: S, dx: S) -> (S, S) {
 /// assert!((dx - (1.0 / 6.0)).abs() < 1e-12);
 /// ```
 pub fn sqrt_rrule<S: ScalarAd>(result: S, cotangent: S) -> S {
-    let zero = S::from_i32(0);
-    if result == zero {
-        zero
-    } else {
-        cotangent / (S::from_i32(2) * result.conj())
-    }
+    cotangent / (S::from_i32(2) * result.conj())
 }
 
 /// Primal `powf`.

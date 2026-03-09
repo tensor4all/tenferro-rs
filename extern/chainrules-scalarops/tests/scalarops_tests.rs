@@ -42,6 +42,16 @@ fn sqrt_rules_match_formula_f64() {
 }
 
 #[test]
+fn sqrt_rules_surface_singularity_at_zero() {
+    let (y, dy) = sqrt_frule(0.0_f64, 1.0_f64);
+    assert_eq!(y, 0.0);
+    assert!(dy.is_infinite(), "sqrt_frule at zero should be singular");
+
+    let grad = sqrt_rrule(0.0_f64, 1.0_f64);
+    assert!(grad.is_infinite(), "sqrt_rrule at zero should be singular");
+}
+
+#[test]
 fn add_sub_rules_match_formula_f64() {
     let x = 5.0_f64;
     let y = 2.0_f64;

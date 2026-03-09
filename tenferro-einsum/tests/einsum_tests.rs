@@ -2377,6 +2377,37 @@ fn hvp_via_fw_grad_composition() {
 }
 
 #[test]
+fn hvp_via_leaf_with_tangent_tracks_einsum_direction() {
+    use chainrules::Tape;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let tape = Tape::<Tensor<f64>>::new();
+    let x = tape
+        .leaf_with_tangent(
+            Tensor::<f64>::ones(&[3], MEM, COL),
+            Tensor::<f64>::ones(&[3], MEM, COL),
+        )
+        .unwrap();
+    let x_id = x.node_id().unwrap();
+
+    let loss = tracked_einsum::<S, CpuBackend>(ctx, "i,i->", &[&x, &x]).unwrap();
+    let hvp = tape.hvp(&loss).unwrap();
+
+    assert_tensors_close(
+        hvp.gradients.get(x_id).unwrap(),
+        &Tensor::<f64>::from_slice(&[2.0, 2.0, 2.0], &[3], COL).unwrap(),
+        "grad",
+    );
+    assert_tensors_close(
+        hvp.hvp.get(x_id).unwrap(),
+        &Tensor::<f64>::from_slice(&[2.0, 2.0, 2.0], &[3], COL).unwrap(),
+        "hvp",
+    );
+}
+
+#[test]
 fn einsum_hvp_matches_manual_matmul_rule() {
     use chainrules::Differentiable;
     use tenferro_einsum::einsum_hvp;
