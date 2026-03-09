@@ -604,7 +604,11 @@ fn to_ad_err(e: Error) -> chainrules_core::AutodiffError {
 
 /// Compute batch count from batch dims (product, or 1 if empty).
 fn batch_count(batch_dims: &[usize]) -> usize {
-    batch_dims.iter().product::<usize>().max(1)
+    if batch_dims.is_empty() {
+        1
+    } else {
+        batch_dims.iter().product()
+    }
 }
 
 /// Build output dims: [mat_dims..., batch_dims...].
@@ -2924,8 +2928,8 @@ where
             let ut_du = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, du_b, k)?;
             for i in 0..k {
                 for j in 0..k {
-                    let sym = ut_du[i + j * k] + ut_du[j + i * k];
-                    gamma[i + j * k] = gamma[i + j * k] + f_mat[i + j * k] * sym * s_b[j];
+                    let skew = ut_du[i + j * k] - ut_du[j + i * k];
+                    gamma[i + j * k] = gamma[i + j * k] + f_mat[i + j * k] * skew * s_b[j];
                 }
             }
         }
@@ -2940,8 +2944,8 @@ where
             let vt_dv = backend_mat_mul(ctx, &transpose(&v_b, n, k), k, n, &dv_b, k)?;
             for i in 0..k {
                 for j in 0..k {
-                    let sym = vt_dv[i + j * k] + vt_dv[j + i * k];
-                    gamma[i + j * k] = gamma[i + j * k] + s_b[i] * f_mat[i + j * k] * sym;
+                    let skew = vt_dv[i + j * k] - vt_dv[j + i * k];
+                    gamma[i + j * k] = gamma[i + j * k] + s_b[i] * f_mat[i + j * k] * skew;
                 }
             }
         }
@@ -3082,58 +3086,62 @@ where
             vec![T::zero(); k * n]
         };
 
-        // For thin QR (m >= n): A = QR where Q is m×k, R is k×n
-        // W = R dR^T - dQ^T Q (k×k)
-        let r_drt = backend_mat_mul(ctx, r_b, k, n, &transpose(&dr_b, k, n), k)?;
-        let dqt_q = backend_mat_mul(ctx, &transpose(&dq_b, m, k), k, m, q_b, k)?;
-        let w = sub_vec(&r_drt, &dqt_q);
+        if m >= n {
+            // For thin QR (m >= n): A = QR where Q is m×k, R is k×n.
+            // Match PyTorch's reduced-QR backward for the real case.
+            let r_drt = backend_mat_mul(ctx, r_b, k, n, &transpose(&dr_b, k, n), k)?;
+            let dqt_q = backend_mat_mul(ctx, &transpose(&dq_b, m, k), k, m, q_b, k)?;
+            let w = sub_vec(&r_drt, &dqt_q);
 
-        // H = copyltu(W) — symmetrize from lower triangle
-        let h = copyltu(&w, k);
+            let h = copyltu(&w, k);
+            let qh = backend_mat_mul(ctx, q_b, m, k, &h, k)?;
+            let rhs = add_vec(&dq_b, &qh);
 
-        // B = dQ + Q H (m×k)
-        let qh = backend_mat_mul(ctx, q_b, m, k, &h, k)?;
-        let rhs = add_vec(&dq_b, &qh);
+            let r_square = r_b[..k * n].to_vec();
+            let rhs_t = transpose(&rhs, m, k);
+            let da_t = backend_solve_tri(ctx, &r_square, &rhs_t, k, m, true)?;
+            let da_first_k = transpose(&da_t, k, m);
 
-        // dA = B R^{-T} = solve R^T x = B^T, then transpose
-        // R is k×k upper triangular (first k columns)
-        let r_square = if n > k {
-            // Extract first k columns of R (k×n → k×k)
-            let mut rs = vec![T::zero(); k * k];
-            for j in 0..k {
-                for i in 0..k {
-                    rs[i + j * k] = r_b[i + j * k];
+            for j in 0..k.min(n) {
+                for i in 0..m {
+                    grad_a[b * m * n + i + j * m] = da_first_k[i + j * m];
                 }
             }
-            rs
         } else {
-            // When n <= k, we have k = min(m,n) = n, so k*n == k*k
-            // and the full R block is already the square factor.
-            r_b[..k * n].to_vec()
-        };
+            // Wide reduced QR follows the PyTorch backward:
+            // gA = pi*(Q trilImInvAdjSkew(Q^T gQ - gR R^T) R1^{-T}) + Q gR
+            let qtgq = backend_mat_mul(ctx, &transpose(q_b, m, k), k, m, &dq_b, k)?;
+            let gr_rt = backend_mat_mul(ctx, &dr_b, k, n, &transpose(r_b, k, n), k)?;
+            let wide_inner = sub_vec(&qtgq, &gr_rt);
 
-        // dA[:, :k] = B R_square^{-T} (m×k solve)
-        let rhs_t = transpose(&rhs, m, k);
-        let da_t = backend_solve_tri(ctx, &r_square, &rhs_t, k, m, true)?;
-        let da_first_k = transpose(&da_t, k, m);
-
-        // Copy first k columns
-        for j in 0..k.min(n) {
-            for i in 0..m {
-                grad_a[b * m * n + i + j * m] = da_first_k[i + j * m];
+            let mut lower_skew = vec![T::zero(); k * k];
+            for j in 0..k {
+                for i in j..k {
+                    lower_skew[i + j * k] = wide_inner[i + j * k] - wide_inner[j + i * k];
+                }
             }
-        }
 
-        // For wide case (n > k), handle remaining columns via dR
-        if n > k {
-            // dA[:, k:] = Q dR[:, k:]
-            for j in k..n {
+            let q_lower = backend_mat_mul(ctx, q_b, m, k, &lower_skew, k)?;
+            let q_lower_t = transpose(&q_lower, m, k);
+            let mut r1 = vec![T::zero(); k * k];
+            for j in 0..k {
+                for i in 0..k {
+                    r1[i + j * k] = r_b[i + j * k];
+                }
+            }
+            let leading_t = backend_solve_tri(ctx, &r1, &q_lower_t, k, m, true)?;
+            let leading = transpose(&leading_t, k, m);
+
+            for j in 0..k {
                 for i in 0..m {
-                    let mut val = T::zero();
-                    for l in 0..k {
-                        val = val + q_b[i + l * m] * dr_b[l + j * k];
-                    }
-                    grad_a[b * m * n + i + j * m] = val;
+                    grad_a[b * m * n + i + j * m] = leading[i + j * m];
+                }
+            }
+
+            let qgr = backend_mat_mul(ctx, q_b, m, k, &dr_b, n)?;
+            for j in 0..n {
+                for i in 0..m {
+                    grad_a[b * m * n + i + j * m] = grad_a[b * m * n + i + j * m] + qgr[i + j * m];
                 }
             }
         }
@@ -3461,8 +3469,8 @@ where
             let half: T = scalar_from(0.5).map_err(to_ad_err)?;
             for i in 0..n {
                 for j in 0..n {
-                    let sym = half * (vt_dv[i + j * n] + vt_dv[j + i * n]);
-                    d_mat[i + j * n] = d_mat[i + j * n] + f_mat[i + j * n] * sym;
+                    let skew = half * (vt_dv[i + j * n] - vt_dv[j + i * n]);
+                    d_mat[i + j * n] = d_mat[i + j * n] + f_mat[i + j * n] * skew;
                 }
             }
         }
@@ -4643,7 +4651,7 @@ where
         let mut st_c_plus_ct_s = vec![T::zero(); k * k];
         for i in 0..k {
             for j in 0..k {
-                st_c_plus_ct_s[i + j * k] = s_b[j] * c[i + j * k] + c[j + i * k] * s_b[i];
+                st_c_plus_ct_s[i + j * k] = -(s_b[i] * c[i + j * k] + c[j + i * k] * s_b[j]);
             }
         }
         let f_inner2 = hadamard(&f_mat, &st_c_plus_ct_s);
@@ -5016,7 +5024,7 @@ where
         for i in 0..n {
             for j in 0..n {
                 if i != j {
-                    let denom = e_b[i] - e_b[j];
+                    let denom = e_b[j] - e_b[i];
                     let f_ij = T::one()
                         / (denom
                             + eta

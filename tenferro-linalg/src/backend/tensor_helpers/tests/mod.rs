@@ -44,6 +44,12 @@ fn batch_count_nonempty() {
 }
 
 #[test]
+fn batch_count_zero_dim_batch_is_zero() {
+    assert_eq!(batch_count(&[0]), 0);
+    assert_eq!(batch_count(&[2, 0, 3]), 0);
+}
+
+#[test]
 fn ensure_col_major_contiguous() {
     let a = make(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = ensure_col_major(&a);
