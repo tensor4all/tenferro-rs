@@ -9,7 +9,7 @@ description = "Tensor primitive operations (TensorPrims trait) for the tenferro 
 
 [features]
 default = ["gemm-faer"]
-cuda = ["dep:cudarc"]
+cuda = ["dep:cudarc", "tenferro-tensor/cuda"]
 gemm-faer = ["dep:faer"]
 gemm-blas = ["dep:cblas-sys"]
 # Backward-compatible alias: use `--no-default-features --features gemm-openblas`.
@@ -42,6 +42,6 @@ cblas-sys = { workspace = true, optional = true }
 cblas-src = { workspace = true, optional = true }
 cblas-inject = { workspace = true, optional = true }
 blas-src = { workspace = true, optional = true }
-cudarc = { version = "0.19", optional = true, default-features = false, features = ["driver", "dynamic-loading", "cuda-12060"] }
+cudarc = { workspace = true, optional = true }
 
 [dev-dependencies]

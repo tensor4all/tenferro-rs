@@ -19,6 +19,8 @@ use std::marker::PhantomData;
 use std::ptr;
 use std::sync::Arc;
 
+#[cfg(unix)]
+use libloading::os::unix::{Library as UnixLibrary, RTLD_GLOBAL, RTLD_NOW};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
@@ -141,7 +143,7 @@ pub(crate) trait CutensorType: Scalar {
 
 impl CutensorType for f32 {
     fn data_type() -> CutensorDataType {
-        CutensorDataType::R_32F
+        CUTENSOR_R_32F
     }
     fn compute_descriptor(vtable: &CutensorVtable) -> cutensorComputeDescriptor_t {
         vtable.compute_desc_32f
@@ -150,7 +152,7 @@ impl CutensorType for f32 {
 
 impl CutensorType for f64 {
     fn data_type() -> CutensorDataType {
-        CutensorDataType::R_64F
+        CUTENSOR_R_64F
     }
     fn compute_descriptor(vtable: &CutensorVtable) -> cutensorComputeDescriptor_t {
         vtable.compute_desc_64f
@@ -159,7 +161,7 @@ impl CutensorType for f64 {
 
 impl CutensorType for Complex32 {
     fn data_type() -> CutensorDataType {
-        CutensorDataType::C_32F
+        CUTENSOR_C_32F
     }
     fn compute_descriptor(vtable: &CutensorVtable) -> cutensorComputeDescriptor_t {
         vtable.compute_desc_32f
@@ -168,7 +170,7 @@ impl CutensorType for Complex32 {
 
 impl CutensorType for Complex64 {
     fn data_type() -> CutensorDataType {
-        CutensorDataType::C_64F
+        CUTENSOR_C_64F
     }
     fn compute_descriptor(vtable: &CutensorVtable) -> cutensorComputeDescriptor_t {
         vtable.compute_desc_64f
@@ -238,8 +240,8 @@ fn build_cutensor_plan(
         (vtable.create_plan_preference)(
             handle,
             &mut pref_raw,
-            CutensorAlgo::Default,
-            CutensorJitMode::None,
+            CUTENSOR_ALGO_DEFAULT,
+            CUTENSOR_JIT_MODE_NONE,
         )
     };
     check_status(status, "cutensorCreatePlanPreference")?;
@@ -255,7 +257,7 @@ fn build_cutensor_plan(
             handle,
             op_desc.raw,
             _pref.raw,
-            CutensorWorksizePref::Recommended,
+            CUTENSOR_WORKSPACE_DEFAULT,
             &mut workspace_size,
         )
     };
@@ -289,13 +291,13 @@ fn scalar_data_type<T: Scalar>() -> Result<CutensorDataType> {
     use std::any::TypeId;
     let tid = TypeId::of::<T>();
     if tid == TypeId::of::<f32>() {
-        Ok(CutensorDataType::R_32F)
+        Ok(CUTENSOR_R_32F)
     } else if tid == TypeId::of::<f64>() {
-        Ok(CutensorDataType::R_64F)
+        Ok(CUTENSOR_R_64F)
     } else if tid == TypeId::of::<Complex32>() {
-        Ok(CutensorDataType::C_32F)
+        Ok(CUTENSOR_C_32F)
     } else if tid == TypeId::of::<Complex64>() {
-        Ok(CutensorDataType::C_64F)
+        Ok(CUTENSOR_C_64F)
     } else {
         Err(Error::DeviceError(
             "Unsupported scalar type for CUDA backend".into(),
@@ -354,13 +356,13 @@ fn plan_contraction(
             &mut op_raw,
             desc_a.raw,
             modes_a.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_b.raw,
             modes_b.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_c.raw,
             modes_c.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_d.raw,
             modes_c.as_ptr(),
             compute,
@@ -400,7 +402,7 @@ fn plan_permutation(
             &mut op_raw,
             desc_a.raw,
             modes_a.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_b.raw,
             modes_b.as_ptr(),
             compute,
@@ -425,7 +427,7 @@ fn plan_reduction(
     modes_c: &[i32],
     shape_c: &[usize],
     strides_c: &[isize],
-    reduce_op: CutensorReduceOp,
+    reduce_op: CutensorOperator,
 ) -> Result<(PlanWrapper, u64)> {
     let vtable = &ctx.vtable;
     let handle = ctx.handle.raw;
@@ -441,10 +443,10 @@ fn plan_reduction(
             &mut op_raw,
             desc_a.raw,
             modes_a.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_c.raw,
             modes_c.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_d.raw,
             modes_c.as_ptr(),
             reduce_op,
@@ -482,13 +484,13 @@ fn plan_elementwise_binary(
             &mut op_raw,
             desc_a.raw,
             modes.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_c.raw,
             modes.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_d.raw,
             modes.as_ptr(),
-            CutensorReduceOp::Add,
+            CUTENSOR_OP_MUL,
             compute,
         )
     };
@@ -531,14 +533,14 @@ fn plan_elementwise_trinary(
             op_a,
             desc_b.raw,
             modes.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_c.raw,
             modes.as_ptr(),
-            CutensorOperator::Identity,
+            CUTENSOR_OP_IDENTITY,
             desc_d.raw,
             modes.as_ptr(),
-            CutensorReduceOp::Add, // op_ab
-            CutensorReduceOp::Add, // op_abc
+            CUTENSOR_OP_ADD, // op_ab
+            CUTENSOR_OP_ADD, // op_abc
             compute,
         )
     };
@@ -568,8 +570,8 @@ fn plan_elementwise_trinary(
 pub struct CudaContext {
     /// cuTENSOR library handle (RAII — Drop calls cutensorDestroy).
     handle: HandleWrapper,
-    /// cudarc stream handle for GPU memory and stream management.
-    stream: Arc<cudarc::driver::CudaStream>,
+    /// CUDA device ordinal used for runtime API calls.
+    device_id: usize,
     /// cuTENSOR function pointer vtable loaded via libloading.
     vtable: Arc<CutensorVtable>,
     /// GPU workspace buffer for cuTENSOR operations.
@@ -612,7 +614,10 @@ pub struct CudaPlan<T: Scalar> {
 /// registry.load_cutensor("/usr/lib/libcutensor.so").unwrap();
 /// ```
 pub struct CudaBackend {
-    _lib: libloading::Library,
+    #[cfg(unix)]
+    _cudart_global: UnixLibrary,
+    #[cfg(unix)]
+    _lib: DynamicLibrary,
 }
 
 impl CudaBackend {
@@ -630,16 +635,41 @@ impl CudaBackend {
     /// let (backend, ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
     /// ```
     pub fn load(path: &str) -> Result<(Self, CudaContext)> {
+        #[cfg(unix)]
+        let cudart_global = {
+            let candidates = [
+                "/usr/lib/x86_64-linux-gnu/libcudart.so.12",
+                "/usr/lib/x86_64-linux-gnu/libcudart.so",
+            ];
+            let mut loaded = None;
+            for candidate in candidates {
+                match unsafe { UnixLibrary::open(Some(candidate), RTLD_NOW | RTLD_GLOBAL) } {
+                    Ok(lib) => {
+                        loaded = Some(lib);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+            loaded.ok_or_else(|| {
+                Error::DeviceError("Failed to load libcudart with RTLD_GLOBAL for cuTENSOR".into())
+            })?
+        };
+
         // 1. Open shared library
-        let lib = unsafe { libloading::Library::new(path) }
+        let lib = unsafe { DynamicLibrary::open(path, RTLD_NOW) }
             .map_err(|e| Error::DeviceError(format!("Failed to load cuTENSOR: {e}")))?;
 
         // 2. Populate vtable
-        let vtable = unsafe { CutensorVtable::load(&lib) }
+        let vtable = unsafe { CutensorVtable::load(lib.handle()) }
             .map_err(|e| Error::DeviceError(format!("Failed to load cuTENSOR symbols: {e}")))?;
         let vtable = Arc::new(vtable);
 
-        // 3. Initialize cuTENSOR handle
+        // 3. Initialize CUDA runtime state before creating the cuTENSOR handle.
+        cudarc::runtime::result::device::set(0)
+            .map_err(|e| Error::DeviceError(format!("CUDA runtime init failed: {e:?}")))?;
+
+        // 4. Initialize cuTENSOR handle now that the CUDA context is active.
         let mut handle_raw: cutensorHandle_t = ptr::null_mut();
         let status = unsafe { (vtable.create)(&mut handle_raw) };
         check_status(status, "cutensorCreate")?;
@@ -648,20 +678,23 @@ impl CudaBackend {
             vtable: Arc::clone(&vtable),
         };
 
-        // 4. Initialize CUDA device and stream via cudarc
-        let cuda_ctx = cudarc::driver::CudaContext::new(0)
-            .map_err(|e| Error::DeviceError(format!("CUDA device init failed: {e:?}")))?;
-        let stream = cuda_ctx.default_stream();
-
         let ctx = CudaContext {
             handle,
-            stream,
+            device_id: 0,
             vtable: Arc::clone(&vtable),
             workspace: Vec::new(),
             plan_cache: PlanCache::new(),
         };
 
-        Ok((CudaBackend { _lib: lib }, ctx))
+        Ok((
+            CudaBackend {
+                #[cfg(unix)]
+                _cudart_global: cudart_global,
+                #[cfg(unix)]
+                _lib: lib,
+            },
+            ctx,
+        ))
     }
 
     /// Materialize a lazily-conjugated tensor on GPU.
@@ -696,6 +729,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
     ) -> Result<CudaPlan<S>> {
+        cudarc::runtime::result::device::set(ctx.device_id as i32)
+            .map_err(|e| Error::DeviceError(format!("CUDA runtime set-device failed: {e:?}")))?;
         // Resolve cuTENSOR data type and compute descriptor for the algebra scalar.
         // This uses TypeId dispatch since the trait bound is Scalar (not CutensorType).
         let data_type = scalar_data_type::<S>()?;
@@ -841,9 +876,9 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
             } => {
                 validate_shape_count(shapes, 2, "Reduce")?;
                 let reduce_op = match op {
-                    ReduceOp::Sum => CutensorReduceOp::Add,
-                    ReduceOp::Max => CutensorReduceOp::Max,
-                    ReduceOp::Min => CutensorReduceOp::Min,
+                    ReduceOp::Sum => CUTENSOR_OP_ADD,
+                    ReduceOp::Max => CUTENSOR_OP_MAX,
+                    ReduceOp::Min => CUTENSOR_OP_MIN,
                 };
                 let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
                 let modes_c_i32: Vec<i32> = modes_c.iter().map(|&m| m as i32).collect();
@@ -872,8 +907,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
             PrimDescriptor::ElementwiseUnary { op } => {
                 validate_shape_count(shapes, 2, "ElementwiseUnary")?;
                 let op_a = match op {
-                    UnaryOp::Conj => CutensorOperator::Conj,
-                    _ => CutensorOperator::Identity,
+                    UnaryOp::Conj => CUTENSOR_OP_CONJ,
+                    _ => CUTENSOR_OP_IDENTITY,
                 };
                 let ndim = shapes[0].len();
                 let modes: Vec<i32> = (0..ndim as i32).collect();
@@ -916,6 +951,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
     ) -> Result<()> {
         use std::ffi::c_void;
 
+        cudarc::runtime::result::device::set(ctx.device_id as i32)
+            .map_err(|e| Error::DeviceError(format!("CUDA runtime set-device failed: {e:?}")))?;
         let handle = ctx.handle.raw;
         // Use null stream (default CUDA stream)
         let stream: *mut c_void = ptr::null_mut();

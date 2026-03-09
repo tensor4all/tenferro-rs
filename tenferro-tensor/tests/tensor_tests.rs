@@ -784,13 +784,19 @@ fn to_memory_space_same_space() {
 }
 
 #[test]
-fn to_memory_space_gpu_fails() {
+fn to_memory_space_gpu_behavior_matches_feature_support() {
     let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let result = t.to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 });
+
+    #[cfg(feature = "cuda")]
     assert!(
-        matches!(
-            t.to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 }),
-            Err(tenferro_device::Error::DeviceError(_))
-        ),
+        result.is_ok(),
+        "expected CUDA feature build to allow GPU transfer"
+    );
+
+    #[cfg(not(feature = "cuda"))]
+    assert!(
+        matches!(result, Err(tenferro_device::Error::DeviceError(_))),
         "expected DeviceError for GPU memory transfer"
     );
 }

@@ -104,6 +104,9 @@ use tenferro_device::{
     preferred_compute_devices, ComputeDevice, Error, LogicalMemorySpace, OpKind, Result,
 };
 
+#[cfg(feature = "cuda")]
+mod cuda_runtime;
+
 // ============================================================================
 // Private helpers
 // ============================================================================
@@ -866,22 +869,28 @@ impl<T: Scalar> Tensor<T> {
     /// );
     /// ```
     pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
-        assert!(
-            memory_space == LogicalMemorySpace::MainMemory,
-            "GPU memory allocation not yet implemented"
-        );
         let n_elements: usize = dims.iter().product();
         let strides = compute_contiguous_strides(dims, order);
-        Tensor {
+        let tensor = Tensor {
             buffer: DataBuffer::from_vec(vec![T::zero(); n_elements]),
             dims: Arc::from(dims),
             strides: Arc::from(strides),
             offset: 0,
-            logical_memory_space: memory_space,
+            logical_memory_space: LogicalMemorySpace::MainMemory,
             preferred_compute_device: None,
             event: None,
             conjugated: false,
             fw_grad: None,
+        };
+
+        if memory_space == LogicalMemorySpace::MainMemory {
+            tensor
+        } else {
+            tensor
+                .to_memory_space_async(memory_space)
+                .unwrap_or_else(|err| {
+                    panic!("tensor allocation for {memory_space:?} failed: {err}")
+                })
         }
     }
 
@@ -903,22 +912,28 @@ impl<T: Scalar> Tensor<T> {
     ///     LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
     /// ```
     pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
-        assert!(
-            memory_space == LogicalMemorySpace::MainMemory,
-            "GPU memory allocation not yet implemented"
-        );
         let n_elements: usize = dims.iter().product();
         let strides = compute_contiguous_strides(dims, order);
-        Tensor {
+        let tensor = Tensor {
             buffer: DataBuffer::from_vec(vec![T::one(); n_elements]),
             dims: Arc::from(dims),
             strides: Arc::from(strides),
             offset: 0,
-            logical_memory_space: memory_space,
+            logical_memory_space: LogicalMemorySpace::MainMemory,
             preferred_compute_device: None,
             event: None,
             conjugated: false,
             fw_grad: None,
+        };
+
+        if memory_space == LogicalMemorySpace::MainMemory {
+            tensor
+        } else {
+            tensor
+                .to_memory_space_async(memory_space)
+                .unwrap_or_else(|err| {
+                    panic!("tensor allocation for {memory_space:?} failed: {err}")
+                })
         }
     }
 
@@ -1072,10 +1087,6 @@ impl<T: Scalar> Tensor<T> {
     /// assert_eq!(id.dims(), &[3, 3]);
     /// ```
     pub fn eye(n: usize, memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
-        assert!(
-            memory_space == LogicalMemorySpace::MainMemory,
-            "GPU memory allocation not yet implemented"
-        );
         let dims = [n, n];
         let strides = compute_contiguous_strides(&dims, order);
         let n_elements = n * n;
@@ -1084,16 +1095,26 @@ impl<T: Scalar> Tensor<T> {
             let pos = (i as isize * strides[0] + i as isize * strides[1]) as usize;
             data[pos] = T::one();
         }
-        Tensor {
+        let tensor = Tensor {
             buffer: DataBuffer::from_vec(data),
             dims: Arc::from(dims.as_slice()),
             strides: Arc::from(strides),
             offset: 0,
-            logical_memory_space: memory_space,
+            logical_memory_space: LogicalMemorySpace::MainMemory,
             preferred_compute_device: None,
             event: None,
             conjugated: false,
             fw_grad: None,
+        };
+
+        if memory_space == LogicalMemorySpace::MainMemory {
+            tensor
+        } else {
+            tensor
+                .to_memory_space_async(memory_space)
+                .unwrap_or_else(|err| {
+                    panic!("tensor allocation for {memory_space:?} failed: {err}")
+                })
         }
     }
 
@@ -2210,7 +2231,9 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// # Errors
     ///
-    /// Returns an error if the transfer is not supported.
+    /// Returns an error if the transfer is not supported. With the `cuda`
+    /// feature enabled, `MainMemory <-> GpuMemory { device_id }` is supported.
+    /// Pinned, managed, and GPU-to-GPU transfers remain unsupported.
     ///
     /// # Examples
     ///
@@ -2225,9 +2248,19 @@ impl<T: Scalar> Tensor<T> {
         if target == self.logical_memory_space {
             return Ok(self.clone());
         }
-        Err(Error::DeviceError(
-            "GPU memory transfer not yet implemented".into(),
-        ))
+
+        #[cfg(feature = "cuda")]
+        {
+            return cuda_runtime::transfer_tensor(self, target);
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        {
+            Err(Error::DeviceError(
+                "GPU memory transfer not available: rebuild with `tenferro-tensor --features cuda`"
+                    .into(),
+            ))
+        }
     }
 
     // ========================================================================

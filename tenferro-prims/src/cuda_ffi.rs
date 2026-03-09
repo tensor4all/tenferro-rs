@@ -14,7 +14,16 @@
 //! let vtable = unsafe { CutensorVtable::load(&lib) }.unwrap();
 //! ```
 
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr, CString};
+
+#[cfg(unix)]
+#[link(name = "dl")]
+unsafe extern "C" {
+    fn dlopen(filename: *const std::os::raw::c_char, flags: i32) -> *mut c_void;
+    fn dlclose(handle: *mut c_void) -> i32;
+    fn dlsym(handle: *mut c_void, symbol: *const std::os::raw::c_char) -> *mut c_void;
+    fn dlerror() -> *const std::os::raw::c_char;
+}
 
 // ============================================================================
 // cuTENSOR status codes
@@ -47,82 +56,50 @@ pub type cutensorComputeDescriptor_t = *const c_void;
 // Enums
 // ============================================================================
 
-/// cuTENSOR data type (mirrors `cutensorDataType_t`).
-///
-/// Maps Rust scalar types to cuTENSOR's internal type identifiers.
-/// Values must match the cuTENSOR v2 header exactly.
-///
-/// # Examples
-///
-/// ```ignore
-/// use tenferro_prims::CutensorDataType;
-/// let dt = CutensorDataType::R_64F;
-/// ```
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CutensorDataType {
-    /// 32-bit float (`float`).
-    R_32F = 0,
-    /// 64-bit float (`double`).
-    R_64F = 1,
-    /// 32-bit complex (`cuComplex`).
-    C_32F = 4,
-    /// 64-bit complex (`cuDoubleComplex`).
-    C_64F = 5,
-}
+/// cuTENSOR data type (mirrors `cutensorDataType_t` / `cudaDataType_t`).
+pub type CutensorDataType = i32;
+/// 32-bit float (`float`).
+pub const CUTENSOR_R_32F: CutensorDataType = 0;
+/// 64-bit float (`double`).
+pub const CUTENSOR_R_64F: CutensorDataType = 1;
+/// 32-bit complex (`cuComplex`).
+pub const CUTENSOR_C_32F: CutensorDataType = 4;
+/// 64-bit complex (`cuDoubleComplex`).
+pub const CUTENSOR_C_64F: CutensorDataType = 5;
 
-/// cuTENSOR unary element-wise operator (mirrors `cutensorOperator_t`).
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CutensorOperator {
-    /// Identity (no transformation).
-    Identity = 1,
-    /// Complex conjugate.
-    Conj = 2,
-}
+/// cuTENSOR unary/binary operator (mirrors `cutensorOperator_t`).
+pub type CutensorOperator = i32;
+/// Identity (no transformation).
+pub const CUTENSOR_OP_IDENTITY: CutensorOperator = 1;
+/// Addition.
+pub const CUTENSOR_OP_ADD: CutensorOperator = 3;
+/// Multiplication.
+pub const CUTENSOR_OP_MUL: CutensorOperator = 5;
+/// Maximum.
+pub const CUTENSOR_OP_MAX: CutensorOperator = 6;
+/// Minimum.
+pub const CUTENSOR_OP_MIN: CutensorOperator = 7;
+/// Complex conjugate.
+pub const CUTENSOR_OP_CONJ: CutensorOperator = 9;
 
 /// cuTENSOR algorithm selection (mirrors `cutensorAlgo_t`).
-#[repr(i32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CutensorAlgo {
-    /// Let cuTENSOR choose the best algorithm.
-    Default = -1,
-}
+pub type CutensorAlgo = i32;
+/// Let cuTENSOR choose the best algorithm.
+pub const CUTENSOR_ALGO_DEFAULT: CutensorAlgo = -1;
 
 /// cuTENSOR JIT compilation mode (mirrors `cutensorJitMode_t`).
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CutensorJitMode {
-    /// Disable JIT compilation.
-    None = 0,
-}
+pub type CutensorJitMode = i32;
+/// Disable JIT compilation.
+pub const CUTENSOR_JIT_MODE_NONE: CutensorJitMode = 0;
 
 /// cuTENSOR workspace size preference (mirrors `cutensorWorksizePreference_t`).
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CutensorWorksizePref {
-    /// Minimum workspace.
-    Min = 1,
-    /// Recommended workspace (balance of speed and memory).
-    Recommended = 2,
-    /// Maximum workspace (fastest execution).
-    Max = 3,
-}
-
-/// Reduction operator for `cutensorCreateReduction`.
-///
-/// Mirrors the cuTENSOR v2 `cutensorOperator_t` values used in
-/// reduction contexts.
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CutensorReduceOp {
-    /// Addition (sum) reduction.
-    Add = 3,
-    /// Maximum value reduction.
-    Max = 5,
-    /// Minimum value reduction.
-    Min = 6,
-}
+pub type CutensorWorksizePref = i32;
+/// Minimum workspace.
+pub const CUTENSOR_WORKSPACE_MIN: CutensorWorksizePref = 1;
+/// Recommended workspace (balance of speed and memory).
+pub const CUTENSOR_WORKSPACE_DEFAULT: CutensorWorksizePref = 2;
+/// Maximum workspace (fastest execution).
+pub const CUTENSOR_WORKSPACE_MAX: CutensorWorksizePref = 3;
 
 // ============================================================================
 // Function pointer type aliases
@@ -186,7 +163,7 @@ pub type FnCreateReduction = unsafe extern "C" fn(
     CutensorOperator, // C
     cutensorTensorDescriptor_t,
     *const i32, // D
-    CutensorReduceOp,
+    CutensorOperator,
     cutensorComputeDescriptor_t,
 ) -> cutensorStatus_t;
 
@@ -201,7 +178,7 @@ pub type FnCreateElementwiseBinary = unsafe extern "C" fn(
     CutensorOperator, // C
     cutensorTensorDescriptor_t,
     *const i32,       // D
-    CutensorReduceOp, // op_ac
+    CutensorOperator, // op_ac
     cutensorComputeDescriptor_t,
 ) -> cutensorStatus_t;
 
@@ -219,8 +196,8 @@ pub type FnCreateElementwiseTrinary = unsafe extern "C" fn(
     CutensorOperator, // C
     cutensorTensorDescriptor_t,
     *const i32,       // D
-    CutensorReduceOp, // op_ab
-    CutensorReduceOp, // op_abc
+    CutensorOperator, // op_ab
+    CutensorOperator, // op_abc
     cutensorComputeDescriptor_t,
 ) -> cutensorStatus_t;
 
@@ -371,6 +348,85 @@ pub struct CutensorVtable {
     pub compute_desc_64f: cutensorComputeDescriptor_t,
 }
 
+#[cfg(unix)]
+fn dlerror_string() -> String {
+    unsafe {
+        let err = dlerror();
+        if err.is_null() {
+            "unknown dlerror".into()
+        } else {
+            CStr::from_ptr(err).to_string_lossy().into_owned()
+        }
+    }
+}
+
+#[cfg(unix)]
+unsafe fn load_symbol<T: Copy>(
+    handle: *mut c_void,
+    symbol: &str,
+) -> std::result::Result<T, String> {
+    let symbol = CString::new(symbol).map_err(|e| e.to_string())?;
+    let ptr = dlsym(handle, symbol.as_ptr());
+    if ptr.is_null() {
+        Err(dlerror_string())
+    } else {
+        Ok(std::mem::transmute_copy(&ptr))
+    }
+}
+
+#[cfg(unix)]
+unsafe fn load_data_symbol<T: Copy>(
+    handle: *mut c_void,
+    symbol: &str,
+) -> std::result::Result<T, String> {
+    let symbol = CString::new(symbol).map_err(|e| e.to_string())?;
+    let ptr = dlsym(handle, symbol.as_ptr());
+    if ptr.is_null() {
+        Err(dlerror_string())
+    } else {
+        Ok(*(ptr as *const T))
+    }
+}
+
+#[cfg(unix)]
+pub(crate) struct DynamicLibrary {
+    handle: *mut c_void,
+}
+
+#[cfg(unix)]
+unsafe impl Send for DynamicLibrary {}
+
+#[cfg(unix)]
+unsafe impl Sync for DynamicLibrary {}
+
+#[cfg(unix)]
+impl DynamicLibrary {
+    pub unsafe fn open(path: &str, flags: i32) -> std::result::Result<Self, String> {
+        let path = CString::new(path).map_err(|e| e.to_string())?;
+        let handle = dlopen(path.as_ptr(), flags);
+        if handle.is_null() {
+            Err(dlerror_string())
+        } else {
+            Ok(Self { handle })
+        }
+    }
+
+    pub fn handle(&self) -> *mut c_void {
+        self.handle
+    }
+}
+
+#[cfg(unix)]
+impl Drop for DynamicLibrary {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                let _ = dlclose(self.handle);
+            }
+        }
+    }
+}
+
 impl CutensorVtable {
     /// Load all cuTENSOR v2 function pointers from a libloading Library.
     ///
@@ -379,32 +435,34 @@ impl CutensorVtable {
     /// The caller must ensure `lib` points to a valid cuTENSOR v2 shared
     /// library. Function pointer signatures must match the loaded library
     /// version.
-    pub unsafe fn load(lib: &libloading::Library) -> std::result::Result<Self, libloading::Error> {
+    #[cfg(unix)]
+    pub unsafe fn load(handle: *mut c_void) -> std::result::Result<Self, String> {
         Ok(Self {
-            create: *lib.get(b"cutensorCreate\0")?,
-            destroy: *lib.get(b"cutensorDestroy\0")?,
-            create_tensor_descriptor: *lib.get(b"cutensorCreateTensorDescriptor\0")?,
-            destroy_tensor_descriptor: *lib.get(b"cutensorDestroyTensorDescriptor\0")?,
-            create_contraction: *lib.get(b"cutensorCreateContraction\0")?,
-            create_permutation: *lib.get(b"cutensorCreatePermutation\0")?,
-            create_reduction: *lib.get(b"cutensorCreateReduction\0")?,
-            create_elementwise_binary: *lib.get(b"cutensorCreateElementwiseBinary\0")?,
-            create_elementwise_trinary: *lib.get(b"cutensorCreateElementwiseTrinary\0")?,
-            destroy_operation_descriptor: *lib.get(b"cutensorDestroyOperationDescriptor\0")?,
-            create_plan_preference: *lib.get(b"cutensorCreatePlanPreference\0")?,
-            destroy_plan_preference: *lib.get(b"cutensorDestroyPlanPreference\0")?,
-            estimate_workspace_size: *lib.get(b"cutensorEstimateWorkspaceSize\0")?,
-            create_plan: *lib.get(b"cutensorCreatePlan\0")?,
-            destroy_plan: *lib.get(b"cutensorDestroyPlan\0")?,
-            contract: *lib.get(b"cutensorContract\0")?,
-            permute: *lib.get(b"cutensorPermute\0")?,
-            reduce: *lib.get(b"cutensorReduce\0")?,
-            elementwise_binary_execute: *lib.get(b"cutensorElementwiseBinaryExecute\0")?,
-            elementwise_trinary_execute: *lib.get(b"cutensorElementwiseTrinaryExecute\0")?,
-            compute_desc_32f: *lib
-                .get::<cutensorComputeDescriptor_t>(b"CUTENSOR_COMPUTE_DESC_32F\0")?,
-            compute_desc_64f: *lib
-                .get::<cutensorComputeDescriptor_t>(b"CUTENSOR_COMPUTE_DESC_64F\0")?,
+            create: load_symbol(handle, "cutensorCreate")?,
+            destroy: load_symbol(handle, "cutensorDestroy")?,
+            create_tensor_descriptor: load_symbol(handle, "cutensorCreateTensorDescriptor")?,
+            destroy_tensor_descriptor: load_symbol(handle, "cutensorDestroyTensorDescriptor")?,
+            create_contraction: load_symbol(handle, "cutensorCreateContraction")?,
+            create_permutation: load_symbol(handle, "cutensorCreatePermutation")?,
+            create_reduction: load_symbol(handle, "cutensorCreateReduction")?,
+            create_elementwise_binary: load_symbol(handle, "cutensorCreateElementwiseBinary")?,
+            create_elementwise_trinary: load_symbol(handle, "cutensorCreateElementwiseTrinary")?,
+            destroy_operation_descriptor: load_symbol(
+                handle,
+                "cutensorDestroyOperationDescriptor",
+            )?,
+            create_plan_preference: load_symbol(handle, "cutensorCreatePlanPreference")?,
+            destroy_plan_preference: load_symbol(handle, "cutensorDestroyPlanPreference")?,
+            estimate_workspace_size: load_symbol(handle, "cutensorEstimateWorkspaceSize")?,
+            create_plan: load_symbol(handle, "cutensorCreatePlan")?,
+            destroy_plan: load_symbol(handle, "cutensorDestroyPlan")?,
+            contract: load_symbol(handle, "cutensorContract")?,
+            permute: load_symbol(handle, "cutensorPermute")?,
+            reduce: load_symbol(handle, "cutensorReduce")?,
+            elementwise_binary_execute: load_symbol(handle, "cutensorElementwiseBinaryExecute")?,
+            elementwise_trinary_execute: load_symbol(handle, "cutensorElementwiseTrinaryExecute")?,
+            compute_desc_32f: load_data_symbol(handle, "CUTENSOR_COMPUTE_DESC_32F")?,
+            compute_desc_64f: load_data_symbol(handle, "CUTENSOR_COMPUTE_DESC_64F")?,
         })
     }
 }
