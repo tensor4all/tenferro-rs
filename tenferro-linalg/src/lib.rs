@@ -3664,11 +3664,9 @@ where
     let (n, batch_dims) = validate_square(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
-    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
-        b.dims()[1]
-    } else {
-        1
-    };
+    let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "solve_rrule")
+        .map_err(to_ad_err)?;
+    let nrhs = rhs.nrhs;
 
     let (a_data, _) = extract_data(a)?;
     let (x_data, _) = extract_data(&x)?;
@@ -3697,7 +3695,7 @@ where
     }
 
     let a_dims = output_dims(&[n, n], batch_dims);
-    let b_dims = output_dims(&[n, nrhs], batch_dims);
+    let b_dims = rhs.output_dims;
     Ok(SolveGrad {
         a: tensor_from_data(grad_a_data, &a_dims)
             .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
@@ -3728,11 +3726,14 @@ where
     let (n, batch_dims) = validate_square(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
-    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
-        b.dims()[1]
-    } else {
-        1
-    };
+    let rhs = backend::tensor_helpers::validate_solve_rhs_shape(
+        b,
+        n,
+        batch_dims,
+        "solve_triangular_rrule",
+    )
+    .map_err(to_ad_err)?;
+    let nrhs = rhs.nrhs;
 
     let (a_data, _) = extract_data(a)?;
     let (x_data, _) = extract_data(&x)?;
@@ -3766,7 +3767,7 @@ where
     }
 
     let a_dims = output_dims(&[n, n], batch_dims);
-    let b_dims = output_dims(&[n, nrhs], batch_dims);
+    let b_dims = rhs.output_dims;
     Ok(SolveGrad {
         a: tensor_from_data(grad_a_data, &a_dims)
             .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
@@ -5221,11 +5222,9 @@ where
     let (n, batch_dims) = validate_square(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
-    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
-        b.dims()[1]
-    } else {
-        1
-    };
+    let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "solve_frule")
+        .map_err(to_ad_err)?;
+    let nrhs = rhs.nrhs;
 
     let (a_data, _) = extract_data(a)?;
     let (x_data, _) = extract_data(&x)?;
@@ -5249,7 +5248,7 @@ where
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b_vec);
     }
 
-    let dims = output_dims(&[n, nrhs], batch_dims);
+    let dims = rhs.output_dims;
     let dx = tensor_from_data(dx_data, &dims)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((x, dx))
@@ -5296,11 +5295,14 @@ where
     let (n, batch_dims) = validate_square(a)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let bc = batch_count(batch_dims);
-    let nrhs = if b.ndim() > 1 && b.dims()[1] != n {
-        b.dims()[1]
-    } else {
-        1
-    };
+    let rhs = backend::tensor_helpers::validate_solve_rhs_shape(
+        b,
+        n,
+        batch_dims,
+        "solve_triangular_frule",
+    )
+    .map_err(to_ad_err)?;
+    let nrhs = rhs.nrhs;
 
     let (a_data, _) = extract_data(a)?;
     let (x_data, _) = extract_data(&x)?;
@@ -5333,7 +5335,7 @@ where
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b);
     }
 
-    let dims = output_dims(&[n, nrhs], batch_dims);
+    let dims = rhs.output_dims;
     let dx = tensor_from_data(dx_data, &dims)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((x, dx))

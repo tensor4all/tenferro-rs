@@ -26,11 +26,16 @@
 //!
 //! ```ignore
 //! use chainrules::{Tape, TrackedTensor};
+//! use std::cell::RefCell;
+//! use std::rc::Rc;
+//! use tenferro_algebra::Standard;
 //! use tenferro_einsum::tracked_einsum;
+//! use tenferro_prims::{CpuBackend, CpuContext};
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let tape = Tape::<Tensor<f64>>::new();
+//! let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 //! let a = tape.leaf(Tensor::ones(
 //!     &[2, 3],
 //!     LogicalMemorySpace::MainMemory,
@@ -41,8 +46,10 @@
 //!     LogicalMemorySpace::MainMemory,
 //!     MemoryOrder::ColumnMajor,
 //! ));
-//! let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
-//! let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
+//! let c =
+//!     tracked_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+//! let loss =
+//!     tracked_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 //! let grads = tape.pullback(&loss).unwrap();
 //! let _ga = grads.get(a.node_id().unwrap()).unwrap();
 //! ```
@@ -76,16 +83,21 @@
 //!
 //! ```ignore
 //! use chainrules::DualTensor;
+//! use tenferro_algebra::Standard;
 //! use tenferro_einsum::dual_einsum;
+//! use tenferro_prims::{CpuBackend, CpuContext};
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
+//! let mut ctx = CpuContext::new(1);
 //! let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 //! let da = Tensor::<f64>::ones(&[2, 2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 //! let b = Tensor::<f64>::ones(&[2, 2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 //!
 //! let a_dual = DualTensor::with_tangent(a, da).unwrap();
 //! let b_dual = DualTensor::new(b);
-//! let c_dual = dual_einsum("ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
+//! let c_dual =
+//!     dual_einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual])
+//!         .unwrap();
 //! let _jvp = c_dual.tangent();
 //! ```
 //!
@@ -93,16 +105,22 @@
 //!
 //! ```ignore
 //! use chainrules::Tape;
+//! use std::cell::RefCell;
+//! use std::rc::Rc;
+//! use tenferro_algebra::Standard;
 //! use tenferro_einsum::tracked_einsum;
+//! use tenferro_prims::{CpuBackend, CpuContext};
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let tape = Tape::<Tensor<f64>>::new();
+//! let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 //! let x = tape.leaf_with_tangent(
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),  // direction v
 //! ).unwrap();
-//! let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();  // f(x) = x·x
+//! let loss =
+//!     tracked_einsum::<Standard<f64>, CpuBackend>(ctx, "i,i->", &[&x, &x]).unwrap();  // f(x) = x·x
 //! let result = tape.hvp(&loss).unwrap();
 //! let _grad = result.gradients;  // ∇f(x) = 2x
 //! let _hv = result.hvp;          // H·v = 2v
@@ -160,11 +178,16 @@ struct TapeInner<V: Differentiable> {
 ///
 /// ```ignore
 /// use chainrules::Tape;
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::tracked_einsum;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let tape = Tape::<Tensor<f64>>::new();
+/// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 /// let a = tape.leaf(Tensor::ones(
 ///     &[2, 3],
 ///     LogicalMemorySpace::MainMemory,
@@ -175,8 +198,10 @@ struct TapeInner<V: Differentiable> {
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
 /// ));
-/// let c = tracked_einsum("ij,jk->ik", &[&a, &b]).unwrap();
-/// let loss = tracked_einsum("ij,ij->", &[&c, &c]).unwrap();
+/// let c =
+///     tracked_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+/// let loss =
+///     tracked_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 /// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
@@ -416,16 +441,22 @@ impl<V: Differentiable> Tape<V> {
     ///
     /// ```ignore
     /// use chainrules::Tape;
+    /// use std::cell::RefCell;
+    /// use std::rc::Rc;
+    /// use tenferro_algebra::Standard;
     /// use tenferro_einsum::tracked_einsum;
+    /// use tenferro_prims::{CpuBackend, CpuContext};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     /// use tenferro_device::LogicalMemorySpace;
     ///
     /// let tape = Tape::<Tensor<f64>>::new();
+    /// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
     /// let x = tape.leaf_with_tangent(
     ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
     ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
     /// ).unwrap();
-    /// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();
+    /// let loss =
+    ///     tracked_einsum::<Standard<f64>, CpuBackend>(ctx, "i,i->", &[&x, &x]).unwrap();
     /// let result = tape.hvp(&loss).unwrap();
     /// let _grad = result.gradients;
     /// let _hv = result.hvp;
@@ -1024,16 +1055,22 @@ impl<V: Differentiable> PullbackPlan<V> {
 ///
 /// ```ignore
 /// use chainrules::{Tape, HvpResult};
+/// use std::cell::RefCell;
+/// use std::rc::Rc;
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::tracked_einsum;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let tape = Tape::<Tensor<f64>>::new();
+/// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 /// let x = tape.leaf_with_tangent(
 ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 /// ).unwrap();
-/// let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();
+/// let loss =
+///     tracked_einsum::<Standard<f64>, CpuBackend>(ctx, "i,i->", &[&x, &x]).unwrap();
 /// let result: HvpResult<Tensor<f64>> = tape.hvp(&loss).unwrap();
 /// let _grad = result.gradients.get(x.node_id().unwrap());
 /// let _hv = result.hvp.get(x.node_id().unwrap());

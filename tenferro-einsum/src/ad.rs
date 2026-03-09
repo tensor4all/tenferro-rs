@@ -210,6 +210,23 @@ where
     let output = einsum::<Alg, Backend>(&mut *ctx.borrow_mut(), subscripts, &primals, None)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
+    let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
+        operands.iter().map(|op| op.tangent()).collect();
+    let tangent_out = if tangents.iter().any(Option::is_some) {
+        Some(
+            einsum_frule_impl::<Alg, Backend>(
+                &mut *ctx.borrow_mut(),
+                &subs,
+                None,
+                &primals,
+                &tangents,
+            )
+            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?,
+        )
+    } else {
+        None
+    };
+
     // Check if any operand requires gradients
     let any_requires_grad = operands.iter().any(|op| op.requires_grad());
 
@@ -240,16 +257,13 @@ where
         ctx: ctx.clone(),
         subscripts: subs,
         primals: primals.iter().map(|&t| t.clone()).collect(),
-        input_tangents: operands
-            .iter()
-            .map(|op| op.value().fw_grad().cloned())
-            .collect(),
+        input_tangents: operands.iter().map(|op| op.tangent().cloned()).collect(),
         input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
         _phantom: PhantomData,
     };
 
     // Record the operation on the tape so pullback can compute gradients
-    let result = tape.record_op(output, Box::new(rule), None);
+    let result = tape.record_op(output, Box::new(rule), tangent_out);
 
     Ok(result)
 }
