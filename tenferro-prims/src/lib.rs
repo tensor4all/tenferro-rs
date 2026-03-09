@@ -51,7 +51,7 @@
 //! # Algebra parameterization
 //!
 //! [`TensorPrims<Alg>`] is parameterized by algebra `Alg` (e.g.,
-//! [`Standard<f64>`](Standard), `MaxPlusAlgebra`). The algebra type carries
+//! [`Standard<f64>`](tenferro_algebra::Standard), `MaxPlusAlgebra`). The algebra type carries
 //! its scalar type via `Alg::Scalar` (see [`Semiring`](tenferro_algebra::Semiring)).
 //! External crates implement `TensorPrims<MyAlgebra> for CpuBackend` (orphan rule
 //! compatible). The [`HasAlgebra`](tenferro_algebra::HasAlgebra) trait on scalar types
@@ -62,50 +62,110 @@
 //! ## Plan-based GEMM
 //!
 //! ```ignore
-//! use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor};
-//! use strided_view::StridedArray;
+//! use tenferro_algebra::Standard;
+//! use tenferro_device::LogicalMemorySpace;
+//! use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+//! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
 //! let mut ctx = CpuContext::new(4);
-//! let a = StridedArray::<f64>::col_major(&[3, 4]);
-//! let b = StridedArray::<f64>::col_major(&[4, 5]);
-//! let mut c = StridedArray::<f64>::col_major(&[3, 5]);
+//! let col = MemoryOrder::ColumnMajor;
+//! let mem = LogicalMemorySpace::MainMemory;
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col);
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col);
 //!
 //! let desc = PrimDescriptor::BatchedGemm {
-//!     batch_dims: vec![], m: 3, n: 5, k: 4,
+//!     batch_dims: vec![],
+//!     m: 3,
+//!     n: 5,
+//!     k: 4,
 //! };
-//! let plan = CpuBackend::plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-//! CpuBackend::execute(&mut ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+//! let plan = <CpuBackend as TensorPrims<Standard<f64>>>::plan(
+//!     &mut ctx,
+//!     &desc,
+//!     &[&[3, 4], &[4, 5], &[3, 5]],
+//! )
+//! .unwrap();
+//! <CpuBackend as TensorPrims<Standard<f64>>>::execute(
+//!     &mut ctx,
+//!     &plan,
+//!     1.0,
+//!     &[&a, &b],
+//!     0.0,
+//!     &mut c,
+//! )
+//! .unwrap();
 //! ```
 //!
 //! ## Reduction (sum over an axis)
 //!
 //! ```ignore
-//! use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor, ReduceOp};
+//! use tenferro_algebra::Standard;
+//! use tenferro_device::LogicalMemorySpace;
+//! use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
+//! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
 //! let mut ctx = CpuContext::new(4);
-//! // Sum over columns: c_i = Σ_j A_{i,j}
+//! let col = MemoryOrder::ColumnMajor;
+//! let mem = LogicalMemorySpace::MainMemory;
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+//! let mut c = Tensor::<f64>::zeros(&[3], mem, col);
+//!
 //! let desc = PrimDescriptor::Reduce {
-//!     modes_a: vec![0, 1], modes_c: vec![0], op: ReduceOp::Sum,
+//!     modes_a: vec![0, 1],
+//!     modes_c: vec![0],
+//!     op: ReduceOp::Sum,
 //! };
-//! let plan = CpuBackend::plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
-//! CpuBackend::execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut c.view_mut()).unwrap();
+//! let plan =
+//!     <CpuBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[3, 4], &[3]])
+//!         .unwrap();
+//! <CpuBackend as TensorPrims<Standard<f64>>>::execute(
+//!     &mut ctx,
+//!     &plan,
+//!     1.0,
+//!     &[&a],
+//!     0.0,
+//!     &mut c,
+//! )
+//! .unwrap();
 //! ```
 //!
 //! ## Contraction (extended operation)
 //!
 //! ```ignore
-//! use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor, Extension};
+//! use tenferro_algebra::Standard;
+//! use tenferro_device::LogicalMemorySpace;
+//! use tenferro_prims::{CpuBackend, CpuContext, Extension, PrimDescriptor, TensorPrims};
+//! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
 //! let mut ctx = CpuContext::new(4);
-//! // Contract is an extended operation — check availability first
-//! if CpuBackend::has_extension_for::<f64>(Extension::Contract) {
+//! let col = MemoryOrder::ColumnMajor;
+//! let mem = LogicalMemorySpace::MainMemory;
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col);
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col);
+//!
+//! if <CpuBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::Contract) {
 //!     let desc = PrimDescriptor::Contract {
-//!         modes_a: vec![0, 1], modes_b: vec![1, 2], modes_c: vec![0, 2],
+//!         modes_a: vec![0, 1],
+//!         modes_b: vec![1, 2],
+//!         modes_c: vec![0, 2],
 //!     };
-//!     let plan = CpuBackend::plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-//!     CpuBackend::execute(
-//!         &ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut(),
-//!     ).unwrap();
+//!     let plan = <CpuBackend as TensorPrims<Standard<f64>>>::plan(
+//!         &mut ctx,
+//!         &desc,
+//!         &[&[3, 4], &[4, 5], &[3, 5]],
+//!     )
+//!     .unwrap();
+//!     <CpuBackend as TensorPrims<Standard<f64>>>::execute(
+//!         &mut ctx,
+//!         &plan,
+//!         1.0,
+//!         &[&a, &b],
+//!         0.0,
+//!         &mut c,
+//!     )
+//!     .unwrap();
 //! }
 //! ```
 
@@ -478,15 +538,39 @@ pub enum PrimDescriptor {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor};
+/// use tenferro_algebra::Standard;
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
-/// let mut ctx = CpuContext::new(4); // 4 threads
+/// let mut ctx = CpuContext::new(4);
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let b = Tensor::<f64>::zeros(&[4, 5], mem, col);
+/// let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col);
 ///
 /// let desc = PrimDescriptor::BatchedGemm {
-///     batch_dims: vec![], m: 3, n: 5, k: 4,
+///     batch_dims: vec![],
+///     m: 3,
+///     n: 5,
+///     k: 4,
 /// };
-/// let plan = <CpuBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[3, 4], &[4, 5], &[3, 5]]).unwrap();
-/// <CpuBackend as TensorPrims<Standard<f64>>>::execute(&mut ctx, &plan, 1.0, &[&a.view(), &b.view()], 0.0, &mut c.view_mut()).unwrap();
+/// let plan = <CpuBackend as TensorPrims<Standard<f64>>>::plan(
+///     &mut ctx,
+///     &desc,
+///     &[&[3, 4], &[4, 5], &[3, 5]],
+/// )
+/// .unwrap();
+/// <CpuBackend as TensorPrims<Standard<f64>>>::execute(
+///     &mut ctx,
+///     &plan,
+///     1.0,
+///     &[&a, &b],
+///     0.0,
+///     &mut c,
+/// )
+/// .unwrap();
 /// ```
 pub trait TensorPrims<Alg: Algebra> {
     /// Backend-specific plan type.

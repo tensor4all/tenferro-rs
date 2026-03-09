@@ -47,20 +47,23 @@ fn canonicalize_col_major_operands<T: Scalar>(operands: &[&Tensor<T>]) -> Vec<Te
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_prims::{CpuBackend, CpuContext};
 /// let mut ctx = CpuContext::new(4);
 ///
 /// // Matrix multiplication
-/// let c = einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+/// let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 ///
 /// // Trace
-/// let tr = einsum::<_, _, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+/// let tr = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
 ///
 /// // Batch matrix multiplication
-/// let c = einsum::<_, _, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
+/// let c =
+///     einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
 ///
 /// // Explicit contraction order: contract B*C first, then A
-/// let d = einsum::<_, _, CpuBackend>(&mut ctx, "ij,(jk,kl)->il", &[&a, &b, &c], None).unwrap();
+/// let d = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,(jk,kl)->il", &[&a, &b, &c], None)
+///     .unwrap();
 /// ```
 ///
 /// # Errors
@@ -151,14 +154,22 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::{einsum_with_path, Subscripts};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+/// let c = Tensor::<f64>::from_slice(&[9.0, 10.0, 11.0, 12.0], &[2, 2], col).unwrap();
 /// // Path: contract B*C first, then A*(BC)
 /// let pairs = vec![(1, 2), (0, 3)];
-/// let d = einsum_with_path::<_, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None).unwrap();
+/// let d =
+///     einsum_with_path::<Standard<f64>, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None)
+///         .unwrap();
 /// ```
 pub fn einsum_with_path<Alg, Backend>(
     ctx: &mut Backend::Context,
@@ -242,6 +253,7 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::einsum_owned;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_prims::{CpuBackend, CpuContext};
@@ -252,7 +264,9 @@ where
 /// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
 ///
 /// // `a` and `b` are consumed; their buffers may be reused
-/// let c = einsum_owned::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", vec![a, b], None).unwrap();
+/// let c =
+///     einsum_owned::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", vec![a, b], None)
+///         .unwrap();
 /// ```
 ///
 /// # Errors
@@ -346,6 +360,7 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::einsum_into;
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
@@ -358,10 +373,10 @@ where
 /// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
 ///
 /// // Overwrite: C = A @ B
-/// einsum_into::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c, None).unwrap();
+/// einsum_into::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c, None).unwrap();
 ///
 /// // Accumulate: C += A @ B
-/// einsum_into::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 1.0, &mut c, None).unwrap();
+/// einsum_into::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 1.0, &mut c, None).unwrap();
 /// ```
 ///
 /// # Errors
@@ -415,17 +430,31 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::{einsum_with_subscripts_into, Subscripts};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let mut ctx = CpuContext::new(4);
+/// let col = MemoryOrder::ColumnMajor;
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-/// let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let a = Tensor::<f64>::from_slice(
+///     &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+///     &[3, 2],
+///     col,
+/// )
+/// .unwrap();
+/// let b = Tensor::<f64>::from_slice(
+///     &[7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0],
+///     &[2, 5],
+///     col,
+/// )
+/// .unwrap();
+/// let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, col);
 ///
 /// // C = 1.0 * (A @ B) + 0.0 * C
-/// einsum_with_subscripts_into::<_, _, CpuBackend>(
+/// einsum_with_subscripts_into::<Standard<f64>, CpuBackend>(
 ///     &mut ctx, &subs, &[&a, &b], 1.0, 0.0, &mut c, None,
 /// ).unwrap();
 /// ```
@@ -461,13 +490,21 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::{einsum_with_path_into, Subscripts};
+/// use tenferro_device::LogicalMemorySpace;
 /// use tenferro_prims::{CpuBackend, CpuContext};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+/// let c = Tensor::<f64>::from_slice(&[9.0, 10.0, 11.0, 12.0], &[2, 2], col).unwrap();
 /// let pairs = vec![(1, 2), (0, 3)];
-/// einsum_with_path_into::<_, CpuBackend>(
+/// let mut out = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
+/// einsum_with_path_into::<Standard<f64>, CpuBackend>(
 ///     &mut ctx, &subs, &pairs, &[&a, &b, &c], 1.0, 0.0, &mut out, None
 /// ).unwrap();
 /// ```
@@ -501,6 +538,7 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::{einsum_with_plan_into, ContractionTree, Subscripts};
 /// use tenferro_tensor::{Tensor, MemoryOrder};
 /// use tenferro_device::LogicalMemorySpace;
@@ -510,11 +548,13 @@ where
 /// let mut ctx = CpuContext::new(4);
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 /// let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
+/// let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+/// let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
 /// let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, col);
 ///
 /// // Hot loop: reuse output buffer, no allocation per iteration
 /// for _ in 0..1000 {
-///     einsum_with_plan_into::<_, _, CpuBackend>(
+///     einsum_with_plan_into::<Standard<f64>, CpuBackend>(
 ///         &mut ctx, &tree, &[&a, &b], 1.0, 0.0, &mut c, None,
 ///     ).unwrap();
 /// }

@@ -83,12 +83,15 @@ algebra extension mechanism works for external crates.
 
 ```rust
 // tenferro-tropical crate
-pub struct MaxPlus<T>(PhantomData<T>);
+pub struct MaxPlus<T>(pub T);
+pub struct MaxPlusAlgebra<T>(PhantomData<T>);
 
-impl HasAlgebra for MaxPlus<f64> { type Algebra = MaxPlus<f64>; }
+impl HasAlgebra for MaxPlus<f64> {
+    type Algebra = MaxPlusAlgebra<f64>;
+}
 
-impl TensorPrims<MaxPlus<f64>> for CpuBackend {
-    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool {
+impl TensorPrims<MaxPlusAlgebra<f64>> for CpuBackend {
+    fn has_extension_for(ext: Extension) -> bool {
         false  // tropical uses core ops decomposition
     }
     ...

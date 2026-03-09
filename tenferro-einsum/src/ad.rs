@@ -164,24 +164,29 @@ where
 /// use std::cell::RefCell;
 /// use std::rc::Rc;
 /// use chainrules::Tape;
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::tracked_einsum;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
+/// let col = MemoryOrder::ColumnMajor;
 /// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
 /// let tape = Tape::<Tensor<f64>>::new();
 /// let a = tape.leaf(Tensor::ones(
 ///     &[2, 3],
 ///     LogicalMemorySpace::MainMemory,
-///     MemoryOrder::ColumnMajor,
+///     col,
 /// ));
 /// let b = tape.leaf(Tensor::ones(
 ///     &[3, 4],
 ///     LogicalMemorySpace::MainMemory,
-///     MemoryOrder::ColumnMajor,
+///     col,
 /// ));
-/// let c = tracked_einsum::<_, _, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
-/// let loss = tracked_einsum::<_, _, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
+/// let c =
+///     tracked_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+/// let loss =
+///     tracked_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 /// let grads = tape.pullback(&loss).unwrap();
 /// let _ga = grads.get(a.node_id().unwrap()).unwrap();
 /// ```
@@ -261,6 +266,7 @@ where
 /// use std::rc::Rc;
 /// use std::sync::Arc;
 /// use chainrules::{autograd, AutogradContext, BackwardOptions, Variable};
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::variable_einsum;
 /// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
@@ -275,8 +281,10 @@ where
 ///     Tensor::ones(&[3, 4], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 ///     Arc::clone(&ad_ctx),
 /// ).requires_grad_(true).unwrap();
-/// let c = variable_einsum::<_, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
-/// let loss = variable_einsum::<_, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
+/// let c = variable_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b])
+///     .unwrap();
+/// let loss =
+///     variable_einsum::<Standard<f64>, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 /// loss.backward(BackwardOptions::default()).unwrap();
 /// ```
 pub fn variable_einsum<Alg: 'static, Backend>(
@@ -335,19 +343,24 @@ where
 ///
 /// ```ignore
 /// use chainrules::DualTensor;
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::dual_einsum;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::ones(&[2, 3], mem, col);
 /// let da = Tensor::<f64>::ones(&[2, 3], mem, col);
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 ///
 /// let a_dual = DualTensor::with_tangent(a, da).unwrap();
 /// let b_dual = DualTensor::new(b);
-/// let c_dual = dual_einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
+/// let c_dual =
+///     dual_einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual])
+///         .unwrap();
 /// let _tangent = c_dual.tangent();
 /// ```
 pub fn dual_einsum<Alg, Backend>(
@@ -393,17 +406,21 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::einsum_rrule;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::ones(&[2, 3], mem, col);
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let grad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
 ///
-/// let grads = einsum_rrule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c).unwrap();
+/// let grads = einsum_rrule::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c)
+///     .unwrap();
 /// assert_eq!(grads.len(), 2);
 /// ```
 pub fn einsum_rrule<Alg, Backend>(
@@ -457,17 +474,26 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::einsum_frule;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::ones(&[2, 3], mem, col);
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[2, 3], mem, col);
 ///
-/// let dc = einsum_frule::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None]).unwrap();
+/// let dc = einsum_frule::<Standard<f64>, CpuBackend>(
+///     &mut ctx,
+///     "ij,jk->ik",
+///     &[&a, &b],
+///     &[Some(&da), None],
+/// )
+/// .unwrap();
 /// ```
 pub fn einsum_frule<Alg, Backend>(
     ctx: &mut Backend::Context,
@@ -563,12 +589,15 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::einsum_hvp;
+/// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_device::LogicalMemorySpace;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
+/// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::<f64>::ones(&[2, 3], mem, col);
 /// let b = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let da = Tensor::<f64>::ones(&[2, 3], mem, col);
@@ -576,7 +605,7 @@ where
 /// let grad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
 /// let dgrad_c = Tensor::<f64>::ones(&[2, 4], mem, col);
 ///
-/// let results = einsum_hvp::<_, _, CpuBackend>(
+/// let results = einsum_hvp::<Standard<f64>, CpuBackend>(
 ///     &mut ctx,
 ///     "ij,jk->ik",
 ///     &[&a, &b],

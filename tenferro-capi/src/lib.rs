@@ -23,6 +23,14 @@
 //!   copies the caller's data into a Rust-owned buffer. For zero-copy, use
 //!   DLPack.
 //!
+//! # Header generation
+//!
+//! Generate the public C header from a workspace checkout with:
+//!
+//! ```text
+//! cbindgen --config cbindgen.toml --crate tenferro-capi --output tenferro.h
+//! ```
+//!
 //! # Memory ownership
 //!
 //! | Allocation | Freed by |

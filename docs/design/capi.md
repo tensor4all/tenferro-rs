@@ -307,8 +307,17 @@ See [testing.md](./testing.md) for the workspace-level testing strategy.
 ## ABI Policy
 
 ### Header Generation
-C header generated via `cbindgen` from `tenferro-capi/src/lib.rs`.
-Run `cbindgen --config cbindgen.toml --output tenferro.h` after API changes.
+C headers are generated via `cbindgen` from the two FFI crates:
+
+```bash
+cbindgen --config cbindgen.toml --crate tenferro-capi --output tenferro.h
+cbindgen \
+  --config extension/tenferro-tropical-capi/cbindgen.toml \
+  --crate tenferro-tropical-capi \
+  --output tenferro_tropical.h
+```
+
+`tenferro_tropical.h` is the extension header and includes `tenferro.h`.
 
 ### Symbol Naming
 All public symbols use the `tfe_` prefix. Tropical extension uses `tfe_tropical_` prefix.

@@ -61,17 +61,39 @@
 //! ## Plan-based tropical contraction
 //!
 //! ```ignore
+//! use tenferro_algebra::Standard;
+//! use tenferro_device::LogicalMemorySpace;
 //! use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor};
+//! use tenferro_prims::CpuContext;
+//! use tenferro_tensor::{MemoryOrder, Tensor};
 //! use tenferro_tropical::MaxPlusAlgebra;
 //!
+//! let mut ctx = CpuContext::new(1);
+//! let col = MemoryOrder::ColumnMajor;
+//! let mem = LogicalMemorySpace::MainMemory;
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col);
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col);
 //! let desc = PrimDescriptor::BatchedGemm {
 //!     batch_dims: vec![], m: 3, n: 5, k: 4,
 //! };
 //! // Under MaxPlusAlgebra<f64>, GEMM computes:
 //! //   C[i,j] = max_k (A[i,k] + B[k,j])
-//! let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan::<f64>(
-//!     &desc, &[&[3, 4], &[4, 5], &[3, 5]],
-//! ).unwrap();
+//! let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan(
+//!     &mut ctx,
+//!     &desc,
+//!     &[&[3, 4], &[4, 5], &[3, 5]],
+//! )
+//! .unwrap();
+//! <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::execute(
+//!     &mut ctx,
+//!     &plan,
+//!     1.0,
+//!     &[&a, &b],
+//!     0.0,
+//!     &mut c,
+//! )
+//! .unwrap();
 //! ```
 
 pub mod ad;

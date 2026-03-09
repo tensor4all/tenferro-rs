@@ -716,9 +716,14 @@ impl<T> DataBuffer<T> {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_tensor::Tensor;
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
-/// let t = Tensor::<f64>::zeros(&[2, 3]);
+/// let t = Tensor::<f64>::zeros(
+///     &[2, 3],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// );
 /// assert_eq!(t.dims(), &[2, 3]);
 /// assert_eq!(t.len(), 6);
 /// ```
@@ -1127,7 +1132,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert_eq!(t.dims(), &[3, 4]);
     /// ```
     pub fn dims(&self) -> &[usize] {
@@ -1139,7 +1151,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let strides = t.strides();
     /// ```
     pub fn strides(&self) -> &[isize] {
@@ -1151,7 +1170,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert_eq!(t.offset(), 0);
     /// ```
     pub fn offset(&self) -> isize {
@@ -1163,7 +1189,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let buf = t.buffer();
     /// ```
     pub fn buffer(&self) -> &DataBuffer<T> {
@@ -1175,7 +1208,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let mut t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let mut t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let buf = t.buffer_mut();
     /// ```
     pub fn buffer_mut(&mut self) -> &mut DataBuffer<T> {
@@ -1187,7 +1227,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert_eq!(t.ndim(), 2);
     /// ```
     pub fn ndim(&self) -> usize {
@@ -1199,7 +1246,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert_eq!(t.len(), 12);
     /// ```
     pub fn len(&self) -> usize {
@@ -1211,7 +1265,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[0, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[0, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert!(t.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
@@ -1224,8 +1285,13 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// ```ignore
     /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let t = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert_eq!(t.logical_memory_space(), LogicalMemorySpace::MainMemory);
     /// ```
     pub fn logical_memory_space(&self) -> LogicalMemorySpace {
@@ -1237,7 +1303,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert!(t.preferred_compute_device().is_none());
     /// ```
     pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
@@ -1248,15 +1321,21 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// When set, this device will be used for operations on this tensor
     /// instead of the default device selected by
-    /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
+    /// [`preferred_compute_devices`].
     /// Pass `None` to clear the override and revert to automatic selection.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// use tenferro_device::ComputeDevice;
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let mut t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// let mut t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// t.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 0 }));
     /// ```
     pub fn set_preferred_compute_device(&mut self, device: Option<ComputeDevice>) {
@@ -1271,7 +1350,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert!(!t.is_conjugated());
     /// ```
     pub fn is_conjugated(&self) -> bool {
@@ -1347,7 +1433,7 @@ impl<T: Scalar> Tensor<T> {
     /// If a preferred compute device is set, returns a single-element vector
     /// containing that device when it is compatible with the tensor's logical
     /// memory space for the requested operation. Otherwise, delegates to
-    /// [`preferred_compute_devices`](tenferro_device::preferred_compute_devices).
+    /// [`preferred_compute_devices`].
     ///
     /// # Errors
     ///
@@ -1357,8 +1443,14 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// ```ignore
     /// use tenferro_device::OpKind;
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col);
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let devices = t.effective_compute_devices(OpKind::BatchedGemm).unwrap();
     /// ```
     pub fn effective_compute_devices(
@@ -1400,7 +1492,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 4], mem, col); // [3, 4]
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let transposed = t.permute(&[1, 0]).unwrap();    // [4, 3]
     /// ```
     pub fn permute(&self, perm: &[usize]) -> Result<Tensor<T>> {
@@ -1922,9 +2021,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// assert!(t.is_contiguous());
     /// ```
     pub fn is_contiguous(&self) -> bool {
@@ -1992,9 +2096,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let tc = t.into_conj();
     /// assert!(tc.is_conjugated());
     /// ```
@@ -2238,10 +2347,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_tensor::Tensor;
     /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let t2 = t.to_memory_space_async(LogicalMemorySpace::MainMemory).unwrap();
     /// ```
     pub fn to_memory_space_async(&self, target: LogicalMemorySpace) -> Result<Tensor<T>> {
@@ -2303,9 +2416,14 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// // CPU tensors are always ready.
     /// assert!(t.is_ready());
     /// ```
@@ -2326,10 +2444,15 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     /// use chainrules_core::Differentiable;
     ///
-    /// let t = Tensor::<f64>::zeros(&[2, 3]);
+    /// let t = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// let zt = t.zero_tangent();
     /// ```
     fn zero_tangent(&self) -> Tensor<T> {
@@ -2345,11 +2468,20 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     /// use chainrules_core::Differentiable;
     ///
-    /// let mut t = Tensor::<f64>::zeros(&[2, 3]);
-    /// let tangent = Tensor::<f64>::zeros(&[2, 3]);
+    /// let mut t = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// let tangent = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
     /// t.accumulate_tangent(&tangent);
     /// ```
     fn num_elements(&self) -> usize {
