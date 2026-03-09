@@ -688,18 +688,18 @@ impl CudaBackend {
 }
 
 impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
-    type Plan<T: Scalar> = CudaPlan<T>;
+    type Plan = CudaPlan<S>;
     type Context = CudaContext;
 
-    fn plan<T: Scalar>(
+    fn plan(
         ctx: &mut CudaContext,
         desc: &PrimDescriptor,
         shapes: &[&[usize]],
-    ) -> Result<CudaPlan<T>> {
-        // Resolve cuTENSOR data type and compute descriptor for T.
+    ) -> Result<CudaPlan<S>> {
+        // Resolve cuTENSOR data type and compute descriptor for the algebra scalar.
         // This uses TypeId dispatch since the trait bound is Scalar (not CutensorType).
-        let data_type = scalar_data_type::<T>()?;
-        let compute = scalar_compute_descriptor::<T>(&ctx.vtable)?;
+        let data_type = scalar_data_type::<S>()?;
+        let compute = scalar_compute_descriptor::<S>(&ctx.vtable)?;
 
         match desc {
             PrimDescriptor::Contract {
@@ -906,13 +906,13 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         }
     }
 
-    fn execute<T: Scalar>(
+    fn execute(
         ctx: &mut CudaContext,
-        plan: &CudaPlan<T>,
-        alpha: T,
-        inputs: &[&Tensor<T>],
-        beta: T,
-        output: &mut Tensor<T>,
+        plan: &CudaPlan<S>,
+        alpha: S,
+        inputs: &[&Tensor<S>],
+        beta: S,
+        output: &mut Tensor<S>,
     ) -> Result<()> {
         use std::ffi::c_void;
 
@@ -923,8 +923,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         let ws_ptr: *mut c_void = ptr::null_mut();
         let ws_size: u64 = 0;
 
-        let alpha_ptr = &alpha as *const T as *const c_void;
-        let beta_ptr = &beta as *const T as *const c_void;
+        let alpha_ptr = &alpha as *const S as *const c_void;
+        let beta_ptr = &beta as *const S as *const c_void;
 
         match &plan.desc {
             PrimDescriptor::Contract { .. }
@@ -1071,8 +1071,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                     as *const c_void;
                 let d_ptr = c_ptr as *mut c_void;
 
-                let beta_zero = T::zero();
-                let beta_zero_ptr = &beta_zero as *const T as *const c_void;
+                let beta_zero = S::zero();
+                let beta_zero_ptr = &beta_zero as *const S as *const c_void;
                 let gamma_ptr = beta_ptr;
 
                 let status = unsafe {
@@ -1094,7 +1094,10 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         }
     }
 
-    fn has_extension_for<T: Scalar>(ext: Extension) -> bool {
+    fn has_extension_for(ext: Extension) -> bool {
         matches!(ext, Extension::Contract | Extension::ElementwiseMul)
     }
 }
+
+#[cfg(test)]
+mod tests;

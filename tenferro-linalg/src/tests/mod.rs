@@ -1,5 +1,6 @@
 use super::*;
 use num_complex::{Complex32, Complex64};
+use std::hint::black_box;
 use tenferro_prims::CpuContext;
 
 fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
@@ -31,6 +32,9 @@ fn vector_norm_paths_are_covered_in_crate_unit_tests() {
 
 #[test]
 fn private_scalar_and_validation_helpers_are_covered_in_crate_unit_tests() {
+    assert_eq!(<f64 as LinalgScalar>::abs_real(&black_box(-1.5_f64)), 1.5);
+    assert_eq!(<f32 as LinalgScalar>::abs_real(&black_box(-1.5_f32)), 1.5);
+    assert!(black_box(<f32 as LinalgScalar>::real_epsilon()) > 0.0);
     assert_eq!(<f64 as LinalgScalar>::conj(&1.5), 1.5);
     assert_eq!(<f32 as LinalgScalar>::conj(&1.5_f32), 1.5_f32);
 
