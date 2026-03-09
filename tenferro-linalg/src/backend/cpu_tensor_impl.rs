@@ -280,6 +280,16 @@ where
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
+    if n == 0 || bc == 0 {
+        let mut val_shape = vec![n];
+        val_shape.extend_from_slice(batch_dims);
+        let mut vec_shape = vec![n, n];
+        vec_shape.extend_from_slice(batch_dims);
+        return Ok(EigenTensorResult {
+            values: tensor_from_data(Vec::new(), &val_shape)?,
+            vectors: tensor_from_data(Vec::new(), &vec_shape)?,
+        });
+    }
 
     let a_contig = ensure_col_major(a);
     let a_data = extract_contiguous_slice(&a_contig)?;
