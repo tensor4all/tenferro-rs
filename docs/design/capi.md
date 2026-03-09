@@ -48,7 +48,8 @@ if a caller were to invoke such a path internally, it would surface as
 4. **f64 only** in POC phase. All functions carry the `_f64` suffix.
 
 5. **DLPack v1.0.** Zero-copy tensor exchange across language boundaries
-   (NumPy, PyTorch, JAX, DLPack.jl). Supports CPU and GPU memory.
+   (NumPy, PyTorch, JAX, DLPack.jl). Export preserves CPU/GPU logical memory
+   spaces; import currently accepts only `KDLCPU` with `device_id = 0`.
 
 6. **Copy semantics for convenience.** `tfe_tensor_f64_from_data` copies
    caller data. For zero-copy, use DLPack.
@@ -95,7 +96,8 @@ The returned `DLManagedTensorVersioned` must be consumed by the host
 language, which calls the `deleter` callback when done.
 
 **Import**: takes ownership of `DLManagedTensorVersioned`. The deleter
-is called when the returned tensor is released.
+is called exactly once, either when the returned tensor is released or
+immediately if import validation rejects the input.
 
 ### Einsum
 
@@ -193,6 +195,10 @@ DLPack device types map to `LogicalMemorySpace`:
 | `KDLCUDA_HOST`, `KDLROCM_HOST` | `PinnedMemory` |
 | `KDLCUDA`, `KDLROCM` | `GpuMemory { device_id }` |
 | `KDLCUDA_MANAGED` | `ManagedMemory` |
+
+Current import support is narrower than the full mapping above:
+`tfe_tensor_f64_from_dlpack` only accepts `KDLCPU` with `device_id = 0`
+and `float64` dtype today.
 
 ---
 
