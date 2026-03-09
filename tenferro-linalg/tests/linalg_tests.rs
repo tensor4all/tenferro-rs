@@ -619,6 +619,15 @@ fn eigen_nonsymmetric_returns_error() {
     assert!(eigen(&mut ctx, &a).is_err());
 }
 
+#[test]
+fn eigen_0x0_returns_empty_values_and_vectors() {
+    let mut ctx = CpuContext::new(1);
+    let a: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0], &[1, 0], 0).unwrap();
+    let result = eigen(&mut ctx, &a).unwrap();
+    assert_eq!(result.values.dims(), &[0]);
+    assert_eq!(result.vectors.dims(), &[0, 0]);
+}
+
 // ============================================================================
 // Solve tests
 // ============================================================================

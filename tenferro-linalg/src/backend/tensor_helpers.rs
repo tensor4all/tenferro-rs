@@ -53,7 +53,11 @@ pub(crate) fn ensure_col_major<T: LinalgScalar>(a: &Tensor<T>) -> Tensor<T> {
 
 /// Compute the total number of elements in batch dimensions.
 pub(crate) fn batch_count(batch_dims: &[usize]) -> usize {
-    batch_dims.iter().product::<usize>().max(1)
+    if batch_dims.is_empty() {
+        1
+    } else {
+        batch_dims.iter().product()
+    }
 }
 
 /// Extract the underlying buffer slice from a tensor. Returns an error if

@@ -84,43 +84,77 @@ The key insight is that $R\bar{R}^\dagger - \bar{Q}^\dagger Q$ encodes
 the cotangent information, and `copyltu` extracts the Hermitian part
 consistent with the $Q$ orthogonality constraint.
 
-## QR Case 2: Wide $R$ ($M < N$, $K = M$)
+## QR Case 2: Wide Reduced QR ($M < N$, $K = M$)
 
-When $R$ has more columns than rows, partition:
-
-$$
-R = [U \mid D], \quad U \in \mathbb{C}^{K \times K} \text{ upper triangular}, \quad D \in \mathbb{C}^{K \times (N - K)}
-$$
-
-and correspondingly:
+When $M < N$, the reduced QR still has
 
 $$
-A = Q [U \mid D] = [QU \mid QD]
+Q \in \mathbb{C}^{K \times K}, \qquad R \in \mathbb{C}^{K \times N},
 $$
 
-Let $A_1 = A_{:, 1:K}$ and $A_2 = A_{:, K+1:N}$.
-Note $A_2 = QD$, so $D = Q^\dagger A_2$.
-
-### Backward
-
-Partition $\bar{R} = [\bar{U} \mid \bar{D}]$.
-
-**From $D = Q^\dagger A_2$:**
-- $\bar{Q} \leftarrow \bar{Q} + A_2 \bar{D}^\dagger$ (chain rule for $Q$ through $D = Q^\dagger A_2$)
-- $\bar{A}_2 = Q \bar{D}$ (chain rule for $A_2$)
-
-**For $A_1 = QU$:**
-Apply the full-rank QR backward with the augmented cotangent:
+with the leading square block
 
 $$
-\bar{A}_1 = \mathrm{qr\_back\_fullrank}(Q, U, \bar{Q} + A_2 \bar{D}^\dagger, \bar{U})
+R_1 = R_{:, 1:K} \in \mathbb{C}^{K \times K}.
 $$
 
-**Combine:**
+The reverse rule is most convenient to write directly in terms of
+$Q$, $R$, $\bar{Q}$, and $\bar{R}$, without repartitioning the primal
+matrix.
+
+### Step 1: Build the square auxiliary matrix
 
 $$
-\bar{A} = [\bar{A}_1 \mid \bar{A}_2]
+X = Q^\dagger \bar{Q} - \bar{R} R^\dagger \in \mathbb{C}^{K \times K}
 $$
+
+### Step 2: Project to the lower-triangular skew part
+
+Define the adjoint helper used in the wide reduced-QR backward:
+
+$$
+\mathrm{trilImInvAdjSkew}(X) =
+\begin{cases}
+\mathrm{tril}(X - X^\top) & \text{real case}, \\
+\mathrm{tril}(X - X^\dagger)\ \text{with imaginary diagonal halved} & \text{complex case}.
+\end{cases}
+$$
+
+For the current `tenferro-linalg` implementation, the real-valued
+specialization is the one in use.
+
+### Step 3: Solve for the leading block
+
+$$
+\bar{A}_{\mathrm{lead}} = Q \, \mathrm{trilImInvAdjSkew}(X)\, R_1^{-\dagger}
+$$
+
+This produces the cotangent for the leading $K$ columns only.
+
+### Step 4: Embed and add the direct $R$ path
+
+Let $\pi^\*(Y)$ embed a $K \times K$ block back into the full-width
+$K \times N$ matrix by padding trailing zero columns:
+
+$$
+\pi^\*(Y) = [Y \mid 0].
+$$
+
+Then the full reverse rule is
+
+$$
+\bar{A} = \pi^\*(\bar{A}_{\mathrm{lead}}) + Q \bar{R}.
+$$
+
+The first term accounts for the orthogonality constraint on $Q$ together
+with the triangular structure of the leading block of $R$. The second term
+is the direct cotangent flow through the explicit $Q \bar{R}$ contribution.
+
+### Implementation note
+
+This is the formula used by the current `tenferro-linalg::qr_rrule`
+implementation, and it matches the reduced-QR backward written in
+PyTorch's manual autograd formulas for the real case.
 
 ---
 
