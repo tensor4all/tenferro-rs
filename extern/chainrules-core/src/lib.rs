@@ -410,3 +410,6 @@ impl Differentiable for f32 {
         1.0
     }
 }
+
+#[cfg(test)]
+mod tests;
