@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(feature = "cuda")]
+mod cuda;
+
 #[test]
 fn tensor_debug_is_summary_style() {
     let tensor = Tensor::<f32>::zeros(

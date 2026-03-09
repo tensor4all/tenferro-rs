@@ -1,5 +1,7 @@
 use tenferro_algebra::Standard;
+use tenferro_device::LogicalMemorySpace;
 use tenferro_device::Result;
+use tenferro_tensor::MemoryOrder;
 use tenferro_tensor::Tensor;
 
 use super::*;
@@ -20,5 +22,80 @@ fn cuda_backend_feature_surface_matches_tensor_prims_contract() {
     assert!(<CudaBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::Contract));
     assert!(
         <CudaBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::ElementwiseMul)
+    );
+}
+
+fn available_cutensor_library_path() -> Option<&'static str> {
+    [
+        "/usr/lib/x86_64-linux-gnu/libcutensor.so",
+        "/usr/lib/x86_64-linux-gnu/libcutensor.so.2",
+        "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so",
+        "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2",
+    ]
+    .into_iter()
+    .find(|path| std::path::Path::new(path).exists())
+}
+
+fn cuda_device_zero_is_available() -> bool {
+    std::panic::catch_unwind(|| {
+        cudarc::runtime::result::device::get_count()
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
+#[test]
+fn cuda_permute_smoke_runs_on_device_tensors_when_runtime_is_available() {
+    let Some(path) = available_cutensor_library_path() else {
+        return;
+    };
+
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let (_backend, mut ctx) = CudaBackend::load(path).unwrap();
+    let input = Tensor::<f32>::from_slice(
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+        &[2, 3],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let desc = PrimDescriptor::Permute {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+    };
+    let plan =
+        <CudaBackend as TensorPrims<Standard<f32>>>::plan(&mut ctx, &desc, &[&[2, 3], &[3, 2]])
+            .unwrap();
+    let input_gpu = input
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut output_gpu = Tensor::<f32>::zeros(
+        &[3, 2],
+        LogicalMemorySpace::GpuMemory { device_id: 0 },
+        MemoryOrder::ColumnMajor,
+    );
+
+    <CudaBackend as TensorPrims<Standard<f32>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input_gpu],
+        0.0,
+        &mut output_gpu,
+    )
+    .unwrap();
+
+    let output_cpu = output_gpu
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+
+    assert!(output_cpu.is_contiguous());
+    assert_eq!(output_cpu.dims(), &[3, 2]);
+    assert_eq!(
+        output_cpu.buffer().as_slice(),
+        Some(&[1.0, 3.0, 5.0, 2.0, 4.0, 6.0][..])
     );
 }

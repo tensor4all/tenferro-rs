@@ -16,11 +16,11 @@ The workspace contains active implementations alongside evolving APIs. Implement
 
 ### GPU Status
 
-GPU support is currently stubbed and not implemented. CUDA/HIP-facing types,
-traits, and C API entrypoints may exist to preserve the intended future API
-shape, but they should not be treated as working execution paths yet. Outside
-explicit bug exploration or GPU implementation tasks, do not assume a GPU path
-works just because the symbol is present.
+GPU support is still partial and experimental. CUDA-only allocation,
+CPU<->GPU transfer, and limited cuTENSOR-backed primitive execution now exist,
+but broader GPU coverage is incomplete and HIP remains stubbed. Outside
+explicit GPU implementation tasks, do not assume a GPU path works just because
+the symbol is present.
 
 ### Documentation Requirements
 

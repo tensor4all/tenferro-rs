@@ -3,9 +3,9 @@
 A general-purpose tensor computation library in Rust with CPU support today and planned GPU support later.
 
 > [!WARNING]
-> GPU support is currently stubbed and not implemented. The repository contains
-> CUDA/HIP-facing types and API surfaces, but production GPU allocation,
-> transfer, and execution are still future work.
+> GPU support is still partial and experimental. CUDA-only allocation,
+> CPU<->GPU transfer, and limited cuTENSOR-backed primitive execution exist,
+> but broad GPU coverage is incomplete and HIP remains stubbed.
 
 ## Overview
 
@@ -21,9 +21,10 @@ Built on top of [strided-rs](https://github.com/tensor4all/strided-rs) for cache
 
 ## GPU Status
 
-CPU functionality is actively implemented and tested. GPU-facing modules exist
-to stabilize the future API shape, but the current CUDA/HIP path is still a
-stub. Outside explicit bug exploration or implementation work, do not assume a
+CPU functionality is actively implemented and tested. The CUDA path now has
+basic allocation, CPU<->GPU transfer, and a small set of runtime-loaded
+primitive execution paths, but broader GPU coverage is still incomplete and
+HIP remains a stub. Outside explicit GPU implementation tasks, do not assume a
 GPU code path works just because the type, trait, or FFI entrypoint exists.
 
 ### Influences
