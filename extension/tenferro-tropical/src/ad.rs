@@ -509,7 +509,9 @@ fn tropical_forward_with_argmax<T: TropicalScalar>(
             }
 
             let new_sum = best + product;
-            if k_flat == 0 || product.inner() == new_sum.inner() {
+            // Keep the first winner on ties so gradients route to the
+            // smallest linear contraction index deterministically.
+            if k_flat == 0 || new_sum.inner() != best.inner() {
                 best_k = k_flat;
             }
             best = new_sum;

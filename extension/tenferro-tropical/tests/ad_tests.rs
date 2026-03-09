@@ -195,7 +195,7 @@ fn maxplus_matmul_backward_mixed_winners() {
     .unwrap();
 
     // C[i,k] = max_j(A[i,j] + B[j,k])
-    // C[0,0] = max(10+1, 1+10) = max(11, 11) = 11  → winner j=1 (last one wins tie)
+    // C[0,0] = max(10+1, 1+10) = max(11, 11) = 11  → winner j=0 (smallest index wins tie)
     // C[1,0] = max(0+1, 5+10) = max(1, 15) = 15    → winner j=1
     // C[0,1] = max(10+0, 1+1) = max(10, 2) = 10    → winner j=0
     // C[1,1] = max(0+0, 5+1) = max(0, 6) = 6       → winner j=1
@@ -212,24 +212,24 @@ fn maxplus_matmul_backward_mixed_winners() {
     let da = grads[0].buffer().as_slice().unwrap();
     let db = grads[1].buffer().as_slice().unwrap();
 
-    // Winners: C[0,0]→j=1, C[1,0]→j=1, C[0,1]→j=0, C[1,1]→j=1
+    // Winners: C[0,0]→j=0, C[1,0]→j=1, C[0,1]→j=0, C[1,1]→j=1
     // dA[i,j] gets dC[i,k] when j was the winner for (i,k)
-    // dA[0,0] = dC[0,1] = 1  (j=0 won for (0,1))
+    // dA[0,0] = dC[0,0] + dC[0,1] = 2  (j=0 won for both outputs in row 0)
     // dA[1,0] = 0             (j=0 never won for i=1)
-    // dA[0,1] = dC[0,0] = 1  (j=1 won for (0,0))
+    // dA[0,1] = 0             (j=1 never won for i=0)
     // dA[1,1] = dC[1,0] + dC[1,1] = 2  (j=1 won for (1,0) and (1,1))
-    assert_eq!(da[0], 1.0); // dA[0,0]
+    assert_eq!(da[0], 2.0); // dA[0,0]
     assert_eq!(da[1], 0.0); // dA[1,0]
-    assert_eq!(da[2], 1.0); // dA[0,1]
+    assert_eq!(da[2], 0.0); // dA[0,1]
     assert_eq!(da[3], 2.0); // dA[1,1]
 
     // dB[j,k] gets dC[i,k] when j was the winner for (i,k)
-    // dB[0,0] = 0             (j=0 never won for k=0)
-    // dB[1,0] = dC[0,0] + dC[1,0] = 2  (j=1 won for k=0)
+    // dB[0,0] = dC[0,0] = 1  (j=0 won for (0,0))
+    // dB[1,0] = dC[1,0] = 1  (j=1 won for (1,0))
     // dB[0,1] = dC[0,1] = 1  (j=0 won for (0,1))
     // dB[1,1] = dC[1,1] = 1  (j=1 won for (1,1))
-    assert_eq!(db[0], 0.0); // dB[0,0]
-    assert_eq!(db[1], 2.0); // dB[1,0]
+    assert_eq!(db[0], 1.0); // dB[0,0]
+    assert_eq!(db[1], 1.0); // dB[1,0]
     assert_eq!(db[2], 1.0); // dB[0,1]
     assert_eq!(db[3], 1.0); // dB[1,1]
 }

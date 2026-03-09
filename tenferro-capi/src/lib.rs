@@ -16,9 +16,10 @@
 //!   (ChainRules.jl, PyTorch autograd, JAX custom_vjp).
 //! - **f64 only** in this POC phase. All functions carry the `_f64` suffix.
 //! - **DLPack interop**: Zero-copy tensor exchange with Julia, Python, and
-//!   other frameworks via [`DLManagedTensorVersioned`]. Supports CPU and
-//!   GPU memory. Use [`tfe_tensor_f64_to_dlpack`] (export) and
-//!   [`tfe_tensor_f64_from_dlpack`] (import).
+//!   other frameworks via [`DLManagedTensorVersioned`]. Export preserves the
+//!   tensor's logical memory space, while import currently accepts only
+//!   `kDLCPU device_id=0` float64 tensors. Use [`tfe_tensor_f64_to_dlpack`]
+//!   (export) and [`tfe_tensor_f64_from_dlpack`] (import).
 //! - **Copy semantics** for convenience functions: `tfe_tensor_f64_from_data`
 //!   copies the caller's data into a Rust-owned buffer. For zero-copy, use
 //!   DLPack.
@@ -339,6 +340,44 @@ struct ExportedDLPackTensor {
     tensor: Box<Tensor<f64>>,
     shape: Box<[i64]>,
     strides: Box<[i64]>,
+}
+
+struct ImportedDLPackGuard {
+    managed: *mut DLManagedTensorVersioned,
+    armed: bool,
+}
+
+impl ImportedDLPackGuard {
+    unsafe fn new(managed: *mut DLManagedTensorVersioned) -> Self {
+        Self {
+            managed,
+            armed: true,
+        }
+    }
+
+    fn as_ptr(&self) -> *mut DLManagedTensorVersioned {
+        self.managed
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ImportedDLPackGuard {
+    fn drop(&mut self) {
+        if !self.armed || self.managed.is_null() {
+            return;
+        }
+
+        unsafe {
+            if let Some(deleter) = (*self.managed).deleter {
+                deleter(self.managed);
+            } else {
+                drop(Box::from_raw(self.managed));
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -1301,6 +1340,8 @@ pub unsafe extern "C" fn tfe_tensor_f64_to_dlpack(
 /// Takes ownership of the `DLManagedTensorVersioned`. The deleter
 /// callback will be called when the returned tensor is released
 /// via `tfe_tensor_f64_release`.
+/// For every non-null input, ownership is consumed even when validation
+/// fails, so rejected imports still trigger the producer deleter exactly once.
 ///
 /// The tensor data is NOT copied. The returned tensor references
 /// the same memory as the DLPack tensor.
@@ -1340,7 +1381,8 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
                 return Err(TFE_INVALID_ARGUMENT);
             }
 
-            let managed_ref = &*managed;
+            let mut guard = ImportedDLPackGuard::new(managed);
+            let managed_ref = &*guard.as_ptr();
             if managed_ref.version.major != 1 {
                 set_last_error("from_dlpack: unsupported DLPack major version");
                 return Err(TFE_INVALID_ARGUMENT);
@@ -1411,7 +1453,7 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
                 return Err(TFE_INVALID_ARGUMENT);
             }
 
-            let managed_addr = managed as usize;
+            let managed_addr = guard.as_ptr() as usize;
             let release = move || unsafe {
                 let managed = managed_addr as *mut DLManagedTensorVersioned;
                 if let Some(deleter) = (*managed).deleter {
@@ -1422,6 +1464,7 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
             };
             let tensor = Tensor::from_external_parts(data, len, &dims, &strides, offset, release)
                 .map_err(|err| map_device_error(&err))?;
+            guard.disarm();
             Ok(tensor_to_handle(tensor))
         },
     ));

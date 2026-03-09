@@ -3,12 +3,58 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;
 
+type TropicalRruleFn = unsafe extern "C" fn(
+    *const std::ffi::c_char,
+    *const *const TfeTensorF64,
+    usize,
+    *const TfeTensorF64,
+    *mut *mut TfeTensorF64,
+    *mut tfe_status_t,
+);
+
 fn tensor_handle(data: &[f64], dims: &[usize]) -> *mut TfeTensorF64 {
     tensor_to_handle(Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap())
 }
 
 unsafe fn read_tensor(handle: *const TfeTensorF64) -> Vec<f64> {
     handle_to_ref(handle).buffer().as_slice().unwrap().to_vec()
+}
+
+fn assert_rrule_prefers_smallest_linear_index(
+    rrule: TropicalRruleFn,
+    a_data: &[f64],
+    b_data: &[f64],
+    expected_da: &[f64],
+    expected_db: &[f64],
+) {
+    let a = tensor_handle(a_data, &[2]);
+    let b = tensor_handle(b_data, &[2]);
+    let cot = tensor_handle(&[1.0], &[]);
+    let ops = [a as *const TfeTensorF64, b as *const TfeTensorF64];
+    let mut grads = [std::ptr::null_mut(); 2];
+    let mut status = TFE_INTERNAL_ERROR;
+
+    unsafe {
+        rrule(
+            c"i,i->".as_ptr(),
+            ops.as_ptr(),
+            2,
+            cot,
+            grads.as_mut_ptr(),
+            &mut status,
+        )
+    };
+    assert_eq!(status, TFE_SUCCESS);
+    assert_eq!(unsafe { read_tensor(grads[0]) }, expected_da);
+    assert_eq!(unsafe { read_tensor(grads[1]) }, expected_db);
+
+    unsafe {
+        tfe_tensor_f64_release(grads[0]);
+        tfe_tensor_f64_release(grads[1]);
+        tfe_tensor_f64_release(cot);
+        tfe_tensor_f64_release(b);
+        tfe_tensor_f64_release(a);
+    }
 }
 
 #[test]
@@ -177,4 +223,37 @@ fn maxmul_entrypoints_produce_expected_values() {
         tfe_tensor_f64_release(b);
         tfe_tensor_f64_release(a);
     }
+}
+
+#[test]
+fn maxplus_rrule_tie_prefers_smallest_linear_index() {
+    assert_rrule_prefers_smallest_linear_index(
+        tfe_tropical_einsum_rrule_maxplus_f64,
+        &[1.0, 1.0],
+        &[2.0, 2.0],
+        &[1.0, 0.0],
+        &[1.0, 0.0],
+    );
+}
+
+#[test]
+fn minplus_rrule_tie_prefers_smallest_linear_index() {
+    assert_rrule_prefers_smallest_linear_index(
+        tfe_tropical_einsum_rrule_minplus_f64,
+        &[1.0, 1.0],
+        &[2.0, 2.0],
+        &[1.0, 0.0],
+        &[1.0, 0.0],
+    );
+}
+
+#[test]
+fn maxmul_rrule_tie_prefers_smallest_linear_index() {
+    assert_rrule_prefers_smallest_linear_index(
+        tfe_tropical_einsum_rrule_maxmul_f64,
+        &[2.0, 2.0],
+        &[3.0, 3.0],
+        &[3.0, 0.0],
+        &[2.0, 0.0],
+    );
 }

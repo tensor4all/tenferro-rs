@@ -21,6 +21,48 @@ unsafe extern "C" fn import_fixture_deleter(managed: *mut DLManagedTensorVersion
     fixture.calls.fetch_add(1, Ordering::SeqCst);
 }
 
+fn import_fixture_managed(
+    device_type: i32,
+    device_id: i32,
+) -> (*mut DLManagedTensorVersioned, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut fixture = Box::new(ImportFixture {
+        data: vec![1.0, 2.0, 3.0, 4.0],
+        shape: vec![2, 2].into_boxed_slice(),
+        strides: vec![2, 1].into_boxed_slice(),
+        calls: calls.clone(),
+    });
+    let data_ptr = fixture.data.as_mut_ptr();
+    let shape_ptr = fixture.shape.as_mut_ptr();
+    let strides_ptr = fixture.strides.as_mut_ptr();
+    let manager_ctx = Box::into_raw(fixture);
+
+    let managed = Box::into_raw(Box::new(DLManagedTensorVersioned {
+        version: DLPackVersion { major: 1, minor: 0 },
+        manager_ctx: manager_ctx as *mut c_void,
+        deleter: Some(import_fixture_deleter),
+        flags: 0,
+        dl_tensor: DLTensor {
+            data: data_ptr as *mut c_void,
+            device: DLDevice {
+                device_type,
+                device_id,
+            },
+            ndim: 2,
+            dtype: DLDataType {
+                code: KDLFLOAT,
+                bits: 64,
+                lanes: 1,
+            },
+            shape: shape_ptr,
+            strides: strides_ptr,
+            byte_offset: 0,
+        },
+    }));
+
+    (managed, calls)
+}
+
 #[test]
 fn dlpack_export_import_roundtrip_preserves_strides_and_values() {
     let base = Tensor::from_slice(
@@ -68,40 +110,7 @@ fn dlpack_export_import_roundtrip_preserves_strides_and_values() {
 
 #[test]
 fn dlpack_import_calls_producer_deleter_on_release() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let mut fixture = Box::new(ImportFixture {
-        data: vec![1.0, 2.0, 3.0, 4.0],
-        shape: vec![2, 2].into_boxed_slice(),
-        strides: vec![2, 1].into_boxed_slice(),
-        calls: calls.clone(),
-    });
-    let data_ptr = fixture.data.as_mut_ptr();
-    let shape_ptr = fixture.shape.as_mut_ptr();
-    let strides_ptr = fixture.strides.as_mut_ptr();
-    let manager_ctx = Box::into_raw(fixture);
-
-    let managed = Box::into_raw(Box::new(DLManagedTensorVersioned {
-        version: DLPackVersion { major: 1, minor: 0 },
-        manager_ctx: manager_ctx as *mut c_void,
-        deleter: Some(import_fixture_deleter),
-        flags: 0,
-        dl_tensor: DLTensor {
-            data: data_ptr as *mut c_void,
-            device: DLDevice {
-                device_type: KDLCPU,
-                device_id: 0,
-            },
-            ndim: 2,
-            dtype: DLDataType {
-                code: KDLFLOAT,
-                bits: 64,
-                lanes: 1,
-            },
-            shape: shape_ptr,
-            strides: strides_ptr,
-            byte_offset: 0,
-        },
-    }));
+    let (managed, calls) = import_fixture_managed(KDLCPU, 0);
 
     let mut status = TFE_INTERNAL_ERROR;
     let handle = unsafe { tfe_tensor_f64_from_dlpack(managed, &mut status) };
@@ -115,5 +124,16 @@ fn dlpack_import_calls_producer_deleter_on_release() {
     assert_eq!(tensor.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
 
     unsafe { tfe_tensor_f64_release(handle) };
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn dlpack_import_rejects_unsupported_device_and_consumes_input() {
+    let (managed, calls) = import_fixture_managed(KDLCUDA, 0);
+
+    let mut status = TFE_INTERNAL_ERROR;
+    let handle = unsafe { tfe_tensor_f64_from_dlpack(managed, &mut status) };
+    assert!(handle.is_null());
+    assert_eq!(status, TFE_INVALID_ARGUMENT);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
