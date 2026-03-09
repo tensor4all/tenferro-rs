@@ -1896,7 +1896,7 @@ pub mod autograd {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// // Intended for operation implementations:
     /// // let out = autograd::record_op(value, &[&x, &y], Box::new(rule), tangent)?;
     /// ```

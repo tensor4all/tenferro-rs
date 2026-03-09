@@ -14,11 +14,11 @@
 //!
 //! ## Architecture
 //!
-//! - [`tropical_forward_with_argmax`]: runs tropical einsum forward and records
-//!   winner indices in an [`ArgmaxTracker`](crate::ArgmaxTracker)
+//! - `tropical_forward_with_argmax`: runs tropical einsum forward and records
+//!   winner indices in an [`ArgmaxTracker`]
 //! - [`tropical_einsum_rrule`]: standalone reverse-mode rule (pullback)
-//! - [`TropicalEinsumReverseRule`]: implements
-//!   [`ReverseRule<Tensor<T::Inner>>`](chainrules::ReverseRule) for tape integration
+//! - [`TropicalEinsumReverseRule`]: tape integration via
+//!   [`ReverseRule<Tensor<T::Inner>>`](chainrules::ReverseRule)
 //! - [`tracked_tropical_einsum`]: tape-aware tracked einsum for tropical ops
 //!
 //! ## Backward rules by semiring
@@ -26,11 +26,11 @@
 //! For a GEMM `C[i,j] = opt_k (A[i,k] (x) B[k,j])` where `opt` = max/min
 //! and `(x)` is tropical multiplication:
 //!
-//! | Semiring | opt | (x) | dA[i,k*] | dB[k*,j] |
+//! | Semiring | opt | (x) | `dA[i,k*]` | `dB[k*,j]` |
 //! |----------|-----|-----|----------|----------|
-//! | MaxPlus | max | + | dC[i,j] | dC[i,j] |
-//! | MinPlus | min | + | dC[i,j] | dC[i,j] |
-//! | MaxMul | max | x | dC[i,j] * B.0[k*,j] | dC[i,j] * A.0[i,k*] |
+//! | MaxPlus | max | + | `dC[i,j]` | `dC[i,j]` |
+//! | MinPlus | min | + | `dC[i,j]` | `dC[i,j]` |
+//! | MaxMul | max | x | `dC[i,j] * B.0[k*,j]` | `dC[i,j] * A.0[i,k*]` |
 //!
 //! where `k*` is the winner index from the forward pass.
 //!
@@ -955,7 +955,7 @@ fn tropical_backward_binary<T: TropicalScalar>(
 // Tape-integrated tropical AD
 // ============================================================================
 
-/// Reverse-mode rule for tropical einsum, for integration with [`Tape`].
+/// Reverse-mode rule for tropical einsum, for integration with [`chainrules::Tape`].
 ///
 /// This rule stores the tropical primal tensors and the argmax tracker from
 /// the forward pass. The pullback computes standard real gradients.

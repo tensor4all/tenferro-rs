@@ -447,7 +447,7 @@ where
 /// Builder for primal einsum.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `EinsumBuilder` via its corresponding operation constructor.
 /// ```
 pub struct EinsumBuilder<'a, T>
@@ -525,7 +525,7 @@ where
 /// Builder for AD einsum.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `EinsumAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct EinsumAdBuilder<'a, T>
@@ -844,7 +844,7 @@ where
 /// Builder for SVD.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SvdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SvdBuilder<'a, T: LinalgScalar> {
@@ -897,7 +897,7 @@ pub fn svd<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> SvdBuilder<'a, T> {
 /// Builder for QR.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `QrBuilder` via its corresponding operation constructor.
 /// ```
 pub struct QrBuilder<'a, T: LinalgScalar> {
@@ -934,7 +934,7 @@ pub fn qr<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> QrBuilder<'a, T> {
 /// Builder for LU.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `LuBuilder` via its corresponding operation constructor.
 /// ```
 pub struct LuBuilder<'a, T: LinalgScalar> {
@@ -986,7 +986,7 @@ pub fn lu<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> LuBuilder<'a, T> {
 /// Builder for eigen decomposition.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `EigenBuilder` via its corresponding operation constructor.
 /// ```
 pub struct EigenBuilder<'a, T: LinalgScalar> {
@@ -1023,7 +1023,7 @@ pub fn eigen<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> EigenBuilder<'a, T> 
 /// Builder for least squares solve.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `LstsqBuilder` via its corresponding operation constructor.
 /// ```
 pub struct LstsqBuilder<'a, T: LinalgScalar> {
@@ -1061,7 +1061,7 @@ pub fn lstsq<'a, T: LinalgScalar>(a: &'a Tensor<T>, b: &'a Tensor<T>) -> LstsqBu
 /// Builder for Cholesky.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `CholeskyBuilder` via its corresponding operation constructor.
 /// ```
 pub struct CholeskyBuilder<'a, T: LinalgScalar> {
@@ -1098,7 +1098,7 @@ pub fn cholesky<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> CholeskyBuilder<'
 /// Builder for solve.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SolveBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SolveBuilder<'a, T: LinalgScalar> {
@@ -1136,7 +1136,7 @@ pub fn solve<'a, T: LinalgScalar>(a: &'a Tensor<T>, b: &'a Tensor<T>) -> SolveBu
 /// Builder for matrix inverse.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `InvBuilder` via its corresponding operation constructor.
 /// ```
 pub struct InvBuilder<'a, T: LinalgScalar> {
@@ -1173,7 +1173,7 @@ pub fn inv<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> InvBuilder<'a, T> {
 /// Builder for determinant.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `DetBuilder` via its corresponding operation constructor.
 /// ```
 pub struct DetBuilder<'a, T: LinalgScalar> {
@@ -1210,7 +1210,7 @@ pub fn det<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> DetBuilder<'a, T> {
 /// Builder for slogdet.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SlogdetBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SlogdetBuilder<'a, T: LinalgScalar> {
@@ -1247,7 +1247,7 @@ pub fn slogdet<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> SlogdetBuilder<'a,
 /// Builder for general eigendecomposition.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `EigBuilder` via its corresponding operation constructor.
 /// ```
 pub struct EigBuilder<'a, T: LinalgScalar> {
@@ -1284,7 +1284,7 @@ pub fn eig<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> EigBuilder<'a, T> {
 /// Builder for pseudoinverse.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `PinvBuilder` via its corresponding operation constructor.
 /// ```
 pub struct PinvBuilder<'a, T: LinalgScalar> {
@@ -1337,7 +1337,7 @@ pub fn pinv<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> PinvBuilder<'a, T> {
 /// Builder for matrix exponential.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `MatrixExpBuilder` via its corresponding operation constructor.
 /// ```
 pub struct MatrixExpBuilder<'a, T: LinalgScalar> {
@@ -1374,7 +1374,7 @@ pub fn matrix_exp<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> MatrixExpBuilde
 /// Builder for triangular solve.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SolveTriangularBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SolveTriangularBuilder<'a, T: LinalgScalar> {
@@ -1428,7 +1428,7 @@ pub fn solve_triangular<'a, T: LinalgScalar>(
 /// Builder for norm.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `NormBuilder` via its corresponding operation constructor.
 /// ```
 pub struct NormBuilder<'a, T: LinalgScalar> {
@@ -1642,7 +1642,7 @@ where
 /// Builder for AD SVD.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SvdAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SvdAdBuilder<'a, T: Scalar> {
@@ -1826,7 +1826,7 @@ pub fn svd_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> SvdAdBuilder<'a, T> {
 /// Builder for AD QR.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `QrAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct QrAdBuilder<'a, T: Scalar> {
@@ -1951,7 +1951,7 @@ pub fn qr_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> QrAdBuilder<'a, T> {
 /// Builder for AD LU.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `LuAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct LuAdBuilder<'a, T: Scalar> {
@@ -2101,7 +2101,7 @@ pub fn lu_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> LuAdBuilder<'a, T> {
 /// Builder for AD eigen decomposition.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `EigenAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct EigenAdBuilder<'a, T: Scalar> {
@@ -2229,7 +2229,7 @@ pub fn eigen_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> EigenAdBuilder<'a, T>
 /// Builder for AD least squares.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `LstsqAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct LstsqAdBuilder<'a, T: Scalar> {
@@ -2365,7 +2365,7 @@ pub fn lstsq_ad<'a, T: Scalar>(a: &'a AdTensor<T>, b: &'a AdTensor<T>) -> LstsqA
 /// Builder for AD Cholesky.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `CholeskyAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct CholeskyAdBuilder<'a, T: Scalar> {
@@ -2407,7 +2407,7 @@ pub fn cholesky_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> CholeskyAdBuilder<
 /// Builder for AD solve.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SolveAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SolveAdBuilder<'a, T: Scalar> {
@@ -2454,7 +2454,7 @@ pub fn solve_ad<'a, T: Scalar>(a: &'a AdTensor<T>, b: &'a AdTensor<T>) -> SolveA
 /// Builder for AD inverse.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `InvAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct InvAdBuilder<'a, T: Scalar> {
@@ -2496,7 +2496,7 @@ pub fn inv_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> InvAdBuilder<'a, T> {
 /// Builder for AD det.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `DetAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct DetAdBuilder<'a, T: Scalar> {
@@ -2538,7 +2538,7 @@ pub fn det_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> DetAdBuilder<'a, T> {
 /// Builder for AD slogdet.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SlogdetAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SlogdetAdBuilder<'a, T: Scalar> {
@@ -2654,7 +2654,7 @@ pub fn slogdet_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> SlogdetAdBuilder<'a
 /// Builder for AD eig.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `EigAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct EigAdBuilder<'a, T: Scalar> {
@@ -2786,7 +2786,7 @@ pub fn eig_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> EigAdBuilder<'a, T> {
 /// Builder for AD pinv.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `PinvAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct PinvAdBuilder<'a, T: Scalar> {
@@ -2847,7 +2847,7 @@ pub fn pinv_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> PinvAdBuilder<'a, T> {
 /// Builder for AD matrix exponential.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `MatrixExpAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct MatrixExpAdBuilder<'a, T: Scalar> {
@@ -2891,7 +2891,7 @@ pub fn matrix_exp_ad<'a, T: Scalar>(tensor: &'a AdTensor<T>) -> MatrixExpAdBuild
 /// Builder for AD solve_triangular.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `SolveTriangularAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct SolveTriangularAdBuilder<'a, T: Scalar> {
@@ -3017,7 +3017,7 @@ pub fn solve_triangular_ad<'a, T: Scalar>(
 /// Builder for AD norm.
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// // Construct `NormAdBuilder` via its corresponding operation constructor.
 /// ```
 pub struct NormAdBuilder<'a, T: Scalar> {

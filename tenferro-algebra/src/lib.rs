@@ -163,7 +163,7 @@ impl HasAlgebra for Complex64 {
 
 /// Associates an algebra marker with its scalar type.
 ///
-/// This is the minimal trait required by [`TensorPrims`] — it provides
+/// This is the minimal trait required by `TensorPrims` — it provides
 /// the scalar type without requiring semiring operations.
 ///
 /// [`Semiring`] extends `Algebra` with zero/one/add/mul.
