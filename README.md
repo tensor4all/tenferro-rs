@@ -27,6 +27,45 @@ primitive execution paths, but broader GPU coverage is still incomplete and
 HIP remains a stub. Outside explicit GPU implementation tasks, do not assume a
 GPU code path works just because the type, trait, or FFI entrypoint exists.
 
+## Quickstart
+
+For a local checkout, a minimal CPU-only downstream crate needs these
+workspace members:
+
+```toml
+[dependencies]
+tenferro-algebra = { path = "../tenferro-rs/tenferro-algebra" }
+tenferro-device = { path = "../tenferro-rs/tenferro-device" }
+tenferro-tensor = { path = "../tenferro-rs/tenferro-tensor" }
+tenferro-prims = { path = "../tenferro-rs/tenferro-prims" }
+tenferro-einsum = { path = "../tenferro-rs/tenferro-einsum" }
+```
+
+```rust
+use tenferro_algebra::Standard;
+use tenferro_device::LogicalMemorySpace;
+use tenferro_einsum::einsum;
+use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro_tensor::{MemoryOrder, Tensor};
+
+fn main() {
+    let col = MemoryOrder::ColumnMajor;
+    let mem = LogicalMemorySpace::MainMemory;
+    let mut ctx = CpuContext::new(4);
+
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+    let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None)
+        .unwrap();
+
+    assert_eq!(c.dims(), &[2, 2]);
+    assert_eq!(c.logical_memory_space(), mem);
+}
+```
+
+If you want autodiff, start from `extension/tenferro-dyadtensor`. For more
+examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor`.
+
 ### Influences
 
 The API and internal architecture are strongly influenced by
@@ -98,6 +137,13 @@ Generate a unified local docs site (design docs + Rust API docs):
 bash scripts/build_docs_site.sh
 python3 scripts/check-docs-site.py
 ```
+
+Extra local tools:
+
+- `quarto` is required for `target/docs-site/design/`
+- Graphviz `dot` is required for the dependency graph assets
+- without those tools, the script still generates `target/docs-site/api/` and
+  `target/docs-site/index.html`
 
 Output:
 

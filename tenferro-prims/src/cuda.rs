@@ -585,10 +585,17 @@ pub struct CudaContext {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_prims::{CudaBackend, CudaContext, TensorPrims, PrimDescriptor};
+/// use tenferro_algebra::Standard;
+/// use tenferro_prims::{CudaBackend, PrimDescriptor, TensorPrims};
 ///
 /// let (_, mut ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
-/// let plan = CudaBackend::plan::<f64>(&mut ctx, &desc, &shapes).unwrap();
+/// let desc = PrimDescriptor::Permute {
+///     modes_a: vec![0, 1],
+///     modes_b: vec![1, 0],
+/// };
+/// let plan =
+///     <CudaBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[2, 3], &[3, 2]])
+///         .unwrap();
 /// ```
 pub struct CudaPlan<T: Scalar> {
     /// Compiled cuTENSOR plan (RAII — Drop calls cutensorDestroyPlan).

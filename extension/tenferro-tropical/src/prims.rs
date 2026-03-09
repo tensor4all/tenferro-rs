@@ -55,18 +55,33 @@ fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_,
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor, ReduceOp};
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_tropical::{MaxPlusAlgebra, TropicalPlan};
 ///
 /// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let mut c = Tensor::<f64>::zeros(&[3], mem, col);
 /// let desc = PrimDescriptor::Reduce {
 ///     modes_a: vec![0, 1],
 ///     modes_c: vec![0],
 ///     op: ReduceOp::Sum,
 /// };
-/// let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan::<f64>(
-///     &mut ctx, &desc, &[&[3, 4], &[3]],
-/// ).unwrap();
+/// let plan =
+///     <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan(&mut ctx, &desc, &[&[3, 4], &[3]])
+///         .unwrap();
+/// <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::execute(
+///     &mut ctx,
+///     &plan,
+///     1.0,
+///     &[&a],
+///     0.0,
+///     &mut c,
+/// )
+/// .unwrap();
 /// ```
 #[derive(Debug)]
 pub enum TropicalPlan<T: Scalar> {

@@ -86,12 +86,14 @@ when the caller wants to control exactly where memory copies occur.
 
 ### Notes
 
-- `lu(..., LuPivot::NoPivot)` returns `Error::InvalidArgument` (not implemented).
+- `lu(..., LuPivot::NoPivot)` is implemented for the supported CPU paths and
+  returns an LU factorization with `p: None`.
 - `eig()` always returns `EigResult` with `Complex<T>` eigenvalues and eigenvectors,
   even for real input. This avoids branching on whether eigenvalues happen to be real.
 - `norm(...)` implements `Fro`, `Nuclear`, and `Spectral` only; other variants
   return `Error::InvalidArgument`.
-- `solve_triangular` has no AD rules (forward-only utility).
+- `solve_triangular` has public reverse- and forward-mode AD rules via
+  `solve_triangular_rrule` and `solve_triangular_frule`.
 
 ---
 

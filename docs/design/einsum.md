@@ -223,35 +223,44 @@ let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
 
 // Matrix multiplication
-let c = einsum::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
+let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();
 
 // Trace
-let tr = einsum::<_, _, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
+let tr = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ii->", &[&a], None).unwrap();
 
 // Batch matrix multiplication
 let ba = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
 let bb = Tensor::<f64>::zeros(&[10, 4, 5], LogicalMemorySpace::MainMemory, col);
-let bc = einsum::<_, _, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&ba, &bb], None).unwrap();
+let bc =
+    einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&ba, &bb], None).unwrap();
 
 // Explicit contraction order via parentheses
-let d = einsum::<_, _, CpuBackend>(
+let d = einsum::<Standard<f64>, CpuBackend>(
     &mut ctx, "ij,(jk,kl)->il", &[&a, &b, &c], None,
 ).unwrap();
 
 // Integer label notation (for programmatic use)
 let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-let c = einsum_with_subscripts::<_, _, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
+let c = einsum_with_subscripts::<Standard<f64>, CpuBackend>(
+    &mut ctx,
+    &subs,
+    &[&a, &b],
+    None,
+)
+.unwrap();
 
 // Pre-optimized tree (hot loops)
 let tree = ContractionTree::optimize(&subs, &[&[2, 2], &[2, 2]]).unwrap();
 for _ in 0..n_steps {
-    let c = einsum_with_plan::<_, _, CpuBackend>(&mut ctx, &tree, &[&a, &b], None).unwrap();
+    let c = einsum_with_plan::<Standard<f64>, CpuBackend>(&mut ctx, &tree, &[&a, &b], None)
+        .unwrap();
 }
 
 // Consuming variant: operands moved, buffers reused
 let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 let y = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
-let z = einsum_owned::<_, _, CpuBackend>(&mut ctx, "ij,jk->ik", vec![x, y], None).unwrap();
+let z =
+    einsum_owned::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", vec![x, y], None).unwrap();
 ```
 
 ---
@@ -290,10 +299,10 @@ where
 
 For each binary contraction, the engine chooses between:
 
-**Path A — Extended Contract available** (`has_extension_for::<T>(Contract)`):
+**Path A — Extended Contract available** (`has_extension_for(Contract)`):
 ```
 let desc = PrimDescriptor::Contract { modes_a, modes_b, modes_c };
-let plan = B::plan::<T>(&mut ctx, &desc, &shapes)?;
+let plan = B::plan(&mut ctx, &desc, &shapes)?;
 B::execute(&mut ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
 → backend handles diag, trace, permute, GEMM internally
 ```

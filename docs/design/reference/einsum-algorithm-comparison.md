@@ -275,7 +275,7 @@ not in `TensorPrims` (no computation needed).
 | 1 | `contract` | omeinsum-rs + strided-rs | Fused permute + batched_gemm + unpermute (cuTENSOR's `cutensorContract`) |
 | 2 | `elementwise_mul` | strided-rs | Hadamard product bypass (strided-rs's `zip_map2_into`) |
 
-**Dispatch rule**: If `has_extension_for::<T>(Extension::Contract)` returns
+**Dispatch rule**: If `has_extension_for(Extension::Contract)` returns
 `true` → use the fused operation via `PrimDescriptor::Contract`. Otherwise →
 `tenferro-einsum` decomposes into core ops:
 `diag → trace/reduce → permute → batched_gemm → permute`.

@@ -20,7 +20,7 @@ tenferro-einsum (engine)
     │  T: HasAlgebra (UX sugar) → infers A = T::Algebra automatically
     │  A: Semiring → A::Scalar is the canonical scalar type
     │
-    ├── [has_extension_for::<T>(Contract)?]
+    ├── [has_extension_for(Contract)?]
     │   YES → execute Contract plan (fused permute+GEMM)
     │
     └── [otherwise]
@@ -28,8 +28,9 @@ tenferro-einsum (engine)
         diag → trace/reduce → permute_view → make_contiguous → batched_gemm
 ```
 
-**Dispatch is dynamic**: `has_extension_for::<T>(ext)` queries at runtime
-whether a specific extended operation is available for scalar type `T`.
+**Dispatch is dynamic**: `has_extension_for(ext)` queries at runtime
+whether a specific extended operation is available for the algebra-specific
+backend implementation.
 This is important because:
 - GPU backends are loaded at runtime (dlopen)
 - cuTENSOR supports `f32`/`f64`/Complex but not tropical types
@@ -85,7 +86,7 @@ needed independently of a GEMM.
 
 Extended operations are in the same `PrimDescriptor` enum as core ops.
 Whether a backend supports them is queried at runtime via
-`has_extension_for::<T>(Extension::Contract)`.
+`has_extension_for(Extension::Contract)`.
 
 ---
 

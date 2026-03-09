@@ -617,18 +617,32 @@ impl CpuContext {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_prims::{CpuBackend, CpuContext, TensorPrims, PrimDescriptor};
-/// use strided_view::StridedArray;
+/// use tenferro_algebra::Standard;
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let mut ctx = CpuContext::new(4);
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let mut b = Tensor::<f64>::zeros(&[4, 3], mem, col);
 /// let desc = PrimDescriptor::Permute {
 ///     modes_a: vec![0, 1],
 ///     modes_b: vec![1, 0],
 /// };
-/// let plan = CpuBackend::plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 3]]).unwrap();
-/// let a = StridedArray::<f64>::col_major(&[3, 4]);
-/// let mut b = StridedArray::<f64>::col_major(&[4, 3]);
-/// CpuBackend::execute(&mut ctx, &plan, 1.0, &[&a.view()], 0.0, &mut b.view_mut()).unwrap();
+/// let plan =
+///     <CpuBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[3, 4], &[4, 3]])
+///         .unwrap();
+/// <CpuBackend as TensorPrims<Standard<f64>>>::execute(
+///     &mut ctx,
+///     &plan,
+///     1.0,
+///     &[&a],
+///     0.0,
+///     &mut b,
+/// )
+/// .unwrap();
 /// ```
 pub struct CpuBackend;
 

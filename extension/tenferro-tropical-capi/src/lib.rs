@@ -29,6 +29,17 @@
 //! tfe_tensor_f64 *c = tfe_tropical_einsum_maxplus_f64("ij,jk->ik", ops, 2, &status);
 //! ```
 //!
+//! # Header generation
+//!
+//! Generate the extension header from a workspace checkout with:
+//!
+//! ```text
+//! cbindgen \
+//!   --config extension/tenferro-tropical-capi/cbindgen.toml \
+//!   --crate tenferro-tropical-capi \
+//!   --output tenferro_tropical.h
+//! ```
+//!
 //! # Example (C pseudocode)
 //!
 //! ```c

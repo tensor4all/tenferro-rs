@@ -26,11 +26,17 @@ fn ensure_binary_subscripts(subscripts: &Subscripts) -> Result<()> {
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::einsum_binary;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let mut ctx = CpuContext::new(1);
-/// let c = einsum_binary::<_, CpuBackend>(&mut ctx, "ij,jk->ik", &a, &b, None).unwrap();
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+/// let c =
+///     einsum_binary::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &a, &b, None).unwrap();
 /// ```
 pub fn einsum_binary<Alg, Backend>(
     ctx: &mut Backend::Context,
@@ -57,12 +63,19 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::{einsum_binary_with_subscripts, Subscripts};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-/// let c = einsum_binary_with_subscripts::<_, CpuBackend>(&mut ctx, &subs, &a, &b, None).unwrap();
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+/// let c =
+///     einsum_binary_with_subscripts::<Standard<f64>, CpuBackend>(&mut ctx, &subs, &a, &b, None)
+///         .unwrap();
 /// ```
 pub fn einsum_binary_with_subscripts<Alg, Backend>(
     ctx: &mut Backend::Context,
@@ -87,11 +100,21 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::einsum_binary_into;
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let mut ctx = CpuContext::new(1);
-/// einsum_binary_into::<_, CpuBackend>(&mut ctx, "ij,jk->ik", &a, &b, 1.0, 0.0, &mut c, None).unwrap();
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+/// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
+/// einsum_binary_into::<Standard<f64>, CpuBackend>(
+///     &mut ctx, "ij,jk->ik", &a, &b, 1.0, 0.0, &mut c, None
+/// )
+/// .unwrap();
 /// ```
 pub fn einsum_binary_into<Alg, Backend>(
     ctx: &mut Backend::Context,
@@ -125,12 +148,19 @@ where
 /// # Examples
 ///
 /// ```ignore
+/// use tenferro_algebra::Standard;
 /// use tenferro_einsum::{einsum_binary_with_subscripts_into, Subscripts};
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
-/// einsum_binary_with_subscripts_into::<_, CpuBackend>(
+/// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+/// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
+/// einsum_binary_with_subscripts_into::<Standard<f64>, CpuBackend>(
 ///     &mut ctx, &subs, &a, &b, 1.0, 0.0, &mut c, None
 /// ).unwrap();
 /// ```
