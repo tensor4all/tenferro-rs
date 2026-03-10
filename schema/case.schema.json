@@ -1,0 +1,416 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tensor4all.org/schemas/tensor-ad-oracles/case.schema.json",
+  "title": "tensor-ad-oracles case schema",
+  "type": "object",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/success_case"
+    },
+    {
+      "$ref": "#/$defs/error_case"
+    }
+  ],
+  "$defs": {
+    "dtype": {
+      "type": "string",
+      "enum": [
+        "float64",
+        "complex128"
+      ]
+    },
+    "op": {
+      "type": "string"
+    },
+    "observable_kind": {
+      "type": "string",
+      "enum": [
+        "identity",
+        "svd_u_abs",
+        "svd_s",
+        "svd_vh_abs",
+        "svd_uvh_product",
+        "eigh_values_vectors_abs",
+        "eig_values_vectors_abs"
+      ]
+    },
+    "tensor_real_data": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "tensor_complex_data": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "prefixItems": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "number"
+          }
+        ],
+        "items": false
+      }
+    },
+    "tensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dtype",
+        "shape",
+        "order",
+        "data"
+      ],
+      "properties": {
+        "dtype": {
+          "$ref": "#/$defs/dtype"
+        },
+        "shape": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "order": {
+          "type": "string",
+          "const": "row_major"
+        },
+        "data": {
+          "type": "array"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "dtype": {
+                "const": "float64"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/tensor_real_data"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dtype": {
+                "const": "complex128"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/tensor_complex_data"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "tensor_map": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/tensor"
+      }
+    },
+    "observable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/observable_kind"
+        }
+      }
+    },
+    "success_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "rtol",
+        "atol"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "allclose"
+        },
+        "rtol": {
+          "type": "number",
+          "minimum": 0
+        },
+        "atol": {
+          "type": "number",
+          "minimum": 0
+        }
+      }
+    },
+    "error_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reason_code"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "expect_error"
+        },
+        "reason_code": {
+          "type": "string",
+          "enum": [
+            "gauge_ill_defined",
+            "repeated_spectrum",
+            "nondifferentiable_point",
+            "rank_change",
+            "ill_conditioned"
+          ]
+        }
+      }
+    },
+    "pytorch_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jvp",
+        "vjp"
+      ],
+      "properties": {
+        "jvp": {
+          "$ref": "#/$defs/tensor_map"
+        },
+        "vjp": {
+          "$ref": "#/$defs/tensor_map"
+        }
+      }
+    },
+    "fd_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "method",
+        "stencil_order",
+        "step",
+        "jvp"
+      ],
+      "properties": {
+        "method": {
+          "type": "string",
+          "const": "central_difference"
+        },
+        "stencil_order": {
+          "type": "integer",
+          "const": 2
+        },
+        "step": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "jvp": {
+          "$ref": "#/$defs/tensor_map"
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "probe_id",
+        "direction",
+        "cotangent",
+        "pytorch_ref",
+        "fd_ref"
+      ],
+      "properties": {
+        "probe_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "direction": {
+          "$ref": "#/$defs/tensor_map"
+        },
+        "cotangent": {
+          "$ref": "#/$defs/tensor_map"
+        },
+        "pytorch_ref": {
+          "$ref": "#/$defs/pytorch_ref"
+        },
+        "fd_ref": {
+          "$ref": "#/$defs/fd_ref"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_repo",
+        "source_file",
+        "source_function",
+        "source_commit",
+        "generator",
+        "seed",
+        "torch_version",
+        "fd_policy_version"
+      ],
+      "properties": {
+        "source_repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_function": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_commit": {
+          "type": "string",
+          "minLength": 1
+        },
+        "generator": {
+          "type": "string",
+          "minLength": 1
+        },
+        "seed": {
+          "type": "integer"
+        },
+        "torch_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fd_policy_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "common_case": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "case_id",
+        "op",
+        "dtype",
+        "family",
+        "expected_behavior",
+        "inputs",
+        "observable",
+        "probes",
+        "provenance"
+      ],
+      "properties": {
+        "schema_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "case_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "op": {
+          "$ref": "#/$defs/op"
+        },
+        "dtype": {
+          "$ref": "#/$defs/dtype"
+        },
+        "family": {
+          "type": "string",
+          "minLength": 1
+        },
+        "expected_behavior": {
+          "type": "string",
+          "enum": [
+            "success",
+            "error"
+          ]
+        },
+        "inputs": {
+          "$ref": "#/$defs/tensor_map"
+        },
+        "observable": {
+          "$ref": "#/$defs/observable"
+        },
+        "probes": {
+          "type": "array"
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenance"
+        }
+      }
+    },
+    "success_case": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common_case"
+        },
+        {
+          "type": "object",
+          "required": [
+            "comparison"
+          ],
+          "properties": {
+            "expected_behavior": {
+              "type": "string",
+              "const": "success"
+            },
+            "comparison": {
+              "$ref": "#/$defs/success_comparison"
+            },
+            "probes": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "$ref": "#/$defs/probe"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "error_case": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/common_case"
+        },
+        {
+          "type": "object",
+          "required": [
+            "comparison"
+          ],
+          "properties": {
+            "expected_behavior": {
+              "type": "string",
+              "const": "error"
+            },
+            "comparison": {
+              "$ref": "#/$defs/error_comparison"
+            },
+            "probes": {
+              "type": "array",
+              "maxItems": 0
+            }
+          }
+        }
+      ]
+    }
+  }
+}
