@@ -234,6 +234,8 @@ mod cpu;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod registry;
+mod semiring_core;
+mod semiring_fast_path;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.
@@ -245,6 +247,8 @@ mod cuda_ffi;
 mod gpu_stubs;
 
 pub use cpu::*;
+pub use semiring_core::*;
+pub use semiring_fast_path::*;
 
 #[cfg(feature = "cuda")]
 pub use cuda::*;
@@ -829,3 +833,6 @@ pub(crate) fn validate_execute_inputs<T: Scalar>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
