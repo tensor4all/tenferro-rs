@@ -1,6 +1,7 @@
 mod db;
 mod decode;
 mod replay;
+mod support;
 
 use serde_json::json;
 
@@ -261,6 +262,31 @@ fn oracle_db_parser_rejects_half_present_hvp_payloads() {
 
     let err = db::parse_case_record_value(record).expect_err("half-present HVP should fail");
     assert!(err.contains("half-present HVP"));
+}
+
+#[test]
+fn oracle_db_every_record_is_classified() {
+    let root = db::default_oracle_db_root().expect("vendored tensor-ad-oracles root not found");
+    let files = db::case_files(&root).expect("case files should load");
+    let mut unknown = Vec::new();
+
+    for path in files {
+        let records = db::load_case_records(&path).expect("case records should parse");
+        for record in records {
+            if matches!(support::classify_record(&record), support::RecordSupport::Unknown) {
+                unknown.push(format!(
+                    "{}/{}/{} ({})",
+                    record.op, record.family, record.observable.kind, record.expected_behavior
+                ));
+            }
+        }
+    }
+
+    assert!(
+        unknown.is_empty(),
+        "unclassified oracle families: {:?}",
+        unknown
+    );
 }
 
 #[test]

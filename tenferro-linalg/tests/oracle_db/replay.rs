@@ -15,23 +15,21 @@ use crate::decode::{
     batched_matmul, batched_transpose, compare_tensor_maps, decode_f64_tensor_with_core_rank,
     elementwise_sign_mul, tensor_add, tensor_data_col_major, tensor_map_inner_product,
 };
+use crate::support::{classify_record, ExpectedErrorKind, RecordSupport, ReplayKind};
 
 #[derive(Debug)]
 pub struct ReplaySummary {
     pub validated_records: usize,
     pub expected_error_case_ids: Vec<String>,
+    pub unsupported_records: usize,
     pub failures: Vec<String>,
 }
-
-const EXPECTED_ERROR_CASE_IDS: [&str; 2] = [
-    "eigh_c128_gauge_ill_defined_001",
-    "svd_c128_gauge_ill_defined_001",
-];
 
 pub fn run_database_replay() -> ReplaySummary {
     let mut summary = ReplaySummary {
         validated_records: 0,
         expected_error_case_ids: Vec::new(),
+        unsupported_records: 0,
         failures: Vec::new(),
     };
 
@@ -59,14 +57,12 @@ pub fn run_database_replay() -> ReplaySummary {
             }
         };
         for record in records {
-            if !supports_record(&record) {
-                continue;
-            }
             match replay_case(&record) {
                 Ok(ReplayOutcome::Validated) => summary.validated_records += 1,
                 Ok(ReplayOutcome::ExpectedError) => {
                     summary.expected_error_case_ids.push(record.case_id.clone());
                 }
+                Ok(ReplayOutcome::Unsupported) => summary.unsupported_records += 1,
                 Err(err) => summary.failures.push(format!("{}: {err}", record.case_id)),
             }
         }
@@ -79,6 +75,7 @@ pub fn run_database_replay() -> ReplaySummary {
 enum ReplayOutcome {
     Validated,
     ExpectedError,
+    Unsupported,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,55 +84,34 @@ enum TriangularOrientation {
     Upper,
 }
 
-fn supports_record(record: &CaseRecord) -> bool {
-    matches!(
-        (record.op.as_str(), record.family.as_str()),
-        ("solve", "identity")
-            | ("cholesky", "identity")
-            | ("qr", "identity")
-            | ("svd", "u_abs")
-            | ("svd", "s")
-            | ("svd", "vh_abs")
-            | ("svd", "uvh_product")
-            | ("svd", "gauge_ill_defined")
-            | ("eigh", "values_vectors_abs")
-            | ("eigh", "gauge_ill_defined")
-            | ("pinv_singular", "identity")
-    )
-}
-
 fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
-    if record.expected_behavior == "error" {
-        return if EXPECTED_ERROR_CASE_IDS.contains(&record.case_id.as_str()) {
-            Ok(ReplayOutcome::ExpectedError)
-        } else {
-            Err(format!(
-                "unexpected targeted error record {} ({}/{})",
-                record.case_id, record.op, record.family
-            ))
-        };
-    }
-
-    if record.dtype != "float64" {
-        return Err(format!("unsupported success dtype {}", record.dtype));
-    }
-
-    match (record.op.as_str(), record.family.as_str()) {
-        ("solve", "identity") => replay_solve(record),
-        ("cholesky", "identity") => replay_cholesky(record),
-        ("qr", "identity") => replay_qr(record),
-        ("svd", "u_abs") | ("svd", "s") | ("svd", "vh_abs") | ("svd", "uvh_product") => {
-            replay_svd(record)
+    match classify_record(record) {
+        RecordSupport::Supported(kind) => {
+            if record.dtype != "float64" {
+                return Err(format!("unsupported success dtype {}", record.dtype));
+            }
+            match kind {
+                ReplayKind::SolveIdentity => replay_solve(record),
+                ReplayKind::CholeskyIdentity => replay_cholesky(record),
+                ReplayKind::QrIdentity => replay_qr(record),
+                ReplayKind::SvdUAbs
+                | ReplayKind::SvdS
+                | ReplayKind::SvdVhAbs
+                | ReplayKind::SvdUvhProduct => replay_svd(record),
+                ReplayKind::EighValuesVectorsAbs => replay_eigen(record),
+                ReplayKind::PinvSingularIdentity => replay_pinv_singular(record),
+            }?;
+            Ok(ReplayOutcome::Validated)
         }
-        ("eigh", "values_vectors_abs") => replay_eigen(record),
-        ("pinv_singular", "identity") => replay_pinv_singular(record),
-        _ => Err(format!(
-            "unsupported success family {}/{} with observable {}",
-            record.op, record.family, record.observable.kind
+        RecordSupport::ExpectedError(ExpectedErrorKind::GaugeIllDefined) => {
+            Ok(ReplayOutcome::ExpectedError)
+        }
+        RecordSupport::Unsupported { .. } => Ok(ReplayOutcome::Unsupported),
+        RecordSupport::Unknown => Err(format!(
+            "unclassified oracle family {}/{}/{} ({})",
+            record.op, record.family, record.observable.kind, record.expected_behavior
         )),
-    }?;
-
-    Ok(ReplayOutcome::Validated)
+    }
 }
 
 fn comparison(record: &CaseRecord) -> Result<(f64, f64), String> {
