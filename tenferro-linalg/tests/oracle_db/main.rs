@@ -7,6 +7,29 @@ mod support;
 
 use serde_json::json;
 
+fn oracle_support_record(
+    case_id: &str,
+    op: &str,
+    family: &str,
+    observable_kind: &str,
+) -> db::CaseRecord {
+    db::parse_case_record_value(json!({
+        "case_id": case_id,
+        "op": op,
+        "dtype": "float64",
+        "family": family,
+        "expected_behavior": "success",
+        "inputs": {},
+        "observable": { "kind": observable_kind },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": []
+    }))
+    .expect("test oracle support record should parse")
+}
+
 #[test]
 fn oracle_db_root_resolves_vendored_subtree() {
     let root = db::default_oracle_db_root().expect("vendored tensor-ad-oracles root not found");
@@ -295,11 +318,66 @@ fn oracle_db_every_record_is_classified() {
 }
 
 #[test]
+fn oracle_db_marks_batch_a_oracles_supported_for_replay() {
+    let cases = [
+        (
+            "cholesky_ex_f64_identity_test",
+            "cholesky_ex",
+            "identity",
+            "identity",
+        ),
+        (
+            "solve_ex_f64_identity_test",
+            "solve_ex",
+            "identity",
+            "identity",
+        ),
+        ("inv_ex_f64_identity_test", "inv_ex", "identity", "identity"),
+        (
+            "lu_factor_f64_identity_test",
+            "lu_factor",
+            "identity",
+            "identity",
+        ),
+        (
+            "lu_factor_ex_f64_identity_test",
+            "lu_factor_ex",
+            "identity",
+            "identity",
+        ),
+        (
+            "lu_solve_f64_identity_test",
+            "lu_solve",
+            "identity",
+            "identity",
+        ),
+        ("cond_f64_identity_test", "cond", "identity", "identity"),
+        (
+            "matrix_power_f64_identity_test",
+            "matrix_power",
+            "identity",
+            "identity",
+        ),
+    ];
+
+    for (case_id, op, family, observable) in cases {
+        let record = oracle_support_record(case_id, op, family, observable);
+        assert!(
+            matches!(
+                support::classify_record(&record),
+                support::RecordSupport::Supported(_)
+            ),
+            "{op}/{family}/{observable} should be supported"
+        );
+    }
+}
+
+#[test]
 fn oracle_db_replay_against_tensor_ad_oracles() {
     let summary = replay::run_database_replay();
 
     assert_eq!(
-        summary.validated_records, 348,
+        summary.validated_records, 867,
         "unexpected replay summary: validated={}, expected_error={:?}, failures={:?}",
         summary.validated_records, summary.expected_error_case_ids, summary.failures
     );
@@ -322,7 +400,7 @@ fn oracle_db_replays_supported_hvp_cases() {
     let summary = replay::run_database_replay();
 
     assert_eq!(
-        summary.validated_hvp_records, 348,
+        summary.validated_hvp_records, 867,
         "unexpected HVP replay summary: validated_hvp={}, unsupported={}, failures={:?}",
         summary.validated_hvp_records, summary.unsupported_records, summary.failures
     );

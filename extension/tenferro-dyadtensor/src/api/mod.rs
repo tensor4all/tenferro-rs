@@ -9,8 +9,9 @@ use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_linalg::backend::CpuLinalgScalar;
 use tenferro_linalg::{
-    EigResult, EigenResult, LinalgScalar, LstsqResult, LuPivot, LuResult, NormKind, QrResult,
-    SlogdetResult, SvdOptions, SvdResult,
+    CholeskyExResult, EigResult, EigenResult, InvExResult, LinalgScalar, LstsqResult,
+    LuFactorExResult, LuFactorResult, LuPivot, LuResult, NormKind, QrResult, SlogdetResult,
+    SolveExResult, SvdOptions, SvdResult,
 };
 use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -983,6 +984,80 @@ pub fn lu<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> LuBuilder<'a, T> {
     }
 }
 
+/// Builder for packed LU factorization.
+/// # Examples
+///
+/// ```text
+/// // Construct `LuFactorBuilder` via its corresponding operation constructor.
+/// ```
+pub struct LuFactorBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+}
+
+impl<'a, T> LuFactorBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Executes packed LU factorization.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<LuFactorResult<T>> {
+        with_cpu_runtime("lu_factor", |ctx| {
+            tenferro_linalg::lu_factor::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a packed LU factorization builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = lu_factor(/* ... */);
+/// ```
+pub fn lu_factor<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> LuFactorBuilder<'a, T> {
+    LuFactorBuilder { tensor }
+}
+
+/// Builder for packed LU factorization with numerical status.
+/// # Examples
+///
+/// ```text
+/// // Construct `LuFactorExBuilder` via its corresponding operation constructor.
+/// ```
+pub struct LuFactorExBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+}
+
+impl<'a, T> LuFactorExBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Executes structured LU factorization.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<LuFactorExResult<T>> {
+        with_cpu_runtime("lu_factor_ex", |ctx| {
+            tenferro_linalg::lu_factor_ex::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a structured LU factorization builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = lu_factor_ex(/* ... */);
+/// ```
+pub fn lu_factor_ex<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> LuFactorExBuilder<'a, T> {
+    LuFactorExBuilder { tensor }
+}
+
 /// Builder for eigen decomposition.
 /// # Examples
 ///
@@ -1095,6 +1170,43 @@ pub fn cholesky<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> CholeskyBuilder<'
     CholeskyBuilder { tensor }
 }
 
+/// Builder for structured Cholesky with numerical status.
+/// # Examples
+///
+/// ```text
+/// // Construct `CholeskyExBuilder` via its corresponding operation constructor.
+/// ```
+pub struct CholeskyExBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+}
+
+impl<'a, T> CholeskyExBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Executes structured Cholesky.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<CholeskyExResult<T>> {
+        with_cpu_runtime("cholesky_ex", |ctx| {
+            tenferro_linalg::cholesky_ex::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a structured cholesky builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = cholesky_ex(/* ... */);
+/// ```
+pub fn cholesky_ex<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> CholeskyExBuilder<'a, T> {
+    CholeskyExBuilder { tensor }
+}
+
 /// Builder for solve.
 /// # Examples
 ///
@@ -1133,6 +1245,107 @@ pub fn solve<'a, T: LinalgScalar>(a: &'a Tensor<T>, b: &'a Tensor<T>) -> SolveBu
     SolveBuilder { a, b }
 }
 
+/// Builder for structured solve with numerical status.
+/// # Examples
+///
+/// ```text
+/// // Construct `SolveExBuilder` via its corresponding operation constructor.
+/// ```
+pub struct SolveExBuilder<'a, T: LinalgScalar> {
+    a: &'a Tensor<T>,
+    b: &'a Tensor<T>,
+}
+
+impl<'a, T> SolveExBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Executes structured solve.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<SolveExResult<T>> {
+        with_cpu_runtime("solve_ex", |ctx| {
+            tenferro_linalg::solve_ex::<T, CpuContext>(ctx, self.a, self.b).map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a structured solve builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = solve_ex(/* ... */);
+/// ```
+pub fn solve_ex<'a, T: LinalgScalar>(a: &'a Tensor<T>, b: &'a Tensor<T>) -> SolveExBuilder<'a, T> {
+    SolveExBuilder { a, b }
+}
+
+/// Builder for LU-based solve from packed factors.
+/// # Examples
+///
+/// ```text
+/// // Construct `LuSolveBuilder` via its corresponding operation constructor.
+/// ```
+pub struct LuSolveBuilder<'a, T: LinalgScalar> {
+    factors: &'a Tensor<T>,
+    b: &'a Tensor<T>,
+    pivots: Option<&'a [usize]>,
+}
+
+impl<'a, T> LuSolveBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Sets forward row-permutation indices from `lu_factor`.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _builder = builder.pivots(&pivots);
+    /// ```
+    pub fn pivots(mut self, pivots: &'a [usize]) -> Self {
+        self.pivots = Some(pivots);
+        self
+    }
+
+    /// Executes packed LU solve.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        let pivots = self.pivots.ok_or_else(|| {
+            Error::Backend(tenferro_device::Error::InvalidArgument(
+                "lu_solve builder requires `.pivots(&[..])` before `run()`".into(),
+            ))
+        })?;
+        with_cpu_runtime("lu_solve", |ctx| {
+            tenferro_linalg::lu_solve::<T, CpuContext>(ctx, self.factors, pivots, self.b)
+                .map_err(Error::from)
+        })
+    }
+}
+
+/// Creates an LU solve builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = lu_solve(/* ... */);
+/// ```
+pub fn lu_solve<'a, T: LinalgScalar>(
+    factors: &'a Tensor<T>,
+    b: &'a Tensor<T>,
+) -> LuSolveBuilder<'a, T> {
+    LuSolveBuilder {
+        factors,
+        b,
+        pivots: None,
+    }
+}
+
 /// Builder for matrix inverse.
 /// # Examples
 ///
@@ -1168,6 +1381,43 @@ where
 /// ```
 pub fn inv<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> InvBuilder<'a, T> {
     InvBuilder { tensor }
+}
+
+/// Builder for structured inverse with numerical status.
+/// # Examples
+///
+/// ```text
+/// // Construct `InvExBuilder` via its corresponding operation constructor.
+/// ```
+pub struct InvExBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+}
+
+impl<'a, T> InvExBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Executes structured inverse.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<InvExResult<T>> {
+        with_cpu_runtime("inv_ex", |ctx| {
+            tenferro_linalg::inv_ex::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a structured inv builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = inv_ex(/* ... */);
+/// ```
+pub fn inv_ex<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> InvExBuilder<'a, T> {
+    InvExBuilder { tensor }
 }
 
 /// Builder for determinant.
@@ -1371,6 +1621,59 @@ pub fn matrix_exp<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> MatrixExpBuilde
     MatrixExpBuilder { tensor }
 }
 
+/// Builder for integer matrix powers.
+/// # Examples
+///
+/// ```text
+/// // Construct `MatrixPowerBuilder` via its corresponding operation constructor.
+/// ```
+pub struct MatrixPowerBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+    exponent: i64,
+}
+
+impl<'a, T> MatrixPowerBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Sets the integer exponent.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _builder = builder.exponent(3);
+    /// ```
+    pub fn exponent(mut self, exponent: i64) -> Self {
+        self.exponent = exponent;
+        self
+    }
+
+    /// Executes matrix_power.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        with_cpu_runtime("matrix_power", |ctx| {
+            tenferro_linalg::matrix_power::<T, CpuContext>(ctx, self.tensor, self.exponent)
+                .map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a matrix_power builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = matrix_power(/* ... */);
+/// ```
+pub fn matrix_power<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> MatrixPowerBuilder<'a, T> {
+    MatrixPowerBuilder {
+        tensor,
+        exponent: 1,
+    }
+}
+
 /// Builder for triangular solve.
 /// # Examples
 ///
@@ -1475,6 +1778,313 @@ pub fn norm<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> NormBuilder<'a, T> {
         tensor,
         kind: NormKind::Fro,
     }
+}
+
+/// Builder for condition numbers.
+/// # Examples
+///
+/// ```text
+/// // Construct `CondBuilder` via its corresponding operation constructor.
+/// ```
+pub struct CondBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+    kind: NormKind,
+}
+
+impl<'a, T> CondBuilder<'a, T>
+where
+    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+{
+    /// Sets the norm kind used in the condition number.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _builder = builder.kind(NormKind::Spectral);
+    /// ```
+    pub fn kind(mut self, kind: NormKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Executes cond.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        with_cpu_runtime("cond", |ctx| {
+            tenferro_linalg::cond::<T, CpuContext>(ctx, self.tensor, self.kind).map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a cond builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = cond(/* ... */);
+/// ```
+pub fn cond<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> CondBuilder<'a, T> {
+    CondBuilder {
+        tensor,
+        kind: NormKind::Spectral,
+    }
+}
+
+/// Builder for cross products.
+/// # Examples
+///
+/// ```text
+/// // Construct `CrossBuilder` via its corresponding operation constructor.
+/// ```
+pub struct CrossBuilder<'a, T: LinalgScalar> {
+    a: &'a Tensor<T>,
+    b: &'a Tensor<T>,
+}
+
+impl<'a, T> CrossBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Executes cross.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        with_cpu_runtime("cross", |ctx| {
+            tenferro_linalg::cross::<T, CpuContext>(ctx, self.a, self.b).map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a cross builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = cross(/* ... */);
+/// ```
+pub fn cross<'a, T: LinalgScalar>(a: &'a Tensor<T>, b: &'a Tensor<T>) -> CrossBuilder<'a, T> {
+    CrossBuilder { a, b }
+}
+
+/// Builder for Householder products.
+/// # Examples
+///
+/// ```text
+/// // Construct `HouseholderProductBuilder` via its corresponding operation constructor.
+/// ```
+pub struct HouseholderProductBuilder<'a, T: LinalgScalar> {
+    a: &'a Tensor<T>,
+    tau: &'a Tensor<T>,
+}
+
+impl<'a, T> HouseholderProductBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Executes householder_product.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        with_cpu_runtime("householder_product", |ctx| {
+            tenferro_linalg::householder_product::<T, CpuContext>(ctx, self.a, self.tau)
+                .map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a householder_product builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = householder_product(/* ... */);
+/// ```
+pub fn householder_product<'a, T: LinalgScalar>(
+    a: &'a Tensor<T>,
+    tau: &'a Tensor<T>,
+) -> HouseholderProductBuilder<'a, T> {
+    HouseholderProductBuilder { a, tau }
+}
+
+/// Builder for Vandermonde matrices.
+/// # Examples
+///
+/// ```text
+/// // Construct `VanderBuilder` via its corresponding operation constructor.
+/// ```
+pub struct VanderBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+    columns: Option<usize>,
+    increasing: bool,
+}
+
+impl<'a, T> VanderBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Sets the output column count.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _builder = builder.columns(4);
+    /// ```
+    pub fn columns(mut self, columns: usize) -> Self {
+        self.columns = Some(columns);
+        self
+    }
+
+    /// Sets whether powers increase from left to right.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _builder = builder.increasing(true);
+    /// ```
+    pub fn increasing(mut self, increasing: bool) -> Self {
+        self.increasing = increasing;
+        self
+    }
+
+    /// Executes vander.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        with_cpu_runtime("vander", |ctx| {
+            tenferro_linalg::vander::<T, CpuContext>(
+                ctx,
+                self.tensor,
+                self.columns,
+                self.increasing,
+            )
+            .map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a vander builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = vander(/* ... */);
+/// ```
+pub fn vander<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> VanderBuilder<'a, T> {
+    VanderBuilder {
+        tensor,
+        columns: None,
+        increasing: false,
+    }
+}
+
+/// Builder for tensor inverses.
+/// # Examples
+///
+/// ```text
+/// // Construct `TensorinvBuilder` via its corresponding operation constructor.
+/// ```
+pub struct TensorinvBuilder<'a, T: LinalgScalar> {
+    tensor: &'a Tensor<T>,
+    ind: usize,
+}
+
+impl<'a, T> TensorinvBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Sets the partition point between left and right tensor dimensions.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _builder = builder.ind(2);
+    /// ```
+    pub fn ind(mut self, ind: usize) -> Self {
+        self.ind = ind;
+        self
+    }
+
+    /// Executes tensorinv.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        with_cpu_runtime("tensorinv", |ctx| {
+            tenferro_linalg::tensorinv::<T, CpuContext>(ctx, self.tensor, self.ind)
+                .map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a tensorinv builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = tensorinv(/* ... */);
+/// ```
+pub fn tensorinv<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> TensorinvBuilder<'a, T> {
+    TensorinvBuilder { tensor, ind: 1 }
+}
+
+/// Builder for tensorized linear solves.
+/// # Examples
+///
+/// ```text
+/// // Construct `TensorsolveBuilder` via its corresponding operation constructor.
+/// ```
+pub struct TensorsolveBuilder<'a, T: LinalgScalar> {
+    a: &'a Tensor<T>,
+    b: &'a Tensor<T>,
+    dims: Option<&'a [usize]>,
+}
+
+impl<'a, T> TensorsolveBuilder<'a, T>
+where
+    T: LinalgScalar + CpuLinalgScalar,
+{
+    /// Sets the solution axes to move before solving.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _builder = builder.dims(&[3, 2]);
+    /// ```
+    pub fn dims(mut self, dims: &'a [usize]) -> Self {
+        self.dims = Some(dims);
+        self
+    }
+
+    /// Executes tensorsolve.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let _out = builder.run();
+    /// ```
+    pub fn run(self) -> Result<Tensor<T>> {
+        with_cpu_runtime("tensorsolve", |ctx| {
+            tenferro_linalg::tensorsolve::<T, CpuContext>(ctx, self.a, self.b, self.dims)
+                .map_err(Error::from)
+        })
+    }
+}
+
+/// Creates a tensorsolve builder.
+/// # Examples
+///
+/// ```ignore
+/// let _ = tensorsolve(/* ... */);
+/// ```
+pub fn tensorsolve<'a, T: LinalgScalar>(
+    a: &'a Tensor<T>,
+    b: &'a Tensor<T>,
+) -> TensorsolveBuilder<'a, T> {
+    TensorsolveBuilder { a, b, dims: None }
 }
 
 fn run_unary_tensor_ad<T, FPrimal, FFrule, FRrule>(

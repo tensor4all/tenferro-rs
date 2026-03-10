@@ -127,10 +127,31 @@ fn primal_linalg_builders_cover_all_ops() {
     assert_eq!(out_lstsq.x.dims(), &[2]);
     let out_cholesky = cholesky(&a).run().unwrap();
     assert_eq!(out_cholesky.dims(), &[2, 2]);
+    let out_cholesky_ex = cholesky_ex(&a).run().unwrap();
+    assert_eq!(out_cholesky_ex.l.dims(), &[2, 2]);
+    assert_eq!(out_cholesky_ex.info, vec![0]);
     let out_solve = solve(&a, &b).run().unwrap();
     assert_eq!(out_solve.dims(), &[2]);
+    let out_solve_ex = solve_ex(&a, &b).run().unwrap();
+    assert_eq!(out_solve_ex.solution.dims(), &[2]);
+    assert_eq!(out_solve_ex.info, vec![0]);
     let out_inv = inv(&a).run().unwrap();
     assert_eq!(out_inv.dims(), &[2, 2]);
+    let out_inv_ex = inv_ex(&a).run().unwrap();
+    assert_eq!(out_inv_ex.inverse.dims(), &[2, 2]);
+    assert_eq!(out_inv_ex.info, vec![0]);
+    let out_lu_factor = lu_factor(&a).run().unwrap();
+    assert_eq!(out_lu_factor.factors.dims(), &[2, 2]);
+    assert_eq!(out_lu_factor.pivots.len(), 2);
+    let out_lu_factor_ex = lu_factor_ex(&a).run().unwrap();
+    assert_eq!(out_lu_factor_ex.factors.dims(), &[2, 2]);
+    assert_eq!(out_lu_factor_ex.pivots.len(), 2);
+    assert_eq!(out_lu_factor_ex.info, vec![0]);
+    let out_lu_solve = lu_solve(&out_lu_factor.factors, &b)
+        .pivots(&out_lu_factor.pivots)
+        .run()
+        .unwrap();
+    assert_eq!(out_lu_solve.dims(), &[2]);
     let out_det = det(&a).run().unwrap();
     assert_eq!(out_det.dims(), &[]);
     let out_slogdet = slogdet(&a).run().unwrap();
@@ -141,10 +162,57 @@ fn primal_linalg_builders_cover_all_ops() {
     assert_eq!(out_pinv.dims(), &[3, 2]);
     let out_exp = matrix_exp(&a).run().unwrap();
     assert_eq!(out_exp.dims(), &[2, 2]);
+    let out_power = matrix_power(&a).exponent(3).run().unwrap();
+    assert_eq!(out_power.dims(), &[2, 2]);
     let out_tri = solve_triangular(&tri, &b).upper(true).run().unwrap();
     assert_eq!(out_tri.dims(), &[2]);
     let out_norm = norm(&a).kind(NormKind::Fro).run().unwrap();
     assert_eq!(out_norm.dims(), &[]);
+    let out_cond = cond(&a).kind(NormKind::Spectral).run().unwrap();
+    assert_eq!(out_cond.dims(), &[]);
+    let cross_a =
+        Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let cross_b =
+        Tensor::<f64>::from_slice(&[0.0, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let out_cross = cross(&cross_a, &cross_b).run().unwrap();
+    assert_eq!(out_cross.dims(), &[3]);
+    let reflectors = Tensor::<f64>::from_slice(
+        &[
+            1.0, 0.0, 0.0, 0.0, //
+            2.0, 1.0, 0.0, 0.0, //
+            3.0, 4.0, 1.0, 0.0,
+        ],
+        &[4, 3],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let tau = Tensor::<f64>::from_slice(&[0.0, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let out_householder = householder_product(&reflectors, &tau).run().unwrap();
+    assert_eq!(out_householder.dims(), &[4, 3]);
+    let out_vander = vander(&cross_a).columns(4).increasing(true).run().unwrap();
+    assert_eq!(out_vander.dims(), &[3, 4]);
+    let eye4 = Tensor::<f64>::from_slice(
+        &[
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ],
+        &[4, 4],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let tensorized = eye4.reshape(&[2, 2, 2, 2]).unwrap();
+    let out_tensorinv = tensorinv(&tensorized).ind(2).run().unwrap();
+    assert_eq!(out_tensorinv.dims(), &[2, 2, 2, 2]);
+    let rhs_tensor =
+        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let out_tensorsolve = tensorsolve(&tensorized, &rhs_tensor)
+        .dims(&[3, 2])
+        .run()
+        .unwrap();
+    assert_eq!(out_tensorsolve.dims(), &[2, 2]);
 }
 
 #[test]

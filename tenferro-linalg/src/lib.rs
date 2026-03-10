@@ -618,6 +618,62 @@ fn output_dims(mat_dims: &[usize], batch_dims: &[usize]) -> Vec<usize> {
     dims
 }
 
+fn is_identity_permutation(perm: &[usize]) -> bool {
+    perm.iter().enumerate().all(|(idx, &axis)| idx == axis)
+}
+
+fn axes_to_end_permutation(rank: usize, axes: &[usize]) -> Vec<usize> {
+    let mut is_solution_axis = vec![false; rank];
+    for &axis in axes {
+        is_solution_axis[axis] = true;
+    }
+
+    let mut perm = Vec::with_capacity(rank);
+    for (axis, selected) in is_solution_axis.iter().enumerate() {
+        if !selected {
+            perm.push(axis);
+        }
+    }
+    perm.extend_from_slice(axes);
+    perm
+}
+
+fn validate_tensor_solve_axes(
+    rank: usize,
+    expected_len: usize,
+    dims: Option<&[usize]>,
+) -> Result<Vec<usize>> {
+    let axes = if let Some(dims) = dims {
+        if dims.len() != expected_len {
+            return Err(Error::InvalidArgument(format!(
+                "tensorsolve expects {} solution axes, got {}",
+                expected_len,
+                dims.len()
+            )));
+        }
+        dims.to_vec()
+    } else {
+        (rank - expected_len..rank).collect()
+    };
+
+    let mut seen = vec![false; rank];
+    for &axis in &axes {
+        if axis >= rank {
+            return Err(Error::InvalidArgument(format!(
+                "tensorsolve axis {} is out of bounds for rank {}",
+                axis, rank
+            )));
+        }
+        if std::mem::replace(&mut seen[axis], true) {
+            return Err(Error::InvalidArgument(format!(
+                "tensorsolve axes must be unique, got {:?}",
+                axes
+            )));
+        }
+    }
+    Ok(axes)
+}
+
 /// Create a Tensor from raw column-major data with the given dims.
 fn tensor_from_data<T: LinalgScalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>> {
     let strides = backend::col_major_strides(dims);
@@ -781,6 +837,153 @@ pub struct LuResult<T: Scalar> {
     pub l: Tensor<T>,
     /// Upper triangular factor. Shape: `(k, n, *)`.
     pub u: Tensor<T>,
+}
+
+/// Structured Cholesky result with numerical status information.
+///
+/// `info` contains one entry per batch matrix. A zero entry indicates success.
+/// A positive entry indicates that the corresponding batch matrix was not
+/// positive definite.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::cholesky_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[4.0_f64, 2.0, 2.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = cholesky_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.l.dims(), &[2, 2]);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+#[derive(Debug)]
+pub struct CholeskyExResult<T: Scalar> {
+    /// Lower-triangular Cholesky factor. Shape: `(n, n, *)`.
+    pub l: Tensor<T>,
+    /// Per-batch numerical status, flattened over batch dimensions.
+    pub info: Vec<i32>,
+}
+
+/// Structured inverse result with numerical status information.
+///
+/// `info` contains one entry per batch matrix. A zero entry indicates success.
+/// A positive entry indicates that the corresponding batch matrix was singular
+/// or numerically unstable for inversion.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::inv_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = inv_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.inverse.dims(), &[2, 2]);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+#[derive(Debug)]
+pub struct InvExResult<T: Scalar> {
+    /// Inverse matrix. Shape: `(n, n, *)`.
+    pub inverse: Tensor<T>,
+    /// Per-batch numerical status, flattened over batch dimensions.
+    pub info: Vec<i32>,
+}
+
+/// Structured solve result with numerical status information.
+///
+/// `info` contains one entry per batch matrix. A zero entry indicates success.
+/// A positive entry indicates that the corresponding batch matrix was singular
+/// or numerically unstable for the solve.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::solve_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let b = Tensor::from_slice(&[2.0_f64, -1.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+/// let result = solve_ex(&mut ctx, &a, &b).unwrap();
+/// assert_eq!(result.solution.dims(), &[2]);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+#[derive(Debug)]
+pub struct SolveExResult<T: Scalar> {
+    /// Solution tensor. Shape matches the input `b`.
+    pub solution: Tensor<T>,
+    /// Per-batch numerical status, flattened over batch dimensions.
+    pub info: Vec<i32>,
+}
+
+/// Packed LU factorization result.
+///
+/// `factors` stores the strict lower-triangular multipliers in its lower part
+/// and the upper-triangular factor in its upper part, using the same packed
+/// layout as LAPACK `getrf`.
+///
+/// `pivots` contains the forward row-permutation indices for each batch matrix,
+/// flattened as `m * batch_count`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = lu_factor(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.pivots.len(), 2);
+/// ```
+#[derive(Debug)]
+pub struct LuFactorResult<T: Scalar> {
+    /// Packed LU factors with the same shape as the input matrix.
+    pub factors: Tensor<T>,
+    /// Forward row-permutation indices, flattened over batch dimensions.
+    pub pivots: Vec<usize>,
+}
+
+/// Packed LU factorization result with numerical status information.
+///
+/// `info` contains one entry per batch matrix. A zero entry indicates success.
+/// A positive entry indicates that the corresponding `U(info, info)` diagonal
+/// entry was numerically zero after factorization.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = lu_factor_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.pivots.len(), 2);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+#[derive(Debug)]
+pub struct LuFactorExResult<T: Scalar> {
+    /// Packed LU factors with the same shape as the input matrix.
+    pub factors: Tensor<T>,
+    /// Forward row-permutation indices, flattened over batch dimensions.
+    pub pivots: Vec<usize>,
+    /// Per-batch numerical status, flattened over batch dimensions.
+    pub info: Vec<i32>,
 }
 
 /// Eigendecomposition result: `A * V = V * diag(values)`.
@@ -1216,6 +1419,98 @@ where
     })
 }
 
+/// Compute the packed LU factorization of a batched matrix.
+///
+/// The returned `factors` tensor has the same shape as the input. Its strict
+/// lower-triangular part stores the multipliers for `L`, and its diagonal plus
+/// upper-triangular part stores `U`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = lu_factor(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.pivots.len(), 2);
+/// ```
+pub fn lu_factor<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<LuFactorResult<T>>
+where
+    C: backend::TensorLinalgContextFor<T>,
+{
+    let result = lu_factor_impl(ctx, tensor)?;
+    Ok(LuFactorResult {
+        factors: result.factors,
+        pivots: result.pivots,
+    })
+}
+
+/// Compute the packed LU factorization with numerical status information.
+///
+/// `info` contains one entry per batch matrix. Zero indicates success.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = lu_factor_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+pub fn lu_factor_ex<T: LinalgScalar, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+) -> Result<LuFactorExResult<T>>
+where
+    C: backend::TensorLinalgContextFor<T>,
+{
+    lu_factor_impl(ctx, tensor)
+}
+
+/// Solve `A x = b` from a packed LU factorization.
+///
+/// `factors` and `pivots` should come from [`lu_factor`] or [`lu_factor_ex`].
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::{lu_factor, lu_solve};
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[3.0_f64, 1.0, 1.0, 2.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let b = Tensor::from_slice(&[9.0_f64, 8.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+/// let lu = lu_factor(&mut ctx, &a).unwrap();
+/// let x = lu_solve(&mut ctx, &lu.factors, &lu.pivots, &b).unwrap();
+/// assert_eq!(x.dims(), &[2]);
+/// ```
+pub fn lu_solve<T: LinalgScalar, C>(
+    ctx: &mut C,
+    factors: &Tensor<T>,
+    pivots: &[usize],
+    b: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("lu_solve")?;
+    lu_solve_impl(ctx, factors, pivots, b)
+}
+
 /// Compute the eigendecomposition of a batched square matrix.
 ///
 /// Input shape: `(n, n, *)`.
@@ -1396,6 +1691,60 @@ where
     <C::Backend as backend::TensorLinalgBackend<T>>::cholesky(ctx, tensor)
 }
 
+/// Compute the Cholesky decomposition with numerical status information.
+///
+/// `info` contains one entry per batch matrix. Zero indicates success.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::cholesky_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[4.0_f64, 2.0, 2.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = cholesky_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.l.dims(), &[2, 2]);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+pub fn cholesky_ex<T: LinalgScalar, C>(
+    _ctx: &mut C,
+    tensor: &Tensor<T>,
+) -> Result<CholeskyExResult<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("cholesky_ex")?;
+
+    let (n, batch_dims) = validate_square(tensor)?;
+    let bc = batch_count(batch_dims);
+    let input = ensure_col_major(tensor);
+    let data = extract_slice(&input)?;
+    let offset = input.offset() as usize;
+    let mat_size = n * n;
+
+    let mut factors = vec![T::zero(); mat_size * bc];
+    let mut info = vec![0_i32; bc];
+
+    for batch in 0..bc {
+        let start = offset + batch * mat_size;
+        let a_slice = &data[start..start + mat_size];
+        let l_out = &mut factors[batch * mat_size..(batch + 1) * mat_size];
+        if backend::cpu::cholesky_slices(a_slice, n, l_out).is_err() {
+            l_out.fill(T::zero());
+            info[batch] = 1;
+        }
+    }
+
+    Ok(CholeskyExResult {
+        l: tensor_from_data(factors, &output_dims(&[n, n], batch_dims))?,
+        info,
+    })
+}
+
 /// Solve a square linear system `A x = b`.
 ///
 /// Input shapes: `A` is `(n, n, *)`, `b` is `(n, *)` or `(n, k, *)`.
@@ -1421,6 +1770,70 @@ where
     C: backend::TensorLinalgContextFor<T>,
 {
     <C::Backend as backend::TensorLinalgBackend<T>>::solve(ctx, a, b)
+}
+
+/// Solve a square linear system with numerical status information.
+///
+/// `info` contains one entry per batch matrix. Zero indicates success.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::solve_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let b = Tensor::from_slice(&[2.0_f64, -1.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+/// let result = solve_ex(&mut ctx, &a, &b).unwrap();
+/// assert_eq!(result.solution.dims(), &[2]);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+pub fn solve_ex<T: LinalgScalar, C>(
+    _ctx: &mut C,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+) -> Result<SolveExResult<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("solve_ex")?;
+
+    let (n, batch_dims) = validate_square(a)?;
+    let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
+    let bc = batch_count(batch_dims);
+
+    let a_input = ensure_col_major(a);
+    let b_input = ensure_col_major(b);
+    let a_data = extract_slice(&a_input)?;
+    let b_data = extract_slice(&b_input)?;
+    let a_offset = a_input.offset() as usize;
+    let b_offset = b_input.offset() as usize;
+
+    let mat_size = n * n;
+    let rhs_size = n * rhs.nrhs;
+    let mut solution = vec![T::zero(); rhs_size * bc];
+    let mut info = vec![0_i32; bc];
+
+    for batch in 0..bc {
+        let a_start = a_offset + batch * mat_size;
+        let b_start = b_offset + batch * rhs_size;
+        let a_slice = &a_data[a_start..a_start + mat_size];
+        let b_slice = &b_data[b_start..b_start + rhs_size];
+        let x_out = &mut solution[batch * rhs_size..(batch + 1) * rhs_size];
+        if backend::cpu::solve_slices(a_slice, b_slice, n, rhs.nrhs, x_out).is_err() {
+            x_out.fill(T::zero());
+            info[batch] = 1;
+        }
+    }
+
+    Ok(SolveExResult {
+        solution: tensor_from_data(solution, &rhs.output_dims)?,
+        info,
+    })
 }
 
 /// Compute the inverse of a square matrix.
@@ -1471,6 +1884,44 @@ where
 
     let dims = output_dims(&[n, n], batch_dims);
     tensor_from_data(inv_data, &dims)
+}
+
+/// Compute the inverse with numerical status information.
+///
+/// `info` contains one entry per batch matrix. Zero indicates success.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::inv_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let result = inv_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.inverse.dims(), &[2, 2]);
+/// assert_eq!(result.info, vec![0]);
+/// ```
+pub fn inv_ex<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<InvExResult<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    let (n, batch_dims) = validate_square(tensor)?;
+    let bc = batch_count(batch_dims);
+    let mut eye_data = vec![T::zero(); n * n * bc];
+    let eye = identity_matrix::<T>(n);
+    for batch in 0..bc {
+        eye_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&eye);
+    }
+    let rhs = tensor_from_data(eye_data, &output_dims(&[n, n], batch_dims))?;
+    let result = solve_ex(ctx, tensor, &rhs)?;
+    Ok(InvExResult {
+        inverse: result.solution,
+        info: result.info,
+    })
 }
 
 /// Compute the determinant of a square matrix.
@@ -1870,6 +2321,499 @@ where
     tensor_from_data(result_data, &dims)
 }
 
+/// Raise a square matrix to an integer power.
+///
+/// Negative exponents are supported for invertible matrices.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::matrix_power;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let a3 = matrix_power(&mut ctx, &a, 3).unwrap();
+/// assert_eq!(a3.dims(), &[2, 2]);
+/// ```
+pub fn matrix_power<T: LinalgScalar, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+    exponent: i64,
+) -> Result<Tensor<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("matrix_power")?;
+
+    let (n, batch_dims) = validate_square(tensor)?;
+    let bc = batch_count(batch_dims);
+    let dims = output_dims(&[n, n], batch_dims);
+
+    if exponent == 0 {
+        let eye = identity_matrix::<T>(n);
+        let mut data = vec![T::zero(); n * n * bc];
+        for batch in 0..bc {
+            data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&eye);
+        }
+        return tensor_from_data(data, &dims);
+    }
+
+    let positive_exponent = if exponent < 0 {
+        let abs = exponent.checked_abs().ok_or_else(|| {
+            Error::InvalidArgument("matrix_power does not support i64::MIN exponent".into())
+        })?;
+        let inverse = inv(ctx, tensor)?;
+        return matrix_power(ctx, &inverse, abs);
+    } else {
+        exponent as u64
+    };
+
+    let input = ensure_col_major(tensor);
+    let data = extract_slice(&input)?;
+    let offset = input.offset() as usize;
+    let mat_size = n * n;
+    let mut out = vec![T::zero(); mat_size * bc];
+
+    for batch in 0..bc {
+        let start = offset + batch * mat_size;
+        let a_slice = &data[start..start + mat_size];
+        let powered = matrix_power_single(ctx, a_slice, n, positive_exponent)?;
+        out[batch * mat_size..(batch + 1) * mat_size].copy_from_slice(&powered);
+    }
+
+    tensor_from_data(out, &dims)
+}
+
+/// Compute the cross product along the leading vector axis.
+///
+/// Inputs must have shape `(3, *)` and identical dimensions. The cross product
+/// is evaluated independently over every trailing index.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::cross;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[1.0_f64, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+/// let b = Tensor::from_slice(&[0.0_f64, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+/// let c = cross(&mut ctx, &a, &b).unwrap();
+/// assert_eq!(c.dims(), &[3]);
+/// ```
+pub fn cross<T: LinalgScalar, C>(_ctx: &mut C, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
+where
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("cross")?;
+
+    if a.ndim() != b.ndim() {
+        return Err(Error::InvalidArgument(format!(
+            "cross expects matching ranks, got {:?} and {:?}",
+            a.dims(),
+            b.dims()
+        )));
+    }
+    if a.ndim() == 0 || a.dims()[0] != 3 {
+        return Err(Error::InvalidArgument(format!(
+            "cross expects leading vector dimension of size 3, got {:?}",
+            a.dims()
+        )));
+    }
+    if b.ndim() == 0 || b.dims()[0] != 3 {
+        return Err(Error::InvalidArgument(format!(
+            "cross expects leading vector dimension of size 3, got {:?}",
+            b.dims()
+        )));
+    }
+    let mut out_dims = vec![3];
+    for axis in 1..a.ndim() {
+        let lhs = a.dims()[axis];
+        let rhs = b.dims()[axis];
+        if lhs != rhs && lhs != 1 && rhs != 1 {
+            return Err(Error::InvalidArgument(format!(
+                "cross broadcast mismatch on axis {axis}: left={}, right={}",
+                lhs, rhs
+            )));
+        }
+        out_dims.push(lhs.max(rhs));
+    }
+
+    let a_input = ensure_col_major(a);
+    let b_input = ensure_col_major(b);
+    let a_data = extract_slice(&a_input)?;
+    let b_data = extract_slice(&b_input)?;
+    let a_offset = a_input.offset() as usize;
+    let b_offset = b_input.offset() as usize;
+    let lanes = out_dims[1..].iter().product::<usize>().max(1);
+    let out_strides = backend::col_major_strides(&out_dims);
+    let a_strides = backend::col_major_strides(a.dims());
+    let b_strides = backend::col_major_strides(b.dims());
+    let mut out = vec![T::zero(); out_dims.iter().product()];
+    let mut index = vec![0usize; out_dims.len().saturating_sub(1)];
+
+    for _lane in 0..lanes {
+        let mut a_tail_offset = 0isize;
+        let mut b_tail_offset = 0isize;
+        let mut out_tail_offset = 0isize;
+        for axis in 1..out_dims.len() {
+            let coord = index[axis - 1];
+            out_tail_offset += coord as isize * out_strides[axis];
+            let a_coord = if a.dims()[axis] == 1 { 0 } else { coord };
+            let b_coord = if b.dims()[axis] == 1 { 0 } else { coord };
+            a_tail_offset += a_coord as isize * a_strides[axis];
+            b_tail_offset += b_coord as isize * b_strides[axis];
+        }
+
+        let a_base = (a_offset as isize + a_tail_offset) as usize;
+        let b_base = (b_offset as isize + b_tail_offset) as usize;
+        let o_base = out_tail_offset as usize;
+        let ax = a_data[a_base];
+        let ay = a_data[a_base + 1];
+        let az = a_data[a_base + 2];
+        let bx = b_data[b_base];
+        let by = b_data[b_base + 1];
+        let bz = b_data[b_base + 2];
+        out[o_base] = ay * bz - az * by;
+        out[o_base + 1] = az * bx - ax * bz;
+        out[o_base + 2] = ax * by - ay * bx;
+
+        for axis in 0..index.len() {
+            index[axis] += 1;
+            if index[axis] < out_dims[axis + 1] {
+                break;
+            }
+            index[axis] = 0;
+        }
+    }
+
+    tensor_from_data(out, &out_dims)
+}
+
+/// Form the explicit product of Householder reflectors.
+///
+/// `a` stores reflector vectors in the standard QR compact format with shape
+/// `(m, n, *)`. `tau` stores the reflector coefficients with shape `(k, *)`,
+/// where `k <= min(m, n)`.
+///
+/// The result has shape `(m, n, *)`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::householder_product;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(
+///     &[1.0_f64, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+///     &[4, 2],
+///     MemoryOrder::ColumnMajor,
+/// )
+/// .unwrap();
+/// let tau = Tensor::from_slice(&[0.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+/// let q = householder_product(&mut ctx, &a, &tau).unwrap();
+/// assert_eq!(q.dims(), &[4, 2]);
+/// ```
+pub fn householder_product<T: LinalgScalar, C>(
+    _ctx: &mut C,
+    a: &Tensor<T>,
+    tau: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("householder_product")?;
+
+    let (m, n, batch_dims) = validate_2d(a)?;
+    if tau.ndim() != 1 + batch_dims.len() {
+        return Err(Error::InvalidArgument(format!(
+            "householder_product expects tau shape (k, *), got {:?}",
+            tau.dims()
+        )));
+    }
+    if &tau.dims()[1..] != batch_dims {
+        return Err(Error::InvalidArgument(format!(
+            "householder_product batch dims mismatch: expected {:?}, got {:?}",
+            batch_dims,
+            &tau.dims()[1..]
+        )));
+    }
+
+    let k = tau.dims()[0];
+    if k > m.min(n) {
+        return Err(Error::InvalidArgument(format!(
+            "householder_product expects tau length <= min(m, n) = {}, got {}",
+            m.min(n),
+            k
+        )));
+    }
+
+    let a_input = ensure_col_major(a);
+    let tau_input = ensure_col_major(tau);
+    let a_data = extract_slice(&a_input)?;
+    let tau_data = extract_slice(&tau_input)?;
+    let a_offset = a_input.offset() as usize;
+    let tau_offset = tau_input.offset() as usize;
+    let bc = batch_count(batch_dims);
+    let mat_size = m * n;
+    let mut out = vec![T::zero(); mat_size * bc];
+
+    for batch in 0..bc {
+        let a_start = a_offset + batch * mat_size;
+        let tau_start = tau_offset + batch * k;
+        let a_batch = &a_data[a_start..a_start + mat_size];
+        let tau_batch = &tau_data[tau_start..tau_start + k];
+        let q_batch = &mut out[batch * mat_size..(batch + 1) * mat_size];
+
+        for col in 0..n {
+            if col < m {
+                q_batch[col * m + col] = T::one();
+            }
+        }
+
+        for reflector in (0..k).rev() {
+            let tau_i = tau_batch[reflector];
+            if tau_i == T::zero() {
+                continue;
+            }
+            for col in 0..n {
+                let mut proj = q_batch[reflector + col * m];
+                for row in (reflector + 1)..m {
+                    proj = proj + a_batch[row + reflector * m].conj() * q_batch[row + col * m];
+                }
+                proj = tau_i * proj;
+                q_batch[reflector + col * m] = q_batch[reflector + col * m] - proj;
+                for row in (reflector + 1)..m {
+                    q_batch[row + col * m] =
+                        q_batch[row + col * m] - a_batch[row + reflector * m] * proj;
+                }
+            }
+        }
+    }
+
+    tensor_from_data(out, &output_dims(&[m, n], batch_dims))
+}
+
+/// Build a Vandermonde matrix from leading-dimension vectors.
+///
+/// If `columns` is `None`, the output uses as many columns as the input vector
+/// length. For scalar input, the leading vector length is treated as `1`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::vander;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let x = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+/// let v = vander(&mut ctx, &x, Some(3), true).unwrap();
+/// assert_eq!(v.dims(), &[2, 3]);
+/// ```
+pub fn vander<T: LinalgScalar, C>(
+    _ctx: &mut C,
+    x: &Tensor<T>,
+    columns: Option<usize>,
+    increasing: bool,
+) -> Result<Tensor<T>>
+where
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("vander")?;
+
+    let (vector_len, batch_dims): (usize, &[usize]) = if x.ndim() == 0 {
+        (1, &[])
+    } else {
+        (x.dims()[0], &x.dims()[1..])
+    };
+    let columns = columns.unwrap_or(vector_len);
+
+    let x_input = ensure_col_major(x);
+    let x_data = extract_slice(&x_input)?;
+    let x_offset = x_input.offset() as usize;
+    let bc = batch_count(batch_dims);
+    let mut out = vec![T::zero(); vector_len * columns * bc];
+
+    for batch in 0..bc {
+        let vector = if x.ndim() == 0 {
+            &x_data[x_offset..x_offset + 1]
+        } else {
+            let start = x_offset + batch * vector_len;
+            &x_data[start..start + vector_len]
+        };
+        for row in 0..vector_len {
+            let value = vector[row];
+            let mut powers = vec![T::one(); columns];
+            for col in 1..columns {
+                powers[col] = powers[col - 1] * value;
+            }
+            for col in 0..columns {
+                let power = if increasing {
+                    powers[col]
+                } else {
+                    powers[columns.saturating_sub(col + 1)]
+                };
+                out[batch * vector_len * columns + row + col * vector_len] = power;
+            }
+        }
+    }
+
+    tensor_from_data(out, &output_dims(&[vector_len, columns], batch_dims))
+}
+
+/// Invert a tensorized square operator.
+///
+/// `ind` splits the tensor shape into `(left_dims, right_dims)` and requires
+/// `prod(left_dims) == prod(right_dims)`. The output shape is
+/// `(right_dims..., left_dims...)`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::tensorinv;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let eye = Tensor::from_slice(
+///     &[1.0_f64, 0.0, 0.0, 1.0],
+///     &[2, 2],
+///     MemoryOrder::ColumnMajor,
+/// )
+/// .unwrap();
+/// let a = eye.reshape(&[1, 2, 1, 2]).unwrap();
+/// let inv = tensorinv(&mut ctx, &a, 2).unwrap();
+/// assert_eq!(inv.dims(), &[1, 2, 1, 2]);
+/// ```
+pub fn tensorinv<T: LinalgScalar, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+    ind: usize,
+) -> Result<Tensor<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("tensorinv")?;
+
+    if ind == 0 || ind >= tensor.ndim() {
+        return Err(Error::InvalidArgument(format!(
+            "tensorinv expects 0 < ind < rank, got ind={ind} for shape {:?}",
+            tensor.dims()
+        )));
+    }
+
+    let left_dims = &tensor.dims()[..ind];
+    let right_dims = &tensor.dims()[ind..];
+    let left_prod = left_dims.iter().product::<usize>();
+    let right_prod = right_dims.iter().product::<usize>();
+    if left_prod != right_prod {
+        return Err(Error::InvalidArgument(format!(
+            "tensorinv requires prod(shape[..ind]) == prod(shape[ind..]); got {} and {} for {:?}",
+            left_prod,
+            right_prod,
+            tensor.dims()
+        )));
+    }
+
+    let input = ensure_col_major(tensor);
+    let matrix = input.reshape(&[left_prod, right_prod])?;
+    let inverse = inv(ctx, &matrix)?;
+
+    let mut out_dims = right_dims.to_vec();
+    out_dims.extend_from_slice(left_dims);
+    inverse.reshape(&out_dims)
+}
+
+/// Solve a tensorized linear system.
+///
+/// By default the solution uses the trailing `a.ndim() - b.ndim()` axes of `a`.
+/// If `dims` is provided, those axes are moved to the end in the given order
+/// before solving, and the solution shape follows that order.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::tensorsolve;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let eye = Tensor::from_slice(
+///     &[1.0_f64, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+///     &[4, 4],
+///     MemoryOrder::ColumnMajor,
+/// )
+/// .unwrap();
+/// let a = eye.reshape(&[2, 2, 2, 2]).unwrap();
+/// let b = Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let x = tensorsolve(&mut ctx, &a, &b, None).unwrap();
+/// assert_eq!(x.dims(), &[2, 2]);
+/// ```
+pub fn tensorsolve<T: LinalgScalar, C>(
+    ctx: &mut C,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+    dims: Option<&[usize]>,
+) -> Result<Tensor<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    ensure_cpu_backend::<T, C>("tensorsolve")?;
+
+    if b.ndim() > a.ndim() {
+        return Err(Error::InvalidArgument(format!(
+            "tensorsolve expects b rank <= a rank, got {:?} and {:?}",
+            a.dims(),
+            b.dims()
+        )));
+    }
+
+    let solution_rank = a.ndim() - b.ndim();
+    let solution_axes = validate_tensor_solve_axes(a.ndim(), solution_rank, dims)?;
+    let perm = axes_to_end_permutation(a.ndim(), &solution_axes);
+    let a_permuted = if is_identity_permutation(&perm) {
+        a.clone()
+    } else {
+        a.permute(&perm)?
+    };
+
+    if &a_permuted.dims()[..b.ndim()] != b.dims() {
+        return Err(Error::InvalidArgument(format!(
+            "tensorsolve leading dims of permuted a must match b; got {:?} and {:?}",
+            a_permuted.dims(),
+            b.dims()
+        )));
+    }
+
+    let lhs_prod = b.dims().iter().product::<usize>();
+    let rhs_dims = &a_permuted.dims()[b.ndim()..];
+    let rhs_prod = rhs_dims.iter().product::<usize>();
+    if lhs_prod != rhs_prod {
+        return Err(Error::InvalidArgument(format!(
+            "tensorsolve requires matching flattened system size, got {} and {}",
+            lhs_prod, rhs_prod
+        )));
+    }
+
+    let a_contiguous = ensure_col_major(&a_permuted);
+    let a_matrix = a_contiguous.reshape(&[lhs_prod, rhs_prod])?;
+    let b_contiguous = ensure_col_major(b);
+    let b_vector = b_contiguous.reshape(&[lhs_prod])?;
+    let x = solve(ctx, &a_matrix, &b_vector)?;
+    x.reshape(rhs_dims)
+}
+
 // ============================================================================
 // matrix_exp helpers (private)
 // ============================================================================
@@ -2073,6 +3017,220 @@ where
     }
 
     Ok(result)
+}
+
+fn matrix_power_single<T: LinalgScalar, C>(
+    ctx: &mut C,
+    a: &[T],
+    n: usize,
+    exponent: u64,
+) -> Result<Vec<T>>
+where
+    T: backend::CpuLinalgScalar,
+{
+    if exponent == 1 {
+        return Ok(a.to_vec());
+    }
+
+    let mut result = identity_matrix::<T>(n);
+    let mut base = a.to_vec();
+    let mut power = exponent;
+
+    while power > 0 {
+        if power & 1 == 1 {
+            result = backend_mat_mul_nn(ctx, &result, &base, n)?;
+        }
+        power >>= 1;
+        if power > 0 {
+            base = backend_mat_mul_nn(ctx, &base, &base, n)?;
+        }
+    }
+
+    Ok(result)
+}
+
+fn lu_factor_impl<T: LinalgScalar, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+) -> Result<LuFactorExResult<T>>
+where
+    C: backend::TensorLinalgContextFor<T>,
+{
+    let (m, n, batch_dims) = validate_2d(tensor)?;
+    let bc = batch_count(batch_dims);
+    let k = m.min(n);
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
+    let factors = pack_lu_factors(&result.l, &result.u, m, n, batch_dims)?;
+
+    let u_input = ensure_col_major(&result.u);
+    let u_data = extract_slice(&u_input)?;
+    let u_offset = u_input.offset() as usize;
+    let mut info = vec![0_i32; bc];
+
+    for (batch, info_slot) in info.iter_mut().enumerate().take(bc) {
+        let start = u_offset + batch * k * n;
+        let u_slice = &u_data[start..start + k * n];
+        for i in 0..k {
+            if u_slice[i + i * k].abs_real() <= T::real_epsilon() {
+                *info_slot = (i + 1) as i32;
+                break;
+            }
+        }
+    }
+
+    Ok(LuFactorExResult {
+        factors,
+        pivots: result
+            .pivots
+            .into_iter()
+            .map(|pivot| pivot as usize)
+            .collect(),
+        info,
+    })
+}
+
+fn pack_lu_factors<T: LinalgScalar>(
+    l: &Tensor<T>,
+    u: &Tensor<T>,
+    m: usize,
+    n: usize,
+    batch_dims: &[usize],
+) -> Result<Tensor<T>> {
+    let bc = batch_count(batch_dims);
+    let k = m.min(n);
+    let l_input = ensure_col_major(l);
+    let u_input = ensure_col_major(u);
+    let l_data = extract_slice(&l_input)?;
+    let u_data = extract_slice(&u_input)?;
+    let l_offset = l_input.offset() as usize;
+    let u_offset = u_input.offset() as usize;
+    let mut packed = vec![T::zero(); m * n * bc];
+
+    for batch in 0..bc {
+        let l_start = l_offset + batch * m * k;
+        let u_start = u_offset + batch * k * n;
+        let l_slice = &l_data[l_start..l_start + m * k];
+        let u_slice = &u_data[u_start..u_start + k * n];
+        let packed_slice = &mut packed[batch * m * n..(batch + 1) * m * n];
+        for j in 0..n {
+            for i in 0..m {
+                packed_slice[i + j * m] = if i > j {
+                    l_slice[i + j * m]
+                } else {
+                    u_slice[i + j * k]
+                };
+            }
+        }
+    }
+
+    tensor_from_data(packed, &output_dims(&[m, n], batch_dims))
+}
+
+fn lu_solve_impl<T: LinalgScalar, C>(
+    _ctx: &mut C,
+    factors: &Tensor<T>,
+    pivots: &[usize],
+    b: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    let (n, batch_dims) = validate_square(factors)?;
+    let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "lu_solve")?;
+    let bc = batch_count(batch_dims);
+    let expected_pivots = n * bc;
+    if pivots.len() != expected_pivots {
+        return Err(Error::InvalidArgument(format!(
+            "lu_solve expects pivots.len() == {expected_pivots}, got {}",
+            pivots.len()
+        )));
+    }
+
+    let factors_input = ensure_col_major(factors);
+    let rhs_input = ensure_col_major(b);
+    let factors_data = extract_slice(&factors_input)?;
+    let rhs_data = extract_slice(&rhs_input)?;
+    let factors_offset = factors_input.offset() as usize;
+    let rhs_offset = rhs_input.offset() as usize;
+
+    let mat_size = n * n;
+    let rhs_size = n * rhs.nrhs;
+    let mut out = vec![T::zero(); rhs_size * bc];
+    let mut lower = vec![T::zero(); mat_size];
+    let mut upper = vec![T::zero(); mat_size];
+    let mut permuted_rhs = vec![T::zero(); rhs_size];
+    let mut tmp = vec![T::zero(); rhs_size];
+
+    for batch in 0..bc {
+        let factor_start = factors_offset + batch * mat_size;
+        let rhs_start = rhs_offset + batch * rhs_size;
+        let factor_slice = &factors_data[factor_start..factor_start + mat_size];
+        let rhs_slice = &rhs_data[rhs_start..rhs_start + rhs_size];
+        let pivot_slice = &pivots[batch * n..(batch + 1) * n];
+
+        unpack_packed_lu_square(factor_slice, n, &mut lower, &mut upper);
+        apply_lu_permutation(pivot_slice, rhs_slice, n, rhs.nrhs, &mut permuted_rhs)?;
+        backend::cpu::solve_triangular_slices(&lower, &permuted_rhs, n, rhs.nrhs, false, &mut tmp)?;
+        backend::cpu::solve_triangular_slices(
+            &upper,
+            &tmp,
+            n,
+            rhs.nrhs,
+            true,
+            &mut out[batch * rhs_size..(batch + 1) * rhs_size],
+        )?;
+    }
+
+    tensor_from_data(out, &rhs.output_dims)
+}
+
+fn unpack_packed_lu_square<T: LinalgScalar>(
+    factors: &[T],
+    n: usize,
+    lower: &mut [T],
+    upper: &mut [T],
+) {
+    lower.fill(T::zero());
+    upper.fill(T::zero());
+    for j in 0..n {
+        for i in 0..n {
+            let value = factors[i + j * n];
+            if i > j {
+                lower[i + j * n] = value;
+            } else {
+                upper[i + j * n] = value;
+                if i == j {
+                    lower[i + j * n] = T::one();
+                }
+            }
+        }
+    }
+}
+
+fn apply_lu_permutation<T: LinalgScalar>(
+    pivots: &[usize],
+    rhs: &[T],
+    n: usize,
+    nrhs: usize,
+    out: &mut [T],
+) -> Result<()> {
+    for &pivot in pivots {
+        if pivot >= n {
+            return Err(Error::InvalidArgument(format!(
+                "lu_solve pivot index {pivot} is out of range for n={n}"
+            )));
+        }
+    }
+
+    for col in 0..nrhs {
+        let col_offset = col * n;
+        for row in 0..n {
+            out[row + col_offset] = rhs[pivots[row] + col_offset];
+        }
+    }
+
+    Ok(())
 }
 
 /// Solve a triangular linear system `A x = b`.
@@ -2296,6 +3454,58 @@ where
             "norm kind {kind:?} not yet implemented"
         ))),
     }
+}
+
+/// Compute the matrix condition number with a selected norm convention.
+///
+/// Currently supported for square matrices with `NormKind::Fro`,
+/// `NormKind::L1`, `NormKind::Inf`, and `NormKind::Spectral`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::{cond, NormKind};
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 0.5], &[2, 2], MemoryOrder::ColumnMajor)
+///     .unwrap();
+/// let value = cond(&mut ctx, &a, NormKind::Fro).unwrap();
+/// assert_eq!(value.dims(), &[]);
+/// ```
+pub fn cond<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+    kind: NormKind,
+) -> Result<Tensor<T>>
+where
+    T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+{
+    match kind {
+        NormKind::Fro | NormKind::L1 | NormKind::Inf | NormKind::Spectral => {}
+        _ => {
+            return Err(Error::InvalidArgument(format!(
+                "cond only supports Fro, L1, Inf, and Spectral norms, got {kind:?}"
+            )));
+        }
+    }
+
+    validate_square(tensor)?;
+    let lhs = norm(ctx, tensor, kind)?;
+    let inverse = inv(ctx, tensor)?;
+    let rhs = norm(ctx, &inverse, kind)?;
+    let lhs_data = extract_slice(&lhs)?;
+    let rhs_data = extract_slice(&rhs)?;
+    let lhs_offset = lhs.offset() as usize;
+    let rhs_offset = rhs.offset() as usize;
+    let len = lhs.dims().iter().product::<usize>().max(1);
+    let mut out = vec![T::zero(); len];
+    for i in 0..len {
+        out[i] = lhs_data[lhs_offset + i] * rhs_data[rhs_offset + i];
+    }
+    tensor_from_data(out, lhs.dims())
 }
 
 /// Least squares result: `x = argmin ||Ax - b||²`.
