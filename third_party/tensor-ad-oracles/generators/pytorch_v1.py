@@ -18,7 +18,10 @@ from .runtime import (
     build_direction_map,
     build_input_map,
     build_observable_function,
+    build_scalarized_observable_function,
     combined_input_norm,
+    compute_fd_hvp,
+    compute_pytorch_hvp,
     dtype_name,
     import_generation_runtime,
     map_allclose,
@@ -33,6 +36,7 @@ from .runtime import (
 )
 from .tolerance_audit import (
     comparison_from_observed_residuals,
+    hvp_residuals,
     max_abs_diff,
     max_rel_diff,
     scalar_residual,
@@ -58,6 +62,7 @@ class CaseFamilySpec:
     upstream_name: str | None = None
     upstream_variant_name: str = ""
     sample_process_name: str | None = None
+    hvp_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,7 @@ class UpstreamMappedFamily:
 
     op: str
     family: str
+    hvp_enabled: bool
 
 
 @dataclass
@@ -78,10 +84,14 @@ class SuccessProbePayload:
     cotangent: dict[str, object]
     pytorch_jvp: dict[str, object]
     pytorch_vjp: dict[str, object]
+    pytorch_hvp: dict[str, object] | None
     fd_step: float
     fd_jvp: dict[str, object]
-    max_rel_residual: float
-    max_abs_residual: float
+    fd_hvp: dict[str, object] | None
+    first_order_max_rel_residual: float
+    first_order_max_abs_residual: float
+    second_order_max_rel_residual: float
+    second_order_max_abs_residual: float
 
 
 ERROR_REASON_CODES = {
@@ -113,25 +123,46 @@ def _normalized_upstream_op_id(name: str, variant_name: str) -> str:
 
 def build_supported_upstream_mapping_index() -> dict[tuple[str, str], tuple[UpstreamMappedFamily, ...]]:
     """Map upstream AD-relevant OpInfo variants to planned DB families."""
+    inventory = {
+        (row.name, row.variant_name): row
+        for row in collect_ad_relevant_linalg_opinfos()
+    }
     mapping: dict[tuple[str, str], tuple[UpstreamMappedFamily, ...]] = {}
-    for row in collect_ad_relevant_linalg_opinfos():
+    for row in inventory.values():
         key = (row.name, row.variant_name)
         if key in UNSUPPORTED_UPSTREAM_KEYS:
             continue
         if row.name == "linalg.svd":
             families = tuple(
-                UpstreamMappedFamily(op="svd", family=family)
+                UpstreamMappedFamily(
+                    op="svd",
+                    family=family,
+                    hvp_enabled=row.supports_fwgrad_bwgrad,
+                )
                 for family in ("u_abs", "s", "vh_abs", "uvh_product")
             )
         elif row.name == "linalg.eigh":
-            families = (UpstreamMappedFamily(op="eigh", family=EIGH_PROCESS_FAMILY),)
+            families = (
+                UpstreamMappedFamily(
+                    op="eigh",
+                    family=EIGH_PROCESS_FAMILY,
+                    hvp_enabled=row.supports_fwgrad_bwgrad,
+                ),
+            )
         elif row.name == "linalg.eig":
-            families = (UpstreamMappedFamily(op="eig", family=EIG_PROCESS_FAMILY),)
+            families = (
+                UpstreamMappedFamily(
+                    op="eig",
+                    family=EIG_PROCESS_FAMILY,
+                    hvp_enabled=row.supports_fwgrad_bwgrad,
+                ),
+            )
         else:
             families = (
                 UpstreamMappedFamily(
                     op=_normalized_upstream_op_id(row.name, row.variant_name),
                     family="identity",
+                    hvp_enabled=row.supports_fwgrad_bwgrad,
                 ),
             )
         mapping[key] = families
@@ -199,6 +230,7 @@ def _build_success_case_specs() -> tuple[CaseFamilySpec, ...]:
                     upstream_name=row.name,
                     upstream_variant_name=row.variant_name,
                     sample_process_name=_sample_process_name_for_target(key, target),
+                    hvp_enabled=target.hvp_enabled,
                 )
             )
     return tuple(specs)
@@ -365,8 +397,10 @@ def materialize_success_case(
     raw_cotangent: dict[str, object],
     raw_pytorch_jvp: dict[str, object],
     raw_pytorch_vjp: dict[str, object],
+    raw_pytorch_hvp: dict[str, object] | None = None,
     fd_step: float,
     raw_fd_jvp: dict[str, object],
+    raw_fd_hvp: dict[str, object] | None = None,
     provenance: dict,
 ) -> dict:
     """Encode raw tensor payloads into one success-case record."""
@@ -376,8 +410,18 @@ def materialize_success_case(
         cotangent=normalize_tensor_map(encoding.encode_tensor_map(raw_cotangent)),
         pytorch_jvp=encoding.encode_tensor_map(raw_pytorch_jvp),
         pytorch_vjp=encoding.encode_tensor_map(raw_pytorch_vjp),
+        pytorch_hvp=(
+            None
+            if raw_pytorch_hvp is None
+            else encoding.encode_tensor_map(raw_pytorch_hvp)
+        ),
         fd_step=fd_step,
         fd_jvp=encoding.encode_tensor_map(raw_fd_jvp),
+        fd_hvp=(
+            None
+            if raw_fd_hvp is None
+            else encoding.encode_tensor_map(raw_fd_hvp)
+        ),
     )
     return make_success_case(
         spec,
@@ -404,6 +448,10 @@ def _sample_matches_family(spec: CaseFamilySpec, sample) -> bool:
     return sample.output_process_fn_grad.__name__ == spec.sample_process_name
 
 
+def _materialize_hvp_for_spec(spec: CaseFamilySpec) -> bool:
+    return spec.hvp_enabled
+
+
 def _validate_success_probe(
     torch,
     *,
@@ -413,13 +461,16 @@ def _validate_success_probe(
     pytorch_jvp: dict[str, object],
     pytorch_vjp: dict[str, object],
     fd_jvp: dict[str, object],
+    pytorch_hvp: dict[str, object] | None = None,
+    fd_hvp: dict[str, object] | None = None,
 ) -> None:
+    first_order = comparison["first_order"]
     if not map_allclose(
         torch,
         pytorch_jvp,
         fd_jvp,
-        rtol=comparison["rtol"],
-        atol=comparison["atol"],
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
     ):
         raise ValueError("PyTorch JVP and FD-JVP disagree outside tolerance")
 
@@ -429,21 +480,49 @@ def _validate_success_probe(
     if not torch.allclose(
         residual,
         torch.zeros_like(residual),
-        rtol=comparison["rtol"],
-        atol=comparison["atol"],
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
         ):
         raise ValueError("probe failed adjoint consistency")
+
+    if pytorch_hvp is None and fd_hvp is None:
+        return
+    if pytorch_hvp is None or fd_hvp is None:
+        raise ValueError("HVP references must be present together")
+    second_order = comparison["second_order"]
+    if not map_allclose(
+        torch,
+        pytorch_hvp,
+        fd_hvp,
+        rtol=second_order["rtol"],
+        atol=second_order["atol"],
+    ):
+        raise ValueError("PyTorch HVP and FD-HVP disagree outside tolerance")
 
 
 def _measured_comparison(
     payloads: list[SuccessProbePayload],
 ) -> dict[str, float | str]:
-    max_rel_residual = max(payload.max_rel_residual for payload in payloads)
-    max_abs_residual = max(payload.max_abs_residual for payload in payloads)
-    return comparison_from_observed_residuals(
-        max_rel_residual=max_rel_residual,
-        max_abs_residual=max_abs_residual,
-    )
+    comparison = {
+        "first_order": comparison_from_observed_residuals(
+            max_rel_residual=max(
+                payload.first_order_max_rel_residual for payload in payloads
+            ),
+            max_abs_residual=max(
+                payload.first_order_max_abs_residual for payload in payloads
+            ),
+        )
+    }
+    if any(payload.pytorch_hvp is not None for payload in payloads):
+        comparison["second_order"] = comparison_from_observed_residuals(
+            max_rel_residual=max(
+                payload.second_order_max_rel_residual for payload in payloads
+            ),
+            max_abs_residual=max(
+                payload.second_order_max_abs_residual for payload in payloads
+            ),
+        )
+    return comparison
 
 
 def _generate_success_records(
@@ -457,6 +536,7 @@ def _generate_success_records(
     samples = sample_inputs_for_spec(torch, linalg, spec, seed=seed)
     source_commit = getattr(torch.version, "git_version", None) or torch.__version__
     payloads: list[SuccessProbePayload] = []
+    materialize_hvp = _materialize_hvp_for_spec(spec)
 
     for sample in samples:
         if limit is not None and len(payloads) >= limit:
@@ -534,6 +614,35 @@ def _generate_success_records(
             name: (plus_output[name] - minus_output[name]) / (2.0 * fd_step)
             for name in output_names
         }
+        pytorch_hvp = None
+        fd_hvp = None
+        second_order_abs = 0.0
+        second_order_rel = 0.0
+        if materialize_hvp:
+            scalarized_fn = build_scalarized_observable_function(
+                torch,
+                observable_fn,
+                output_names=output_names,
+                cotangent=cotangent,
+            )
+            pytorch_hvp = compute_pytorch_hvp(
+                torch,
+                scalarized_fn,
+                inputs=inputs,
+                direction=direction,
+            )
+            fd_hvp = compute_fd_hvp(
+                torch,
+                scalarized_fn,
+                inputs=inputs,
+                direction=direction,
+                step=fd_step,
+            )
+            second_order_abs, second_order_rel = hvp_residuals(
+                torch,
+                pytorch_hvp,
+                fd_hvp,
+            )
         jvp_abs = max_abs_diff(torch, pytorch_jvp, fd_jvp)
         jvp_rel = max_rel_diff(torch, pytorch_jvp, fd_jvp)
         lhs = tensor_map_inner_product(torch, cotangent, fd_jvp)
@@ -547,10 +656,14 @@ def _generate_success_records(
                 cotangent=cotangent,
                 pytorch_jvp=pytorch_jvp,
                 pytorch_vjp=pytorch_vjp,
+                pytorch_hvp=pytorch_hvp,
                 fd_step=fd_step,
                 fd_jvp=fd_jvp,
-                max_rel_residual=max(jvp_rel, adj_rel),
-                max_abs_residual=max(jvp_abs, adj_abs),
+                fd_hvp=fd_hvp,
+                first_order_max_rel_residual=max(jvp_rel, adj_rel),
+                first_order_max_abs_residual=max(jvp_abs, adj_abs),
+                second_order_max_rel_residual=second_order_rel,
+                second_order_max_abs_residual=second_order_abs,
             )
         )
 
@@ -568,6 +681,8 @@ def _generate_success_records(
             pytorch_jvp=payload.pytorch_jvp,
             pytorch_vjp=payload.pytorch_vjp,
             fd_jvp=payload.fd_jvp,
+            pytorch_hvp=payload.pytorch_hvp,
+            fd_hvp=payload.fd_hvp,
         )
 
         provenance = build_provenance(
@@ -588,8 +703,10 @@ def _generate_success_records(
                 raw_cotangent=payload.cotangent,
                 raw_pytorch_jvp=payload.pytorch_jvp,
                 raw_pytorch_vjp=payload.pytorch_vjp,
+                raw_pytorch_hvp=payload.pytorch_hvp,
                 fd_step=payload.fd_step,
                 raw_fd_jvp=payload.fd_jvp,
+                raw_fd_hvp=payload.fd_hvp,
                 provenance=provenance,
             )
         )

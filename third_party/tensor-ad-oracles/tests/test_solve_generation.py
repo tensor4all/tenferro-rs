@@ -64,6 +64,10 @@ class SolveGenerationTests(unittest.TestCase):
         self.assertEqual(record["op"], "solve")
         self.assertEqual(record["family"], "identity")
         self.assertEqual(len(record["probes"]), 1)
+        self.assertIn("first_order", record["comparison"])
+        self.assertIn("second_order", record["comparison"])
+        self.assertIn("hvp", record["probes"][0]["pytorch_ref"])
+        self.assertIn("hvp", record["probes"][0]["fd_ref"])
 
         spec = pytorch_v1.build_case_spec_index()[("solve", "identity")]
         with tempfile.TemporaryDirectory() as tmpdir:

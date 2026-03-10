@@ -137,7 +137,7 @@
         }
       }
     },
-    "success_comparison": {
+    "allclose_comparison": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -157,6 +157,21 @@
         "atol": {
           "type": "number",
           "minimum": 0
+        }
+      }
+    },
+    "success_comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "first_order"
+      ],
+      "properties": {
+        "first_order": {
+          "$ref": "#/$defs/allclose_comparison"
+        },
+        "second_order": {
+          "$ref": "#/$defs/allclose_comparison"
         }
       }
     },
@@ -195,6 +210,9 @@
         "jvp": {
           "$ref": "#/$defs/tensor_map"
         },
+        "hvp": {
+          "$ref": "#/$defs/tensor_map"
+        },
         "vjp": {
           "$ref": "#/$defs/tensor_map"
         }
@@ -221,6 +239,9 @@
         "step": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "hvp": {
+          "$ref": "#/$defs/tensor_map"
         },
         "jvp": {
           "$ref": "#/$defs/tensor_map"

@@ -7,6 +7,10 @@ from dataclasses import dataclass
 from .runtime import import_generation_runtime
 
 
+DEFAULT_FIRST_ORDER_AD_TOLERANCE = {"rtol": 1e-3, "atol": 1e-5}
+DEFAULT_SECOND_ORDER_AD_TOLERANCE = {"rtol": 1e-3, "atol": 1e-5}
+
+
 @dataclass(frozen=True)
 class UpstreamOpInfoRecord:
     """Normalized metadata for one AD-relevant upstream linalg OpInfo entry."""
@@ -17,6 +21,8 @@ class UpstreamOpInfoRecord:
     gradcheck_wrapper_name: str | None
     sample_output_process_fn_names: tuple[str, ...]
     gradcheck_fast_mode: bool
+    supports_forward_ad: bool
+    supports_fwgrad_bwgrad: bool
 
 
 def _normalized_name(obj) -> str | None:
@@ -60,6 +66,61 @@ def collect_ad_relevant_linalg_opinfos() -> list[UpstreamOpInfoRecord]:
                     op, torch=torch
                 ),
                 gradcheck_fast_mode=bool(getattr(op, "gradcheck_fast_mode", False)),
+                supports_forward_ad=bool(getattr(op, "supports_forward_ad", False)),
+                supports_fwgrad_bwgrad=bool(getattr(op, "supports_fwgrad_bwgrad", False)),
             )
         )
     return rows
+
+
+def resolve_upstream_ad_tolerance(
+    name: str,
+    variant_name: str,
+    *,
+    order: str,
+    dtype_name: str,
+) -> dict[str, float]:
+    """Resolve the effective upstream AD tolerance for one pinned linalg OpInfo."""
+    torch, linalg = import_generation_runtime()
+    dtype = {
+        "float64": torch.double,
+        "complex128": torch.cdouble,
+    }[dtype_name]
+    cls_name, test_name, default = {
+        "first_order": (
+            "TestFwdGradients",
+            "test_forward_mode_AD",
+            DEFAULT_FIRST_ORDER_AD_TOLERANCE,
+        ),
+        "second_order": (
+            "TestFwdGradients",
+            "test_fn_fwgrad_bwgrad",
+            DEFAULT_SECOND_ORDER_AD_TOLERANCE,
+        ),
+    }[order]
+
+    op = next(
+        candidate
+        for candidate in linalg.op_db
+        if candidate.name == name
+        and ((getattr(candidate, "variant_test_name", "") or "") == variant_name)
+    )
+    decorators = op.get_decorators(
+        cls_name,
+        test_name,
+        "cpu",
+        dtype,
+        {"dtype": dtype},
+    )
+    tolerance = dict(default)
+    for decorator in decorators:
+        if decorator.__class__.__name__ != "toleranceOverride":
+            continue
+        override = getattr(decorator, "d", {}).get(dtype)
+        if override is None:
+            continue
+        tolerance = {
+            "rtol": float(override.rtol),
+            "atol": float(override.atol),
+        }
+    return tolerance

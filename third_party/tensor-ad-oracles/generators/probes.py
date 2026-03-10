@@ -58,22 +58,32 @@ def make_probe_record(
     cotangent: dict[str, dict],
     pytorch_jvp: dict[str, dict],
     pytorch_vjp: dict[str, dict],
+    pytorch_hvp: dict[str, dict] | None = None,
     fd_step: float,
     fd_jvp: dict[str, dict],
+    fd_hvp: dict[str, dict] | None = None,
 ) -> dict:
     """Assemble one paired derivative probe record."""
+    pytorch_ref = {
+        "jvp": pytorch_jvp,
+        "vjp": pytorch_vjp,
+    }
+    if pytorch_hvp is not None:
+        pytorch_ref["hvp"] = pytorch_hvp
+
+    fd_ref = {
+        "method": "central_difference",
+        "stencil_order": 2,
+        "step": fd_step,
+        "jvp": fd_jvp,
+    }
+    if fd_hvp is not None:
+        fd_ref["hvp"] = fd_hvp
+
     return {
         "probe_id": probe_id,
         "direction": direction,
         "cotangent": cotangent,
-        "pytorch_ref": {
-            "jvp": pytorch_jvp,
-            "vjp": pytorch_vjp,
-        },
-        "fd_ref": {
-            "method": "central_difference",
-            "stencil_order": 2,
-            "step": fd_step,
-            "jvp": fd_jvp,
-        },
+        "pytorch_ref": pytorch_ref,
+        "fd_ref": fd_ref,
     }

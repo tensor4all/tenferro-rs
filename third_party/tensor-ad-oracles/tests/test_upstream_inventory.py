@@ -33,6 +33,37 @@ class UpstreamInventoryTests(unittest.TestCase):
         solve = index[("linalg.solve", "")]
         self.assertEqual(solve.sample_inputs_func_name, "sample_inputs_linalg_solve")
         self.assertEqual(solve.sample_output_process_fn_names, ("<lambda>",))
+        self.assertTrue(solve.supports_forward_ad)
+        self.assertTrue(solve.supports_fwgrad_bwgrad)
+
+    def test_inventory_exposes_second_order_support_flags(self) -> None:
+        rows = upstream_inventory.collect_ad_relevant_linalg_opinfos()
+        index = {(row.name, row.variant_name): row for row in rows}
+
+        svd = index[("linalg.svd", "")]
+        self.assertTrue(svd.supports_forward_ad)
+        self.assertTrue(svd.supports_fwgrad_bwgrad)
+
+        norm_subgrad = index[("linalg.norm", "subgradients_at_zero")]
+        self.assertTrue(norm_subgrad.supports_forward_ad)
+        self.assertTrue(norm_subgrad.supports_fwgrad_bwgrad)
+
+    def test_resolve_upstream_ad_tolerance_uses_gradcheck_defaults_for_float64(self) -> None:
+        first_order = upstream_inventory.resolve_upstream_ad_tolerance(
+            "linalg.solve",
+            "",
+            order="first_order",
+            dtype_name="float64",
+        )
+        second_order = upstream_inventory.resolve_upstream_ad_tolerance(
+            "linalg.solve",
+            "",
+            order="second_order",
+            dtype_name="float64",
+        )
+
+        self.assertEqual(first_order, {"rtol": 1e-3, "atol": 1e-5})
+        self.assertEqual(second_order, {"rtol": 1e-3, "atol": 1e-5})
 
 
 if __name__ == "__main__":

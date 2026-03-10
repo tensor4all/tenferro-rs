@@ -24,7 +24,22 @@ def _record_tolerance(record: dict) -> tuple[float, float]:
     comparison = record.get("comparison", {})
     if comparison.get("kind") == "allclose":
         return float(comparison["rtol"]), float(comparison["atol"])
+    if "first_order" in comparison:
+        return (
+            float(comparison["first_order"]["rtol"]),
+            float(comparison["first_order"]["atol"]),
+        )
     return 0.0, 0.0
+
+
+def _record_second_order_tolerance(record: dict) -> tuple[float, float] | None:
+    comparison = record.get("comparison", {})
+    if "second_order" not in comparison:
+        return None
+    return (
+        float(comparison["second_order"]["rtol"]),
+        float(comparison["second_order"]["atol"]),
+    )
 
 
 def _load_jsonl(path: Path) -> list[dict]:
@@ -38,10 +53,39 @@ def _load_jsonl(path: Path) -> list[dict]:
 
 
 def _is_comparison_tolerance_path(path: str) -> bool:
-    return path.endswith(".comparison.rtol") or path.endswith(".comparison.atol")
+    return (
+        path.endswith(".comparison.rtol")
+        or path.endswith(".comparison.atol")
+        or path.endswith(".comparison.first_order.rtol")
+        or path.endswith(".comparison.first_order.atol")
+        or path.endswith(".comparison.second_order.rtol")
+        or path.endswith(".comparison.second_order.atol")
+    )
 
 
-def _compare_values(expected, actual, *, rtol: float, atol: float, path: str) -> None:
+def _uses_second_order_tolerance(path: str) -> bool:
+    return ".hvp." in path
+
+
+def _compare_values(
+    expected,
+    actual,
+    *,
+    rtol: float,
+    atol: float,
+    second_order_rtol: float | None,
+    second_order_atol: float | None,
+    path: str,
+) -> None:
+    active_rtol = rtol
+    active_atol = atol
+    if (
+        second_order_rtol is not None
+        and second_order_atol is not None
+        and _uses_second_order_tolerance(path)
+    ):
+        active_rtol = second_order_rtol
+        active_atol = second_order_atol
     if isinstance(expected, dict):
         if not isinstance(actual, dict):
             raise ValueError(f"type mismatch at {path}: expected dict, got {type(actual).__name__}")
@@ -49,7 +93,15 @@ def _compare_values(expected, actual, *, rtol: float, atol: float, path: str) ->
             raise ValueError(f"key mismatch at {path}: {sorted(expected.keys())} != {sorted(actual.keys())}")
         for key in expected:
             child = f"{path}.{key}" if path else key
-            _compare_values(expected[key], actual[key], rtol=rtol, atol=atol, path=child)
+            _compare_values(
+                expected[key],
+                actual[key],
+                rtol=rtol,
+                atol=atol,
+                second_order_rtol=second_order_rtol,
+                second_order_atol=second_order_atol,
+                path=child,
+            )
         return
 
     if isinstance(expected, list):
@@ -58,7 +110,15 @@ def _compare_values(expected, actual, *, rtol: float, atol: float, path: str) ->
         if len(expected) != len(actual):
             raise ValueError(f"length mismatch at {path}: {len(expected)} != {len(actual)}")
         for index, (left, right) in enumerate(zip(expected, actual, strict=True)):
-            _compare_values(left, right, rtol=rtol, atol=atol, path=f"{path}[{index}]")
+            _compare_values(
+                left,
+                right,
+                rtol=rtol,
+                atol=atol,
+                second_order_rtol=second_order_rtol,
+                second_order_atol=second_order_atol,
+                path=f"{path}[{index}]",
+            )
         return
 
     if isinstance(expected, float):
@@ -66,7 +126,7 @@ def _compare_values(expected, actual, *, rtol: float, atol: float, path: str) ->
             return
         if not isinstance(actual, (int, float)):
             raise ValueError(f"type mismatch at {path}: expected float, got {type(actual).__name__}")
-        if not math.isclose(expected, float(actual), rel_tol=rtol, abs_tol=atol):
+        if not math.isclose(expected, float(actual), rel_tol=active_rtol, abs_tol=active_atol):
             raise ValueError(f"numeric mismatch at {path}: {expected} != {actual}")
         return
 
@@ -91,12 +151,15 @@ def _compare_case_files(expected_path: Path, actual_path: Path) -> None:
         zip(expected_records, actual_records, strict=True)
     ):
         rtol, atol = _record_tolerance(expected_record)
+        second_order = _record_second_order_tolerance(expected_record)
         try:
             _compare_values(
                 expected_record,
                 actual_record,
                 rtol=rtol,
                 atol=atol,
+                second_order_rtol=None if second_order is None else second_order[0],
+                second_order_atol=None if second_order is None else second_order[1],
                 path=f"record[{index}]",
             )
         except ValueError as exc:

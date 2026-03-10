@@ -56,7 +56,9 @@ class CheckRegenerationTests(unittest.TestCase):
                 }
             },
             "observable": {"kind": "identity"},
-            "comparison": {"kind": "allclose", "rtol": 1e-8, "atol": 1e-9},
+            "comparison": {
+                "first_order": {"kind": "allclose", "rtol": 1e-8, "atol": 1e-9}
+            },
             "probes": [
                 {
                     "probe_id": "p0",
@@ -169,13 +171,15 @@ class CheckRegenerationTests(unittest.TestCase):
             "expected_behavior": "success",
             "inputs": {},
             "observable": {"kind": "eig_values_vectors_abs"},
-            "comparison": {"kind": "allclose", "rtol": 1e-2, "atol": 1e-6},
+            "comparison": {
+                "first_order": {"kind": "allclose", "rtol": 1e-2, "atol": 1e-6}
+            },
             "probes": [],
             "provenance": {},
         }
         actual_record = json.loads(json.dumps(expected_record))
-        actual_record["comparison"]["rtol"] = 1e-3
-        actual_record["comparison"]["atol"] = 1e-7
+        actual_record["comparison"]["first_order"]["rtol"] = 1e-3
+        actual_record["comparison"]["first_order"]["atol"] = 1e-7
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

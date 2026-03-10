@@ -31,6 +31,14 @@ class FamilyAudit:
     proposed_atol: float
     tighten_rtol: bool
     tighten_atol: bool
+    current_second_order_rtol: float | None
+    current_second_order_atol: float | None
+    max_second_order_rel_residual: float | None
+    max_second_order_abs_residual: float | None
+    proposed_second_order_rtol: float | None
+    proposed_second_order_atol: float | None
+    tighten_second_order_rtol: bool
+    tighten_second_order_atol: bool
 
 
 def max_abs_diff(torch, left: dict[str, object], right: dict[str, object]) -> float:
@@ -64,8 +72,24 @@ def scalar_residual(torch, lhs, rhs) -> tuple[float, float]:
     return abs_residual, rel_residual
 
 
+def hvp_residuals(torch, pytorch_hvp: dict[str, object], fd_hvp: dict[str, object]) -> tuple[float, float]:
+    """Measure max absolute and relative residuals for scalarized HVP tensor maps."""
+    return (
+        max_abs_diff(torch, pytorch_hvp, fd_hvp),
+        max_rel_diff(torch, pytorch_hvp, fd_hvp),
+    )
+
+
 def _family_key(record: dict) -> tuple[str, str, str]:
     return (record["op"], record["family"], record["dtype"])
+
+
+def _comparison_block(comparison: dict, order: str) -> dict | None:
+    if order in comparison:
+        return comparison[order]
+    if order == "first_order":
+        return comparison
+    return None
 
 
 def propose_tolerance(*, observed_max: float, safety_factor: float, floor: float) -> float:
@@ -107,7 +131,7 @@ def audit_case_tree(root: Path) -> list[FamilyAudit]:
     from validators.case_loader import iter_case_files, load_case_file
     from validators.encoding import decode_tensor_map
 
-    aggregates: dict[tuple[str, str, str], dict[str, float]] = {}
+    aggregates: dict[tuple[str, str, str], dict[str, object]] = {}
     for path in iter_case_files(root):
         for record in load_case_file(path):
             if record["expected_behavior"] != "success":
@@ -115,6 +139,8 @@ def audit_case_tree(root: Path) -> list[FamilyAudit]:
             key = _family_key(record)
             probe = record["probes"][0]
             comparison = record["comparison"]
+            first_order = _comparison_block(comparison, "first_order")
+            second_order = _comparison_block(comparison, "second_order")
             direction = decode_tensor_map(probe["direction"])
             cotangent = decode_tensor_map(probe["cotangent"])
             pytorch_jvp = decode_tensor_map(probe["pytorch_ref"]["jvp"])
@@ -126,14 +152,28 @@ def audit_case_tree(root: Path) -> list[FamilyAudit]:
             lhs = tensor_map_inner_product(torch, cotangent, fd_jvp)
             rhs = tensor_map_inner_product(torch, pytorch_vjp, direction)
             adj_abs, adj_rel = scalar_residual(torch, lhs, rhs)
+            second_order_abs = None
+            second_order_rel = None
+            if "hvp" in probe["pytorch_ref"] and "hvp" in probe["fd_ref"]:
+                pytorch_hvp = decode_tensor_map(probe["pytorch_ref"]["hvp"])
+                fd_hvp = decode_tensor_map(probe["fd_ref"]["hvp"])
+                second_order_abs, second_order_rel = hvp_residuals(
+                    torch,
+                    pytorch_hvp,
+                    fd_hvp,
+                )
 
             bucket = aggregates.setdefault(
                 key,
                 {
-                    "current_rtol": float(comparison["rtol"]),
-                    "current_atol": float(comparison["atol"]),
+                    "current_rtol": float(first_order["rtol"]),
+                    "current_atol": float(first_order["atol"]),
                     "max_rel_residual": 0.0,
                     "max_abs_residual": 0.0,
+                    "current_second_order_rtol": None,
+                    "current_second_order_atol": None,
+                    "max_second_order_rel_residual": None,
+                    "max_second_order_abs_residual": None,
                 },
             )
             bucket["max_rel_residual"] = max(
@@ -146,13 +186,21 @@ def audit_case_tree(root: Path) -> list[FamilyAudit]:
                 jvp_abs,
                 adj_abs,
             )
+            if second_order_abs is not None and second_order_rel is not None:
+                if second_order is not None:
+                    bucket["current_second_order_rtol"] = float(second_order["rtol"])
+                    bucket["current_second_order_atol"] = float(second_order["atol"])
+                existing_rel = bucket["max_second_order_rel_residual"]
+                existing_abs = bucket["max_second_order_abs_residual"]
+                bucket["max_second_order_rel_residual"] = second_order_rel if existing_rel is None else max(existing_rel, second_order_rel)
+                bucket["max_second_order_abs_residual"] = second_order_abs if existing_abs is None else max(existing_abs, second_order_abs)
 
     audits: list[FamilyAudit] = []
     for (op, family, dtype), bucket in sorted(aggregates.items()):
-        max_rel = bucket["max_rel_residual"]
-        max_abs = bucket["max_abs_residual"]
-        current_rtol = bucket["current_rtol"]
-        current_atol = bucket["current_atol"]
+        max_rel = float(bucket["max_rel_residual"])
+        max_abs = float(bucket["max_abs_residual"])
+        current_rtol = float(bucket["current_rtol"])
+        current_atol = float(bucket["current_atol"])
         proposed_rtol = propose_tolerance(
             observed_max=max_rel,
             safety_factor=SAFETY_FACTOR,
@@ -163,6 +211,40 @@ def audit_case_tree(root: Path) -> list[FamilyAudit]:
             safety_factor=SAFETY_FACTOR,
             floor=ABSOLUTE_FLOOR,
         )
+        current_second_order_rtol = bucket["current_second_order_rtol"]
+        current_second_order_atol = bucket["current_second_order_atol"]
+        max_second_order_rel = bucket["max_second_order_rel_residual"]
+        max_second_order_abs = bucket["max_second_order_abs_residual"]
+        proposed_second_order_rtol = None
+        proposed_second_order_atol = None
+        tighten_second_order_rtol = False
+        tighten_second_order_atol = False
+        if (
+            current_second_order_rtol is not None
+            and current_second_order_atol is not None
+            and max_second_order_rel is not None
+            and max_second_order_abs is not None
+        ):
+            proposed_second_order_rtol = propose_tolerance(
+                observed_max=float(max_second_order_rel),
+                safety_factor=SAFETY_FACTOR,
+                floor=RELATIVE_FLOOR,
+            )
+            proposed_second_order_atol = propose_tolerance(
+                observed_max=float(max_second_order_abs),
+                safety_factor=SAFETY_FACTOR,
+                floor=ABSOLUTE_FLOOR,
+            )
+            tighten_second_order_rtol = needs_tightening(
+                current=float(current_second_order_rtol),
+                observed_max=float(max_second_order_rel),
+                looseness_orders=LOOSENESS_ORDERS,
+            )
+            tighten_second_order_atol = needs_tightening(
+                current=float(current_second_order_atol),
+                observed_max=float(max_second_order_abs),
+                looseness_orders=LOOSENESS_ORDERS,
+            )
         audits.append(
             FamilyAudit(
                 op=op,
@@ -184,6 +266,22 @@ def audit_case_tree(root: Path) -> list[FamilyAudit]:
                     observed_max=max_abs,
                     looseness_orders=LOOSENESS_ORDERS,
                 ),
+                current_second_order_rtol=(
+                    None if current_second_order_rtol is None else float(current_second_order_rtol)
+                ),
+                current_second_order_atol=(
+                    None if current_second_order_atol is None else float(current_second_order_atol)
+                ),
+                max_second_order_rel_residual=(
+                    None if max_second_order_rel is None else float(max_second_order_rel)
+                ),
+                max_second_order_abs_residual=(
+                    None if max_second_order_abs is None else float(max_second_order_abs)
+                ),
+                proposed_second_order_rtol=proposed_second_order_rtol,
+                proposed_second_order_atol=proposed_second_order_atol,
+                tighten_second_order_rtol=tighten_second_order_rtol,
+                tighten_second_order_atol=tighten_second_order_atol,
             )
         )
     return audits

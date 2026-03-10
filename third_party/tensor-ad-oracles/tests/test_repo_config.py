@@ -29,6 +29,7 @@ class RepoConfigTests(unittest.TestCase):
         self.assertIn("uv sync --locked --all-groups", readme)
         self.assertIn("uv run python -m unittest", readme)
         self.assertIn("uv run python -m generators.pytorch_v1 --list", readme)
+        self.assertIn("uv run python scripts/check_upstream_ad_tolerances.py", readme)
 
     def test_uv_lock_is_checked_in(self) -> None:
         self.assertTrue((REPO_ROOT / "uv.lock").exists())
@@ -68,6 +69,7 @@ class RepoConfigTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("uv run python scripts/check_tolerances.py", workflow)
+        self.assertIn("uv run python scripts/check_upstream_ad_tolerances.py", workflow)
 
 
 if __name__ == "__main__":
