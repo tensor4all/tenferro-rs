@@ -160,6 +160,21 @@ Recommended grouping:
 - `higher-level linear algebra ops`: `cond`, `lu_solve`, `matrix_power`,
   `tensorinv`, `tensorsolve`
 
+## Replay Handoff
+
+Replay-expansion work should only target the `Replay only` families from this
+document.
+
+The following missing-surface families are explicitly out of scope for replay
+implementation until their product issues land:
+
+- issue #433: `cholesky_ex`, `inv_ex`, `solve_ex`
+- issue #434: `lu_factor`, `lu_factor_ex`, `lu_solve`
+- issue #435: `cross`, `householder_product`, `vander`
+- issue #436: `cond`
+- issue #437: `matrix_power`
+- issue #438: `tensorinv`, `tensorsolve`
+
 ## Non-Goals
 
 - implementing replay support in this phase
