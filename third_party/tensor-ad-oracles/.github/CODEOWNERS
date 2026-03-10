@@ -1,0 +1,9 @@
+* @shinaoka
+/cases/ @shinaoka
+/generators/ @shinaoka
+/validators/ @shinaoka
+/schema/ @shinaoka
+/scripts/ @shinaoka
+/.github/workflows/ @shinaoka
+/pyproject.toml @shinaoka
+/uv.lock @shinaoka
