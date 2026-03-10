@@ -1,0 +1,25 @@
+[project]
+name = "tensor-ad-oracles"
+version = "0.1.0"
+description = "JSON database and generators for derivative-correctness oracles of tensor and linear algebra operations."
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+  "expecttest>=0.3",
+  "jsonschema>=4.23",
+  "numpy>=2.0",
+  "torch==2.10.0",
+]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.12",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
