@@ -788,7 +788,7 @@ where
     T: LinalgScalar + CpuLinalgScalar,
 {
     super::with_cpu_runtime("solve_triangular_rrule", |ctx| {
-        tenferro_linalg::solve_triangular_rrule::<T>(
+        tenferro_linalg::solve_triangular_rrule::<T, _>(
             ctx,
             a.primal(),
             b.primal(),

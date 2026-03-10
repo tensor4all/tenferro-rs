@@ -533,7 +533,7 @@ where
                 message: "svd_ad missing materialized tangent".to_string(),
             })?;
             let (p, d) = with_cpu_runtime("svd_ad", |ctx| {
-                tenferro_linalg::svd_frule::<T>(ctx, &input_primal, &dt, self.options)
+                tenferro_linalg::svd_frule::<T, _>(ctx, &input_primal, &dt, self.options)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
@@ -575,7 +575,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("svd_ad_pullback_u", |ctx| {
-                            tenferro_linalg::svd_rrule::<T>(
+                            tenferro_linalg::svd_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::SvdCotangent {
@@ -604,7 +604,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("svd_ad_pullback_s", |ctx| {
-                            tenferro_linalg::svd_rrule::<T>(
+                            tenferro_linalg::svd_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::SvdCotangent {
@@ -633,7 +633,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("svd_ad_pullback_vt", |ctx| {
-                            tenferro_linalg::svd_rrule::<T>(
+                            tenferro_linalg::svd_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::SvdCotangent {
@@ -705,7 +705,7 @@ where
                 message: "qr_ad missing materialized tangent".to_string(),
             })?;
             let (p, d) = with_cpu_runtime("qr_ad", |ctx| {
-                tenferro_linalg::qr_frule::<T>(ctx, &input_primal, &dt).map_err(Error::from)
+                tenferro_linalg::qr_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
@@ -741,7 +741,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("qr_ad_pullback_q", |ctx| {
-                            tenferro_linalg::qr_rrule::<T>(
+                            tenferro_linalg::qr_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::QrCotangent {
@@ -767,7 +767,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("qr_ad_pullback_r", |ctx| {
-                            tenferro_linalg::qr_rrule::<T>(
+                            tenferro_linalg::qr_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::QrCotangent {
@@ -842,7 +842,7 @@ where
                 message: "lu_ad missing materialized tangent".to_string(),
             })?;
             let (p, d) = with_cpu_runtime("lu_ad", |ctx| {
-                tenferro_linalg::lu_frule::<T>(ctx, &input_primal, &dt, self.pivot)
+                tenferro_linalg::lu_frule::<T, _>(ctx, &input_primal, &dt, self.pivot)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
@@ -881,7 +881,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("lu_ad_pullback_l", |ctx| {
-                            tenferro_linalg::lu_rrule::<T>(
+                            tenferro_linalg::lu_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::LuCotangent {
@@ -909,7 +909,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("lu_ad_pullback_u", |ctx| {
-                            tenferro_linalg::lu_rrule::<T>(
+                            tenferro_linalg::lu_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::LuCotangent {
@@ -980,7 +980,7 @@ where
                 message: "eigen_ad missing materialized tangent".to_string(),
             })?;
             let (p, d) = with_cpu_runtime("eigen_ad", |ctx| {
-                tenferro_linalg::eigen_frule::<T>(ctx, &input_primal, &dt).map_err(Error::from)
+                tenferro_linalg::eigen_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
@@ -1016,7 +1016,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("eigen_ad_pullback_values", |ctx| {
-                            tenferro_linalg::eigen_rrule::<T>(
+                            tenferro_linalg::eigen_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::EigenCotangent {
@@ -1042,7 +1042,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("eigen_ad_pullback_vectors", |ctx| {
-                            tenferro_linalg::eigen_rrule::<T>(
+                            tenferro_linalg::eigen_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::EigenCotangent {
@@ -1238,8 +1238,8 @@ where
             "cholesky_ad_pullback",
             self.tensor,
             |ctx, t| tenferro_linalg::cholesky::<T, CpuContext>(ctx, t).map_err(Error::from),
-            |ctx, t, dt| tenferro_linalg::cholesky_frule::<T>(ctx, t, dt),
-            |ctx, t, cotangent| tenferro_linalg::cholesky_rrule::<T>(ctx, t, cotangent),
+            |ctx, t, dt| tenferro_linalg::cholesky_frule::<T, _>(ctx, t, dt),
+            |ctx, t, cotangent| tenferro_linalg::cholesky_rrule::<T, _>(ctx, t, cotangent),
         )
     }
 }
@@ -1282,9 +1282,9 @@ where
             self.a,
             self.b,
             |ctx, a, b| tenferro_linalg::solve::<T, CpuContext>(ctx, a, b).map_err(Error::from),
-            |ctx, a, b, da, db| tenferro_linalg::solve_frule::<T>(ctx, a, b, da, db),
+            |ctx, a, b, da, db| tenferro_linalg::solve_frule::<T, _>(ctx, a, b, da, db),
             |ctx, a, b, cotangent| {
-                let grad = tenferro_linalg::solve_rrule::<T>(ctx, a, b, cotangent)?;
+                let grad = tenferro_linalg::solve_rrule::<T, _>(ctx, a, b, cotangent)?;
                 Ok((grad.a, grad.b))
             },
         )
@@ -1537,7 +1537,7 @@ where
                 message: "eig_ad missing materialized tangent".to_string(),
             })?;
             let (p, d) = with_cpu_runtime("eig_ad", |ctx| {
-                tenferro_linalg::eig_frule::<T>(ctx, &input_primal, &dt).map_err(Error::from)
+                tenferro_linalg::eig_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
@@ -1573,7 +1573,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("eig_ad_pullback_values", |ctx| {
-                            tenferro_linalg::eig_rrule::<T>(
+                            tenferro_linalg::eig_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::EigCotangent {
@@ -1599,7 +1599,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let grad = with_cpu_runtime("eig_ad_pullback_vectors", |ctx| {
-                            tenferro_linalg::eig_rrule::<T>(
+                            tenferro_linalg::eig_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
                                 &tenferro_linalg::EigCotangent {
@@ -1794,7 +1794,7 @@ where
             })?;
 
             let (p, d) = with_cpu_runtime("solve_triangular_ad", |ctx| {
-                tenferro_linalg::solve_triangular_frule::<T>(
+                tenferro_linalg::solve_triangular_frule::<T, _>(
                     ctx, &a_primal, &b_primal, &ta, &tb, self.upper,
                 )
                 .map_err(Error::from)
@@ -1825,7 +1825,7 @@ where
                 output_node,
                 Box::new(move |cotangent| {
                     let grad = with_cpu_runtime("solve_triangular_ad_pullback", |ctx| {
-                        tenferro_linalg::solve_triangular_rrule::<T>(
+                        tenferro_linalg::solve_triangular_rrule::<T, _>(
                             ctx, &a_primal, &b_primal, cotangent, upper,
                         )
                         .map_err(Error::from)
