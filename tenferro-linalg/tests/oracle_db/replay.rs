@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use tenferro_linalg::{
-    cholesky_frule, cholesky_rrule, eigen_frule, eigen_rrule, pinv_frule, pinv_rrule, qr_frule,
-    qr_rrule, solve_frule, solve_rrule, svd_frule, svd_rrule, EigenCotangent, QrCotangent,
-    SolveGrad, SvdCotangent,
+    cholesky_frule, cholesky_rrule, eigen, eigen_frule, eigen_rrule, pinv_frule, pinv_rrule,
+    qr_frule, qr_rrule, solve_frule, solve_rrule, svd, svd_frule, svd_rrule, EigenCotangent,
+    QrCotangent, SolveGrad, SvdCotangent,
 };
 use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor;
@@ -15,11 +15,13 @@ use crate::decode::{
     batched_matmul, batched_transpose, compare_tensor_maps, decode_f64_tensor_with_core_rank,
     elementwise_sign_mul, tensor_add, tensor_data_col_major, tensor_map_inner_product,
 };
+use crate::hvp::{central_diff_tensor_maps, perturb_input_map};
 use crate::support::{classify_record, ExpectedErrorKind, RecordSupport, ReplayKind};
 
 #[derive(Debug)]
 pub struct ReplaySummary {
     pub validated_records: usize,
+    pub validated_hvp_records: usize,
     pub expected_error_case_ids: Vec<String>,
     pub unsupported_records: usize,
     pub failures: Vec<String>,
@@ -28,6 +30,7 @@ pub struct ReplaySummary {
 pub fn run_database_replay() -> ReplaySummary {
     let mut summary = ReplaySummary {
         validated_records: 0,
+        validated_hvp_records: 0,
         expected_error_case_ids: Vec::new(),
         unsupported_records: 0,
         failures: Vec::new(),
@@ -58,7 +61,12 @@ pub fn run_database_replay() -> ReplaySummary {
         };
         for record in records {
             match replay_case(&record) {
-                Ok(ReplayOutcome::Validated) => summary.validated_records += 1,
+                Ok(ReplayOutcome::Validated { hvp_checked }) => {
+                    summary.validated_records += 1;
+                    if hvp_checked {
+                        summary.validated_hvp_records += 1;
+                    }
+                }
                 Ok(ReplayOutcome::ExpectedError) => {
                     summary.expected_error_case_ids.push(record.case_id.clone());
                 }
@@ -73,7 +81,7 @@ pub fn run_database_replay() -> ReplaySummary {
 }
 
 enum ReplayOutcome {
-    Validated,
+    Validated { hvp_checked: bool },
     ExpectedError,
     Unsupported,
 }
@@ -90,7 +98,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
             if record.dtype != "float64" {
                 return Err(format!("unsupported success dtype {}", record.dtype));
             }
-            match kind {
+            let hvp_checked = match kind {
                 ReplayKind::SolveIdentity => replay_solve(record),
                 ReplayKind::CholeskyIdentity => replay_cholesky(record),
                 ReplayKind::QrIdentity => replay_qr(record),
@@ -101,7 +109,7 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
                 ReplayKind::EighValuesVectorsAbs => replay_eigen(record),
                 ReplayKind::PinvSingularIdentity => replay_pinv_singular(record),
             }?;
-            Ok(ReplayOutcome::Validated)
+            Ok(ReplayOutcome::Validated { hvp_checked })
         }
         RecordSupport::ExpectedError(ExpectedErrorKind::GaugeIllDefined) => {
             Ok(ReplayOutcome::ExpectedError)
@@ -141,6 +149,51 @@ fn second_order_comparison(record: &CaseRecord) -> Result<(f64, f64), String> {
         ));
     }
     Ok((comparison.rtol, comparison.atol))
+}
+
+fn validate_hvp<F>(
+    label: &str,
+    record: &CaseRecord,
+    base_inputs: &BTreeMap<String, Tensor<f64>>,
+    direction: &BTreeMap<String, Tensor<f64>>,
+    probe: &ProbeRecord,
+    eval_grad: F,
+) -> Result<bool, String>
+where
+    F: Fn(&BTreeMap<String, Tensor<f64>>) -> Result<BTreeMap<String, Tensor<f64>>, String>,
+{
+    let Some(expected_torch_hvp) = probe.pytorch_ref.hvp.as_ref() else {
+        return Ok(false);
+    };
+    let expected_fd_hvp = probe
+        .fd_ref
+        .hvp
+        .as_ref()
+        .ok_or_else(|| format!("missing fd_ref.hvp for {}", record.case_id))?;
+    let expected_hvp_torch = decode_input_map_like(record, expected_torch_hvp)?;
+    let expected_hvp_fd = decode_input_map_like(record, expected_fd_hvp)?;
+    let step = probe.fd_ref.step;
+    let plus_inputs = perturb_input_map(base_inputs, direction, step)?;
+    let minus_inputs = perturb_input_map(base_inputs, direction, -step)?;
+    let grad_plus = eval_grad(&plus_inputs)?;
+    let grad_minus = eval_grad(&minus_inputs)?;
+    let actual_hvp = central_diff_tensor_maps(&grad_plus, &grad_minus, step)?;
+    let (rtol, atol) = second_order_comparison(record)?;
+    compare_tensor_maps(
+        &format!("{label}.hvp.fd"),
+        &expected_hvp_fd,
+        &actual_hvp,
+        rtol,
+        atol,
+    )?;
+    compare_tensor_maps(
+        &format!("{label}.hvp.torch"),
+        &expected_hvp_torch,
+        &actual_hvp,
+        rtol,
+        atol,
+    )?;
+    Ok(true)
 }
 
 fn solve_rhs_core_rank(a: &DbTensor, b: &DbTensor) -> usize {
@@ -266,7 +319,7 @@ fn apply_hermitian_wrapper(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> 
     Ok(tensor_add(tensor, &transpose))
 }
 
-fn replay_solve(record: &CaseRecord) -> Result<(), String> {
+fn replay_solve(record: &CaseRecord) -> Result<bool, String> {
     let inputs = decode_inputs(record)?;
     let probe = probe(record)?;
     let direction = decode_input_map_like(record, &probe.direction)?;
@@ -304,10 +357,25 @@ fn replay_solve(record: &CaseRecord) -> Result<(), String> {
         atol,
     )?;
     compare_tensor_maps("solve.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)
+    let hvp_checked = validate_hvp("solve", record, &inputs, &direction, probe, |perturbed| {
+        let mut ctx = CpuContext::new(1);
+        let grad = solve_rrule(
+            &mut ctx,
+            perturbed.get("a").unwrap(),
+            perturbed.get("b").unwrap(),
+            cotangent.get("value").unwrap(),
+        )
+        .map_err(|err| format!("solve_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([
+            (String::from("a"), grad.a),
+            (String::from("b"), grad.b),
+        ]))
+    })?;
+    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
 }
 
-fn replay_cholesky(record: &CaseRecord) -> Result<(), String> {
+fn replay_cholesky(record: &CaseRecord) -> Result<bool, String> {
     let inputs = decode_inputs(record)?;
     let probe = probe(record)?;
     let direction = decode_input_map_like(record, &probe.direction)?;
@@ -349,7 +417,19 @@ fn replay_cholesky(record: &CaseRecord) -> Result<(), String> {
         atol,
     )?;
     compare_tensor_maps("cholesky.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)
+    let hvp_checked =
+        validate_hvp("cholesky", record, &inputs, &direction, probe, |perturbed| {
+            let wrapped = apply_hermitian_wrapper(perturbed.get("a").unwrap())?;
+            let mut ctx = CpuContext::new(1);
+            let grad = cholesky_rrule(&mut ctx, &wrapped, &raw_cotangent)
+                .map_err(|err| format!("cholesky_rrule failed during HVP replay: {err}"))?;
+            Ok(BTreeMap::from([(
+                String::from("a"),
+                apply_hermitian_wrapper(&grad)?,
+            )]))
+        })?;
+    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
 }
 
 fn infer_triangular_orientation(tensor: &Tensor<f64>) -> Result<TriangularOrientation, String> {
@@ -401,7 +481,7 @@ fn infer_triangular_orientation(tensor: &Tensor<f64>) -> Result<TriangularOrient
     ))
 }
 
-fn replay_qr(record: &CaseRecord) -> Result<(), String> {
+fn replay_qr(record: &CaseRecord) -> Result<bool, String> {
     let inputs = decode_inputs(record)?;
     let probe = probe(record)?;
     let direction = decode_input_map_like(record, &probe.direction)?;
@@ -436,7 +516,21 @@ fn replay_qr(record: &CaseRecord) -> Result<(), String> {
     compare_tensor_maps("qr.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
     compare_tensor_maps("qr.jvp.torch", &expected_jvp_torch, &actual_jvp, rtol, atol)?;
     compare_tensor_maps("qr.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)
+    let hvp_checked = validate_hvp("qr", record, &inputs, &direction, probe, |perturbed| {
+        let mut ctx = CpuContext::new(1);
+        let grad = qr_rrule(
+            &mut ctx,
+            perturbed.get("a").unwrap(),
+            &QrCotangent {
+                q: Some(cotangent.get("output_0").unwrap().clone()),
+                r: Some(cotangent.get("output_1").unwrap().clone()),
+            },
+        )
+        .map_err(|err| format!("qr_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(String::from("a"), grad)]))
+    })?;
+    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
 }
 
 fn svd_observable_jvp(
@@ -513,7 +607,7 @@ fn svd_observable_cotangent(
     }
 }
 
-fn replay_svd(record: &CaseRecord) -> Result<(), String> {
+fn replay_svd(record: &CaseRecord) -> Result<bool, String> {
     let inputs = decode_inputs(record)?;
     let probe = probe(record)?;
     let direction = decode_input_map_like(record, &probe.direction)?;
@@ -555,10 +649,25 @@ fn replay_svd(record: &CaseRecord) -> Result<(), String> {
         atol,
     )?;
     compare_tensor_maps("svd.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)
+    let hvp_checked = validate_hvp("svd", record, &inputs, &direction, probe, |perturbed| {
+        let mut ctx = CpuContext::new(1);
+        let primal = svd(&mut ctx, perturbed.get("a").unwrap(), None)
+            .map_err(|err| format!("svd failed during HVP replay: {err}"))?;
+        let cotangent_raw = svd_observable_cotangent(
+            record.family.as_str(),
+            &primal.u,
+            &primal.vt,
+            &cotangent,
+        )?;
+        let grad = svd_rrule(&mut ctx, perturbed.get("a").unwrap(), &cotangent_raw, None)
+            .map_err(|err| format!("svd_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(String::from("a"), grad)]))
+    })?;
+    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
 }
 
-fn replay_eigen(record: &CaseRecord) -> Result<(), String> {
+fn replay_eigen(record: &CaseRecord) -> Result<bool, String> {
     let inputs = decode_inputs(record)?;
     let probe = probe(record)?;
     let direction = decode_input_map_like(record, &probe.direction)?;
@@ -603,7 +712,30 @@ fn replay_eigen(record: &CaseRecord) -> Result<(), String> {
         atol,
     )?;
     compare_tensor_maps("eigen.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)
+    let hvp_checked = validate_hvp("eigen", record, &inputs, &direction, probe, |perturbed| {
+        let wrapped = apply_hermitian_wrapper(perturbed.get("a").unwrap())?;
+        let mut ctx = CpuContext::new(1);
+        let primal = eigen(&mut ctx, &wrapped)
+            .map_err(|err| format!("eigen failed during HVP replay: {err}"))?;
+        let grad = eigen_rrule(
+            &mut ctx,
+            &wrapped,
+            &EigenCotangent {
+                values: Some(cotangent.get("values").unwrap().clone()),
+                vectors: Some(elementwise_sign_mul(
+                    &primal.vectors,
+                    cotangent.get("vectors").unwrap(),
+                )),
+            },
+        )
+        .map_err(|err| format!("eigen_rrule failed during HVP replay: {err}"))?;
+        Ok(BTreeMap::from([(
+            String::from("a"),
+            apply_hermitian_wrapper(&grad)?,
+        )]))
+    })?;
+    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
 }
 
 fn pinv_factor_product(a: &Tensor<f64>, b: &Tensor<f64>) -> Result<Tensor<f64>, String> {
@@ -623,7 +755,7 @@ fn pinv_factor_pullback(
     })
 }
 
-fn replay_pinv_singular(record: &CaseRecord) -> Result<(), String> {
+fn replay_pinv_singular(record: &CaseRecord) -> Result<bool, String> {
     let inputs = decode_inputs(record)?;
     let a = inputs.get("a").unwrap();
     let b = inputs.get("b").unwrap();
@@ -662,5 +794,19 @@ fn replay_pinv_singular(record: &CaseRecord) -> Result<(), String> {
         atol,
     )?;
     compare_tensor_maps("pinv.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)
+    let hvp_checked = validate_hvp("pinv", record, &inputs, &direction, probe, |perturbed| {
+        let pa = perturbed.get("a").unwrap();
+        let pb = perturbed.get("b").unwrap();
+        let matrix = pinv_factor_product(pa, pb)?;
+        let mut ctx = CpuContext::new(1);
+        let grad_matrix = pinv_rrule(&mut ctx, &matrix, cotangent.get("value").unwrap(), None)
+            .map_err(|err| format!("pinv_rrule failed during HVP replay: {err}"))?;
+        let grad_factors = pinv_factor_pullback(&grad_matrix, pa, pb)?;
+        Ok(BTreeMap::from([
+            (String::from("a"), grad_factors.a),
+            (String::from("b"), grad_factors.b),
+        ]))
+    })?;
+    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    Ok(hvp_checked)
 }

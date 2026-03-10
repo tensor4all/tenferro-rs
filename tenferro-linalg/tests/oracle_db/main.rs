@@ -1,5 +1,6 @@
 mod db;
 mod decode;
+mod hvp;
 mod replay;
 mod support;
 
@@ -309,5 +310,16 @@ fn oracle_db_replay_against_tensor_ad_oracles() {
         summary.failures.is_empty(),
         "oracle replay failures: {:?}",
         summary.failures
+    );
+}
+
+#[test]
+fn oracle_db_replays_supported_hvp_cases() {
+    let summary = replay::run_database_replay();
+
+    assert_eq!(
+        summary.validated_hvp_records, 348,
+        "unexpected HVP replay summary: validated_hvp={}, unsupported={}, failures={:?}",
+        summary.validated_hvp_records, summary.unsupported_records, summary.failures
     );
 }
