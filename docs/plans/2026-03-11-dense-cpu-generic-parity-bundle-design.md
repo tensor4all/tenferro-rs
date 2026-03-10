@@ -13,6 +13,8 @@ PyTorch coverage. Its job is to:
   protocol split
 - remove one concrete abstraction flaw (`LinalgScalar` carrying LAPACK-specific
   eigen helpers)
+- remove the most immediate structure violations that would make the bundle
+  itself hard to review or extend
 
 ## Why One PR Can Only Go This Far
 
@@ -39,6 +41,8 @@ So the maximum coherent one-PR bundle is:
 2. fix architecture/docs drift for `#443`
 3. close immediate rustdoc debt for `#444`
 4. remove the most obvious trait-layer leak for `#445`
+5. split the worst monolithic modules and inline tests that would otherwise
+   block clean CPU/GPU-generic follow-up work
 
 This creates the right base for follow-up implementation PRs without pretending
 that broad parity already exists.
@@ -56,9 +60,48 @@ That means:
   rather than deeper CPU-only helpers
 - audit artifacts must explicitly classify CPU-only runtime assumptions as
   architecture debt
+- AD helper and rule APIs touched by this bundle should move away from
+  `&mut CpuContext`-specific signatures toward backend-parametric context bounds
 
 This PR does **not** have to remove every existing CPU-only path. It **does**
 have to make those paths visible and avoid extending them.
+
+## Review-Driven Must-Fix Items
+
+The current codebase state validates several structural problems that are large
+enough to belong in the bundle itself:
+
+- `tenferro-linalg/src/lib.rs` is currently `7,370` lines
+- `extension/tenferro-dyadtensor/src/api/mod.rs` is currently `3,687` lines
+- `tenferro-linalg/src/lib.rs` contains an inline `eig_scalar_tests` module in
+  addition to `mod tests;`
+- multiple AD entry points in `tenferro-linalg/src/lib.rs` still hard-code
+  `&mut tenferro_prims::CpuContext`
+- `ensure_cpu_backend(...)` currently compares backend types with
+  `type_name::<...>()`
+- `options.expect("checked above")` still exists in library code
+
+These are not merely style nits. They directly affect the CPU/GPU-generic
+architecture and the maintainability of the one-PR bundle.
+
+## Review Findings: In Bundle vs Follow-Up
+
+### Must be handled inside this bundle
+
+- split `tenferro-linalg/src/lib.rs` into focused modules
+- move `eig_scalar_tests` out of inline test scope
+- remove newly touched `CpuContext`-hardcoded AD surface in `tenferro-linalg`
+- replace `type_name::<...>()` backend comparison with `TypeId`
+- remove `expect(...)` from public/library code paths
+- split `extension/tenferro-dyadtensor/src/api/mod.rs` into focused modules
+
+### Must be recorded, but can stay follow-up
+
+- `PrimDescriptor::Permute` still exists in `tenferro-prims`
+
+The `Permute` point is valid architecture debt, but it belongs to the broader
+substrate redesign tracked by `#441`, not this bundle. The audit must mention
+it explicitly without trying to land the full prims removal here.
 
 ## Bundle Scope
 
@@ -108,6 +151,29 @@ Expected end state:
 - CPU eigendecomposition code depends on the LAPACK-specific trait
 - future GPU backends are not forced to implement dead-weight LAPACK helpers
 
+### Structural cleanup included in the same PR
+
+The single PR should also perform no-behavior-change file organization cleanup
+where it materially improves architecture review:
+
+- split `tenferro-linalg/src/lib.rs` into modules such as:
+  - `result_types.rs`
+  - `primal.rs`
+  - `ad_helpers.rs`
+  - `rrules.rs`
+  - `frules.rs`
+- keep only thin re-export / module wiring in `lib.rs`
+- move inline eigen helper tests into crate-local test modules
+- split `extension/tenferro-dyadtensor/src/api/mod.rs` by concern, e.g.:
+  - `runtime.rs`
+  - `primal_builders.rs`
+  - `linalg_builders.rs`
+  - `ad_builders.rs`
+  - `tests/mod.rs`
+
+The exact filenames may change, but the bundle should end with focused modules
+instead of multi-thousand-line catch-all files.
+
 ## Recommended File Targets
 
 ### Docs / audit
@@ -138,6 +204,20 @@ Expected end state:
 - Modify: `tenferro-linalg/src/tests/mod.rs`
 - Create: `tenferro-linalg-prims/src/tests/mod.rs`
 
+### Structural refactor
+
+- Create: `tenferro-linalg/src/result_types.rs`
+- Create: `tenferro-linalg/src/primal.rs`
+- Create: `tenferro-linalg/src/ad_helpers.rs`
+- Create: `tenferro-linalg/src/rrules.rs`
+- Create: `tenferro-linalg/src/frules.rs`
+- Modify: `tenferro-linalg/src/lib.rs`
+- Create: `extension/tenferro-dyadtensor/src/api/runtime.rs`
+- Create: `extension/tenferro-dyadtensor/src/api/primal_builders.rs`
+- Create: `extension/tenferro-dyadtensor/src/api/linalg_builders.rs`
+- Create: `extension/tenferro-dyadtensor/src/api/ad_builders.rs`
+- Modify: `extension/tenferro-dyadtensor/src/api/mod.rs`
+
 ## Non-Goals
 
 This bundle should **not**:
@@ -145,6 +225,7 @@ This bundle should **not**:
 - add broad new scalar / elementwise / reduction primal kernels
 - add broad new VJP/JVP/HVP implementations
 - remove all existing CPU-only runtime assumptions in dyadtensor or linalg
+- remove `PrimDescriptor::Permute` from the legacy prims surface
 - close `#441`
 
 `#441` remains an input and a follow-up implementation stream. This bundle only
@@ -158,6 +239,11 @@ The single PR is successful if all of the following are true:
 - `#446` has a concrete audit artifact in the repo, not just issue text
 - the audit makes CPU-only layer leaks explicit
 - no new CPU-only API surface is introduced
+- `tenferro-linalg/src/lib.rs` no longer acts as a monolithic implementation
+  file
+- `extension/tenferro-dyadtensor/src/api/mod.rs` no longer acts as a monolithic
+  implementation file
+- non-leaf inline tests are moved out of `tenferro-linalg/src/lib.rs`
 - required workspace verification passes
 
 ## Verification
