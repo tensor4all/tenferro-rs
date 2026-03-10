@@ -83,6 +83,8 @@ class PytorchV1RegistryTests(unittest.TestCase):
             index[("inv", "identity")].source_function,
             "sample_inputs_linalg_invertible",
         )
+        self.assertTrue(index[("solve", "identity")].hvp_enabled)
+        self.assertTrue(index[("svd", "u_abs")].hvp_enabled)
 
     def test_main_list_prints_case_registry(self) -> None:
         stdout = io.StringIO()

@@ -296,3 +296,67 @@ def build_observable_function(
         return tensor_map_to_tuple(output)
 
     return observable_fn
+
+
+def build_scalarized_observable_function(
+    torch,
+    observable_fn: Callable[..., tuple[object, ...]],
+    *,
+    output_names: tuple[str, ...],
+    cotangent: dict[str, object],
+) -> Callable[..., object]:
+    """Build `phi(x) = <cotangent, observable(x)>` using the repository scalarization."""
+
+    def scalarized_fn(*args):
+        observable = tuple_to_tensor_map(output_names, observable_fn(*args))
+        return tensor_map_inner_product(torch, cotangent, observable)
+
+    return scalarized_fn
+
+
+def compute_pytorch_hvp(
+    torch,
+    scalarized_fn: Callable[..., object],
+    *,
+    inputs: dict[str, object],
+    direction: dict[str, object],
+) -> dict[str, object]:
+    """Compute a scalarized HVP with PyTorch `grad` + `jvp`."""
+    input_names = tuple(inputs.keys())
+    argnums = tuple(range(len(input_names)))
+    grad_fn = torch.func.grad(scalarized_fn, argnums=argnums)
+    _, hvp = torch.func.jvp(
+        grad_fn,
+        tensor_map_to_tuple(inputs),
+        tensor_map_to_tuple(direction),
+    )
+    return tuple_to_tensor_map(input_names, hvp)
+
+
+def compute_fd_hvp(
+    torch,
+    scalarized_fn: Callable[..., object],
+    *,
+    inputs: dict[str, object],
+    direction: dict[str, object],
+    step: float,
+) -> dict[str, object]:
+    """Compute a scalarized HVP by central differences on the scalarized gradient."""
+    input_names = tuple(inputs.keys())
+    argnums = tuple(range(len(input_names)))
+    grad_fn = torch.func.grad(scalarized_fn, argnums=argnums)
+    plus_inputs = {
+        name: tensor + step * direction[name] for name, tensor in inputs.items()
+    }
+    minus_inputs = {
+        name: tensor - step * direction[name] for name, tensor in inputs.items()
+    }
+    plus_grad = tuple_to_tensor_map(input_names, grad_fn(*tensor_map_to_tuple(plus_inputs)))
+    minus_grad = tuple_to_tensor_map(
+        input_names,
+        grad_fn(*tensor_map_to_tuple(minus_inputs)),
+    )
+    return {
+        name: (plus_grad[name] - minus_grad[name]) / (2.0 * step)
+        for name in input_names
+    }

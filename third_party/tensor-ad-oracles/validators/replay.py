@@ -10,6 +10,9 @@ from generators.runtime import (
     apply_spec_observable,
     build_input_map,
     build_observable_function,
+    build_scalarized_observable_function,
+    compute_fd_hvp,
+    compute_pytorch_hvp,
     import_generation_runtime,
     map_allclose,
     sample_inputs_for_spec,
@@ -52,8 +55,26 @@ def _decode_success_probe(record: dict) -> tuple[dict[str, object], dict[str, ob
         decode_tensor_map(probe["cotangent"]),
         decode_tensor_map(probe["pytorch_ref"]["jvp"]),
         decode_tensor_map(probe["pytorch_ref"]["vjp"]),
+        (
+            None
+            if "hvp" not in probe["pytorch_ref"]
+            else decode_tensor_map(probe["pytorch_ref"]["hvp"])
+        ),
         float(probe["fd_ref"]["step"]),
+        (
+            None
+            if "hvp" not in probe["fd_ref"]
+            else decode_tensor_map(probe["fd_ref"]["hvp"])
+        ),
     )
+
+
+def _first_order_comparison(comparison: dict) -> dict:
+    return comparison.get("first_order", comparison)
+
+
+def _second_order_comparison(comparison: dict) -> dict | None:
+    return comparison.get("second_order")
 
 
 def validate_live_success_probe(
@@ -65,14 +86,17 @@ def validate_live_success_probe(
     pytorch_jvp: dict[str, object],
     pytorch_vjp: dict[str, object],
     fd_jvp: dict[str, object],
+    pytorch_hvp: dict[str, object] | None = None,
+    fd_hvp: dict[str, object] | None = None,
 ) -> None:
     """Validate live cross-oracle agreement for one success-case probe."""
+    first_order = _first_order_comparison(comparison)
     if not map_allclose(
         torch,
         pytorch_jvp,
         fd_jvp,
-        rtol=comparison["rtol"],
-        atol=comparison["atol"],
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
     ):
         raise ValueError("live PyTorch JVP and live FD-JVP disagree")
 
@@ -81,10 +105,25 @@ def validate_live_success_probe(
     if not torch.allclose(
         lhs,
         rhs,
-        rtol=comparison["rtol"],
-        atol=comparison["atol"],
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
     ):
         raise ValueError("live probe failed adjoint consistency")
+    if pytorch_hvp is None and fd_hvp is None:
+        return
+    if pytorch_hvp is None or fd_hvp is None:
+        raise ValueError("live probe has incomplete HVP references")
+    second_order = _second_order_comparison(comparison)
+    if second_order is None:
+        raise ValueError("live probe is missing second-order comparison tolerance")
+    if not map_allclose(
+        torch,
+        pytorch_hvp,
+        fd_hvp,
+        rtol=second_order["rtol"],
+        atol=second_order["atol"],
+    ):
+        raise ValueError("live PyTorch HVP and live FD-HVP disagree")
 
 
 def _find_candidate_samples(torch, spec, record_inputs: dict[str, object]) -> list[object]:
@@ -109,11 +148,15 @@ def _replay_success_case_for_sample(
     cotangent: dict[str, object],
     stored_pytorch_jvp: dict[str, object],
     stored_pytorch_vjp: dict[str, object],
+    stored_pytorch_hvp: dict[str, object] | None,
     stored_fd_jvp: dict[str, object],
     fd_step: float,
+    stored_fd_hvp: dict[str, object] | None,
 ) -> str | None:
     comparison = record["comparison"]
     input_names = tuple(inputs.keys())
+    first_order = _first_order_comparison(comparison)
+    second_order = _second_order_comparison(comparison)
 
     try:
         observable = apply_spec_observable(torch, spec, sample, inputs)
@@ -146,6 +189,28 @@ def _replay_success_case_for_sample(
             name: (plus_output[name] - minus_output[name]) / (2.0 * fd_step)
             for name in output_names
         }
+        pytorch_hvp = None
+        fd_hvp = None
+        if stored_pytorch_hvp is not None or stored_fd_hvp is not None:
+            scalarized_fn = build_scalarized_observable_function(
+                torch,
+                observable_fn,
+                output_names=output_names,
+                cotangent=cotangent,
+            )
+            pytorch_hvp = compute_pytorch_hvp(
+                torch,
+                scalarized_fn,
+                inputs=inputs,
+                direction=direction,
+            )
+            fd_hvp = compute_fd_hvp(
+                torch,
+                scalarized_fn,
+                inputs=inputs,
+                direction=direction,
+                step=fd_step,
+            )
     except Exception as exc:
         return str(exc)
 
@@ -153,26 +218,45 @@ def _replay_success_case_for_sample(
         torch,
         stored_pytorch_jvp,
         pytorch_jvp,
-        rtol=comparison["rtol"],
-        atol=comparison["atol"],
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
     ):
         return "stored and replayed PyTorch JVP disagree"
     if not map_allclose(
         torch,
         stored_pytorch_vjp,
         pytorch_vjp,
-        rtol=comparison["rtol"],
-        atol=comparison["atol"],
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
     ):
         return "stored and replayed PyTorch VJP disagree"
     if not map_allclose(
         torch,
         stored_fd_jvp,
         fd_jvp,
-        rtol=comparison["rtol"],
-        atol=comparison["atol"],
+        rtol=first_order["rtol"],
+        atol=first_order["atol"],
     ):
         return "stored and replayed FD-JVP disagree"
+    if stored_pytorch_hvp is not None and stored_fd_hvp is not None:
+        if second_order is None:
+            return "missing second-order comparison block"
+        if not map_allclose(
+            torch,
+            stored_pytorch_hvp,
+            pytorch_hvp,
+            rtol=second_order["rtol"],
+            atol=second_order["atol"],
+        ):
+            return "stored and replayed PyTorch HVP disagree"
+        if not map_allclose(
+            torch,
+            stored_fd_hvp,
+            fd_hvp,
+            rtol=second_order["rtol"],
+            atol=second_order["atol"],
+        ):
+            return "stored and replayed FD-HVP disagree"
     try:
         validate_live_success_probe(
             torch,
@@ -182,6 +266,8 @@ def _replay_success_case_for_sample(
             pytorch_jvp=pytorch_jvp,
             pytorch_vjp=pytorch_vjp,
             fd_jvp=fd_jvp,
+            pytorch_hvp=pytorch_hvp,
+            fd_hvp=fd_hvp,
         )
     except ValueError as exc:
         return str(exc)
@@ -193,7 +279,15 @@ def _replay_success_case(record: dict) -> None:
 
     spec = build_case_spec_index()[(record["op"], record["family"])]
     inputs = _decode_record_inputs(record)
-    direction, cotangent, stored_pytorch_jvp, stored_pytorch_vjp, fd_step = (
+    (
+        direction,
+        cotangent,
+        stored_pytorch_jvp,
+        stored_pytorch_vjp,
+        stored_pytorch_hvp,
+        fd_step,
+        stored_fd_hvp,
+    ) = (
         _decode_success_probe(record)
     )
     stored_fd_jvp = decode_tensor_map(record["probes"][0]["fd_ref"]["jvp"])
@@ -214,8 +308,10 @@ def _replay_success_case(record: dict) -> None:
             cotangent=cotangent,
             stored_pytorch_jvp=stored_pytorch_jvp,
             stored_pytorch_vjp=stored_pytorch_vjp,
+            stored_pytorch_hvp=stored_pytorch_hvp,
             stored_fd_jvp=stored_fd_jvp,
             fd_step=fd_step,
+            stored_fd_hvp=stored_fd_hvp,
         )
         if mismatch is None:
             return

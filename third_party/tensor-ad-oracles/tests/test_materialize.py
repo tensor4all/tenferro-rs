@@ -46,7 +46,9 @@ class MaterializeTests(unittest.TestCase):
             case_id="solve_f64_identity_001",
             dtype="float64",
             inputs={"a": {"dtype": "float64", "shape": [1], "order": "row_major", "data": [1.0]}},
-            comparison={"kind": "allclose", "rtol": 1e-11, "atol": 1e-12},
+            comparison={
+                "first_order": {"kind": "allclose", "rtol": 1e-11, "atol": 1e-12}
+            },
             probes=[
                 {
                     "probe_id": "p0",
@@ -98,20 +100,27 @@ class MaterializeTests(unittest.TestCase):
             case_id="solve_f64_identity_001",
             dtype="float64",
             raw_inputs={"a": FakeTensor([[4.0, 1.0], [1.0, 3.0]], dtype="float64")},
-            comparison={"kind": "allclose", "rtol": 1e-11, "atol": 1e-12},
+            comparison={
+                "first_order": {"kind": "allclose", "rtol": 1e-11, "atol": 1e-12},
+                "second_order": {"kind": "allclose", "rtol": 1e-8, "atol": 1e-9},
+            },
             probe_id="p0",
             raw_direction={"a": FakeTensor([[1.0, 0.0], [0.0, 1.0]], dtype="float64")},
             raw_cotangent={"value": FakeTensor([[0.5], [0.25]], dtype="float64")},
             raw_pytorch_jvp={"value": FakeTensor([[0.1], [0.2]], dtype="float64")},
             raw_pytorch_vjp={"a": FakeTensor([[0.3, 0.4], [0.5, 0.6]], dtype="float64")},
+            raw_pytorch_hvp={"a": FakeTensor([[0.7, 0.8], [0.9, 1.0]], dtype="float64")},
             fd_step=1e-6,
             raw_fd_jvp={"value": FakeTensor([[0.1], [0.2]], dtype="float64")},
+            raw_fd_hvp={"a": FakeTensor([[0.7, 0.8], [0.9, 1.0]], dtype="float64")},
             provenance=provenance,
         )
 
         self.assertEqual(case["inputs"]["a"]["data"], [4.0, 1.0, 1.0, 3.0])
         self.assertEqual(case["probes"][0]["direction"]["a"]["shape"], [2, 2])
         self.assertEqual(case["probes"][0]["fd_ref"]["jvp"]["value"]["data"], [0.1, 0.2])
+        self.assertEqual(case["probes"][0]["pytorch_ref"]["hvp"]["a"]["data"], [0.7, 0.8, 0.9, 1.0])
+        self.assertEqual(case["probes"][0]["fd_ref"]["hvp"]["a"]["data"], [0.7, 0.8, 0.9, 1.0])
         self.assertEqual(case["observable"], {"kind": "identity"})
 
 

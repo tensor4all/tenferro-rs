@@ -60,6 +60,7 @@ uv run python scripts/verify_cases.py
 uv run python scripts/check_replay.py
 uv run python scripts/check_regeneration.py
 uv run python scripts/check_tolerances.py
+uv run python scripts/check_upstream_ad_tolerances.py
 ```
 
 Repository-managed environment files:
@@ -93,6 +94,13 @@ Every published `success` case must satisfy:
 
 - `Jv_torch ~= Jv_fd`
 - `<bar_y, Jv_fd> ~= <J*bar_y_torch, v>`
+
+For upstream second-order families, `success` probes also carry scalarized HVP data:
+
+- `pytorch_ref.hvp`
+- `fd_ref.hvp`
+
+where `hvp` denotes `H_phi(x) v` for `phi(x) = <bar_y, observable(x)>`.
 
 `error` cases do not require numeric references. They encode expected failure behavior with a machine-readable reason code.
 
@@ -139,6 +147,7 @@ For every paired probe in every `success` case:
 
 - compare `pytorch_ref.jvp` with `fd_ref.jvp`
 - check adjoint consistency with `<bar_y, Jv_fd> ~= <J*bar_y_torch, v>`
+- for HVP-enabled families, compare `pytorch_ref.hvp` with `fd_ref.hvp`
 
 All probe directions and cotangents are normalized to unit Frobenius norm after any required structure-preserving projection.
 
@@ -148,8 +157,11 @@ The repository includes a replay validator in `validators/replay.py`. It re-exec
 
 - stored `pytorch_ref.jvp` is reproducible
 - stored `pytorch_ref.vjp` is reproducible
+- stored `pytorch_ref.hvp` is reproducible when present
 - stored `fd_ref.jvp` is reproducible
+- stored `fd_ref.hvp` is reproducible when present
 - replayed `pytorch_ref.jvp` still matches replayed `fd_ref.jvp` within the case tolerance
+- replayed `pytorch_ref.hvp` still matches replayed `fd_ref.hvp` within the second-order case tolerance
 - replayed probes still satisfy adjoint consistency within the case tolerance
 - expected gauge-ill-defined spectral failures still raise
 
@@ -173,6 +185,8 @@ The repository ships two CI lanes:
   - semantic comparison against the checked-in database using each case tolerance
 - `tolerance-audit`
   - verifies published family tolerances are not more than ten orders of magnitude looser than stored cross-oracle residuals
+- `upstream-ad-tolerance-audit`
+  - verifies direct `torch` vs finite-difference residuals stay within PyTorch's own AD test tolerances
 
 `CODEOWNERS` covers `cases/`, `generators/`, `validators/`, `scripts/`,
 `schema/`, and workflow files. To make this effective, GitHub branch protection

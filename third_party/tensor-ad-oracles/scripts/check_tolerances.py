@@ -18,16 +18,26 @@ def main() -> int:
     flagged = [
         audit
         for audit in audits
-        if audit.tighten_rtol or audit.tighten_atol
+        if audit.tighten_rtol
+        or audit.tighten_atol
+        or audit.tighten_second_order_rtol
+        or audit.tighten_second_order_atol
     ]
     if flagged:
         lines = []
         for audit in flagged:
-            lines.append(
-                f"{audit.op}/{audit.family}/{audit.dtype}: "
-                f"rtol {audit.current_rtol:g}->{audit.proposed_rtol:g}, "
+            first_order = (
+                f"first_order rtol {audit.current_rtol:g}->{audit.proposed_rtol:g}, "
                 f"atol {audit.current_atol:g}->{audit.proposed_atol:g}"
             )
+            line = f"{audit.op}/{audit.family}/{audit.dtype}: {first_order}"
+            if audit.current_second_order_rtol is not None and audit.current_second_order_atol is not None:
+                line += (
+                    ", second_order "
+                    f"rtol {audit.current_second_order_rtol:g}->{audit.proposed_second_order_rtol:g}, "
+                    f"atol {audit.current_second_order_atol:g}->{audit.proposed_second_order_atol:g}"
+                )
+            lines.append(line)
         raise SystemExit("tolerance audit failed:\n" + "\n".join(lines))
     print(f"audited_family_tolerances={len(audits)}")
     return 0

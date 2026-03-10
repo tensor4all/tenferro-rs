@@ -23,3 +23,4 @@ jobs:
       - run: uv run python scripts/verify_cases.py
       - run: uv run python scripts/check_replay.py
       - run: uv run python scripts/check_tolerances.py
+      - run: uv run python scripts/check_upstream_ad_tolerances.py

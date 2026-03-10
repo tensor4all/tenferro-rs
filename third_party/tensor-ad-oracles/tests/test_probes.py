@@ -68,6 +68,39 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(probe["fd_ref"]["method"], "central_difference")
         self.assertEqual(probe["pytorch_ref"]["vjp"], direction)
 
+    def test_make_probe_record_includes_optional_hvp_payloads(self) -> None:
+        direction = {
+            "a": {
+                "dtype": "float64",
+                "shape": [1],
+                "order": "row_major",
+                "data": [1.0],
+            }
+        }
+        cotangent = {
+            "value": {
+                "dtype": "float64",
+                "shape": [1],
+                "order": "row_major",
+                "data": [1.0],
+            }
+        }
+
+        probe = probes.make_probe_record(
+            probe_id="p0",
+            direction=direction,
+            cotangent=cotangent,
+            pytorch_jvp=cotangent,
+            pytorch_vjp=direction,
+            pytorch_hvp=direction,
+            fd_step=1e-6,
+            fd_jvp=cotangent,
+            fd_hvp=direction,
+        )
+
+        self.assertEqual(probe["pytorch_ref"]["hvp"], direction)
+        self.assertEqual(probe["fd_ref"]["hvp"], direction)
+
 
 if __name__ == "__main__":
     unittest.main()

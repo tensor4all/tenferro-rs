@@ -39,6 +39,10 @@ class FamilyMappingTests(unittest.TestCase):
             {(spec.op, spec.family) for spec in pinv_singular},
             {("pinv_singular", "identity")},
         )
+        self.assertTrue(all(spec.hvp_enabled for spec in pinv_singular))
+
+        solve = supported[("linalg.solve", "")]
+        self.assertTrue(all(spec.hvp_enabled for spec in solve))
 
     def test_known_upstream_xfail_family_is_explicitly_classified(self) -> None:
         unsupported = pytorch_v1.build_unsupported_upstream_mapping_index()
