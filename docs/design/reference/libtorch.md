@@ -5,6 +5,9 @@ infrastructure, covering features relevant to tenferro's scope. It is intended a
 a reference when designing tenferro crate APIs to follow the `torch` approach where
 appropriate — adapted for column-major layout and Rust idioms.
 
+For the current family-first dense parity status against PyTorch, see
+[pytorch-dense-cpu-parity.md](./pytorch-dense-cpu-parity.md).
+
 > **Note on batch convention**: PyTorch uses row-major (C-contiguous) with
 > `(*, m, n)` (last 2 dims = matrix). tenferro uses col-major (Fortran-contiguous)
 > with `(m, n, *)` (first 2 dims = matrix). All shape descriptions below use

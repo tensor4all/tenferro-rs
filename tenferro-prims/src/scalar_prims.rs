@@ -80,15 +80,23 @@ pub enum ScalarReductionOp {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ScalarPrimsDescriptor {
+    /// Apply a unary pointwise operation to one input tensor.
     PointwiseUnary {
+        /// The unary scalar operation to apply.
         op: ScalarUnaryOp,
     },
+    /// Apply a binary pointwise operation to two input tensors.
     PointwiseBinary {
+        /// The binary scalar operation to apply.
         op: ScalarBinaryOp,
     },
+    /// Reduce one tensor into an output tensor over the dropped modes.
     Reduction {
+        /// Input modes associated with the source tensor.
         modes_a: Vec<u32>,
+        /// Output modes that remain after reduction.
         modes_c: Vec<u32>,
+        /// Reduction operator to use.
         op: ScalarReductionOp,
     },
 }
@@ -178,12 +186,20 @@ pub trait TensorScalarPrims<Alg: Algebra> {
     type Plan;
     type Context;
 
+    /// Plan a scalar-family operation for the given input/output shapes.
+    ///
+    /// Backends may reject descriptors that are reserved in the public
+    /// vocabulary but not yet wired to the current execution substrate.
     fn plan(
         ctx: &mut Self::Context,
         desc: &ScalarPrimsDescriptor,
         shapes: &[&[usize]],
     ) -> Result<Self::Plan>;
 
+    /// Execute a previously planned scalar-family operation.
+    ///
+    /// The execution contract matches the rest of tenferro prims:
+    /// `output <- alpha * op(inputs) + beta * output`.
     fn execute(
         ctx: &mut Self::Context,
         plan: &Self::Plan,
@@ -193,6 +209,10 @@ pub trait TensorScalarPrims<Alg: Algebra> {
         output: &mut Tensor<Alg::Scalar>,
     ) -> Result<()>;
 
+    /// Report whether the backend advertises support for the given descriptor.
+    ///
+    /// This query is about the backend family surface, not whether a specific
+    /// shape instance is valid.
     fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool;
 }
 

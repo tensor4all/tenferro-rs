@@ -41,6 +41,7 @@ source of truth for the current split architecture:
 | Document | Description |
 |----------|-------------|
 | [reference/libtorch.md](./reference/libtorch.md) | PyTorch/libtorch C++ tensor infrastructure survey |
+| [reference/pytorch-dense-cpu-parity.md](./reference/pytorch-dense-cpu-parity.md) | Dense CPU parity audit against PyTorch families, AD coverage, and layer cleanliness |
 | [reference/itensor-ecosystem.md](./reference/itensor-ecosystem.md) | ITensor Julia ecosystem analysis and Rust mapping |
 | [reference/einsum-algorithm-comparison.md](./reference/einsum-algorithm-comparison.md) | strided-rs vs omeinsum-rs optimization comparison (historical decision record) |
 

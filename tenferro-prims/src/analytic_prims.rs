@@ -76,15 +76,23 @@ pub enum AnalyticReductionOp {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AnalyticPrimsDescriptor {
+    /// Apply an analytic unary pointwise operation to one input tensor.
     PointwiseUnary {
+        /// The unary analytic operation to apply.
         op: AnalyticUnaryOp,
     },
+    /// Apply an analytic binary pointwise operation to two input tensors.
     PointwiseBinary {
+        /// The binary analytic operation to apply.
         op: AnalyticBinaryOp,
     },
+    /// Reduce one tensor into an output tensor over the dropped modes.
     Reduction {
+        /// Input modes associated with the source tensor.
         modes_a: Vec<u32>,
+        /// Output modes that remain after reduction.
         modes_c: Vec<u32>,
+        /// Reduction operator to use.
         op: AnalyticReductionOp,
     },
 }
@@ -131,12 +139,20 @@ pub trait TensorAnalyticPrims<Alg: Algebra> {
     type Plan;
     type Context;
 
+    /// Plan an analytic-family operation for the given input/output shapes.
+    ///
+    /// Public vocabulary may be broader than the currently wired execution
+    /// surface while the workspace migrates away from legacy `TensorPrims<A>`.
     fn plan(
         ctx: &mut Self::Context,
         desc: &AnalyticPrimsDescriptor,
         shapes: &[&[usize]],
     ) -> Result<Self::Plan>;
 
+    /// Execute a previously planned analytic-family operation.
+    ///
+    /// The execution contract matches the rest of tenferro prims:
+    /// `output <- alpha * op(inputs) + beta * output`.
     fn execute(
         ctx: &mut Self::Context,
         plan: &Self::Plan,
@@ -146,6 +162,10 @@ pub trait TensorAnalyticPrims<Alg: Algebra> {
         output: &mut Tensor<Alg::Scalar>,
     ) -> Result<()>;
 
+    /// Report whether the backend advertises support for the given descriptor.
+    ///
+    /// This is a family-level capability check and does not validate every
+    /// shape-specific precondition.
     fn has_analytic_support(desc: AnalyticPrimsDescriptor) -> bool;
 }
 

@@ -116,6 +116,18 @@ backends are still backed by blanket adapters over the legacy `TensorPrims<A>`
 surface while the workspace migrates. The intended long-term dependency
 direction is nevertheless the layered split documented above.
 
+Current migration debt that should be read as implementation status, not design
+target:
+
+- `TensorScalarPrims` and `TensorAnalyticPrims` still execute through legacy
+  `TensorPrims<A>` blanket adapters
+- some `tenferro-linalg` composite paths still guard through
+  `ensure_cpu_backend(...)`
+- some dyadtensor eager AD paths still route through `with_cpu_runtime(...)`
+  and `CpuContext`
+- legacy `PrimDescriptor::Permute` still exists inside `tenferro-prims` even
+  though the intended structural boundary is `permute view -> MakeContiguous`
+
 ## Dependency Direction
 
 ```
@@ -149,3 +161,14 @@ The redesign is constrained by three performance principles.
 3. Generalize public protocol descriptors only when backends can still
    specialize at plan time and keep hot loops free of per-element dynamic
    dispatch.
+
+## Backlog Categories
+
+The dense parity audit separates follow-up work into two main buckets.
+
+- substrate gaps: scalar/analytic execution vocabulary and legacy `Permute`
+  cleanup
+- layer gaps: CPU-only runtime assumptions in dyadtensor and composite linalg
+
+Those categories intentionally stay separate so the workspace does not confuse
+missing family coverage with abstraction drift.

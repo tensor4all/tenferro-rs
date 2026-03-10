@@ -1254,7 +1254,7 @@ fn solve_builder_reverse_pullback_matches_rrule() {
     let grad_b = grads[1].as_ref().expect("missing solve dB");
 
     let expected = crate::api::with_cpu_runtime("solve_rrule_expected", |ctx| {
-        tenferro_linalg::solve_rrule::<f64>(ctx, &a, &b, &cotangent).map_err(Error::from)
+        tenferro_linalg::solve_rrule::<f64, _>(ctx, &a, &b, &cotangent).map_err(Error::from)
     })
     .unwrap();
 
@@ -1400,7 +1400,7 @@ fn svd_builder_reverse_pullback_s_matches_rrule() {
     let grad_a = grads[0].as_ref().expect("missing svd dA");
 
     let expected = crate::api::with_cpu_runtime("svd_rrule_expected", |ctx| {
-        tenferro_linalg::svd_rrule::<f64>(
+        tenferro_linalg::svd_rrule::<f64, _>(
             ctx,
             &a,
             &tenferro_linalg::SvdCotangent {
@@ -1478,7 +1478,7 @@ fn eig_builder_reverse_pullback_values_matches_rrule_for_real_wrt() {
     let grad_a = grads[0].as_ref().expect("missing eig dA");
 
     let expected = crate::api::with_cpu_runtime("eig_rrule_expected", |ctx| {
-        tenferro_linalg::eig_rrule::<f64>(
+        tenferro_linalg::eig_rrule::<f64, _>(
             ctx,
             &a,
             &tenferro_linalg::EigCotangent {

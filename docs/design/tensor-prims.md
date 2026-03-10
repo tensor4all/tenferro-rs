@@ -117,6 +117,21 @@ Today, their implementations are provided through blanket adapters over the
 legacy `TensorPrims<A>` surface. That compatibility layer exists only as a
 migration mechanism; new high-level code should target the family traits.
 
+The same migration note applies to the current scalar and analytic families:
+their public vocabulary is broader than the set of operations actually wired to
+legacy execution today.
+
+## Explicit Debt
+
+Two points are intentionally documented as current debt rather than final
+design:
+
+- legacy `PrimDescriptor::Permute` still exists in `tenferro-prims`
+- the scalar and analytic families still rely on blanket adapters over the old
+  `TensorPrims<A>` contract
+
+The `Permute` cleanup remains follow-up work under `#441`.
+
 ## Relationship to Linalg
 
 `tenferro-prims` is not responsible for structured factorizations like QR, SVD,

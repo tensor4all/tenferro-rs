@@ -271,3 +271,17 @@ Current AD tests should cover at least:
 - `retain_graph` / `create_graph` lifetime behavior
 - detached tangent query behavior for `grad_tangent`
 - graph-connected higher-order behavior for supported `grad_variable` cases
+
+## Current Runtime Debt
+
+The current eager AD surface is not fully backend-generic yet.
+
+- `extension/tenferro-dyadtensor` still uses `with_cpu_runtime(...)` in several
+  eager builder and pullback paths
+- many public examples still instantiate `CpuContext` directly
+- this should be read as migration debt, not as the intended final AD
+  abstraction
+
+The dense parity audit tracks this separately from missing AD formulas because
+an operation can be mathematically differentiated while still leaking a CPU-only
+runtime path.
