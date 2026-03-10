@@ -1,6 +1,7 @@
 mod db;
 mod decode;
 mod hvp;
+mod report;
 mod replay;
 mod support;
 
@@ -322,4 +323,13 @@ fn oracle_db_replays_supported_hvp_cases() {
         "unexpected HVP replay summary: validated_hvp={}, unsupported={}, failures={:?}",
         summary.validated_hvp_records, summary.unsupported_records, summary.failures
     );
+}
+
+#[test]
+fn oracle_db_support_report_matches_checked_in_markdown() {
+    let root = db::default_oracle_db_root().expect("vendored tensor-ad-oracles root not found");
+    let generated = report::generate_support_report(&root).expect("support report should render");
+    let checked_in = std::fs::read_to_string(report::checked_in_report_path())
+        .expect("checked-in support report should exist");
+    assert_eq!(generated, checked_in);
 }

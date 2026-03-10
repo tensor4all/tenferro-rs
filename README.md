@@ -153,6 +153,16 @@ Output:
 
 The shared docs deploy workflow publishes the same `target/docs-site` tree to GitHub Pages on pushes to `main`.
 
+## Oracle Replay Coverage
+
+`tenferro-linalg` continuously replays the vendored
+`third_party/tensor-ad-oracles` database during workspace tests. Supported
+families are validated against the published first-order references and, where
+available, scalarized HVP payloads. Published families that tenferro does not
+yet replay are tracked explicitly in:
+
+- [`docs/generated/tensor-ad-oracles-support.md`](docs/generated/tensor-ad-oracles-support.md)
+
 ## Coverage
 
 Per-file line coverage is checked against thresholds in `coverage-thresholds.json`.
