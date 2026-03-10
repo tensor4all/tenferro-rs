@@ -1,12 +1,11 @@
 use std::collections::HashMap;
 
-use num_traits::{One, Zero};
-use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
-use tenferro_prims::TensorPrims;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad::einsum_frule_impl;
+use crate::backend::{BackendContext, EinsumBackend};
 use crate::execute::{execute_nested, execute_tree};
 use crate::nested::NestedEinsum;
 use crate::pool::BufferPool;
@@ -71,15 +70,15 @@ fn canonicalize_col_major_operands<T: Scalar>(operands: &[&Tensor<T>]) -> Vec<Te
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
 pub fn einsum<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     operands: &[&Tensor<Alg::Scalar>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     // Subscripts::parse strips parentheses, giving the flat form needed
     // by both the flat execution path and the frule tangent propagation.
@@ -119,15 +118,15 @@ where
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
 pub fn einsum_with_subscripts<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &Subscripts,
     operands: &[&Tensor<Alg::Scalar>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)?;
@@ -172,16 +171,16 @@ where
 ///         .unwrap();
 /// ```
 pub fn einsum_with_path<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &Subscripts,
     pairs: &[(usize, usize)],
     operands: &[&Tensor<Alg::Scalar>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::from_pairs(subscripts, &shapes, pairs)?;
@@ -199,15 +198,15 @@ where
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
 pub fn einsum_with_plan<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     tree: &ContractionTree,
     operands: &[&Tensor<Alg::Scalar>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     // Merge size_dict from tree and optional extra
     let mut sd = tree.size_dict.clone();
@@ -228,8 +227,8 @@ where
         ctx,
         tree,
         &canonical_refs,
-        Alg::Scalar::one(),
-        Alg::Scalar::zero(),
+        Alg::one(),
+        Alg::zero(),
         &mut output,
         &mut pool,
         true, // lazy_final: output is internally allocated
@@ -274,15 +273,15 @@ where
 /// Returns an error if the notation is invalid or tensor shapes are
 /// incompatible with the subscripts.
 pub fn einsum_owned<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     operands: Vec<Tensor<Alg::Scalar>>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let refs: Vec<&Tensor<Alg::Scalar>> = operands.iter().collect();
     einsum::<Alg, Backend>(ctx, subscripts, &refs, size_dict)
@@ -297,15 +296,15 @@ where
 ///
 /// Returns an error if tensor shapes are incompatible with the subscripts.
 pub fn einsum_with_subscripts_owned<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &Subscripts,
     operands: Vec<Tensor<Alg::Scalar>>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let refs: Vec<&Tensor<Alg::Scalar>> = operands.iter().collect();
     einsum_with_subscripts::<Alg, Backend>(ctx, subscripts, &refs, size_dict)
@@ -323,15 +322,15 @@ where
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree.
 pub fn einsum_with_plan_owned<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     tree: &ContractionTree,
     operands: Vec<Tensor<Alg::Scalar>>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let refs: Vec<&Tensor<Alg::Scalar>> = operands.iter().collect();
     einsum_with_plan::<Alg, Backend>(ctx, tree, &refs, size_dict)
@@ -384,7 +383,7 @@ where
 /// Returns an error if the notation is invalid, tensor shapes are
 /// incompatible, or the output shape does not match the expected result.
 pub fn einsum_into<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     operands: &[&Tensor<Alg::Scalar>],
     alpha: Alg::Scalar,
@@ -393,9 +392,9 @@ pub fn einsum_into<Alg, Backend>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     if subscripts.contains('(') {
@@ -464,7 +463,7 @@ where
 /// Returns an error if tensor shapes are incompatible with the subscripts
 /// or the output shape does not match.
 pub fn einsum_with_subscripts_into<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &Subscripts,
     operands: &[&Tensor<Alg::Scalar>],
     alpha: Alg::Scalar,
@@ -473,9 +472,9 @@ pub fn einsum_with_subscripts_into<Alg, Backend>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)?;
@@ -509,7 +508,7 @@ where
 /// ).unwrap();
 /// ```
 pub fn einsum_with_path_into<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &Subscripts,
     pairs: &[(usize, usize)],
     operands: &[&Tensor<Alg::Scalar>],
@@ -519,9 +518,9 @@ pub fn einsum_with_path_into<Alg, Backend>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::from_pairs(subscripts, &shapes, pairs)?;
@@ -565,7 +564,7 @@ where
 /// Returns an error if the operand shapes do not match those used to
 /// build the contraction tree, or the output shape is incorrect.
 pub fn einsum_with_plan_into<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     tree: &ContractionTree,
     operands: &[&Tensor<Alg::Scalar>],
     alpha: Alg::Scalar,
@@ -574,9 +573,9 @@ pub fn einsum_with_plan_into<Alg, Backend>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let _ = size_dict; // size_dict already captured in tree.size_dict
     let canonical_operands = canonicalize_col_major_operands(operands);

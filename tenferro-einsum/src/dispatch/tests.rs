@@ -4,6 +4,7 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;
 use crate::plan::{GemmPlan, ReducePlan, StepPlan};
+use crate::tests::semiring_backend::SemiringOnlyCpuBackend;
 use crate::util::{tensor_get, unflatten_index};
 
 fn tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
@@ -74,6 +75,66 @@ fn execute_pairwise_dispatches_dynamic_ewmul_after_reduce_b() {
     };
 
     execute_pairwise_with_plan::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &plan,
+        None,
+        None,
+        &[0],
+        &[0, 1],
+        &[0],
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        false,
+    )
+    .unwrap();
+
+    let expected = tensor(&[2.0 * (5.0 + 11.0), 3.0 * (7.0 + 13.0)], &[2]);
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_pairwise_accepts_semiring_only_backend() {
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+    let a = tensor(&[2.0, 3.0], &[2]);
+    let b = tensor(&[5.0, 7.0, 11.0, 13.0], &[2, 2]);
+    let mut output = zeros(&[2]);
+
+    let plan = StepPlan {
+        diag_a: None,
+        diag_b: None,
+        gemm: GemmPlan {
+            reduce_a: None,
+            reduce_b: Some(ReducePlan {
+                original_subs: vec![0, 1],
+                kept_subs: vec![0],
+                out_shape: vec![2],
+            }),
+            subs_a: vec![0],
+            subs_b: vec![0],
+            lo_modes: vec![],
+            ro_modes: vec![],
+            sum_modes: vec![],
+            batch_sizes: vec![2],
+            m: 1,
+            n: 1,
+            k: 1,
+            target_a: vec![0],
+            target_b: vec![0],
+            c_gemm_shape: vec![1, 1, 2],
+            expanded_shape: vec![2],
+            canonical_modes: vec![0],
+            needs_final_permute: false,
+            a_gemm_shape: vec![1, 1, 2],
+            b_gemm_shape: vec![1, 1, 2],
+        },
+    };
+
+    execute_pairwise_with_plan::<Standard<f64>, SemiringOnlyCpuBackend>(
         &mut ctx,
         &plan,
         None,

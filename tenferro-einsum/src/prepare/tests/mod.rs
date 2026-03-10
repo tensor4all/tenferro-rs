@@ -4,6 +4,7 @@ use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::MemoryOrder;
 
 use super::*;
+use crate::tests::semiring_backend::SemiringOnlyCpuBackend;
 use crate::util::{tensor_get, unflatten_index};
 
 fn tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
@@ -181,4 +182,23 @@ fn make_contiguous_if_needed_copies_only_when_required() {
     assert!((tensor_get(&copied, &[0, 0]).unwrap() - 1.0).abs() < 1e-10);
     assert!((tensor_get(&copied, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
     assert!((tensor_get(&copied, &[0, 1]).unwrap() - 2.0).abs() < 1e-10);
+}
+
+#[test]
+fn make_contiguous_if_needed_accepts_semiring_core_only_backend() {
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+    let contiguous = tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let transposed = contiguous.permute(&[1, 0]).unwrap();
+
+    let copied = make_contiguous_if_needed::<Standard<f64>, SemiringOnlyCpuBackend>(
+        &mut ctx,
+        &transposed,
+        &mut pool,
+    )
+    .unwrap();
+
+    assert!(copied.is_contiguous());
+    assert_eq!(copied.dims(), &[2, 2]);
+    assert!((tensor_get(&copied, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
 }

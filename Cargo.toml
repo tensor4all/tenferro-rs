@@ -6,6 +6,7 @@ members = [
     "tenferro-prims",
     "tenferro-tensor",
     "tenferro-einsum",
+    "tenferro-linalg-prims",
     "tenferro-linalg",
     "tenferro-capi",
     # extension

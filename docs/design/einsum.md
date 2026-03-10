@@ -6,7 +6,8 @@ contraction trees.
 
 See [contraction-pipeline.md](./contraction-pipeline.md) for the binary
 contraction pipeline details and [tensor-prims.md](./tensor-prims.md)
-for the `TensorPrims<A>` protocol.
+for the semiring-core / semiring-fast-path protocol families that `einsum`
+depends on.
 
 ---
 

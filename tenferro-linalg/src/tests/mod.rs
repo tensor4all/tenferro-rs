@@ -144,3 +144,42 @@ fn private_scalar_and_validation_helpers_are_covered_in_crate_unit_tests() {
         matches!(ad_err, chainrules_core::AutodiffError::InvalidArgument(msg) if msg.contains("coverage"))
     );
 }
+
+#[test]
+fn private_validation_helpers_cover_remaining_error_paths() {
+    let wrong_rank_rhs =
+        Tensor::from_slice(&[1.0_f64, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let err = validate_lstsq_rhs(&wrong_rank_rhs, 2, &[2]).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("lstsq expects b shape")));
+
+    let wrong_leading_rhs =
+        Tensor::from_slice(&[1.0_f64, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let err = validate_lstsq_rhs(&wrong_leading_rhs, 2, &[]).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("dim[0] == m")));
+
+    let wrong_batch_rhs =
+        Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let err = validate_lstsq_rhs(&wrong_batch_rhs, 2, &[3]).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("batch dims mismatch")));
+
+    let nonscalar_cotangent =
+        Tensor::from_slice(&[1.0_f64], &[1], MemoryOrder::ColumnMajor).unwrap();
+    let err = validate_norm_cotangent(&nonscalar_cotangent, &[]).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("expected scalar")));
+
+    let wrong_batch_cotangent =
+        Tensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let err = validate_norm_cotangent(&wrong_batch_cotangent, &[3]).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("shape mismatch")));
+
+    let err = validate_tensor_solve_axes(4, 2, Some(&[0])).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("expects 2 solution axes")));
+
+    let err = validate_tensor_solve_axes(3, 2, Some(&[0, 3])).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("out of bounds")));
+
+    let err = validate_tensor_solve_axes(3, 2, Some(&[1, 1])).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("must be unique")));
+
+    assert_eq!(validate_tensor_solve_axes(4, 2, None).unwrap(), vec![2, 3]);
+}

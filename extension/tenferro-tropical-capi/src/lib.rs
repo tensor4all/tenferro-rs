@@ -211,7 +211,7 @@ unsafe fn tropical_einsum_impl<T, Alg>(
 ) -> std::result::Result<*mut TfeTensorF64, tfe_status_t>
 where
     T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
-    Alg: tenferro_algebra::Algebra<Scalar = T>,
+    Alg: tenferro_algebra::Semiring<Scalar = T>,
     CpuBackend: TensorPrims<Alg, Context = CpuContext>,
 {
     let subscripts = parse_subscripts(subscripts)?;
@@ -237,7 +237,7 @@ unsafe fn tropical_einsum_rrule_impl<T, Alg>(
 ) -> std::result::Result<(), tfe_status_t>
 where
     T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
-    Alg: tenferro_algebra::Algebra<Scalar = T>,
+    Alg: tenferro_algebra::Semiring<Scalar = T>,
     CpuBackend: TensorPrims<Alg, Context = CpuContext>,
 {
     if cotangent.is_null() || grads_out.is_null() {
@@ -280,7 +280,7 @@ unsafe fn tropical_einsum_frule_impl<T, Alg>(
 ) -> std::result::Result<*mut TfeTensorF64, tfe_status_t>
 where
     T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
-    Alg: tenferro_algebra::Algebra<Scalar = T>,
+    Alg: tenferro_algebra::Semiring<Scalar = T>,
     CpuBackend: TensorPrims<Alg, Context = CpuContext>,
 {
     let subscripts = parse_subscripts(subscripts)?;

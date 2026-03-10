@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use num_traits::{One, Zero};
-use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
-use tenferro_prims::{Extension, PrimDescriptor, TensorPrims};
+use tenferro_prims::{
+    SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
+    TensorSemiringFastPath,
+};
 use tenferro_tensor::Tensor;
 
+use crate::backend::{BackendContext, BackendPlan, EinsumBackend};
 use crate::dispatch::execute_pairwise_with_plan;
 use crate::nested::NestedEinsum;
 use crate::pool::BufferPool;
@@ -23,7 +26,7 @@ use crate::api::einsum_with_subscripts;
 /// output tensor is internally allocated (e.g. by `einsum_with_plan`) but
 /// NOT when it is a user-provided buffer (e.g. `einsum_with_plan_into`).
 pub(crate) fn execute_tree<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     tree: &ContractionTree,
     operands: &[&Tensor<Alg::Scalar>],
     alpha: Alg::Scalar,
@@ -33,9 +36,9 @@ pub(crate) fn execute_tree<Alg, Backend>(
     lazy_final: bool,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let n_inputs = tree.subscripts.inputs.len();
 
@@ -65,8 +68,12 @@ where
     // Pre-compute Backend prim plans for ElementwiseMul extension.
     // Only pre-compute for steps where all dimensions are batch (m==n==k==1)
     // and no diagonal extraction is needed (shapes are known at plan time).
-    let use_ewmul = Backend::has_extension_for(Extension::ElementwiseMul);
-    let prim_plans: Vec<Option<Backend::Plan>> = if use_ewmul {
+    let use_ewmul = <Backend as TensorSemiringFastPath<Alg>>::has_fast_path(
+        SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        },
+    );
+    let prim_plans: Vec<Option<BackendPlan<Alg, Backend>>> = if use_ewmul {
         step_plans
             .iter()
             .enumerate()
@@ -96,9 +103,11 @@ where
                 } else {
                     &tree.step_output_shapes[step_idx]
                 };
-                let desc = PrimDescriptor::ElementwiseMul;
+                let desc = SemiringFastPathDescriptor::ElementwiseBinary {
+                    op: SemiringBinaryOp::Mul,
+                };
                 let shapes = [shape_a, shape_b, shape_c];
-                Backend::plan(ctx, &desc, &shapes).ok()
+                <Backend as TensorSemiringFastPath<Alg>>::plan(ctx, &desc, &shapes).ok()
             })
             .collect()
     } else {
@@ -108,12 +117,18 @@ where
     // Pre-compute BatchedGemm plans for all steps.
     // Shapes are fully determined by StepPlan (m, k, n, batch_sizes) —
     // independent of actual tensor data or strides.
-    let use_contract = Backend::has_extension_for(Extension::Contract);
-    let gemm_plans: Vec<Option<Backend::Plan>> = if !use_contract {
+    let use_contract = <Backend as TensorSemiringFastPath<Alg>>::has_fast_path(
+        SemiringFastPathDescriptor::Contract {
+            modes_a: Vec::new(),
+            modes_b: Vec::new(),
+            modes_c: Vec::new(),
+        },
+    );
+    let gemm_plans: Vec<Option<BackendPlan<Alg, Backend>>> = if !use_contract {
         step_plans
             .iter()
             .map(|sp| {
-                let desc = PrimDescriptor::BatchedGemm {
+                let desc = SemiringCoreDescriptor::BatchedGemm {
                     batch_dims: sp.gemm.batch_sizes.clone(),
                     m: sp.gemm.m,
                     n: sp.gemm.n,
@@ -124,7 +139,7 @@ where
                     sp.gemm.b_gemm_shape.as_slice(),
                     sp.gemm.c_gemm_shape.as_slice(),
                 ];
-                Backend::plan(ctx, &desc, &shapes).ok()
+                <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes).ok()
             })
             .collect()
     } else {
@@ -207,8 +222,8 @@ where
                 subs_result,
                 left,
                 right,
-                Alg::Scalar::one(),
-                Alg::Scalar::zero(),
+                Alg::one(),
+                Alg::zero(),
                 &mut result,
                 pool,
                 true,
@@ -243,15 +258,15 @@ where
 /// node recursively evaluates its children, then calls
 /// [`einsum_with_subscripts`] on the intermediate results.
 pub(crate) fn execute_nested<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     nested: &NestedEinsum,
     operands: &[&Tensor<Alg::Scalar>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     // Validate operand count at the top level
     let n_leaves = nested.count_leaves();
@@ -266,15 +281,15 @@ where
 
 /// Recursive inner implementation (no operand count check — done by caller).
 fn execute_nested_inner<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     nested: &NestedEinsum,
     operands: &[&Tensor<Alg::Scalar>],
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     match nested {
         NestedEinsum::Leaf(idx) => Ok(operands[*idx].clone()),

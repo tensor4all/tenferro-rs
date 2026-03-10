@@ -1,17 +1,45 @@
 use std::collections::{HashMap, HashSet};
 
-use num_traits::{One, Zero};
-use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
-use tenferro_prims::{PrimDescriptor, ReduceOp, TensorPrims};
+use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
+use crate::backend::BackendContext;
+use crate::classify::compute_permutation;
 use crate::pool::BufferPool;
 use crate::util::alloc_tensor_from_pool;
 
-/// Execute a single-tensor einsum operation via TensorPrims.
+fn copy_structural_permute<Alg, Backend>(
+    ctx: &mut BackendContext<Alg, Backend>,
+    input: &Tensor<Alg::Scalar>,
+    modes_a: &[u32],
+    modes_b: &[u32],
+    alpha: Alg::Scalar,
+    beta: Alg::Scalar,
+    output: &mut Tensor<Alg::Scalar>,
+) -> Result<()>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Backend: TensorSemiringCore<Alg>,
+{
+    let permuted = if modes_a == modes_b {
+        input.clone()
+    } else {
+        let perm = compute_permutation(modes_a, modes_b)
+            .map_err(tenferro_device::Error::InvalidArgument)?;
+        input.permute(&perm)?
+    };
+    let desc = SemiringCoreDescriptor::MakeContiguous;
+    let shapes = [permuted.dims(), output.dims()];
+    let plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
+    <Backend as TensorSemiringCore<Alg>>::execute(ctx, &plan, alpha, &[&permuted], beta, output)
+}
+
+/// Execute a single-tensor einsum operation via semiring-core prims.
 pub(crate) fn execute_single_tensor_einsum<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subs_a: &[u32],
     subs_c: &[u32],
     input: &Tensor<Alg::Scalar>,
@@ -21,9 +49,9 @@ pub(crate) fn execute_single_tensor_einsum<Alg, Backend>(
     pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: TensorSemiringCore<Alg>,
 {
     // Count label occurrences in input and output
     let mut label_positions: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -48,24 +76,16 @@ where
         let output_set: HashSet<u32> = subs_c.iter().copied().collect();
 
         if input_set == output_set {
-            // Pure permutation
-            let desc = PrimDescriptor::Permute {
-                modes_a: subs_a.to_vec(),
-                modes_b: subs_c.to_vec(),
-            };
-            let shapes = [input.dims(), output.dims()];
-            let plan = Backend::plan(ctx, &desc, &shapes)?;
-            Backend::execute(ctx, &plan, alpha, &[input], beta, output)
+            copy_structural_permute::<Alg, Backend>(ctx, input, subs_a, subs_c, alpha, beta, output)
         } else if output_set.is_subset(&input_set) {
             // Reduction (sum over labels not in output)
-            let desc = PrimDescriptor::Reduce {
+            let desc = SemiringCoreDescriptor::ReduceAdd {
                 modes_a: subs_a.to_vec(),
                 modes_c: subs_c.to_vec(),
-                op: ReduceOp::Sum,
             };
             let shapes = [input.dims(), output.dims()];
-            let plan = Backend::plan(ctx, &desc, &shapes)?;
-            Backend::execute(ctx, &plan, alpha, &[input], beta, output)
+            let plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
+            <Backend as TensorSemiringCore<Alg>>::execute(ctx, &plan, alpha, &[input], beta, output)
         } else {
             Err(tenferro_device::Error::InvalidArgument(
                 "output labels contain labels not in input".into(),
@@ -121,14 +141,14 @@ where
                 })
                 .collect::<Result<_>>()?;
 
-            let desc = PrimDescriptor::Trace {
+            let desc = SemiringCoreDescriptor::Trace {
                 modes_a: unique_modes_a,
                 modes_c,
                 paired,
             };
             let shapes = [input.dims(), output.dims()];
-            let plan = Backend::plan(ctx, &desc, &shapes)?;
-            Backend::execute(ctx, &plan, alpha, &[input], beta, output)
+            let plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
+            <Backend as TensorSemiringCore<Alg>>::execute(ctx, &plan, alpha, &[input], beta, output)
         } else {
             // Diagonal extraction: repeated labels appear in output
             // Diagonal extraction + copy
@@ -170,25 +190,32 @@ where
             let to_reduce: HashSet<u32> = after_set.difference(&output_set).copied().collect();
 
             if to_reduce.is_empty() {
-                // Permute from diagonal layout to output layout
-                let desc = PrimDescriptor::Permute {
-                    modes_a: after_diag_subs,
-                    modes_b: subs_c.to_vec(),
-                };
-                let shapes = [diag_tensor.dims(), output.dims()];
-                let plan = Backend::plan(ctx, &desc, &shapes)?;
-                Backend::execute(ctx, &plan, alpha, &[&diag_tensor], beta, output)
+                copy_structural_permute::<Alg, Backend>(
+                    ctx,
+                    &diag_tensor,
+                    &after_diag_subs,
+                    subs_c,
+                    alpha,
+                    beta,
+                    output,
+                )
             } else {
                 // Copy diagonal to contiguous temp, then reduce
                 let diag_tensor = diag_tensor.contiguous(MemoryOrder::ColumnMajor);
-                let desc = PrimDescriptor::Reduce {
+                let desc = SemiringCoreDescriptor::ReduceAdd {
                     modes_a: after_diag_subs,
                     modes_c: subs_c.to_vec(),
-                    op: ReduceOp::Sum,
                 };
                 let shapes = [diag_tensor.dims(), output.dims()];
-                let plan = Backend::plan(ctx, &desc, &shapes)?;
-                Backend::execute(ctx, &plan, alpha, &[&diag_tensor], beta, output)
+                let plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
+                <Backend as TensorSemiringCore<Alg>>::execute(
+                    ctx,
+                    &plan,
+                    alpha,
+                    &[&diag_tensor],
+                    beta,
+                    output,
+                )
             }
         }
     } else if repeated_labels.is_empty() && output_has_repeated {
@@ -223,14 +250,14 @@ where
             })
             .collect::<Result<_>>()?;
 
-        let desc = PrimDescriptor::AntiDiag {
+        let desc = SemiringCoreDescriptor::AntiDiag {
             modes_a,
             modes_c: unique_modes_c,
             paired,
         };
         let shapes = [input.dims(), output.dims()];
-        let plan = Backend::plan(ctx, &desc, &shapes)?;
-        Backend::execute(ctx, &plan, alpha, &[input], beta, output)
+        let plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
+        <Backend as TensorSemiringCore<Alg>>::execute(ctx, &plan, alpha, &[input], beta, output)
     } else {
         // Both input and output have repeated labels — pipeline decomposition.
         //
@@ -332,8 +359,8 @@ where
                 &current_subs,
                 &inter_subs,
                 &current,
-                Alg::Scalar::one(),
-                Alg::Scalar::zero(),
+                Alg::one(),
+                Alg::zero(),
                 &mut intermediate,
                 pool,
             )?;

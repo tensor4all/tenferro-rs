@@ -10,12 +10,23 @@ fn cuda_stubs_return_device_error() {
     let mut ctx = tenferro_prims::CudaContext::new();
     let a = dummy_tensor();
     let b = dummy_tensor();
-    assert!(CudaTensorLinalgBackend::solve(&mut ctx, &a, &b).is_err());
-    assert!(CudaTensorLinalgBackend::solve_triangular(&mut ctx, &a, &b, true).is_err());
-    assert!(CudaTensorLinalgBackend::qr(&mut ctx, &a).is_err());
-    assert!(CudaTensorLinalgBackend::thin_svd(&mut ctx, &a).is_err());
-    assert!(CudaTensorLinalgBackend::lu_factor(&mut ctx, &a).is_err());
-    assert!(CudaTensorLinalgBackend::cholesky(&mut ctx, &a).is_err());
-    assert!(CudaTensorLinalgBackend::eigen_sym(&mut ctx, &a).is_err());
-    assert!(CudaTensorLinalgBackend::eig(&mut ctx, &a).is_err());
+    assert!(
+        <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::solve(&mut ctx, &a, &b).is_err()
+    );
+    assert!(
+        <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::solve_triangular(
+            &mut ctx, &a, &b, true,
+        )
+        .is_err()
+    );
+    assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::qr(&mut ctx, &a).is_err());
+    assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::thin_svd(&mut ctx, &a).is_err());
+    assert!(
+        <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::lu_factor(&mut ctx, &a).is_err()
+    );
+    assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::cholesky(&mut ctx, &a).is_err());
+    assert!(
+        <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::eigen_sym(&mut ctx, &a).is_err()
+    );
+    assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::eig(&mut ctx, &a).is_err());
 }

@@ -1,264 +1,151 @@
 # Architecture
 
-## Scope
-
-This is the top-level architecture document for tenferro-rs. It covers:
-
-- Workspace layer structure and crate dependency graph
-- Device layer (`tenferro-device`)
-- Compile-time vs runtime decision summary
-- Relationship with mdarray and ITensor ecosystems
-
-Per-crate API details are in companion documents:
-[tensor-prims](./tensor-prims.md),
-[inplace-indexing](./inplace-indexing.md),
-[einsum](./einsum.md),
-[tensor](./tensor.md),
-[algebra](./algebra.md),
-[autodiff](./autodiff.md),
-[einsum-dyadtensor](./einsum-dyadtensor.md),
-[linalg](./linalg.md),
-[capi](./capi.md),
-[contraction-pipeline](./contraction-pipeline.md).
+This document describes the current high-level layering of the tenferro
+workspace after the prims/linalg protocol split.
 
 ## Layered Architecture
 
 ```
-Layer 5: tenferro-capi         — C-API (FFI) for Julia/Python: einsum + SVD, f64, stateless rrule/frule
-Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, AD rules
-         tenferro-linalg       — Tensor-level SVD/QR/LU/eigen, linalg AD rules
-Layer 3: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait, plan-based execution
-                                 (depends on tenferro-tensor for resolve_conj)
-Layer 2: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
-                                 impl Differentiable for Tensor<T>
-Shared:  chainrules-core       — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V>
-         chainrules            — AD engine: Tape<V>, TrackedTensor<V>, DualTensor<V>
-         tenferro-algebra      — HasAlgebra trait (UX sugar for algebra inference), Semiring trait, Standard<T> typed algebra
-         tenferro-device       — Device enum, Error/Result types
-Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas)
-         GPU backends          — cuTENSOR / hipTensor via tenferro-device vtable [future]
+Layer 5: tenferro-capi
+    FFI entry points for tensor, einsum, and linalg functionality
 
-Foundation: strided-rs         — Independent workspace (strided-traits → strided-view → strided-kernel)
+Layer 4: tenferro-einsum
+    High-level contraction planning and execution
+         tenferro-linalg
+    Public linalg APIs, composite lowering, AD-facing result shaping
+
+Layer 3a: tenferro-prims
+    TensorSemiringCore
+    TensorSemiringFastPath
+    TensorScalarPrims
+    TensorAnalyticPrims
+
+Layer 3b: tenferro-linalg-prims
+    Backend-facing linalg kernel contracts
+    (solve, factorization, eigensolvers, SVD, QR, Cholesky)
+
+Layer 2: tenferro-tensor
+    Tensor storage, shape/stride metadata, structural views
+
+Shared: tenferro-algebra
+    Semiring/algebra vocabulary and scalar typing
+        tenferro-device
+    workspace error and device abstractions
+        chainrules-core / chainrules
+    AD traits and engine
+
+Layer 1: CPU/GPU backend implementations
+    faer / BLAS / LAPACK / cuTENSOR / future GPU linalg providers
 ```
 
-### Design Rationale
+## Core Design Rules
 
-strided-rs serves as a "tensor-level BLAS" — the CPU counterpart to
-cuTENSOR — with standardized interfaces applicable to CPU, GPU, and tropical
-tensors. `tenferro-prims` defines a **universal set** of primitive operations
-(`batched_gemm`, `trace`, `diag`, `permute`, `repeat`, `anti_diag`,
-`anti_trace`) that any backend must implement, plus an **extended set** of
-optimized composites (`contract`, `elementwise_mul`) that backends may
-optionally provide.
+The protocol split is driven by four rules.
 
-The core operations form **adjoint pairs** for clean AD support:
-`trace ↔ anti_trace`, `diag ↔ anti_diag`, `reduce ↔ repeat`,
-`permute ↔ inverse permute`, `batched_gemm` uses the Leibniz rule.
+1. `tenferro-einsum` depends only on the semiring core and optional semiring
+   fast paths.
+2. Structural view operations belong to `tenferro-tensor`, not to prims.
+3. `tenferro-linalg` is a public/composite layer and does not own
+   backend-specific execution contracts.
+4. Backend-facing linalg kernels live in `tenferro-linalg-prims`, not in
+   `tenferro-prims`.
 
-**Implementation status**: The following crates are fully implemented with
-working tests:
+This keeps `einsum-only` and tropical backends lightweight while still giving
+standard arithmetic backends access to scalar, analytic, and linalg
+capabilities.
 
-| Crate | Status |
-|-------|--------|
-| `tenferro-tensor` | Implemented (Tensor, DataBuffer, view ops, contiguous, conj) |
-| `tenferro-prims` | Implemented (CpuBackend with all core + extended ops) |
-| `tenferro-einsum` | Implemented (all 9 API functions, N-ary tree, AD rules) |
-| `tenferro-linalg` | Implemented (SVD, QR, LU, eigen, cholesky, solve, inv) |
-| `chainrules-core` | Implemented (Differentiable, ReverseRule, ForwardRule traits) |
-| `chainrules` | Implemented (Tape, TrackedTensor, DualTensor, pullback) |
-| `tenferro-algebra` | Implemented (HasAlgebra, Semiring, Standard) |
-| `tenferro-device` | Implemented (Device enum, Error/Result types) |
-| `tenferro-tropical` (extension) | Implemented (MaxPlus algebra, TensorPrims, SIMD dispatch) |
-| `tenferro-capi` | Partially implemented (einsum + linalg FFI; DLPack interop stubs) |
+## Execution Boundaries
 
-GPU backend types (`CudaBackend`, `RocmBackend`) are defined as stubs
-in `tenferro-prims` (return errors when called); `CudaBackend` has a
-real implementation behind the `cuda` feature flag. `BackendRegistry`
-and `TensorLibVtable` are future work.
+### Structural Layer
 
----
+`tenferro-tensor` owns zero-copy views:
 
-## tenferro-device
+- `permute`
+- `reshape`
+- `broadcast`
+- `diagonal`
+- related indexing/view transforms
 
-Device abstraction and shared error types. Provides `LogicalMemorySpace`,
-`ComputeDevice`, `OpKind`, `preferred_compute_devices()`, and the workspace
-`Error`/`Result` types.
+These operations do not imply execution and therefore are not prims.
 
-Dependencies: `thiserror` only.
+### Semiring Execution Layer
 
-See [device.md](./device.md) for the full API reference.
+`tenferro-prims` exposes four protocol families:
 
----
+- `TensorSemiringCore<Alg>`
+- `TensorSemiringFastPath<Alg>`
+- `TensorScalarPrims<Alg>`
+- `TensorAnalyticPrims<Alg>`
 
-## Crate Dependency Graph
+This is the execution substrate for `einsum`, tropical algebra, and
+non-factorization scalar/tensor composites.
 
-```
-strided-rs (independent workspace):
-strided-traits -> strided-view -> strided-kernel
+### Linalg Execution Layer
 
-tenferro-rs (workspace, depends on strided-rs):
+`tenferro-linalg-prims` exposes backend-facing structured linalg contracts such
+as:
 
-tenferro-device              tenferro-algebra
-  (LogicalMemorySpace +        (HasAlgebra trait (UX sugar),
-   ComputeDevice, Error,       Semiring trait,
-   Result)                     Standard<T> typed algebra)
-  (depends on: thiserror
-   only)
-                              (depends on: strided-traits,
-                               num-complex)
-        │                              │
-        ├──────────────┐       ┌───────┤
-        │              ↓       ↓       │
-        │         tenferro-tensor      │
-        │           (Tensor<T> =       │
-        │            DataBuffer        │
-        │            + dims/strides/   │
-        │            offset, view ops) │
-        │           (depends on:       │
-        │            tenferro-device,  │
-        │            tenferro-algebra, │
-        │            strided-view,     │
-        │            strided-traits,   │
-        │            num-traits,       │
-        │            chainrules-core)  │
-        │              │               │
-        ↓              ↓               │
-   tenferro-prims                      │
-     (TensorPrims<A>,                  │
-      PrimDescriptor,                  │
-      CpuBackend,                      │
-      Extension,                       │
-      ReduceOp)                        │
-     (depends on:                      │
-      tenferro-device,                 │
-      tenferro-algebra,                │
-      tenferro-tensor,                 │
-      strided-view,                    │
-      strided-traits)                  │
-        │                      ┌───────┘
-               ↓               ↓
-          tenferro-einsum
-            (einsum, einsum_with_subscripts,
-             einsum_with_plan,
-             Subscripts, ContractionTree)
-            (depends on: tenferro-device,
-             tenferro-algebra,
-             tenferro-prims,
-             tenferro-tensor,
-             strided-traits)
-```
+- `solve`
+- `solve_triangular`
+- `qr`
+- `thin_svd`
+- `lu_factor`
+- `cholesky`
+- `eigen_sym`
+- `eig`
 
-Fully implemented crates:
-- `tenferro-linalg` — Tensor-level linalg wrapper (SVD, QR, LU, eigen, cholesky, solve, inv)
-- `chainrules-core` / `chainrules` — AD traits and engine (tape recording, pullback, dual)
-- `tenferro-tropical` (extension) — Tropical algebra types, `TensorPrims<MaxPlus>` for CpuBackend
+These contracts are kernel-oriented. They are not a one-to-one mirror of
+`torch.linalg` or the public `tenferro-linalg` API.
 
-Partially implemented:
-- `tenferro-capi` — C FFI for Julia/Python (einsum + linalg working; DLPack interop stubs)
+### Public Linalg Layer
 
----
+`tenferro-linalg` validates shapes/options, lowers composite operations, and
+formats structured results. Examples:
 
-## Compile-Time vs Runtime Decision Summary
+- `matrix_power` lowers to repeated multiplication and inverse paths
+- `cond` lowers to norms and singular-value-based building blocks
+- `tensorinv` and `tensorsolve` lower through reshape/permute plus `inv`/`solve`
 
-| Choice | Mechanism | Rationale |
-|--------|-----------|-----------|
-| GPU vendor (cuTENSOR/hipTensor) | **Runtime** dlopen (future) | Single binary for all platforms; Julia/Python inject .so path |
-| CPU GEMM (faer/cblas) | **Compile-time** feature (future) | Fundamentally different linking (pure Rust vs C ABI) |
-| Elementwise ops | **Enum-based** in TensorPrims; closures via strided-kernel | cuTENSOR-compatible for GPU; custom closures via strided-kernel (CPU only) |
-| libloading | **Always ON** (future, in tenferro-device) | Lightweight, no overhead when GPU absent |
-| .so path | **Caller-injected** (future, via tenferro-device) | No auto-search; Julia/Python manage library versions |
+When a dedicated factorization kernel is needed, `tenferro-linalg` routes
+through `tenferro-linalg-prims`.
 
----
+## Current Migration Status
 
-## Relationship with mdarray / mdarray-linalg
+The new family traits and `tenferro-linalg-prims` crate exist today. Some
+backends are still backed by blanket adapters over the legacy `TensorPrims<A>`
+surface while the workspace migrates. The intended long-term dependency
+direction is nevertheless the layered split documented above.
 
-| | mdarray / mdarray-linalg | tenferro-* |
-|---|---|---|
-| Role | **numpy equivalent** — general-purpose multidimensional array | **PyTorch equivalent** — high-performance tensor library |
-| Memory | Owned `Array<T, D>` | `DataBuffer<T>` (CPU/GPU) |
-| GPU | No | cuTENSOR, hipTensor (no Metal) |
-| Autodiff | No | chainrules-core (VJP/JVP; API skeleton in POC) |
-| Dispatch | Direct function calls | `TensorPrims` trait (backend selection) |
-
-Both are needed. mdarray is a foundational array library; tenferro builds a
-richer tensor ecosystem with GPU support and automatic differentiation.
-
-tenferro-linalg and mdarray-linalg are **parallel** (both call faer directly),
-not serial. `tenferro-linalg` is a thin wrapper over external matrix
-decomposition libraries providing tensor-level APIs with numeric dimension
-indices (e.g., `svd(tensor, &[0, 1], &[2, 3])`).
+## Dependency Direction
 
 ```
-faer (SVD, QR, eigen)       ← external matrix algorithms
-    ^                ^
-tenferro-linalg  mdarray-linalg-faer
-(Tensor<T>       (Array<T, D>
- -> MatRef)       -> MatRef)
+tenferro-algebra ───────┐
+tenferro-device ────────┤
+chainrules-core ────────┤
+                        ▼
+                  tenferro-tensor
+                        │
+        ┌───────────────┴───────────────┐
+        ▼                               ▼
+  tenferro-prims                 tenferro-linalg-prims
+        │                               │
+        ├───────────────┐               │
+        ▼               ▼               ▼
+  tenferro-einsum   extensions     tenferro-linalg
+        └───────────────┬───────────────┘
+                        ▼
+                  tenferro-capi
 ```
 
-## No Metal (Apple GPU) Support
+## Performance Principles
 
-M-series CPUs are fast enough for our workloads (tensor network algorithms).
-Metal lacks a cuTENSOR-equivalent tensor contraction library, requiring
-reshape+matmul decomposition that would be slow for high-rank tensors. Not
-worth the implementation cost.
+The redesign is constrained by three performance principles.
 
-## ITensor Ecosystem Mapping
-
-| Aspect | ITensor Julia | tenferro | Notes |
-|---|---|---|---|
-| Sparse storage | DOK-of-Arrays | Single DataBuffer + offset map | tenferro is GPU-friendly |
-| Axis fusion | FusionStyle dispatch | Not yet designed | Critical for quantum number tensors |
-
-See [reference/itensor-ecosystem.md](./reference/itensor-ecosystem.md) for
-the full ecosystem analysis.
-
-## Gap Analysis: DFT Application (OpenMX) as a Target Use Case
-
-We analysed [OpenMX 3.9.9 GPU](https://www.openmx-square.org/) — a
-production DFT code using MPI + OpenACC + cuBLAS/cuSOLVER — to evaluate
-whether tenferro-rs could serve as a pure-Rust computation foundation for
-similar electronic-structure applications.
-
-### What tenferro-rs already covers
-
-| OpenMX need | tenferro equivalent | Status |
-|-------------|---------------------|--------|
-| Dense GEMM (`dgemm`/`zgemm`, `cublasDgemm`) | `TensorPrims::BatchedGemm`, einsum | API defined |
-| Standard eigenvalue (`dsyev`/`zheev`) | `tenferro-linalg::eigen()` | API defined |
-| SVD, QR, LU | `tenferro-linalg` | API defined |
-| Complex128 support | `num-complex::Complex64` | Supported |
-| GPU memory model | `LogicalMemorySpace::GpuMemory` | Designed |
-| Async GPU execution | `CompletionEvent` | Designed |
-| C FFI + DLPack | `tenferro-capi` | API defined |
-
-### Gaps identified and decisions
-
-**Add to `tenferro-linalg` (POC phase):**
-
-| Operation | Rationale | Backend mapping |
-|-----------|-----------|-----------------|
-| `cholesky()` | Overlap matrix S factorisation (`dpotrf`) | faer (CPU), cuSOLVER (GPU) |
-| `solve()` | General linear solve A·x = b (Green's functions, NEGF) | faer (CPU), cuSOLVER (GPU) |
-| `inv()` | Explicit matrix inversion (LU-based) | Composed from `lu()` + `solve()` |
-
-**Deferred — introduce when application development requires them:**
-
-| Feature | Why deferred | Where it would live |
-|---------|-------------|---------------------|
-| Generalised eigenvalue (`geig`: A·x = λ·B·x) | Core of SCF loop but requires application-level validation first | `tenferro-linalg` |
-| FFT (3D forward/inverse) | Poisson solver; orthogonal to tensor contraction — better served by external `rustfft` + `cuFFT` via `Tensor::view()` | Application layer or thin wrapper crate |
-| Sparse / block-sparse matrices | Hamiltonian construction; application manages sparsity, passes dense blocks to tenferro | Application layer + external crates (`sprs`) |
-| MPI / distributed parallel | Node-level distribution; tenferro stays single-node (CPU/GPU) | Application layer |
-| ScaLAPACK-equivalent distributed solvers | Distributed eigenvalue (`pdsyev`/`pzheev`) | External crate (ELPA Rust binding) |
-| Extended `UnaryOp` (`Exp`, `Log`, `Pow`) | XC functionals on grids; handled by `strided-kernel::zip_map` | `TensorPrims` if needed |
-
-### Architectural assessment
-
-The current layered structure (device → algebra → prims → tensor →
-einsum/linalg → capi) is **natural and sufficient** for this use case.
-No structural changes are needed — adding `cholesky`/`solve`/`inv` to
-`tenferro-linalg` is a straightforward extension within the existing
-design. Application-specific concerns (sparsity, MPI, FFT) belong in the
-application layer, keeping tenferro-rs slim as a general-purpose tensor
-library.
+1. Keep BLAS/cuTENSOR-style `alpha * op(inputs) + beta * output` execution
+   contracts.
+2. Preserve the `einsum` lowering shape:
+   `permute view -> MakeContiguous -> BatchedGemm`, with `Contract` as an
+   optional fast path.
+3. Generalize public protocol descriptors only when backends can still
+   specialize at plan time and keep hot loops free of per-element dynamic
+   dispatch.
