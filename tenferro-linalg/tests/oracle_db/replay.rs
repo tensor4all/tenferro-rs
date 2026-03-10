@@ -128,10 +128,7 @@ fn comparison(record: &CaseRecord) -> Result<(f64, f64), String> {
         .first_order()
         .ok_or_else(|| format!("missing first-order comparison for {}", record.case_id))?;
     if comparison.kind != "allclose" {
-        return Err(format!(
-            "unsupported comparison kind {}",
-            comparison.kind
-        ));
+        return Err(format!("unsupported comparison kind {}", comparison.kind));
     }
     Ok((comparison.rtol, comparison.atol))
 }
@@ -417,8 +414,13 @@ fn replay_cholesky(record: &CaseRecord) -> Result<bool, String> {
         atol,
     )?;
     compare_tensor_maps("cholesky.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    let hvp_checked =
-        validate_hvp("cholesky", record, &inputs, &direction, probe, |perturbed| {
+    let hvp_checked = validate_hvp(
+        "cholesky",
+        record,
+        &inputs,
+        &direction,
+        probe,
+        |perturbed| {
             let wrapped = apply_hermitian_wrapper(perturbed.get("a").unwrap())?;
             let mut ctx = CpuContext::new(1);
             let grad = cholesky_rrule(&mut ctx, &wrapped, &raw_cotangent)
@@ -427,7 +429,8 @@ fn replay_cholesky(record: &CaseRecord) -> Result<bool, String> {
                 String::from("a"),
                 apply_hermitian_wrapper(&grad)?,
             )]))
-        })?;
+        },
+    )?;
     check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
     Ok(hvp_checked)
 }
@@ -653,12 +656,8 @@ fn replay_svd(record: &CaseRecord) -> Result<bool, String> {
         let mut ctx = CpuContext::new(1);
         let primal = svd(&mut ctx, perturbed.get("a").unwrap(), None)
             .map_err(|err| format!("svd failed during HVP replay: {err}"))?;
-        let cotangent_raw = svd_observable_cotangent(
-            record.family.as_str(),
-            &primal.u,
-            &primal.vt,
-            &cotangent,
-        )?;
+        let cotangent_raw =
+            svd_observable_cotangent(record.family.as_str(), &primal.u, &primal.vt, &cotangent)?;
         let grad = svd_rrule(&mut ctx, perturbed.get("a").unwrap(), &cotangent_raw, None)
             .map_err(|err| format!("svd_rrule failed during HVP replay: {err}"))?;
         Ok(BTreeMap::from([(String::from("a"), grad)]))

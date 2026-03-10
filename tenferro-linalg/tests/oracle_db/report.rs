@@ -46,7 +46,11 @@ pub fn generate_support_report(root: &Path) -> Result<String, String> {
             match classify_record(&record) {
                 RecordSupport::Supported(_) => {
                     totals.supported_records += 1;
-                    if record.probes.iter().any(|probe| probe.pytorch_ref.hvp.is_some()) {
+                    if record
+                        .probes
+                        .iter()
+                        .any(|probe| probe.pytorch_ref.hvp.is_some())
+                    {
                         totals.supported_hvp_records += 1;
                     }
                     *supported.entry(key).or_default() += 1;
@@ -75,7 +79,10 @@ pub fn generate_support_report(root: &Path) -> Result<String, String> {
         "This file is generated from the vendored `third_party/tensor-ad-oracles` subtree and the local oracle replay support registry.\n\n",
     );
     out.push_str("## Summary\n\n");
-    out.push_str(&format!("- Total published records: {}\n", totals.total_records));
+    out.push_str(&format!(
+        "- Total published records: {}\n",
+        totals.total_records
+    ));
     out.push_str(&format!(
         "- Supported success records: {}\n",
         totals.supported_records

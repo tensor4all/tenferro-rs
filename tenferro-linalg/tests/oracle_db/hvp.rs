@@ -54,7 +54,9 @@ pub fn central_diff_tensor_maps(
     step: f64,
 ) -> Result<BTreeMap<String, Tensor<f64>>, String> {
     if step <= 0.0 {
-        return Err(format!("central difference requires positive step, got {step}"));
+        return Err(format!(
+            "central difference requires positive step, got {step}"
+        ));
     }
     if plus.keys().collect::<Vec<_>>() != minus.keys().collect::<Vec<_>>() {
         return Err(format!(
@@ -80,7 +82,10 @@ pub fn central_diff_tensor_maps(
             .zip(minus_data.iter())
             .map(|(p, m)| (p - m) / (2.0 * step))
             .collect();
-        out.insert(name.clone(), tensor_from_col_major(data, plus_tensor.dims()));
+        out.insert(
+            name.clone(),
+            tensor_from_col_major(data, plus_tensor.dims()),
+        );
     }
     Ok(out)
 }

@@ -42,9 +42,7 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         ("qr", "identity", "identity", "success") => {
             RecordSupport::Supported(ReplayKind::QrIdentity)
         }
-        ("svd", "u_abs", "svd_u_abs", "success") => {
-            RecordSupport::Supported(ReplayKind::SvdUAbs)
-        }
+        ("svd", "u_abs", "svd_u_abs", "success") => RecordSupport::Supported(ReplayKind::SvdUAbs),
         ("svd", "s", "svd_s", "success") => RecordSupport::Supported(ReplayKind::SvdS),
         ("svd", "vh_abs", "svd_vh_abs", "success") => {
             RecordSupport::Supported(ReplayKind::SvdVhAbs)
@@ -89,11 +87,9 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         | ("inv", "identity", "identity", "success")
         | ("inv_ex", "identity", "identity", "success")
         | ("pinv", "identity", "identity", "success")
-        | ("pinv_hermitian", "identity", "identity", "success") => {
-            RecordSupport::Unsupported {
-                reason: "tenferro replay does not implement this spectral/inverse family yet",
-            }
-        }
+        | ("pinv_hermitian", "identity", "identity", "success") => RecordSupport::Unsupported {
+            reason: "tenferro replay does not implement this spectral/inverse family yet",
+        },
         ("lstsq_grad_oriented", "identity", "identity", "success")
         | ("lu", "identity", "identity", "success")
         | ("lu_factor", "identity", "identity", "success")
@@ -102,11 +98,9 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         | ("solve_ex", "identity", "identity", "success")
         | ("solve_triangular", "identity", "identity", "success")
         | ("tensorinv", "identity", "identity", "success")
-        | ("tensorsolve", "identity", "identity", "success") => {
-            RecordSupport::Unsupported {
-                reason: "tenferro replay does not implement this solver/decomposition family yet",
-            }
-        }
+        | ("tensorsolve", "identity", "identity", "success") => RecordSupport::Unsupported {
+            reason: "tenferro replay does not implement this solver/decomposition family yet",
+        },
         _ => RecordSupport::Unknown,
     }
 }

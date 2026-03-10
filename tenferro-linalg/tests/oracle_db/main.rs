@@ -1,8 +1,8 @@
 mod db;
 mod decode;
 mod hvp;
-mod report;
 mod replay;
+mod report;
 mod support;
 
 use serde_json::json;
@@ -275,7 +275,10 @@ fn oracle_db_every_record_is_classified() {
     for path in files {
         let records = db::load_case_records(&path).expect("case records should parse");
         for record in records {
-            if matches!(support::classify_record(&record), support::RecordSupport::Unknown) {
+            if matches!(
+                support::classify_record(&record),
+                support::RecordSupport::Unknown
+            ) {
                 unknown.push(format!(
                     "{}/{}/{} ({})",
                     record.op, record.family, record.observable.kind, record.expected_behavior

@@ -129,7 +129,8 @@ impl CaseRecord {
     fn validate(self) -> Result<Self, String> {
         match self.expected_behavior.as_str() {
             "success" => {
-                if self.comparison.first_order().is_none() || self.comparison.second_order().is_none()
+                if self.comparison.first_order().is_none()
+                    || self.comparison.second_order().is_none()
                 {
                     return Err(format!(
                         "success case {} must use success comparison schema",
@@ -162,8 +163,8 @@ impl CaseRecord {
 }
 
 pub fn parse_case_record_value(value: Value) -> Result<CaseRecord, String> {
-    let record: CaseRecord =
-        serde_json::from_value(value).map_err(|err| format!("failed to parse case record: {err}"))?;
+    let record: CaseRecord = serde_json::from_value(value)
+        .map_err(|err| format!("failed to parse case record: {err}"))?;
     record.validate()
 }
 
