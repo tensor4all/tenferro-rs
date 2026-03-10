@@ -11,10 +11,9 @@ fn oracle_db_root_resolves_vendored_subtree() {
 
     let files = db::case_files(&root).unwrap();
     assert!(!files.is_empty());
-    assert!(
-        files.iter()
-            .any(|path| path.ends_with("cases/solve/identity.jsonl"))
-    );
+    assert!(files
+        .iter()
+        .any(|path| path.ends_with("cases/solve/identity.jsonl")));
 }
 
 #[test]
