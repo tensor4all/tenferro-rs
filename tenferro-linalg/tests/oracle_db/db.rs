@@ -16,14 +16,51 @@ pub struct DbTensor {
 
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)]
-pub struct Comparison {
+pub struct ComparisonTolerance {
     pub kind: String,
-    #[serde(default)]
     pub rtol: f64,
-    #[serde(default)]
     pub atol: f64,
-    #[serde(default)]
-    pub reason_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+pub struct ErrorComparison {
+    pub kind: String,
+    pub reason_code: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+#[allow(dead_code)]
+pub enum Comparison {
+    Success {
+        first_order: ComparisonTolerance,
+        second_order: ComparisonTolerance,
+    },
+    Error(ErrorComparison),
+}
+
+impl Comparison {
+    pub fn first_order(&self) -> Option<&ComparisonTolerance> {
+        match self {
+            Comparison::Success { first_order, .. } => Some(first_order),
+            Comparison::Error(_) => None,
+        }
+    }
+
+    pub fn second_order(&self) -> Option<&ComparisonTolerance> {
+        match self {
+            Comparison::Success { second_order, .. } => Some(second_order),
+            Comparison::Error(_) => None,
+        }
+    }
+
+    pub fn error(&self) -> Option<&ErrorComparison> {
+        match self {
+            Comparison::Success { .. } => None,
+            Comparison::Error(error) => Some(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -36,6 +73,8 @@ pub struct Observable {
 #[allow(dead_code)]
 pub struct PytorchRef {
     pub jvp: BTreeMap<String, DbTensor>,
+    #[serde(default)]
+    pub hvp: Option<BTreeMap<String, DbTensor>>,
     pub vjp: BTreeMap<String, DbTensor>,
 }
 
@@ -46,6 +85,8 @@ pub struct FdRef {
     pub stencil_order: usize,
     pub step: f64,
     pub jvp: BTreeMap<String, DbTensor>,
+    #[serde(default)]
+    pub hvp: Option<BTreeMap<String, DbTensor>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +111,66 @@ pub struct CaseRecord {
     pub observable: Observable,
     pub comparison: Comparison,
     pub probes: Vec<ProbeRecord>,
+}
+
+impl ProbeRecord {
+    fn validate(&self) -> Result<(), String> {
+        match (&self.pytorch_ref.hvp, &self.fd_ref.hvp) {
+            (Some(_), Some(_)) | (None, None) => Ok(()),
+            (Some(_), None) | (None, Some(_)) => Err(format!(
+                "probe {} has half-present HVP payloads",
+                self.probe_id
+            )),
+        }
+    }
+}
+
+impl CaseRecord {
+    fn validate(self) -> Result<Self, String> {
+        match self.expected_behavior.as_str() {
+            "success" => {
+                if self.comparison.first_order().is_none() || self.comparison.second_order().is_none()
+                {
+                    return Err(format!(
+                        "success case {} must use success comparison schema",
+                        self.case_id
+                    ));
+                }
+            }
+            "error" => {
+                if self.comparison.error().is_none() {
+                    return Err(format!(
+                        "error case {} must use expect_error comparison schema",
+                        self.case_id
+                    ));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "case {} has unsupported expected_behavior {}",
+                    self.case_id, other
+                ));
+            }
+        }
+
+        for probe in &self.probes {
+            probe.validate()?;
+        }
+
+        Ok(self)
+    }
+}
+
+pub fn parse_case_record_value(value: Value) -> Result<CaseRecord, String> {
+    let record: CaseRecord =
+        serde_json::from_value(value).map_err(|err| format!("failed to parse case record: {err}"))?;
+    record.validate()
+}
+
+fn parse_case_record_str(raw: &str) -> Result<CaseRecord, String> {
+    let record: CaseRecord =
+        serde_json::from_str(raw).map_err(|err| format!("failed to parse case record: {err}"))?;
+    record.validate()
 }
 
 pub fn default_oracle_db_root() -> Option<PathBuf> {
@@ -119,7 +220,7 @@ pub fn load_case_records(path: &Path) -> Result<Vec<CaseRecord>, String> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
-            serde_json::from_str::<CaseRecord>(line)
+            parse_case_record_str(line)
                 .map_err(|err| format!("failed to parse {}: {err}", path.display()))
         })
         .collect()

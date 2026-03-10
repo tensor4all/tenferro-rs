@@ -139,13 +139,32 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
 }
 
 fn comparison(record: &CaseRecord) -> Result<(f64, f64), String> {
-    if record.comparison.kind != "allclose" {
+    let comparison = record
+        .comparison
+        .first_order()
+        .ok_or_else(|| format!("missing first-order comparison for {}", record.case_id))?;
+    if comparison.kind != "allclose" {
         return Err(format!(
             "unsupported comparison kind {}",
-            record.comparison.kind
+            comparison.kind
         ));
     }
-    Ok((record.comparison.rtol, record.comparison.atol))
+    Ok((comparison.rtol, comparison.atol))
+}
+
+#[allow(dead_code)]
+fn second_order_comparison(record: &CaseRecord) -> Result<(f64, f64), String> {
+    let comparison = record
+        .comparison
+        .second_order()
+        .ok_or_else(|| format!("missing second-order comparison for {}", record.case_id))?;
+    if comparison.kind != "allclose" {
+        return Err(format!(
+            "unsupported second-order comparison kind {}",
+            comparison.kind
+        ));
+    }
+    Ok((comparison.rtol, comparison.atol))
 }
 
 fn solve_rhs_core_rank(a: &DbTensor, b: &DbTensor) -> usize {

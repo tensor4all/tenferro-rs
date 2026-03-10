@@ -29,6 +29,241 @@ fn oracle_db_decode_moves_pytorch_matrix_dims_to_tenferro_front() {
 }
 
 #[test]
+fn oracle_db_parser_handles_current_schema() {
+    let record = json!({
+        "case_id": "solve_f64_identity_hvp_001",
+        "op": "solve",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [2, 2],
+                "order": "row_major",
+                "data": [1.0, 0.0, 0.0, 1.0]
+            },
+            "b": {
+                "dtype": "float64",
+                "shape": [2],
+                "order": "row_major",
+                "data": [1.0, 2.0]
+            }
+        },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": [{
+            "probe_id": "p0",
+            "direction": {
+                "a": {
+                    "dtype": "float64",
+                    "shape": [2, 2],
+                    "order": "row_major",
+                    "data": [0.0, 0.0, 0.0, 0.0]
+                },
+                "b": {
+                    "dtype": "float64",
+                    "shape": [2],
+                    "order": "row_major",
+                    "data": [0.0, 0.0]
+                }
+            },
+            "cotangent": {
+                "value": {
+                    "dtype": "float64",
+                    "shape": [2],
+                    "order": "row_major",
+                    "data": [1.0, 1.0]
+                }
+            },
+            "pytorch_ref": {
+                "jvp": {
+                    "value": {
+                        "dtype": "float64",
+                        "shape": [2],
+                        "order": "row_major",
+                        "data": [0.0, 0.0]
+                    }
+                },
+                "hvp": {
+                    "a": {
+                        "dtype": "float64",
+                        "shape": [2, 2],
+                        "order": "row_major",
+                        "data": [0.0, 0.0, 0.0, 0.0]
+                    },
+                    "b": {
+                        "dtype": "float64",
+                        "shape": [2],
+                        "order": "row_major",
+                        "data": [0.0, 0.0]
+                    }
+                },
+                "vjp": {
+                    "a": {
+                        "dtype": "float64",
+                        "shape": [2, 2],
+                        "order": "row_major",
+                        "data": [1.0, 0.0, 0.0, 1.0]
+                    },
+                    "b": {
+                        "dtype": "float64",
+                        "shape": [2],
+                        "order": "row_major",
+                        "data": [1.0, 1.0]
+                    }
+                }
+            },
+            "fd_ref": {
+                "method": "central_difference",
+                "stencil_order": 2,
+                "step": 1e-6,
+                "jvp": {
+                    "value": {
+                        "dtype": "float64",
+                        "shape": [2],
+                        "order": "row_major",
+                        "data": [0.0, 0.0]
+                    }
+                },
+                "hvp": {
+                    "a": {
+                        "dtype": "float64",
+                        "shape": [2, 2],
+                        "order": "row_major",
+                        "data": [0.0, 0.0, 0.0, 0.0]
+                    },
+                    "b": {
+                        "dtype": "float64",
+                        "shape": [2],
+                        "order": "row_major",
+                        "data": [0.0, 0.0]
+                    }
+                }
+            }
+        }]
+    });
+
+    let parsed = db::parse_case_record_value(record).expect("current schema should parse");
+    assert_eq!(parsed.comparison.first_order().unwrap().kind, "allclose");
+    assert_eq!(parsed.comparison.second_order().unwrap().kind, "allclose");
+    assert!(parsed.probes[0].pytorch_ref.hvp.is_some());
+    assert!(parsed.probes[0].fd_ref.hvp.is_some());
+}
+
+#[test]
+fn oracle_db_parser_rejects_half_present_hvp_payloads() {
+    let record = json!({
+        "case_id": "solve_f64_identity_hvp_half_present",
+        "op": "solve",
+        "dtype": "float64",
+        "family": "identity",
+        "expected_behavior": "success",
+        "inputs": {
+            "a": {
+                "dtype": "float64",
+                "shape": [1, 1],
+                "order": "row_major",
+                "data": [1.0]
+            },
+            "b": {
+                "dtype": "float64",
+                "shape": [1],
+                "order": "row_major",
+                "data": [1.0]
+            }
+        },
+        "observable": { "kind": "identity" },
+        "comparison": {
+            "first_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-6 },
+            "second_order": { "kind": "allclose", "rtol": 1e-4, "atol": 1e-5 }
+        },
+        "probes": [{
+            "probe_id": "p0",
+            "direction": {
+                "a": {
+                    "dtype": "float64",
+                    "shape": [1, 1],
+                    "order": "row_major",
+                    "data": [0.0]
+                },
+                "b": {
+                    "dtype": "float64",
+                    "shape": [1],
+                    "order": "row_major",
+                    "data": [0.0]
+                }
+            },
+            "cotangent": {
+                "value": {
+                    "dtype": "float64",
+                    "shape": [1],
+                    "order": "row_major",
+                    "data": [1.0]
+                }
+            },
+            "pytorch_ref": {
+                "jvp": {
+                    "value": {
+                        "dtype": "float64",
+                        "shape": [1],
+                        "order": "row_major",
+                        "data": [0.0]
+                    }
+                },
+                "hvp": {
+                    "a": {
+                        "dtype": "float64",
+                        "shape": [1, 1],
+                        "order": "row_major",
+                        "data": [0.0]
+                    },
+                    "b": {
+                        "dtype": "float64",
+                        "shape": [1],
+                        "order": "row_major",
+                        "data": [0.0]
+                    }
+                },
+                "vjp": {
+                    "a": {
+                        "dtype": "float64",
+                        "shape": [1, 1],
+                        "order": "row_major",
+                        "data": [1.0]
+                    },
+                    "b": {
+                        "dtype": "float64",
+                        "shape": [1],
+                        "order": "row_major",
+                        "data": [1.0]
+                    }
+                }
+            },
+            "fd_ref": {
+                "method": "central_difference",
+                "stencil_order": 2,
+                "step": 1e-6,
+                "jvp": {
+                    "value": {
+                        "dtype": "float64",
+                        "shape": [1],
+                        "order": "row_major",
+                        "data": [0.0]
+                    }
+                }
+            }
+        }]
+    });
+
+    let err = db::parse_case_record_value(record).expect_err("half-present HVP should fail");
+    assert!(err.contains("half-present HVP"));
+}
+
+#[test]
 fn oracle_db_replay_against_tensor_ad_oracles() {
     let summary = replay::run_database_replay();
 
