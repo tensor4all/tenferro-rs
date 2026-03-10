@@ -3,6 +3,9 @@ use num_complex::{Complex32, Complex64};
 use std::hint::black_box;
 use tenferro_prims::CpuContext;
 
+mod batch_a_contracts;
+mod batch_b_contracts;
+
 fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
     let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
     let offset = contiguous.offset() as usize;
