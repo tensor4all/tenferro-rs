@@ -89,3 +89,8 @@ The crate exists and is already wired into backend implementations. During the
 migration, some implementations are still delegated through existing local
 backend helpers, but the public backend-facing source of truth is
 `tenferro-linalg-prims`.
+
+One important current debt is that `LinalgScalar` still carries
+LAPACK-oriented eigendecomposition helper requirements. That helper surface is
+more specific than the true backend-generic scalar contract and should be
+isolated into a narrower CPU-oriented trait.

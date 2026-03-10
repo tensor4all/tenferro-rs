@@ -101,8 +101,17 @@ boundary is now:
 - `tenferro-linalg` for public/composite logic
 - `tenferro-prims` and `tenferro-linalg-prims` for execution
 
+Current debt that should not be treated as the desired end state:
+
+- some composite and structured paths still rely on `ensure_cpu_backend(...)`
+- some linalg composites still depend on CPU-local migration helpers
+- primal parity is broader than VJP/JVP/HVP parity for several newer families
+
 ## Non-Goals
 
 `tenferro-linalg` is not trying to be a literal mirror of `torch.linalg` at the
 backend boundary. PyTorch-style API families may exist publicly, but backend
 contracts are intentionally smaller and more Rust-structured.
+
+For the broader family-level parity and backlog view, see
+[reference/pytorch-dense-cpu-parity.md](./reference/pytorch-dense-cpu-parity.md).
