@@ -5,12 +5,12 @@ use std::rc::Rc;
 use chainrules::{
     autograd, AdResult, Differentiable, DualTensor, NodeId, ReverseRule, TrackedTensor, Variable,
 };
-use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
-use tenferro_prims::TensorPrims;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::api::{einsum, einsum_with_subscripts};
+use crate::backend::{BackendContext, EinsumBackend};
 use crate::execute::execute_nested;
 use crate::nested::NestedEinsum;
 use crate::subscripts::Subscripts;
@@ -19,12 +19,12 @@ use crate::subscripts::Subscripts;
 /// backend context for backend-optimized pullback.
 struct EinsumReverseRule<Alg, Backend>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
 {
-    ctx: Rc<RefCell<Backend::Context>>,
+    ctx: Rc<RefCell<BackendContext<Alg, Backend>>>,
     subscripts: Subscripts,
     primals: Vec<Tensor<Alg::Scalar>>,
     input_tangents: Vec<Option<Tensor<Alg::Scalar>>>,
@@ -34,9 +34,9 @@ where
 
 impl<Alg, Backend> ReverseRule<Tensor<Alg::Scalar>> for EinsumReverseRule<Alg, Backend>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
 {
     fn pullback(
@@ -192,14 +192,14 @@ where
 /// ```
 ///
 pub fn tracked_einsum<Alg: 'static, Backend>(
-    ctx: Rc<RefCell<Backend::Context>>,
+    ctx: Rc<RefCell<BackendContext<Alg, Backend>>>,
     subscripts: &str,
     operands: &[&TrackedTensor<Tensor<Alg::Scalar>>],
 ) -> AdResult<TrackedTensor<Tensor<Alg::Scalar>>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg> + 'static,
+    Backend: EinsumBackend<Alg> + 'static,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
 {
     let subs = Subscripts::parse(subscripts)
@@ -302,14 +302,14 @@ where
 /// loss.backward(BackwardOptions::default()).unwrap();
 /// ```
 pub fn variable_einsum<Alg: 'static, Backend>(
-    ctx: Rc<RefCell<Backend::Context>>,
+    ctx: Rc<RefCell<BackendContext<Alg, Backend>>>,
     subscripts: &str,
     operands: &[&Variable<Tensor<Alg::Scalar>>],
 ) -> AdResult<Variable<Tensor<Alg::Scalar>>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg> + 'static,
+    Backend: EinsumBackend<Alg> + 'static,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>> + 'static,
 {
     let subs = Subscripts::parse(subscripts)
@@ -378,14 +378,14 @@ where
 /// let _tangent = c_dual.tangent();
 /// ```
 pub fn dual_einsum<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     operands: &[&DualTensor<Tensor<Alg::Scalar>>],
 ) -> AdResult<DualTensor<Tensor<Alg::Scalar>>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
 {
     // Extract primals
@@ -438,15 +438,15 @@ where
 /// assert_eq!(grads.len(), 2);
 /// ```
 pub fn einsum_rrule<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     operands: &[&Tensor<Alg::Scalar>],
     cotangent: &Tensor<Alg::Scalar>,
 ) -> Result<Vec<Tensor<Alg::Scalar>>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = operands.len();
@@ -510,15 +510,15 @@ where
 /// .unwrap();
 /// ```
 pub fn einsum_frule<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     primals: &[&Tensor<Alg::Scalar>],
     tangents: &[Option<&Tensor<Alg::Scalar>>],
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     let nested = if subscripts.contains('(') {
@@ -535,16 +535,16 @@ where
 /// (respecting parenthesized contraction order). Otherwise the flat
 /// `Subscripts` path is used.
 pub(crate) fn einsum_frule_impl<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subs: &Subscripts,
     nested: Option<&NestedEinsum>,
     primals: &[&Tensor<Alg::Scalar>],
     tangents: &[Option<&Tensor<Alg::Scalar>>],
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let n = primals.len();
 
@@ -632,7 +632,7 @@ where
 /// let (_grad_b, _hvp_b) = &results[1];
 /// ```
 pub fn einsum_hvp<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     primals: &[&Tensor<Alg::Scalar>],
     tangents: &[Option<&Tensor<Alg::Scalar>>],
@@ -640,9 +640,9 @@ pub fn einsum_hvp<Alg, Backend>(
     cotangent_tangent: &Tensor<Alg::Scalar>,
 ) -> Result<Vec<(Tensor<Alg::Scalar>, Tensor<Alg::Scalar>)>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = primals.len();

@@ -42,6 +42,7 @@ src-intel-mkl-static-parallel = [
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
+tenferro-linalg-prims = { path = "../tenferro-linalg-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
 chainrules-core = { path = "../extern/chainrules-core" }
 faer = { workspace = true, optional = true }

@@ -1,0 +1,18 @@
+[package]
+name = "tenferro-linalg-prims"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Backend-facing linalg kernel contracts for the tenferro workspace."
+
+[dependencies]
+tenferro-algebra = { path = "../tenferro-algebra" }
+tenferro-device = { path = "../tenferro-device" }
+tenferro-tensor = { path = "../tenferro-tensor" }
+num-complex = { workspace = true }
+num-traits = { workspace = true }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }

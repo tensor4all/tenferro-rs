@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use num_traits::{One, Zero};
-use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, LogicalMemorySpace, Result};
-use tenferro_prims::{PrimDescriptor, TensorPrims};
+use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore};
 use tenferro_tensor::Tensor;
 
+use crate::backend::BackendContext;
 use crate::classify::compute_permutation;
 use crate::pool::BufferPool;
 use crate::util::alloc_tensor_from_pool;
@@ -37,7 +37,7 @@ fn record_prepare_fallback(dims: &[usize]) {
 
 /// Prepare a single operand for GEMM: permute and try to fuse dimension groups.
 pub(crate) fn prepare_one_operand<A, B>(
-    ctx: &mut B::Context,
+    ctx: &mut BackendContext<A, B>,
     tensor: &Tensor<A::Scalar>,
     current_subs: &[u32],
     target_subs: &[u32],
@@ -48,9 +48,9 @@ pub(crate) fn prepare_one_operand<A, B>(
     pool: &mut BufferPool<A::Scalar>,
 ) -> Result<Tensor<A::Scalar>>
 where
-    A: Algebra,
+    A: Semiring,
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    B: TensorSemiringCore<A>,
 {
     use strided_perm::try_fuse_group;
 
@@ -143,16 +143,16 @@ where
 /// `current_subs == target_subs`.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn permute_or_copy<A, B>(
-    ctx: &mut B::Context,
+    ctx: &mut BackendContext<A, B>,
     tensor: &Tensor<A::Scalar>,
     current_subs: &[u32],
     target_subs: &[u32],
     pool: &mut BufferPool<A::Scalar>,
 ) -> Result<Tensor<A::Scalar>>
 where
-    A: Algebra,
+    A: Semiring,
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    B: TensorSemiringCore<A>,
 {
     if current_subs == target_subs {
         // No permutation needed; ensure contiguous
@@ -178,15 +178,15 @@ where
     // Otherwise copy to a contiguous pooled buffer
     let memory_space = tensor.logical_memory_space();
     let mut contiguous = alloc_tensor_from_pool::<A::Scalar>(view.dims(), memory_space, pool);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [view.dims(), contiguous.dims()];
-    let plan = B::plan(ctx, &desc, &shapes)?;
-    B::execute(
+    let plan = <B as TensorSemiringCore<A>>::plan(ctx, &desc, &shapes)?;
+    <B as TensorSemiringCore<A>>::execute(
         ctx,
         &plan,
-        A::Scalar::one(),
+        A::one(),
         &[&view],
-        A::Scalar::zero(),
+        A::zero(),
         &mut contiguous,
     )?;
     Ok(contiguous)
@@ -194,14 +194,14 @@ where
 
 /// Ensure a tensor is contiguous, copying if necessary.
 pub(crate) fn make_contiguous_if_needed<A, B>(
-    ctx: &mut B::Context,
+    ctx: &mut BackendContext<A, B>,
     tensor: &Tensor<A::Scalar>,
     pool: &mut BufferPool<A::Scalar>,
 ) -> Result<Tensor<A::Scalar>>
 where
-    A: Algebra,
+    A: Semiring,
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    B: TensorSemiringCore<A>,
 {
     if tensor.is_contiguous() {
         return Ok(tensor.clone());
@@ -241,17 +241,10 @@ where
 
     let memory_space = tensor.logical_memory_space();
     let mut result = alloc_tensor_from_pool::<A::Scalar>(tensor.dims(), memory_space, pool);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [tensor.dims(), result.dims()];
-    let plan = B::plan(ctx, &desc, &shapes)?;
-    B::execute(
-        ctx,
-        &plan,
-        A::Scalar::one(),
-        &[tensor],
-        A::Scalar::zero(),
-        &mut result,
-    )?;
+    let plan = <B as TensorSemiringCore<A>>::plan(ctx, &desc, &shapes)?;
+    <B as TensorSemiringCore<A>>::execute(ctx, &plan, A::one(), &[tensor], A::zero(), &mut result)?;
     Ok(result)
 }
 

@@ -23,10 +23,11 @@
 //!
 //! # Backend dispatch
 //!
-//! The backend is passed explicitly as a type parameter `Backend: TensorPrims<Alg>`
-//! with a mutable context `&mut Backend::Context`.  This follows Rust idiom of
-//! explicit ownership and mutability (no global/thread-local state).
-//! The context provides access to the thread pool and plan cache.
+//! The backend is passed explicitly as a type parameter
+//! `Backend: EinsumBackend<Alg>` with a mutable context
+//! [`BackendContext<Alg, Backend>`](crate::BackendContext). This follows Rust
+//! idiom of explicit ownership and mutability (no global/thread-local state).
+//! The backend contract is the semiring core plus optional semiring fast paths.
 //!
 //! # Examples
 //!
@@ -249,6 +250,7 @@
 // Internal modules
 pub(crate) mod ad;
 pub(crate) mod api;
+mod backend;
 mod binary;
 mod classify;
 mod dispatch;
@@ -265,6 +267,7 @@ mod unary;
 mod util;
 
 // Public re-exports: types
+pub use backend::{BackendContext, EinsumBackend};
 pub use nested::NestedEinsum;
 pub use subscripts::Subscripts;
 pub use tree::ContractionTree;

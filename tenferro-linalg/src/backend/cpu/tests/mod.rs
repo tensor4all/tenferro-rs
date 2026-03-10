@@ -46,7 +46,10 @@ macro_rules! cpu_backend_tests {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
                 let b = make::<$scalar>(&[4.0, 7.0], &[2, 1]);
-                let x = CpuTensorLinalgBackend::solve(&mut ctx, &a, &b).unwrap();
+                let x = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::solve(
+                    &mut ctx, &a, &b,
+                )
+                .unwrap();
                 assert_eq!(x.dims(), &[2, 1]);
             }
 
@@ -55,7 +58,10 @@ macro_rules! cpu_backend_tests {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
                 let b = make::<$scalar>(&[4.0, 7.0], &[2]);
-                let x = CpuTensorLinalgBackend::solve(&mut ctx, &a, &b).unwrap();
+                let x = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::solve(
+                    &mut ctx, &a, &b,
+                )
+                .unwrap();
                 assert_eq!(x.dims(), &[2]);
             }
 
@@ -64,7 +70,12 @@ macro_rules! cpu_backend_tests {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
                 let b = make::<$scalar>(&[4.0], &[]);
-                assert!(CpuTensorLinalgBackend::solve(&mut ctx, &a, &b).is_err());
+                assert!(
+                    <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::solve(
+                        &mut ctx, &a, &b
+                    )
+                    .is_err()
+                );
             }
 
             #[test]
@@ -72,7 +83,10 @@ macro_rules! cpu_backend_tests {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[2.0, 0.0, 1.0, 3.0], &[2, 2]);
                 let b = make::<$scalar>(&[5.0, 6.0], &[2, 1]);
-                let x = CpuTensorLinalgBackend::solve_triangular(&mut ctx, &a, &b, true).unwrap();
+                let x = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::solve_triangular(
+                    &mut ctx, &a, &b, true,
+                )
+                .unwrap();
                 assert_eq!(x.dims(), &[2, 1]);
             }
 
@@ -81,7 +95,10 @@ macro_rules! cpu_backend_tests {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[2.0, 0.0, 1.0, 3.0], &[2, 2]);
                 let b = make::<$scalar>(&[5.0, 6.0], &[2]);
-                let x = CpuTensorLinalgBackend::solve_triangular(&mut ctx, &a, &b, true).unwrap();
+                let x = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::solve_triangular(
+                    &mut ctx, &a, &b, true,
+                )
+                .unwrap();
                 assert_eq!(x.dims(), &[2]);
             }
 
@@ -89,7 +106,9 @@ macro_rules! cpu_backend_tests {
             fn qr() {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
-                let result = CpuTensorLinalgBackend::qr(&mut ctx, &a).unwrap();
+                let result =
+                    <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::qr(&mut ctx, &a)
+                        .unwrap();
                 assert_eq!(result.q.dims(), &[2, 2]);
                 assert_eq!(result.r.dims(), &[2, 2]);
             }
@@ -98,7 +117,10 @@ macro_rules! cpu_backend_tests {
             fn thin_svd() {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[1.0, 0.0, 0.0, 2.0], &[2, 2]);
-                let result = CpuTensorLinalgBackend::thin_svd(&mut ctx, &a).unwrap();
+                let result = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::thin_svd(
+                    &mut ctx, &a,
+                )
+                .unwrap();
                 assert_eq!(result.u.dims(), &[2, 2]);
                 assert_eq!(result.s.dims(), &[2]);
                 assert_eq!(result.vt.dims(), &[2, 2]);
@@ -108,7 +130,10 @@ macro_rules! cpu_backend_tests {
             fn lu_factor() {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
-                let result = CpuTensorLinalgBackend::lu_factor(&mut ctx, &a).unwrap();
+                let result = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::lu_factor(
+                    &mut ctx, &a,
+                )
+                .unwrap();
                 assert_eq!(result.l.dims(), &[2, 2]);
                 assert_eq!(result.u.dims(), &[2, 2]);
                 assert_eq!(result.pivots.len(), 2);
@@ -119,7 +144,10 @@ macro_rules! cpu_backend_tests {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 // SPD (Hermitian positive-definite): [[4, 2], [2, 3]]
                 let a = make::<$scalar>(&[4.0, 2.0, 2.0, 3.0], &[2, 2]);
-                let l = CpuTensorLinalgBackend::cholesky(&mut ctx, &a).unwrap();
+                let l = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::cholesky(
+                    &mut ctx, &a,
+                )
+                .unwrap();
                 assert_eq!(l.dims(), &[2, 2]);
             }
 
@@ -127,7 +155,10 @@ macro_rules! cpu_backend_tests {
             fn eigen_sym() {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
-                let result = CpuTensorLinalgBackend::eigen_sym(&mut ctx, &a).unwrap();
+                let result = <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::eigen_sym(
+                    &mut ctx, &a,
+                )
+                .unwrap();
                 assert_eq!(result.values.dims(), &[2]);
                 assert_eq!(result.vectors.dims(), &[2, 2]);
             }
@@ -136,7 +167,9 @@ macro_rules! cpu_backend_tests {
             fn eig() {
                 let mut ctx = tenferro_prims::CpuContext::new(1);
                 let a = make::<$scalar>(&[1.0, 2.0, 0.0, 3.0], &[2, 2]);
-                let result = CpuTensorLinalgBackend::eig(&mut ctx, &a).unwrap();
+                let result =
+                    <CpuTensorLinalgBackend as TensorLinalgBackend<$scalar>>::eig(&mut ctx, &a)
+                        .unwrap();
                 assert_eq!(result.values.dims(), &[2]);
                 assert_eq!(result.vectors.dims(), &[2, 2]);
             }

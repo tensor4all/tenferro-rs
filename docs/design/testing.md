@@ -5,7 +5,30 @@
 Tests are split into two layers:
 
 1. **Unit tests** — inside the tenferro-rs workspace. Run via `cargo test` in seconds. No external data required.
-2. **Benchmark / integration tests** — in the `tensor4all/benchmark_einsum` repository. Uses the einsum_benchmark dataset (pkl format).
+2. **Benchmark / integration tests** — external performance and compatibility gates run after correctness work is green.
+
+For the current prims/linalg redesign, correctness work is intentionally driven
+first. Performance verification is still required before merge, but it is run as
+the final phase after the protocol migration compiles and passes functional
+tests.
+
+## Performance Gates
+
+The primary `einsum` regression gate is the sibling repository:
+
+- `../tenferro-einsum-benchmark`
+
+This benchmark suite is used to confirm that the protocol split does not
+degrade the established `einsum` lowering path. In particular, the redesign
+must preserve the expected CPU/GPU lowering shape:
+
+- CPU: `permute view -> MakeContiguous -> BatchedGemm`
+- GPU: `Contract` fast path when available, otherwise the same explicit
+  structural/materialization path
+
+`tenferro-prims` and `tenferro-linalg` may also add crate-local microbenchmarks
+for scalar or linalg-heavy paths, but `../tenferro-einsum-benchmark` remains
+the top-level performance gate for contraction behavior.
 
 ## Unit Tests (per crate)
 

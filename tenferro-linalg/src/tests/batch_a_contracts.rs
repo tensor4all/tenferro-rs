@@ -85,11 +85,11 @@ fn cond_accepts_supported_norm_kinds() {
         Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 0.5], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
     let cond_fro = cond(&mut ctx, &a, NormKind::Fro).unwrap();
-    assert_eq!(cond_fro.dims(), &[]);
+    assert!(cond_fro.dims().is_empty());
     assert!((tensor_data(&cond_fro)[0] - 4.25).abs() < 1e-12);
 
     let cond_l1 = cond(&mut ctx, &a, NormKind::L1).unwrap();
-    assert_eq!(cond_l1.dims(), &[]);
+    assert!(cond_l1.dims().is_empty());
     assert!((tensor_data(&cond_l1)[0] - 4.0).abs() < 1e-12);
 }
 

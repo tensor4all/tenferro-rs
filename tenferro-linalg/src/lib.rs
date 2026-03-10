@@ -204,7 +204,6 @@ mod prims_bridge;
 use std::any::type_name;
 
 use chainrules_core::AdResult;
-use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
@@ -214,210 +213,8 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 // LinalgScalar trait
 // ============================================================================
 
-/// Types that support linear algebra decompositions.
-///
-/// Implemented for `f64`, `f32`, `Complex64`, and `Complex32`.
-///
-/// The associated type [`Real`](LinalgScalar::Real) maps to the underlying
-/// real scalar for eigenvalues / singular values.  For real types
-/// (`f64`, `f32`) `Real = Self`; for complex types (`Complex64`, `Complex32`)
-/// `Real` is the real part type (`f64`, `f32`).
-///
-/// The associated type [`Complex`](LinalgScalar::Complex) provides the
-/// canonical complex-valued companion type used by APIs such as general
-/// eigendecomposition. For real scalars it maps to the corresponding complex
-/// type (`f64 -> Complex64`, `f32 -> Complex32`); for complex scalars it maps
-/// to `Self`.
-///
-/// # Examples
-///
-/// ```
-/// use tenferro_linalg::LinalgScalar;
-///
-/// fn my_func<T: LinalgScalar>(x: T) -> T { x }
-/// let y = my_func(1.0_f64);
-/// ```
-pub trait LinalgScalar:
-    Scalar
-    + std::ops::Sub<Output = Self>
-    + std::ops::Neg<Output = Self>
-    + std::ops::Div<Output = Self>
-    + num_traits::NumCast
-    + std::fmt::Debug
-    + 'static
-{
-    /// The real scalar type for eigenvalues / singular values.
-    type Real: LinalgScalar<Real = Self::Real, Complex = Self::Complex> + num_traits::Float;
-
-    /// The canonical complex-valued companion type for this scalar.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_linalg::LinalgScalar;
-    /// use num_complex::Complex64;
-    ///
-    /// let _: <f64 as LinalgScalar>::Complex = Complex64::new(1.0, 0.0);
-    /// ```
-    type Complex: LinalgScalar<Real = Self::Real, Complex = Self::Complex>;
-
-    /// Absolute value mapped to the real type (modulus for complex).
-    fn abs_real(&self) -> Self::Real;
-
-    /// Machine epsilon for the underlying real type.
-    fn real_epsilon() -> Self::Real;
-
-    /// Complex conjugate (identity for real types).
-    fn conj(&self) -> Self;
-
-    /// Buffer sizes for `eig_general` output.
-    ///
-    /// Returns `(values_len, vectors_len)` — the number of `T` elements
-    /// needed for the interleaved eigenvalue/eigenvector output buffers.
-    /// For real types this is `(2*n, 2*n*n)` (interleaved re/im pairs);
-    /// for complex types it is `(n, n*n)`.
-    fn eig_buffer_sizes(n: usize) -> (usize, usize);
-
-    /// Convert interleaved `eig_general` output to `Complex` tensors.
-    ///
-    /// For real `T`, `val_ri` has `[re0, im0, re1, im1, ...]` layout.
-    /// For complex `T`, `val_ri` already contains complex values directly.
-    fn eig_ri_to_complex(
-        n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Self::Complex],
-        vectors_out: &mut [Self::Complex],
-    );
-}
-
-impl LinalgScalar for f64 {
-    type Real = f64;
-    type Complex = Complex64;
-    #[inline]
-    fn abs_real(&self) -> f64 {
-        num_traits::Float::abs(*self)
-    }
-    #[inline]
-    fn real_epsilon() -> f64 {
-        <f64 as num_traits::Float>::epsilon()
-    }
-    #[inline]
-    fn conj(&self) -> f64 {
-        *self
-    }
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (2 * n, 2 * n * n)
-    }
-    fn eig_ri_to_complex(
-        n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex64],
-        vectors_out: &mut [Complex64],
-    ) {
-        for i in 0..n {
-            values_out[i] = Complex64::new(val_ri[2 * i], val_ri[2 * i + 1]);
-        }
-        for k in 0..(n * n) {
-            vectors_out[k] = Complex64::new(vec_ri[2 * k], vec_ri[2 * k + 1]);
-        }
-    }
-}
-
-impl LinalgScalar for f32 {
-    type Real = f32;
-    type Complex = Complex32;
-    #[inline]
-    fn abs_real(&self) -> f32 {
-        num_traits::Float::abs(*self)
-    }
-    #[inline]
-    fn real_epsilon() -> f32 {
-        <f32 as num_traits::Float>::epsilon()
-    }
-    #[inline]
-    fn conj(&self) -> f32 {
-        *self
-    }
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (2 * n, 2 * n * n)
-    }
-    fn eig_ri_to_complex(
-        n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex32],
-        vectors_out: &mut [Complex32],
-    ) {
-        for i in 0..n {
-            values_out[i] = Complex32::new(val_ri[2 * i], val_ri[2 * i + 1]);
-        }
-        for k in 0..(n * n) {
-            vectors_out[k] = Complex32::new(vec_ri[2 * k], vec_ri[2 * k + 1]);
-        }
-    }
-}
-
-impl LinalgScalar for Complex64 {
-    type Real = f64;
-    type Complex = Complex64;
-    #[inline]
-    fn abs_real(&self) -> f64 {
-        self.norm()
-    }
-    #[inline]
-    fn real_epsilon() -> f64 {
-        <f64 as num_traits::Float>::epsilon()
-    }
-    #[inline]
-    fn conj(&self) -> Complex64 {
-        Complex64::conj(self)
-    }
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (n, n * n)
-    }
-    fn eig_ri_to_complex(
-        n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex64],
-        vectors_out: &mut [Complex64],
-    ) {
-        values_out[..n].copy_from_slice(&val_ri[..n]);
-        vectors_out[..n * n].copy_from_slice(&vec_ri[..n * n]);
-    }
-}
-
-impl LinalgScalar for Complex32 {
-    type Real = f32;
-    type Complex = Complex32;
-    #[inline]
-    fn abs_real(&self) -> f32 {
-        self.norm()
-    }
-    #[inline]
-    fn real_epsilon() -> f32 {
-        <f32 as num_traits::Float>::epsilon()
-    }
-    #[inline]
-    fn conj(&self) -> Complex32 {
-        Complex32::conj(self)
-    }
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (n, n * n)
-    }
-    fn eig_ri_to_complex(
-        n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex32],
-        vectors_out: &mut [Complex32],
-    ) {
-        values_out[..n].copy_from_slice(&val_ri[..n]);
-        vectors_out[..n * n].copy_from_slice(&vec_ri[..n * n]);
-    }
-}
+#[doc(inline)]
+pub use tenferro_linalg_prims::LinalgScalar;
 
 // ============================================================================
 // Batch processing helpers
@@ -7370,10 +7167,8 @@ mod internal_tests {
     use super::*;
     use num_complex::Complex64;
 
-    // The old tests used mock backends (RejectingMatMulBackend) to verify that
-    // backend_mat_mul/backend_mat_mul_nn route through TensorPrims instead of the
-    // backend's mat_mul. These helper functions now accept a generic context
-    // (still ignored, using prims_bridge directly), so we just use a real context.
+    // These tests assert that backend_mat_mul/backend_mat_mul_nn stay on the
+    // prims bridge instead of calling backend-local matrix multiplication.
 
     #[test]
     fn validate_hermitian_batches_accepts_symmetric_input() {
@@ -7392,6 +7187,36 @@ mod internal_tests {
         let data = vec![2.0, 1.0, 4.0, 3.0];
         let result = validate_hermitian_batches(&data, 0, 2, 1, "eigen");
         assert!(matches!(result, Err(Error::InvalidArgument(_))));
+    }
+
+    #[test]
+    fn validate_2d_and_validate_square_cover_error_and_batch_paths() {
+        let vector =
+            Tensor::from_slice(&[1.0_f64, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+        let err = validate_2d(&vector).unwrap_err();
+        assert!(matches!(err, Error::InvalidArgument(_)));
+
+        let nonsquare = Tensor::from_slice(
+            &[1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0],
+            &[2, 3],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let err = validate_square(&nonsquare).unwrap_err();
+        assert!(matches!(err, Error::ShapeMismatch { .. }));
+
+        let batched_square = Tensor::from_slice(
+            &[1.0_f64, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let (m, n, batch) = validate_2d(&batched_square).unwrap();
+        assert_eq!((m, n), (2, 2));
+        assert_eq!(batch, &[2]);
+        let (n_square, batch_square) = validate_square(&batched_square).unwrap();
+        assert_eq!(n_square, 2);
+        assert_eq!(batch_square, &[2]);
     }
 
     #[test]

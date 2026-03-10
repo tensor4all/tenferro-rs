@@ -3,11 +3,15 @@
 // site is an associated type (Alg::Scalar) rather than a concrete type.
 #[allow(unused_imports)]
 use num_traits::{One, Zero};
-use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
-use tenferro_prims::{Extension, PrimDescriptor, ReduceOp, TensorPrims};
+use tenferro_prims::{
+    SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
+    TensorSemiringFastPath,
+};
 use tenferro_tensor::Tensor;
 
+use crate::backend::{BackendContext, BackendPlan, EinsumBackend};
 use crate::classify::compute_permutation;
 use crate::plan::{GemmPlan, ReducePlan, StepPlan};
 use crate::pool::BufferPool;
@@ -65,10 +69,10 @@ pub fn print_and_reset_profile() {
 /// non-contiguous view (lazy permute) instead of a physical copy. Only safe
 /// for intermediate tensors consumed by subsequent einsum steps.
 pub(crate) fn execute_pairwise_with_plan<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     plan: &StepPlan,
-    ewmul_plan: Option<&Backend::Plan>,
-    gemm_plan: Option<&Backend::Plan>,
+    ewmul_plan: Option<&BackendPlan<Alg, Backend>>,
+    gemm_plan: Option<&BackendPlan<Alg, Backend>>,
     _subs_a: &[u32],
     _subs_b: &[u32],
     subs_c: &[u32],
@@ -81,9 +85,9 @@ pub(crate) fn execute_pairwise_with_plan<Alg, Backend>(
     lazy_output: bool,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     // 1. Diagonal extraction (zero-copy view)
     let a_diag;
@@ -133,20 +137,40 @@ where
         if let Some(pp) = ewmul_plan {
             #[cfg(feature = "profile-dispatch")]
             let _t0 = std::time::Instant::now();
-            let r = Backend::execute(ctx, pp, alpha, &[a_ref, b_ref], beta, output);
+            let r = <Backend as TensorSemiringFastPath<Alg>>::execute(
+                ctx,
+                pp,
+                alpha,
+                &[a_ref, b_ref],
+                beta,
+                output,
+            );
             #[cfg(feature = "profile-dispatch")]
             EWMUL_NS.fetch_add(_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             #[cfg(feature = "profile-dispatch")]
             CALL_COUNT.fetch_add(1, Ordering::Relaxed);
             return r;
         }
-        if Backend::has_extension_for(Extension::ElementwiseMul) {
-            let desc = PrimDescriptor::ElementwiseMul;
+        if <Backend as TensorSemiringFastPath<Alg>>::has_fast_path(
+            SemiringFastPathDescriptor::ElementwiseBinary {
+                op: SemiringBinaryOp::Mul,
+            },
+        ) {
+            let desc = SemiringFastPathDescriptor::ElementwiseBinary {
+                op: SemiringBinaryOp::Mul,
+            };
             let shapes = [a_ref.dims(), b_ref.dims(), output.dims()];
-            let pp = Backend::plan(ctx, &desc, &shapes)?;
+            let pp = <Backend as TensorSemiringFastPath<Alg>>::plan(ctx, &desc, &shapes)?;
             #[cfg(feature = "profile-dispatch")]
             let _t0 = std::time::Instant::now();
-            let r = Backend::execute(ctx, &pp, alpha, &[a_ref, b_ref], beta, output);
+            let r = <Backend as TensorSemiringFastPath<Alg>>::execute(
+                ctx,
+                &pp,
+                alpha,
+                &[a_ref, b_ref],
+                beta,
+                output,
+            );
             #[cfg(feature = "profile-dispatch")]
             EWMUL_NS.fetch_add(_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
             #[cfg(feature = "profile-dispatch")]
@@ -156,15 +180,28 @@ where
     }
 
     // 4. Contract extension (user-provided backends, e.g. cuTENSOR)
-    if Backend::has_extension_for(Extension::Contract) {
-        let desc = PrimDescriptor::Contract {
+    if <Backend as TensorSemiringFastPath<Alg>>::has_fast_path(
+        SemiringFastPathDescriptor::Contract {
+            modes_a: plan.gemm.subs_a.clone(),
+            modes_b: plan.gemm.subs_b.clone(),
+            modes_c: subs_c.to_vec(),
+        },
+    ) {
+        let desc = SemiringFastPathDescriptor::Contract {
             modes_a: plan.gemm.subs_a.clone(),
             modes_b: plan.gemm.subs_b.clone(),
             modes_c: subs_c.to_vec(),
         };
         let shapes = [a_ref.dims(), b_ref.dims(), output.dims()];
-        let pp = Backend::plan(ctx, &desc, &shapes)?;
-        return Backend::execute(ctx, &pp, alpha, &[a_ref, b_ref], beta, output);
+        let pp = <Backend as TensorSemiringFastPath<Alg>>::plan(ctx, &desc, &shapes)?;
+        return <Backend as TensorSemiringFastPath<Alg>>::execute(
+            ctx,
+            &pp,
+            alpha,
+            &[a_ref, b_ref],
+            beta,
+            output,
+        );
     }
 
     // 5. Fallback: prepare + BatchedGemm + permute
@@ -185,31 +222,30 @@ where
 
 /// Execute pre-reduction of unique-only axes using a pre-computed plan.
 fn execute_reduce_with_plan<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     reduce: &ReducePlan,
     tensor: &Tensor<Alg::Scalar>,
     pool: &mut BufferPool<Alg::Scalar>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let memory_space = tensor.logical_memory_space();
     let mut reduced = alloc_tensor_from_pool::<Alg::Scalar>(&reduce.out_shape, memory_space, pool);
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: reduce.original_subs.clone(),
         modes_c: reduce.kept_subs.clone(),
-        op: ReduceOp::Sum,
     };
     let shapes = [tensor.dims(), reduced.dims()];
-    let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
-    Backend::execute(
+    let prim_plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
+    <Backend as TensorSemiringCore<Alg>>::execute(
         ctx,
         &prim_plan,
-        Alg::Scalar::one(),
+        Alg::one(),
         &[tensor],
-        Alg::Scalar::zero(),
+        Alg::zero(),
         &mut reduced,
     )?;
     Ok(reduced)
@@ -223,9 +259,9 @@ where
 /// When `lazy_output` is true and `alpha=1, beta=0`, skips the physical
 /// permute and returns a zero-copy view with rearranged strides.
 fn execute_gemm_after_reduce<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     plan: &GemmPlan,
-    gemm_plan: Option<&Backend::Plan>,
+    gemm_plan: Option<&BackendPlan<Alg, Backend>>,
     subs_c: &[u32],
     a_ref: &Tensor<Alg::Scalar>,
     b_ref: &Tensor<Alg::Scalar>,
@@ -236,9 +272,9 @@ fn execute_gemm_after_reduce<Alg, Backend>(
     lazy_output: bool,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let memory_space = a_ref.logical_memory_space();
     let nb = plan.batch_sizes.len();
@@ -316,22 +352,22 @@ where
         drop(out_tensor); // Arc refcount → 1
 
         let owned_plan;
-        let prim_plan: &Backend::Plan = if let Some(gp) = gemm_plan {
+        let prim_plan: &BackendPlan<Alg, Backend> = if let Some(gp) = gemm_plan {
             gp
         } else {
-            let desc = PrimDescriptor::BatchedGemm {
+            let desc = SemiringCoreDescriptor::BatchedGemm {
                 batch_dims: plan.batch_sizes.clone(),
                 m: plan.m,
                 n: plan.n,
                 k: plan.k,
             };
             let shapes = [a_prepared.dims(), b_prepared.dims(), c_fused.dims()];
-            owned_plan = Backend::plan(ctx, &desc, &shapes)?;
+            owned_plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
             &owned_plan
         };
         #[cfg(feature = "profile-dispatch")]
         let _gemm_t0 = std::time::Instant::now();
-        Backend::execute(
+        <Backend as TensorSemiringCore<Alg>>::execute(
             ctx,
             prim_plan,
             alpha,
@@ -359,27 +395,27 @@ where
         let mut temp =
             alloc_tensor_from_pool::<Alg::Scalar>(&plan.c_gemm_shape, memory_space, pool);
         let owned_plan;
-        let prim_plan: &Backend::Plan = if let Some(gp) = gemm_plan {
+        let prim_plan: &BackendPlan<Alg, Backend> = if let Some(gp) = gemm_plan {
             gp
         } else {
-            let desc = PrimDescriptor::BatchedGemm {
+            let desc = SemiringCoreDescriptor::BatchedGemm {
                 batch_dims: plan.batch_sizes.clone(),
                 m: plan.m,
                 n: plan.n,
                 k: plan.k,
             };
             let shapes = [a_prepared.dims(), b_prepared.dims(), temp.dims()];
-            owned_plan = Backend::plan(ctx, &desc, &shapes)?;
+            owned_plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
             &owned_plan
         };
         #[cfg(feature = "profile-dispatch")]
         let _gemm_t0 = std::time::Instant::now();
-        Backend::execute(
+        <Backend as TensorSemiringCore<Alg>>::execute(
             ctx,
             prim_plan,
-            Alg::Scalar::one(),
+            Alg::one(),
             &[&a_prepared, &b_prepared],
-            Alg::Scalar::zero(),
+            Alg::zero(),
             &mut temp,
         )?;
         #[cfg(feature = "profile-dispatch")]
@@ -397,7 +433,7 @@ where
 
         #[cfg(feature = "profile-dispatch")]
         let _perm_t0 = std::time::Instant::now();
-        if lazy_output && alpha == Alg::Scalar::one() && beta == Alg::Scalar::zero() {
+        if lazy_output && alpha == Alg::one() && beta == Alg::zero() {
             // Lazy permute: zero-copy view with rearranged strides.
             // temp data moves to output — cannot return to pool.
             if !plan.needs_final_permute {
@@ -408,15 +444,27 @@ where
                 *output = temp_expanded.permute(&perm)?;
             }
         } else {
-            // Physical permute (with optional alpha/beta scaling).
-            let desc = PrimDescriptor::Permute {
-                modes_a: plan.canonical_modes.clone(),
-                modes_b: subs_c.to_vec(),
+            // Physical permute is a structural view plus MakeContiguous.
+            let permuted = if plan.needs_final_permute {
+                let perm = compute_permutation(&plan.canonical_modes, subs_c)
+                    .map_err(|e| Error::InvalidArgument(e))?;
+                temp_expanded.permute(&perm)?
+            } else {
+                temp_expanded.clone()
             };
-            let shapes = [temp_expanded.dims(), output.dims()];
-            let prim_plan = Backend::plan(ctx, &desc, &shapes)?;
-            Backend::execute(ctx, &prim_plan, alpha, &[&temp_expanded], beta, output)?;
+            let desc = SemiringCoreDescriptor::MakeContiguous;
+            let shapes = [permuted.dims(), output.dims()];
+            let prim_plan = <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes)?;
+            <Backend as TensorSemiringCore<Alg>>::execute(
+                ctx,
+                &prim_plan,
+                alpha,
+                &[&permuted],
+                beta,
+                output,
+            )?;
             // Return temp buffer to pool (data was copied to output).
+            drop(permuted);
             drop(temp_expanded);
             if let Some(data) = temp.try_into_data_vec() {
                 pool.return_buf(data);

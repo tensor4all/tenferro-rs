@@ -230,10 +230,14 @@ extern crate cblas_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate cblas_src as _;
 
+mod analytic_prims;
 mod cpu;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod registry;
+mod scalar_prims;
+mod semiring_core;
+mod semiring_fast_path;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.
@@ -244,7 +248,11 @@ mod cuda_ffi;
 
 mod gpu_stubs;
 
+pub use analytic_prims::*;
 pub use cpu::*;
+pub use scalar_prims::*;
+pub use semiring_core::*;
+pub use semiring_fast_path::*;
 
 #[cfg(feature = "cuda")]
 pub use cuda::*;
@@ -829,3 +837,6 @@ pub(crate) fn validate_execute_inputs<T: Scalar>(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

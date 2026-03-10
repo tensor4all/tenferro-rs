@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
-use tenferro_algebra::{Algebra, HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
-use tenferro_prims::TensorPrims;
 use tenferro_tensor::Tensor;
 
 use crate::api::{einsum_with_subscripts, einsum_with_subscripts_into};
+use crate::backend::{BackendContext, EinsumBackend};
 use crate::subscripts::Subscripts;
 
 fn ensure_binary_subscripts(subscripts: &Subscripts) -> Result<()> {
@@ -39,16 +39,16 @@ fn ensure_binary_subscripts(subscripts: &Subscripts) -> Result<()> {
 ///     einsum_binary::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &a, &b, None).unwrap();
 /// ```
 pub fn einsum_binary<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     left: &Tensor<Alg::Scalar>,
     right: &Tensor<Alg::Scalar>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     einsum_binary_with_subscripts::<Alg, Backend>(ctx, &subs, left, right, size_dict)
@@ -78,16 +78,16 @@ where
 ///         .unwrap();
 /// ```
 pub fn einsum_binary_with_subscripts<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &Subscripts,
     left: &Tensor<Alg::Scalar>,
     right: &Tensor<Alg::Scalar>,
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Tensor<Alg::Scalar>>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     ensure_binary_subscripts(subscripts)?;
     einsum_with_subscripts::<Alg, Backend>(ctx, subscripts, &[left, right], size_dict)
@@ -117,7 +117,7 @@ where
 /// .unwrap();
 /// ```
 pub fn einsum_binary_into<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
     left: &Tensor<Alg::Scalar>,
     right: &Tensor<Alg::Scalar>,
@@ -127,9 +127,9 @@ pub fn einsum_binary_into<Alg, Backend>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
     einsum_binary_with_subscripts_into::<Alg, Backend>(
@@ -165,7 +165,7 @@ where
 /// ).unwrap();
 /// ```
 pub fn einsum_binary_with_subscripts_into<Alg, Backend>(
-    ctx: &mut Backend::Context,
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &Subscripts,
     left: &Tensor<Alg::Scalar>,
     right: &Tensor<Alg::Scalar>,
@@ -175,9 +175,9 @@ pub fn einsum_binary_with_subscripts_into<Alg, Backend>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<()>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: EinsumBackend<Alg>,
 {
     ensure_binary_subscripts(subscripts)?;
     einsum_with_subscripts_into::<Alg, Backend>(

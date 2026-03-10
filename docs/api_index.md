@@ -19,12 +19,12 @@ Layer 5: tenferro-capi       C-API (FFI) for Julia/Python: exposes einsum + SVD
                              with stateless rrule/frule (f64 only),
                              DLPack v1.0 zero-copy tensor exchange
 Layer 4: tenferro-einsum     High-level einsum on Tensor<T>, N-ary contraction
-                             tree, algebra dispatch, einsum AD rules
-         tenferro-linalg     Tensor-level SVD/QR/LU/eigen, linalg AD rules
-Layer 3: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
+                             tree, semiring-core/fast-path dispatch, einsum AD rules
+         tenferro-linalg     Public tensor linalg APIs, composite lowering, AD rules
+Layer 3: tenferro-prims      Semiring/scalar/analytic execution families
+         tenferro-linalg-prims Backend-facing linalg factorization/solve contracts
+Layer 2: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
                              zero-copy view ops, impl Differentiable
-Layer 2: tenferro-prims      "Tensor BLAS": TensorPrims<A> trait
-                             (algebra-parameterized), plan-based execution
 Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
                              Scalar trait, Conjugate trait
          tenferro-device     Device enum, Error/Result types
@@ -91,8 +91,17 @@ Utilities: `inv`, `det`, `slogdet`, `pinv`, `matrix_exp`, `norm`.
 
 All operations have stateless AD rules (`_rrule`, `_frule`).
 
+<a id="tenferro-linalg-prims"></a>
+### [tenferro-linalg-prims](tenferro_linalg_prims/index.html) <small>(Layer 3)</small>
+
+Backend-facing structured linalg kernel contracts used by `tenferro-linalg`.
+This crate holds tensor-level solve/factorization/eigensolver traits and
+structured result types. It is intentionally smaller than the public linalg API
+surface and exists to keep `tenferro-prims` focused on semiring/scalar
+execution.
+
 <a id="tenferro-tensor"></a>
-### [tenferro-tensor](tenferro_tensor/index.html) <small>(Layer 3)</small>
+### [tenferro-tensor](tenferro_tensor/index.html) <small>(Layer 2)</small>
 
 `Tensor<T>` type with `DataBuffer` (Rust-owned or externally-owned via DLPack),
 shape/strides metadata, and zero-copy view operations (`permute`, `broadcast`,
@@ -101,15 +110,18 @@ views. Factory functions: `zeros`, `ones`, `eye`. Triangular extraction:
 `tril`, `triu`.
 
 <a id="tenferro-prims"></a>
-### [tenferro-prims](tenferro_prims/index.html) <small>(Layer 2)</small>
+### [tenferro-prims](tenferro_prims/index.html) <small>(Layer 3)</small>
 
-Low-level "Tensor BLAS" protocol. `TensorPrims<A>` trait parameterized by
-algebra `A` with a cuTENSOR-compatible plan-based execution model
-(`PrimDescriptor -> plan -> execute`).
+Low-level tensor execution substrate. The current public direction is the split
+protocol family:
 
-Core ops (universal set): `batched_gemm`, `reduce`, `trace`, `permute`,
-`anti_trace`, `anti_diag`, `elementwise_unary`. Extended ops (dynamically queried):
-`contract`, `elementwise_mul`.
+- `TensorSemiringCore`
+- `TensorSemiringFastPath`
+- `TensorScalarPrims`
+- `TensorAnalyticPrims`
+
+These family traits are currently backed by a migration layer over the legacy
+`TensorPrims<A>` surface.
 
 <a id="tenferro-algebra"></a>
 ### [tenferro-algebra](tenferro_algebra/index.html) <small>(Shared)</small>
