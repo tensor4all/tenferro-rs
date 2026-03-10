@@ -4,6 +4,7 @@
 //! `linalg-faer` or `linalg-lapack` features.
 
 use num_complex::{Complex32, Complex64};
+use tenferro_linalg_prims::LapackEigScalar;
 
 use super::tensor_api::TensorLinalgBackend;
 use super::tensor_context::TensorLinalgContextFor;
@@ -163,7 +164,7 @@ mod private {
 }
 
 /// Scalar types supported by the CPU linalg provider selected at build time.
-pub trait CpuLinalgScalar: private::CpuLinalgOps {}
+pub trait CpuLinalgScalar: private::CpuLinalgOps + LapackEigScalar {}
 
 impl CpuLinalgScalar for f64 {}
 impl CpuLinalgScalar for f32 {}

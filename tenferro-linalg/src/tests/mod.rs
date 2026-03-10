@@ -5,7 +5,6 @@ use tenferro_prims::CpuContext;
 
 mod batch_a_contracts;
 mod batch_b_contracts;
-mod eig_scalar_tests;
 
 fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
     let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
@@ -56,62 +55,6 @@ fn private_scalar_and_validation_helpers_are_covered_in_crate_unit_tests() {
     assert_eq!(
         <Complex32 as LinalgScalar>::conj(&z32),
         Complex32::new(-2.0, -1.5)
-    );
-
-    assert_eq!(<f64 as LinalgScalar>::eig_buffer_sizes(2), (4, 8));
-    assert_eq!(<f32 as LinalgScalar>::eig_buffer_sizes(2), (4, 8));
-    assert_eq!(<Complex64 as LinalgScalar>::eig_buffer_sizes(2), (2, 4));
-    assert_eq!(<Complex32 as LinalgScalar>::eig_buffer_sizes(2), (2, 4));
-
-    let mut real_vals = vec![Complex64::new(0.0, 0.0); 2];
-    let mut real_vecs = vec![Complex64::new(0.0, 0.0); 4];
-    <f64 as LinalgScalar>::eig_ri_to_complex(
-        2,
-        &[1.0, 0.5, -2.0, 1.25],
-        &[1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-        &mut real_vals,
-        &mut real_vecs,
-    );
-    assert_eq!(
-        real_vals,
-        vec![Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.25)]
-    );
-    assert_eq!(
-        real_vecs,
-        vec![
-            Complex64::new(1.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(0.0, 0.0),
-            Complex64::new(1.0, 0.0),
-        ]
-    );
-
-    let mut complex_vals = vec![Complex32::new(0.0, 0.0); 2];
-    let mut complex_vecs = vec![Complex32::new(0.0, 0.0); 4];
-    <Complex32 as LinalgScalar>::eig_ri_to_complex(
-        2,
-        &[Complex32::new(1.0, -0.5), Complex32::new(-2.0, 0.25)],
-        &[
-            Complex32::new(1.0, 0.0),
-            Complex32::new(0.0, 1.0),
-            Complex32::new(0.0, 0.0),
-            Complex32::new(1.0, 0.0),
-        ],
-        &mut complex_vals,
-        &mut complex_vecs,
-    );
-    assert_eq!(
-        complex_vals,
-        vec![Complex32::new(1.0, -0.5), Complex32::new(-2.0, 0.25)]
-    );
-    assert_eq!(
-        complex_vecs,
-        vec![
-            Complex32::new(1.0, 0.0),
-            Complex32::new(0.0, 1.0),
-            Complex32::new(0.0, 0.0),
-            Complex32::new(1.0, 0.0),
-        ]
     );
 
     let square =

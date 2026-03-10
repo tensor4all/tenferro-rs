@@ -41,10 +41,34 @@ pub trait LinalgScalar:
     type Real: LinalgScalar<Real = Self::Real, Complex = Self::Complex> + num_traits::Float;
     type Complex: LinalgScalar<Real = Self::Real, Complex = Self::Complex>;
 
+    /// Return the scalar magnitude in the associated real field.
     fn abs_real(&self) -> Self::Real;
+    /// Return a reasonable machine epsilon for the associated real field.
     fn real_epsilon() -> Self::Real;
+    /// Return the algebraic conjugate.
     fn conj(&self) -> Self;
+}
+
+/// LAPACK-oriented eigen helper contract for CPU eigendecomposition paths.
+///
+/// This trait is intentionally narrower than [`LinalgScalar`]. It exists so
+/// CPU eigensolver glue can request the real/imag buffer conversion helpers it
+/// needs without forcing every backend-generic scalar contract to carry LAPACK
+/// details.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg_prims::LapackEigScalar;
+///
+/// let (vals, vecs) = <f64 as LapackEigScalar>::eig_buffer_sizes(2);
+/// assert_eq!((vals, vecs), (4, 8));
+/// ```
+pub trait LapackEigScalar: LinalgScalar {
+    /// Return the temporary value/vector buffer sizes used by the CPU eig path.
     fn eig_buffer_sizes(n: usize) -> (usize, usize);
+
+    /// Convert LAPACK-style real/imag outputs into complex values/vectors.
     fn eig_ri_to_complex(
         n: usize,
         val_ri: &[Self],
@@ -69,7 +93,9 @@ impl LinalgScalar for f64 {
     fn conj(&self) -> f64 {
         *self
     }
+}
 
+impl LapackEigScalar for f64 {
     fn eig_buffer_sizes(n: usize) -> (usize, usize) {
         (2 * n, 2 * n * n)
     }
@@ -105,7 +131,9 @@ impl LinalgScalar for f32 {
     fn conj(&self) -> f32 {
         *self
     }
+}
 
+impl LapackEigScalar for f32 {
     fn eig_buffer_sizes(n: usize) -> (usize, usize) {
         (2 * n, 2 * n * n)
     }
@@ -141,7 +169,9 @@ impl LinalgScalar for Complex64 {
     fn conj(&self) -> Complex64 {
         self.conj()
     }
+}
 
+impl LapackEigScalar for Complex64 {
     fn eig_buffer_sizes(n: usize) -> (usize, usize) {
         (n, n * n)
     }
@@ -173,7 +203,9 @@ impl LinalgScalar for Complex32 {
     fn conj(&self) -> Complex32 {
         self.conj()
     }
+}
 
+impl LapackEigScalar for Complex32 {
     fn eig_buffer_sizes(n: usize) -> (usize, usize) {
         (n, n * n)
     }
@@ -289,3 +321,6 @@ pub trait TensorLinalgPrims<T: LinalgScalar> {
     fn eigen_sym(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<EigenTensorResult<T>>;
     fn eig(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<EigTensorResult<T>>;
 }
+
+#[cfg(test)]
+mod tests;
