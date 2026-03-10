@@ -201,7 +201,7 @@ pub mod backend;
 pub mod inject;
 mod prims_bridge;
 
-use std::any::type_name;
+use std::any::TypeId;
 
 use chainrules_core::AdResult;
 use num_traits::Zero;

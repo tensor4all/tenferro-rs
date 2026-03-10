@@ -47,15 +47,9 @@ pub fn svd<T: LinalgScalar, C>(
 ) -> Result<SvdResult<T, T::Real>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::thin_svd(ctx, tensor)?;
-    if options.is_none() {
-        return Ok(SvdResult {
-            u: result.u,
-            s: result.s,
-            vt: result.vt,
-        });
-    }
 
     let u_input = ensure_col_major(&result.u);
     let s_input = ensure_col_major(&result.s);
@@ -74,7 +68,13 @@ where
     let bc = batch_count(batch_dims);
 
     // Determine effective rank after truncation
-    let opts = options.expect("checked above");
+    let Some(opts) = options else {
+        return Ok(SvdResult {
+            u: result.u,
+            s: result.s,
+            vt: result.vt,
+        });
+    };
     let max_k = opts.max_rank.map_or(k, |r| r.min(k));
 
     let mut u_data = vec![T::zero(); m * max_k * bc];
@@ -157,6 +157,7 @@ where
 pub fn qr<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<QrResult<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::qr(ctx, tensor)?;
 
@@ -211,6 +212,7 @@ pub fn lu<T: LinalgScalar, C>(
 ) -> Result<LuResult<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     if pivot == LuPivot::NoPivot {
         let (m, n, batch_dims) = validate_2d(tensor)?;
@@ -315,6 +317,7 @@ where
 pub fn lu_factor<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<LuFactorResult<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = lu_factor_impl(ctx, tensor)?;
     Ok(LuFactorResult {
@@ -347,6 +350,7 @@ pub fn lu_factor_ex<T: LinalgScalar, C>(
 ) -> Result<LuFactorExResult<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     lu_factor_impl(ctx, tensor)
 }
@@ -379,6 +383,7 @@ pub fn lu_solve<T: LinalgScalar, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("lu_solve")?;
     lu_solve_impl(ctx, factors, pivots, b)
@@ -415,6 +420,7 @@ where
 pub fn eigen<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<EigenResult<T, T::Real>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -466,6 +472,7 @@ pub fn lstsq<T: LinalgScalar, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("lstsq")?;
 
@@ -560,6 +567,7 @@ where
 pub fn cholesky<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     <C::Backend as backend::TensorLinalgBackend<T>>::cholesky(ctx, tensor)
 }
@@ -589,6 +597,7 @@ pub fn cholesky_ex<T: LinalgScalar, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("cholesky_ex")?;
 
@@ -641,6 +650,7 @@ where
 pub fn solve<T: LinalgScalar, C>(ctx: &mut C, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     <C::Backend as backend::TensorLinalgBackend<T>>::solve(ctx, a, b)
 }
@@ -672,6 +682,7 @@ pub fn solve_ex<T: LinalgScalar, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("solve_ex")?;
 
@@ -730,6 +741,7 @@ pub fn inv<T: LinalgScalar, C>(_ctx: &mut C, tensor: &Tensor<T>) -> Result<Tenso
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("inv")?;
 
@@ -781,6 +793,7 @@ pub fn inv_ex<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Inv
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let (n, batch_dims) = validate_square(tensor)?;
     let bc = batch_count(batch_dims);
@@ -821,6 +834,7 @@ pub fn det<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("det")?;
 
@@ -913,6 +927,7 @@ pub fn slogdet<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("slogdet")?;
 
@@ -1027,6 +1042,7 @@ pub fn eig<T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_tr
 ) -> Result<EigResult<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::eig(ctx, tensor)?;
 
@@ -1039,8 +1055,10 @@ where
 pub(crate) fn ensure_cpu_backend<T: LinalgScalar, C>(op: &str) -> Result<()>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
+    C::Backend: 'static,
 {
-    if type_name::<C::Backend>() == type_name::<backend::CpuTensorLinalgBackend>() {
+    if TypeId::of::<C::Backend>() == TypeId::of::<backend::CpuTensorLinalgBackend>() {
         return Ok(());
     }
 
@@ -1077,6 +1095,7 @@ pub fn pinv<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("pinv")?;
 
@@ -1171,6 +1190,7 @@ pub fn matrix_exp<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("matrix_exp")?;
 
@@ -1219,6 +1239,7 @@ pub fn matrix_power<T: LinalgScalar, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("matrix_power")?;
 
@@ -1282,6 +1303,7 @@ where
 pub fn cross<T: LinalgScalar, C>(_ctx: &mut C, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("cross")?;
 
@@ -1401,6 +1423,7 @@ pub fn householder_product<T: LinalgScalar, C>(
 ) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("householder_product")?;
 
@@ -1499,6 +1522,7 @@ pub fn vander<T: LinalgScalar, C>(
 ) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("vander")?;
 
@@ -1574,6 +1598,7 @@ pub fn tensorinv<T: LinalgScalar, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("tensorinv")?;
 
@@ -1641,6 +1666,7 @@ pub fn tensorsolve<T: LinalgScalar, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("tensorsolve")?;
 
@@ -1721,6 +1747,7 @@ pub fn solve_triangular<T: LinalgScalar, C>(
 ) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     <C::Backend as backend::TensorLinalgBackend<T>>::solve_triangular(ctx, a, b, upper)
 }
@@ -1764,6 +1791,7 @@ pub fn norm<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("norm")?;
 
@@ -1936,6 +1964,7 @@ pub fn cond<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     match kind {
         NormKind::Fro | NormKind::L1 | NormKind::Inf | NormKind::Spectral => {}

@@ -24,14 +24,16 @@ use super::*;
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
-pub fn svd_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn svd_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     options: Option<&SvdOptions>,
 ) -> AdResult<(SvdResult<T>, SvdResult<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = svd(ctx, tensor, options)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -203,13 +205,15 @@ where
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn qr_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn qr_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(QrResult<T>, QrResult<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = qr(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -322,14 +326,16 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn lu_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     pivot: LuPivot,
 ) -> AdResult<(LuResult<T>, LuResult<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = lu(ctx, tensor, pivot)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -455,13 +461,15 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn eigen_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn eigen_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(EigenResult<T>, EigenResult<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = eigen(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -564,6 +572,7 @@ pub fn lstsq_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("lstsq_frule").map_err(to_ad_err)?;
 
@@ -634,13 +643,15 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (l, dl) = cholesky_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn cholesky_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn cholesky_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     // dL = L phi(L^{-1} dA L^{-T})
     let l = cholesky(ctx, tensor)
@@ -697,8 +708,8 @@ where
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     tangent_a: &Tensor<T>,
@@ -706,6 +717,8 @@ pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float>(
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     // dx = A^{-1} (db - dA x)
     let x = solve(ctx, a, b)
@@ -753,8 +766,8 @@ where
 ///
 /// where `proj(dA)` keeps only the active triangular part
 /// (`triu` when `upper=true`, `tril` when `upper=false`).
-pub fn solve_triangular_frule<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn solve_triangular_frule<T: LinalgScalar, C>(
+    ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     tangent_a: &Tensor<T>,
@@ -763,6 +776,8 @@ pub fn solve_triangular_frule<T: LinalgScalar>(
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     if tangent_a.dims() != a.dims() {
         return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
@@ -857,6 +872,7 @@ pub fn inv_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("inv_frule").map_err(to_ad_err)?;
 
@@ -913,6 +929,7 @@ pub fn det_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("det_frule").map_err(to_ad_err)?;
 
@@ -973,6 +990,7 @@ pub fn slogdet_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("slogdet_frule").map_err(to_ad_err)?;
 
@@ -1036,13 +1054,18 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eig_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn eig_frule<T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn eig_frule<
+    T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
+    C,
+>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(EigResult<T>, EigResult<T>)>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     // Forward pass
     let eig_result = eig(ctx, tensor).map_err(to_ad_err)?;
@@ -1135,6 +1158,7 @@ pub fn pinv_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("pinv_frule").map_err(to_ad_err)?;
 
@@ -1224,6 +1248,7 @@ pub fn matrix_exp_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("matrix_exp_frule").map_err(to_ad_err)?;
 
@@ -1305,6 +1330,7 @@ pub fn norm_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("norm_frule").map_err(to_ad_err)?;
 

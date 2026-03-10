@@ -25,14 +25,16 @@ use super::*;
 /// };
 /// let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
-pub fn svd_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn svd_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &SvdCotangent<T>,
     options: Option<&SvdOptions>,
 ) -> AdResult<Tensor<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = svd(ctx, tensor, options)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -224,13 +226,15 @@ where
 /// };
 /// let grad_a = qr_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn qr_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn qr_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &QrCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = qr(ctx, tensor)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -351,14 +355,16 @@ where
 /// };
 /// let grad_a = lu_rrule(&mut ctx, &a, &cotangent, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn lu_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &LuCotangent<T>,
     pivot: LuPivot,
 ) -> AdResult<Tensor<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let result = lu(ctx, tensor, pivot)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -573,13 +579,15 @@ where
 /// };
 /// let grad_a = eigen_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eigen_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn eigen_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &EigenCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     // Symmetric eigendecomposition: A = V diag(E) V^T
     let result = eigen(ctx, tensor)
@@ -693,6 +701,7 @@ pub fn lstsq_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("lstsq_rrule").map_err(to_ad_err)?;
 
@@ -766,13 +775,15 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = cholesky_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn cholesky_rrule<T: LinalgScalar<Real = T> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn cholesky_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     // A = L L^T, dA = L^{-T} phi*(tril(L^T dL)) L^{-1}
     let l = cholesky(ctx, tensor)
@@ -833,14 +844,16 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
-pub fn solve_rrule<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn solve_rrule<T: LinalgScalar, C>(
+    ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<SolveGrad<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     // Ax = b → G = A^{-H} dx, dB = G, dA = -G x^H
     let x = solve(ctx, a, b)
@@ -895,8 +908,8 @@ where
 /// - `G = A^{-H} x̄` solved with conjugate-transposed triangular structure
 /// - `b̄ = G`
 /// - `Ā = proj(-G x^H)` where `proj = triu` for upper, `tril` for lower
-pub fn solve_triangular_rrule<T: LinalgScalar>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn solve_triangular_rrule<T: LinalgScalar, C>(
+    ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent: &Tensor<T>,
@@ -904,6 +917,8 @@ pub fn solve_triangular_rrule<T: LinalgScalar>(
 ) -> AdResult<SolveGrad<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let x = solve_triangular(ctx, a, b, upper)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
@@ -987,6 +1002,7 @@ pub fn inv_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("inv_rrule").map_err(to_ad_err)?;
 
@@ -1045,6 +1061,7 @@ pub fn det_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("det_rrule").map_err(to_ad_err)?;
 
@@ -1109,6 +1126,7 @@ pub fn slogdet_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("slogdet_rrule").map_err(to_ad_err)?;
 
@@ -1167,13 +1185,18 @@ where
 /// };
 /// let grad_a = eig_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eig_rrule<T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float>(
-    ctx: &mut tenferro_prims::CpuContext,
+pub fn eig_rrule<
+    T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
+    C,
+>(
+    ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &EigCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
     T: backend::CpuLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
@@ -1265,6 +1288,7 @@ pub fn pinv_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("pinv_rrule").map_err(to_ad_err)?;
 
@@ -1359,6 +1383,7 @@ pub fn matrix_exp_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("matrix_exp_rrule").map_err(to_ad_err)?;
 
@@ -1432,6 +1457,7 @@ pub fn norm_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: backend::CpuLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     ensure_cpu_backend::<T, C>("norm_rrule").map_err(to_ad_err)?;
 
