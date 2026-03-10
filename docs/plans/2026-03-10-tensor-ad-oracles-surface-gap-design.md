@@ -28,15 +28,14 @@ tracked as product-surface work.
 
 ## Decision
 
-Adopt a three-bucket classification for the published oracle database:
+Adopt a two-bucket classification for the published oracle database:
 
 1. `Replay only`
 2. `Needs public API issue`
-3. `Needs explicit product decision`
 
-The buckets are defined by the current tenferro public API surface, not by
-internal backend helpers or by whether an operation could theoretically be
-assembled from lower-level building blocks.
+The buckets are defined by the current tenferro public API surface across
+`tenferro-linalg`, `tenferro-tensor`, and `tenferro-einsum`, not by internal
+backend helpers.
 
 ## Classification Rule
 
@@ -76,20 +75,17 @@ Examples:
 These families should be tracked as product/API work before replay support is
 attempted.
 
-### Needs Explicit Product Decision
+## Snapshot Inventory
 
-Use this bucket when the oracle family is close to existing tenferro APIs but
-not obviously equivalent enough to suppress product discussion.
+At the current vendored snapshot, `third_party/tensor-ad-oracles/cases`
+publishes:
 
-This bucket is intentionally small. Its purpose is to force a deliberate
-decision instead of letting edge cases drift.
+- 42 JSONL files
+- 1,828 total records
+- 37 distinct oracle ops
 
-Initial decision bucket:
-
-- `lu_factor`
-- `multi_dot`
-- `pinv_hermitian`
-- `vecdot`
+The family mapping below is expected to stay in lockstep with that vendored
+snapshot until the subtree is refreshed again.
 
 ## Preliminary Family Mapping
 
@@ -106,8 +102,10 @@ Initial decision bucket:
 - `lstsq_grad_oriented`
 - `lu`
 - `matrix_norm`
+- `multi_dot`
 - `norm`
 - `pinv`
+- `pinv_hermitian`
 - `pinv_singular`
 - `qr`
 - `slogdet`
@@ -115,6 +113,7 @@ Initial decision bucket:
 - `solve_triangular`
 - `svd`
 - `svdvals`
+- `vecdot`
 - `vector_norm`
 
 ### Needs Public API Issue
@@ -124,6 +123,7 @@ Initial decision bucket:
 - `cross`
 - `householder_product`
 - `inv_ex`
+- `lu_factor`
 - `lu_factor_ex`
 - `lu_solve`
 - `matrix_power`
@@ -131,13 +131,6 @@ Initial decision bucket:
 - `tensorinv`
 - `tensorsolve`
 - `vander`
-
-### Needs Explicit Product Decision
-
-- `lu_factor`
-- `multi_dot`
-- `pinv_hermitian`
-- `vecdot`
 
 ## Naming Policy
 
@@ -150,8 +143,9 @@ A family counts as covered by existing public surface when:
 - the semantic contract is close enough that a tenferro user would reasonably
   view it as the same operation
 
-This is why `eigh` maps to `eigen`, and why `svdvals` does not require a new
-`svdvals` symbol.
+This is why `eigh` maps to `eigen`, why `svdvals` does not require a new
+`svdvals` symbol, and why `vecdot` or simple `multi_dot` chains can stay in
+the replay backlog through `tenferro_einsum::einsum`.
 
 ## Issue Strategy
 
@@ -161,13 +155,10 @@ families are clearly one feature slice.
 Recommended grouping:
 
 - `structured inverse/solve variants`: `cholesky_ex`, `inv_ex`, `solve_ex`
+- `LU factorization surface`: `lu_factor`, `lu_factor_ex`
 - `tensor construction ops`: `cross`, `householder_product`, `vander`
 - `higher-level linear algebra ops`: `cond`, `lu_solve`, `matrix_power`,
   `tensorinv`, `tensorsolve`
-
-Do not open implementation issues yet for the decision bucket. Open one short
-triage issue or design note if necessary, then resolve each family into either
-`Replay only` or `Needs public API issue`.
 
 ## Non-Goals
 
@@ -180,7 +171,7 @@ triage issue or design note if necessary, then resolve each family into either
 
 This phase is complete when:
 
-1. every currently unsupported oracle family is placed into one of the three
+1. every currently unsupported oracle family is placed into one of the two
    buckets
 2. missing public-surface families have implementation issues
 3. the replay backlog only contains families already expressible via current

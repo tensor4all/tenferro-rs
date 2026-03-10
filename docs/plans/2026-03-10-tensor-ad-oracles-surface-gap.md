@@ -4,7 +4,7 @@
 
 **Goal:** Classify the published `tensor-ad-oracles` surface against current tenferro public APIs, open implementation issues only for real public-surface gaps, and leave replay expansion focused on already-expressible families.
 
-**Architecture:** Use the vendored oracle case tree as the source of truth, compare each family against the current public APIs in `tenferro-linalg` and `tenferro-tensor`, record the canonical bucket mapping in docs, then create issue-ready backlog entries only for families that require new product surface.
+**Architecture:** Use the vendored oracle case tree as the source of truth, compare each family against the current public APIs in `tenferro-linalg`, `tenferro-tensor`, and `tenferro-einsum`, record the canonical bucket mapping in docs, then create issue-ready backlog entries only for families that require new product surface.
 
 **Tech Stack:** Rust workspace docs, vendored `tensor-ad-oracles` JSONL database, GitHub issues via `gh`, repository design docs.
 
@@ -42,7 +42,7 @@ Check the family lists in:
 - `docs/plans/2026-03-10-tensor-ad-oracles-surface-gap-design.md`
 
 Expected: every unsupported family in the vendored subtree appears in one of the
-three buckets.
+two buckets.
 
 **Step 3: Commit the inventory confirmation**
 
@@ -62,6 +62,7 @@ Inspect:
 
 - `tenferro-linalg/src/lib.rs`
 - `tenferro-tensor/src/lib.rs`
+- `tenferro-einsum/src/lib.rs`
 - `extension/tenferro-dyadtensor/src/api/mod.rs`
 
 Focus on:
