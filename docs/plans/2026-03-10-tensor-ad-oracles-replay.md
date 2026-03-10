@@ -2,11 +2,17 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Vendor `tensor-ad-oracles` into `tenferro-rs` and add an always-on Rust replay harness that validates `tenferro-linalg` against the published JSON oracle database.
+**Goal:** Vendor `tensor-ad-oracles` into `tenferro-rs` and add an always-on Rust replay harness that validates `tenferro-linalg` against the published JSON oracle database for families already expressible by the current tenferro public APIs.
 
-**Architecture:** Vendor the full upstream repository under `third_party/tensor-ad-oracles/`, then keep all replay code under `tenferro-linalg/tests/oracle_db/`. The harness decodes row-major oracle tensors into tenferro tensors, maps each published observable to a `tenferro-linalg` computation, and checks forward/JVP/VJP consistency using the per-case tolerances stored in the database.
+**Architecture:** Vendor the full upstream repository under `third_party/tensor-ad-oracles/`, then keep all replay code under `tenferro-linalg/tests/oracle_db/`. The harness decodes row-major oracle tensors into tenferro tensors, maps each published observable to existing tenferro public APIs in `tenferro-linalg`, `tenferro-tensor`, or `tenferro-einsum`, and checks forward/JVP/VJP consistency using the per-case tolerances stored in the database.
 
 **Tech Stack:** git subtree, Rust integration tests, `serde`, `serde_json`, `tenferro-linalg`, `tenferro-tensor`
+
+**Scope Note:** Replay work from this plan must exclude families that still
+need new public surface, as classified in
+`docs/plans/2026-03-10-tensor-ad-oracles-surface-gap-design.md`. Those are
+tracked in issues #433 through #438 and should not be implemented as ad hoc
+replay-only wrappers.
 
 ---
 
