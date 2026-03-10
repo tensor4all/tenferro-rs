@@ -249,9 +249,10 @@ for_each_index(&dims, |idx| {
 ```
 Layer 5: tenferro-capi         — C-API (FFI) for Julia/Python: exposes einsum + SVD with AD rules (f64, stateless rrule/frule)
 Layer 4: tenferro-einsum       — High-level einsum on Tensor<T>, N-ary tree, algebra dispatch, einsum AD rules
-         tenferro-linalg       — Tensor-level SVD/QR/LU/eigen (matricize→decompose→unmatricize), linalg AD rules
-Layer 3: tenferro-prims        — "Tensor BLAS": TensorPrims<A> trait (algebra-parameterized), plan-based execution
-                                 (depends on tenferro-tensor for resolve_conj)
+         tenferro-linalg       — Public/composite tensor linalg, result shaping, linalg AD rules
+Layer 3: tenferro-prims        — Semiring/scalar/analytic execution families
+                                 (TensorSemiringCore/FastPath, TensorScalarPrims, TensorAnalyticPrims)
+         tenferro-linalg-prims — Backend-facing factorization/solve/eigensolver kernel contracts
 Layer 2: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
                                  impl Differentiable for Tensor<T>
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
@@ -269,7 +270,8 @@ of any tensor type. `chainrules` provides the AD engine (Tape, TrackedTensor, Du
 `Tensor<T>` implements `Differentiable` in `tenferro-tensor`.
 Operation-specific AD rules live with their operations: `tenferro-einsum` owns einsum
 AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`);
-`tenferro-linalg` owns linalg AD functions (`svd_rrule`, `svd_frule`, etc.).
+`tenferro-linalg` owns linalg AD functions (`svd_rrule`, `svd_frule`, etc.),
+while `tenferro-linalg-prims` owns only backend-facing execution contracts.
 
 ### Dependency Graph (POC)
 
@@ -297,17 +299,18 @@ tenferro-device  tenferro-tensor
     │               impl Differentiable for Tensor<T>
     │                    │
     └────────┬───────────┘
-             ↓
-        tenferro-prims
+             ├───────────────┐
+             ↓               ↓
+        tenferro-prims   tenferro-linalg-prims
           (← strided-view,
            ← strided-traits,
            ← tenferro-tensor)
-             │
-             ↓
+             │               │
+             ▼               ▼
         tenferro-einsum
           (← strided-traits, ← chainrules)
         tenferro-linalg
-          (← strided-traits, ← chainrules-core)
+          (← strided-traits, ← chainrules-core, ← tenferro-linalg-prims)
                ↓
           tenferro-capi
               (← tenferro-tensor, ← tenferro-einsum, ← tenferro-linalg, ← tenferro-device)
