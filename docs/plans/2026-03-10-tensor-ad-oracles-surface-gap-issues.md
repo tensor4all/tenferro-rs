@@ -28,7 +28,7 @@ public APIs.
     documented limitation
   - oracle replay can classify these families as replayable instead of missing
     surface
-- Issue URL: pending
+- Issue URL: https://github.com/tensor4all/tenferro-rs/issues/433
 
 ### 2. Add LU factorization and solve surface
 
@@ -50,7 +50,7 @@ public APIs.
     them
   - replay work no longer needs to treat LU factorization families as missing
     public surface
-- Issue URL: pending
+- Issue URL: https://github.com/tensor4all/tenferro-rs/issues/434
 
 ### 3. Add tensor construction linalg helpers
 
@@ -69,7 +69,7 @@ public APIs.
   - CPU implementations match the oracle family contracts
   - AD coverage exists where the oracle families publish derivative references
   - replay can move these families out of the missing-surface bucket
-- Issue URL: pending
+- Issue URL: https://github.com/tensor4all/tenferro-rs/issues/435
 
 ### 4. Add matrix condition number API
 
@@ -87,7 +87,7 @@ public APIs.
   - first-order AD support is implemented for the published oracle family, or a
     narrower supported subset is documented explicitly
   - replay can classify `cond` as replayable instead of missing surface
-- Issue URL: pending
+- Issue URL: https://github.com/tensor4all/tenferro-rs/issues/436
 
 ### 5. Add matrix power API
 
@@ -106,7 +106,7 @@ public APIs.
   - AD support is implemented for the supported exponent domain, or documented
     limitations are explicit
   - replay can classify `matrix_power` as replayable instead of missing surface
-- Issue URL: pending
+- Issue URL: https://github.com/tensor4all/tenferro-rs/issues/437
 
 ### 6. Add tensor inversion and tensor solve APIs
 
@@ -124,4 +124,4 @@ public APIs.
   - AD support is implemented for the published oracle families, or the
     supported subset and limitations are documented
   - replay can classify these families as replayable instead of missing surface
-- Issue URL: pending
+- Issue URL: https://github.com/tensor4all/tenferro-rs/issues/438
