@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(test)]
 pub(crate) fn with_cpu_runtime<R>(
     op: &'static str,
     f: impl FnOnce(&mut CpuContext) -> Result<R>,
@@ -197,7 +198,7 @@ where
         return Ok(dense);
     }
 
-    with_cpu_runtime(op_name, |ctx| {
+    with_runtime_cpu_only(op_name, |ctx| {
         compress_dense_to_layout_in_ctx(ctx, &dense, layout).map(StructuredTensor::into_payload)
     })
 }

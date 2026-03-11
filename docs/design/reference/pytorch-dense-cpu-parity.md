@@ -179,11 +179,13 @@ problem addressed by `#445`.
 ### 5. Dyadtensor runtime is still mixed
 
 `extension/tenferro-dyadtensor` exposes a runtime enum, but the eager AD
-surface is only partly migrated. The new scalar/analytic unary, binary, and
-reduction builders dispatch through runtime/capability queries, but much of
-the older eager AD surface still leans on `with_cpu_runtime(...)`,
-`CpuContext`, and `CpuBackend`-specific bounds. That means the public AD story
-is moving toward CPU/GPU generic, but is not there workspace-wide yet.
+surface is now runtime-dispatch-based across the high-level primal and AD
+entrypoints. The remaining debt is no longer the old `with_cpu_runtime(...)`
+shortcut in production code; it is the continued presence of
+`CpuContext`/`CpuBackend`-specific type bounds and the fact that unsupported
+backends still rely on narrow CPU implementations underneath. That means the
+public AD story is materially closer to CPU/GPU generic, but is not there
+workspace-wide yet.
 
 ### 6. Oracle-HVP coverage is meaningful but still selective
 
