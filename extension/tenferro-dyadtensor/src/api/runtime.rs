@@ -1,4 +1,5 @@
 use super::*;
+use tenferro_device::LogicalMemorySpace;
 
 pub(crate) fn has_forward<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
     operands
@@ -186,25 +187,7 @@ pub(crate) fn dense_input_snapshot_in_runtime<T>(
 where
     T: EinsumRuntimeValue,
 {
-    dispatch_einsum_runtime!(T, op_name, |ctx, Backend, runtime| {
-        if std::any::TypeId::of::<Backend>() != std::any::TypeId::of::<CpuBackend>() {
-            if !input.is_dense() {
-                return Err(unsupported_runtime_capability(op_name, runtime));
-            }
-            let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
-            let tangent = if needs_tangent {
-                Some(
-                    input
-                        .tangent()
-                        .cloned()
-                        .unwrap_or_else(|| zero_like(&primal))
-                        .contiguous(MemoryOrder::ColumnMajor),
-                )
-            } else {
-                None
-            };
-            return Ok((primal, tangent));
-        }
+    dispatch_einsum_runtime!(T, op_name, |ctx, Backend| {
         dense_input_snapshot_in_backend::<Backend, _, T>(ctx, input, needs_tangent)
     })
 }
@@ -222,11 +205,9 @@ where
         return Ok(dense);
     }
 
-    with_runtime(
-        |ctx| compress_pullback_like_in_backend::<CpuBackend, _, T>(ctx, op_name, dense, layout),
-        |_ctx| Err(unsupported_runtime_capability(op_name, "cuda")),
-        |_ctx| Err(unsupported_runtime_capability(op_name, "rocm")),
-    )
+    dispatch_einsum_runtime!(T, op_name, |ctx, Backend| {
+        compress_pullback_like_in_backend::<Backend, _, T>(ctx, op_name, dense.clone(), layout)
+    })
 }
 
 pub(crate) fn compress_pullback_like_in_backend<B, C, T>(
@@ -269,6 +250,13 @@ where
         });
     }
     let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let contiguous = if contiguous.logical_memory_space() == LogicalMemorySpace::MainMemory {
+        contiguous
+    } else {
+        contiguous
+            .to_memory_space_async(LogicalMemorySpace::MainMemory)
+            .map_err(Error::from)?
+    };
     let off = contiguous.offset() as usize;
     contiguous
         .buffer()
@@ -276,7 +264,7 @@ where
         .and_then(|values| values.get(off))
         .copied()
         .ok_or_else(|| Error::InvalidAdTensor {
-            message: format!("{op_name} expects CPU-backed scalar cotangent"),
+            message: format!("{op_name} could not materialize rank-0 cotangent on host memory"),
         })
 }
 
@@ -286,7 +274,15 @@ where
 {
     let len = template.len();
     let data = vec![value; len];
-    Tensor::from_slice(&data, template.dims(), MemoryOrder::ColumnMajor).map_err(Error::from)
+    let dense = Tensor::from_slice(&data, template.dims(), MemoryOrder::ColumnMajor)
+        .map_err(Error::from)?;
+    if template.logical_memory_space() == LogicalMemorySpace::MainMemory {
+        Ok(dense)
+    } else {
+        dense
+            .to_memory_space_async(template.logical_memory_space())
+            .map_err(Error::from)
+    }
 }
 
 pub(crate) fn wrap_dense_ad_output<TIn: Scalar, TOut: Scalar>(

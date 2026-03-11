@@ -3,12 +3,10 @@ use std::collections::{HashMap, HashSet};
 use chainrules_core::Differentiable as _;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
-use tenferro_prims::{
-    CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext, TensorPrims,
-};
+use tenferro_prims::TensorPrims;
 use tenferro_tensor::Tensor;
 
-use crate::api::with_einsum_runtime;
+use crate::api::{dispatch_einsum_runtime, EinsumRuntimeValue};
 use crate::{Error, Result};
 
 use super::meta::{plan_axis_classes_for_subscripts, OperandAxisClasses};
@@ -16,10 +14,7 @@ use super::StructuredTensor;
 
 impl<T> StructuredTensor<T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    CudaBackend: TensorPrims<Standard<T>, Context = CudaContext>,
-    RocmBackend: TensorPrims<Standard<T>, Context = RocmContext>,
+    T: EinsumRuntimeValue,
 {
     /// Materialize this structured tensor into a dense payload tensor.
     ///
@@ -34,12 +29,9 @@ where
             return Ok(self.payload().clone());
         }
 
-        with_einsum_runtime::<T, _>(
-            "structured_to_dense",
-            |ctx| to_dense_in_ctx::<CpuBackend, _, T>(ctx, self),
-            |ctx| to_dense_in_ctx::<CudaBackend, _, T>(ctx, self),
-            |ctx| to_dense_in_ctx::<RocmBackend, _, T>(ctx, self),
-        )
+        dispatch_einsum_runtime!(T, "structured_to_dense", |ctx, Backend| {
+            to_dense_in_ctx::<Backend, _, T>(ctx, self)
+        })
     }
 
     /// Contract/einsum structured operands while preserving compressed metadata.
@@ -59,12 +51,9 @@ where
             });
         }
 
-        with_einsum_runtime::<T, _>(
-            "structured_einsum",
-            |ctx| einsum_with_subscripts_in_ctx::<CpuBackend, _, T>(ctx, subscripts, operands),
-            |ctx| einsum_with_subscripts_in_ctx::<CudaBackend, _, T>(ctx, subscripts, operands),
-            |ctx| einsum_with_subscripts_in_ctx::<RocmBackend, _, T>(ctx, subscripts, operands),
-        )
+        dispatch_einsum_runtime!(T, "structured_einsum", |ctx, Backend| {
+            einsum_with_subscripts_in_ctx::<Backend, _, T>(ctx, subscripts, operands)
+        })
     }
 }
 

@@ -26,6 +26,10 @@ The tensor wrappers now share a centralized runtime-dispatch contract layer in
 repeating backend-specific `Cpu/Cuda/Rocm` bounds at each eager or builder
 entrypoint.
 
+Scalar reduction helpers also use transfer-aware rank-0 extraction and scalar
+broadcast utilities. That keeps reduction pullbacks on the same generic
+runtime path instead of introducing one-off CPU-only builder branches.
+
 Tensor-level wrappers built on top of those formulas:
 
 - pointwise binary:

@@ -129,6 +129,11 @@ The following public primal ops do not yet have stateless linalg AD rules:
 
 ## `tenferro-dyadtensor`
 
+### Structured tensor helpers
+
+- `StructuredTensor::to_dense`
+- `StructuredTensor::einsum_with_subscripts`
+
 ### Eager AD tensor entrypoints
 
 `tenferro_dyadtensor::ad::*` currently includes:
@@ -161,6 +166,7 @@ Builder APIs are implemented for:
 
 - API contract: runtime-generic across CPU, CUDA, and ROCm
 - `chainrules_api::einsum` is backend-parametric over `tenferro-einsum::EinsumBackend`; callers choose the backend via the runtime context type
+- Structured tensor materialization and compressed einsum reuse the same einsum runtime-dispatch layer rather than maintaining separate CPU/CUDA/ROCm builder paths
 - Actual execution today:
   - CPU paths are implemented for the operations listed above
   - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution

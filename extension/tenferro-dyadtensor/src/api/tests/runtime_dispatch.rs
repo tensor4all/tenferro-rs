@@ -13,6 +13,10 @@ fn repo_files(paths: &[&str]) -> String {
         .join("\n")
 }
 
+// IMPORTANT: Do not delete or weaken these runtime-dispatch structure tests.
+// They guard the generic/capability-driven architecture that keeps dyadtensor
+// extensible as more scalar, analytic, and linalg families are added.
+
 #[test]
 fn unary_and_reduction_entrypoints_route_through_runtime_dispatch() {
     let scalar_builders = [
@@ -99,5 +103,36 @@ fn structured_einsum_uses_shared_runtime_dispatch_path() {
     assert!(
         !structured_einsum.contains("with_runtime_cpu_only("),
         "structured einsum should share the same runtime-dispatch path as the rest of dyadtensor"
+    );
+    assert!(
+        !structured_einsum.contains("CpuBackend")
+            && !structured_einsum.contains("CudaBackend")
+            && !structured_einsum.contains("RocmBackend"),
+        "structured einsum should dispatch through shared generic helpers rather than spelling out backend triples"
+    );
+    assert!(
+        !structured_einsum.contains("CpuContext")
+            && !structured_einsum.contains("CudaContext")
+            && !structured_einsum.contains("RocmContext"),
+        "structured einsum should not hard-code runtime context triples once shared dispatch exists"
+    );
+}
+
+#[test]
+fn runtime_helpers_stay_capability_driven() {
+    let runtime_helpers = repo_file("src/api/runtime.rs");
+    let reduction_builders = repo_file("src/api/ad_builders/reduction.rs");
+
+    assert!(
+        !runtime_helpers.contains("TypeId::of::<Backend>()"),
+        "runtime helpers should dispatch through capability-aware generic helpers rather than backend type checks"
+    );
+    assert!(
+        !runtime_helpers.contains("compress_pullback_like_in_backend::<CpuBackend"),
+        "runtime helpers should not hard-code CPU-only compression paths once einsum runtime dispatch exists"
+    );
+    assert!(
+        !reduction_builders.contains("unsupported_runtime_capability(\"sum_ad_pullback\""),
+        "sum_ad pullback should rely on transfer-aware runtime helpers rather than hard-coded CPU-only runtime failures"
     );
 }
