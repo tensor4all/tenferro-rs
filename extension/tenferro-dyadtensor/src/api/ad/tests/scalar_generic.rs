@@ -3,8 +3,8 @@ use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
-    add_ad, atan2_ad, cos_ad, exp_ad, log_ad, mean_ad, set_default_runtime, sin_ad, std_ad,
-    tanh_ad, var_ad, AdTensor, RuntimeContext,
+    add_ad, atan2_ad, cos_ad, exp_ad, expm1_ad, log1p_ad, log_ad, mean_ad, set_default_runtime,
+    sin_ad, sqrt_ad, std_ad, tanh_ad, var_ad, AdTensor, RuntimeContext,
 };
 
 fn tensor_from_slice(data: &[f64], dims: &[usize]) -> Tensor<f64> {
@@ -40,7 +40,13 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     let out_unary = exp_ad(&ad_x).run().unwrap();
     assert_eq!(out_unary.dims(), &[2]);
     let out_log = log_ad(&ad_x).run().unwrap();
+    let out_sqrt = sqrt_ad(&ad_x).run().unwrap();
+    let out_expm1 = expm1_ad(&ad_x).run().unwrap();
+    let out_log1p = log1p_ad(&ad_x).run().unwrap();
     assert_eq!(out_log.dims(), &[2]);
+    assert_eq!(out_sqrt.dims(), &[2]);
+    assert_eq!(out_expm1.dims(), &[2]);
+    assert_eq!(out_log1p.dims(), &[2]);
     let out_sin = sin_ad(&ad_x).run().unwrap();
     let out_cos = cos_ad(&ad_x).run().unwrap();
     let out_tanh = tanh_ad(&ad_x).run().unwrap();
@@ -61,6 +67,9 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     assert_eq!(out_std.dims(), &[]);
 
     let eager_unary = crate::ad::exp(&ad_x).unwrap();
+    let eager_sqrt = crate::ad::sqrt(&ad_x).unwrap();
+    let eager_expm1 = crate::ad::expm1(&ad_x).unwrap();
+    let eager_log1p = crate::ad::log1p(&ad_x).unwrap();
     let eager_sin = crate::ad::sin(&ad_x).unwrap();
     let eager_cos = crate::ad::cos(&ad_x).unwrap();
     let eager_tanh = crate::ad::tanh(&ad_x).unwrap();
@@ -68,6 +77,9 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     let eager_mean = crate::ad::mean(&eager_binary).unwrap();
 
     assert_eq!(eager_unary.dims(), &[2]);
+    assert_eq!(eager_sqrt.dims(), &[2]);
+    assert_eq!(eager_expm1.dims(), &[2]);
+    assert_eq!(eager_log1p.dims(), &[2]);
     assert_eq!(eager_sin.dims(), &[2]);
     assert_eq!(eager_cos.dims(), &[2]);
     assert_eq!(eager_tanh.dims(), &[2]);
@@ -133,6 +145,45 @@ fn log_ad_forward_matches_inverse_scaling_rule() {
     let expected = tensor_from_slice(&[1.5, -2.0], &[2]);
 
     assert!(max_abs_diff(&tangent, &expected) < 1e-12);
+}
+
+#[test]
+fn sqrt_and_log1p_forward_match_expected_rules() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let x = tensor_from_slice(&[4.0, 3.0], &[2]);
+    let dx = tensor_from_slice(&[6.0, -8.0], &[2]);
+    let ad_x = AdTensor::new_forward(x.clone(), dx).unwrap();
+
+    let sqrt_out = sqrt_ad(&ad_x).run().unwrap();
+    let sqrt_tangent = sqrt_out.tangent().unwrap().clone();
+    let sqrt_expected = tensor_from_slice(&[1.5, -4.0 / 3.0_f64.sqrt()], &[2]);
+    assert!(max_abs_diff(&sqrt_tangent, &sqrt_expected) < 1e-12);
+
+    let log1p_out = log1p_ad(&ad_x).run().unwrap();
+    let log1p_tangent = log1p_out.tangent().unwrap().clone();
+    let log1p_expected = tensor_from_slice(&[6.0 / 5.0, -2.0], &[2]);
+    assert!(max_abs_diff(&log1p_tangent, &log1p_expected) < 1e-12);
+}
+
+#[test]
+fn expm1_reverse_pullback_matches_exp_rule() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let x = AdTensor::new_reverse(
+        tensor_from_slice(&[0.0, 1.0], &[2]),
+        NodeId(70),
+        TapeId(80),
+        None,
+    )
+    .unwrap();
+
+    let out = expm1_ad(&x).run().unwrap();
+    let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -2.0], &[2]));
+    let grads = crate::ad::pullback_wrt(&out, &cotangent, &[&x]).unwrap();
+    let expected = tensor_from_slice(&[1.0, -2.0 * std::f64::consts::E], &[2]);
+
+    assert!(max_abs_diff(grads[0].as_ref().unwrap().payload(), &expected) < 1e-12);
 }
 
 #[test]

@@ -180,8 +180,11 @@ macro_rules! define_scalar_reduction_eager_ad_fn {
     };
 }
 
+define_scalar_unary_eager_ad_fn!(sqrt, sqrt_ad, "sqrt", generic);
 define_scalar_unary_eager_ad_fn!(exp, exp_ad, "exp", generic);
+define_scalar_unary_eager_ad_fn!(expm1, expm1_ad, "expm1", generic);
 define_scalar_unary_eager_ad_fn!(log, log_ad, "log", generic);
+define_scalar_unary_eager_ad_fn!(log1p, log1p_ad, "log1p", generic);
 define_scalar_unary_eager_ad_fn!(sin, sin_ad, "sin", generic);
 define_scalar_unary_eager_ad_fn!(cos, cos_ad, "cos", generic);
 define_scalar_unary_eager_ad_fn!(tanh, tanh_ad, "tanh", generic);

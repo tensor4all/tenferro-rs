@@ -38,7 +38,7 @@ use super::{
 };
 
 mod scalar_eager;
-pub use scalar_eager::{add, atan2, cos, exp, log, mean, sin, std, tanh, var};
+pub use scalar_eager::{add, atan2, cos, exp, expm1, log, log1p, mean, sin, sqrt, std, tanh, var};
 
 fn increment_col_major_index(index: &mut [usize], dims: &[usize]) {
     for axis in 0..dims.len() {

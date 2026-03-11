@@ -7,8 +7,18 @@ fn repo_file(path: &str) -> String {
 
 #[test]
 fn unary_and_reduction_entrypoints_route_through_runtime_dispatch() {
-    let scalar_builders = repo_file("src/api/scalar_ad_builders.rs");
-    let ad_api = repo_file("src/api/ad.rs");
+    let scalar_builders = [
+        repo_file("src/api/scalar_ad_builders/common.rs"),
+        repo_file("src/api/scalar_ad_builders/unary.rs"),
+        repo_file("src/api/scalar_ad_builders/binary.rs"),
+        repo_file("src/api/scalar_ad_builders/reduction.rs"),
+    ]
+    .join("\n");
+    let ad_api = [
+        repo_file("src/api/ad.rs"),
+        repo_file("src/api/ad/scalar_eager.rs"),
+    ]
+    .join("\n");
     let ad_builders = repo_file("src/api/ad_builders.rs");
 
     assert!(
