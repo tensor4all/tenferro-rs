@@ -85,3 +85,47 @@ fn split_ad_helper_modules_stay_under_size_guideline() {
         );
     }
 }
+
+#[test]
+fn primal_is_split_into_focused_modules() {
+    assert!(
+        !repo_path("src/primal.rs").exists(),
+        "primal.rs should be replaced by a focused module directory"
+    );
+
+    for relative in [
+        "src/primal/mod.rs",
+        "src/primal/decompositions.rs",
+        "src/primal/least_squares.rs",
+        "src/primal/linear_systems.rs",
+        "src/primal/spectral.rs",
+        "src/primal/matrix_functions.rs",
+        "src/primal/tensor_ops.rs",
+        "src/primal/norms.rs",
+    ] {
+        assert!(
+            repo_path(relative).exists(),
+            "expected split primal module to exist: {relative}"
+        );
+    }
+}
+
+#[test]
+fn split_primal_modules_stay_under_size_guideline() {
+    for relative in [
+        "src/primal/decompositions.rs",
+        "src/primal/least_squares.rs",
+        "src/primal/linear_systems.rs",
+        "src/primal/spectral.rs",
+        "src/primal/matrix_functions.rs",
+        "src/primal/tensor_ops.rs",
+        "src/primal/norms.rs",
+    ] {
+        let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
+        let line_count = contents.lines().count();
+        assert!(
+            line_count <= 500,
+            "{relative} should stay focused; found {line_count} lines"
+        );
+    }
+}
