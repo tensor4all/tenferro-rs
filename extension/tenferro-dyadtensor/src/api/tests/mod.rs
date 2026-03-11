@@ -7,6 +7,8 @@ use tenferro_prims::CpuBackend;
 use tenferro_prims::{CudaContext, RocmContext};
 use tenferro_tensor::MemoryOrder;
 
+mod runtime_dispatch;
+
 fn as_slice<T: Scalar>(t: &Tensor<T>) -> &[T] {
     t.buffer()
         .as_slice()

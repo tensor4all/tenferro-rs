@@ -207,8 +207,12 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
 
 ### Layer gaps
 
+- Phase 2 explicitly targets removal of high-level `with_cpu_runtime(...)`
+  shortcuts from `extension/tenferro-dyadtensor`
 - Finish removing CPU-only runtime assumptions from the older dyadtensor eager
   AD paths
+- Replace removable `ensure_cpu_backend(...)` sites in `tenferro-linalg` with
+  capability-driven checks rather than backend-name guards
 - Continue reducing `ensure_cpu_backend(...)` reliance in composite linalg paths
 - Split LAPACK eig helpers out of `LinalgScalar`
 
