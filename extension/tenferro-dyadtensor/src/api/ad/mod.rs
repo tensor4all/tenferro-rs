@@ -56,7 +56,10 @@ pub use pullback::{
     einsum_frule, einsum_hvp, einsum_rrule, pullback, pullback_wrt, pullback_wrt_mixed,
     pullback_wrt_scalars, solve_triangular_rrule,
 };
-pub use scalar_eager::{add, atan2, cos, exp, expm1, log, log1p, mean, sin, sqrt, std, tanh, var};
+pub use scalar_eager::{
+    acos, acosh, add, asin, asinh, atan, atan2, atanh, cos, cosh, exp, expm1, hypot, log, log1p,
+    mean, pow, sin, sinh, sqrt, std, tanh, var,
+};
 
 #[cfg(test)]
 mod tests;

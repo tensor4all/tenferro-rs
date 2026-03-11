@@ -188,9 +188,19 @@ define_scalar_unary_eager_ad_fn!(log1p, log1p_ad, "log1p", generic);
 define_scalar_unary_eager_ad_fn!(sin, sin_ad, "sin", generic);
 define_scalar_unary_eager_ad_fn!(cos, cos_ad, "cos", generic);
 define_scalar_unary_eager_ad_fn!(tanh, tanh_ad, "tanh", generic);
+define_scalar_unary_eager_ad_fn!(asin, asin_ad, "asin", generic);
+define_scalar_unary_eager_ad_fn!(acos, acos_ad, "acos", generic);
+define_scalar_unary_eager_ad_fn!(atan, atan_ad, "atan", generic);
+define_scalar_unary_eager_ad_fn!(sinh, sinh_ad, "sinh", generic);
+define_scalar_unary_eager_ad_fn!(cosh, cosh_ad, "cosh", generic);
+define_scalar_unary_eager_ad_fn!(asinh, asinh_ad, "asinh", generic);
+define_scalar_unary_eager_ad_fn!(acosh, acosh_ad, "acosh", generic);
+define_scalar_unary_eager_ad_fn!(atanh, atanh_ad, "atanh", generic);
 
 define_scalar_binary_eager_ad_fn!(add, add_ad, "add", generic);
 define_scalar_binary_eager_ad_fn!(atan2, atan2_ad, "atan2", real);
+define_scalar_binary_eager_ad_fn!(pow, pow_ad, "pow", generic);
+define_scalar_binary_eager_ad_fn!(hypot, hypot_ad, "hypot", real);
 
 define_scalar_reduction_eager_ad_fn!(mean, mean_ad, "mean", generic);
 define_scalar_reduction_eager_ad_fn!(var, var_ad, "variance", real);

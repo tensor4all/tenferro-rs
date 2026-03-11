@@ -3,8 +3,9 @@ use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
-    add_ad, atan2_ad, cos_ad, exp_ad, expm1_ad, log1p_ad, log_ad, mean_ad, set_default_runtime,
-    sin_ad, sqrt_ad, std_ad, tanh_ad, var_ad, AdTensor, RuntimeContext,
+    acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cos_ad, cosh_ad,
+    exp_ad, expm1_ad, hypot_ad, log1p_ad, log_ad, mean_ad, pow_ad, set_default_runtime, sin_ad,
+    sinh_ad, sqrt_ad, std_ad, tanh_ad, var_ad, AdTensor, RuntimeContext,
 };
 
 fn tensor_from_slice(data: &[f64], dims: &[usize]) -> Tensor<f64> {
@@ -50,14 +51,41 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     let out_sin = sin_ad(&ad_x).run().unwrap();
     let out_cos = cos_ad(&ad_x).run().unwrap();
     let out_tanh = tanh_ad(&ad_x).run().unwrap();
+    let out_asin = asin_ad(&ad_x).run().unwrap();
+    let out_acos = acos_ad(&ad_x).run().unwrap();
+    let out_atan = atan_ad(&ad_x).run().unwrap();
+    let out_sinh = sinh_ad(&ad_x).run().unwrap();
+    let out_cosh = cosh_ad(&ad_x).run().unwrap();
+    let out_asinh = asinh_ad(&ad_x).run().unwrap();
+    let out_acosh = acosh_ad(&AdTensor::new_primal(tensor_from_slice(&[2.0, 3.0], &[2])))
+        .run()
+        .unwrap();
+    let out_atanh = atanh_ad(&AdTensor::new_primal(tensor_from_slice(
+        &[0.25, -0.5],
+        &[2],
+    )))
+    .run()
+    .unwrap();
     assert_eq!(out_sin.dims(), &[2]);
     assert_eq!(out_cos.dims(), &[2]);
     assert_eq!(out_tanh.dims(), &[2]);
+    assert_eq!(out_asin.dims(), &[2]);
+    assert_eq!(out_acos.dims(), &[2]);
+    assert_eq!(out_atan.dims(), &[2]);
+    assert_eq!(out_sinh.dims(), &[2]);
+    assert_eq!(out_cosh.dims(), &[2]);
+    assert_eq!(out_asinh.dims(), &[2]);
+    assert_eq!(out_acosh.dims(), &[2]);
+    assert_eq!(out_atanh.dims(), &[2]);
 
     let out_binary = add_ad(&ad_x, &ad_y).run().unwrap();
     assert_eq!(out_binary.dims(), &[2]);
     let out_atan2 = atan2_ad(&ad_y, &ad_x).run().unwrap();
+    let out_pow = pow_ad(&ad_y, &ad_x).run().unwrap();
+    let out_hypot = hypot_ad(&ad_y, &ad_x).run().unwrap();
     assert_eq!(out_atan2.dims(), &[2]);
+    assert_eq!(out_pow.dims(), &[2]);
+    assert_eq!(out_hypot.dims(), &[2]);
 
     let out_reduced = mean_ad(&out_binary).run().unwrap();
     assert_eq!(out_reduced.dims(), &[]);
@@ -73,6 +101,14 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     let eager_sin = crate::ad::sin(&ad_x).unwrap();
     let eager_cos = crate::ad::cos(&ad_x).unwrap();
     let eager_tanh = crate::ad::tanh(&ad_x).unwrap();
+    let eager_asin = crate::ad::asin(&ad_x).unwrap();
+    let eager_acos = crate::ad::acos(&ad_x).unwrap();
+    let eager_atan = crate::ad::atan(&ad_x).unwrap();
+    let eager_sinh = crate::ad::sinh(&ad_x).unwrap();
+    let eager_cosh = crate::ad::cosh(&ad_x).unwrap();
+    let eager_asinh = crate::ad::asinh(&ad_x).unwrap();
+    let eager_pow = crate::ad::pow(&ad_y, &ad_x).unwrap();
+    let eager_hypot = crate::ad::hypot(&ad_y, &ad_x).unwrap();
     let eager_binary = crate::ad::add(&ad_x, &ad_y).unwrap();
     let eager_mean = crate::ad::mean(&eager_binary).unwrap();
 
@@ -83,6 +119,14 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     assert_eq!(eager_sin.dims(), &[2]);
     assert_eq!(eager_cos.dims(), &[2]);
     assert_eq!(eager_tanh.dims(), &[2]);
+    assert_eq!(eager_asin.dims(), &[2]);
+    assert_eq!(eager_acos.dims(), &[2]);
+    assert_eq!(eager_atan.dims(), &[2]);
+    assert_eq!(eager_sinh.dims(), &[2]);
+    assert_eq!(eager_cosh.dims(), &[2]);
+    assert_eq!(eager_asinh.dims(), &[2]);
+    assert_eq!(eager_pow.dims(), &[2]);
+    assert_eq!(eager_hypot.dims(), &[2]);
     assert_eq!(eager_binary.dims(), &[2]);
     assert_eq!(eager_mean.dims(), &[]);
 }
@@ -253,6 +297,103 @@ fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients()
     );
     assert!(max_abs_diff(var_grads[0].as_ref().unwrap().payload(), &expected_var) < 1e-12);
     assert!(max_abs_diff(std_grads[0].as_ref().unwrap().payload(), &expected_std) < 1e-12);
+}
+
+#[test]
+fn remaining_analytic_unary_forward_rules_match_reference_derivatives() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let trig_input = tensor_from_slice(&[0.25, -0.5], &[2]);
+    let trig_tangent = tensor_from_slice(&[2.0, -3.0], &[2]);
+    let trig_ad = AdTensor::new_forward(trig_input.clone(), trig_tangent.clone()).unwrap();
+
+    let asin_out = asin_ad(&trig_ad).run().unwrap();
+    let asin_expected = tensor_from_slice(
+        &[
+            2.0 / (1.0_f64 - 0.25_f64.powi(2)).sqrt(),
+            -3.0 / (1.0_f64 - 0.5_f64.powi(2)).sqrt(),
+        ],
+        &[2],
+    );
+    assert!(max_abs_diff(asin_out.tangent().unwrap(), &asin_expected) < 1e-12);
+
+    let atan_out = atan_ad(&trig_ad).run().unwrap();
+    let atan_expected = tensor_from_slice(
+        &[
+            2.0 / (1.0 + 0.25_f64.powi(2)),
+            -3.0 / (1.0 + 0.5_f64.powi(2)),
+        ],
+        &[2],
+    );
+    assert!(max_abs_diff(atan_out.tangent().unwrap(), &atan_expected) < 1e-12);
+
+    let hyper_input = tensor_from_slice(&[0.25, 1.25], &[2]);
+    let hyper_tangent = tensor_from_slice(&[1.5, -0.75], &[2]);
+    let hyper_ad = AdTensor::new_forward(hyper_input.clone(), hyper_tangent.clone()).unwrap();
+
+    let sinh_out = sinh_ad(&hyper_ad).run().unwrap();
+    let sinh_expected = tensor_from_slice(&[1.5 * 0.25_f64.cosh(), -0.75 * 1.25_f64.cosh()], &[2]);
+    assert!(max_abs_diff(sinh_out.tangent().unwrap(), &sinh_expected) < 1e-12);
+
+    let asinh_out = asinh_ad(&hyper_ad).run().unwrap();
+    let asinh_expected = tensor_from_slice(
+        &[
+            1.5 / (1.0_f64 + 0.25_f64.powi(2)).sqrt(),
+            -0.75 / (1.0_f64 + 1.25_f64.powi(2)).sqrt(),
+        ],
+        &[2],
+    );
+    assert!(max_abs_diff(asinh_out.tangent().unwrap(), &asinh_expected) < 1e-12);
+}
+
+#[test]
+fn pow_and_hypot_reverse_pullbacks_match_reference_gradients() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let base = AdTensor::new_reverse(
+        tensor_from_slice(&[2.0, 3.0], &[2]),
+        NodeId(90),
+        TapeId(91),
+        None,
+    )
+    .unwrap();
+    let exponent = AdTensor::new_reverse(
+        tensor_from_slice(&[3.0, 2.0], &[2]),
+        NodeId(92),
+        TapeId(91),
+        None,
+    )
+    .unwrap();
+    let pow_out = pow_ad(&base, &exponent).run().unwrap();
+    let pow_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -0.5], &[2]));
+    let pow_grads = crate::ad::pullback_wrt(&pow_out, &pow_cotangent, &[&base, &exponent]).unwrap();
+    let expected_base = tensor_from_slice(&[12.0, -3.0], &[2]);
+    let expected_exponent =
+        tensor_from_slice(&[8.0 * 2.0_f64.ln(), -0.5 * 9.0 * 3.0_f64.ln()], &[2]);
+    assert!(max_abs_diff(pow_grads[0].as_ref().unwrap().payload(), &expected_base) < 1e-12);
+    assert!(max_abs_diff(pow_grads[1].as_ref().unwrap().payload(), &expected_exponent) < 1e-12);
+
+    let lhs = AdTensor::new_reverse(
+        tensor_from_slice(&[3.0, 5.0], &[2]),
+        NodeId(93),
+        TapeId(94),
+        None,
+    )
+    .unwrap();
+    let rhs = AdTensor::new_reverse(
+        tensor_from_slice(&[4.0, 12.0], &[2]),
+        NodeId(95),
+        TapeId(94),
+        None,
+    )
+    .unwrap();
+    let hypot_out = hypot_ad(&lhs, &rhs).run().unwrap();
+    let hypot_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -2.0], &[2]));
+    let hypot_grads = crate::ad::pullback_wrt(&hypot_out, &hypot_cotangent, &[&lhs, &rhs]).unwrap();
+    let expected_lhs = tensor_from_slice(&[3.0 / 5.0, -10.0 / 13.0], &[2]);
+    let expected_rhs = tensor_from_slice(&[4.0 / 5.0, -24.0 / 13.0], &[2]);
+    assert!(max_abs_diff(hypot_grads[0].as_ref().unwrap().payload(), &expected_lhs) < 1e-12);
+    assert!(max_abs_diff(hypot_grads[1].as_ref().unwrap().payload(), &expected_rhs) < 1e-12);
 }
 
 #[test]

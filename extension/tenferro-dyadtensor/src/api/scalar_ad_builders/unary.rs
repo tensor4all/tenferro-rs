@@ -114,3 +114,112 @@ define_conj_factor_unary_builder!(
         scalar_binary_primal("tanh_ad_factor_sub", ScalarBinaryOp::Sub, &one, &sq)
     }
 );
+
+define_conj_factor_unary_builder!(
+    AsinAdBuilder,
+    asin_ad,
+    "asin",
+    "asin",
+    AnalyticUnaryOp::Asin,
+    |input, _primal| {
+        let sq = scalar_unary_primal("asin_ad_factor_sq", ScalarUnaryOp::Square, input)?;
+        let one = one_tensor_like(input)?;
+        let inside = scalar_binary_primal("asin_ad_factor_inside", ScalarBinaryOp::Sub, &one, &sq)?;
+        let root = analytic_unary_primal("asin_ad_factor_sqrt", AnalyticUnaryOp::Sqrt, &inside)?;
+        scalar_unary_primal("asin_ad_factor_recip", ScalarUnaryOp::Reciprocal, &root)
+    }
+);
+
+define_conj_factor_unary_builder!(
+    AcosAdBuilder,
+    acos_ad,
+    "acos",
+    "acos",
+    AnalyticUnaryOp::Acos,
+    |input, _primal| {
+        let sq = scalar_unary_primal("acos_ad_factor_sq", ScalarUnaryOp::Square, input)?;
+        let one = one_tensor_like(input)?;
+        let inside = scalar_binary_primal("acos_ad_factor_inside", ScalarBinaryOp::Sub, &one, &sq)?;
+        let root = analytic_unary_primal("acos_ad_factor_sqrt", AnalyticUnaryOp::Sqrt, &inside)?;
+        let recip = scalar_unary_primal("acos_ad_factor_recip", ScalarUnaryOp::Reciprocal, &root)?;
+        scalar_unary_primal("acos_ad_factor_neg", ScalarUnaryOp::Neg, &recip)
+    }
+);
+
+define_conj_factor_unary_builder!(
+    AtanAdBuilder,
+    atan_ad,
+    "atan",
+    "atan",
+    AnalyticUnaryOp::Atan,
+    |input, _primal| {
+        let sq = scalar_unary_primal("atan_ad_factor_sq", ScalarUnaryOp::Square, input)?;
+        let one = one_tensor_like(input)?;
+        let denom = scalar_binary_primal("atan_ad_factor_denom", ScalarBinaryOp::Add, &one, &sq)?;
+        scalar_unary_primal("atan_ad_factor_recip", ScalarUnaryOp::Reciprocal, &denom)
+    }
+);
+
+define_conj_factor_unary_builder!(
+    SinhAdBuilder,
+    sinh_ad,
+    "sinh",
+    "sinh",
+    AnalyticUnaryOp::Sinh,
+    |input, _primal| analytic_unary_primal("sinh_ad_factor", AnalyticUnaryOp::Cosh, input)
+);
+
+define_conj_factor_unary_builder!(
+    CoshAdBuilder,
+    cosh_ad,
+    "cosh",
+    "cosh",
+    AnalyticUnaryOp::Cosh,
+    |input, _primal| analytic_unary_primal("cosh_ad_factor", AnalyticUnaryOp::Sinh, input)
+);
+
+define_conj_factor_unary_builder!(
+    AsinhAdBuilder,
+    asinh_ad,
+    "asinh",
+    "asinh",
+    AnalyticUnaryOp::Asinh,
+    |input, _primal| {
+        let sq = scalar_unary_primal("asinh_ad_factor_sq", ScalarUnaryOp::Square, input)?;
+        let one = one_tensor_like(input)?;
+        let inside =
+            scalar_binary_primal("asinh_ad_factor_inside", ScalarBinaryOp::Add, &one, &sq)?;
+        let root = analytic_unary_primal("asinh_ad_factor_sqrt", AnalyticUnaryOp::Sqrt, &inside)?;
+        scalar_unary_primal("asinh_ad_factor_recip", ScalarUnaryOp::Reciprocal, &root)
+    }
+);
+
+define_conj_factor_unary_builder!(
+    AcoshAdBuilder,
+    acosh_ad,
+    "acosh",
+    "acosh",
+    AnalyticUnaryOp::Acosh,
+    |input, _primal| {
+        let sq = scalar_unary_primal("acosh_ad_factor_sq", ScalarUnaryOp::Square, input)?;
+        let one = one_tensor_like(input)?;
+        let inside =
+            scalar_binary_primal("acosh_ad_factor_inside", ScalarBinaryOp::Sub, &sq, &one)?;
+        let root = analytic_unary_primal("acosh_ad_factor_sqrt", AnalyticUnaryOp::Sqrt, &inside)?;
+        scalar_unary_primal("acosh_ad_factor_recip", ScalarUnaryOp::Reciprocal, &root)
+    }
+);
+
+define_conj_factor_unary_builder!(
+    AtanhAdBuilder,
+    atanh_ad,
+    "atanh",
+    "atanh",
+    AnalyticUnaryOp::Atanh,
+    |input, _primal| {
+        let sq = scalar_unary_primal("atanh_ad_factor_sq", ScalarUnaryOp::Square, input)?;
+        let one = one_tensor_like(input)?;
+        let denom = scalar_binary_primal("atanh_ad_factor_denom", ScalarBinaryOp::Sub, &one, &sq)?;
+        scalar_unary_primal("atanh_ad_factor_recip", ScalarUnaryOp::Reciprocal, &denom)
+    }
+);
