@@ -14,7 +14,7 @@ pub struct LuAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LuAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Sets LU pivot policy.
     /// # Examples
@@ -193,7 +193,7 @@ pub struct LstsqAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LstsqAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD least squares.
     /// # Examples

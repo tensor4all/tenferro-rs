@@ -1,14 +1,12 @@
-use tenferro_algebra::{Scalar, Standard};
+use tenferro_algebra::Standard;
 use tenferro_linalg::backend::{LinalgCapabilityOp, TensorLinalgBackend, TensorLinalgContextFor};
-use tenferro_linalg::LinalgScalar;
-use tenferro_prims::{
-    CpuBackend, CpuContext, CudaBackend, CudaContext, Extension, RocmBackend, RocmContext,
-    TensorPrims,
-};
+use tenferro_prims::CpuContext;
+use tenferro_prims::{CudaBackend, CudaContext, Extension, RocmBackend, RocmContext, TensorPrims};
 
 use crate::runtime::RuntimeContext;
 use crate::{Error, Result};
 
+use super::contracts::{EinsumRuntimeValue, LinalgRuntimeValue};
 use super::with_default_runtime;
 
 pub(crate) fn unsupported_runtime_capability(op: &'static str, runtime: &'static str) -> Error {
@@ -27,17 +25,12 @@ pub(crate) fn with_runtime<R>(
     })
 }
 
-pub(crate) fn with_einsum_runtime<T: Scalar, R>(
+pub(crate) fn with_einsum_runtime<T: EinsumRuntimeValue, R>(
     op: &'static str,
     cpu: impl FnOnce(&mut CpuContext) -> Result<R>,
     cuda: impl FnOnce(&mut CudaContext) -> Result<R>,
     rocm: impl FnOnce(&mut RocmContext) -> Result<R>,
-) -> Result<R>
-where
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    CudaBackend: TensorPrims<Standard<T>, Context = CudaContext>,
-    RocmBackend: TensorPrims<Standard<T>, Context = RocmContext>,
-{
+) -> Result<R> {
     with_runtime(
         cpu,
         |ctx| {
@@ -55,24 +48,13 @@ where
     )
 }
 
-pub(crate) fn with_linalg_runtime<T: LinalgScalar, R>(
+pub(crate) fn with_linalg_runtime<T: LinalgRuntimeValue, R>(
     op: &'static str,
     capability: LinalgCapabilityOp,
     cpu: impl FnOnce(&mut CpuContext) -> Result<R>,
     cuda: impl FnOnce(&mut CudaContext) -> Result<R>,
     rocm: impl FnOnce(&mut RocmContext) -> Result<R>,
-) -> Result<R>
-where
-    CpuContext: TensorLinalgContextFor<T>,
-    CudaContext: TensorLinalgContextFor<T>,
-    RocmContext: TensorLinalgContextFor<T>,
-    <CpuContext as TensorLinalgContextFor<T>>::Backend:
-        TensorLinalgBackend<T, Context = CpuContext>,
-    <CudaContext as TensorLinalgContextFor<T>>::Backend:
-        TensorLinalgBackend<T, Context = CudaContext>,
-    <RocmContext as TensorLinalgContextFor<T>>::Backend:
-        TensorLinalgBackend<T, Context = RocmContext>,
-{
+) -> Result<R> {
     with_runtime(
         |ctx| {
             if !<<CpuContext as TensorLinalgContextFor<T>>::Backend as TensorLinalgBackend<T>>::has_linalg_support(capability)
@@ -97,3 +79,55 @@ where
         },
     )
 }
+
+macro_rules! dispatch_einsum_runtime {
+    ($ty:ty, $op:expr, |$ctx:ident, $backend:ident| $body:expr) => {{
+        dispatch_einsum_runtime!($ty, $op, |$ctx, $backend, _runtime| $body)
+    }};
+    ($ty:ty, $op:expr, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
+        crate::api::with_einsum_runtime::<$ty, _>(
+            $op,
+            |$ctx| {
+                type $backend = tenferro_prims::CpuBackend;
+                let $runtime = "cpu";
+                $body
+            },
+            |$ctx| {
+                type $backend = tenferro_prims::CudaBackend;
+                let $runtime = "cuda";
+                $body
+            },
+            |$ctx| {
+                type $backend = tenferro_prims::RocmBackend;
+                let $runtime = "rocm";
+                $body
+            },
+        )
+    }};
+}
+
+pub(crate) use dispatch_einsum_runtime;
+
+macro_rules! dispatch_standard_runtime {
+    ($op:expr, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
+        crate::api::with_runtime(
+            |$ctx| {
+                type $backend = tenferro_prims::CpuBackend;
+                let $runtime = "cpu";
+                $body
+            },
+            |$ctx| {
+                type $backend = tenferro_prims::CudaBackend;
+                let $runtime = "cuda";
+                $body
+            },
+            |$ctx| {
+                type $backend = tenferro_prims::RocmBackend;
+                let $runtime = "rocm";
+                $body
+            },
+        )
+    }};
+}
+
+pub(crate) use dispatch_standard_runtime;

@@ -4,6 +4,10 @@ fn repo_path(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
+// IMPORTANT: Do not delete or weaken these structure tests.
+// They protect the module boundaries that keep dyadtensor extensible as more
+// ops land under #441 and later follow-up work.
+
 #[test]
 fn ad_builders_are_split_into_focused_modules() {
     assert!(

@@ -5,10 +5,14 @@ fn repo_file(path: &str) -> String {
     std::fs::read_to_string(root.join(path)).unwrap()
 }
 
+// IMPORTANT: Do not delete or weaken these tests.
+// They are the regression guard that keeps linalg on capability-based runtime
+// checks instead of slipping back to CPU/backend-name special cases.
+
 #[test]
 fn capability_checked_composite_paths_do_not_require_cpu_type_checks() {
-    let frules = repo_file("src/frules.rs");
-    let rrules = repo_file("src/rrules.rs");
+    let frules = repo_file("src/frules/mod.rs");
+    let rrules = repo_file("src/rrules/mod.rs");
 
     assert!(
         !frules.contains("ensure_cpu_backend::<"),
@@ -22,7 +26,7 @@ fn capability_checked_composite_paths_do_not_require_cpu_type_checks() {
 
 #[test]
 fn cpu_only_kernel_paths_fail_through_capability_not_backend_name() {
-    let primal = repo_file("src/primal.rs");
+    let primal = repo_file("src/primal/mod.rs");
 
     assert!(
         !primal.contains("TypeId::of::<C::Backend>()"),

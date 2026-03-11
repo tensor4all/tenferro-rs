@@ -7,7 +7,7 @@ binary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Solve,
     op = "solve",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::solve::<T, _>(ctx, builder.a, builder.b).map_err(Error::from)
 );
 
@@ -17,7 +17,7 @@ binary_linalg_builder!(
     returns = SolveExResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::SolveEx,
     op = "solve_ex",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::solve_ex::<T, _>(ctx, builder.a, builder.b).map_err(Error::from)
 );
 
@@ -35,7 +35,7 @@ pub struct LuSolveBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> LuSolveBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets forward row-permutation indices from `lu_factor`.
     /// # Examples
@@ -95,7 +95,7 @@ unary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Inv,
     op = "inv",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::inv::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -105,7 +105,7 @@ unary_linalg_builder!(
     returns = InvExResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Inv,
     op = "inv_ex",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::inv_ex::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -123,7 +123,7 @@ pub struct SolveTriangularBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> SolveTriangularBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets whether the matrix is upper triangular.
     /// # Examples

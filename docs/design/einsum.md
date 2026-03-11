@@ -396,7 +396,7 @@ transformations (`diag`, `repeat`) at the Tensor layer.
 subscripts + operand + optional size_dict
     -> classify labels (extract / trace / generative / duplicate)
     -> normalize with Tensor view ops (diag, repeat where applicable)
-    -> execute prim plans (Trace, Reduce, Permute, AntiDiag, AntiTrace)
+    -> execute prim plans (Trace, Reduce, MakeContiguous where needed, AntiDiag, AntiTrace)
     -> final tensor with requested output label multiplicities
 ```
 

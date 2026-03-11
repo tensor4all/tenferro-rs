@@ -2,19 +2,16 @@ use std::convert::TryFrom;
 
 use tenferro_algebra::Standard;
 use tenferro_prims::{
-    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp, CpuBackend,
-    CudaBackend, RocmBackend, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp,
-    ScalarUnaryOp, TensorAnalyticPrims, TensorScalarPrims,
+    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp,
+    ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp, TensorAnalyticPrims,
+    TensorScalarPrims,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{Error, Result};
 
-use super::scalar_contracts::{
-    CpuAnalyticBackend, CpuScalarBackend, CudaAnalyticBackend, CudaScalarBackend,
-    RocmAnalyticBackend, RocmScalarBackend, StandardScalarValue,
-};
-use super::with_runtime;
+use super::contracts::{AnalyticRuntimeValue, ScalarRuntimeValue, StandardRuntimeValue};
+use super::dispatch_standard_runtime;
 
 fn run_scalar_unary_backend<B, T>(
     ctx: &mut <B as TensorScalarPrims<Standard<T>>>::Context,
@@ -24,7 +21,7 @@ fn run_scalar_unary_backend<B, T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
+    T: StandardRuntimeValue,
     B: TensorScalarPrims<Standard<T>>,
 {
     let desc = ScalarPrimsDescriptor::PointwiseUnary { op };
@@ -53,7 +50,7 @@ fn run_scalar_binary_backend<B, T>(
     rhs: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
+    T: StandardRuntimeValue,
     B: TensorScalarPrims<Standard<T>>,
 {
     let desc = ScalarPrimsDescriptor::PointwiseBinary { op };
@@ -82,7 +79,7 @@ fn run_scalar_full_reduction_backend<B, T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
+    T: StandardRuntimeValue,
     B: TensorScalarPrims<Standard<T>>,
 {
     let modes_a: Vec<u32> = (0..input.dims().len())
@@ -120,7 +117,7 @@ fn run_analytic_unary_backend<B, T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
+    T: StandardRuntimeValue,
     B: TensorAnalyticPrims<Standard<T>>,
 {
     let desc = AnalyticPrimsDescriptor::PointwiseUnary { op };
@@ -149,7 +146,7 @@ fn run_analytic_binary_backend<B, T>(
     rhs: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
+    T: StandardRuntimeValue,
     B: TensorAnalyticPrims<Standard<T>>,
 {
     let desc = AnalyticPrimsDescriptor::PointwiseBinary { op };
@@ -178,7 +175,7 @@ fn run_analytic_full_reduction_backend<B, T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
+    T: StandardRuntimeValue,
     B: TensorAnalyticPrims<Standard<T>>,
 {
     let modes_a: Vec<u32> = (0..input.dims().len())
@@ -214,16 +211,11 @@ pub(crate) fn scalar_unary_primal<T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
-    CpuBackend: CpuScalarBackend<T>,
-    CudaBackend: CudaScalarBackend<T>,
-    RocmBackend: RocmScalarBackend<T>,
+    T: ScalarRuntimeValue,
 {
-    with_runtime(
-        |ctx| run_scalar_unary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
-        |ctx| run_scalar_unary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input),
-        |ctx| run_scalar_unary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input),
-    )
+    dispatch_standard_runtime!(op_name, |ctx, Backend, runtime| {
+        run_scalar_unary_backend::<Backend, T>(ctx, runtime, op_name, op, input)
+    })
 }
 
 pub(crate) fn scalar_binary_primal<T>(
@@ -233,16 +225,11 @@ pub(crate) fn scalar_binary_primal<T>(
     rhs: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
-    CpuBackend: CpuScalarBackend<T>,
-    CudaBackend: CudaScalarBackend<T>,
-    RocmBackend: RocmScalarBackend<T>,
+    T: ScalarRuntimeValue,
 {
-    with_runtime(
-        |ctx| run_scalar_binary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, lhs, rhs),
-        |ctx| run_scalar_binary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, lhs, rhs),
-        |ctx| run_scalar_binary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, lhs, rhs),
-    )
+    dispatch_standard_runtime!(op_name, |ctx, Backend, runtime| {
+        run_scalar_binary_backend::<Backend, T>(ctx, runtime, op_name, op, lhs, rhs)
+    })
 }
 
 pub(crate) fn scalar_full_reduction_primal<T>(
@@ -251,16 +238,11 @@ pub(crate) fn scalar_full_reduction_primal<T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
-    CpuBackend: CpuScalarBackend<T>,
-    CudaBackend: CudaScalarBackend<T>,
-    RocmBackend: RocmScalarBackend<T>,
+    T: ScalarRuntimeValue,
 {
-    with_runtime(
-        |ctx| run_scalar_full_reduction_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
-        |ctx| run_scalar_full_reduction_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input),
-        |ctx| run_scalar_full_reduction_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input),
-    )
+    dispatch_standard_runtime!(op_name, |ctx, Backend, runtime| {
+        run_scalar_full_reduction_backend::<Backend, T>(ctx, runtime, op_name, op, input)
+    })
 }
 
 pub(crate) fn analytic_unary_primal<T>(
@@ -269,16 +251,11 @@ pub(crate) fn analytic_unary_primal<T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
-    CpuBackend: CpuAnalyticBackend<T>,
-    CudaBackend: CudaAnalyticBackend<T>,
-    RocmBackend: RocmAnalyticBackend<T>,
+    T: AnalyticRuntimeValue,
 {
-    with_runtime(
-        |ctx| run_analytic_unary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
-        |ctx| run_analytic_unary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input),
-        |ctx| run_analytic_unary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input),
-    )
+    dispatch_standard_runtime!(op_name, |ctx, Backend, runtime| {
+        run_analytic_unary_backend::<Backend, T>(ctx, runtime, op_name, op, input)
+    })
 }
 
 pub(crate) fn analytic_binary_primal<T>(
@@ -288,16 +265,11 @@ pub(crate) fn analytic_binary_primal<T>(
     rhs: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
-    CpuBackend: CpuAnalyticBackend<T>,
-    CudaBackend: CudaAnalyticBackend<T>,
-    RocmBackend: RocmAnalyticBackend<T>,
+    T: AnalyticRuntimeValue,
 {
-    with_runtime(
-        |ctx| run_analytic_binary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, lhs, rhs),
-        |ctx| run_analytic_binary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, lhs, rhs),
-        |ctx| run_analytic_binary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, lhs, rhs),
-    )
+    dispatch_standard_runtime!(op_name, |ctx, Backend, runtime| {
+        run_analytic_binary_backend::<Backend, T>(ctx, runtime, op_name, op, lhs, rhs)
+    })
 }
 
 pub(crate) fn analytic_full_reduction_primal<T>(
@@ -306,18 +278,9 @@ pub(crate) fn analytic_full_reduction_primal<T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: StandardScalarValue,
-    CpuBackend: CpuAnalyticBackend<T>,
-    CudaBackend: CudaAnalyticBackend<T>,
-    RocmBackend: RocmAnalyticBackend<T>,
+    T: AnalyticRuntimeValue,
 {
-    with_runtime(
-        |ctx| run_analytic_full_reduction_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
-        |ctx| {
-            run_analytic_full_reduction_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input)
-        },
-        |ctx| {
-            run_analytic_full_reduction_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input)
-        },
-    )
+    dispatch_standard_runtime!(op_name, |ctx, Backend, runtime| {
+        run_analytic_full_reduction_backend::<Backend, T>(ctx, runtime, op_name, op, input)
+    })
 }

@@ -160,6 +160,7 @@ Builder APIs are implemented for:
 ### Runtime status
 
 - API contract: runtime-generic across CPU, CUDA, and ROCm
+- `chainrules_api::einsum` is backend-parametric over `tenferro-einsum::EinsumBackend`; callers choose the backend via the runtime context type
 - Actual execution today:
   - CPU paths are implemented for the operations listed above
   - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution

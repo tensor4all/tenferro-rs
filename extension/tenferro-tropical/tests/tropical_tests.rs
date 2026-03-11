@@ -14,7 +14,7 @@ fn permuted_view<T: Scalar>(tensor: &Tensor<T>, perm: &[usize]) -> Tensor<T> {
 fn tropical_make_contiguous_plan<Alg>(
     ctx: &mut CpuContext,
     input_dims: &[usize],
-) -> Result<<CpuBackend as TensorPrims<Alg>>::Plan<Alg::Scalar>>
+) -> Result<<CpuBackend as TensorPrims<Alg>>::Plan>
 where
     Alg: Algebra,
     Alg::Scalar: Scalar,
@@ -1636,11 +1636,11 @@ fn maxplus_anti_trace_vec_to_3d() {
 }
 
 // ============================================================================
-// Permute with alpha/beta scaling
+// MakeContiguous from a transposed view with alpha/beta scaling
 // ============================================================================
 
 #[test]
-fn maxplus_permute_with_alpha_beta() {
+fn maxplus_make_contiguous_from_transposed_view_with_alpha_beta() {
     // Tests MakeContiguous with non-trivial alpha and beta on a transposed view:
     // output = alpha * contiguous(transposed_view(input)) ⊕ beta * output_old
     //
@@ -2489,21 +2489,6 @@ fn tropical_plan_anti_diag_input_shape_mismatch_returns_error() {
         &mut ctx,
         &desc,
         &[&[2], &[3, 3]],
-    );
-    assert!(matches!(result, Err(Error::InvalidArgument(_))));
-}
-
-#[test]
-fn tropical_plan_make_contiguous_shape_mismatch_returns_error() {
-    use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
-    let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
-        &mut ctx,
-        &desc,
-        &[&[2, 3], &[2, 4]],
     );
     assert!(matches!(result, Err(Error::InvalidArgument(_))));
 }

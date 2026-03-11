@@ -14,7 +14,7 @@ pub struct SvdBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> SvdBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets optional SVD options.
     /// # Examples
@@ -64,7 +64,7 @@ unary_linalg_builder!(
     returns = QrResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Qr,
     op = "qr",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::qr::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -81,7 +81,7 @@ pub struct LuBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> LuBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets LU pivoting policy.
     /// # Examples
@@ -131,7 +131,7 @@ unary_linalg_builder!(
     returns = LuFactorResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
     op = "lu_factor",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::lu_factor::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -141,7 +141,7 @@ unary_linalg_builder!(
     returns = LuFactorExResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
     op = "lu_factor_ex",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::lu_factor_ex::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -151,7 +151,7 @@ unary_linalg_builder!(
     returns = EigenResult<T, T::Real>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
     op = "eigen",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::eigen::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -161,7 +161,7 @@ binary_linalg_builder!(
     returns = LstsqResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
     op = "lstsq",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::lstsq::<T, _>(ctx, builder.a, builder.b).map_err(Error::from)
 );
 
@@ -171,7 +171,7 @@ unary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Cholesky,
     op = "cholesky",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::cholesky::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -181,6 +181,6 @@ unary_linalg_builder!(
     returns = CholeskyExResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::CholeskyEx,
     op = "cholesky_ex",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::cholesky_ex::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );

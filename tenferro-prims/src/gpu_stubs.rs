@@ -209,9 +209,10 @@ pub struct RocmPlan<T: Scalar> {
 /// [`TensorPrims<Standard<T>>`](TensorPrims) for standard arithmetic on
 /// AMD GPUs.
 ///
-/// hipTENSOR natively supports `Contract`, `Permute`, `Reduce`, and
-/// `ElementwiseMul`. `AntiTrace`/`AntiDiag` will be composed via
-/// `Contract(eye, dC)`.
+/// hipTENSOR natively supports contraction, reduction, and elementwise
+/// building blocks. Structural `permute` stays a tensor view, and any required
+/// materialization path is modeled through `MakeContiguous`. `AntiTrace` and
+/// `AntiDiag` will be composed via `Contract(eye, dC)`.
 ///
 /// # Examples
 ///

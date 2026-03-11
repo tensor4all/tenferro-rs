@@ -56,7 +56,7 @@ pub struct EigResult<R: LinalgScalar<Real = R> + num_traits::Float> {
     pub vectors: Tensor<num_complex::Complex<R>>,
 }
 
-/// Norm kind for [`norm`].
+/// Norm kind for [`crate::norm`].
 ///
 /// # Examples
 ///

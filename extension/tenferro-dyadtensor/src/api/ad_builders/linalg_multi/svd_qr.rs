@@ -14,7 +14,7 @@ pub struct SvdAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SvdAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Sets optional SVD options.
     /// # Examples
@@ -232,7 +232,7 @@ pub struct QrAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> QrAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD QR.
     /// # Examples

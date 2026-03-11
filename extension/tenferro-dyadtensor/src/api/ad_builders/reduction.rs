@@ -9,16 +9,14 @@ use super::super::*;
 /// ```
 pub struct SumAdBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    T: ScalarRuntimeValue,
 {
     tensor: &'a AdTensor<T>,
 }
 
 impl<'a, T> SumAdBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    T: ScalarRuntimeValue,
 {
     /// Executes AD full reduction / sum with mode propagation.
     ///
@@ -27,15 +25,7 @@ where
     /// ```ignore
     /// let out = builder.run()?;
     /// ```
-    pub fn run(self) -> Result<AdTensor<T>>
-    where
-        T: Copy + 'static,
-        CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
-        tenferro_prims::CudaBackend:
-            tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-        tenferro_prims::RocmBackend:
-            tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
-    {
+    pub fn run(self) -> Result<AdTensor<T>> {
         let operands = [self.tensor];
         let primal = StructuredTensor::from_dense(
             super::super::scalar_runtime::scalar_full_reduction_primal(
@@ -107,8 +97,7 @@ where
 /// ```
 pub fn sum_ad<'a, T>(tensor: &'a AdTensor<T>) -> SumAdBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    T: ScalarRuntimeValue,
 {
     SumAdBuilder { tensor }
 }

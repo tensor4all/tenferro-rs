@@ -4,6 +4,10 @@ fn repo_path(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
 }
 
+// IMPORTANT: Do not delete or weaken these structure tests.
+// They keep linalg split across stable family boundaries so future op growth
+// under #441 does not regress back into monolithic modules.
+
 #[test]
 fn result_types_is_split_into_focused_modules() {
     assert!(

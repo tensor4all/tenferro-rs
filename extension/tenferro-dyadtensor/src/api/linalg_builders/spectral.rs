@@ -9,7 +9,7 @@ unary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Det,
     op = "det",
-    bounds = (T: LinalgScalar<Real = T> + Float + CpuLinalgScalar),
+    bounds = (T: RealLinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::det::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -19,7 +19,7 @@ unary_linalg_builder!(
     returns = SlogdetResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
     op = "slogdet",
-    bounds = (T: LinalgScalar<Real = T> + Float + CpuLinalgScalar),
+    bounds = (T: RealLinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::slogdet::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -29,7 +29,7 @@ unary_linalg_builder!(
     returns = EigResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Eig,
     op = "eig",
-    bounds = (T: LinalgScalar<Real = T, Complex = Complex<T>> + Float + CpuLinalgScalar),
+    bounds = (T: ComplexLinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::eig::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -46,7 +46,7 @@ pub struct PinvBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> PinvBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: RealLinalgRuntimeValue,
 {
     /// Sets rcond.
     /// # Examples
@@ -96,7 +96,7 @@ unary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::MatrixExp,
     op = "matrix_exp",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: RealLinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::matrix_exp::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -113,7 +113,7 @@ pub struct MatrixPowerBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> MatrixPowerBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets the integer exponent.
     /// # Examples
@@ -171,7 +171,7 @@ pub struct NormBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> NormBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: RealLinalgRuntimeValue,
 {
     /// Sets norm kind.
     /// # Examples
@@ -228,7 +228,7 @@ pub struct CondBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> CondBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar,
+    T: RealLinalgRuntimeValue,
 {
     /// Sets the norm kind used in the condition number.
     /// # Examples

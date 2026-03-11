@@ -488,34 +488,6 @@ fn execute_trace<T: Scalar>(
     Ok(())
 }
 
-fn execute_permute<T: Scalar>(
-    alpha: T,
-    input: &StridedView<T>,
-    beta: T,
-    output: &mut StridedViewMut<T>,
-    perm: &[usize],
-) -> Result<()> {
-    let permuted = input
-        .permute(perm)
-        .map_err(|e| Error::StrideError(e.to_string()))?;
-
-    if alpha == T::one() && beta == T::zero() {
-        strided_perm::copy_into(output, &permuted)
-            .map_err(|e| Error::StrideError(e.to_string()))?;
-    } else {
-        let dims = output.dims().to_vec();
-        for_each_index(&dims, |idx| {
-            let val = alpha * permuted.get(idx);
-            if beta == T::zero() {
-                output.set(idx, val);
-            } else {
-                output.set(idx, val + beta * output.get(idx));
-            }
-        });
-    }
-    Ok(())
-}
-
 fn execute_anti_trace<T: Scalar>(
     alpha: T,
     input: &StridedView<T>,

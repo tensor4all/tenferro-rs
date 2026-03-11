@@ -13,7 +13,7 @@ pub struct EigenAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> EigenAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD eigen decomposition.
     /// # Examples
@@ -171,11 +171,7 @@ pub struct EigAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> EigAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T, Complex = Complex<T>>
-        + Float
-        + CpuLinalgScalar
-        + HasAlgebra<Algebra = Standard<T>>,
-    Complex<T>: Scalar,
+    T: ComplexLinalgRuntimeValue,
 {
     /// Executes AD eig.
     /// # Examples

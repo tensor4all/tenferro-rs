@@ -4,16 +4,14 @@ use std::hash::{Hash, Hasher};
 
 use chainrules_core::Differentiable as _;
 use num_complex::Complex;
-use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
-use tenferro_linalg::backend::CpuLinalgScalar;
 use tenferro_linalg::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LinalgScalar, LstsqResult,
     LuFactorExResult, LuFactorResult, LuPivot, LuResult, NormKind, QrResult, SlogdetResult,
     SolveExResult, SvdOptions, SvdResult,
 };
-use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
+use tenferro_prims::{CpuBackend, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad_value::{AdValue, NodeId};
@@ -34,15 +32,18 @@ pub use ad_results::{
 };
 
 mod ad_builders;
+#[doc(hidden)]
+pub mod contracts;
 mod linalg_builders;
 mod primal_builders;
 mod runtime;
 mod runtime_dispatch;
 mod scalar_ad_builders;
-mod scalar_contracts;
 mod scalar_runtime;
 
 pub use ad_builders::*;
+#[allow(unused_imports)]
+pub(crate) use contracts::*;
 pub use linalg_builders::*;
 pub use primal_builders::*;
 #[allow(unused_imports)]

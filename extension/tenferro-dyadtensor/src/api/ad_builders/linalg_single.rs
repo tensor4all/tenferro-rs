@@ -13,7 +13,7 @@ pub struct CholeskyAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> CholeskyAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD Cholesky.
     /// # Examples
@@ -67,7 +67,7 @@ pub struct SolveAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SolveAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD solve.
     /// # Examples
@@ -123,7 +123,7 @@ pub struct InvAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> InvAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD inverse.
     /// # Examples
@@ -176,7 +176,7 @@ pub struct DetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> DetAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD determinant.
     /// # Examples
@@ -230,7 +230,7 @@ pub struct PinvAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> PinvAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Sets rcond.
     /// # Examples
@@ -299,7 +299,7 @@ pub struct MatrixExpAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> MatrixExpAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD matrix exponential.
     /// # Examples
@@ -355,7 +355,7 @@ pub struct SolveTriangularAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SolveTriangularAdBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: LinalgRuntimeValue,
 {
     /// Sets whether the matrix is upper triangular.
     /// # Examples
@@ -433,7 +433,7 @@ pub struct NormAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> NormAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Sets norm kind.
     /// # Examples

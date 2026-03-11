@@ -8,10 +8,7 @@ use super::*;
 /// ```
 pub struct EinsumBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     subscripts: &'a str,
     operands: &'a [&'a Tensor<T>],
@@ -20,10 +17,7 @@ where
 
 impl<'a, T> EinsumBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     /// Sets optional size dictionary for output-only labels.
     /// # Examples
@@ -43,36 +37,15 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_einsum_runtime::<T, _>(
-            "einsum",
-            |ctx| {
-                tf_einsum::einsum::<Standard<T>, CpuBackend>(
-                    ctx,
-                    self.subscripts,
-                    self.operands,
-                    self.size_dict,
-                )
-                .map_err(Error::from)
-            },
-            |ctx| {
-                tf_einsum::einsum::<Standard<T>, tenferro_prims::CudaBackend>(
-                    ctx,
-                    self.subscripts,
-                    self.operands,
-                    self.size_dict,
-                )
-                .map_err(Error::from)
-            },
-            |ctx| {
-                tf_einsum::einsum::<Standard<T>, tenferro_prims::RocmBackend>(
-                    ctx,
-                    self.subscripts,
-                    self.operands,
-                    self.size_dict,
-                )
-                .map_err(Error::from)
-            },
-        )
+        dispatch_einsum_runtime!(T, "einsum", |ctx, Backend| {
+            tf_einsum::einsum::<Standard<T>, Backend>(
+                ctx,
+                self.subscripts,
+                self.operands,
+                self.size_dict,
+            )
+            .map_err(Error::from)
+        })
     }
 }
 
@@ -93,10 +66,7 @@ where
 /// ```
 pub fn einsum<'a, T>(subscripts: &'a str, operands: &'a [&'a Tensor<T>]) -> EinsumBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     EinsumBuilder {
         subscripts,

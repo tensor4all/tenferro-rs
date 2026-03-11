@@ -41,7 +41,7 @@ Status labels in the matrix use:
 | Family | Primal | VJP | JVP | Oracle-HVP | CPU/GPU generic | Layer-clean | Notes |
 |--------|--------|-----|-----|------------|-----------------|-------------|-------|
 | Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | `permute`, `reshape`, `broadcast`, and `diagonal` exist as tensor views; AD coverage is not yet documented as a first-class family surface |
-| Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Partial | `einsum` is strong, but the public family traits still route through legacy `TensorPrims<A>` adapters and legacy `Permute` remains in the crate |
+| Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Partial | `einsum` is strong and `Permute` is gone from the prim surface, but semiring execution still carries some legacy adapter debt under the new family traits |
 | Scalar (`TensorScalarPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Neg/Conj/Abs/Reciprocal/Real/Imag/Square`, binary `Add/Sub/Mul/Div/Maximum/Minimum/Clamp*`, and reductions `Sum/Prod/Mean/Max/Min`; predicate/select tensor ops such as `where` are still absent |
 | Analytic (`TensorAnalyticPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Sqrt/Rsqrt/Exp/Expm1/Log/Log1p/Sin/Cos/Tan/Tanh/Asin/Acos/Atan/Sinh/Cosh/Asinh/Acosh/Atanh`, binary `Pow/Atan2/Hypot/Xlogy`, and reductions `Var/Std`; GPU custom-kernel coverage is still absent |
 | Linalg kernel (`tenferro-linalg-prims`) | Yes | Partial | Partial | Partial | Partial | Partial | Solve/factorization kernels exist, but CPU eig helpers still leak through `LinalgScalar` and some execution still routes through CPU-local helpers |
@@ -207,8 +207,8 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
   families can land without smuggling boolean semantics into scalar core traits
 - Broaden `TensorAnalyticPrims` surface and expose the remaining user-facing
   analytic wrappers such as `xlogy`
-- Remove legacy `Permute` from the prim execution surface and complete the
-  structural/materialization split
+- Keep the structural/materialization split stable as additional semiring fast
+  paths land
 
 ### Layer gaps
 
@@ -244,5 +244,5 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
 - `#446`: this audit document is the durable repo artifact that records the
   family matrix, layer findings, and backlog
 - `#441`: remains open because the substrate redesign is larger than this audit
-  bundle; in particular, legacy `Permute` removal and broad scalar/analytic
-  execution are follow-up implementation work
+  bundle; the remaining work is broad scalar/analytic expansion, predicate
+  substrate design, and continued generic execution cleanup

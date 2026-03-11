@@ -35,10 +35,7 @@ macro_rules! eager_binary {
 /// ```
 pub fn einsum<'a, T>(subscripts: &'a str, operands: &'a [&'a AdTensor<T>]) -> Result<AdTensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     super::einsum_ad(subscripts, operands).run()
 }
@@ -54,8 +51,7 @@ where
 /// ```
 pub fn sum<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>> + Copy,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    T: ScalarRuntimeValue,
 {
     super::sum_ad(tensor).run()
 }
@@ -72,7 +68,7 @@ eager_unary!(
     /// ```
     fn svd -> AdSvdResult<T> => svd_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -88,7 +84,7 @@ eager_unary!(
     /// ```
     fn qr -> AdQrResult<T> => qr_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -104,7 +100,7 @@ eager_unary!(
     /// ```
     fn lu -> AdLuResult<T> => lu_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -120,7 +116,7 @@ eager_unary!(
     /// ```
     fn eigen -> AdEigenResult<T> => eigen_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -136,7 +132,7 @@ eager_binary!(
     /// ```
     fn lstsq -> AdLstsqResult<T> => lstsq_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -152,7 +148,7 @@ eager_unary!(
     /// ```
     fn cholesky -> AdTensor<T> => cholesky_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -168,7 +164,7 @@ eager_binary!(
     /// ```
     fn solve -> AdTensor<T> => solve_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -184,7 +180,7 @@ eager_unary!(
     /// ```
     fn inv -> AdTensor<T> => inv_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -200,7 +196,7 @@ eager_unary!(
     /// ```
     fn det -> AdTensor<T> => det_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -216,7 +212,7 @@ eager_unary!(
     /// ```
     fn slogdet -> AdSlogdetResult<T> => slogdet_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -232,11 +228,7 @@ eager_unary!(
     /// ```
     fn eig -> AdEigResult<T> => eig_ad;
     where {
-        T: LinalgScalar<Real = T, Complex = Complex<T>>
-            + Float
-            + CpuLinalgScalar
-            + HasAlgebra<Algebra = Standard<T>>,
-        Complex<T>: Scalar,
+        T: ComplexLinalgRuntimeValue,
     }
 );
 
@@ -252,7 +244,7 @@ eager_unary!(
     /// ```
     fn pinv -> AdTensor<T> => pinv_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -268,7 +260,7 @@ eager_unary!(
     /// ```
     fn matrix_exp -> AdTensor<T> => matrix_exp_ad;
     where {
-        T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: RealLinalgRuntimeValue,
     }
 );
 
@@ -284,7 +276,7 @@ eager_binary!(
     /// ```
     fn solve_triangular -> AdTensor<T> => solve_triangular_ad;
     where {
-        T: LinalgScalar + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+        T: LinalgRuntimeValue,
     }
 );
 
@@ -299,7 +291,7 @@ eager_binary!(
 /// ```
 pub fn norm<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     super::norm_ad(tensor).kind(NormKind::Fro).run()
 }

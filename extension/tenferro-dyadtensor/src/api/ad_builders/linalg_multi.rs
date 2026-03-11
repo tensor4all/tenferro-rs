@@ -21,7 +21,7 @@ pub struct SlogdetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SlogdetAdBuilder<'a, T>
 where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
+    T: RealLinalgRuntimeValue,
 {
     /// Executes AD slogdet.
     /// # Examples

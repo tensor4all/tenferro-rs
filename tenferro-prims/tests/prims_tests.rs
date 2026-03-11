@@ -1495,7 +1495,7 @@ fn plan_reduce_wrong_rank() {
 }
 
 #[test]
-fn plan_make_contiguous_wrong_shape_count() {
+fn plan_make_contiguous_zero_shape_count() {
     let mut ctx = CpuContext::new(1);
     let desc = PrimDescriptor::MakeContiguous;
     // 3 shapes instead of 2

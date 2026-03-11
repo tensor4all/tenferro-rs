@@ -184,16 +184,12 @@ pub(crate) fn dense_input_snapshot_in_runtime<T>(
     needs_tangent: bool,
 ) -> Result<(Tensor<T>, Option<Tensor<T>>)>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
-    with_runtime(
-        |ctx| dense_input_snapshot_in_backend::<CpuBackend, _, T>(ctx, input, needs_tangent),
-        |_ctx| {
+    dispatch_einsum_runtime!(T, op_name, |ctx, Backend, runtime| {
+        if std::any::TypeId::of::<Backend>() != std::any::TypeId::of::<CpuBackend>() {
             if !input.is_dense() {
-                return Err(unsupported_runtime_capability(op_name, "cuda"));
+                return Err(unsupported_runtime_capability(op_name, runtime));
             }
             let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
             let tangent = if needs_tangent {
@@ -207,27 +203,10 @@ where
             } else {
                 None
             };
-            Ok((primal, tangent))
-        },
-        |_ctx| {
-            if !input.is_dense() {
-                return Err(unsupported_runtime_capability(op_name, "rocm"));
-            }
-            let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
-            let tangent = if needs_tangent {
-                Some(
-                    input
-                        .tangent()
-                        .cloned()
-                        .unwrap_or_else(|| zero_like(&primal))
-                        .contiguous(MemoryOrder::ColumnMajor),
-                )
-            } else {
-                None
-            };
-            Ok((primal, tangent))
-        },
-    )
+            return Ok((primal, tangent));
+        }
+        dense_input_snapshot_in_backend::<Backend, _, T>(ctx, input, needs_tangent)
+    })
 }
 
 pub(crate) fn compress_pullback_like<T>(
@@ -236,10 +215,7 @@ pub(crate) fn compress_pullback_like<T>(
     layout: &StructuredTensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     let dense = normalize_pullback_shape(grad, layout.logical_dims(), op_name)?;
     if layout.is_dense() {

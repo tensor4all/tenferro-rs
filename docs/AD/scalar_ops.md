@@ -21,6 +21,11 @@ Additional tensor-level scalar/analytic rules are implemented in
 `tenferro-dyadtensor` by composing runtime-generic tensor primitives on top of
 that basis.
 
+The tensor wrappers now share a centralized runtime-dispatch contract layer in
+`tenferro-dyadtensor`, so adding new scalar families does not require
+repeating backend-specific `Cpu/Cuda/Rocm` bounds at each eager or builder
+entrypoint.
+
 Tensor-level wrappers built on top of those formulas:
 
 - pointwise binary:

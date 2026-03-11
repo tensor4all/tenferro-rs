@@ -10,10 +10,7 @@ use super::super::*;
 /// ```
 pub struct EinsumAdBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     subscripts: &'a str,
     operands: &'a [&'a AdTensor<T>],
@@ -96,11 +93,8 @@ fn run_einsum_ad_in_backend<B, C, T>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>> + 'static,
+    T: EinsumRuntimeValue,
     B: TensorPrims<Standard<T>, Context = C>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     if size_dict.is_none() && !subscripts.contains('(') {
         let subs = Subscripts::parse(subscripts).map_err(Error::from)?;
@@ -131,36 +125,15 @@ where
                 output_node,
                 Box::new(move |cotangent| {
                     let cotangent = output_layout.with_payload_like(cotangent.clone())?;
-                    with_einsum_runtime::<T, _>(
-                        "einsum_ad_pullback_structured",
-                        |ctx| {
-                            structured_einsum_pullback_in_backend::<CpuBackend, _, T>(
-                                ctx,
-                                &subscripts,
-                                &reverse_nodes,
-                                &primal_owned,
-                                &cotangent,
-                            )
-                        },
-                        |ctx| {
-                            structured_einsum_pullback_in_backend::<tenferro_prims::CudaBackend, _, T>(
-                                ctx,
-                                &subscripts,
-                                &reverse_nodes,
-                                &primal_owned,
-                                &cotangent,
-                            )
-                        },
-                        |ctx| {
-                            structured_einsum_pullback_in_backend::<tenferro_prims::RocmBackend, _, T>(
-                                ctx,
-                                &subscripts,
-                                &reverse_nodes,
-                                &primal_owned,
-                                &cotangent,
-                            )
-                        },
-                    )
+                    dispatch_einsum_runtime!(T, "einsum_ad_pullback_structured", |ctx, Backend| {
+                        structured_einsum_pullback_in_backend::<Backend, _, T>(
+                            ctx,
+                            &subscripts,
+                            &reverse_nodes,
+                            &primal_owned,
+                            &cotangent,
+                        )
+                    })
                 }),
             )?;
         }
@@ -207,36 +180,15 @@ where
             tape_id,
             output_node,
             Box::new(move |cotangent| {
-                with_einsum_runtime::<T, _>(
-                    "einsum_ad_pullback",
-                    |ctx| {
-                        dense_einsum_pullback_in_backend::<CpuBackend, _, T>(
-                            ctx,
-                            &subscripts,
-                            &reverse_specs,
-                            &primal_owned,
-                            cotangent,
-                        )
-                    },
-                    |ctx| {
-                        dense_einsum_pullback_in_backend::<tenferro_prims::CudaBackend, _, T>(
-                            ctx,
-                            &subscripts,
-                            &reverse_specs,
-                            &primal_owned,
-                            cotangent,
-                        )
-                    },
-                    |ctx| {
-                        dense_einsum_pullback_in_backend::<tenferro_prims::RocmBackend, _, T>(
-                            ctx,
-                            &subscripts,
-                            &reverse_specs,
-                            &primal_owned,
-                            cotangent,
-                        )
-                    },
-                )
+                dispatch_einsum_runtime!(T, "einsum_ad_pullback", |ctx, Backend| {
+                    dense_einsum_pullback_in_backend::<Backend, _, T>(
+                        ctx,
+                        &subscripts,
+                        &reverse_specs,
+                        &primal_owned,
+                        cotangent,
+                    )
+                })
             }),
         )?;
     }
@@ -246,10 +198,7 @@ where
 
 impl<'a, T> EinsumAdBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     /// Sets optional size dictionary for output-only labels.
     /// # Examples
@@ -275,22 +224,9 @@ where
         let subscripts = self.subscripts;
         let operands = self.operands;
         let size_dict = self.size_dict;
-        with_einsum_runtime::<T, _>(
-            "einsum_ad",
-            |ctx| {
-                run_einsum_ad_in_backend::<CpuBackend, _, T>(ctx, subscripts, operands, size_dict)
-            },
-            |ctx| {
-                run_einsum_ad_in_backend::<tenferro_prims::CudaBackend, _, T>(
-                    ctx, subscripts, operands, size_dict,
-                )
-            },
-            |ctx| {
-                run_einsum_ad_in_backend::<tenferro_prims::RocmBackend, _, T>(
-                    ctx, subscripts, operands, size_dict,
-                )
-            },
-        )
+        dispatch_einsum_runtime!(T, "einsum_ad", |ctx, Backend| {
+            run_einsum_ad_in_backend::<Backend, _, T>(ctx, subscripts, operands, size_dict)
+        })
     }
 }
 
@@ -316,10 +252,7 @@ pub fn einsum_ad<'a, T>(
     operands: &'a [&'a AdTensor<T>],
 ) -> EinsumAdBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    T: EinsumRuntimeValue,
 {
     EinsumAdBuilder {
         subscripts,

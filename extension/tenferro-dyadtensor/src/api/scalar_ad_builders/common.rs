@@ -1,6 +1,6 @@
 pub(super) use chainrules_scalarops::ScalarAd;
 pub(super) use num_traits::NumCast;
-pub(super) use tenferro_algebra::{Scalar, Standard};
+pub(super) use tenferro_algebra::Scalar;
 pub(super) use tenferro_prims::{
     AnalyticBinaryOp, AnalyticReductionOp, AnalyticUnaryOp, ScalarBinaryOp, ScalarReductionOp,
     ScalarUnaryOp,
@@ -9,14 +9,11 @@ pub(super) use tenferro_tensor::Tensor;
 
 pub(super) use crate::{reverse_tape, AdTensor, AdValue, Error, Result};
 
+pub(super) use super::super::contracts::{GenericAdRuntimeValue, RealAdRuntimeValue};
 pub(super) use super::super::runtime::{
     broadcast_scalar_like, collect_reverse_input_specs, compress_pullback_like,
     dense_input_snapshot_in_runtime, has_any_tangent, has_forward, scalar_from_rank0_tensor,
     wrap_dense_ad_output,
-};
-pub(super) use super::super::scalar_contracts::{
-    CpuScalarAnalyticBackend, CudaScalarAnalyticBackend, GenericAdScalar, RealAdScalar,
-    RocmScalarAnalyticBackend,
 };
 pub(super) use super::super::scalar_runtime::{
     analytic_binary_primal, analytic_full_reduction_primal, analytic_unary_primal,
@@ -36,10 +33,7 @@ macro_rules! define_unary_ad_builder {
 
         impl<'a, T> $builder<'a, T>
         where
-            T: GenericAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: GenericAdRuntimeValue,
         {
             #[doc = concat!("Executes AD `", $doc_op, "`.")]
             #[doc = ""]
@@ -59,10 +53,7 @@ macro_rules! define_unary_ad_builder {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::", stringify!($ctor), "(&x).run()?;\n```")]
         pub fn $ctor<'a, T>(tensor: &'a AdTensor<T>) -> $builder<'a, T>
         where
-            T: GenericAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: GenericAdRuntimeValue,
         {
             $builder { tensor }
         }
@@ -79,10 +70,7 @@ macro_rules! define_unary_ad_builder {
 
         impl<'a, T> $builder<'a, T>
         where
-            T: RealAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: RealAdRuntimeValue,
         {
             #[doc = concat!("Executes AD `", $doc_op, "`.")]
             #[doc = ""]
@@ -102,10 +90,7 @@ macro_rules! define_unary_ad_builder {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::", stringify!($ctor), "(&x).run()?;\n```")]
         pub fn $ctor<'a, T>(tensor: &'a AdTensor<T>) -> $builder<'a, T>
         where
-            T: RealAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: RealAdRuntimeValue,
         {
             $builder { tensor }
         }
@@ -128,10 +113,7 @@ macro_rules! define_binary_ad_builder {
 
         impl<'a, T> $builder<'a, T>
         where
-            T: GenericAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: GenericAdRuntimeValue,
         {
             #[doc = concat!("Executes AD `", $doc_op, "`.")]
             #[doc = ""]
@@ -151,10 +133,7 @@ macro_rules! define_binary_ad_builder {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::", stringify!($ctor), "(&a, &b).run()?;\n```")]
         pub fn $ctor<'a, T>(lhs: &'a AdTensor<T>, rhs: &'a AdTensor<T>) -> $builder<'a, T>
         where
-            T: GenericAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: GenericAdRuntimeValue,
         {
             $builder { lhs, rhs }
         }
@@ -172,10 +151,7 @@ macro_rules! define_binary_ad_builder {
 
         impl<'a, T> $builder<'a, T>
         where
-            T: RealAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: RealAdRuntimeValue,
         {
             #[doc = concat!("Executes AD `", $doc_op, "`.")]
             #[doc = ""]
@@ -195,10 +171,7 @@ macro_rules! define_binary_ad_builder {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::", stringify!($ctor), "(&a, &b).run()?;\n```")]
         pub fn $ctor<'a, T>(lhs: &'a AdTensor<T>, rhs: &'a AdTensor<T>) -> $builder<'a, T>
         where
-            T: RealAdScalar,
-            tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+            T: RealAdRuntimeValue,
         {
             $builder { lhs, rhs }
         }
@@ -239,10 +212,7 @@ pub(super) fn mul_with_conj_factor<T>(
     factor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: GenericAdScalar,
-    tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-    tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-    tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+    T: GenericAdRuntimeValue,
 {
     let conj_factor = scalar_unary_primal(op_name, ScalarUnaryOp::Conj, factor)?;
     scalar_binary_primal(op_name, ScalarBinaryOp::Mul, value, &conj_factor)
@@ -253,10 +223,7 @@ pub(super) fn centered_input_tensor<T>(
     input: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: GenericAdScalar,
-    tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-    tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-    tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+    T: GenericAdRuntimeValue,
 {
     let mean = scalar_full_reduction_primal(op_name, ScalarReductionOp::Mean, input)?;
     let mean_scalar = scalar_from_rank0_tensor(&mean, op_name)?;
@@ -270,10 +237,7 @@ pub(super) fn variance_reduction_tangent<T>(
     tangent: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: GenericAdScalar,
-    tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-    tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-    tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+    T: GenericAdRuntimeValue,
 {
     let centered = centered_input_tensor(op_name, input)?;
     let centered_dt = scalar_binary_primal(op_name, ScalarBinaryOp::Mul, &centered, tangent)?;
@@ -288,10 +252,7 @@ pub(super) fn variance_reduction_pullback<T>(
     cotangent: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: GenericAdScalar,
-    tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-    tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-    tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+    T: GenericAdRuntimeValue,
 {
     let centered = centered_input_tensor(op_name, input)?;
     let cotangent_scalar = scalar_from_rank0_tensor(cotangent, op_name)?;
@@ -309,10 +270,7 @@ pub(super) fn run_scalar_unary_ad<T, FPrimal, FTangent, FPullback>(
     pullback_fn: FPullback,
 ) -> Result<AdTensor<T>>
 where
-    T: GenericAdScalar,
-    tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-    tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-    tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+    T: GenericAdRuntimeValue,
     FPrimal: Fn(&Tensor<T>) -> Result<Tensor<T>>,
     FTangent: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
     FPullback: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>> + 'static,
@@ -368,10 +326,7 @@ pub(super) fn run_scalar_binary_ad<T, FPrimal, FTangent, FPullback>(
     pullback_fn: FPullback,
 ) -> Result<AdTensor<T>>
 where
-    T: GenericAdScalar,
-    tenferro_prims::CpuBackend: CpuScalarAnalyticBackend<T>,
-    tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
-    tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
+    T: GenericAdRuntimeValue,
     FPrimal: Fn(&Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
     FTangent: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
     FPullback: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<(Tensor<T>, Tensor<T>)>

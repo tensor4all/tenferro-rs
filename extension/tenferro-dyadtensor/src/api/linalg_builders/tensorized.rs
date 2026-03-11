@@ -7,7 +7,7 @@ binary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Cross,
     op = "cross",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::cross::<T, _>(ctx, builder.a, builder.b).map_err(Error::from)
 );
 
@@ -17,7 +17,7 @@ binary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::HouseholderProduct,
     op = "householder_product",
-    bounds = (T: LinalgScalar + CpuLinalgScalar),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::householder_product::<T, _>(ctx, builder.a, builder.b).map_err(Error::from)
 );
 
@@ -35,7 +35,7 @@ pub struct VanderBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> VanderBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets the output column count.
     /// # Examples
@@ -105,7 +105,7 @@ pub struct TensorinvBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> TensorinvBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets the partition point between left and right tensor dimensions.
     /// # Examples
@@ -160,7 +160,7 @@ pub struct TensorsolveBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> TensorsolveBuilder<'a, T>
 where
-    T: LinalgScalar + CpuLinalgScalar,
+    T: LinalgRuntimeValue,
 {
     /// Sets the solution axes to move before solving.
     /// # Examples

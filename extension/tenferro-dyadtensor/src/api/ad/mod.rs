@@ -22,13 +22,9 @@
 use std::collections::HashMap;
 
 use chainrules_scalarops::ScalarAd;
-use num_complex::Complex;
-use num_traits::Float;
-use tenferro_algebra::{HasAlgebra, Scalar, Standard};
-use tenferro_einsum as tf_einsum;
-use tenferro_linalg::backend::CpuLinalgScalar;
-use tenferro_linalg::{LinalgScalar, NormKind, SolveGrad};
-use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
+use tenferro_algebra::{Scalar, Standard};
+pub(crate) use tenferro_einsum as tf_einsum;
+use tenferro_linalg::{NormKind, SolveGrad};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{reverse_tape, AdScalar, AdTensor, AdValue, Error, NodeId, Result, StructuredTensor};
@@ -36,7 +32,11 @@ use crate::{reverse_tape, AdScalar, AdTensor, AdValue, Error, NodeId, Result, St
 use super::{
     cholesky_ad, det_ad, eig_ad, eigen_ad, einsum_ad, inv_ad, lstsq_ad, lu_ad, matrix_exp_ad,
     norm_ad, pinv_ad, qr_ad, slogdet_ad, solve_ad, solve_triangular_ad, sum_ad, svd_ad,
-    with_einsum_runtime, with_linalg_runtime,
+    with_linalg_runtime,
+};
+pub(crate) use super::{
+    dispatch_einsum_runtime, ComplexLinalgRuntimeValue, EinsumRuntimeValue, LinalgRuntimeValue,
+    RealLinalgRuntimeValue, ScalarRuntimeValue,
 };
 use super::{
     AdEigResult, AdEigenResult, AdLstsqResult, AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
