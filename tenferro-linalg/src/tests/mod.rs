@@ -5,6 +5,7 @@ use tenferro_prims::CpuContext;
 
 mod batch_a_contracts;
 mod batch_b_contracts;
+mod organization;
 mod runtime_capability;
 
 fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {

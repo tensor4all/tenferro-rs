@@ -203,7 +203,6 @@ mod prims_bridge;
 
 use chainrules_core::AdResult;
 use num_traits::Zero;
-use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
