@@ -255,6 +255,32 @@ where
     broadcast_scalar_like(T::one() + T::one(), template)
 }
 
+pub(super) fn one_tensor_like<T>(template: &Tensor<T>) -> Result<Tensor<T>>
+where
+    T: Scalar + ScalarAd + Copy,
+{
+    broadcast_scalar_like(T::one(), template)
+}
+
+pub(super) fn mul_with_conj_factor<T>(
+    op_name: &'static str,
+    value: &Tensor<T>,
+    factor: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>> + ScalarAd + Copy + 'static,
+    CpuBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CpuContext>,
+    CpuBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::CpuContext>,
+    CpuBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CpuContext>,
+    CudaBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    CudaBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    RocmBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    RocmBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+{
+    let conj_factor = scalar_unary_primal(op_name, ScalarUnaryOp::Conj, factor)?;
+    scalar_binary_primal(op_name, ScalarBinaryOp::Mul, value, &conj_factor)
+}
+
 pub(super) fn centered_input_tensor<T>(
     op_name: &'static str,
     input: &Tensor<T>,

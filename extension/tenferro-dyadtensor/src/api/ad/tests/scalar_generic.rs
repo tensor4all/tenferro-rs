@@ -3,8 +3,8 @@ use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
-    add_ad, atan2_ad, exp_ad, log_ad, mean_ad, set_default_runtime, std_ad, var_ad, AdTensor,
-    RuntimeContext,
+    add_ad, atan2_ad, cos_ad, exp_ad, log_ad, mean_ad, set_default_runtime, sin_ad, std_ad,
+    tanh_ad, var_ad, AdTensor, RuntimeContext,
 };
 
 fn tensor_from_slice(data: &[f64], dims: &[usize]) -> Tensor<f64> {
@@ -41,6 +41,12 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     assert_eq!(out_unary.dims(), &[2]);
     let out_log = log_ad(&ad_x).run().unwrap();
     assert_eq!(out_log.dims(), &[2]);
+    let out_sin = sin_ad(&ad_x).run().unwrap();
+    let out_cos = cos_ad(&ad_x).run().unwrap();
+    let out_tanh = tanh_ad(&ad_x).run().unwrap();
+    assert_eq!(out_sin.dims(), &[2]);
+    assert_eq!(out_cos.dims(), &[2]);
+    assert_eq!(out_tanh.dims(), &[2]);
 
     let out_binary = add_ad(&ad_x, &ad_y).run().unwrap();
     assert_eq!(out_binary.dims(), &[2]);
@@ -55,10 +61,16 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     assert_eq!(out_std.dims(), &[]);
 
     let eager_unary = crate::ad::exp(&ad_x).unwrap();
+    let eager_sin = crate::ad::sin(&ad_x).unwrap();
+    let eager_cos = crate::ad::cos(&ad_x).unwrap();
+    let eager_tanh = crate::ad::tanh(&ad_x).unwrap();
     let eager_binary = crate::ad::add(&ad_x, &ad_y).unwrap();
     let eager_mean = crate::ad::mean(&eager_binary).unwrap();
 
     assert_eq!(eager_unary.dims(), &[2]);
+    assert_eq!(eager_sin.dims(), &[2]);
+    assert_eq!(eager_cos.dims(), &[2]);
+    assert_eq!(eager_tanh.dims(), &[2]);
     assert_eq!(eager_binary.dims(), &[2]);
     assert_eq!(eager_mean.dims(), &[]);
 }
@@ -124,6 +136,21 @@ fn log_ad_forward_matches_inverse_scaling_rule() {
 }
 
 #[test]
+fn sin_ad_forward_matches_cos_rule() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let x = tensor_from_slice(&[0.0, std::f64::consts::FRAC_PI_3], &[2]);
+    let dx = tensor_from_slice(&[2.0, -3.0], &[2]);
+    let ad_x = AdTensor::new_forward(x, dx).unwrap();
+
+    let out = sin_ad(&ad_x).run().unwrap();
+    let tangent = out.tangent().unwrap().clone();
+    let expected = tensor_from_slice(&[2.0, -1.5], &[2]);
+
+    assert!(max_abs_diff(&tangent, &expected) < 1e-12);
+}
+
+#[test]
 fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
@@ -175,4 +202,42 @@ fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients()
     );
     assert!(max_abs_diff(var_grads[0].as_ref().unwrap().payload(), &expected_var) < 1e-12);
     assert!(max_abs_diff(std_grads[0].as_ref().unwrap().payload(), &expected_std) < 1e-12);
+}
+
+#[test]
+fn cos_and_tanh_reverse_pullback_match_expected_dense_gradients() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let x = AdTensor::new_reverse(
+        tensor_from_slice(&[0.0, std::f64::consts::FRAC_PI_6], &[2]),
+        NodeId(50),
+        TapeId(60),
+        None,
+    )
+    .unwrap();
+
+    let cos_out = cos_ad(&x).run().unwrap();
+    let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
+    let cos_grads = crate::ad::pullback_wrt(&cos_out, &cotangent, &[&x]).unwrap();
+    let expected_cos = tensor_from_slice(&[-0.0, -0.5], &[2]);
+    assert!(max_abs_diff(cos_grads[0].as_ref().unwrap().payload(), &expected_cos) < 1e-12);
+
+    let y = AdTensor::new_reverse(
+        tensor_from_slice(&[-1.0, 0.5], &[2]),
+        NodeId(51),
+        TapeId(61),
+        None,
+    )
+    .unwrap();
+    let tanh_out = tanh_ad(&y).run().unwrap();
+    let scalar_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
+    let tanh_grads = crate::ad::pullback_wrt(&tanh_out, &scalar_cotangent, &[&y]).unwrap();
+    let expected_tanh = tensor_from_slice(
+        &[
+            1.0 - (-1.0f64).tanh().powi(2),
+            1.0 - (0.5f64).tanh().powi(2),
+        ],
+        &[2],
+    );
+    assert!(max_abs_diff(tanh_grads[0].as_ref().unwrap().payload(), &expected_tanh) < 1e-12);
 }
