@@ -97,10 +97,12 @@ where
                                         rev_operands.push(operand);
                                     }
                                 }
-                                let grad =
-                                    with_runtime_cpu_only("einsum_ad_pullback_structured", |ctx| {
+                                let grad = with_runtime_cpu_only(
+                                    "einsum_ad_pullback_structured",
+                                    |ctx| {
                                         einsum_with_subscripts_in_ctx(ctx, &rev_subs, &rev_operands)
-                                    })?;
+                                    },
+                                )?;
                                 input_grads.push((*node, grad.into_payload()));
                             }
 
@@ -1100,12 +1102,13 @@ where
     pub fn run(self) -> Result<AdLstsqResult<T>> {
         let operands = [self.a, self.b];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_runtime_cpu_only("lstsq_ad", |ctx| {
-            Ok((
-                dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
-                dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
-            ))
-        })?;
+        let ((a_primal, a_tangent), (b_primal, b_tangent)) =
+            with_runtime_cpu_only("lstsq_ad", |ctx| {
+                Ok((
+                    dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
+                    dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
+                ))
+            })?;
 
         let (primal, tangent) = if needs_tangent {
             let da = a_tangent.ok_or_else(|| Error::InvalidAdTensor {

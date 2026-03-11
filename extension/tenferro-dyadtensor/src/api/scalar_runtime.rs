@@ -2,9 +2,9 @@ use std::convert::TryFrom;
 
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_prims::{
-    AnalyticPrimsDescriptor, AnalyticUnaryOp, CpuBackend, CudaBackend, RocmBackend, ScalarBinaryOp,
-    ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp, TensorAnalyticPrims, TensorPrims,
-    TensorScalarPrims,
+    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp, CpuBackend,
+    CudaBackend, RocmBackend, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp,
+    ScalarUnaryOp, TensorAnalyticPrims, TensorPrims, TensorScalarPrims,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -187,6 +187,74 @@ where
     Ok(output)
 }
 
+fn run_analytic_binary_backend<B, T>(
+    ctx: &mut <B as TensorAnalyticPrims<Standard<T>>>::Context,
+    runtime: &'static str,
+    op_name: &'static str,
+    op: AnalyticBinaryOp,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    B: TensorAnalyticPrims<Standard<T>>,
+{
+    let desc = AnalyticPrimsDescriptor::PointwiseBinary { op };
+    if !B::has_analytic_support(desc.clone()) {
+        return Err(Error::UnsupportedRuntimeOp {
+            op: op_name,
+            runtime,
+        });
+    }
+    let mut output = Tensor::zeros(
+        lhs.dims(),
+        lhs.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan =
+        B::plan(ctx, &desc, &[lhs.dims(), rhs.dims(), output.dims()]).map_err(Error::from)?;
+    B::execute(ctx, &plan, T::one(), &[lhs, rhs], T::zero(), &mut output).map_err(Error::from)?;
+    Ok(output)
+}
+
+fn run_analytic_full_reduction_backend<B, T>(
+    ctx: &mut <B as TensorAnalyticPrims<Standard<T>>>::Context,
+    runtime: &'static str,
+    op_name: &'static str,
+    op: AnalyticReductionOp,
+    input: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    B: TensorAnalyticPrims<Standard<T>>,
+{
+    let modes_a: Vec<u32> = (0..input.dims().len())
+        .map(|idx| {
+            u32::try_from(idx).map_err(|_| Error::InvalidAdTensor {
+                message: format!(
+                    "{op_name} rank {} exceeds u32 label space",
+                    input.dims().len()
+                ),
+            })
+        })
+        .collect::<Result<_>>()?;
+    let desc = AnalyticPrimsDescriptor::Reduction {
+        modes_a,
+        modes_c: Vec::new(),
+        op,
+    };
+    if !B::has_analytic_support(desc.clone()) {
+        return Err(Error::UnsupportedRuntimeOp {
+            op: op_name,
+            runtime,
+        });
+    }
+    let mut output = Tensor::zeros(&[], input.logical_memory_space(), MemoryOrder::ColumnMajor);
+    let plan = B::plan(ctx, &desc, &[input.dims(), output.dims()]).map_err(Error::from)?;
+    B::execute(ctx, &plan, T::one(), &[input], T::zero(), &mut output).map_err(Error::from)?;
+    Ok(output)
+}
+
 pub(crate) fn scalar_unary_primal<T>(
     op_name: &'static str,
     op: ScalarUnaryOp,
@@ -257,5 +325,46 @@ where
         |ctx| run_analytic_unary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
         |ctx| run_analytic_unary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input),
         |ctx| run_analytic_unary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input),
+    )
+}
+
+pub(crate) fn analytic_binary_primal<T>(
+    op_name: &'static str,
+    op: AnalyticBinaryOp,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CpuContext>,
+    CudaBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    RocmBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+{
+    with_runtime(
+        |ctx| run_analytic_binary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, lhs, rhs),
+        |ctx| run_analytic_binary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, lhs, rhs),
+        |ctx| run_analytic_binary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, lhs, rhs),
+    )
+}
+
+pub(crate) fn analytic_full_reduction_primal<T>(
+    op_name: &'static str,
+    op: AnalyticReductionOp,
+    input: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    CpuBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CpuContext>,
+    CudaBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    RocmBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+{
+    with_runtime(
+        |ctx| run_analytic_full_reduction_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
+        |ctx| {
+            run_analytic_full_reduction_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input)
+        },
+        |ctx| {
+            run_analytic_full_reduction_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input)
+        },
     )
 }

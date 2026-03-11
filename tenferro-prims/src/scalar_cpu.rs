@@ -7,9 +7,12 @@ use tenferro_tensor::Tensor;
 
 use crate::cpu::{tensor_to_view, tensor_to_view_mut};
 use crate::family_cpu_common::{
-    execute_binary_map, execute_extrema_reduction, execute_mean_reduction, execute_prod_reduction,
-    execute_sum_reduction, execute_unary_map, is_supported_ordered_real_type,
+    execute_binary_map, execute_unary_map, is_supported_ordered_real_type,
     is_supported_scalar_type, plan_reduction, validate_pointwise_shapes, CpuScalarValue,
+};
+use crate::family_cpu_reduction::{
+    execute_extrema_reduction, execute_mean_reduction, execute_prod_reduction,
+    execute_sum_reduction,
 };
 use crate::{
     validate_execute_inputs, CpuBackend, CpuContext, ScalarBinaryOp, ScalarPrimsDescriptor,

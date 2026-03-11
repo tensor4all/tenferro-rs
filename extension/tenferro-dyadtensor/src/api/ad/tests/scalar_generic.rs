@@ -2,7 +2,10 @@ use crate::{NodeId, TapeId};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{add_ad, exp_ad, mean_ad, set_default_runtime, AdTensor, RuntimeContext};
+use crate::{
+    add_ad, atan2_ad, exp_ad, log_ad, mean_ad, set_default_runtime, std_ad, var_ad, AdTensor,
+    RuntimeContext,
+};
 
 fn tensor_from_slice(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::<f64>::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
@@ -36,12 +39,20 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
 
     let out_unary = exp_ad(&ad_x).run().unwrap();
     assert_eq!(out_unary.dims(), &[2]);
+    let out_log = log_ad(&ad_x).run().unwrap();
+    assert_eq!(out_log.dims(), &[2]);
 
     let out_binary = add_ad(&ad_x, &ad_y).run().unwrap();
     assert_eq!(out_binary.dims(), &[2]);
+    let out_atan2 = atan2_ad(&ad_y, &ad_x).run().unwrap();
+    assert_eq!(out_atan2.dims(), &[2]);
 
     let out_reduced = mean_ad(&out_binary).run().unwrap();
     assert_eq!(out_reduced.dims(), &[]);
+    let out_var = var_ad(&out_binary).run().unwrap();
+    let out_std = std_ad(&out_binary).run().unwrap();
+    assert_eq!(out_var.dims(), &[]);
+    assert_eq!(out_std.dims(), &[]);
 
     let eager_unary = crate::ad::exp(&ad_x).unwrap();
     let eager_binary = crate::ad::add(&ad_x, &ad_y).unwrap();
@@ -95,4 +106,73 @@ fn mean_add_reverse_pullback_matches_expected_dense_gradients() {
 
     assert!(max_abs_diff(grads[0].as_ref().unwrap().payload(), &expected) < 1e-12);
     assert!(max_abs_diff(grads[1].as_ref().unwrap().payload(), &expected) < 1e-12);
+}
+
+#[test]
+fn log_ad_forward_matches_inverse_scaling_rule() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let x = tensor_from_slice(&[2.0, 4.0], &[2]);
+    let dx = tensor_from_slice(&[3.0, -8.0], &[2]);
+    let ad_x = AdTensor::new_forward(x, dx).unwrap();
+
+    let out = log_ad(&ad_x).run().unwrap();
+    let tangent = out.tangent().unwrap().clone();
+    let expected = tensor_from_slice(&[1.5, -2.0], &[2]);
+
+    assert!(max_abs_diff(&tangent, &expected) < 1e-12);
+}
+
+#[test]
+fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let y = AdTensor::new_reverse(
+        tensor_from_slice(&[3.0, 4.0], &[2]),
+        NodeId(30),
+        TapeId(40),
+        None,
+    )
+    .unwrap();
+    let x = AdTensor::new_reverse(
+        tensor_from_slice(&[4.0, 3.0], &[2]),
+        NodeId(31),
+        TapeId(40),
+        None,
+    )
+    .unwrap();
+
+    let atan2_out = atan2_ad(&y, &x).run().unwrap();
+    let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
+    let atan2_grads = crate::ad::pullback_wrt(&atan2_out, &cotangent, &[&y, &x]).unwrap();
+    let expected_dy = tensor_from_slice(&[0.16, 0.12], &[2]);
+    let expected_dx = tensor_from_slice(&[-0.12, -0.16], &[2]);
+    assert!(max_abs_diff(atan2_grads[0].as_ref().unwrap().payload(), &expected_dy) < 1e-12);
+    assert!(max_abs_diff(atan2_grads[1].as_ref().unwrap().payload(), &expected_dx) < 1e-12);
+
+    let z = AdTensor::new_reverse(
+        tensor_from_slice(&[1.0, 3.0, 5.0, 7.0], &[2, 2]),
+        NodeId(32),
+        TapeId(41),
+        None,
+    )
+    .unwrap();
+    let var_out = var_ad(&z).run().unwrap();
+    let std_out = std_ad(&z).run().unwrap();
+    let scalar_cot = AdTensor::new_primal(tensor_from_slice(&[1.0], &[]));
+    let var_grads = crate::ad::pullback_wrt(&var_out, &scalar_cot, &[&z]).unwrap();
+    let std_grads = crate::ad::pullback_wrt(&std_out, &scalar_cot, &[&z]).unwrap();
+    let expected_var = tensor_from_slice(&[-1.5, -0.5, 0.5, 1.5], &[2, 2]);
+    let inv_two_std = 1.0 / (2.0 * 5.0_f64.sqrt());
+    let expected_std = tensor_from_slice(
+        &[
+            -1.5 * inv_two_std,
+            -0.5 * inv_two_std,
+            0.5 * inv_two_std,
+            1.5 * inv_two_std,
+        ],
+        &[2, 2],
+    );
+    assert!(max_abs_diff(var_grads[0].as_ref().unwrap().payload(), &expected_var) < 1e-12);
+    assert!(max_abs_diff(std_grads[0].as_ref().unwrap().payload(), &expected_std) < 1e-12);
 }

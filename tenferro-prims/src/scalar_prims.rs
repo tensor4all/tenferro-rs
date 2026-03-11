@@ -2,11 +2,6 @@ use tenferro_algebra::{Algebra, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-#[cfg(test)]
-use crate::{
-    CudaBackend, CudaContext, PrimDescriptor, ReduceOp, RocmBackend, RocmContext, UnaryOp,
-};
-#[cfg(not(test))]
 use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
 
 /// Pointwise scalar unary operations.
@@ -104,69 +99,6 @@ pub enum ScalarPrimsDescriptor {
         /// Reduction operator to use.
         op: ScalarReductionOp,
     },
-}
-
-impl ScalarPrimsDescriptor {
-    #[cfg(test)]
-    pub(crate) fn to_legacy(&self) -> Result<PrimDescriptor> {
-        match self {
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Neg,
-            } => Ok(PrimDescriptor::ElementwiseUnary {
-                op: UnaryOp::Negate,
-            }),
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Conj,
-            } => Ok(PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj }),
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Abs,
-            } => Ok(PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs }),
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Reciprocal,
-            } => Ok(PrimDescriptor::ElementwiseUnary {
-                op: UnaryOp::Reciprocal,
-            }),
-            Self::PointwiseUnary { op } => Err(Error::InvalidArgument(format!(
-                "scalar unary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::PointwiseBinary {
-                op: ScalarBinaryOp::Mul,
-            } => Ok(PrimDescriptor::ElementwiseMul),
-            Self::PointwiseBinary { op } => Err(Error::InvalidArgument(format!(
-                "scalar binary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::Reduction {
-                modes_a,
-                modes_c,
-                op: ScalarReductionOp::Sum,
-            } => Ok(PrimDescriptor::Reduce {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                op: ReduceOp::Sum,
-            }),
-            Self::Reduction {
-                modes_a,
-                modes_c,
-                op: ScalarReductionOp::Max,
-            } => Ok(PrimDescriptor::Reduce {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                op: ReduceOp::Max,
-            }),
-            Self::Reduction {
-                modes_a,
-                modes_c,
-                op: ScalarReductionOp::Min,
-            } => Ok(PrimDescriptor::Reduce {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                op: ReduceOp::Min,
-            }),
-            Self::Reduction { op, .. } => Err(Error::InvalidArgument(format!(
-                "scalar reduction {op:?} is not wired to the legacy prim surface yet"
-            ))),
-        }
-    }
 }
 
 /// Scalar pointwise and reduction protocol family.

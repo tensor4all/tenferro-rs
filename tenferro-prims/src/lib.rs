@@ -234,6 +234,7 @@ mod analytic_cpu;
 mod analytic_prims;
 mod cpu;
 mod family_cpu_common;
+mod family_cpu_reduction;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod registry;

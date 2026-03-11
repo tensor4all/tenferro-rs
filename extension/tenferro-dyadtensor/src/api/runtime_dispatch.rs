@@ -5,10 +5,7 @@ use crate::{Error, Result};
 
 use super::with_default_runtime;
 
-pub(crate) fn unsupported_runtime_capability(
-    op: &'static str,
-    runtime: &'static str,
-) -> Error {
+pub(crate) fn unsupported_runtime_capability(op: &'static str, runtime: &'static str) -> Error {
     Error::UnsupportedRuntimeOp { op, runtime }
 }
 

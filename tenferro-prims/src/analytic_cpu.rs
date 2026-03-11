@@ -9,11 +9,13 @@ use tenferro_tensor::Tensor;
 use crate::cpu::{tensor_to_view, tensor_to_view_mut};
 use crate::family_cpu_common::{
     execute_binary_map, execute_unary_map, is_supported_ordered_real_type,
-    is_supported_scalar_type, validate_pointwise_shapes, ComplexCpuScalarValue, CpuScalarValue,
+    is_supported_scalar_type, plan_reduction, validate_pointwise_shapes, ComplexCpuScalarValue,
+    CpuScalarValue, ReductionPlanSpec,
 };
+use crate::family_cpu_reduction::{execute_std_reduction, execute_variance_reduction};
 use crate::{
-    validate_execute_inputs, AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticUnaryOp,
-    CpuBackend, CpuContext, TensorAnalyticPrims,
+    validate_execute_inputs, AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp,
+    AnalyticUnaryOp, CpuBackend, CpuContext, TensorAnalyticPrims,
 };
 
 /// CPU execution plan for the analytic protocol family.
@@ -26,8 +28,16 @@ use crate::{
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CpuAnalyticPlan {
-    PointwiseUnary { op: AnalyticUnaryOp },
-    PointwiseBinary { op: AnalyticBinaryOp },
+    PointwiseUnary {
+        op: AnalyticUnaryOp,
+    },
+    PointwiseBinary {
+        op: AnalyticBinaryOp,
+    },
+    Reduction {
+        reduced_axes: Vec<usize>,
+        op: AnalyticReductionOp,
+    },
 }
 
 fn supports_analytic_unary<S: Scalar + 'static>(op: AnalyticUnaryOp) -> bool {
@@ -44,6 +54,14 @@ fn supports_analytic_unary<S: Scalar + 'static>(op: AnalyticUnaryOp) -> bool {
                 | AnalyticUnaryOp::Cos
                 | AnalyticUnaryOp::Tan
                 | AnalyticUnaryOp::Tanh
+                | AnalyticUnaryOp::Asin
+                | AnalyticUnaryOp::Acos
+                | AnalyticUnaryOp::Atan
+                | AnalyticUnaryOp::Sinh
+                | AnalyticUnaryOp::Cosh
+                | AnalyticUnaryOp::Asinh
+                | AnalyticUnaryOp::Acosh
+                | AnalyticUnaryOp::Atanh
         )
 }
 
@@ -51,6 +69,14 @@ fn supports_analytic_binary<S: Scalar + 'static>(op: AnalyticBinaryOp) -> bool {
     match op {
         AnalyticBinaryOp::Pow | AnalyticBinaryOp::Xlogy => is_supported_scalar_type::<S>(),
         AnalyticBinaryOp::Atan2 | AnalyticBinaryOp::Hypot => is_supported_ordered_real_type::<S>(),
+    }
+}
+
+fn supports_analytic_reduction<S: Scalar + 'static>(op: AnalyticReductionOp) -> bool {
+    match op {
+        AnalyticReductionOp::Var | AnalyticReductionOp::Std => {
+            is_supported_ordered_real_type::<S>()
+        }
     }
 }
 
@@ -78,6 +104,14 @@ fn execute_analytic_unary_typed<S: CpuScalarValue>(
         AnalyticUnaryOp::Cos => execute_unary_map(alpha, input, beta, output, |x| x.cos()),
         AnalyticUnaryOp::Tan => execute_unary_map(alpha, input, beta, output, |x| x.tan()),
         AnalyticUnaryOp::Tanh => execute_unary_map(alpha, input, beta, output, |x| x.tanh()),
+        AnalyticUnaryOp::Asin => execute_unary_map(alpha, input, beta, output, |x| x.asin()),
+        AnalyticUnaryOp::Acos => execute_unary_map(alpha, input, beta, output, |x| x.acos()),
+        AnalyticUnaryOp::Atan => execute_unary_map(alpha, input, beta, output, |x| x.atan()),
+        AnalyticUnaryOp::Sinh => execute_unary_map(alpha, input, beta, output, |x| x.sinh()),
+        AnalyticUnaryOp::Cosh => execute_unary_map(alpha, input, beta, output, |x| x.cosh()),
+        AnalyticUnaryOp::Asinh => execute_unary_map(alpha, input, beta, output, |x| x.asinh()),
+        AnalyticUnaryOp::Acosh => execute_unary_map(alpha, input, beta, output, |x| x.acosh()),
+        AnalyticUnaryOp::Atanh => execute_unary_map(alpha, input, beta, output, |x| x.atanh()),
     }
 }
 
@@ -244,6 +278,60 @@ fn execute_analytic_binary<T: Scalar + 'static>(
     )))
 }
 
+fn execute_analytic_reduction_real<S: Float + CpuScalarValue>(
+    alpha: S,
+    input: &strided_view::StridedView<S>,
+    beta: S,
+    output: &mut strided_view::StridedViewMut<S>,
+    reduced_axes: &[usize],
+    op: AnalyticReductionOp,
+) -> Result<()> {
+    match op {
+        AnalyticReductionOp::Var => {
+            execute_variance_reduction(alpha, input, beta, output, reduced_axes)
+        }
+        AnalyticReductionOp::Std => execute_std_reduction(alpha, input, beta, output, reduced_axes),
+    }
+}
+
+fn execute_analytic_reduction<T: Scalar + 'static>(
+    alpha: T,
+    input: &strided_view::StridedView<T>,
+    beta: T,
+    output: &mut strided_view::StridedViewMut<T>,
+    reduced_axes: &[usize],
+    op: AnalyticReductionOp,
+) -> Result<()> {
+    macro_rules! dispatch_real {
+        ($ty:ty) => {{
+            let input = unsafe {
+                &*(input as *const strided_view::StridedView<T>
+                    as *const strided_view::StridedView<$ty>)
+            };
+            let output = unsafe {
+                &mut *(output as *mut strided_view::StridedViewMut<T>
+                    as *mut strided_view::StridedViewMut<$ty>)
+            };
+            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
+            let beta = unsafe { *(&beta as *const T as *const $ty) };
+            return execute_analytic_reduction_real(alpha, input, beta, output, reduced_axes, op);
+        }};
+    }
+
+    let tid = TypeId::of::<T>();
+    if tid == TypeId::of::<f64>() {
+        dispatch_real!(f64);
+    }
+    if tid == TypeId::of::<f32>() {
+        dispatch_real!(f32);
+    }
+
+    Err(Error::InvalidArgument(format!(
+        "analytic reduction {op:?} is not supported for {}",
+        std::any::type_name::<T>()
+    )))
+}
+
 impl<S: Scalar + 'static> TensorAnalyticPrims<Standard<S>> for CpuBackend {
     type Plan = CpuAnalyticPlan;
     type Context = CpuContext;
@@ -274,9 +362,24 @@ impl<S: Scalar + 'static> TensorAnalyticPrims<Standard<S>> for CpuBackend {
                 }
                 Ok(CpuAnalyticPlan::PointwiseBinary { op: *op })
             }
-            AnalyticPrimsDescriptor::Reduction { op, .. } => Err(Error::InvalidArgument(format!(
-                "analytic reduction {op:?} is not implemented in phase 1"
-            ))),
+            AnalyticPrimsDescriptor::Reduction {
+                modes_a,
+                modes_c,
+                op,
+            } => {
+                let ReductionPlanSpec { reduced_axes, .. } =
+                    plan_reduction(modes_a, modes_c, shapes, "AnalyticReduction")?;
+                if !supports_analytic_reduction::<S>(*op) {
+                    return Err(Error::InvalidArgument(format!(
+                        "analytic reduction {op:?} is not supported on CpuBackend for {}",
+                        std::any::type_name::<S>()
+                    )));
+                }
+                Ok(CpuAnalyticPlan::Reduction {
+                    reduced_axes,
+                    op: *op,
+                })
+            }
         }
     }
 
@@ -304,6 +407,17 @@ impl<S: Scalar + 'static> TensorAnalyticPrims<Standard<S>> for CpuBackend {
                 validate_execute_inputs(inputs, 2, "AnalyticPointwiseBinary")?;
                 execute_analytic_binary(alpha, view_refs[0], view_refs[1], beta, &mut out_view, *op)
             }
+            CpuAnalyticPlan::Reduction { reduced_axes, op } => {
+                validate_execute_inputs(inputs, 1, "AnalyticReduction")?;
+                execute_analytic_reduction(
+                    alpha,
+                    view_refs[0],
+                    beta,
+                    &mut out_view,
+                    reduced_axes,
+                    *op,
+                )
+            }
         }
     }
 
@@ -311,7 +425,7 @@ impl<S: Scalar + 'static> TensorAnalyticPrims<Standard<S>> for CpuBackend {
         match desc {
             AnalyticPrimsDescriptor::PointwiseUnary { op } => supports_analytic_unary::<S>(op),
             AnalyticPrimsDescriptor::PointwiseBinary { op } => supports_analytic_binary::<S>(op),
-            AnalyticPrimsDescriptor::Reduction { .. } => false,
+            AnalyticPrimsDescriptor::Reduction { op, .. } => supports_analytic_reduction::<S>(op),
         }
     }
 }

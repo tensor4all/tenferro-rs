@@ -2,9 +2,6 @@ use tenferro_algebra::{Algebra, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-#[cfg(test)]
-use crate::{CudaBackend, CudaContext, PrimDescriptor, RocmBackend, RocmContext, UnaryOp};
-#[cfg(not(test))]
 use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
 
 /// Analytic unary operations.
@@ -29,6 +26,14 @@ pub enum AnalyticUnaryOp {
     Cos,
     Tan,
     Tanh,
+    Asin,
+    Acos,
+    Atan,
+    Sinh,
+    Cosh,
+    Asinh,
+    Acosh,
+    Atanh,
 }
 
 /// Analytic binary operations.
@@ -98,26 +103,6 @@ pub enum AnalyticPrimsDescriptor {
         /// Reduction operator to use.
         op: AnalyticReductionOp,
     },
-}
-
-impl AnalyticPrimsDescriptor {
-    #[cfg(test)]
-    pub(crate) fn to_legacy(&self) -> Result<PrimDescriptor> {
-        match self {
-            Self::PointwiseUnary {
-                op: AnalyticUnaryOp::Sqrt,
-            } => Ok(PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt }),
-            Self::PointwiseUnary { op } => Err(Error::InvalidArgument(format!(
-                "analytic unary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::PointwiseBinary { op } => Err(Error::InvalidArgument(format!(
-                "analytic binary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::Reduction { op, .. } => Err(Error::InvalidArgument(format!(
-                "analytic reduction {op:?} is not wired to the legacy prim surface yet"
-            ))),
-        }
-    }
 }
 
 /// Analytic pointwise and reduction protocol family.

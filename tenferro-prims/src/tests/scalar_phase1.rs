@@ -102,6 +102,42 @@ fn cpu_scalar_phase1_executes_add_and_mean_reduction() {
 }
 
 #[test]
+fn cpu_scalar_phase1_mean_reduction_handles_non_contiguous_input() {
+    let mut ctx = CpuContext::new(1);
+
+    let mean_desc = ScalarPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1],
+        op: ScalarReductionOp::Mean,
+    };
+    let mean_plan = <CpuBackend as TensorScalarPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &mean_desc,
+        &[&[3, 2], &[2]],
+    )
+    .unwrap();
+
+    let base = tensor_f64(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let input = base.permute(&[1, 0]).unwrap();
+    let mut mean_out = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &mean_plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut mean_out,
+    )
+    .unwrap();
+
+    assert_eq!(mean_out.buffer().as_slice().unwrap(), &[3.0, 4.0]);
+}
+
+#[test]
 fn cuda_scalar_phase1_does_not_advertise_unimplemented_ops() {
     assert!(
         !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
