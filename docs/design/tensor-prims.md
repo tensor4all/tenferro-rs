@@ -113,13 +113,20 @@ The repository is in the middle of the protocol migration.
 
 already exist as public traits in `tenferro-prims`.
 
-Today, their implementations are provided through blanket adapters over the
-legacy `TensorPrims<A>` surface. That compatibility layer exists only as a
-migration mechanism; new high-level code should target the family traits.
+Current state by family:
 
-The same migration note applies to the current scalar and analytic families:
-their public vocabulary is broader than the set of operations actually wired to
-legacy execution today.
+- `TensorSemiringCore` and `TensorSemiringFastPath` still use compatibility
+  bridges over the legacy `TensorPrims<A>` surface.
+- `TensorScalarPrims` now has explicit CPU planning/execution for the phase-1
+  unary, binary, and reduction inventory, with truthful `false` capability
+  reporting for unwired CUDA/ROCm cases.
+- `TensorAnalyticPrims` now has explicit CPU planning/execution for the phase-1
+  unary and binary inventory, while `Var` and `Std` remain reserved vocabulary
+  and are not yet executed in phase 1.
+
+The public scalar and analytic vocabularies remain intentionally broader than
+the currently executed subset so later GPU and reduction work can land without
+descriptor churn.
 
 ## Explicit Debt
 
@@ -127,8 +134,8 @@ Two points are intentionally documented as current debt rather than final
 design:
 
 - legacy `PrimDescriptor::Permute` still exists in `tenferro-prims`
-- the scalar and analytic families still rely on blanket adapters over the old
-  `TensorPrims<A>` contract
+- semiring-core and semiring-fast-path families still rely on legacy
+  `TensorPrims<A>` compatibility paths
 
 The `Permute` cleanup remains follow-up work under `#441`.
 

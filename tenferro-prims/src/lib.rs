@@ -230,11 +230,14 @@ extern crate cblas_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate cblas_src as _;
 
+mod analytic_cpu;
 mod analytic_prims;
 mod cpu;
+mod family_cpu_common;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod registry;
+mod scalar_cpu;
 mod scalar_prims;
 mod semiring_core;
 mod semiring_fast_path;
@@ -248,8 +251,12 @@ mod cuda_ffi;
 
 mod gpu_stubs;
 
+#[doc(hidden)]
+pub use analytic_cpu::CpuAnalyticPlan;
 pub use analytic_prims::*;
 pub use cpu::*;
+#[doc(hidden)]
+pub use scalar_cpu::CpuScalarPlan;
 pub use scalar_prims::*;
 pub use semiring_core::*;
 pub use semiring_fast_path::*;

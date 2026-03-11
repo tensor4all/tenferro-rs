@@ -1,4 +1,4 @@
-# Scalar AD Rules (`conj`, `sqrt`, `powf`, `powi`)
+# Scalar AD Rules (`conj`, `sqrt`, `powf`, `powi`, `exp`, `log`, `atan2`)
 
 This note records the scalar AD formulas we align with before implementing
 `chainrules-scalarops` and exposing `AdScalar` APIs in `tenferro-dyadtensor`.
@@ -11,6 +11,9 @@ Target operations:
 - `sqrt`
 - `powf` (scalar exponent)
 - `powi` (integer exponent; a restricted `pow` case)
+- `exp`
+- `log`
+- `atan2`
 
 Target scalar domains:
 
@@ -32,6 +35,9 @@ Key lines:
 
 - `_conj` backward: `derivatives.yaml:477-479`
 - `sqrt` backward: `derivatives.yaml:1622-1624`
+- `exp` backward: `derivatives.yaml:652-654`
+- `log` backward: `derivatives.yaml:966-968`
+- `atan2` backward: `derivatives.yaml:260-263`
 - `pow.Tensor_Scalar` / `pow.Tensor_Tensor`: `derivatives.yaml:1385-1392`
 - `pow_backward*` implementation: `FunctionsManual.cpp:473-557`
 - `handle_r_to_c`: `FunctionsManual.cpp:169-183`
@@ -76,6 +82,29 @@ This is `powf` with integer exponent semantics.
 - rrule: `dx = g * conj(n * x^(n - 1))`
 - frule: `dy = dx * conj(n * x^(n - 1))`
 
+### `exp`
+
+- Primal: `y = exp(x)`
+- rrule: `dx = g * conj(y)`
+- frule: `dy = dx * conj(y)`
+
+### `log`
+
+- Primal: `y = log(x)`
+- rrule: `dx = g / conj(x)`
+- frule: `dy = dx / conj(x)`
+
+### `atan2` (real-valued inputs)
+
+Let `y = atan2(a, b)` with `a` as numerator-like input and `b` as
+denominator-like input.
+
+- rrule:
+  - `da = g * b / (a^2 + b^2)`
+  - `db = g * (-a) / (a^2 + b^2)`
+- frule:
+  - `dy = da * b / (a^2 + b^2) + db * (-a) / (a^2 + b^2)`
+
 ## Edge Cases
 
 Aligned with PyTorch:
@@ -92,4 +121,5 @@ Implementation placement:
   `extern/chainrules-scalarops`
 - user-facing scalar AD API:
   `extension/tenferro-dyadtensor::AdScalar`
-
+  and tensor-level generic unary/binary/reduction wrappers such as
+  `exp_ad`, `add_ad`, and `mean_ad`

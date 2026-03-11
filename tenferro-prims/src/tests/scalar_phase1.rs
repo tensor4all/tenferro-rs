@@ -13,23 +13,29 @@ fn tensor_f64(data: &[f64], dims: &[usize]) -> Tensor<f64> {
 
 #[test]
 fn cpu_scalar_phase1_supports_add_div_and_mean() {
-    assert!(<CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
-        ScalarPrimsDescriptor::PointwiseBinary {
-            op: ScalarBinaryOp::Add,
-        }
-    ));
-    assert!(<CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
-        ScalarPrimsDescriptor::PointwiseBinary {
-            op: ScalarBinaryOp::Div,
-        }
-    ));
-    assert!(<CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
-        ScalarPrimsDescriptor::Reduction {
-            modes_a: vec![0, 1],
-            modes_c: vec![1],
-            op: ScalarReductionOp::Mean,
-        }
-    ));
+    assert!(
+        <CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Add,
+            }
+        )
+    );
+    assert!(
+        <CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Div,
+            }
+        )
+    );
+    assert!(
+        <CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::Reduction {
+                modes_a: vec![0, 1],
+                modes_c: vec![1],
+                op: ScalarReductionOp::Mean,
+            }
+        )
+    );
 }
 
 #[test]
@@ -61,7 +67,10 @@ fn cpu_scalar_phase1_executes_add_and_mean_reduction() {
         &mut add_out,
     )
     .unwrap();
-    assert_eq!(add_out.buffer().as_slice().unwrap(), &[11.0, 22.0, 33.0, 44.0]);
+    assert_eq!(
+        add_out.buffer().as_slice().unwrap(),
+        &[11.0, 22.0, 33.0, 44.0]
+    );
 
     let mean_desc = ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
@@ -75,8 +84,11 @@ fn cpu_scalar_phase1_executes_add_and_mean_reduction() {
     )
     .unwrap();
     let input = tensor_f64(&[1.0, 3.0, 5.0, 7.0], &[2, 2]);
-    let mut mean_out =
-        Tensor::<f64>::zeros(&[2], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    let mut mean_out = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut ctx,
         &mean_plan,

@@ -114,7 +114,7 @@ impl_faer_gemm!(Complex64);
 impl_faer_gemm!(Complex32);
 
 /// Convert a CPU tensor to an immutable strided view.
-fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
+pub(crate) fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
     let data = t
         .buffer()
         .as_slice()
@@ -124,7 +124,7 @@ fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {
 }
 
 /// Convert a CPU tensor to a mutable strided view.
-fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_, T>> {
+pub(crate) fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_, T>> {
     let dims = t.dims().to_vec();
     let strides = t.strides().to_vec();
     let offset = t.offset();

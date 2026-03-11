@@ -18,15 +18,19 @@ fn cpu_analytic_phase1_supports_exp_log_tanh_and_pow() {
         AnalyticUnaryOp::Log,
         AnalyticUnaryOp::Tanh,
     ] {
-        assert!(<CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
-            AnalyticPrimsDescriptor::PointwiseUnary { op }
-        ));
+        assert!(
+            <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+                AnalyticPrimsDescriptor::PointwiseUnary { op }
+            )
+        );
     }
-    assert!(<CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
-        AnalyticPrimsDescriptor::PointwiseBinary {
-            op: AnalyticBinaryOp::Pow,
-        }
-    ));
+    assert!(
+        <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            AnalyticPrimsDescriptor::PointwiseBinary {
+                op: AnalyticBinaryOp::Pow,
+            }
+        )
+    );
 }
 
 #[test]
@@ -43,8 +47,11 @@ fn cpu_analytic_phase1_executes_exp_and_pow() {
     )
     .unwrap();
     let input = tensor_f64(&[0.0, 1.0], &[2]);
-    let mut exp_out =
-        Tensor::<f64>::zeros(&[2], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    let mut exp_out = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &exp_plan,
@@ -69,8 +76,11 @@ fn cpu_analytic_phase1_executes_exp_and_pow() {
     .unwrap();
     let bases = tensor_f64(&[2.0, 9.0], &[2]);
     let exponents = tensor_f64(&[3.0, 0.5], &[2]);
-    let mut pow_out =
-        Tensor::<f64>::zeros(&[2], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    let mut pow_out = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &pow_plan,
@@ -98,10 +108,8 @@ fn cuda_analytic_phase1_does_not_advertise_unimplemented_ops() {
             op: AnalyticBinaryOp::Pow,
         },
     ] {
-        assert!(
-            !<crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
-                desc
-            )
-        );
+        assert!(!<crate::CudaBackend as TensorAnalyticPrims<
+            Standard<f64>,
+        >>::has_analytic_support(desc));
     }
 }

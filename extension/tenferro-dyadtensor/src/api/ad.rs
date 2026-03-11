@@ -226,6 +226,87 @@ where
     super::sum_ad(tensor).run()
 }
 
+/// Eager AD `exp`.
+///
+/// Equivalent to `crate::exp_ad(...).run()`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = tenferro_dyadtensor::ad::exp(&x)?;
+/// ```
+pub fn exp<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>> + chainrules_scalarops::ScalarAd + Copy + 'static,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
+    CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend:
+        tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::CudaBackend:
+        tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend:
+        tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    tenferro_prims::RocmBackend:
+        tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+{
+    super::exp_ad(tensor).run()
+}
+
+/// Eager AD `add`.
+///
+/// Equivalent to `crate::add_ad(...).run()`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = tenferro_dyadtensor::ad::add(&a, &b)?;
+/// ```
+pub fn add<T>(lhs: &AdTensor<T>, rhs: &AdTensor<T>) -> Result<AdTensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>> + chainrules_scalarops::ScalarAd + Copy + 'static,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
+    CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend:
+        tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::CudaBackend:
+        tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend:
+        tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    tenferro_prims::RocmBackend:
+        tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+{
+    super::add_ad(lhs, rhs).run()
+}
+
+/// Eager AD full `mean` reduction.
+///
+/// Equivalent to `crate::mean_ad(...).run()`.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = tenferro_dyadtensor::ad::mean(&x)?;
+/// ```
+pub fn mean<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>> + chainrules_scalarops::ScalarAd + Copy + 'static,
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
+    CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend:
+        tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::CudaBackend:
+        tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend:
+        tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    tenferro_prims::RocmBackend:
+        tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+{
+    super::mean_ad(tensor).run()
+}
+
 /// Eager AD SVD.
 ///
 /// Equivalent to `crate::svd_ad(...).run()`.

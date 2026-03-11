@@ -37,11 +37,14 @@ mod ad_builders;
 mod linalg_builders;
 mod primal_builders;
 mod runtime;
+mod scalar_ad_builders;
+mod scalar_runtime;
 
 pub use ad_builders::*;
 pub use linalg_builders::*;
 pub use primal_builders::*;
 pub(crate) use runtime::*;
+pub use scalar_ad_builders::*;
 
 #[cfg(test)]
 mod tests;

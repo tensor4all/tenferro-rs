@@ -119,12 +119,16 @@ direction is nevertheless the layered split documented above.
 Current migration debt that should be read as implementation status, not design
 target:
 
-- `TensorScalarPrims` and `TensorAnalyticPrims` still execute through legacy
-  `TensorPrims<A>` blanket adapters
+- `TensorSemiringCore` and `TensorSemiringFastPath` still execute through
+  legacy `TensorPrims<A>` compatibility paths
+- `TensorScalarPrims` and `TensorAnalyticPrims` now have real CPU execution for
+  the phase-1 inventory, but CUDA/ROCm still expose mostly truthful
+  unsupported capabilities rather than broad parity
 - some `tenferro-linalg` composite paths still guard through
   `ensure_cpu_backend(...)`
-- some dyadtensor eager AD paths still route through `with_cpu_runtime(...)`
-  and `CpuContext`
+- some dyadtensor eager AD and structured-layout helpers still route through
+  `with_cpu_runtime(...)` and `CpuContext`, although the new scalar/analytic
+  eager wrappers dispatch through runtime/capability checks
 - legacy `PrimDescriptor::Permute` still exists inside `tenferro-prims` even
   though the intended structural boundary is `permute view -> MakeContiguous`
 

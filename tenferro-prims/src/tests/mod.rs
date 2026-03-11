@@ -84,7 +84,7 @@ fn protocol_smoke_analytic_prims_can_plan_sqrt() {
 }
 
 #[test]
-fn scalar_prims_legacy_mapping_and_support_cover_supported_and_unsupported_ops() {
+fn scalar_prims_legacy_bridge_is_partial_but_family_support_matches_phase1_inventory() {
     assert_eq!(
         ScalarPrimsDescriptor::PointwiseUnary {
             op: ScalarUnaryOp::Neg,
@@ -130,7 +130,7 @@ fn scalar_prims_legacy_mapping_and_support_cover_supported_and_unsupported_ops()
             .to_legacy()
             .is_err());
         assert!(
-            !<CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            <CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
                 ScalarPrimsDescriptor::PointwiseUnary { op }
             )
         );
@@ -169,7 +169,7 @@ fn scalar_prims_legacy_mapping_and_support_cover_supported_and_unsupported_ops()
             .to_legacy()
             .is_err());
         assert!(
-            !<CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            <CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
                 ScalarPrimsDescriptor::PointwiseBinary { op }
             )
         );
@@ -205,12 +205,12 @@ fn scalar_prims_legacy_mapping_and_support_cover_supported_and_unsupported_ops()
             op,
         };
         assert!(desc.to_legacy().is_err());
-        assert!(!<CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(desc));
+        assert!(<CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(desc));
     }
 }
 
 #[test]
-fn analytic_prims_legacy_mapping_and_support_cover_supported_and_unsupported_ops() {
+fn analytic_prims_legacy_bridge_is_partial_but_family_support_matches_phase1_inventory() {
     assert_eq!(
         AnalyticPrimsDescriptor::PointwiseUnary {
             op: AnalyticUnaryOp::Sqrt,
@@ -240,7 +240,7 @@ fn analytic_prims_legacy_mapping_and_support_cover_supported_and_unsupported_ops
     ] {
         let desc = AnalyticPrimsDescriptor::PointwiseUnary { op };
         assert!(desc.to_legacy().is_err());
-        assert!(!<CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(desc));
+        assert!(<CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(desc));
     }
 
     for op in [
@@ -251,7 +251,7 @@ fn analytic_prims_legacy_mapping_and_support_cover_supported_and_unsupported_ops
     ] {
         let desc = AnalyticPrimsDescriptor::PointwiseBinary { op };
         assert!(desc.to_legacy().is_err());
-        assert!(!<CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(desc));
+        assert!(<CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(desc));
     }
 
     for op in [AnalyticReductionOp::Var, AnalyticReductionOp::Std] {
