@@ -41,12 +41,12 @@ Status labels in the matrix use:
 | Family | Primal | VJP | JVP | Oracle-HVP | CPU/GPU generic | Layer-clean | Notes |
 |--------|--------|-----|-----|------------|-----------------|-------------|-------|
 | Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | `permute`, `reshape`, `broadcast`, and `diagonal` exist as tensor views; AD coverage is not yet documented as a first-class family surface |
-| Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Partial | `einsum` is strong, but the public family traits still route through legacy `TensorPrims<A>` adapters and legacy `Permute` remains in the crate |
-| Scalar (`TensorScalarPrims`) | Partial | No | No | No | Partial | Partial | Vocabulary exists, but only `Neg`, `Conj`, `Abs`, `Reciprocal`, `Mul`, `Sum`, `Max`, and `Min` are actually wired to legacy prims |
-| Analytic (`TensorAnalyticPrims`) | Partial | No | No | No | Partial | Partial | Vocabulary exists, but only `Sqrt` is wired today |
+| Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Partial | `einsum` is strong and `Permute` is gone from the prim surface, but semiring execution still carries some legacy adapter debt under the new family traits |
+| Scalar (`TensorScalarPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Neg/Conj/Abs/Reciprocal/Real/Imag/Square`, binary `Add/Sub/Mul/Div/Maximum/Minimum/Clamp*`, and reductions `Sum/Prod/Mean/Max/Min`; predicate/select tensor ops such as `where` are still absent |
+| Analytic (`TensorAnalyticPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Sqrt/Rsqrt/Exp/Expm1/Log/Log1p/Sin/Cos/Tan/Tanh/Asin/Acos/Atan/Sinh/Cosh/Asinh/Acosh/Atanh`, binary `Pow/Atan2/Hypot/Xlogy`, and reductions `Var/Std`; GPU custom-kernel coverage is still absent |
 | Linalg kernel (`tenferro-linalg-prims`) | Yes | Partial | Partial | Partial | Partial | Partial | Solve/factorization kernels exist, but CPU eig helpers still leak through `LinalgScalar` and some execution still routes through CPU-local helpers |
 | Linalg composite (`tenferro-linalg`) | Yes | Partial | Partial | Partial | Partial | Partial | Public coverage is broad, but many composite paths still rely on `ensure_cpu_backend(...)` and CPU-only helper stacks |
-| Dyadtensor / AD surface | Partial | Partial | Partial | Partial | No | No | Eager builders cover `einsum` and many linalg ops, but dense pointwise families are missing and runtime still hard-codes CPU paths |
+| Dyadtensor / AD surface | Partial | Partial | Partial | Partial | Partial | Partial | Eager builders now cover scalar/analytic unary, binary, and reduction families including `add`, `atan2`, `pow`, `hypot`, `exp`, `log`, `sin`, `cos`, `tanh`, `asin`, `acos`, `atan`, hyperbolic families, `sum`, `mean`, `var`, and `std`; predicate/select families are still missing |
 
 ### Matrix Interpretation
 
@@ -90,9 +90,12 @@ Owned by `TensorScalarPrims`:
 - pointwise scalar ops such as `neg`, `conj`, `real`, `imag`, `abs`,
   `reciprocal`, `square`
 - scalar reductions such as `sum`, `prod`, `mean`, `max`, `min`
-- ordered-real helpers such as `maximum`, `minimum`, `clamp*`, `where`
+- ordered-real helpers such as `maximum`, `minimum`, `clamp*`
+- predicate/select helpers such as `where`
 
 This family is the largest missing substrate relative to PyTorch dense CPU.
+The main blocker is no dedicated boolean/predicate tensor substrate yet, which
+prevents a clean `where` family and branch-select AD rules.
 
 ### Analytic family
 
@@ -141,29 +144,31 @@ pointwise family comparable to PyTorch eager tensor math.
 
 ## Layer Findings
 
-### 1. Dense scalar and analytic substrate is still migration-only
+### 1. Dense scalar and analytic substrate is real on CPU, but only phase 1
 
-`TensorScalarPrims` and `TensorAnalyticPrims` exist as public traits, but the
-implementations still lower through blanket adapters over legacy
-`TensorPrims<A>`. That is acceptable as a migration step, but it means the
-family boundary exists before the substrate does.
+`TensorScalarPrims` and `TensorAnalyticPrims` are no longer migration-only for
+the phase-1 inventory. CPU planning and execution now live in dedicated family
+implementations rather than through blanket legacy adapters. The remaining gap
+is breadth, not existence:
 
-### 2. `Permute` remains legacy debt inside `tenferro-prims`
+- predicate/select tensor ops such as `where` are still absent
+- GPU pointwise/reduction custom kernels are still absent
+- semiring families still carry more migration debt than scalar/analytic ones
 
-The current design wants `permute` to live in `tenferro-tensor` as a view and
-`MakeContiguous` to be the execution boundary. The legacy
-`PrimDescriptor::Permute` still exists in `tenferro-prims`, so the crate
-surface is not fully aligned with the intended semiring-core design yet.
+### 2. Structural reorder now lives in `tenferro-tensor`
 
-This debt is tracked as follow-up substrate work under `#441`, not by this
-bundle.
+The current design keeps `permute` in `tenferro-tensor` as a view and uses
+`MakeContiguous` as the execution boundary. `PrimDescriptor::Permute` has now
+been removed from `tenferro-prims`, which aligns the public substrate with the
+intended semiring-core design.
 
-### 3. `tenferro-linalg` is public/composite in design but still carries CPU-only debt
+### 3. `tenferro-linalg` is public/composite in design but still carries migration debt
 
-The crate is now structurally split, but many composite or structured paths
-still guard through `ensure_cpu_backend(...)`. That is an improvement over
-hard-coded `CpuContext` signatures, but it is still an explicit marker that the
-current implementation is not backend-generic enough.
+The crate is now structurally split and production runtime entrypoints no
+longer hard-code `ensure_cpu_backend(...)`, but some execution still flows
+through legacy compatibility layers below the family split. That is a much
+smaller problem than the earlier direct CPU-only guards, but it is still
+migration debt.
 
 ### 4. `tenferro-linalg-prims` still mixes generic scalar semantics with LAPACK-specific helpers
 
@@ -172,12 +177,16 @@ that only make sense for the current CPU LAPACK-style path. That makes the
 trait broader than the true cross-backend contract. This is the concrete layer
 problem addressed by `#445`.
 
-### 5. Dyadtensor runtime is still CPU-first
+### 5. Dyadtensor runtime is still mixed
 
 `extension/tenferro-dyadtensor` exposes a runtime enum, but the eager AD
-surface still leans on `with_cpu_runtime(...)`, `CpuContext`, and
-`CpuBackend`-specific bounds. That means the public AD story is not yet
-CPU/GPU generic even where the math itself is backend-parametric.
+surface is now runtime-dispatch-based across the high-level primal and AD
+entrypoints. The remaining debt is no longer the old `with_cpu_runtime(...)`
+shortcut in production code; it is the continued presence of
+`CpuContext`/`CpuBackend`-specific type bounds and the fact that unsupported
+backends still rely on narrow CPU implementations underneath. That means the
+public AD story is materially closer to CPU/GPU generic, but is not there
+workspace-wide yet.
 
 ### 6. Oracle-HVP coverage is meaningful but still selective
 
@@ -193,15 +202,22 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
 
 ### Substrate gaps
 
-- Expand `TensorScalarPrims` beyond the currently wired unary/binary/reduction
-  subset
-- Expand `TensorAnalyticPrims` beyond `Sqrt`
-- Remove legacy `Permute` from the prim execution surface and complete the
-  structural/materialization split
+- Expand `TensorScalarPrims` beyond the phase-1 unary/binary/reduction subset
+- Add a dedicated predicate/select substrate so `where` and branch-select AD
+  families can land without smuggling boolean semantics into scalar core traits
+- Broaden `TensorAnalyticPrims` surface and expose the remaining user-facing
+  analytic wrappers such as `xlogy`
+- Keep the structural/materialization split stable as additional semiring fast
+  paths land
 
 ### Layer gaps
 
-- Finish removing CPU-only runtime assumptions from dyadtensor eager AD
+- Phase 2 explicitly targets removal of high-level `with_cpu_runtime(...)`
+  shortcuts from `extension/tenferro-dyadtensor`
+- Finish removing CPU-only runtime assumptions from the older dyadtensor eager
+  AD paths
+- Replace removable `ensure_cpu_backend(...)` sites in `tenferro-linalg` with
+  capability-driven checks rather than backend-name guards
 - Continue reducing `ensure_cpu_backend(...)` reliance in composite linalg paths
 - Split LAPACK eig helpers out of `LinalgScalar`
 
@@ -228,5 +244,5 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
 - `#446`: this audit document is the durable repo artifact that records the
   family matrix, layer findings, and backlog
 - `#441`: remains open because the substrate redesign is larger than this audit
-  bundle; in particular, legacy `Permute` removal and broad scalar/analytic
-  execution are follow-up implementation work
+  bundle; the remaining work is broad scalar/analytic expansion, predicate
+  substrate design, and continued generic execution cleanup

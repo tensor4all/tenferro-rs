@@ -43,7 +43,6 @@ They have different output structure, state, and dispatch needs.
 The following remain on the primitive side:
 
 - `BatchedGemm`
-- `Permute`
 - `Reduce`
 - `MakeContiguous`
 - elementwise ops

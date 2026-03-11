@@ -1,6 +1,10 @@
+mod organization;
+
 use super::*;
 use num_complex::Complex64;
-use tenferro_tensor::MemoryOrder;
+use tenferro_tensor::{MemoryOrder, Tensor};
+
+use crate::{Error, StructuredTensor};
 
 fn dense_matrix(values: &[f64; 4]) -> Tensor<f64> {
     Tensor::<f64>::from_slice(values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()

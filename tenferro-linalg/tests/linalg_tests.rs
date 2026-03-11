@@ -6432,17 +6432,17 @@ fn lstsq_rrule_rejects_cotangent_shape_mismatch() {
 }
 
 #[test]
-fn lstsq_rrule_cuda_context_returns_cpu_only_error() {
+fn lstsq_rrule_cuda_context_reports_missing_linalg_capability() {
     let mut ctx = tenferro_prims::CudaContext::new();
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     let dx = make_tensor(vec![1.0, 1.0], &[2]);
     let msg = match lstsq_rrule(&mut ctx, &a, &b, &dx) {
-        Ok(_) => panic!("expected CpuContext-only error"),
+        Ok(_) => panic!("expected capability error"),
         Err(err) => format!("{err}"),
     };
     assert!(
-        msg.contains("CpuContext"),
+        msg.contains("not supported on the current linalg backend"),
         "unexpected error message: {msg}"
     );
 }

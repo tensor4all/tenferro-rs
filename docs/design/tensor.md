@@ -45,7 +45,7 @@ Key design points:
 - `DataBuffer<T>` uses `Arc<BufferInner<T>>` for shared ownership (PyTorch pattern)
 - `clone()` is shallow (Arc refcount++, O(1))
 - `conj()` is lazy (Arc clone + conjugated flag flip, O(1))
-- Deep copy uses prims operations (`Permute(identity)` or `MakeContiguous`)
+- Deep copy uses explicit materialization (`MakeContiguous`)
 - Fields: `dims` (`Vec<usize>`), `strides` (`Vec<isize>`), `offset` (`isize`) — no `SmallVec`
 - `MemoryOrder` is only used at allocation time, **not stored** on the tensor
 - No direct dependency on strided-rs — prims backends build `StridedView` from
@@ -144,7 +144,7 @@ Arc-based shared ownership achieves both:
 | `clone()` | O(1) | Arc refcount++ |
 | `conj()` | O(1) | Arc clone + flag flip |
 | `permute()` | O(1) | Arc clone + metadata change |
-| Deep copy | O(n) | Prims `Permute(identity)` or `MakeContiguous` |
+| Deep copy | O(n) | `MakeContiguous` / explicit materialize |
 | `as_mut_slice()` | — | `Arc::get_mut()` — `Some` only if refcount == 1 |
 
 ### DataBuffer API

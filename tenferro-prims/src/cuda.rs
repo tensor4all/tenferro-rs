@@ -589,13 +589,12 @@ pub struct CudaContext {
 /// use tenferro_prims::{CudaBackend, PrimDescriptor, TensorPrims};
 ///
 /// let (_, mut ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
-/// let desc = PrimDescriptor::Permute {
-///     modes_a: vec![0, 1],
-///     modes_b: vec![1, 0],
-/// };
-/// let plan =
-///     <CudaBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[2, 3], &[3, 2]])
-///         .unwrap();
+/// let plan = <CudaBackend as TensorPrims<Standard<f64>>>::plan(
+///     &mut ctx,
+///     &PrimDescriptor::MakeContiguous,
+///     &[&[3, 2], &[3, 2]],
+/// )
+/// .unwrap();
 /// ```
 pub struct CudaPlan<T: Scalar> {
     /// Compiled cuTENSOR plan (RAII — Drop calls cutensorDestroyPlan).
@@ -832,31 +831,6 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 ))
             }
 
-            PrimDescriptor::Permute { modes_a, modes_b } => {
-                validate_shape_count(shapes, 2, "Permute")?;
-                let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
-                let modes_b_i32: Vec<i32> = modes_b.iter().map(|&m| m as i32).collect();
-                let strides_a = default_col_major_strides(shapes[0]);
-                let strides_b = default_col_major_strides(shapes[1]);
-                let (plan, ws) = plan_permutation(
-                    ctx,
-                    data_type,
-                    compute,
-                    &modes_a_i32,
-                    shapes[0],
-                    &strides_a,
-                    &modes_b_i32,
-                    shapes[1],
-                    &strides_b,
-                )?;
-                Ok(CudaPlan {
-                    plan,
-                    desc: desc.clone(),
-                    workspace_size: ws,
-                    _marker: PhantomData,
-                })
-            }
-
             PrimDescriptor::MakeContiguous => {
                 // Identity permutation: modes_a == modes_b = [0, 1, ..., ndim-1]
                 validate_shape_count(shapes, 2, "MakeContiguous")?;
@@ -1012,8 +986,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 check_status(status, "cutensorContract")
             }
 
-            PrimDescriptor::Permute { .. } | PrimDescriptor::MakeContiguous => {
-                validate_execute_inputs(inputs, 1, "Permute")?;
+            PrimDescriptor::MakeContiguous => {
+                validate_execute_inputs(inputs, 1, "MakeContiguous")?;
                 let a_ptr = inputs[0]
                     .buffer()
                     .as_device_ptr()

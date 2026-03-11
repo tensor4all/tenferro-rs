@@ -1,4 +1,3 @@
-use super::runtime::*;
 use super::*;
 
 /// Builder for primal einsum.
@@ -9,8 +8,7 @@ use super::*;
 /// ```
 pub struct EinsumBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    T: EinsumRuntimeValue,
 {
     subscripts: &'a str,
     operands: &'a [&'a Tensor<T>],
@@ -19,8 +17,7 @@ where
 
 impl<'a, T> EinsumBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    T: EinsumRuntimeValue,
 {
     /// Sets optional size dictionary for output-only labels.
     /// # Examples
@@ -40,8 +37,8 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("einsum", |ctx| {
-            tf_einsum::einsum::<Standard<T>, CpuBackend>(
+        dispatch_einsum_runtime!(T, "einsum", |ctx, Backend| {
+            tf_einsum::einsum::<Standard<T>, Backend>(
                 ctx,
                 self.subscripts,
                 self.operands,
@@ -69,8 +66,7 @@ where
 /// ```
 pub fn einsum<'a, T>(subscripts: &'a str, operands: &'a [&'a Tensor<T>]) -> EinsumBuilder<'a, T>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    T: EinsumRuntimeValue,
 {
     EinsumBuilder {
         subscripts,

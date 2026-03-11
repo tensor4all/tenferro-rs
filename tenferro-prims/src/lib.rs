@@ -14,7 +14,6 @@
 //! - [`BatchedGemm`](PrimDescriptor::BatchedGemm): Batched matrix multiplication
 //! - [`Reduce`](PrimDescriptor::Reduce): Sum/max/min reduction over modes
 //! - [`Trace`](PrimDescriptor::Trace): Trace (contraction of paired diagonal modes)
-//! - [`Permute`](PrimDescriptor::Permute): Mode reordering
 //! - [`AntiTrace`](PrimDescriptor::AntiTrace): Scatter-add to diagonal (AD backward of trace)
 //! - [`AntiDiag`](PrimDescriptor::AntiDiag): Write to diagonal positions (AD backward of diag)
 //! - [`ElementwiseUnary`](PrimDescriptor::ElementwiseUnary): Point-wise unary transform (negate, reciprocal, abs, sqrt)
@@ -230,11 +229,15 @@ extern crate cblas_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate cblas_src as _;
 
+mod analytic_cpu;
 mod analytic_prims;
 mod cpu;
+mod family_cpu_common;
+mod family_cpu_reduction;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod registry;
+mod scalar_cpu;
 mod scalar_prims;
 mod semiring_core;
 mod semiring_fast_path;
@@ -248,8 +251,12 @@ mod cuda_ffi;
 
 mod gpu_stubs;
 
+#[doc(hidden)]
+pub use analytic_cpu::CpuAnalyticPlan;
 pub use analytic_prims::*;
 pub use cpu::*;
+#[doc(hidden)]
+pub use scalar_cpu::CpuScalarPlan;
 pub use scalar_prims::*;
 pub use semiring_core::*;
 pub use semiring_fast_path::*;
@@ -435,17 +442,6 @@ pub enum PrimDescriptor {
         /// Pairs of modes to trace over.
         paired: Vec<(u32, u32)>,
     },
-
-    /// Permute (reorder) tensor modes.
-    ///
-    /// `B[modes_b] = alpha * A[modes_a]`
-    Permute {
-        /// Mode labels for input tensor A.
-        modes_a: Vec<u32>,
-        /// Mode labels for output tensor B (same labels, different order).
-        modes_b: Vec<u32>,
-    },
-
     /// Anti-trace: scatter-add gradient to diagonal (AD backward of trace).
     AntiTrace {
         /// Mode labels for input tensor A.
@@ -525,8 +521,8 @@ pub enum PrimDescriptor {
 /// Backend trait for tensor primitive operations, parameterized by algebra `Alg`.
 ///
 /// Provides a cuTENSOR-compatible plan-based execution model for all
-/// operations. Core ops (batched_gemm, reduce, trace, permute,
-/// anti_trace, anti_diag, elementwise_unary) must be implemented.
+/// operations. Core ops (batched_gemm, reduce, trace, anti_trace, anti_diag,
+/// elementwise_unary, make_contiguous) must be implemented.
 /// Extended ops (contract, elementwise_mul) are dynamically queried via
 /// [`has_extension_for`](TensorPrims::has_extension_for).
 ///

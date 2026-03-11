@@ -7,9 +7,12 @@
 //!
 //! - `add`, `sub`, `mul`, `div`
 //! - `conj`
-//! - `sqrt`
+//! - `sqrt`, `rsqrt`
+//! - `exp`, `expm1`, `log`, `log1p`
+//! - `sin`, `cos`, `tanh`
 //! - `powf` (fixed real exponent)
 //! - `powi` (fixed integer exponent)
+//! - `atan2` (real scalars)
 //!
 //! # Examples
 //!
@@ -53,6 +56,27 @@ pub trait ScalarAd:
     /// Square root.
     fn sqrt(self) -> Self;
 
+    /// Exponential.
+    fn exp(self) -> Self;
+
+    /// `exp(self) - 1`.
+    fn expm1(self) -> Self;
+
+    /// Natural logarithm.
+    fn ln(self) -> Self;
+
+    /// `ln(1 + self)`.
+    fn log1p(self) -> Self;
+
+    /// Sine.
+    fn sin(self) -> Self;
+
+    /// Cosine.
+    fn cos(self) -> Self;
+
+    /// Hyperbolic tangent.
+    fn tanh(self) -> Self;
+
     /// Power by real exponent.
     fn powf(self, exponent: Self::Real) -> Self;
 
@@ -75,6 +99,34 @@ impl ScalarAd for f32 {
 
     fn sqrt(self) -> Self {
         f32::sqrt(self)
+    }
+
+    fn exp(self) -> Self {
+        f32::exp(self)
+    }
+
+    fn expm1(self) -> Self {
+        f32::exp_m1(self)
+    }
+
+    fn ln(self) -> Self {
+        f32::ln(self)
+    }
+
+    fn log1p(self) -> Self {
+        f32::ln_1p(self)
+    }
+
+    fn sin(self) -> Self {
+        f32::sin(self)
+    }
+
+    fn cos(self) -> Self {
+        f32::cos(self)
+    }
+
+    fn tanh(self) -> Self {
+        f32::tanh(self)
     }
 
     fn powf(self, exponent: Self::Real) -> Self {
@@ -105,6 +157,34 @@ impl ScalarAd for f64 {
         f64::sqrt(self)
     }
 
+    fn exp(self) -> Self {
+        f64::exp(self)
+    }
+
+    fn expm1(self) -> Self {
+        f64::exp_m1(self)
+    }
+
+    fn ln(self) -> Self {
+        f64::ln(self)
+    }
+
+    fn log1p(self) -> Self {
+        f64::ln_1p(self)
+    }
+
+    fn sin(self) -> Self {
+        f64::sin(self)
+    }
+
+    fn cos(self) -> Self {
+        f64::cos(self)
+    }
+
+    fn tanh(self) -> Self {
+        f64::tanh(self)
+    }
+
     fn powf(self, exponent: Self::Real) -> Self {
         f64::powf(self, exponent)
     }
@@ -133,6 +213,34 @@ impl ScalarAd for Complex32 {
         Complex32::sqrt(self)
     }
 
+    fn exp(self) -> Self {
+        Complex32::exp(self)
+    }
+
+    fn expm1(self) -> Self {
+        Complex32::exp(self) - Complex32::new(1.0, 0.0)
+    }
+
+    fn ln(self) -> Self {
+        Complex32::ln(self)
+    }
+
+    fn log1p(self) -> Self {
+        Complex32::ln(self + Complex32::new(1.0, 0.0))
+    }
+
+    fn sin(self) -> Self {
+        Complex32::sin(self)
+    }
+
+    fn cos(self) -> Self {
+        Complex32::cos(self)
+    }
+
+    fn tanh(self) -> Self {
+        Complex32::tanh(self)
+    }
+
     fn powf(self, exponent: Self::Real) -> Self {
         Complex32::powf(self, exponent)
     }
@@ -159,6 +267,34 @@ impl ScalarAd for Complex64 {
 
     fn sqrt(self) -> Self {
         Complex64::sqrt(self)
+    }
+
+    fn exp(self) -> Self {
+        Complex64::exp(self)
+    }
+
+    fn expm1(self) -> Self {
+        Complex64::exp(self) - Complex64::new(1.0, 0.0)
+    }
+
+    fn ln(self) -> Self {
+        Complex64::ln(self)
+    }
+
+    fn log1p(self) -> Self {
+        Complex64::ln(self + Complex64::new(1.0, 0.0))
+    }
+
+    fn sin(self) -> Self {
+        Complex64::sin(self)
+    }
+
+    fn cos(self) -> Self {
+        Complex64::cos(self)
+    }
+
+    fn tanh(self) -> Self {
+        Complex64::tanh(self)
     }
 
     fn powf(self, exponent: Self::Real) -> Self {
@@ -476,6 +612,99 @@ pub fn sqrt<S: ScalarAd>(x: S) -> S {
     x.sqrt()
 }
 
+/// Primal `exp`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::exp;
+///
+/// assert!((exp(1.0_f64) - std::f64::consts::E).abs() < 1e-12);
+/// ```
+pub fn exp<S: ScalarAd>(x: S) -> S {
+    x.exp()
+}
+
+/// Forward rule for `exp`.
+///
+/// Returns `(primal, tangent)`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::exp_frule;
+///
+/// let (y, dy) = exp_frule(1.0_f64, 0.25_f64);
+/// assert!((y - std::f64::consts::E).abs() < 1e-12);
+/// assert!((dy - 0.25_f64 * std::f64::consts::E).abs() < 1e-12);
+/// ```
+pub fn exp_frule<S: ScalarAd>(x: S, dx: S) -> (S, S) {
+    let y = x.exp();
+    (y, dx * y.conj())
+}
+
+/// Reverse rule for `exp`.
+///
+/// `result` is the primal output `exp(x)`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::exp_rrule;
+///
+/// let dx = exp_rrule(std::f64::consts::E, 0.5_f64);
+/// assert!((dx - 0.5_f64 * std::f64::consts::E).abs() < 1e-12);
+/// ```
+pub fn exp_rrule<S: ScalarAd>(result: S, cotangent: S) -> S {
+    cotangent * result.conj()
+}
+
+/// Primal `log`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::log;
+///
+/// assert!((log(std::f64::consts::E) - 1.0_f64).abs() < 1e-12);
+/// ```
+pub fn log<S: ScalarAd>(x: S) -> S {
+    x.ln()
+}
+
+/// Forward rule for `log`.
+///
+/// Returns `(primal, tangent)`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::log_frule;
+///
+/// let (y, dy) = log_frule(2.0_f64, 3.0_f64);
+/// assert!((y - 2.0_f64.ln()).abs() < 1e-12);
+/// assert!((dy - 1.5_f64).abs() < 1e-12);
+/// ```
+pub fn log_frule<S: ScalarAd>(x: S, dx: S) -> (S, S) {
+    let y = x.ln();
+    let dy = dx * (S::from_i32(1) / x).conj();
+    (y, dy)
+}
+
+/// Reverse rule for `log`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::log_rrule;
+///
+/// let dx = log_rrule(2.0_f64, 3.0_f64);
+/// assert!((dx - 1.5_f64).abs() < 1e-12);
+/// ```
+pub fn log_rrule<S: ScalarAd>(x: S, cotangent: S) -> S {
+    cotangent * (S::from_i32(1) / x).conj()
+}
+
 /// Forward rule for `sqrt`.
 ///
 /// Returns `(primal, tangent)`.
@@ -509,6 +738,65 @@ pub fn sqrt_frule<S: ScalarAd>(x: S, dx: S) -> (S, S) {
 /// ```
 pub fn sqrt_rrule<S: ScalarAd>(result: S, cotangent: S) -> S {
     cotangent / (S::from_i32(2) * result.conj())
+}
+
+/// Primal `atan2(y, x)` for ordered real scalars.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::atan2;
+///
+/// assert!((atan2(3.0_f64, 4.0_f64) - 3.0_f64.atan2(4.0_f64)).abs() < 1e-12);
+/// ```
+pub fn atan2<S>(y: S, x: S) -> S
+where
+    S: ScalarAd<Real = S> + Float,
+{
+    Float::atan2(y, x)
+}
+
+/// Forward rule for `atan2(y, x)`.
+///
+/// Returns `(primal, tangent)`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::atan2_frule;
+///
+/// let (_y, dy) = atan2_frule(3.0_f64, 4.0_f64, 0.5_f64, 0.25_f64);
+/// assert!((dy - 0.05_f64).abs() < 1e-12);
+/// ```
+pub fn atan2_frule<S>(y: S, x: S, dy: S, dx: S) -> (S, S)
+where
+    S: ScalarAd<Real = S> + Float,
+{
+    let primal = Float::atan2(y, x);
+    let denom = x * x + y * y;
+    let tangent = dy * (x / denom) + dx * ((-y) / denom);
+    (primal, tangent)
+}
+
+/// Reverse rule for `atan2(y, x)`.
+///
+/// Returns cotangents with respect to `(y, x)`.
+///
+/// # Examples
+///
+/// ```rust
+/// use chainrules_scalarops::atan2_rrule;
+///
+/// let (dy, dx) = atan2_rrule(3.0_f64, 4.0_f64, 2.0_f64);
+/// assert!((dy - 0.32_f64).abs() < 1e-12);
+/// assert!((dx + 0.24_f64).abs() < 1e-12);
+/// ```
+pub fn atan2_rrule<S>(y: S, x: S, cotangent: S) -> (S, S)
+where
+    S: ScalarAd<Real = S> + Float,
+{
+    let denom = x * x + y * y;
+    (cotangent * (x / denom), cotangent * ((-y) / denom))
 }
 
 /// Primal `powf`.
@@ -616,3 +904,6 @@ pub fn powi_rrule<S: ScalarAd>(x: S, exponent: i32, cotangent: S) -> S {
     }
     cotangent * (S::from_i32(exponent) * x.powi(exponent - 1)).conj()
 }
+
+#[cfg(test)]
+mod tests;

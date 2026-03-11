@@ -201,11 +201,8 @@ pub mod backend;
 pub mod inject;
 mod prims_bridge;
 
-use std::any::TypeId;
-
 use chainrules_core::AdResult;
 use num_traits::Zero;
-use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -218,12 +215,12 @@ mod rrules;
 pub(crate) use ad_helpers::*;
 
 pub use frules::*;
-pub(crate) use primal::ensure_cpu_backend;
+pub(crate) use primal::require_linalg_support;
 pub use primal::*;
 pub use result_types::*;
 pub use rrules::*;
 #[doc(inline)]
-pub use tenferro_linalg_prims::LinalgScalar;
+pub use tenferro_linalg_prims::{LinalgCapabilityOp, LinalgScalar};
 
 #[cfg(test)]
 mod tests;

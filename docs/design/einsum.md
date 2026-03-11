@@ -314,15 +314,15 @@ B::execute(&mut ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
 2. diag(b, paired_axes)        // zero-copy stride trick on Tensor<T>
 3. trace/reduce(a, trace_axes) // TensorPrims::trace or TensorPrims::reduce
 4. trace/reduce(b, trace_axes)
-5. permute_view(a, canonical)  // zero-copy metadata on Tensor<T>
-6. permute_view(b, canonical)
+5. permute(a, canonical)  // zero-copy metadata on Tensor<T>
+6. permute(b, canonical)
 7. make_contiguous(a)          // TensorPrims::make_contiguous (conditional copy)
 8. make_contiguous(b)          // TensorPrims::make_contiguous (conditional copy)
 9. batched_gemm(a, b, c)       // plan + execute BatchedGemm
 ```
 
 See [contraction-pipeline.md](./contraction-pipeline.md) for details on
-the `permute_view + MakeContiguous + BatchedGemm` pipeline.
+the `permute + MakeContiguous + BatchedGemm` pipeline.
 
 > **Status: Not yet implemented.** Path B (core-op decomposition) is not
 > implemented. If the backend does not support the `Contract` extension,
@@ -333,8 +333,8 @@ the `permute_view + MakeContiguous + BatchedGemm` pipeline.
 1. a' = a.diagonal([(0,1)])    → a'[i,j]    (zero-copy)
 2. b' = b.diagonal([(1,2)])    → b'[j,k]    (zero-copy)
 3. (no trace/reduce needed)
-4. a'' = a'.permute_view([i,j])  → canonical  (zero-copy)
-5. b'' = b'.permute_view([j,k])  → canonical  (zero-copy)
+4. a'' = a'.permute([i,j])  → canonical  (zero-copy)
+5. b'' = b'.permute([j,k])  → canonical  (zero-copy)
 6. make_contiguous(a'')          → conditional copy
 7. make_contiguous(b'')          → conditional copy
 8. batched_gemm(a'', b'', c)   → c[i,k]     (computation)
@@ -369,7 +369,8 @@ follow a fixed classification and rewrite pipeline.
    - `diag` (Tensor view op) for `extract_labels`
    - `trace` (`PrimDescriptor::Trace`) for `trace_labels`
    - `reduce` (`PrimDescriptor::Reduce`) for non-output residual labels
-   - `permute` (`PrimDescriptor::Permute`) to canonical output order
+   - `permute` (Tensor view op) to canonical output order
+   - `MakeContiguous` only when a downstream kernel needs packed storage
    - `repeat` (Tensor broadcast) for non-duplicate generative labels
    - `anti_diag` / `anti_trace` for output duplication and scalar-to-diagonal
      materialization
@@ -395,7 +396,7 @@ transformations (`diag`, `repeat`) at the Tensor layer.
 subscripts + operand + optional size_dict
     -> classify labels (extract / trace / generative / duplicate)
     -> normalize with Tensor view ops (diag, repeat where applicable)
-    -> execute prim plans (Trace, Reduce, Permute, AntiDiag, AntiTrace)
+    -> execute prim plans (Trace, Reduce, MakeContiguous where needed, AntiDiag, AntiTrace)
     -> final tensor with requested output label multiplicities
 ```
 

@@ -1,11 +1,18 @@
 use std::collections::HashMap;
 
 use super::*;
+use crate::RuntimeContext;
 use tenferro_algebra::Standard;
 use tenferro_linalg::SvdOptions;
 use tenferro_prims::CpuBackend;
-use tenferro_prims::{CudaContext, RocmContext};
+use tenferro_prims::{CpuContext, CudaContext, RocmContext};
 use tenferro_tensor::MemoryOrder;
+
+mod organization;
+mod runtime_dispatch;
+mod support;
+
+pub(crate) use support::with_cpu_runtime;
 
 fn as_slice<T: Scalar>(t: &Tensor<T>) -> &[T] {
     t.buffer()
@@ -204,38 +211,50 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
     let diag_grad =
         Tensor::<f64>::from_slice(&[9.0, 0.0, 0.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
+    let structured_a = StructuredTensor::from_dense(a.clone());
+    let structured_b = StructuredTensor::from_dense(b.clone());
+    let structured_da = StructuredTensor::from_dense(da.clone());
+    let expected = with_cpu_runtime("runtime_helper", |ctx| {
+        tenferro_einsum::einsum::<Standard<f64>, CpuBackend>(ctx, "ij,jk->ik", &[&da, &b], None)
+            .map_err(Error::from)
+    })
+    .unwrap();
+
+    let summed = super::scalar_runtime::scalar_full_reduction_primal(
+        "runtime_helper",
+        tenferro_prims::ScalarReductionOp::Sum,
+        &a,
+    )
+    .unwrap();
+    assert_eq!(summed.dims(), &[]);
+    assert_eq!(
+        scalar_from_rank0_tensor(&summed, "runtime_helper").unwrap(),
+        10.0
+    );
+    assert!(matches!(
+        scalar_from_rank0_tensor(&a, "runtime_helper"),
+        Err(Error::InvalidAdTensor { message }) if message.contains("expects rank-0 cotangent")
+    ));
+
+    let broadcast = broadcast_scalar_like(2.5, &a).unwrap();
+    assert_eq!(broadcast.dims(), a.dims());
+    assert_eq!(as_slice(&broadcast), &[2.5, 2.5, 2.5, 2.5]);
 
     with_cpu_runtime("runtime_helper", |ctx| {
-        let summed = payload_sum_in_ctx(ctx, &a)?;
-        assert_eq!(summed.dims(), &[]);
-        assert_eq!(scalar_from_rank0_tensor(&summed, "runtime_helper")?, 10.0);
-        assert!(matches!(
-            scalar_from_rank0_tensor(&a, "runtime_helper"),
-            Err(Error::InvalidAdTensor { message }) if message.contains("expects rank-0 cotangent")
-        ));
-
-        let broadcast = broadcast_scalar_like(2.5, &a)?;
-        assert_eq!(broadcast.dims(), a.dims());
-        assert_eq!(as_slice(&broadcast), &[2.5, 2.5, 2.5, 2.5]);
-
         let primals = [&a, &b];
         let tangents = [Some(&da), None];
-        let tangent =
-            sum_einsum_tangent_terms(ctx, "ij,jk->ik", &primals, &tangents, None)?.unwrap();
-        let expected = tenferro_einsum::einsum::<Standard<f64>, CpuBackend>(
+        let tangent = sum_einsum_tangent_terms::<CpuBackend, _, f64>(
             ctx,
             "ij,jk->ik",
-            &[&da, &b],
+            &primals,
+            &tangents,
             None,
-        )
-        .map_err(Error::from)?;
+        )?
+        .unwrap();
         assert_eq!(as_slice(&tangent), as_slice(&expected));
 
         let subs = tenferro_einsum::Subscripts::parse("ij,jk->ik").map_err(Error::from)?;
-        let structured_a = StructuredTensor::from_dense(a.clone());
-        let structured_b = StructuredTensor::from_dense(b.clone());
-        let structured_da = StructuredTensor::from_dense(da.clone());
-        let structured_tangent = sum_structured_einsum_tangent_terms(
+        let structured_tangent = sum_structured_einsum_tangent_terms::<CpuBackend, _, f64>(
             ctx,
             &subs,
             &[&structured_a, &structured_b],
@@ -244,14 +263,13 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
         .unwrap();
         assert_eq!(as_slice(structured_tangent.payload()), as_slice(&expected));
 
-        let compressed_dense =
-            compress_pullback_like("runtime_helper", expected.clone(), &structured_a)?;
-        assert_eq!(as_slice(&compressed_dense), as_slice(&expected));
-
         Ok(())
     })
     .unwrap();
 
+    let compressed_dense =
+        compress_pullback_like("runtime_helper", expected.clone(), &structured_a).unwrap();
+    assert_eq!(as_slice(&compressed_dense), as_slice(&expected));
     let compressed_diag =
         compress_pullback_like("runtime_helper", diag_grad, &diag_layout).unwrap();
     assert_eq!(as_slice(&compressed_diag), &[9.0, 8.0]);
@@ -306,7 +324,7 @@ fn einsum_ad_size_dict_forces_dense_path_and_registers_pullback() {
     let got_a = grads[0].as_ref().unwrap().payload();
     let got_b = grads[1].as_ref().unwrap().payload();
 
-    let expected = crate::api::with_cpu_runtime("einsum_dense_path_expected", |ctx| {
+    let expected = with_cpu_runtime("einsum_dense_path_expected", |ctx| {
         tenferro_einsum::einsum_rrule::<Standard<f64>, CpuBackend>(
             ctx,
             "ij,jk->ik",

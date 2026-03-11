@@ -1,5 +1,7 @@
 use super::*;
 use tenferro_device::LogicalMemorySpace;
+use tenferro_prims::CpuBackend;
+use tenferro_prims::CpuContext;
 use tenferro_tensor::MemoryOrder;
 
 fn get(t: &Tensor<f64>, idx: &[usize]) -> f64 {
@@ -35,8 +37,8 @@ fn variable_einsum_backward_and_hvp_flow() {
         .unwrap();
     let b = leaf_in(b, Arc::clone(&ad_ctx), true).unwrap();
 
-    let y = einsum(runtime_ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
-    let loss = einsum(runtime_ctx.clone(), "ij,ij->", &[&y, &y]).unwrap();
+    let y = einsum::<f64, CpuBackend>(runtime_ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss = einsum::<f64, CpuBackend>(runtime_ctx.clone(), "ij,ij->", &[&y, &y]).unwrap();
 
     backward(
         &loss,
@@ -74,8 +76,8 @@ fn grad_tangent_is_side_effect_free_and_zeros_non_grad_leaf() {
     assert!(!b.requires_grad());
     assert!(b.node_id().is_none());
 
-    let y = einsum(runtime_ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
-    let loss = einsum(runtime_ctx.clone(), "ij,ij->", &[&y, &y]).unwrap();
+    let y = einsum::<f64, CpuBackend>(runtime_ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss = einsum::<f64, CpuBackend>(runtime_ctx.clone(), "ij,ij->", &[&y, &y]).unwrap();
 
     let grads = grad_tangent(&loss, &[&a, &b], BackwardOptions::default()).unwrap();
 

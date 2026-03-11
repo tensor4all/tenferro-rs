@@ -33,6 +33,10 @@ fn unsupported<T>() -> Result<T> {
 impl<T: LinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
     type Context = tenferro_prims::CudaContext;
 
+    fn has_linalg_support(_op: super::tensor_api::LinalgCapabilityOp) -> bool {
+        false
+    }
+
     fn solve(_ctx: &mut Self::Context, _a: &Tensor<T>, _b: &Tensor<T>) -> Result<Tensor<T>> {
         unsupported()
     }

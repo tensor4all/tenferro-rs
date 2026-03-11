@@ -23,6 +23,7 @@ website:
         contents:
           - design/index.md
           - design/architecture.md
+          - design/supported-ops.md
           - design/device.md
           - design/tensor.md
           - design/algebra.md
@@ -40,6 +41,7 @@ website:
       - section: "AD Formula Notes"
         contents:
           - AD/index.md
+          - AD/scalar_ops.md
           - AD/svd.md
           - AD/qr.md
           - AD/lu.md

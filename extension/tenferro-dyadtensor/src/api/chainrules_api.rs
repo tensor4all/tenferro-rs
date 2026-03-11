@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use chainrules::{autograd, AdResult, AutogradContext, BackwardOptions, Variable};
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
-use tenferro_einsum::variable_einsum;
-use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro_einsum::{variable_einsum, BackendContext, EinsumBackend};
 use tenferro_tensor::Tensor;
 
 /// Creates a shared monomorphic AD context for tensor variables.
@@ -55,15 +54,16 @@ where
 /// ```ignore
 /// let out = tenferro_dyadtensor::chainrules_api::einsum(ctx, "ij,jk->ik", &[&a, &b]).unwrap();
 /// ```
-pub fn einsum<T>(
-    runtime_ctx: Rc<RefCell<CpuContext>>,
+pub fn einsum<T, Backend>(
+    runtime_ctx: Rc<RefCell<BackendContext<Standard<T>, Backend>>>,
     subscripts: &str,
     operands: &[&Variable<Tensor<T>>],
 ) -> AdResult<Variable<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>> + 'static,
+    Backend: EinsumBackend<Standard<T>> + 'static,
 {
-    variable_einsum::<Standard<T>, CpuBackend>(runtime_ctx, subscripts, operands)
+    variable_einsum::<Standard<T>, Backend>(runtime_ctx, subscripts, operands)
 }
 
 /// Convenience wrapper for `loss.backward(...)`.

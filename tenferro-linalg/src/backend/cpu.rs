@@ -268,6 +268,10 @@ where
 {
     type Context = tenferro_prims::CpuContext;
 
+    fn has_linalg_support(_op: super::tensor_api::LinalgCapabilityOp) -> bool {
+        true
+    }
+
     fn solve(
         ctx: &mut Self::Context,
         a: &tenferro_tensor::Tensor<T>,

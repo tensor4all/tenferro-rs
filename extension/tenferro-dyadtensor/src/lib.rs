@@ -30,11 +30,13 @@ pub use ad_value::{AdMode, AdScalar, AdTensor, AdValue, NodeId, TapeId};
 pub use api::ad;
 pub use api::chainrules_api;
 pub use api::{
-    cholesky, cholesky_ad, det, det_ad, eig, eig_ad, eigen, eigen_ad, einsum, einsum_ad, inv,
-    inv_ad, lstsq, lstsq_ad, lu, lu_ad, matrix_exp, matrix_exp_ad, norm, norm_ad, pinv, pinv_ad,
-    qr, qr_ad, slogdet, slogdet_ad, solve, solve_ad, solve_triangular, solve_triangular_ad, sum_ad,
-    svd, svd_ad, AdEigResult, AdEigenResult, AdLstsqResult, AdLuResult, AdQrResult,
-    AdSlogdetResult, AdSvdResult,
+    acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cholesky,
+    cholesky_ad, cos_ad, cosh_ad, det, det_ad, eig, eig_ad, eigen, eigen_ad, einsum, einsum_ad,
+    exp_ad, expm1_ad, hypot_ad, inv, inv_ad, log1p_ad, log_ad, lstsq, lstsq_ad, lu, lu_ad,
+    matrix_exp, matrix_exp_ad, mean_ad, norm, norm_ad, pinv, pinv_ad, pow_ad, qr, qr_ad, sin_ad,
+    sinh_ad, slogdet, slogdet_ad, solve, solve_ad, solve_triangular, solve_triangular_ad, sqrt_ad,
+    std_ad, sum_ad, svd, svd_ad, tanh_ad, var_ad, AdEigResult, AdEigenResult, AdLstsqResult,
+    AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
 };
 pub use context::{
     set_global_context, try_with_global_context, with_global_context, GlobalContextGuard,

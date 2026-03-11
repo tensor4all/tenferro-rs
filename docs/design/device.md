@@ -70,7 +70,7 @@ specific class of work on a given memory space.
 | `BatchedGemm` | Batched matrix-matrix multiply |
 | `Reduce` | Reduction (sum, max, min) over one or more modes |
 | `Trace` | Diagonal contraction of paired modes |
-| `Permute` | Mode permutation (transpose) |
+| `MakeContiguous` | Materialize a view into a contiguous dense tensor |
 | `ElementwiseMul` | Element-wise multiplication |
 
 ---

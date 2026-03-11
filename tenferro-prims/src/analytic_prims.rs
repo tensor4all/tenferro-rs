@@ -1,8 +1,8 @@
-use tenferro_algebra::Algebra;
+use tenferro_algebra::{Algebra, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::{PrimDescriptor, TensorPrims, UnaryOp};
+use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
 
 /// Analytic unary operations.
 ///
@@ -26,6 +26,14 @@ pub enum AnalyticUnaryOp {
     Cos,
     Tan,
     Tanh,
+    Asin,
+    Acos,
+    Atan,
+    Sinh,
+    Cosh,
+    Asinh,
+    Acosh,
+    Atanh,
 }
 
 /// Analytic binary operations.
@@ -97,25 +105,6 @@ pub enum AnalyticPrimsDescriptor {
     },
 }
 
-impl AnalyticPrimsDescriptor {
-    pub(crate) fn to_legacy(&self) -> Result<PrimDescriptor> {
-        match self {
-            Self::PointwiseUnary {
-                op: AnalyticUnaryOp::Sqrt,
-            } => Ok(PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt }),
-            Self::PointwiseUnary { op } => Err(Error::InvalidArgument(format!(
-                "analytic unary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::PointwiseBinary { op } => Err(Error::InvalidArgument(format!(
-                "analytic binary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::Reduction { op, .. } => Err(Error::InvalidArgument(format!(
-                "analytic reduction {op:?} is not wired to the legacy prim surface yet"
-            ))),
-        }
-    }
-}
-
 /// Analytic pointwise and reduction protocol family.
 ///
 /// # Examples
@@ -169,40 +158,66 @@ pub trait TensorAnalyticPrims<Alg: Algebra> {
     fn has_analytic_support(desc: AnalyticPrimsDescriptor) -> bool;
 }
 
-impl<Alg, B> TensorAnalyticPrims<Alg> for B
-where
-    Alg: Algebra,
-    B: TensorPrims<Alg>,
-{
-    type Plan = <B as TensorPrims<Alg>>::Plan;
-    type Context = <B as TensorPrims<Alg>>::Context;
+impl<S: Scalar> TensorAnalyticPrims<Standard<S>> for CudaBackend {
+    type Plan = ();
+    type Context = CudaContext;
 
     fn plan(
-        ctx: &mut Self::Context,
+        _ctx: &mut Self::Context,
         desc: &AnalyticPrimsDescriptor,
-        shapes: &[&[usize]],
+        _shapes: &[&[usize]],
     ) -> Result<Self::Plan> {
-        let legacy = desc.to_legacy()?;
-        <B as TensorPrims<Alg>>::plan(ctx, &legacy, shapes)
+        Err(Error::InvalidArgument(format!(
+            "analytic family descriptor {desc:?} is not implemented on CudaBackend in phase 1"
+        )))
     }
 
     fn execute(
-        ctx: &mut Self::Context,
-        plan: &Self::Plan,
-        alpha: Alg::Scalar,
-        inputs: &[&Tensor<Alg::Scalar>],
-        beta: Alg::Scalar,
-        output: &mut Tensor<Alg::Scalar>,
+        _ctx: &mut Self::Context,
+        _plan: &Self::Plan,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
     ) -> Result<()> {
-        <B as TensorPrims<Alg>>::execute(ctx, plan, alpha, inputs, beta, output)
+        Err(Error::InvalidArgument(
+            "analytic family execution is not implemented on CudaBackend in phase 1".into(),
+        ))
     }
 
-    fn has_analytic_support(desc: AnalyticPrimsDescriptor) -> bool {
-        matches!(
-            desc,
-            AnalyticPrimsDescriptor::PointwiseUnary {
-                op: AnalyticUnaryOp::Sqrt,
-            }
-        )
+    fn has_analytic_support(_desc: AnalyticPrimsDescriptor) -> bool {
+        false
+    }
+}
+
+impl<S: Scalar> TensorAnalyticPrims<Standard<S>> for RocmBackend {
+    type Plan = ();
+    type Context = RocmContext;
+
+    fn plan(
+        _ctx: &mut Self::Context,
+        desc: &AnalyticPrimsDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<Self::Plan> {
+        Err(Error::InvalidArgument(format!(
+            "analytic family descriptor {desc:?} is not implemented on RocmBackend in phase 1"
+        )))
+    }
+
+    fn execute(
+        _ctx: &mut Self::Context,
+        _plan: &Self::Plan,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
+    ) -> Result<()> {
+        Err(Error::InvalidArgument(
+            "analytic family execution is not implemented on RocmBackend in phase 1".into(),
+        ))
+    }
+
+    fn has_analytic_support(_desc: AnalyticPrimsDescriptor) -> bool {
+        false
     }
 }

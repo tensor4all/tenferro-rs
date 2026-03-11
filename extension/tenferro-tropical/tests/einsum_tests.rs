@@ -1,7 +1,8 @@
 //! Integration tests for einsum with tropical algebras.
 //!
-//! These tests verify that the fallback contraction path (Permute + BatchedGemm)
-//! works correctly when the Contract extension is unavailable.
+//! These tests verify that the fallback contraction path
+//! (permute view + MakeContiguous + BatchedGemm) works correctly when the
+//! Contract extension is unavailable.
 
 use tenferro_einsum::einsum;
 use tenferro_prims::CpuBackend;

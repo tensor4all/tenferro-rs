@@ -119,14 +119,17 @@ direction is nevertheless the layered split documented above.
 Current migration debt that should be read as implementation status, not design
 target:
 
-- `TensorScalarPrims` and `TensorAnalyticPrims` still execute through legacy
-  `TensorPrims<A>` blanket adapters
-- some `tenferro-linalg` composite paths still guard through
-  `ensure_cpu_backend(...)`
-- some dyadtensor eager AD paths still route through `with_cpu_runtime(...)`
-  and `CpuContext`
-- legacy `PrimDescriptor::Permute` still exists inside `tenferro-prims` even
-  though the intended structural boundary is `permute view -> MakeContiguous`
+- `TensorSemiringCore` and `TensorSemiringFastPath` still execute through
+  legacy `TensorPrims<A>` compatibility paths
+- `TensorScalarPrims` and `TensorAnalyticPrims` now have real CPU execution for
+  the phase-1 inventory, but CUDA/ROCm still expose mostly truthful
+  unsupported capabilities rather than broad parity
+- `tenferro-linalg` and dyadtensor runtime entrypoints now route through
+  capability-driven backend contracts instead of direct `ensure_cpu_backend(...)`
+  or `with_cpu_runtime(...)` production paths
+- semiring-core and semiring-fast-path execution still run through legacy
+  `TensorPrims<A>` compatibility layers, so the substrate split is structurally
+  ahead of the final execution split
 
 ## Dependency Direction
 
@@ -166,8 +169,8 @@ The redesign is constrained by three performance principles.
 
 The dense parity audit separates follow-up work into two main buckets.
 
-- substrate gaps: scalar/analytic execution vocabulary and legacy `Permute`
-  cleanup
+- substrate gaps: scalar/analytic execution vocabulary breadth and semiring
+  compatibility cleanup
 - layer gaps: CPU-only runtime assumptions in dyadtensor and composite linalg
 
 Those categories intentionally stay separate so the workspace does not confuse

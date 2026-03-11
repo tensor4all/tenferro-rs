@@ -46,7 +46,7 @@ fn cuda_device_zero_is_available() -> bool {
 }
 
 #[test]
-fn cuda_permute_smoke_runs_on_device_tensors_when_runtime_is_available() {
+fn cuda_make_contiguous_smoke_runs_on_device_tensors_when_runtime_is_available() {
     let Some(path) = available_cutensor_library_path() else {
         return;
     };
@@ -56,19 +56,19 @@ fn cuda_permute_smoke_runs_on_device_tensors_when_runtime_is_available() {
     }
 
     let (_backend, mut ctx) = CudaBackend::load(path).unwrap();
-    let input = Tensor::<f32>::from_slice(
+    let base = Tensor::<f32>::from_slice(
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         &[2, 3],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan =
-        <CudaBackend as TensorPrims<Standard<f32>>>::plan(&mut ctx, &desc, &[&[2, 3], &[3, 2]])
-            .unwrap();
+    let input = base.permute(&[1, 0]).unwrap();
+    let plan = <CudaBackend as TensorPrims<Standard<f32>>>::plan(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
     let input_gpu = input
         .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
         .unwrap();

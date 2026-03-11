@@ -1,8 +1,8 @@
-use tenferro_algebra::Algebra;
+use tenferro_algebra::{Algebra, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::{Extension, PrimDescriptor, ReduceOp, TensorPrims, UnaryOp};
+use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
 
 /// Pointwise scalar unary operations.
 ///
@@ -101,68 +101,6 @@ pub enum ScalarPrimsDescriptor {
     },
 }
 
-impl ScalarPrimsDescriptor {
-    pub(crate) fn to_legacy(&self) -> Result<PrimDescriptor> {
-        match self {
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Neg,
-            } => Ok(PrimDescriptor::ElementwiseUnary {
-                op: UnaryOp::Negate,
-            }),
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Conj,
-            } => Ok(PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj }),
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Abs,
-            } => Ok(PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs }),
-            Self::PointwiseUnary {
-                op: ScalarUnaryOp::Reciprocal,
-            } => Ok(PrimDescriptor::ElementwiseUnary {
-                op: UnaryOp::Reciprocal,
-            }),
-            Self::PointwiseUnary { op } => Err(Error::InvalidArgument(format!(
-                "scalar unary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::PointwiseBinary {
-                op: ScalarBinaryOp::Mul,
-            } => Ok(PrimDescriptor::ElementwiseMul),
-            Self::PointwiseBinary { op } => Err(Error::InvalidArgument(format!(
-                "scalar binary operation {op:?} is not wired to the legacy prim surface yet"
-            ))),
-            Self::Reduction {
-                modes_a,
-                modes_c,
-                op: ScalarReductionOp::Sum,
-            } => Ok(PrimDescriptor::Reduce {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                op: ReduceOp::Sum,
-            }),
-            Self::Reduction {
-                modes_a,
-                modes_c,
-                op: ScalarReductionOp::Max,
-            } => Ok(PrimDescriptor::Reduce {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                op: ReduceOp::Max,
-            }),
-            Self::Reduction {
-                modes_a,
-                modes_c,
-                op: ScalarReductionOp::Min,
-            } => Ok(PrimDescriptor::Reduce {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                op: ReduceOp::Min,
-            }),
-            Self::Reduction { op, .. } => Err(Error::InvalidArgument(format!(
-                "scalar reduction {op:?} is not wired to the legacy prim surface yet"
-            ))),
-        }
-    }
-}
-
 /// Scalar pointwise and reduction protocol family.
 ///
 /// # Examples
@@ -216,51 +154,66 @@ pub trait TensorScalarPrims<Alg: Algebra> {
     fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool;
 }
 
-impl<Alg, B> TensorScalarPrims<Alg> for B
-where
-    Alg: Algebra,
-    B: TensorPrims<Alg>,
-{
-    type Plan = <B as TensorPrims<Alg>>::Plan;
-    type Context = <B as TensorPrims<Alg>>::Context;
+impl<S: Scalar> TensorScalarPrims<Standard<S>> for CudaBackend {
+    type Plan = ();
+    type Context = CudaContext;
 
     fn plan(
-        ctx: &mut Self::Context,
+        _ctx: &mut Self::Context,
         desc: &ScalarPrimsDescriptor,
-        shapes: &[&[usize]],
+        _shapes: &[&[usize]],
     ) -> Result<Self::Plan> {
-        let legacy = desc.to_legacy()?;
-        <B as TensorPrims<Alg>>::plan(ctx, &legacy, shapes)
+        Err(Error::InvalidArgument(format!(
+            "scalar family descriptor {desc:?} is not implemented on CudaBackend in phase 1"
+        )))
     }
 
     fn execute(
-        ctx: &mut Self::Context,
-        plan: &Self::Plan,
-        alpha: Alg::Scalar,
-        inputs: &[&Tensor<Alg::Scalar>],
-        beta: Alg::Scalar,
-        output: &mut Tensor<Alg::Scalar>,
+        _ctx: &mut Self::Context,
+        _plan: &Self::Plan,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
     ) -> Result<()> {
-        <B as TensorPrims<Alg>>::execute(ctx, plan, alpha, inputs, beta, output)
+        Err(Error::InvalidArgument(
+            "scalar family execution is not implemented on CudaBackend in phase 1".into(),
+        ))
     }
 
-    fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool {
-        match desc {
-            ScalarPrimsDescriptor::PointwiseUnary {
-                op:
-                    ScalarUnaryOp::Neg
-                    | ScalarUnaryOp::Conj
-                    | ScalarUnaryOp::Abs
-                    | ScalarUnaryOp::Reciprocal,
-            } => true,
-            ScalarPrimsDescriptor::PointwiseBinary {
-                op: ScalarBinaryOp::Mul,
-            } => <B as TensorPrims<Alg>>::has_extension_for(Extension::ElementwiseMul),
-            ScalarPrimsDescriptor::Reduction {
-                op: ScalarReductionOp::Sum | ScalarReductionOp::Max | ScalarReductionOp::Min,
-                ..
-            } => true,
-            _ => false,
-        }
+    fn has_scalar_support(_desc: ScalarPrimsDescriptor) -> bool {
+        false
+    }
+}
+
+impl<S: Scalar> TensorScalarPrims<Standard<S>> for RocmBackend {
+    type Plan = ();
+    type Context = RocmContext;
+
+    fn plan(
+        _ctx: &mut Self::Context,
+        desc: &ScalarPrimsDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<Self::Plan> {
+        Err(Error::InvalidArgument(format!(
+            "scalar family descriptor {desc:?} is not implemented on RocmBackend in phase 1"
+        )))
+    }
+
+    fn execute(
+        _ctx: &mut Self::Context,
+        _plan: &Self::Plan,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
+    ) -> Result<()> {
+        Err(Error::InvalidArgument(
+            "scalar family execution is not implemented on RocmBackend in phase 1".into(),
+        ))
+    }
+
+    fn has_scalar_support(_desc: ScalarPrimsDescriptor) -> bool {
+        false
     }
 }

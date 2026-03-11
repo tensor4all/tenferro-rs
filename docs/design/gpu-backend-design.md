@@ -70,7 +70,6 @@ pub struct CudaContext {
 
 pub enum CudaPlan<T: ScalarBase> {
     Contract { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
-    Permute { plan_handle: *mut c_void, _marker: PhantomData<T> },
     Reduce { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
     Trace { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
     AntiTrace { _marker: PhantomData<T> },  // Composed via Contract(eye, ∂C)
@@ -78,7 +77,7 @@ pub enum CudaPlan<T: ScalarBase> {
     ElementwiseUnary { _marker: PhantomData<T> },
     ElementwiseMul { _marker: PhantomData<T> },
     BatchedGemm { _marker: PhantomData<T> },  // Via Contract subset
-    MakeContiguous { _marker: PhantomData<T> },  // n/a on GPU (native stride support)
+    MakeContiguous { _marker: PhantomData<T> },  // explicit materialization path
 }
 
 impl<S: ScalarBase> TensorPrims<Standard<S>> for CudaBackend {
@@ -117,7 +116,7 @@ impl BackendRegistry {
 | PrimDescriptor | cuTENSOR v2 API | hipTENSOR API | Notes |
 |---|---|---|---|
 | Contract | `cutensorContract` | `hiptensorContraction` | 最優先。einsum動作に必須 |
-| Permute | `cutensorPermute` | `hiptensorPermutation` | |
+| Tensor view `permute` + optional materialize | metadata-only + optional `cutensorPermute`/copy | 同左 | `Permute` prim は削除済み |
 | Reduce | `cutensorReduce` | `hiptensorReduction` | |
 | Trace | `cutensorReduce` on diagonal | `hiptensorReduction` on diagonal | stride trick + reduce |
 | BatchedGemm | Contract subset (mode制限) | 同左 | Contract経由 |
@@ -186,7 +185,7 @@ PyTorch と同じセマンティクス:
 | 操作 | PyTorch | tenferro | コスト |
 |------|---------|----------|--------|
 | 浅いコピー | `tensor.clone()` (view) | `tensor.clone()` | O(1), Arc refcount++ |
-| 深いコピー | `tensor.detach().clone()` | prims `Permute(identity)` / `MakeContiguous` | O(n) |
+| 深いコピー | `tensor.detach().clone()` | `MakeContiguous` / explicit materialize | O(n) |
 | 共役 | `tensor.conj()` (lazy) | `tensor.conj()` / `tensor.into_conj()` | O(1), flag flip |
 | 共役実体化 | `torch.resolve_conj()` | `Backend::resolve_conj()` | O(n) |
 | 共役チェック | `tensor.is_conj()` | `tensor.is_conjugated()` | O(1) |
@@ -400,4 +399,4 @@ enum TropicalCudaPlan<T: ScalarBase> {
 | G10 | `ComputeDevice::Hip` → `Rocm` rename | Low | POC 修正で対応 |
 | G11 | Conjugation on GPU | Medium | cuTENSOR は `CUTENSOR_OP_CONJ` でlazy conjugation をサポート。Tensor に conjugated フラグ追加。standalone `conj()` は CPU 転送が必要 |
 | G12 | strided-einsum2 / omeinsum-rs 廃止 | — | 両方廃止予定。アルゴリズムは参考元として参照するが依存しない。tenferro-prims / tenferro-einsum に自前実装 |
-| G13 | Tensor Clone / Conj | Medium | DataBuffer を `Arc<BufferInner>` で共有。clone() は浅い（refcount++）。conj() は lazy（flag flip + refcount++）。深いコピーは prims `Permute(identity)` 経由。resolve_conj() を各バックエンドに提供。PyTorch 準拠 |
+| G13 | Tensor Clone / Conj | Medium | DataBuffer を `Arc<BufferInner>` で共有。clone() は浅い（refcount++）。conj() は lazy（flag flip + refcount++）。深いコピーは `MakeContiguous` などの materialize path 経由。resolve_conj() を各バックエンドに提供。PyTorch 準拠 |
