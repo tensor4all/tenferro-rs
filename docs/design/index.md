@@ -24,7 +24,9 @@
 ## Historical Proposals
 
 These documents remain useful as background, but they are not the primary
-source of truth for the current split architecture:
+source of truth for the current split architecture. Some of them still discuss
+the pre-cutover `TensorPrims` / `PrimDescriptor` terminology as historical
+context:
 
 | Document | Description |
 |----------|-------------|
@@ -38,6 +40,10 @@ source of truth for the current split architecture:
 | [AD Formula Notes](../AD/index.md) | Mathematical derivations for SVD, QR, LU, and other rrule/frule formulas |
 
 ## Reference
+
+These surveys and comparison notes may also mention the pre-cutover
+`TensorPrims` / `PrimDescriptor` surface when describing past design states or
+external systems.
 
 | Document | Description |
 |----------|-------------|

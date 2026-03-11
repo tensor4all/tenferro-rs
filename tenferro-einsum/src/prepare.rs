@@ -207,7 +207,7 @@ where
         return Ok(tensor.clone());
     }
 
-    // CPU fast-path: avoid PrimDescriptor/plan/execute overhead for pure host
+    // CPU fast-path: avoid family-descriptor planning overhead for pure host
     // copies by using strided-perm directly while still reusing pooled buffers.
     if tensor.logical_memory_space() == LogicalMemorySpace::MainMemory {
         if let Some(src_data) = tensor.buffer().as_slice() {

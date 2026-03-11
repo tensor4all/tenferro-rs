@@ -1,7 +1,10 @@
 use tenferro_algebra::Standard;
 use tenferro_linalg::backend::{LinalgCapabilityOp, TensorLinalgBackend, TensorLinalgContextFor};
 use tenferro_prims::CpuContext;
-use tenferro_prims::{CudaBackend, CudaContext, Extension, RocmBackend, RocmContext, TensorPrims};
+use tenferro_prims::{
+    CudaBackend, CudaContext, RocmBackend, RocmContext, SemiringFastPathDescriptor,
+    TensorSemiringFastPath,
+};
 
 use crate::runtime::RuntimeContext;
 use crate::{Error, Result};
@@ -34,13 +37,25 @@ pub(crate) fn with_einsum_runtime<T: EinsumRuntimeValue, R>(
     with_runtime(
         cpu,
         |ctx| {
-            if !<CudaBackend as TensorPrims<Standard<T>>>::has_extension_for(Extension::Contract) {
+            if !<CudaBackend as TensorSemiringFastPath<Standard<T>>>::has_fast_path(
+                SemiringFastPathDescriptor::Contract {
+                    modes_a: Vec::new(),
+                    modes_b: Vec::new(),
+                    modes_c: Vec::new(),
+                },
+            ) {
                 return Err(unsupported_runtime_capability(op, "cuda"));
             }
             cuda(ctx)
         },
         |ctx| {
-            if !<RocmBackend as TensorPrims<Standard<T>>>::has_extension_for(Extension::Contract) {
+            if !<RocmBackend as TensorSemiringFastPath<Standard<T>>>::has_fast_path(
+                SemiringFastPathDescriptor::Contract {
+                    modes_a: Vec::new(),
+                    modes_b: Vec::new(),
+                    modes_c: Vec::new(),
+                },
+            ) {
                 return Err(unsupported_runtime_capability(op, "rocm"));
             }
             rocm(ctx)

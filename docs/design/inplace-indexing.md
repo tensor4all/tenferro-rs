@@ -28,12 +28,12 @@ version counters.
 
 - Zero-copy view ops (`select`, `narrow`, `permute`, `diagonal`, `broadcast`).
 - Shared-buffer ownership model (`Arc<BufferInner<T>>`).
-- Plan-based backend protocol (`TensorPrims<A>::plan/execute`).
+- Family-based backend protocol (`TensorSemiringCore` / dedicated primitive families).
 - Existing output in-place style API (`einsum_into` family).
 
 ### Missing pieces
 
-- No `index_put` / `scatter` primitive in `PrimDescriptor`.
+- No dedicated indexing primitive family yet.
 - No unified version-counter based mutation tracking.
 - No AD mutation guard equivalent to PyTorch `check_inplace`.
 
@@ -60,20 +60,31 @@ impl<T: Scalar> Tensor<T> {
 }
 ```
 
-### Prims extension (Phase 2+)
+### Primitive family extension (Phase 2+)
 
 ```rust
-pub enum Extension {
-    Contract,
-    ElementwiseMul,
-    IndexPut,   // new
-}
-
-pub enum PrimDescriptor {
-    // ...
+pub enum IndexingDescriptor {
     IndexPut {
         accumulate: bool,
     },
+}
+
+pub trait TensorIndexingPrims<Alg: Semiring> {
+    type Plan;
+    type Context;
+
+    fn plan(
+        ctx: &mut Self::Context,
+        desc: &IndexingDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<Self::Plan>;
+
+    fn execute<T: ScalarBase>(
+        ctx: &mut Self::Context,
+        plan: &Self::Plan,
+        inputs: &[&Tensor<T>],
+        output: &mut Tensor<T>,
+    ) -> Result<()>;
 }
 ```
 
@@ -91,7 +102,7 @@ existing view + contiguous/copy logic.
 ### Path B: advanced indexing (Phase 2+)
 
 - Normalize tensor/mask indices.
-- Dispatch to backend `IndexPut` extension if available.
+- Dispatch to backend `TensorIndexingPrims` if available.
 - Fallback behavior:
   - CPU backend: reference implementation.
   - Backends without extension: return explicit `Error::DeviceError` or use
@@ -155,14 +166,14 @@ crate boundaries (`chainrules-core` independent from tensor internals).
 
 - API should be backend-neutral from day one.
 - CUDA/ROCm kernels for advanced indexing can be added incrementally behind
-  `Extension::IndexPut`.
+  `TensorIndexingPrims`.
 - Deterministic behavior with duplicate indices should be explicitly specified
   (especially for `accumulate=true`).
 
 ## Rollout Plan
 
 1. Phase 1: `set_item_` basic indexing only (CPU), AD-unsafe cases rejected.
-2. Phase 2: add `PrimDescriptor::IndexPut` + `Extension::IndexPut`.
+2. Phase 2: add `TensorIndexingPrims` + `IndexingDescriptor::IndexPut`.
 3. Phase 3: version counter + view/in-place safety checks for AD.
 4. Phase 4: GPU advanced indexing kernels and deterministic policy completion.
 

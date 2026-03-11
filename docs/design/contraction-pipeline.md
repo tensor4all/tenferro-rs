@@ -5,7 +5,8 @@ contracted in a single step of an N-ary contraction tree. It covers copy
 elision, copy strategy experiments, and the recommended decomposition into
 core primitives.
 
-See [tensor-prims.md](./tensor-prims.md) for the `TensorPrims<A>` trait and
+See [tensor-prims.md](./tensor-prims.md) for the semiring-core / fast-path
+traits and
 [einsum.md](./einsum.md) for how binary contractions fit into the N-ary
 einsum engine.
 
@@ -21,7 +22,7 @@ involves:
 3. Reordering the output for the next step
 
 In the old design, decomposing this into separate eager reordering and
-`PrimDescriptor::BatchedGemm` calls forced materialization before the backend
+`SemiringCoreDescriptor::BatchedGemm` calls forced materialization before the backend
 could reason about layout. This was suboptimal because:
 
 - **Unnecessary copies**: The contraction backend can often skip the copy
@@ -39,12 +40,12 @@ could reason about layout. This was suboptimal because:
 
 ### Approach A: `Contract` Extended Operation
 
-`PrimDescriptor::Contract` fuses permutation and GEMM into a single primitive,
+`SemiringFastPathDescriptor::Contract` fuses permutation and GEMM into a single primitive,
 matching cuTENSOR's `cutensorContract`. It is an **extended operation**
 (dynamically queried via `has_extension_for`) because not all backends need to
 implement it.
 
-The einsum layer queries `has_extension_for(Extension::Contract)`:
+The einsum layer queries `TensorSemiringFastPath::has_fast_path(...)`:
 - **Available**: emit `Contract`, backend handles everything internally.
 - **Not available**: fall back to core ops decomposition (Approach B).
 
@@ -59,7 +60,7 @@ The argument for `Contract` assumes that decomposing reordering +
 distinguish **two kinds of permutation**:
 
 - `Tensor::permute()`: metadata-only reordering (zero-copy, Tensor layer)
-- `PrimDescriptor::MakeContiguous`: explicit materialization when a packed
+- `SemiringCoreDescriptor::MakeContiguous`: explicit materialization when a packed
   buffer is actually required
 
 If the einsum layer uses `permute` views to reorder axes, then `BatchedGemm`
@@ -93,7 +94,7 @@ bridges this gap.
 ### `MakeContiguous` Prim Descriptor
 
 ```rust
-PrimDescriptor::MakeContiguous
+SemiringCoreDescriptor::MakeContiguous
 ```
 
 No parameters needed. The operation:

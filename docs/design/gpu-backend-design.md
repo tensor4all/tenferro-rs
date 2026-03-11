@@ -6,9 +6,9 @@ both CUDA (cuTENSOR) and ROCm (hipTENSOR) backends.
 **Purpose**: Detect potential problems before implementation begins.
 Define the types, modules, and API mapping needed for GPU support.
 
-See [tensor-prims.md](./tensor-prims.md) for the `TensorPrims<A>` trait
-definition, `PrimDescriptor` enum, and the plan-cache key policy that
-applies to both CPU and GPU backends.
+See [tensor-prims.md](./tensor-prims.md) for the semiring/scalar/analytic
+primitive families and the plan-cache key policy that applies to both CPU and
+GPU backends.
 
 ---
 
@@ -23,12 +23,13 @@ applies to both CPU and GPU backends.
 3. **Layer 1 core infrastructure** — GPU backends are not extensions
    (unlike `tenferro-tropical`). They live in `tenferro-prims` alongside
    `CpuBackend`.
-4. **TensorPrims\<Standard\<S\>\>** — each GPU backend implements the same
-   trait as `CpuBackend`. `einsum` code is backend-agnostic via the `B`
-   type parameter.
+4. **Family-native primitives** — each GPU backend implements
+   `TensorSemiringCore<Standard<S>>`, `TensorSemiringFastPath<Standard<S>>`,
+   and additional families as coverage grows. `einsum` remains backend-agnostic
+   via `EinsumBackend`.
 5. **Prims basic + Contract first** — the minimum set for einsum to work.
 6. **cuTENSOR v2 API** — describe → plan → execute pattern, matching
-   tenferro's existing `PrimDescriptor → plan → execute`.
+   tenferro's family-descriptor → plan → execute model.
 7. **Naming convention** — platform names (`Cuda`, `Rocm`), not API
    names (`Hip`). `ComputeDevice::Hip` renamed to `ComputeDevice::Rocm`.
 
@@ -38,7 +39,7 @@ applies to both CPU and GPU backends.
 
 ```
 tenferro-prims/src/
-    lib.rs          — TensorPrims<A> trait, PrimDescriptor, shared types
+    lib.rs          — family traits, descriptors, shared types
     cpu.rs          — CpuBackend, CpuContext, CpuPlan
     cuda.rs         — CudaBackend, CudaContext, CudaPlan, CutensorVtable
     rocm.rs         — RocmBackend, RocmContext, RocmPlan, RocmTensorVtable
@@ -80,8 +81,8 @@ pub enum CudaPlan<T: ScalarBase> {
     MakeContiguous { _marker: PhantomData<T> },  // explicit materialization path
 }
 
-impl<S: ScalarBase> TensorPrims<Standard<S>> for CudaBackend {
-    type Plan<T: ScalarBase> = CudaPlan<T>;
+impl<S: ScalarBase> TensorSemiringCore<Standard<S>> for CudaBackend {
+    type Plan = CudaPlan<S>;
     type Context = CudaContext;
     // ...
 }
@@ -111,20 +112,20 @@ impl BackendRegistry {
 
 ## cuTENSOR / hipTENSOR API Mapping
 
-### PrimDescriptor → GPU API
+### Family Descriptor → GPU API
 
-| PrimDescriptor | cuTENSOR v2 API | hipTENSOR API | Notes |
+| Family descriptor | cuTENSOR v2 API | hipTENSOR API | Notes |
 |---|---|---|---|
-| Contract | `cutensorContract` | `hiptensorContraction` | 最優先。einsum動作に必須 |
+| `SemiringFastPathDescriptor::Contract` | `cutensorContract` | `hiptensorContraction` | 最優先。einsum動作に必須 |
 | Tensor view `permute` + optional materialize | metadata-only + optional `cutensorPermute`/copy | 同左 | `Permute` prim は削除済み |
-| Reduce | `cutensorReduce` | `hiptensorReduction` | |
-| Trace | `cutensorReduce` on diagonal | `hiptensorReduction` on diagonal | stride trick + reduce |
-| BatchedGemm | Contract subset (mode制限) | 同左 | Contract経由 |
-| MakeContiguous | 不要 | 不要 | GPU はstrideをネイティブに受け付け |
-| AntiTrace | Contract(eye, ∂C) | 同左 | コアprimだがContract合成で実装 |
-| AntiDiag | Contract(eye, ∂C) | 同左 | 同上 |
-| ElementwiseUnary | `cutensorElementwiseTrinary` | 同等API | |
-| ElementwiseMul | `cutensorElementwiseBinary` | `hiptensorElementwiseBinary` | |
+| `SemiringCoreDescriptor::ReduceAdd` | `cutensorReduce` | `hiptensorReduction` | |
+| `SemiringCoreDescriptor::Trace` | `cutensorReduce` on diagonal | `hiptensorReduction` on diagonal | stride trick + reduce |
+| `SemiringCoreDescriptor::BatchedGemm` | Contract subset (mode制限) | 同左 | Contract経由 |
+| `SemiringCoreDescriptor::MakeContiguous` | 不要 | 不要 | GPU はstrideをネイティブに受け付け |
+| `SemiringCoreDescriptor::AntiTrace` | Contract(eye, ∂C) | 同左 | コアprimだがContract合成で実装 |
+| `SemiringCoreDescriptor::AntiDiag` | Contract(eye, ∂C) | 同左 | 同上 |
+| `ScalarPrimsDescriptor::*` | `cutensorElementwiseTrinary` / reduction APIs | 同等API | scalar family |
+| `SemiringFastPathDescriptor::ElementwiseBinary` | `cutensorElementwiseBinary` | `hiptensorElementwiseBinary` | semiring fast path |
 
 ### AntiTrace / AntiDiag の GPU 実装
 
@@ -310,7 +311,7 @@ standalone `conj()` で実データをコピーする場合は CPU 転送が必�
 | Tensor conjugated flag | tenferro-tensor/src/lib.rs | lazy conjugation 用 |
 | Arc\<BufferInner\> | tenferro-tensor/src/lib.rs | DataBuffer を Arc 共有に変更。clone() は浅い、conj() は lazy |
 | resolve_conj stubs | tenferro-prims/src/lib.rs | 各バックエンドに resolve_conj() 追加 |
-| UnaryOp::Conj | tenferro-prims/src/lib.rs | resolve_conj 用の新 UnaryOp variant |
+| `ScalarUnaryOp::Conj` | tenferro-prims scalar family | resolve_conj 用の scalar unary op |
 | prims → tensor dep | tenferro-prims/Cargo.toml | resolve_conj が Tensor<T> を扱うため |
 
 ---
@@ -330,8 +331,10 @@ requires a **separate custom kernel path**, independent of the cuTENSOR path.
 | `MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>` | custom kernels | separate integration target |
 | User-defined algebra | custom kernels (user-provided) | user crate |
 
-The `CudaBackend` / `RocmBackend` types implement `TensorPrims<Standard<S>>`
-only. They do not implement `TensorPrims<MaxPlus<S>>` or any other
+The `CudaBackend` / `RocmBackend` types implement the standard primitive
+families (`TensorSemiringCore<Standard<S>>`, `TensorSemiringFastPath<Standard<S>>`,
+and standard scalar/analytic families) only. They do not implement the same
+families for `MaxPlus<S>` or any other
 non-standard algebra — that would be a type error at compile time.
 
 ### Tropical GPU implementation target
@@ -346,9 +349,9 @@ pub struct TropicalCudaBackend {
     _lib: libloading::Library,   // tropical-gemm-cuda.so, loaded at runtime
 }
 
-impl TensorPrims<MaxPlus<f64>> for TropicalCudaBackend {
+impl TensorSemiringCore<MaxPlus<f64>> for TropicalCudaBackend {
     // delegates to tropical-gemm-cuda kernels, not cuTENSOR
-    fn has_extension_for<T: ScalarBase>(ext: Extension) -> bool { … }
+    type Plan = TropicalCudaPlan<f64>;
     …
 }
 ```

@@ -4,15 +4,12 @@ use num_complex::Complex64;
 use tenferro_tensor::MemoryOrder;
 
 use super::*;
+use crate::SemiringBinaryOp;
 
 #[cfg(not(feature = "cuda"))]
 #[test]
 fn cuda_stub_reports_errors_and_resolves_conj() {
-    let mut ctx = CudaContext {
-        _stream: std::ptr::null_mut(),
-        _workspace: Vec::new(),
-        _plan_cache: PlanCache::new(),
-    };
+    let mut ctx = CudaContext::default();
     let plan = CudaPlan::<f64> {
         _handle: ptr::null_mut(),
         _workspace_size: 0,
@@ -28,13 +25,21 @@ fn cuda_stub_reports_errors_and_resolves_conj() {
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
     );
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = SemiringCoreDescriptor::MakeContiguous;
 
     let plan_result =
-        <CudaBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[1], &[1]]);
+        <CudaBackend as TensorSemiringCore<Standard<f64>>>::plan(&mut ctx, &desc, &[&[1], &[1]]);
     assert!(matches!(plan_result, Err(Error::DeviceError(_))));
+    let fast_plan_result = <CudaBackend as TensorSemiringFastPath<Standard<f64>>>::plan(
+        &mut ctx,
+        &SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        },
+        &[&[1], &[1], &[1]],
+    );
+    assert!(matches!(fast_plan_result, Err(Error::DeviceError(_))));
 
-    let exec_result = <CudaBackend as TensorPrims<Standard<f64>>>::execute(
+    let exec_result = <CudaBackend as TensorSemiringCore<Standard<f64>>>::execute(
         &mut ctx,
         &plan,
         1.0,
@@ -43,7 +48,24 @@ fn cuda_stub_reports_errors_and_resolves_conj() {
         &mut output,
     );
     assert!(matches!(exec_result, Err(Error::DeviceError(_))));
-    assert!(!<CudaBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::Contract));
+    let fast_exec_result = <CudaBackend as TensorSemiringFastPath<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input, &input],
+        0.0,
+        &mut output,
+    );
+    assert!(matches!(fast_exec_result, Err(Error::DeviceError(_))));
+    assert!(
+        !<CudaBackend as TensorSemiringFastPath<Standard<f64>>>::has_fast_path(
+            SemiringFastPathDescriptor::Contract {
+                modes_a: vec![0],
+                modes_b: vec![0],
+                modes_c: vec![0],
+            }
+        )
+    );
 
     let complex = Tensor::<Complex64>::from_slice(
         &[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
@@ -58,15 +80,17 @@ fn cuda_stub_reports_errors_and_resolves_conj() {
     let data = resolved.buffer().as_slice().unwrap();
     assert_eq!(data[0], Complex64::new(1.0, -2.0));
     assert_eq!(data[1], Complex64::new(-3.0, -4.0));
+
+    let passthrough = CudaBackend::resolve_conj(&mut ctx, &complex);
+    assert_eq!(
+        passthrough.buffer().as_slice().unwrap(),
+        complex.buffer().as_slice().unwrap()
+    );
 }
 
 #[test]
 fn rocm_stub_reports_errors_and_resolves_conj() {
-    let mut ctx = RocmContext {
-        _stream: std::ptr::null_mut(),
-        _workspace: Vec::new(),
-        _plan_cache: PlanCache::new(),
-    };
+    let mut ctx = RocmContext::default();
     let plan = RocmPlan::<f64> {
         _handle: ptr::null_mut(),
         _workspace_size: 0,
@@ -82,13 +106,21 @@ fn rocm_stub_reports_errors_and_resolves_conj() {
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
     );
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = SemiringCoreDescriptor::MakeContiguous;
 
     let plan_result =
-        <RocmBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[1], &[1]]);
+        <RocmBackend as TensorSemiringCore<Standard<f64>>>::plan(&mut ctx, &desc, &[&[1], &[1]]);
     assert!(matches!(plan_result, Err(Error::DeviceError(_))));
+    let fast_plan_result = <RocmBackend as TensorSemiringFastPath<Standard<f64>>>::plan(
+        &mut ctx,
+        &SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        },
+        &[&[1], &[1], &[1]],
+    );
+    assert!(matches!(fast_plan_result, Err(Error::DeviceError(_))));
 
-    let exec_result = <RocmBackend as TensorPrims<Standard<f64>>>::execute(
+    let exec_result = <RocmBackend as TensorSemiringCore<Standard<f64>>>::execute(
         &mut ctx,
         &plan,
         1.0,
@@ -97,8 +129,21 @@ fn rocm_stub_reports_errors_and_resolves_conj() {
         &mut output,
     );
     assert!(matches!(exec_result, Err(Error::DeviceError(_))));
+    let fast_exec_result = <RocmBackend as TensorSemiringFastPath<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input, &input],
+        0.0,
+        &mut output,
+    );
+    assert!(matches!(fast_exec_result, Err(Error::DeviceError(_))));
     assert!(
-        !<RocmBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::ElementwiseMul)
+        !<RocmBackend as TensorSemiringFastPath<Standard<f64>>>::has_fast_path(
+            SemiringFastPathDescriptor::ElementwiseBinary {
+                op: SemiringBinaryOp::Mul,
+            }
+        )
     );
 
     let complex = Tensor::<Complex64>::from_slice(
@@ -114,4 +159,10 @@ fn rocm_stub_reports_errors_and_resolves_conj() {
     let data = resolved.buffer().as_slice().unwrap();
     assert_eq!(data[0], Complex64::new(2.0, 1.0));
     assert_eq!(data[1], Complex64::new(0.5, -3.0));
+
+    let passthrough = RocmBackend::resolve_conj(&mut ctx, &complex);
+    assert_eq!(
+        passthrough.buffer().as_slice().unwrap(),
+        complex.buffer().as_slice().unwrap()
+    );
 }

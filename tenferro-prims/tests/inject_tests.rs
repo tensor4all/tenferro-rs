@@ -9,7 +9,7 @@ use num_traits::Zero;
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_prims::inject::{register_blas_gemm_fn_ptrs, BlasGemmFnPtrSet};
-use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+use tenferro_prims::{CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 static REGISTER_ONCE: Once = Once::new();
@@ -189,7 +189,7 @@ where
     register_test_ptrs_once();
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
@@ -197,7 +197,8 @@ where
     };
     let shapes: &[&[usize]] = &[&[2, 2], &[2, 2], &[2, 2]];
 
-    let plan = <CpuBackend as TensorPrims<Standard<T>>>::plan(&mut ctx, &desc, shapes).unwrap();
+    let plan =
+        <CpuBackend as TensorSemiringCore<Standard<T>>>::plan(&mut ctx, &desc, shapes).unwrap();
 
     let a = Tensor::from_slice(a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
     let b = Tensor::from_slice(b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
@@ -207,7 +208,7 @@ where
         MemoryOrder::ColumnMajor,
     );
 
-    <CpuBackend as TensorPrims<Standard<T>>>::execute(
+    <CpuBackend as TensorSemiringCore<Standard<T>>>::execute(
         &mut ctx,
         &plan,
         alpha,

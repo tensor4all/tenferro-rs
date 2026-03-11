@@ -1,10 +1,10 @@
 # Tensor Prims Protocol Families
 
 `tenferro-prims` is the execution substrate for tensor operations that are
-valid over a semiring or over standard scalar arithmetic. The redesign splits
-the old monolithic `TensorPrims<A>` surface into smaller protocol families so
-`einsum`, tropical algebra, scalar math, and linalg can depend on only the
-capabilities they actually need.
+valid over a semiring or over standard scalar arithmetic. The primitive layer
+now uses smaller protocol families directly so `einsum`, tropical algebra,
+scalar math, and linalg can depend on only the capabilities they actually
+need.
 
 ## Layering
 
@@ -104,23 +104,21 @@ specialized kernels.
 
 ## Current Implementation Status
 
-The repository is in the middle of the protocol migration.
+`tenferro-prims` now exposes only the family-native protocol surface:
 
 - `TensorSemiringCore`
 - `TensorSemiringFastPath`
 - `TensorScalarPrims`
 - `TensorAnalyticPrims`
 
-already exist as public traits in `tenferro-prims`.
-
 Current state by family:
 
-- `TensorSemiringCore` and `TensorSemiringFastPath` still use compatibility
-  bridges over the legacy `TensorPrims<A>` surface.
-- `TensorScalarPrims` now has explicit CPU planning/execution for the phase-1
+- `TensorSemiringCore` and `TensorSemiringFastPath` are the sole semiring
+  execution contracts for CPU/CUDA/ROCm backends.
+- `TensorScalarPrims` has explicit CPU planning/execution for the phase-1
   unary, binary, and reduction inventory, with truthful `false` capability
   reporting for unwired CUDA/ROCm cases.
-- `TensorAnalyticPrims` now has explicit CPU planning/execution for the phase-1
+- `TensorAnalyticPrims` has explicit CPU planning/execution for the phase-1
   unary and binary inventory, and the current tensor-level surface also wires
   `Var` and `Std` through the analytic reduction family.
 
@@ -128,14 +126,7 @@ The public scalar and analytic vocabularies remain intentionally broader than
 the currently executed subset so later GPU and reduction work can land without
 descriptor churn.
 
-## Explicit Debt
-
-The remaining protocol debt is now narrower than it was at the start of `#441`.
-
-- semiring-core and semiring-fast-path families still rely on legacy
-  `TensorPrims<A>` compatibility paths
-
-`PrimDescriptor::Permute` has been removed. Structural reordering now stays in
+The legacy eager `Permute` primitive has been removed. Structural reordering now stays in
 `tenferro-tensor`, and prims only expose `MakeContiguous` as the explicit
 materialization boundary.
 

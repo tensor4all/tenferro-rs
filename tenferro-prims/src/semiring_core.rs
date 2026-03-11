@@ -2,8 +2,6 @@ use tenferro_algebra::Semiring;
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
-use crate::{PrimDescriptor, TensorPrims};
-
 /// Descriptor for semiring-core execution operations.
 ///
 /// This is the minimal protocol family that `tenferro-einsum` may depend on.
@@ -67,57 +65,6 @@ pub enum SemiringCoreDescriptor {
     MakeContiguous,
 }
 
-impl SemiringCoreDescriptor {
-    pub(crate) fn to_legacy(&self) -> PrimDescriptor {
-        match self {
-            Self::BatchedGemm {
-                batch_dims,
-                m,
-                n,
-                k,
-            } => PrimDescriptor::BatchedGemm {
-                batch_dims: batch_dims.clone(),
-                m: *m,
-                n: *n,
-                k: *k,
-            },
-            Self::ReduceAdd { modes_a, modes_c } => PrimDescriptor::Reduce {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                op: crate::ReduceOp::Sum,
-            },
-            Self::Trace {
-                modes_a,
-                modes_c,
-                paired,
-            } => PrimDescriptor::Trace {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                paired: paired.clone(),
-            },
-            Self::AntiTrace {
-                modes_a,
-                modes_c,
-                paired,
-            } => PrimDescriptor::AntiTrace {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                paired: paired.clone(),
-            },
-            Self::AntiDiag {
-                modes_a,
-                modes_c,
-                paired,
-            } => PrimDescriptor::AntiDiag {
-                modes_a: modes_a.clone(),
-                modes_c: modes_c.clone(),
-                paired: paired.clone(),
-            },
-            Self::MakeContiguous => PrimDescriptor::MakeContiguous,
-        }
-    }
-}
-
 /// Minimal semiring execution protocol.
 ///
 /// # Examples
@@ -158,32 +105,4 @@ pub trait TensorSemiringCore<Alg: Semiring> {
         beta: Alg::Scalar,
         output: &mut Tensor<Alg::Scalar>,
     ) -> Result<()>;
-}
-
-impl<Alg, B> TensorSemiringCore<Alg> for B
-where
-    Alg: Semiring,
-    B: TensorPrims<Alg>,
-{
-    type Plan = <B as TensorPrims<Alg>>::Plan;
-    type Context = <B as TensorPrims<Alg>>::Context;
-
-    fn plan(
-        ctx: &mut Self::Context,
-        desc: &SemiringCoreDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<Self::Plan> {
-        <B as TensorPrims<Alg>>::plan(ctx, &desc.to_legacy(), shapes)
-    }
-
-    fn execute(
-        ctx: &mut Self::Context,
-        plan: &Self::Plan,
-        alpha: Alg::Scalar,
-        inputs: &[&Tensor<Alg::Scalar>],
-        beta: Alg::Scalar,
-        output: &mut Tensor<Alg::Scalar>,
-    ) -> Result<()> {
-        <B as TensorPrims<Alg>>::execute(ctx, plan, alpha, inputs, beta, output)
-    }
 }

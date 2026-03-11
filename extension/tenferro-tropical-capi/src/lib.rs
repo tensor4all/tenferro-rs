@@ -75,8 +75,8 @@ use tenferro_capi::{
     TFE_SUCCESS,
 };
 use tenferro_device::Error as DeviceError;
-use tenferro_einsum::einsum;
-use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
+use tenferro_einsum::{einsum, EinsumBackend};
+use tenferro_prims::{CpuBackend, CpuContext, TensorSemiringCore, TensorSemiringFastPath};
 use tenferro_tensor::Tensor;
 use tenferro_tropical::ad::{
     extract_inner, promote_to_tropical, tropical_einsum_frule, tropical_einsum_rrule,
@@ -212,7 +212,13 @@ unsafe fn tropical_einsum_impl<T, Alg>(
 where
     T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
     Alg: tenferro_algebra::Semiring<Scalar = T>,
-    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+    CpuBackend: EinsumBackend<Alg>
+        + TensorSemiringCore<Alg, Context = CpuContext>
+        + TensorSemiringFastPath<
+            Alg,
+            Context = CpuContext,
+            Plan = <CpuBackend as TensorSemiringCore<Alg>>::Plan,
+        >,
 {
     let subscripts = parse_subscripts(subscripts)?;
     let operands = collect_operand_handles(operands, num_operands)?;
@@ -238,7 +244,13 @@ unsafe fn tropical_einsum_rrule_impl<T, Alg>(
 where
     T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
     Alg: tenferro_algebra::Semiring<Scalar = T>,
-    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+    CpuBackend: EinsumBackend<Alg>
+        + TensorSemiringCore<Alg, Context = CpuContext>
+        + TensorSemiringFastPath<
+            Alg,
+            Context = CpuContext,
+            Plan = <CpuBackend as TensorSemiringCore<Alg>>::Plan,
+        >,
 {
     if cotangent.is_null() || grads_out.is_null() {
         return Err(TFE_INVALID_ARGUMENT);
@@ -281,7 +293,13 @@ unsafe fn tropical_einsum_frule_impl<T, Alg>(
 where
     T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
     Alg: tenferro_algebra::Semiring<Scalar = T>,
-    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+    CpuBackend: EinsumBackend<Alg>
+        + TensorSemiringCore<Alg, Context = CpuContext>
+        + TensorSemiringFastPath<
+            Alg,
+            Context = CpuContext,
+            Plan = <CpuBackend as TensorSemiringCore<Alg>>::Plan,
+        >,
 {
     let subscripts = parse_subscripts(subscripts)?;
     let primals = collect_operand_handles(primals, num_operands)?;

@@ -16,8 +16,9 @@
 //! # Extensibility
 //!
 //! External crates define new algebras by implementing `HasAlgebra` for their
-//! scalar types and `TensorPrims<MyAlgebra>` for `CpuBackend` (orphan rule
-//! compatible). For example, `tenferro-tropical` defines `MaxPlus<T>`.
+//! scalar types and then implementing the primitive family traits they need
+//! (for example `TensorSemiringCore<MyAlgebra> for CpuBackend`) under the
+//! orphan rule. For example, `tenferro-tropical` defines `MaxPlus<T>`.
 //!
 //! # Examples
 //!
@@ -163,8 +164,8 @@ impl HasAlgebra for Complex64 {
 
 /// Associates an algebra marker with its scalar type.
 ///
-/// This is the minimal trait required by `TensorPrims` — it provides
-/// the scalar type without requiring semiring operations.
+/// This is the minimal algebra marker trait required by the primitive family
+/// traits. It provides the scalar type without requiring semiring operations.
 ///
 /// [`Semiring`] extends `Algebra` with zero/one/add/mul.
 ///
@@ -185,8 +186,8 @@ pub trait Algebra {
 /// Semiring trait for algebra-generic operations.
 ///
 /// The algebra type `Alg` carries its scalar type via `Alg::Scalar`. This
-/// is the **core algebra model** — `TensorPrims<Alg>` and einsum/linalg
-/// trait bounds are centered on `Alg::Scalar`.
+/// is the **core algebra model** — primitive-family trait bounds and
+/// einsum/linalg contracts are centered on `Alg::Scalar`.
 ///
 /// Defines the four fundamental operations needed for tensor contractions
 /// under a given algebra:

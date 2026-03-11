@@ -1,8 +1,9 @@
 //! Tropical algebra markers, [`HasAlgebra`], and [`Semiring`] implementations.
 //!
 //! Each zero-sized struct identifies a tropical algebra for use with
-//! [`TensorPrims<Alg>`](tenferro_prims::TensorPrims). The orphan rule is
-//! satisfied because the algebra markers are defined in this crate.
+//! semiring-family execution traits such as
+//! [`TensorSemiringCore<Alg>`](tenferro_prims::TensorSemiringCore). The orphan
+//! rule is satisfied because the algebra markers are defined in this crate.
 //!
 //! | Algebra marker | Scalar wrapper | ⊕ | ⊗ |
 //! |----------------|---------------|---|---|
@@ -72,8 +73,9 @@ define_tropical_algebra!(
     /// Algebra marker for the max-plus tropical semiring (⊕ = max, ⊗ = +).
     ///
     /// Generic over the inner scalar type `T` (typically `f32` or `f64`).
-    /// Used as the algebra parameter `Alg` in
-    /// [`TensorPrims<MaxPlusAlgebra<T>>`](tenferro_prims::TensorPrims).
+    /// Used as the algebra parameter `Alg` in semiring-family execution traits
+    /// such as
+    /// [`TensorSemiringCore<MaxPlusAlgebra<T>>`](tenferro_prims::TensorSemiringCore).
     ///
     /// # Examples
     ///

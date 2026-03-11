@@ -109,27 +109,21 @@ formats structured results. Examples:
 When a dedicated factorization kernel is needed, `tenferro-linalg` routes
 through `tenferro-linalg-prims`.
 
-## Current Migration Status
+## Current Implementation Status
 
-The new family traits and `tenferro-linalg-prims` crate exist today. Some
-backends are still backed by blanket adapters over the legacy `TensorPrims<A>`
-surface while the workspace migrates. The intended long-term dependency
-direction is nevertheless the layered split documented above.
+The family traits and `tenferro-linalg-prims` crate are now the active
+execution contracts for the workspace.
 
-Current migration debt that should be read as implementation status, not design
-target:
+Current status by layer:
 
-- `TensorSemiringCore` and `TensorSemiringFastPath` still execute through
-  legacy `TensorPrims<A>` compatibility paths
-- `TensorScalarPrims` and `TensorAnalyticPrims` now have real CPU execution for
-  the phase-1 inventory, but CUDA/ROCm still expose mostly truthful
-  unsupported capabilities rather than broad parity
-- `tenferro-linalg` and dyadtensor runtime entrypoints now route through
-  capability-driven backend contracts instead of direct `ensure_cpu_backend(...)`
-  or `with_cpu_runtime(...)` production paths
-- semiring-core and semiring-fast-path execution still run through legacy
-  `TensorPrims<A>` compatibility layers, so the substrate split is structurally
-  ahead of the final execution split
+- `TensorSemiringCore` and `TensorSemiringFastPath` are the sole semiring
+  execution contracts for CPU/CUDA/ROCm backends.
+- `TensorScalarPrims` and `TensorAnalyticPrims` have real CPU execution for the
+  current inventory, while CUDA/ROCm expose truthful unsupported capabilities
+  where custom kernels do not yet exist.
+- `tenferro-linalg` and dyadtensor runtime entrypoints route through
+  capability-driven backend contracts instead of direct
+  `ensure_cpu_backend(...)` or `with_cpu_runtime(...)` production paths.
 
 ## Dependency Direction
 

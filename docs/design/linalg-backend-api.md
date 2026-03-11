@@ -5,7 +5,8 @@
 This document proposes a new tensor-level backend layer for `tenferro-linalg`.
 
 The goal is to make decomposition and solve operations device-aware without
-overloading `TensorPrims` with responsibilities it is not designed to carry.
+overloading the primitive-family layer with responsibilities it is not
+designed to carry.
 
 This is the design follow-up for issue #246.
 
@@ -13,7 +14,7 @@ This is the design follow-up for issue #246.
 
 The current stack has a clean primitive layer but an awkward linalg boundary.
 
-- `TensorPrims` is designed for primitive tensor ops:
+- the primitive-family layer is designed for primitive tensor ops:
   - descriptor -> plan -> execute
   - one output tensor
   - `output = alpha * op(inputs) + beta * output`
@@ -32,13 +33,13 @@ helper paths in places where a future GPU path should operate directly on
 
 Keep the layers coherent.
 
-- `TensorPrims` remains the primitive tensor execution layer.
+- `tenferro-prims` remains the primitive tensor execution layer.
 - `tenferro-linalg` gets a separate tensor-level solver/factorization layer.
 
 The key point is that decomposition and solve ops are not just “bigger prims”.
 They have different output structure, state, and dispatch needs.
 
-## What Stays in `TensorPrims`
+## What Stays in `tenferro-prims`
 
 The following remain on the primitive side:
 
@@ -47,7 +48,7 @@ The following remain on the primitive side:
 - `MakeContiguous`
 - elementwise ops
 
-These map naturally to the current `TensorPrims` contract and can be shared by
+These map naturally to the current primitive-family contracts and can be shared by
 CPU and future GPU backends without changing the trait model.
 
 ## What Moves to the Linalg Backend Layer
@@ -74,7 +75,7 @@ The backend surface should be operation-specific, not a single generic
 
 The recommended trait name is `TensorLinalgBackend`.
 
-- `TensorPrims` is already the established primitive-layer name.
+- `tenferro-prims` is already the established primitive-layer crate.
 - `LinalgBackend` is already the existing slice-based backend trait.
 - `TensorLinalgBackend` makes the intended boundary explicit: this is the
   tensor-level backend surface for linalg operations.
@@ -218,7 +219,8 @@ The linalg backend context should be able to own backend execution resources.
 - CUDA/ROCm: stream, handle, workspace, algorithm choice caches
 
 This is the main reason to keep a dedicated linalg layer rather than trying to
-encode everything as stateless slices or to overload the `TensorPrims` context.
+encode everything as stateless slices or to overload the primitive-family
+execution context.
 
 The concrete backend type and the execution context should also stay distinct.
 
@@ -244,7 +246,8 @@ is needed by multiple concrete backends.
 
 The migration should be incremental.
 
-1. Keep `TensorPrims` unchanged except for GEMM-path cleanup handled elsewhere.
+1. Keep the primitive-family layer unchanged except for GEMM-path cleanup
+   handled elsewhere.
 2. Fix the public design around `TensorLinalgBackend` and extend `LinalgScalar`
    with `type Complex`.
 3. Define the new tensor-level linalg trait and result structs.
@@ -317,7 +320,7 @@ The first concrete deliverable for issue #246 should be:
 - result structs for the multi-output operations
 - a decision that initial LU pivots remain `Vec<i32>`
 - a decision that linalg reuses `tenferro_prims` contexts (no linalg-specific context types)
-- an explicit statement of which ops remain on `TensorPrims`
+- an explicit statement of which ops remain on `tenferro-prims`
 - a CPU adapter sketch that maps the new API onto the current `FaerBackend`
 
 This is enough to stabilize the abstraction boundary before any GPU

@@ -7,33 +7,81 @@
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_device::LogicalMemorySpace;
 use tenferro_prims::{
-    BackendRegistry, CpuBackend, CpuContext, CpuPlan, Extension, PrimDescriptor, ReduceOp,
-    TensorPrims, UnaryOp,
+    AnalyticPrimsDescriptor, AnalyticUnaryOp, BackendRegistry, CpuAnalyticPlan, CpuBackend,
+    CpuContext, CpuPlan, CpuScalarPlan, ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp,
+    SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorAnalyticPrims,
+    TensorScalarPrims, TensorSemiringCore, TensorSemiringFastPath,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
+
+#[derive(Clone, Debug)]
+enum TestPrimitiveDescriptor {
+    SemiringCore(SemiringCoreDescriptor),
+    SemiringFastPath(SemiringFastPathDescriptor),
+    Scalar(ScalarPrimsDescriptor),
+    Analytic(AnalyticPrimsDescriptor),
+}
+
+#[derive(Clone, Debug)]
+enum TestPrimitivePlan<T: Scalar> {
+    Semiring(CpuPlan<T>),
+    Scalar(CpuScalarPlan),
+    Analytic(CpuAnalyticPlan),
+}
 
 // Helper functions to disambiguate the algebra parameter S for the CPU backend.
 fn cpu_plan<T: Scalar>(
     ctx: &mut CpuContext,
-    desc: &PrimDescriptor,
+    desc: &TestPrimitiveDescriptor,
     shapes: &[&[usize]],
-) -> tenferro_device::Result<CpuPlan<T>> {
-    <CpuBackend as TensorPrims<Standard<T>>>::plan(ctx, desc, shapes)
+) -> tenferro_device::Result<TestPrimitivePlan<T>> {
+    match desc {
+        TestPrimitiveDescriptor::SemiringCore(desc) => {
+            <CpuBackend as TensorSemiringCore<Standard<T>>>::plan(ctx, desc, shapes)
+                .map(TestPrimitivePlan::Semiring)
+        }
+        TestPrimitiveDescriptor::SemiringFastPath(desc) => {
+            <CpuBackend as TensorSemiringFastPath<Standard<T>>>::plan(ctx, desc, shapes)
+                .map(TestPrimitivePlan::Semiring)
+        }
+        TestPrimitiveDescriptor::Scalar(desc) => {
+            <CpuBackend as TensorScalarPrims<Standard<T>>>::plan(ctx, desc, shapes)
+                .map(TestPrimitivePlan::Scalar)
+        }
+        TestPrimitiveDescriptor::Analytic(desc) => {
+            <CpuBackend as TensorAnalyticPrims<Standard<T>>>::plan(ctx, desc, shapes)
+                .map(TestPrimitivePlan::Analytic)
+        }
+    }
 }
 
 fn cpu_execute<T: Scalar>(
     ctx: &mut CpuContext,
-    plan: &CpuPlan<T>,
+    plan: &TestPrimitivePlan<T>,
     alpha: T,
     inputs: &[&Tensor<T>],
     beta: T,
     output: &mut Tensor<T>,
 ) -> tenferro_device::Result<()> {
-    <CpuBackend as TensorPrims<Standard<T>>>::execute(ctx, plan, alpha, inputs, beta, output)
+    match plan {
+        TestPrimitivePlan::Semiring(plan) => {
+            <CpuBackend as TensorSemiringCore<Standard<T>>>::execute(
+                ctx, plan, alpha, inputs, beta, output,
+            )
+        }
+        TestPrimitivePlan::Scalar(plan) => <CpuBackend as TensorScalarPrims<Standard<T>>>::execute(
+            ctx, plan, alpha, inputs, beta, output,
+        ),
+        TestPrimitivePlan::Analytic(plan) => {
+            <CpuBackend as TensorAnalyticPrims<Standard<T>>>::execute(
+                ctx, plan, alpha, inputs, beta, output,
+            )
+        }
+    }
 }
 
-fn cpu_has_ext<T: Scalar>(ext: Extension) -> bool {
-    <CpuBackend as TensorPrims<Standard<T>>>::has_extension_for(ext)
+fn cpu_has_fast_path<T: Scalar>(desc: SemiringFastPathDescriptor) -> bool {
+    <CpuBackend as TensorSemiringFastPath<Standard<T>>>::has_fast_path(desc)
 }
 
 // ---------------------------------------------------------------------------
@@ -105,10 +153,10 @@ fn permuted_view<T: Scalar>(t: &Tensor<T>, perm: &[usize]) -> Tensor<T> {
 fn cpu_make_contiguous_plan<T: Scalar>(
     ctx: &mut CpuContext,
     input_dims: &[usize],
-) -> tenferro_device::Result<CpuPlan<T>> {
+) -> tenferro_device::Result<TestPrimitivePlan<T>> {
     cpu_plan::<T>(
         ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[input_dims, input_dims],
     )
 }
@@ -150,7 +198,7 @@ fn plan_cache_hit_same_signature() {
     // First call: cache miss, builds and stores the plan.
     let _plan1 = cpu_plan::<f64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -159,7 +207,7 @@ fn plan_cache_hit_same_signature() {
     // Second call: cache hit, should not increase cache size.
     let _plan2 = cpu_plan::<f64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -173,7 +221,7 @@ fn plan_cache_miss_different_shapes() {
 
     let _plan1 = cpu_plan::<f64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -182,7 +230,7 @@ fn plan_cache_miss_different_shapes() {
     // Different shapes: 4x5 instead of 2x3
     let _plan2 = cpu_plan::<f64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[5, 4], &[5, 4]],
     )
     .unwrap();
@@ -196,7 +244,7 @@ fn plan_cache_miss_different_scalar_type() {
 
     let _plan_f64 = cpu_plan::<f64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -204,7 +252,7 @@ fn plan_cache_miss_different_scalar_type() {
 
     let _plan_f32 = cpu_plan::<f32>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -213,27 +261,31 @@ fn plan_cache_miss_different_scalar_type() {
 
 #[test]
 fn plan_cache_miss_different_descriptor() {
-    // Same shapes but different descriptor should miss.
+    // Same shapes but a different family-local descriptor should not reuse the
+    // semiring cache entry. Scalar plans currently bypass the shared plan cache,
+    // so the cache size stays unchanged after the second plan.
     let mut ctx = CpuContext::new(1);
 
     let _plan1 = cpu_plan::<f64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 
-    let desc2 = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let desc2 = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Conj,
+    });
     let _plan2 = cpu_plan::<f64>(&mut ctx, &desc2, &[&[3, 2], &[3, 2]]).unwrap();
-    assert_eq!(ctx.plan_cache_mut().len(), 2);
+    assert_eq!(ctx.plan_cache_mut().len(), 1);
 }
 
 #[test]
 fn plan_cache_clear() {
     let mut ctx = CpuContext::new(1);
 
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     let _plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 
@@ -246,11 +298,11 @@ fn plan_cache_hit_produces_correct_results() {
     // Verify that a cached plan produces the same correct results as the original.
     let mut ctx = CpuContext::new(1);
 
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![0, 2],
-    };
+    });
     let shapes: &[&[usize]] = &[&[2, 3], &[3, 4], &[2, 4]];
 
     // Build and cache the plan
@@ -289,7 +341,7 @@ fn plan_cache_complex64_separate_from_f64() {
     // Build f64 plan
     let _plan_f64 = cpu_plan::<f64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -297,7 +349,7 @@ fn plan_cache_complex64_separate_from_f64() {
     // Build Complex64 plan with same shapes
     let _plan_c64 = cpu_plan::<Complex64>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous),
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -331,18 +383,28 @@ fn plan_cache_complex64_separate_from_f64() {
 }
 
 // ============================================================================
-// has_extension_for
+// semiring fast-path support
 // ============================================================================
 
 #[test]
-fn cpu_has_extension_contract() {
+fn cpu_has_fast_path_contract() {
     // CPU backend now advertises Contract support (#296).
-    assert!(cpu_has_ext::<f64>(Extension::Contract));
+    assert!(cpu_has_fast_path::<f64>(
+        SemiringFastPathDescriptor::Contract {
+            modes_a: vec![],
+            modes_b: vec![],
+            modes_c: vec![]
+        }
+    ));
 }
 
 #[test]
-fn cpu_has_extension_elementwise_mul() {
-    assert!(cpu_has_ext::<f64>(Extension::ElementwiseMul));
+fn cpu_has_fast_path_elementwise_mul() {
+    assert!(cpu_has_fast_path::<f64>(
+        SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul
+        }
+    ));
 }
 
 // ============================================================================
@@ -416,7 +478,7 @@ fn make_contiguous() {
     let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1]) as f64);
     let mut b = tensor_zeros::<f64>(&[3, 4]);
 
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut b).unwrap();
 
@@ -439,11 +501,11 @@ fn reduce_sum_axis1() {
     let a = tensor_from_fn(&[3, 4], |idx| (idx[0] * 10 + idx[1] + 1) as f64);
     let mut c = tensor_zeros::<f64>(&[3]);
 
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
-    };
+        op: ScalarReductionOp::Sum,
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
@@ -468,11 +530,11 @@ fn reduce_sum_full() {
     let a = tensor_from_fn(&[3, 4], |idx| (idx[0] + idx[1] + 1) as f64);
     let mut c = tensor_zeros::<f64>(&[]);
 
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![],
-        op: ReduceOp::Sum,
-    };
+        op: ScalarReductionOp::Sum,
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
@@ -490,11 +552,11 @@ fn reduce_max_f64_executes() {
     let mut ctx = CpuContext::new(1);
     let a = tensor_from_fn(&[3, 4], |idx| (idx[0] as f64) - (idx[1] as f64));
     let mut c = tensor_zeros::<f64>(&[3]);
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Max,
-    };
+        op: ScalarReductionOp::Max,
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
@@ -515,11 +577,11 @@ fn reduce_min_f64_executes() {
     let mut ctx = CpuContext::new(1);
     let a = tensor_from_fn(&[3, 4], |idx| (idx[0] as f64) - (idx[1] as f64));
     let mut c = tensor_zeros::<f64>(&[3]);
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Min,
-    };
+        op: ScalarReductionOp::Min,
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
@@ -551,11 +613,11 @@ fn trace_2d_matrix() {
     });
     let mut c = tensor_zeros::<f64>(&[]);
 
-    let desc = PrimDescriptor::Trace {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut c).unwrap();
 
@@ -576,7 +638,10 @@ fn elementwise_mul_2d() {
     let b = tensor_from_fn(&[3, 4], |idx| (idx[1] + 1) as f64);
     let mut c = tensor_zeros::<f64>(&[3, 4]);
 
-    let desc = PrimDescriptor::ElementwiseMul;
+    let desc =
+        TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 4]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
@@ -603,11 +668,11 @@ fn contract_matrix_multiply() {
     let b = tensor_from_fn(&[3, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
     let mut c = tensor_zeros::<f64>(&[2, 2]);
 
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![0, 2],
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
@@ -633,11 +698,11 @@ fn contract_outer_product() {
     let b = tensor_from_fn(&[4], |idx| (idx[0] + 1) as f64);
     let mut c = tensor_zeros::<f64>(&[3, 4]);
 
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0],
         modes_b: vec![1],
         modes_c: vec![0, 1],
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[4], &[3, 4]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
@@ -660,11 +725,11 @@ fn contract_generic_fallback_with_a_only_mode() {
     let b = tensor_from_fn(&[4, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
     let mut c = tensor_zeros::<f64>(&[2]);
 
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![2],
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 2], &[2]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
@@ -690,11 +755,11 @@ fn contract_generic_fallback_with_b_only_mode() {
     let b = tensor_from_fn(&[4, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64);
     let mut c = tensor_zeros::<f64>(&[3]);
 
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![0],
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 2], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
 
@@ -729,7 +794,9 @@ fn elementwise_unary_conj_complex64() {
     });
     let mut c = tensor_zeros::<Complex64>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Conj,
+    });
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -761,7 +828,9 @@ fn elementwise_unary_conj_complex32() {
     });
     let mut c = tensor_zeros::<Complex32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Conj,
+    });
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -799,9 +868,9 @@ fn elementwise_unary_negate_complex64() {
     });
     let mut c = tensor_zeros::<Complex64>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Negate,
-    };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Neg,
+    });
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -833,9 +902,9 @@ fn elementwise_unary_reciprocal_complex64() {
     });
     let mut c = tensor_zeros::<Complex64>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Reciprocal,
-    };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Reciprocal,
+    });
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -868,7 +937,9 @@ fn elementwise_unary_abs_complex64() {
     });
     let mut c = tensor_zeros::<Complex64>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Abs,
+    });
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -903,7 +974,9 @@ fn elementwise_unary_sqrt_complex64() {
     });
     let mut c = tensor_zeros::<Complex64>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+    let desc = TestPrimitiveDescriptor::Analytic(AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Sqrt,
+    });
     let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -937,9 +1010,9 @@ fn elementwise_unary_negate_f32() {
     let a = tensor_from_fn(&[3], |idx| idx[0] as f32 + 1.0);
     let mut c = tensor_zeros::<f32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Negate,
-    };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Neg,
+    });
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
@@ -959,9 +1032,9 @@ fn elementwise_unary_reciprocal_f32() {
     let a = tensor_from_fn(&[3], |idx| idx[0] as f32 + 1.0);
     let mut c = tensor_zeros::<f32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Reciprocal,
-    };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Reciprocal,
+    });
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
@@ -981,7 +1054,9 @@ fn elementwise_unary_abs_f32() {
     let a = tensor_from_fn(&[3], |idx| -(idx[0] as f32 + 1.0));
     let mut c = tensor_zeros::<f32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Abs,
+    });
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
@@ -1001,7 +1076,9 @@ fn elementwise_unary_sqrt_f32() {
     let a = tensor_from_fn(&[3], |idx| ((idx[0] + 1) * (idx[0] + 1)) as f32);
     let mut c = tensor_zeros::<f32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+    let desc = TestPrimitiveDescriptor::Analytic(AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Sqrt,
+    });
     let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut c).unwrap();
 
@@ -1029,9 +1106,9 @@ fn elementwise_unary_negate_complex32() {
     });
     let mut c = tensor_zeros::<Complex32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Negate,
-    };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Neg,
+    });
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -1063,9 +1140,9 @@ fn elementwise_unary_reciprocal_complex32() {
     });
     let mut c = tensor_zeros::<Complex32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary {
-        op: UnaryOp::Reciprocal,
-    };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Reciprocal,
+    });
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -1098,7 +1175,9 @@ fn elementwise_unary_abs_complex32() {
     });
     let mut c = tensor_zeros::<Complex32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Abs,
+    });
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -1131,7 +1210,9 @@ fn elementwise_unary_sqrt_complex32() {
     });
     let mut c = tensor_zeros::<Complex32>(&[3]);
 
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+    let desc = TestPrimitiveDescriptor::Analytic(AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Sqrt,
+    });
     let plan = cpu_plan::<Complex32>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     cpu_execute(
         &mut ctx,
@@ -1371,12 +1452,12 @@ fn make_contiguous_f32_from_transposed_view() {
 #[test]
 fn plan_batched_gemm_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 3,
         k: 4,
-    };
+    });
     // Only 2 shapes instead of the required 3
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[4, 3]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1390,12 +1471,12 @@ fn plan_batched_gemm_wrong_shape_count() {
 #[test]
 fn plan_batched_gemm_too_many_shapes() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 3,
         k: 4,
-    };
+    });
     // 4 shapes instead of 3
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[4, 3], &[2, 3], &[1]]);
     assert!(result.is_err(), "expected error for too many shapes");
@@ -1404,12 +1485,12 @@ fn plan_batched_gemm_too_many_shapes() {
 #[test]
 fn plan_batched_gemm_shape_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 3,
         k: 4,
-    };
+    });
     // A shape [2, 4] is correct, B shape [5, 3] is wrong (should be [4, 3])
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[5, 3], &[2, 3]]);
     assert!(result.is_err(), "expected error for mismatched shapes");
@@ -1423,12 +1504,12 @@ fn plan_batched_gemm_shape_mismatch() {
 #[test]
 fn plan_batched_gemm_rejects_unsupported_scalar_type() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 3,
         k: 4,
-    };
+    });
     let err = cpu_plan::<i32>(&mut ctx, &desc, &[&[2, 4], &[4, 3], &[2, 3]]).unwrap_err();
     match err {
         tenferro_device::Error::InvalidArgument(msg) => {
@@ -1443,15 +1524,15 @@ fn plan_reduce_max_rejects_unsupported_scalar_type() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Max,
-    };
+        op: ScalarReductionOp::Max,
+    });
     let err = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap_err();
     match err {
         tenferro_device::Error::InvalidArgument(msg) => {
-            assert!(msg.contains("Reduce Max/Min supports only f32 and f64"));
+            assert!(msg.contains("scalar reduction Max is not supported on CpuBackend"));
         }
         other => panic!("expected InvalidArgument, got: {other:?}"),
     }
@@ -1460,11 +1541,11 @@ fn plan_reduce_max_rejects_unsupported_scalar_type() {
 #[test]
 fn plan_reduce_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
-    };
+        op: ScalarReductionOp::Sum,
+    });
     // Only 1 shape instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1473,11 +1554,11 @@ fn plan_reduce_wrong_shape_count() {
 #[test]
 fn plan_reduce_wrong_rank() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
-    };
+        op: ScalarReductionOp::Sum,
+    });
     // Input A has rank 3 but modes_a has 2 entries
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4, 5], &[3]]);
     assert!(result.is_err(), "expected error for rank mismatch");
@@ -1497,7 +1578,7 @@ fn plan_reduce_wrong_rank() {
 #[test]
 fn plan_make_contiguous_zero_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     // 3 shapes instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 3], &[1]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1506,11 +1587,11 @@ fn plan_make_contiguous_zero_shape_count() {
 #[test]
 fn plan_trace_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Trace {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
-    };
+    });
     // Only 1 shape instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1519,11 +1600,11 @@ fn plan_trace_wrong_shape_count() {
 #[test]
 fn plan_trace_mismatched_paired_dims() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Trace {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
-    };
+    });
     // Paired axes have dimensions 3 and 4 (must be equal for trace)
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[]]);
     assert!(result.is_err(), "expected error for mismatched paired dims");
@@ -1537,11 +1618,11 @@ fn plan_trace_mismatched_paired_dims() {
 #[test]
 fn plan_contract_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![0, 2],
-    };
+    });
     // Only 2 shapes instead of 3
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 4]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1550,11 +1631,11 @@ fn plan_contract_wrong_shape_count() {
 #[test]
 fn plan_contract_mismatched_contracted_dims() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![0, 2],
-    };
+    });
     // Mode 1 has dim 3 in A but dim 5 in B
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[5, 4], &[2, 4]]);
     assert!(
@@ -1571,7 +1652,10 @@ fn plan_contract_mismatched_contracted_dims() {
 #[test]
 fn plan_elementwise_mul_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseMul;
+    let desc =
+        TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        });
     // Only 1 shape instead of 3
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1580,7 +1664,9 @@ fn plan_elementwise_mul_wrong_shape_count() {
 #[test]
 fn plan_elementwise_unary_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Conj,
+    });
     // 3 shapes instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3], &[3]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1589,7 +1675,7 @@ fn plan_elementwise_unary_wrong_shape_count() {
 #[test]
 fn plan_make_contiguous_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     // 0 shapes instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1598,7 +1684,9 @@ fn plan_make_contiguous_wrong_shape_count() {
 #[test]
 fn plan_elementwise_unary_shape_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Conj,
+    });
     // Same rank but different dimensions: input [3,4] vs output [3,5]
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5]]);
     assert!(result.is_err(), "expected error for shape mismatch");
@@ -1607,7 +1695,9 @@ fn plan_elementwise_unary_shape_mismatch() {
 #[test]
 fn plan_elementwise_unary_rank_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Conj,
+    });
     // Different ranks: input [3,4] vs output [3,4,2]
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4, 2]]);
     assert!(result.is_err(), "expected error for rank mismatch");
@@ -1616,7 +1706,10 @@ fn plan_elementwise_unary_rank_mismatch() {
 #[test]
 fn plan_elementwise_mul_shape_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseMul;
+    let desc =
+        TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        });
     // A=[3,4], B=[3,4], C=[3,5] — C dimension mismatch
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 5]]);
     assert!(result.is_err(), "expected error for shape mismatch");
@@ -1625,7 +1718,10 @@ fn plan_elementwise_mul_shape_mismatch() {
 #[test]
 fn plan_elementwise_mul_rank_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseMul;
+    let desc =
+        TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        });
     // A=[3,4], B=[3,4], C=[3] — rank mismatch
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3]]);
     assert!(result.is_err(), "expected error for rank mismatch");
@@ -1634,7 +1730,10 @@ fn plan_elementwise_mul_rank_mismatch() {
 #[test]
 fn plan_elementwise_mul_b_shape_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseMul;
+    let desc =
+        TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        });
     // A=[3,4], B=[3,5], C=[3,4] — B dimension mismatch
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5], &[3, 4]]);
     assert!(result.is_err(), "expected error for B shape mismatch");
@@ -1643,7 +1742,7 @@ fn plan_elementwise_mul_b_shape_mismatch() {
 #[test]
 fn plan_make_contiguous_shape_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     // input [3,4] vs output [3,5]
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 5]]);
     assert!(result.is_err(), "expected error for shape mismatch");
@@ -1652,7 +1751,7 @@ fn plan_make_contiguous_shape_mismatch() {
 #[test]
 fn plan_make_contiguous_rank_mismatch() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     // input [3,4] vs output [12]
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[12]]);
     assert!(result.is_err(), "expected error for rank mismatch");
@@ -1661,11 +1760,11 @@ fn plan_make_contiguous_rank_mismatch() {
 #[test]
 fn plan_anti_trace_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
-    };
+    });
     // Only 1 shape instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1674,11 +1773,11 @@ fn plan_anti_trace_wrong_shape_count() {
 #[test]
 fn plan_anti_diag_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::AntiDiag {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiDiag {
         modes_a: vec![0],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
-    };
+    });
     // 3 shapes instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3, 3], &[1]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1691,7 +1790,7 @@ fn plan_anti_diag_wrong_shape_count() {
 #[test]
 fn execute_make_contiguous_multiple_inputs() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 2], &[3, 2]]).unwrap();
     let a = tensor_zeros::<f64>(&[3, 2]);
     let b = tensor_zeros::<f64>(&[3, 2]);
@@ -1709,12 +1808,12 @@ fn execute_make_contiguous_multiple_inputs() {
 #[test]
 fn execute_batched_gemm_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 3,
         k: 4,
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 4], &[4, 3], &[2, 3]]).unwrap();
     let a = tensor_zeros::<f64>(&[2, 4]);
     let mut c = tensor_zeros::<f64>(&[2, 3]);
@@ -1726,11 +1825,11 @@ fn execute_batched_gemm_wrong_input_count() {
 #[test]
 fn execute_contract_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Contract {
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![0, 2],
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 4], &[2, 4]]).unwrap();
     let a = tensor_zeros::<f64>(&[2, 3]);
     let mut c = tensor_zeros::<f64>(&[2, 4]);
@@ -1742,7 +1841,10 @@ fn execute_contract_wrong_input_count() {
 #[test]
 fn execute_elementwise_mul_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseMul;
+    let desc =
+        TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::ElementwiseBinary {
+            op: SemiringBinaryOp::Mul,
+        });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3], &[3]]).unwrap();
     let a = tensor_zeros::<f64>(&[3]);
     let mut c = tensor_zeros::<f64>(&[3]);
@@ -1754,11 +1856,11 @@ fn execute_elementwise_mul_wrong_input_count() {
 #[test]
 fn execute_reduce_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Reduce {
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
-    };
+        op: ScalarReductionOp::Sum,
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
     let a = tensor_zeros::<f64>(&[3, 4]);
     let b = tensor_zeros::<f64>(&[3, 4]);
@@ -1771,11 +1873,11 @@ fn execute_reduce_wrong_input_count() {
 #[test]
 fn execute_trace_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Trace {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
-    };
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
     let mut c = tensor_zeros::<f64>(&[]);
     // 0 inputs instead of 1
@@ -1786,7 +1888,7 @@ fn execute_trace_wrong_input_count() {
 #[test]
 fn execute_make_contiguous_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
     let mut c = tensor_zeros::<f64>(&[3, 4]);
     // 0 inputs instead of 1
@@ -1797,7 +1899,9 @@ fn execute_make_contiguous_wrong_input_count() {
 #[test]
 fn execute_elementwise_unary_wrong_input_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Conj,
+    });
     let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
     let mut c = tensor_zeros::<f64>(&[3]);
     // 0 inputs instead of 1
@@ -1812,11 +1916,11 @@ fn execute_elementwise_unary_wrong_input_count() {
 #[test]
 fn anti_trace_mismatched_paired_dims() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
-    };
+    });
     // Paired axes have dimensions 3 and 4 (must be equal for anti-trace)
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[], &[3, 4]]);
     assert!(
@@ -2034,7 +2138,8 @@ macro_rules! typed_prims_tests {
                 });
                 let mut b = tensor_zeros::<$T>(&[3, 4]);
 
-                let desc = PrimDescriptor::MakeContiguous;
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2064,11 +2169,13 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[2, 2]);
 
-                let desc = PrimDescriptor::Contract {
-                    modes_a: vec![0, 1],
-                    modes_b: vec![1, 2],
-                    modes_c: vec![0, 2],
-                };
+                let desc = TestPrimitiveDescriptor::SemiringFastPath(
+                    SemiringFastPathDescriptor::Contract {
+                        modes_a: vec![0, 1],
+                        modes_b: vec![1, 2],
+                        modes_c: vec![0, 2],
+                    },
+                );
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2104,11 +2211,13 @@ macro_rules! typed_prims_tests {
                 let b = tensor_from_fn(&[4], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
                 let mut c = tensor_zeros::<$T>(&[3, 4]);
 
-                let desc = PrimDescriptor::Contract {
-                    modes_a: vec![0],
-                    modes_b: vec![1],
-                    modes_c: vec![0, 1],
-                };
+                let desc = TestPrimitiveDescriptor::SemiringFastPath(
+                    SemiringFastPathDescriptor::Contract {
+                        modes_a: vec![0],
+                        modes_b: vec![1],
+                        modes_c: vec![0, 1],
+                    },
+                );
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[4], &[3, 4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2142,11 +2251,11 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[3]);
 
-                let desc = PrimDescriptor::Reduce {
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
                     modes_a: vec![0, 1],
                     modes_c: vec![0],
-                    op: ReduceOp::Sum,
-                };
+                    op: ScalarReductionOp::Sum,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2181,11 +2290,11 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[]);
 
-                let desc = PrimDescriptor::Reduce {
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
                     modes_a: vec![0, 1],
                     modes_c: vec![],
-                    op: ReduceOp::Sum,
-                };
+                    op: ScalarReductionOp::Sum,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2224,11 +2333,11 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[]);
 
-                let desc = PrimDescriptor::Trace {
+                let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
                     modes_a: vec![0, 1],
                     modes_c: vec![],
                     paired: vec![(0, 1)],
-                };
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2262,11 +2371,11 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[]);
 
-                let desc = PrimDescriptor::Trace {
+                let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
                     modes_a: vec![0, 1, 2, 3],
                     modes_c: vec![],
                     paired: vec![(0, 1), (2, 3)],
-                };
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 3, 4, 4], &[]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2300,7 +2409,11 @@ macro_rules! typed_prims_tests {
                 let b = tensor_from_fn(&[3, 4], |idx| <$T as TestScalar>::from_usize(idx[1] + 1));
                 let mut c = tensor_zeros::<$T>(&[3, 4]);
 
-                let desc = PrimDescriptor::ElementwiseMul;
+                let desc = TestPrimitiveDescriptor::SemiringFastPath(
+                    SemiringFastPathDescriptor::ElementwiseBinary {
+                        op: SemiringBinaryOp::Mul,
+                    },
+                );
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2334,7 +2447,9 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[3, 4]);
 
-                let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+                    op: ScalarUnaryOp::Conj,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2368,12 +2483,13 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[2, 2]);
 
-                let desc = PrimDescriptor::BatchedGemm {
-                    batch_dims: vec![],
-                    m: 2,
-                    n: 2,
-                    k: 3,
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
+                        batch_dims: vec![],
+                        m: 2,
+                        n: 2,
+                        k: 3,
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2414,12 +2530,13 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[2, 2, 2]);
 
-                let desc = PrimDescriptor::BatchedGemm {
-                    batch_dims: vec![2],
-                    m: 2,
-                    n: 2,
-                    k: 3,
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
+                        batch_dims: vec![2],
+                        m: 2,
+                        n: 2,
+                        k: 3,
+                    });
                 let plan =
                     cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3, 2], &[3, 2, 2], &[2, 2, 2]]).unwrap();
                 cpu_execute(
@@ -2466,11 +2583,11 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[4]);
 
-                let desc = PrimDescriptor::Reduce {
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
                     modes_a: vec![0, 1],
                     modes_c: vec![1],
-                    op: ReduceOp::Sum,
-                };
+                    op: ScalarReductionOp::Sum,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2505,11 +2622,11 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[2]);
 
-                let desc = PrimDescriptor::Trace {
+                let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
                     modes_a: vec![0, 1, 2],
                     modes_c: vec![0],
                     paired: vec![(1, 2)],
-                };
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3, 3], &[2]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2544,9 +2661,9 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[4]);
 
-                let desc = PrimDescriptor::ElementwiseUnary {
-                    op: UnaryOp::Negate,
-                };
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+                    op: ScalarUnaryOp::Neg,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2578,9 +2695,9 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[4]);
 
-                let desc = PrimDescriptor::ElementwiseUnary {
-                    op: UnaryOp::Reciprocal,
-                };
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+                    op: ScalarUnaryOp::Reciprocal,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2614,7 +2731,9 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[4]);
 
-                let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Abs };
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+                    op: ScalarUnaryOp::Abs,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2647,7 +2766,10 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[4]);
 
-                let desc = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Sqrt };
+                let desc =
+                    TestPrimitiveDescriptor::Analytic(AnalyticPrimsDescriptor::PointwiseUnary {
+                        op: AnalyticUnaryOp::Sqrt,
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[4], &[4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2677,11 +2799,12 @@ macro_rules! typed_prims_tests {
                 let a = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(5.0));
                 let mut c = tensor_zeros::<$T>(&[3, 3]);
 
-                let desc = PrimDescriptor::AntiTrace {
-                    modes_a: vec![],
-                    modes_c: vec![0, 1],
-                    paired: vec![(0, 1)],
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiTrace {
+                        modes_a: vec![],
+                        modes_c: vec![0, 1],
+                        paired: vec![(0, 1)],
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[], &[3, 3]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2729,11 +2852,12 @@ macro_rules! typed_prims_tests {
                 let a = tensor_from_fn(&[2], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
                 let mut c = tensor_zeros::<$T>(&[2, 3, 3]);
 
-                let desc = PrimDescriptor::AntiTrace {
-                    modes_a: vec![0],
-                    modes_c: vec![0, 1, 2],
-                    paired: vec![(1, 2)],
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiTrace {
+                        modes_a: vec![0],
+                        modes_c: vec![0, 1, 2],
+                        paired: vec![(1, 2)],
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2], &[2, 3, 3]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2779,11 +2903,12 @@ macro_rules! typed_prims_tests {
                 let a = tensor_from_fn(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
                 let mut c = tensor_zeros::<$T>(&[3, 3]);
 
-                let desc = PrimDescriptor::AntiDiag {
-                    modes_a: vec![0],
-                    modes_c: vec![0, 1],
-                    paired: vec![(0, 1)],
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiDiag {
+                        modes_a: vec![0],
+                        modes_c: vec![0, 1],
+                        paired: vec![(0, 1)],
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[3, 3]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2833,11 +2958,12 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_zeros::<$T>(&[2, 3, 3]);
 
-                let desc = PrimDescriptor::AntiDiag {
-                    modes_a: vec![0, 1],
-                    modes_c: vec![0, 1, 2],
-                    paired: vec![(1, 2)],
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiDiag {
+                        modes_a: vec![0, 1],
+                        modes_c: vec![0, 1, 2],
+                        paired: vec![(1, 2)],
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[2, 3, 3]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2881,11 +3007,12 @@ macro_rules! typed_prims_tests {
                 let a = tensor_from_fn(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 1));
                 let mut c = tensor_from_fn(&[3, 3], |_| <$T as TestScalar>::from_f64(5.0));
 
-                let desc = PrimDescriptor::AntiDiag {
-                    modes_a: vec![0],
-                    modes_c: vec![0, 1],
-                    paired: vec![(0, 1)],
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiDiag {
+                        modes_a: vec![0],
+                        modes_c: vec![0, 1],
+                        paired: vec![(0, 1)],
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[3, 3]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -2926,7 +3053,8 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_from_fn(&[3, 4], |_| <$T as TestScalar>::from_f64(5.0));
 
-                let desc = PrimDescriptor::MakeContiguous;
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::MakeContiguous);
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4]]).unwrap();
                 // C = 2 * contiguous(A) + 3 * C
                 cpu_execute(
@@ -2966,12 +3094,13 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_from_fn(&[2, 2], |_| <$T as TestScalar>::from_f64(5.0));
 
-                let desc = PrimDescriptor::BatchedGemm {
-                    batch_dims: vec![],
-                    m: 2,
-                    n: 2,
-                    k: 3,
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
+                        batch_dims: vec![],
+                        m: 2,
+                        n: 2,
+                        k: 3,
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
                 // C = 2 * A@B + 3 * C
                 cpu_execute(
@@ -3015,11 +3144,11 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(10.0));
 
-                let desc = PrimDescriptor::Trace {
+                let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::Trace {
                     modes_a: vec![0, 1],
                     modes_c: vec![],
                     paired: vec![(0, 1)],
-                };
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 3], &[]]).unwrap();
                 // C = 2 * tr(A) + 3 * C = 2 * 6 + 3 * 10 = 42
                 cpu_execute(
@@ -3048,11 +3177,11 @@ macro_rules! typed_prims_tests {
                 let a = tensor_from_fn(&[2, 3], |_| <$T as TestScalar>::from_f64(1.0));
                 let mut c = tensor_from_fn(&[2], |_| <$T as TestScalar>::from_f64(10.0));
 
-                let desc = PrimDescriptor::Reduce {
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::Reduction {
                     modes_a: vec![0, 1],
                     modes_c: vec![0],
-                    op: ReduceOp::Sum,
-                };
+                    op: ScalarReductionOp::Sum,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[2]]).unwrap();
                 // C = 2 * sum(A, axis=1) + 3 * C
                 // sum over 3 ones = 3, so C = 2 * 3 + 3 * 10 = 36
@@ -3085,7 +3214,11 @@ macro_rules! typed_prims_tests {
                 let b = tensor_from_fn(&[3, 4], |idx| <$T as TestScalar>::from_usize(idx[1] + 1));
                 let mut c = tensor_from_fn(&[3, 4], |_| <$T as TestScalar>::from_f64(5.0));
 
-                let desc = PrimDescriptor::ElementwiseMul;
+                let desc = TestPrimitiveDescriptor::SemiringFastPath(
+                    SemiringFastPathDescriptor::ElementwiseBinary {
+                        op: SemiringBinaryOp::Mul,
+                    },
+                );
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3, 4], &[3, 4], &[3, 4]]).unwrap();
                 // C = 2 * (A .* B) + 3 * C
                 cpu_execute(
@@ -3125,11 +3258,13 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_from_fn(&[2, 2], |_| <$T as TestScalar>::from_f64(5.0));
 
-                let desc = PrimDescriptor::Contract {
-                    modes_a: vec![0, 1],
-                    modes_b: vec![1, 2],
-                    modes_c: vec![0, 2],
-                };
+                let desc = TestPrimitiveDescriptor::SemiringFastPath(
+                    SemiringFastPathDescriptor::Contract {
+                        modes_a: vec![0, 1],
+                        modes_b: vec![1, 2],
+                        modes_c: vec![0, 2],
+                    },
+                );
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[2, 2]]).unwrap();
                 // C = 2 * contract(A, B) + 3 * C
                 cpu_execute(
@@ -3169,9 +3304,9 @@ macro_rules! typed_prims_tests {
                 });
                 let mut c = tensor_from_fn(&[3], |_| <$T as TestScalar>::from_f64(10.0));
 
-                let desc = PrimDescriptor::ElementwiseUnary {
-                    op: UnaryOp::Negate,
-                };
+                let desc = TestPrimitiveDescriptor::Scalar(ScalarPrimsDescriptor::PointwiseUnary {
+                    op: ScalarUnaryOp::Neg,
+                });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[3], &[3]]).unwrap();
                 // C = 2 * (-A) + 3 * C = 2 * (-(i+1)) + 3 * 10
                 cpu_execute(
@@ -3207,11 +3342,12 @@ macro_rules! typed_prims_tests {
                 let a = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(7.0));
                 let mut c = tensor_zeros::<$T>(&[3, 3, 4, 4]);
 
-                let desc = PrimDescriptor::AntiTrace {
-                    modes_a: vec![],
-                    modes_c: vec![0, 1, 2, 3],
-                    paired: vec![(0, 1), (2, 3)],
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiTrace {
+                        modes_a: vec![],
+                        modes_c: vec![0, 1, 2, 3],
+                        paired: vec![(0, 1), (2, 3)],
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[], &[3, 3, 4, 4]]).unwrap();
                 cpu_execute(
                     &mut ctx,
@@ -3256,11 +3392,12 @@ macro_rules! typed_prims_tests {
                 let a = tensor_from_fn(&[], |_| <$T as TestScalar>::from_f64(3.0));
                 let mut c = tensor_zeros::<$T>(&[4, 4]);
 
-                let desc = PrimDescriptor::AntiDiag {
-                    modes_a: vec![],
-                    modes_c: vec![0, 1],
-                    paired: vec![(0, 1)],
-                };
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::AntiDiag {
+                        modes_a: vec![],
+                        modes_c: vec![0, 1],
+                        paired: vec![(0, 1)],
+                    });
                 let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[], &[4, 4]]).unwrap();
                 cpu_execute(
                     &mut ctx,

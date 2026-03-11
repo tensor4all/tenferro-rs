@@ -1,6 +1,6 @@
 # Algebra
 
-Minimal algebra foundation for `TensorPrims<A>`. Provides the `HasAlgebra`
+Minimal algebra foundation for the primitive family traits. Provides the `HasAlgebra`
 trait as UX sugar for automatic algebra inference and the `Standard<T>` type
 for standard arithmetic, where the scalar type `T` is carried by the algebra.
 
@@ -9,7 +9,7 @@ for standard arithmetic, where the scalar type `T` is carried by the algebra.
 ## Core Model: `A::Scalar`-Centric Design
 
 The fundamental design is that **the algebra `A` carries the scalar type** via
-`Semiring::Scalar`. The algebra parameter in `TensorPrims<A>` is the single
+`Semiring::Scalar`. The algebra parameter in the primitive family traits is the single
 source of truth for both the operation semantics and the scalar type.
 
 `HasAlgebra` is **UX sugar only**: it lets the compiler infer `A` from `T`
@@ -90,11 +90,10 @@ impl HasAlgebra for MaxPlus<f64> {
     type Algebra = MaxPlusAlgebra<f64>;
 }
 
-impl TensorPrims<MaxPlusAlgebra<f64>> for CpuBackend {
-    fn has_extension_for(ext: Extension) -> bool {
-        false  // tropical uses core ops decomposition
-    }
-    ...
+impl TensorSemiringCore<MaxPlusAlgebra<f64>> for CpuBackend {
+    type Plan = TropicalPlan<MaxPlus<f64>>;
+    type Context = CpuContext;
+    // ...
 }
 ```
 
@@ -102,7 +101,7 @@ impl TensorPrims<MaxPlusAlgebra<f64>> for CpuBackend {
 
 ## User-Defined Algebras
 
-The `TensorPrims<A>` parameterization enables external crates to implement
+The primitive-family parameterization enables external crates to implement
 their own algebras (orphan rule compatible):
 
 ```rust
@@ -114,8 +113,8 @@ impl ScalarBase for MyScalar { ... }
 // HasAlgebra is UX sugar — wire MyScalar to MyAlgebra for automatic inference
 impl HasAlgebra for MyScalar { type Algebra = MyAlgebra; }
 
-impl TensorPrims<MyAlgebra> for CpuBackend {
-    type Plan<T: ScalarBase> = MyPlan<T>;
+impl TensorSemiringCore<MyAlgebra> for CpuBackend {
+    type Plan = MyPlan<MyScalar>;
     type Context = CpuContext;
     ...
 }
@@ -135,7 +134,7 @@ AD must remain algebra-aware:
 - Tropical algebra: formulas may need algebra-specific state (e.g., argmax
   path information for max-plus variants).
 - API design keeps this extensible by relying on `HasAlgebra` and
-  `TensorPrims<A>` rather than hard-coding only standard arithmetic.
+  primitive-family contracts rather than hard-coding only standard arithmetic.
 
 See [autodiff.md](./autodiff.md) for the AD architecture design and
 [einsum-dyadtensor.md](./einsum-dyadtensor.md) for einsum/dyadtensor integration details.
@@ -161,8 +160,8 @@ Work through these in order; each step unblocks the next.
      Code that needs the algebra explicitly should accept `A: Semiring`, not
      `T: HasAlgebra`.
 
-3. **`TensorPrims<A>` impls must be parameterized by the typed algebra `A`.**
-   - Signature: `impl TensorPrims<MyAlgebra> for CpuBackend { … }`
+3. **Primitive-family impls must be parameterized by the typed algebra `A`.**
+   - Signature: `impl TensorSemiringCore<MyAlgebra> for CpuBackend { … }`
    - The scalar type inside the impl is `<MyAlgebra as Semiring>::Scalar`,
      not a free `T`. Use `A::Scalar` in method bodies instead of bare `T`.
 
@@ -178,10 +177,6 @@ Work through these in order; each step unblocks the next.
    - Confirm tropical `HasAlgebra` impls are in `tenferro-tropical`, not in
      `tenferro-algebra`. Tropical types must not leak into the algebra core.
 
-6. **Future: tighten `TensorPrims<A>` method signatures to use `A::Scalar`.**
-   - Currently `plan<T: ScalarBase>` and `execute<T: ScalarBase>` use a free
-     `T` unconstrained relative to `A`. A future tightening would add
-     `where T: ScalarBase, A: Semiring<Scalar = T>` (or remove the free `T`
-     and use `A::Scalar` directly).
-   - Do not make this change until all existing impls are migrated to step 3,
-     to avoid a large simultaneous diff.
+6. **Keep primitive-family method signatures centered on `A::Scalar`.**
+   - New family traits already use `Alg::Scalar` directly in `execute`, which
+     keeps the algebra and value type coupled.

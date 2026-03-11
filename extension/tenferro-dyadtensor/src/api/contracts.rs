@@ -4,11 +4,12 @@ use chainrules_scalarops::ScalarAd;
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
+use tenferro_einsum::EinsumBackend;
 use tenferro_linalg::backend::{TensorLinalgBackend, TensorLinalgContextFor};
 use tenferro_linalg::{backend::CpuLinalgScalar, LinalgScalar};
 use tenferro_prims::{
     CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
-    TensorAnalyticPrims, TensorPrims, TensorScalarPrims,
+    TensorAnalyticPrims, TensorScalarPrims, TensorSemiringCore, TensorSemiringFastPath,
 };
 
 #[doc(hidden)]
@@ -38,9 +39,52 @@ pub trait EinsumRuntimeValue: StandardRuntimeValue {}
 impl<T> EinsumRuntimeValue for T
 where
     T: StandardRuntimeValue,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    CudaBackend: TensorPrims<Standard<T>, Context = CudaContext>,
-    RocmBackend: TensorPrims<Standard<T>, Context = RocmContext>,
+    CpuBackend: TensorSemiringCore<Standard<T>, Context = CpuContext>
+        + TensorSemiringFastPath<
+            Standard<T>,
+            Context = CpuContext,
+            Plan = <CpuBackend as TensorSemiringCore<Standard<T>>>::Plan,
+        >,
+    CudaBackend: TensorSemiringCore<Standard<T>, Context = CudaContext>
+        + TensorSemiringFastPath<
+            Standard<T>,
+            Context = CudaContext,
+            Plan = <CudaBackend as TensorSemiringCore<Standard<T>>>::Plan,
+        >,
+    RocmBackend: TensorSemiringCore<Standard<T>, Context = RocmContext>
+        + TensorSemiringFastPath<
+            Standard<T>,
+            Context = RocmContext,
+            Plan = <RocmBackend as TensorSemiringCore<Standard<T>>>::Plan,
+        >,
+{
+}
+
+#[doc(hidden)]
+/// Hidden shorthand for a backend/context pair that can execute dense einsum.
+pub trait DenseEinsumBackend<T, C>:
+    EinsumBackend<Standard<T>>
+    + TensorSemiringCore<Standard<T>, Context = C>
+    + TensorSemiringFastPath<
+        Standard<T>,
+        Context = C,
+        Plan = <Self as TensorSemiringCore<Standard<T>>>::Plan,
+    >
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+{
+}
+
+impl<T, C, B> DenseEinsumBackend<T, C> for B
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    B: EinsumBackend<Standard<T>>
+        + TensorSemiringCore<Standard<T>, Context = C>
+        + TensorSemiringFastPath<
+            Standard<T>,
+            Context = C,
+            Plan = <B as TensorSemiringCore<Standard<T>>>::Plan,
+        >,
 {
 }
 

@@ -6,7 +6,7 @@ Issue #245 should be treated as a focused GEMM-path cleanup, not as a full
 backend rewrite.
 
 `tenferro-prims` already owns the shared tensor primitive for batched matrix
-multiplication via `PrimDescriptor::BatchedGemm`. The remaining goal is to make
+multiplication via `SemiringCoreDescriptor::BatchedGemm`. The remaining goal is to make
 `tenferro-linalg` reuse that primitive wherever the internal operation is
 semantically a batched GEMM.
 
@@ -29,7 +29,7 @@ These helpers are used in:
 
 The mathematical operation is often still “matrix multiply”, but the current
 entry points are slice-based and call the local `LinalgBackend::mat_mul` path
-instead of going through `TensorPrims`.
+instead of going through `TensorSemiringCore`.
 
 ## Goal
 
@@ -40,7 +40,7 @@ The first real implementation step for #245 is:
 - avoid changing numerical semantics
 
 This should improve consistency across layers and make the later GPU path
-straightforward, because `TensorPrims` is already the intended cross-device
+straightforward, because the semiring primitive families are already the intended cross-device
 primitive execution layer.
 
 ## Scope
@@ -68,7 +68,7 @@ rewrite runtime behavior yet.
 
 Instead, lock in the intended boundary:
 
-- `TensorPrims` remains the owner of GEMM-style tensor multiplication
+- `TensorSemiringCore` remains the owner of GEMM-style tensor multiplication
 - `tenferro-linalg` stops treating backend-local GEMM as a permanent interface
 - new implementation work should target an internal tensor-based GEMM bridge,
   not expand the existing slice-only helpers
@@ -78,13 +78,13 @@ Instead, lock in the intended boundary:
 Once runtime implementation work is allowed:
 
 1. Introduce an internal helper that expresses the operation in terms of
-   `Tensor<T>` plus `PrimDescriptor::BatchedGemm`.
+   `Tensor<T>` plus `SemiringCoreDescriptor::BatchedGemm`.
 2. Migrate `backend_mat_mul_nn` call sites that already operate on logical
    dense matrices.
 3. Migrate `backend_mat_mul` call sites used in AD rules, preserving existing
    shapes and transpose conventions.
 4. Remove the duplicated helper once all supported cases flow through
-   `TensorPrims`.
+   `TensorSemiringCore`.
 
 ## Relationship to `complex_mat_mul_nn`
 

@@ -65,10 +65,10 @@
 
 use chainrules::{AdResult, Differentiable, NodeId, ReverseRule, TrackedTensor};
 use num_traits::Zero;
-use tenferro_algebra::{HasAlgebra, Scalar};
+use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
 use tenferro_einsum::Subscripts;
-use tenferro_prims::TensorPrims;
+use tenferro_prims::TensorSemiringCore;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::argmax::ArgmaxTracker;
@@ -250,9 +250,9 @@ pub fn tropical_einsum_rrule<T, Alg, Backend>(
     cotangent: &Tensor<T::Inner>,
 ) -> Result<Vec<Tensor<T::Inner>>>
 where
-    Alg: tenferro_algebra::Algebra,
+    Alg: Semiring<Scalar = T>,
     T: TropicalScalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: TensorSemiringCore<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
 
@@ -333,9 +333,9 @@ pub fn tropical_einsum_frule<T, Alg, Backend>(
     tangents: &[Option<&Tensor<T::Inner>>],
 ) -> Result<Tensor<T::Inner>>
 where
-    Alg: tenferro_algebra::Algebra,
+    Alg: Semiring<Scalar = T>,
     T: TropicalScalar + HasAlgebra<Algebra = Alg>,
-    Backend: TensorPrims<Alg>,
+    Backend: TensorSemiringCore<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
 
@@ -1054,10 +1054,10 @@ pub fn tracked_tropical_einsum<T, Alg, Backend>(
     operands: &[&TrackedTensor<Tensor<T::Inner>>],
 ) -> AdResult<TrackedTensor<Tensor<T::Inner>>>
 where
-    Alg: tenferro_algebra::Algebra,
+    Alg: Semiring<Scalar = T>,
     T: TropicalScalar + HasAlgebra<Algebra = Alg> + 'static,
     T::Inner: Scalar + HasAlgebra,
-    Backend: TensorPrims<Alg>,
+    Backend: TensorSemiringCore<Alg>,
     Tensor<T::Inner>: Differentiable<Tangent = Tensor<T::Inner>>,
 {
     if operands.is_empty() || operands.len() > 2 {
