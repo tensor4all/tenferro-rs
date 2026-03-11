@@ -44,6 +44,7 @@ mod scalar_runtime;
 pub use ad_builders::*;
 pub use linalg_builders::*;
 pub use primal_builders::*;
+#[allow(unused_imports)]
 pub(crate) use runtime::*;
 pub(crate) use runtime_dispatch::*;
 pub use scalar_ad_builders::*;

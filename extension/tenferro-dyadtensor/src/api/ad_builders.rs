@@ -43,7 +43,7 @@ where
     where
         T: 'static,
     {
-        with_cpu_runtime("einsum_ad", |ctx| {
+        with_runtime_cpu_only("einsum_ad", |ctx| {
             if self.size_dict.is_none() && !self.subscripts.contains('(') {
                 let subs = Subscripts::parse(self.subscripts).map_err(Error::from)?;
                 let primals: Vec<&StructuredTensor<T>> = self
@@ -98,7 +98,7 @@ where
                                     }
                                 }
                                 let grad =
-                                    with_cpu_runtime("einsum_ad_pullback_structured", |ctx| {
+                                    with_runtime_cpu_only("einsum_ad_pullback_structured", |ctx| {
                                         einsum_with_subscripts_in_ctx(ctx, &rev_subs, &rev_operands)
                                     })?;
                                 input_grads.push((*node, grad.into_payload()));
@@ -158,7 +158,7 @@ where
                     output_node,
                     Box::new(move |cotangent| {
                         let primal_refs: Vec<&Tensor<T>> = primal_owned.iter().collect();
-                        let gradients = with_cpu_runtime("einsum_ad_pullback", |ctx| {
+                        let gradients = with_runtime_cpu_only("einsum_ad_pullback", |ctx| {
                             tf_einsum::einsum_rrule::<Standard<T>, CpuBackend>(
                                 ctx,
                                 &subscripts,
@@ -260,7 +260,7 @@ where
         T: Copy + 'static,
     {
         let operands = [self.tensor];
-        with_cpu_runtime("sum_ad", |ctx| {
+        with_runtime_cpu_only("sum_ad", |ctx| {
             let primal =
                 StructuredTensor::from_dense(payload_sum_in_ctx(ctx, self.tensor.primal())?);
             let tangent = if has_forward(&operands) || has_any_tangent(&operands) {
@@ -353,7 +353,7 @@ where
 {
     let operands = [input];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-    let (input_primal, input_tangent) = with_cpu_runtime(op_name, |ctx| {
+    let (input_primal, input_tangent) = with_runtime_cpu_only(op_name, |ctx| {
         dense_input_snapshot_in_ctx(ctx, input, needs_tangent)
     })?;
 
@@ -361,13 +361,13 @@ where
         let in_tangent = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
             message: format!("{op_name} missing materialized tangent"),
         })?;
-        let (p, d) = with_cpu_runtime(op_name, |ctx| {
+        let (p, d) = with_runtime_cpu_only(op_name, |ctx| {
             frule_fn(ctx, &input_primal, &in_tangent).map_err(Error::from)
         })?;
         (p, Some(d))
     } else {
         (
-            with_cpu_runtime(op_name, |ctx| primal_fn(ctx, &input_primal))?,
+            with_runtime_cpu_only(op_name, |ctx| primal_fn(ctx, &input_primal))?,
             None,
         )
     };
@@ -386,7 +386,7 @@ where
             tape_id,
             output_node,
             Box::new(move |cotangent| {
-                let grad = with_cpu_runtime(pullback_op_name, |ctx| {
+                let grad = with_runtime_cpu_only(pullback_op_name, |ctx| {
                     rrule_fn(ctx, &input_primal, cotangent).map_err(Error::from)
                 })?;
 
@@ -432,7 +432,7 @@ where
 {
     let operands = [a, b];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-    let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_cpu_runtime(op_name, |ctx| {
+    let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_runtime_cpu_only(op_name, |ctx| {
         Ok((
             dense_input_snapshot_in_ctx(ctx, a, needs_tangent)?,
             dense_input_snapshot_in_ctx(ctx, b, needs_tangent)?,
@@ -446,13 +446,13 @@ where
         let tb = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
             message: format!("{op_name} missing materialized rhs tangent"),
         })?;
-        let (p, d) = with_cpu_runtime(op_name, |ctx| {
+        let (p, d) = with_runtime_cpu_only(op_name, |ctx| {
             frule_fn(ctx, &a_primal, &b_primal, &ta, &tb).map_err(Error::from)
         })?;
         (p, Some(d))
     } else {
         (
-            with_cpu_runtime(op_name, |ctx| primal_fn(ctx, &a_primal, &b_primal))?,
+            with_runtime_cpu_only(op_name, |ctx| primal_fn(ctx, &a_primal, &b_primal))?,
             None,
         )
     };
@@ -468,7 +468,7 @@ where
             tape_id,
             output_node,
             Box::new(move |cotangent| {
-                let (grad_a, grad_b) = with_cpu_runtime(pullback_op_name, |ctx| {
+                let (grad_a, grad_b) = with_runtime_cpu_only(pullback_op_name, |ctx| {
                     rrule_fn(ctx, &a_primal, &b_primal, cotangent).map_err(Error::from)
                 })?;
 
@@ -524,7 +524,7 @@ where
     pub fn run(self) -> Result<AdSvdResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_cpu_runtime("svd_ad", |ctx| {
+        let (input_primal, input_tangent) = with_runtime_cpu_only("svd_ad", |ctx| {
             dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
         })?;
 
@@ -532,14 +532,14 @@ where
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "svd_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_cpu_runtime("svd_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("svd_ad", |ctx| {
                 tenferro_linalg::svd_frule::<T, _>(ctx, &input_primal, &dt, self.options)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("svd_ad", |ctx| {
+                with_runtime_cpu_only("svd_ad", |ctx| {
                     tenferro_linalg::svd::<T, CpuContext>(ctx, &input_primal, self.options)
                         .map_err(Error::from)
                 })?,
@@ -574,7 +574,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("svd_ad_pullback_u", |ctx| {
+                        let grad = with_runtime_cpu_only("svd_ad_pullback_u", |ctx| {
                             tenferro_linalg::svd_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -603,7 +603,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("svd_ad_pullback_s", |ctx| {
+                        let grad = with_runtime_cpu_only("svd_ad_pullback_s", |ctx| {
                             tenferro_linalg::svd_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -632,7 +632,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("svd_ad_pullback_vt", |ctx| {
+                        let grad = with_runtime_cpu_only("svd_ad_pullback_vt", |ctx| {
                             tenferro_linalg::svd_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -696,7 +696,7 @@ where
     pub fn run(self) -> Result<AdQrResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_cpu_runtime("qr_ad", |ctx| {
+        let (input_primal, input_tangent) = with_runtime_cpu_only("qr_ad", |ctx| {
             dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
         })?;
 
@@ -704,13 +704,13 @@ where
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "qr_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_cpu_runtime("qr_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("qr_ad", |ctx| {
                 tenferro_linalg::qr_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("qr_ad", |ctx| {
+                with_runtime_cpu_only("qr_ad", |ctx| {
                     tenferro_linalg::qr::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
                 })?,
                 None,
@@ -740,7 +740,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("qr_ad_pullback_q", |ctx| {
+                        let grad = with_runtime_cpu_only("qr_ad_pullback_q", |ctx| {
                             tenferro_linalg::qr_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -766,7 +766,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("qr_ad_pullback_r", |ctx| {
+                        let grad = with_runtime_cpu_only("qr_ad_pullback_r", |ctx| {
                             tenferro_linalg::qr_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -833,7 +833,7 @@ where
     pub fn run(self) -> Result<AdLuResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_cpu_runtime("lu_ad", |ctx| {
+        let (input_primal, input_tangent) = with_runtime_cpu_only("lu_ad", |ctx| {
             dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
         })?;
 
@@ -841,14 +841,14 @@ where
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "lu_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_cpu_runtime("lu_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("lu_ad", |ctx| {
                 tenferro_linalg::lu_frule::<T, _>(ctx, &input_primal, &dt, self.pivot)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("lu_ad", |ctx| {
+                with_runtime_cpu_only("lu_ad", |ctx| {
                     tenferro_linalg::lu::<T, CpuContext>(ctx, &input_primal, self.pivot)
                         .map_err(Error::from)
                 })?,
@@ -880,7 +880,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("lu_ad_pullback_l", |ctx| {
+                        let grad = with_runtime_cpu_only("lu_ad_pullback_l", |ctx| {
                             tenferro_linalg::lu_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -908,7 +908,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("lu_ad_pullback_u", |ctx| {
+                        let grad = with_runtime_cpu_only("lu_ad_pullback_u", |ctx| {
                             tenferro_linalg::lu_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -971,7 +971,7 @@ where
     pub fn run(self) -> Result<AdEigenResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_cpu_runtime("eigen_ad", |ctx| {
+        let (input_primal, input_tangent) = with_runtime_cpu_only("eigen_ad", |ctx| {
             dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
         })?;
 
@@ -979,13 +979,13 @@ where
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "eigen_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_cpu_runtime("eigen_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("eigen_ad", |ctx| {
                 tenferro_linalg::eigen_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("eigen_ad", |ctx| {
+                with_runtime_cpu_only("eigen_ad", |ctx| {
                     tenferro_linalg::eigen::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
                 })?,
                 None,
@@ -1015,7 +1015,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("eigen_ad_pullback_values", |ctx| {
+                        let grad = with_runtime_cpu_only("eigen_ad_pullback_values", |ctx| {
                             tenferro_linalg::eigen_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -1041,7 +1041,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("eigen_ad_pullback_vectors", |ctx| {
+                        let grad = with_runtime_cpu_only("eigen_ad_pullback_vectors", |ctx| {
                             tenferro_linalg::eigen_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -1100,7 +1100,7 @@ where
     pub fn run(self) -> Result<AdLstsqResult<T>> {
         let operands = [self.a, self.b];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_cpu_runtime("lstsq_ad", |ctx| {
+        let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_runtime_cpu_only("lstsq_ad", |ctx| {
             Ok((
                 dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
                 dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
@@ -1114,14 +1114,14 @@ where
             let db = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "lstsq_ad missing materialized rhs tangent".to_string(),
             })?;
-            let (p, d) = with_cpu_runtime("lstsq_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("lstsq_ad", |ctx| {
                 tenferro_linalg::lstsq_frule::<T, CpuContext>(ctx, &a_primal, &b_primal, &da, &db)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("lstsq_ad", |ctx| {
+                with_runtime_cpu_only("lstsq_ad", |ctx| {
                     tenferro_linalg::lstsq::<T, CpuContext>(ctx, &a_primal, &b_primal)
                         .map_err(Error::from)
                 })?,
@@ -1151,7 +1151,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("lstsq_ad_pullback_x", |ctx| {
+                        let grad = with_runtime_cpu_only("lstsq_ad_pullback_x", |ctx| {
                             tenferro_linalg::lstsq_rrule::<T, CpuContext>(
                                 ctx, &a_primal, &b_primal, cotangent,
                             )
@@ -1408,7 +1408,7 @@ where
     pub fn run(self) -> Result<AdSlogdetResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_cpu_runtime("slogdet_ad", |ctx| {
+        let (input_primal, input_tangent) = with_runtime_cpu_only("slogdet_ad", |ctx| {
             dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
         })?;
 
@@ -1416,14 +1416,14 @@ where
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "slogdet_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_cpu_runtime("slogdet_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("slogdet_ad", |ctx| {
                 tenferro_linalg::slogdet_frule::<T, CpuContext>(ctx, &input_primal, &dt)
                     .map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("slogdet_ad", |ctx| {
+                with_runtime_cpu_only("slogdet_ad", |ctx| {
                     tenferro_linalg::slogdet::<T, CpuContext>(ctx, &input_primal)
                         .map_err(Error::from)
                 })?,
@@ -1467,7 +1467,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("slogdet_ad_pullback_logabsdet", |ctx| {
+                        let grad = with_runtime_cpu_only("slogdet_ad_pullback_logabsdet", |ctx| {
                             tenferro_linalg::slogdet_rrule::<T, CpuContext>(
                                 ctx,
                                 &a_primal,
@@ -1528,7 +1528,7 @@ where
     pub fn run(self) -> Result<AdEigResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_cpu_runtime("eig_ad", |ctx| {
+        let (input_primal, input_tangent) = with_runtime_cpu_only("eig_ad", |ctx| {
             dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
         })?;
 
@@ -1536,13 +1536,13 @@ where
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "eig_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_cpu_runtime("eig_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("eig_ad", |ctx| {
                 tenferro_linalg::eig_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
             })?;
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("eig_ad", |ctx| {
+                with_runtime_cpu_only("eig_ad", |ctx| {
                     tenferro_linalg::eig::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
                 })?,
                 None,
@@ -1572,7 +1572,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("eig_ad_pullback_values", |ctx| {
+                        let grad = with_runtime_cpu_only("eig_ad_pullback_values", |ctx| {
                             tenferro_linalg::eig_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -1598,7 +1598,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_cpu_runtime("eig_ad_pullback_vectors", |ctx| {
+                        let grad = with_runtime_cpu_only("eig_ad_pullback_vectors", |ctx| {
                             tenferro_linalg::eig_rrule::<T, _>(
                                 ctx,
                                 &a_primal,
@@ -1778,7 +1778,7 @@ where
         let operands = [self.a, self.b];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let ((a_primal, a_tangent), (b_primal, b_tangent)) =
-            with_cpu_runtime("solve_triangular_ad", |ctx| {
+            with_runtime_cpu_only("solve_triangular_ad", |ctx| {
                 Ok((
                     dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
                     dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
@@ -1793,7 +1793,7 @@ where
                 message: "solve_triangular_ad missing materialized rhs tangent".to_string(),
             })?;
 
-            let (p, d) = with_cpu_runtime("solve_triangular_ad", |ctx| {
+            let (p, d) = with_runtime_cpu_only("solve_triangular_ad", |ctx| {
                 tenferro_linalg::solve_triangular_frule::<T, _>(
                     ctx, &a_primal, &b_primal, &ta, &tb, self.upper,
                 )
@@ -1802,7 +1802,7 @@ where
             (p, Some(d))
         } else {
             (
-                with_cpu_runtime("solve_triangular_ad", |ctx| {
+                with_runtime_cpu_only("solve_triangular_ad", |ctx| {
                     tenferro_linalg::solve_triangular::<T, CpuContext>(
                         ctx, &a_primal, &b_primal, self.upper,
                     )
@@ -1824,7 +1824,7 @@ where
                 tape_id,
                 output_node,
                 Box::new(move |cotangent| {
-                    let grad = with_cpu_runtime("solve_triangular_ad_pullback", |ctx| {
+                    let grad = with_runtime_cpu_only("solve_triangular_ad_pullback", |ctx| {
                         tenferro_linalg::solve_triangular_rrule::<T, _>(
                             ctx, &a_primal, &b_primal, cotangent, upper,
                         )

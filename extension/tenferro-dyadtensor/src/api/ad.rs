@@ -761,7 +761,7 @@ where
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
 {
     let primals: Vec<&Tensor<T>> = operands.iter().map(|op| op.primal()).collect();
-    super::with_cpu_runtime("einsum_rrule", |ctx| {
+    super::with_runtime_cpu_only("einsum_rrule", |ctx| {
         tf_einsum::einsum_rrule::<Standard<T>, CpuBackend>(
             ctx,
             subscripts,
@@ -800,7 +800,7 @@ where
         .map(|opt| opt.as_ref().map(|t| t.primal()))
         .collect();
 
-    super::with_cpu_runtime("einsum_frule", |ctx| {
+    super::with_runtime_cpu_only("einsum_frule", |ctx| {
         tf_einsum::einsum_frule::<Standard<T>, CpuBackend>(
             ctx,
             subscripts,
@@ -843,7 +843,7 @@ where
         .map(|opt| opt.as_ref().map(|t| t.primal()))
         .collect();
 
-    super::with_cpu_runtime("einsum_hvp", |ctx| {
+    super::with_runtime_cpu_only("einsum_hvp", |ctx| {
         tf_einsum::einsum_hvp::<Standard<T>, CpuBackend>(
             ctx,
             subscripts,
@@ -868,7 +868,7 @@ pub fn solve_triangular_rrule<T: Scalar>(
 where
     T: LinalgScalar + CpuLinalgScalar,
 {
-    super::with_cpu_runtime("solve_triangular_rrule", |ctx| {
+    super::with_runtime_cpu_only("solve_triangular_rrule", |ctx| {
         tenferro_linalg::solve_triangular_rrule::<T, _>(
             ctx,
             a.primal(),
