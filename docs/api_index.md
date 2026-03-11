@@ -46,10 +46,13 @@ Extension:  tenferro-tropical       Tropical semiring operations (MaxPlus, MinPl
 ```
 
 ### Dependency Graph
-
 Click a node to jump to its description below.
 
 <div class="dep-graph"><object data="dep_graph.svg" type="image/svg+xml">Dependency graph</object></div>
+
+Small note: this graph omits transitively implied edges by default. If
+`A -> B -> C`, the direct `A -> C` edge is left out unless it carries unique
+information, which keeps the layered structure readable.
 
 ## Crates
 

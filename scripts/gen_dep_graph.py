@@ -24,6 +24,7 @@ Options:
 import argparse
 import sys
 import tomllib
+from collections import defaultdict, deque
 from pathlib import Path
 
 
@@ -92,8 +93,53 @@ def parse_crate_deps(
     return crate_name, internal
 
 
+def adjacency_from_edges(edges: list[tuple[str, str]]) -> dict[str, set[str]]:
+    """Return adjacency sets for a directed graph."""
+    adj: dict[str, set[str]] = defaultdict(set)
+    for src, dst in edges:
+        adj[src].add(dst)
+        adj.setdefault(dst, set())
+    return adj
+
+
+def has_path_excluding_edge(
+    adj: dict[str, set[str]], src: str, dst: str, excluded: tuple[str, str]
+) -> bool:
+    """Return whether src reaches dst without traversing excluded edge."""
+    queue = deque([src])
+    seen = {src}
+    while queue:
+        current = queue.popleft()
+        for nxt in adj.get(current, ()):
+            if (current, nxt) == excluded:
+                continue
+            if nxt == dst:
+                return True
+            if nxt not in seen:
+                seen.add(nxt)
+                queue.append(nxt)
+    return False
+
+
+def transitive_reduction(
+    nodes: list[str], edges: list[tuple[str, str]]
+) -> list[tuple[str, str]]:
+    """Drop edges implied by another path in this DAG-like workspace graph."""
+    adj = adjacency_from_edges(edges)
+    reduced: list[tuple[str, str]] = []
+    for edge in edges:
+        src, dst = edge
+        if src not in nodes or dst not in nodes:
+            continue
+        if not has_path_excluding_edge(adj, src, dst, edge):
+            reduced.append(edge)
+    return reduced
+
+
 def generate_dot(
     root: Path,
+    *,
+    reduce_transitive_edges: bool = True,
 ) -> str:
     """Generate DOT source for the workspace dependency graph."""
     members = parse_workspace_members(root)
@@ -120,6 +166,10 @@ def generate_dot(
         for dep in internal_deps:
             edges.append((dep, crate_name))  # dep -> crate (dep is depended upon)
 
+    if reduce_transitive_edges:
+        ordered_nodes = [crate_name for _member, crate_name, _cls in crate_info]
+        edges = transitive_reduction(ordered_nodes, edges)
+
     # Group crates by class
     groups: dict[str, list[str]] = {"extern": [], "core": [], "extension": []}
     for _member, crate_name, cls in crate_info:
@@ -130,6 +180,9 @@ def generate_dot(
         "digraph workspace {",
         "    rankdir=BT;",
         "    compound=true;",
+        "    newrank=true;",
+        "    ranksep=0.8;",
+        "    nodesep=0.35;",
         '    node [shape=box, style="filled,rounded",',
         '          fontname="IBM Plex Sans", fontsize=12, margin="0.2,0.1"];',
         '    edge [color="#546e7a"];',
@@ -159,6 +212,13 @@ def generate_dot(
                 f'        "{name}" [label="{name}", fillcolor="{fillcolor}", '
                 f'URL="{url}", target="_parent"];'
             )
+        if len(crates) >= 2:
+            lines.append("")
+            for upper, lower in zip(crates, crates[1:]):
+                # Keep each cluster visually stacked without implying an API dependency.
+                lines.append(
+                    f'        "{lower}" -> "{upper}" [style=invis, weight=24, arrowhead=none];'
+                )
         lines.append("    }")
         lines.append("")
 
@@ -178,9 +238,17 @@ def main() -> None:
         default=Path(__file__).resolve().parent.parent,
         help="Workspace root directory",
     )
+    parser.add_argument(
+        "--no-transitive-reduction",
+        action="store_true",
+        help="Keep all direct workspace dependency edges instead of simplifying transitively implied ones",
+    )
     args = parser.parse_args()
 
-    dot_source = generate_dot(args.root_dir)
+    dot_source = generate_dot(
+        args.root_dir,
+        reduce_transitive_edges=not args.no_transitive_reduction,
+    )
     sys.stdout.write(dot_source)
     sys.stdout.write("\n")
 
