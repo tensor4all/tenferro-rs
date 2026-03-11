@@ -1,4 +1,3 @@
-use super::runtime::*;
 use super::*;
 
 pub struct SvdBuilder<'a, T: LinalgScalar> {
@@ -28,7 +27,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<SvdResult<T, T::Real>> {
-        with_cpu_runtime("svd", |ctx| {
+        with_runtime_cpu_only("svd", |ctx| {
             tenferro_linalg::svd::<T, CpuContext>(ctx, self.tensor, self.options)
                 .map_err(Error::from)
         })
@@ -69,7 +68,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<QrResult<T>> {
-        with_cpu_runtime("qr", |ctx| {
+        with_runtime_cpu_only("qr", |ctx| {
             tenferro_linalg::qr::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -118,7 +117,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<LuResult<T>> {
-        with_cpu_runtime("lu", |ctx| {
+        with_runtime_cpu_only("lu", |ctx| {
             tenferro_linalg::lu::<T, CpuContext>(ctx, self.tensor, self.pivot).map_err(Error::from)
         })
     }
@@ -158,7 +157,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<LuFactorResult<T>> {
-        with_cpu_runtime("lu_factor", |ctx| {
+        with_runtime_cpu_only("lu_factor", |ctx| {
             tenferro_linalg::lu_factor::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -195,7 +194,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<LuFactorExResult<T>> {
-        with_cpu_runtime("lu_factor_ex", |ctx| {
+        with_runtime_cpu_only("lu_factor_ex", |ctx| {
             tenferro_linalg::lu_factor_ex::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -232,7 +231,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<EigenResult<T, T::Real>> {
-        with_cpu_runtime("eigen", |ctx| {
+        with_runtime_cpu_only("eigen", |ctx| {
             tenferro_linalg::eigen::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -270,7 +269,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<LstsqResult<T>> {
-        with_cpu_runtime("lstsq", |ctx| {
+        with_runtime_cpu_only("lstsq", |ctx| {
             tenferro_linalg::lstsq::<T, CpuContext>(ctx, self.a, self.b).map_err(Error::from)
         })
     }
@@ -307,7 +306,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("cholesky", |ctx| {
+        with_runtime_cpu_only("cholesky", |ctx| {
             tenferro_linalg::cholesky::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -344,7 +343,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<CholeskyExResult<T>> {
-        with_cpu_runtime("cholesky_ex", |ctx| {
+        with_runtime_cpu_only("cholesky_ex", |ctx| {
             tenferro_linalg::cholesky_ex::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -382,7 +381,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("solve", |ctx| {
+        with_runtime_cpu_only("solve", |ctx| {
             tenferro_linalg::solve::<T, CpuContext>(ctx, self.a, self.b).map_err(Error::from)
         })
     }
@@ -420,7 +419,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<SolveExResult<T>> {
-        with_cpu_runtime("solve_ex", |ctx| {
+        with_runtime_cpu_only("solve_ex", |ctx| {
             tenferro_linalg::solve_ex::<T, CpuContext>(ctx, self.a, self.b).map_err(Error::from)
         })
     }
@@ -475,7 +474,7 @@ where
                 "lu_solve builder requires `.pivots(&[..])` before `run()`".into(),
             ))
         })?;
-        with_cpu_runtime("lu_solve", |ctx| {
+        with_runtime_cpu_only("lu_solve", |ctx| {
             tenferro_linalg::lu_solve::<T, CpuContext>(ctx, self.factors, pivots, self.b)
                 .map_err(Error::from)
         })
@@ -520,7 +519,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("inv", |ctx| {
+        with_runtime_cpu_only("inv", |ctx| {
             tenferro_linalg::inv::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -557,7 +556,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<InvExResult<T>> {
-        with_cpu_runtime("inv_ex", |ctx| {
+        with_runtime_cpu_only("inv_ex", |ctx| {
             tenferro_linalg::inv_ex::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -594,7 +593,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("det", |ctx| {
+        with_runtime_cpu_only("det", |ctx| {
             tenferro_linalg::det::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -631,7 +630,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<SlogdetResult<T>> {
-        with_cpu_runtime("slogdet", |ctx| {
+        with_runtime_cpu_only("slogdet", |ctx| {
             tenferro_linalg::slogdet::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -668,7 +667,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<EigResult<T>> {
-        with_cpu_runtime("eig", |ctx| {
+        with_runtime_cpu_only("eig", |ctx| {
             tenferro_linalg::eig::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -717,7 +716,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("pinv", |ctx| {
+        with_runtime_cpu_only("pinv", |ctx| {
             tenferro_linalg::pinv::<T, CpuContext>(ctx, self.tensor, self.rcond)
                 .map_err(Error::from)
         })
@@ -758,7 +757,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("matrix_exp", |ctx| {
+        with_runtime_cpu_only("matrix_exp", |ctx| {
             tenferro_linalg::matrix_exp::<T, CpuContext>(ctx, self.tensor).map_err(Error::from)
         })
     }
@@ -807,7 +806,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("matrix_power", |ctx| {
+        with_runtime_cpu_only("matrix_power", |ctx| {
             tenferro_linalg::matrix_power::<T, CpuContext>(ctx, self.tensor, self.exponent)
                 .map_err(Error::from)
         })
@@ -861,7 +860,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("solve_triangular", |ctx| {
+        with_runtime_cpu_only("solve_triangular", |ctx| {
             tenferro_linalg::solve_triangular::<T, CpuContext>(ctx, self.a, self.b, self.upper)
                 .map_err(Error::from)
         })
@@ -914,7 +913,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("norm", |ctx| {
+        with_runtime_cpu_only("norm", |ctx| {
             tenferro_linalg::norm::<T, CpuContext>(ctx, self.tensor, self.kind).map_err(Error::from)
         })
     }
@@ -966,7 +965,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("cond", |ctx| {
+        with_runtime_cpu_only("cond", |ctx| {
             tenferro_linalg::cond::<T, CpuContext>(ctx, self.tensor, self.kind).map_err(Error::from)
         })
     }
@@ -1007,7 +1006,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("cross", |ctx| {
+        with_runtime_cpu_only("cross", |ctx| {
             tenferro_linalg::cross::<T, CpuContext>(ctx, self.a, self.b).map_err(Error::from)
         })
     }
@@ -1045,7 +1044,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("householder_product", |ctx| {
+        with_runtime_cpu_only("householder_product", |ctx| {
             tenferro_linalg::householder_product::<T, CpuContext>(ctx, self.a, self.tau)
                 .map_err(Error::from)
         })
@@ -1110,7 +1109,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("vander", |ctx| {
+        with_runtime_cpu_only("vander", |ctx| {
             tenferro_linalg::vander::<T, CpuContext>(
                 ctx,
                 self.tensor,
@@ -1169,7 +1168,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("tensorinv", |ctx| {
+        with_runtime_cpu_only("tensorinv", |ctx| {
             tenferro_linalg::tensorinv::<T, CpuContext>(ctx, self.tensor, self.ind)
                 .map_err(Error::from)
         })
@@ -1220,7 +1219,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("tensorsolve", |ctx| {
+        with_runtime_cpu_only("tensorsolve", |ctx| {
             tenferro_linalg::tensorsolve::<T, CpuContext>(ctx, self.a, self.b, self.dims)
                 .map_err(Error::from)
         })

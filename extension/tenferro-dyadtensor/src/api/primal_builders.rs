@@ -1,4 +1,3 @@
-use super::runtime::*;
 use super::*;
 
 /// Builder for primal einsum.
@@ -40,7 +39,7 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
-        with_cpu_runtime("einsum", |ctx| {
+        with_runtime_cpu_only("einsum", |ctx| {
             tf_einsum::einsum::<Standard<T>, CpuBackend>(
                 ctx,
                 self.subscripts,

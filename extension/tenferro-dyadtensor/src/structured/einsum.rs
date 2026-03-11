@@ -6,7 +6,7 @@ use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
 use tenferro_tensor::Tensor;
 
-use crate::runtime::{with_default_runtime, RuntimeContext};
+use crate::api::with_runtime_cpu_only;
 use crate::{Error, Result};
 
 use super::meta::{plan_axis_classes_for_subscripts, OperandAxisClasses};
@@ -30,7 +30,7 @@ where
             return Ok(self.payload().clone());
         }
 
-        with_cpu_runtime("structured_to_dense", |ctx| to_dense_in_ctx(ctx, self))
+        with_runtime_cpu_only("structured_to_dense", |ctx| to_dense_in_ctx(ctx, self))
     }
 
     /// Contract/einsum structured operands while preserving compressed metadata.
@@ -50,7 +50,7 @@ where
             });
         }
 
-        with_cpu_runtime("structured_einsum", |ctx| {
+        with_runtime_cpu_only("structured_einsum", |ctx| {
             einsum_with_subscripts_in_ctx(ctx, subscripts, operands)
         })
     }
@@ -230,23 +230,6 @@ pub(crate) fn reverse_subscripts(subscripts: &Subscripts, input_idx: usize) -> S
         inputs: rev_inputs,
         output: subscripts.inputs[input_idx].clone(),
     }
-}
-
-fn with_cpu_runtime<R>(
-    op: &'static str,
-    f: impl FnOnce(&mut CpuContext) -> Result<R>,
-) -> Result<R> {
-    with_default_runtime(|runtime| match runtime {
-        RuntimeContext::Cpu(ctx) => f(ctx),
-        RuntimeContext::Cuda(_) => Err(Error::UnsupportedRuntimeOp {
-            op,
-            runtime: "cuda",
-        }),
-        RuntimeContext::Rocm(_) => Err(Error::UnsupportedRuntimeOp {
-            op,
-            runtime: "rocm",
-        }),
-    })
 }
 
 fn unique_ids_first_appearance(ids: &[usize]) -> Vec<usize> {
