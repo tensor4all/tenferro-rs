@@ -53,6 +53,10 @@ fn linalg_entrypoints_report_runtime_capability_failures() {
         "linalg builders should use shared runtime dispatch instead of with_cpu_runtime(...)"
     );
     assert!(
+        !linalg_builders.contains("with_runtime_cpu_only("),
+        "linalg builders should use shared runtime/capability dispatch instead of with_runtime_cpu_only(...)"
+    );
+    assert!(
         !primal_builders.contains("with_runtime_cpu_only("),
         "primal builders should dispatch through runtime-aware helpers instead of with_runtime_cpu_only(...)"
     );

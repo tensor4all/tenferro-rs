@@ -1,4 +1,6 @@
 use tenferro_algebra::{Scalar, Standard};
+use tenferro_linalg::backend::{LinalgCapabilityOp, TensorLinalgBackend, TensorLinalgContextFor};
+use tenferro_linalg::LinalgScalar;
 use tenferro_prims::{
     CpuBackend, CpuContext, CudaBackend, CudaContext, Extension, RocmBackend, RocmContext,
     TensorPrims,
@@ -57,6 +59,49 @@ where
         },
         |ctx| {
             if !<RocmBackend as TensorPrims<Standard<T>>>::has_extension_for(Extension::Contract) {
+                return Err(unsupported_runtime_capability(op, "rocm"));
+            }
+            rocm(ctx)
+        },
+    )
+}
+
+pub(crate) fn with_linalg_runtime<T: LinalgScalar, R>(
+    op: &'static str,
+    capability: LinalgCapabilityOp,
+    cpu: impl FnOnce(&mut CpuContext) -> Result<R>,
+    cuda: impl FnOnce(&mut CudaContext) -> Result<R>,
+    rocm: impl FnOnce(&mut RocmContext) -> Result<R>,
+) -> Result<R>
+where
+    CpuContext: TensorLinalgContextFor<T>,
+    CudaContext: TensorLinalgContextFor<T>,
+    RocmContext: TensorLinalgContextFor<T>,
+    <CpuContext as TensorLinalgContextFor<T>>::Backend:
+        TensorLinalgBackend<T, Context = CpuContext>,
+    <CudaContext as TensorLinalgContextFor<T>>::Backend:
+        TensorLinalgBackend<T, Context = CudaContext>,
+    <RocmContext as TensorLinalgContextFor<T>>::Backend:
+        TensorLinalgBackend<T, Context = RocmContext>,
+{
+    with_runtime(
+        |ctx| {
+            if !<<CpuContext as TensorLinalgContextFor<T>>::Backend as TensorLinalgBackend<T>>::has_linalg_support(capability)
+            {
+                return Err(unsupported_runtime_capability(op, "cpu"));
+            }
+            cpu(ctx)
+        },
+        |ctx| {
+            if !<<CudaContext as TensorLinalgContextFor<T>>::Backend as TensorLinalgBackend<T>>::has_linalg_support(capability)
+            {
+                return Err(unsupported_runtime_capability(op, "cuda"));
+            }
+            cuda(ctx)
+        },
+        |ctx| {
+            if !<<RocmContext as TensorLinalgContextFor<T>>::Backend as TensorLinalgBackend<T>>::has_linalg_support(capability)
+            {
                 return Err(unsupported_runtime_capability(op, "rocm"));
             }
             rocm(ctx)
