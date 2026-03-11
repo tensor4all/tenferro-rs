@@ -129,3 +129,91 @@ fn split_primal_modules_stay_under_size_guideline() {
         );
     }
 }
+
+#[test]
+fn rrules_is_split_into_focused_modules() {
+    assert!(
+        !repo_path("src/rrules.rs").exists(),
+        "rrules.rs should be replaced by a focused module directory"
+    );
+
+    for relative in [
+        "src/rrules/mod.rs",
+        "src/rrules/svd_qr.rs",
+        "src/rrules/lu_eigen.rs",
+        "src/rrules/least_squares.rs",
+        "src/rrules/linear_systems.rs",
+        "src/rrules/spectral.rs",
+        "src/rrules/matrix_functions.rs",
+        "src/rrules/norms.rs",
+    ] {
+        assert!(
+            repo_path(relative).exists(),
+            "expected split rrules module to exist: {relative}"
+        );
+    }
+}
+
+#[test]
+fn split_rrule_modules_stay_under_size_guideline() {
+    for relative in [
+        "src/rrules/svd_qr.rs",
+        "src/rrules/lu_eigen.rs",
+        "src/rrules/least_squares.rs",
+        "src/rrules/linear_systems.rs",
+        "src/rrules/spectral.rs",
+        "src/rrules/matrix_functions.rs",
+        "src/rrules/norms.rs",
+    ] {
+        let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
+        let line_count = contents.lines().count();
+        assert!(
+            line_count <= 500,
+            "{relative} should stay focused; found {line_count} lines"
+        );
+    }
+}
+
+#[test]
+fn frules_is_split_into_focused_modules() {
+    assert!(
+        !repo_path("src/frules.rs").exists(),
+        "frules.rs should be replaced by a focused module directory"
+    );
+
+    for relative in [
+        "src/frules/mod.rs",
+        "src/frules/svd_qr.rs",
+        "src/frules/lu_eigen.rs",
+        "src/frules/least_squares.rs",
+        "src/frules/linear_systems.rs",
+        "src/frules/spectral.rs",
+        "src/frules/matrix_functions.rs",
+        "src/frules/norms.rs",
+    ] {
+        assert!(
+            repo_path(relative).exists(),
+            "expected split frules module to exist: {relative}"
+        );
+    }
+}
+
+#[test]
+fn split_frule_modules_stay_under_size_guideline() {
+    for relative in [
+        "src/frules/svd_qr.rs",
+        "src/frules/lu_eigen.rs",
+        "src/frules/least_squares.rs",
+        "src/frules/linear_systems.rs",
+        "src/frules/spectral.rs",
+        "src/frules/matrix_functions.rs",
+        "src/frules/norms.rs",
+    ] {
+        let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
+        let line_count = contents.lines().count();
+        assert!(
+            line_count <= 500,
+            "{relative} should stay focused; found {line_count} lines"
+        );
+    }
+}
