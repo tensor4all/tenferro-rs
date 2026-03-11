@@ -1,5 +1,45 @@
 # tenferro-rs
 
+**A Rust-native tensor computation engine bridging scientific computing and machine learning.**
+
+## Vision
+
+Most tensor libraries are designed for one world: either ML frameworks (PyTorch, JAX) tuned
+for neural networks, or scientific computing tools (NumPy, Julia) tuned for physics and
+mathematics. tenferro-rs is designed for the intersection.
+
+```
+C / C++ / Fortran / Python / Julia
+            │
+            │  C FFI  (AD-compatible)
+            ▼
+       tenferro-rs
+  ┌─────────────────────────────┐
+  │  einsum over any algebra *  │
+  │  full AD  (VJP / JVP / HVP) │
+  │  extended precision (xprec) │
+  └─────────────────────────────┘
+            │
+     integration with burn
+            │
+            ▼
+  hybrid applications
+  (neural networks + tensor networks, etc.)
+```
+
+**\* einsum over any algebra**: Standard einsum multiplies and sums numbers. tenferro-rs lets
+you swap out those operations — for example, replacing addition with `max` gives the Tropical
+algebra used in combinatorial optimization; replacing `f64` with a double-double type gives
+extended precision. The same einsum engine and AD machinery work across all of them.
+
+### Key strengths
+
+- **Callable from C, C++, Fortran, Python, and Julia** via a stable C FFI — drop it into existing HPC codebases without rewriting anything.
+- **AD-compatible across language boundaries** — reverse-mode (VJP), forward-mode (JVP), and Hessian-vector products (HVP) are exposed through the C API so Python and Julia AD systems can interoperate.
+- **Algebra-parameterized** — einsum, linalg, and AD rules are generic over the algebra, not hardwired to floating-point arithmetic.
+- **Extended precision** — planned support for double-double and higher-precision types for numerically demanding simulations.
+- **ML bridge** — designed to interoperate with [burn](https://github.com/tracel-ai/burn) for hybrid neural network + tensor network models.
+
 A general-purpose tensor computation library in Rust with CPU support today and planned GPU support later.
 
 > [!WARNING]
