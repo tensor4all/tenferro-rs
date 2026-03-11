@@ -70,16 +70,10 @@ where
                     let Some(input_node) = input_node else {
                         return Ok(Vec::new());
                     };
-                    with_runtime(
-                        |_ctx| {
-                            let scalar = scalar_from_rank0_tensor(cotangent, "sum_ad")?;
-                            let payload = broadcast_scalar_like(scalar, input_layout.payload())?;
-                            let grad = input_layout.with_payload_like(payload)?;
-                            Ok(vec![(input_node, grad.into_payload())])
-                        },
-                        |_ctx| Err(unsupported_runtime_capability("sum_ad_pullback", "cuda")),
-                        |_ctx| Err(unsupported_runtime_capability("sum_ad_pullback", "rocm")),
-                    )
+                    let scalar = scalar_from_rank0_tensor(cotangent, "sum_ad")?;
+                    let payload = broadcast_scalar_like(scalar, input_layout.payload())?;
+                    let grad = input_layout.with_payload_like(payload)?;
+                    Ok(vec![(input_node, grad.into_payload())])
                 }),
             )?;
         }

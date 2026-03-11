@@ -1,6 +1,6 @@
 use super::*;
 use crate::{set_default_runtime, RuntimeContext};
-use tenferro_prims::{CpuContext, CudaContext};
+use tenferro_prims::{CpuBackend, CpuContext, CudaContext};
 use tenferro_tensor::MemoryOrder;
 
 fn vector(values: &[f64]) -> Tensor<f64> {
