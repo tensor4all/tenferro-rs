@@ -574,7 +574,8 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("lstsq_frule").map_err(to_ad_err)?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Lstsq, "lstsq_frule")
+        .map_err(to_ad_err)?;
 
     // dx = A^+ (db - dA x), where A^+ = (A^T A)^{-1} A^T
     let result = lstsq(ctx, a, b)
@@ -874,7 +875,8 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("inv_frule").map_err(to_ad_err)?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv_frule")
+        .map_err(to_ad_err)?;
 
     // dB = -B dA B where B = A^{-1}
     let b_inv = inv(ctx, tensor)
@@ -931,7 +933,8 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("det_frule").map_err(to_ad_err)?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det_frule")
+        .map_err(to_ad_err)?;
 
     // d(det) = det(A) * tr(A^{-1} dA)
     let d = det(ctx, tensor)
@@ -992,7 +995,8 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("slogdet_frule").map_err(to_ad_err)?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet_frule")
+        .map_err(to_ad_err)?;
 
     // d(logabsdet) = Re(tr(A^{-1} dA)), d(sign) = 0 (for real)
     let result = slogdet(ctx, tensor)
@@ -1160,7 +1164,8 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("pinv_frule").map_err(to_ad_err)?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Pinv, "pinv_frule")
+        .map_err(to_ad_err)?;
 
     // dA+ = -A+ dA A+ + (I - A+A) dA^T (A+)^T A+ + A+ (A+)^T dA^T (I - AA+)
     let ap = pinv(ctx, tensor, rcond)
@@ -1250,7 +1255,8 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("matrix_exp_frule").map_err(to_ad_err)?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixExp, "matrix_exp_frule")
+        .map_err(to_ad_err)?;
 
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
@@ -1332,7 +1338,8 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("norm_frule").map_err(to_ad_err)?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm_frule")
+        .map_err(to_ad_err)?;
 
     let nrm = norm(ctx, tensor, kind)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;

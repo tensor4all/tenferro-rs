@@ -385,7 +385,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("lu_solve")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuSolve, "lu_solve")?;
     lu_solve_impl(ctx, factors, pivots, b)
 }
 
@@ -474,7 +474,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("lstsq")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Lstsq, "lstsq")?;
 
     let (m, n, batch_dims) = validate_2d(a)?;
     if m < n {
@@ -599,7 +599,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("cholesky_ex")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::CholeskyEx, "cholesky_ex")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let bc = batch_count(batch_dims);
@@ -684,7 +684,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("solve_ex")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::SolveEx, "solve_ex")?;
 
     let (n, batch_dims) = validate_square(a)?;
     let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
@@ -743,7 +743,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("inv")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -836,7 +836,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("det")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -929,7 +929,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("slogdet")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -1052,18 +1052,20 @@ where
     })
 }
 
-pub(crate) fn ensure_cpu_backend<T: LinalgScalar, C>(op: &str) -> Result<()>
+pub(crate) fn require_linalg_support<T: LinalgScalar, C>(
+    capability: backend::LinalgCapabilityOp,
+    op: &str,
+) -> Result<()>
 where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
-    C::Backend: 'static,
 {
-    if TypeId::of::<C::Backend>() == TypeId::of::<backend::CpuTensorLinalgBackend>() {
+    if <C::Backend as backend::TensorLinalgBackend<T>>::has_linalg_support(capability) {
         return Ok(());
     }
 
     Err(Error::DeviceError(format!(
-        "{op} is currently supported only on CpuContext"
+        "{op} is not supported on the current linalg backend"
     )))
 }
 
@@ -1097,7 +1099,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("pinv")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Pinv, "pinv")?;
 
     let (m, n, batch_dims) = validate_2d(tensor)?;
 
@@ -1192,7 +1194,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("matrix_exp")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixExp, "matrix_exp")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
@@ -1241,7 +1243,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("matrix_power")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixPower, "matrix_power")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let bc = batch_count(batch_dims);
@@ -1305,7 +1307,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("cross")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Cross, "cross")?;
 
     if a.ndim() != b.ndim() {
         return Err(Error::InvalidArgument(format!(
@@ -1425,7 +1427,10 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("householder_product")?;
+    require_linalg_support::<T, C>(
+        backend::LinalgCapabilityOp::HouseholderProduct,
+        "householder_product",
+    )?;
 
     let (m, n, batch_dims) = validate_2d(a)?;
     if tau.ndim() != 1 + batch_dims.len() {
@@ -1524,7 +1529,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("vander")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Vander, "vander")?;
 
     let (vector_len, batch_dims): (usize, &[usize]) = if x.ndim() == 0 {
         (1, &[])
@@ -1600,7 +1605,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("tensorinv")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::TensorInv, "tensorinv")?;
 
     if ind == 0 || ind >= tensor.ndim() {
         return Err(Error::InvalidArgument(format!(
@@ -1668,7 +1673,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("tensorsolve")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::TensorSolve, "tensorsolve")?;
 
     if b.ndim() > a.ndim() {
         return Err(Error::InvalidArgument(format!(
@@ -1793,7 +1798,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    ensure_cpu_backend::<T, C>("norm")?;
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm")?;
 
     if tensor.ndim() == 1 {
         let input = ensure_col_major(tensor);

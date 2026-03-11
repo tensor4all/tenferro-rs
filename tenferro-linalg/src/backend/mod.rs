@@ -75,8 +75,8 @@ pub mod hip;
 
 // Tensor-level API (public)
 pub use tensor_api::{
-    EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
-    TensorLinalgBackend,
+    EigTensorResult, EigenTensorResult, LinalgCapabilityOp, LuTensorResult, QrTensorResult,
+    SvdTensorResult, TensorLinalgBackend,
 };
 pub use tensor_context::TensorLinalgContextFor;
 

@@ -304,8 +304,38 @@ pub struct EigTensorResult<T: LinalgScalar> {
 /// fn accepts_backend<B: TensorLinalgPrims<f64>>() {}
 /// let _ = accepts_backend::<todo!()>;
 /// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LinalgCapabilityOp {
+    Solve,
+    SolveTriangular,
+    Qr,
+    ThinSvd,
+    LuFactor,
+    Cholesky,
+    EigenSym,
+    Eig,
+    LuSolve,
+    Lstsq,
+    CholeskyEx,
+    SolveEx,
+    Inv,
+    Det,
+    Slogdet,
+    Pinv,
+    MatrixExp,
+    MatrixPower,
+    Cross,
+    HouseholderProduct,
+    Vander,
+    TensorInv,
+    TensorSolve,
+    Norm,
+}
+
 pub trait TensorLinalgPrims<T: LinalgScalar> {
     type Context;
+
+    fn has_linalg_support(op: LinalgCapabilityOp) -> bool;
 
     fn solve(ctx: &mut Self::Context, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>;
     fn solve_triangular(

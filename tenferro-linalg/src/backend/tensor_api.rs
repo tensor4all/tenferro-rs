@@ -7,8 +7,8 @@
 
 #[doc(inline)]
 pub use tenferro_linalg_prims::{
-    EigTensorResult, EigenTensorResult, LinalgScalar, LuTensorResult, QrTensorResult,
-    SvdTensorResult, TensorLinalgPrims as TensorLinalgBackend,
+    EigTensorResult, EigenTensorResult, LinalgCapabilityOp, LinalgScalar, LuTensorResult,
+    QrTensorResult, SvdTensorResult, TensorLinalgPrims as TensorLinalgBackend,
 };
 
 #[cfg(test)]
