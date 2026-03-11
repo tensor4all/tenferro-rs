@@ -8,6 +8,7 @@ use tenferro_prims::CpuBackend;
 use tenferro_prims::{CudaContext, RocmContext};
 use tenferro_tensor::MemoryOrder;
 
+mod organization;
 mod runtime_dispatch;
 mod support;
 

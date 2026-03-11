@@ -19,7 +19,17 @@ fn unary_and_reduction_entrypoints_route_through_runtime_dispatch() {
         repo_file("src/api/ad/scalar_eager.rs"),
     ]
     .join("\n");
-    let ad_builders = repo_file("src/api/ad_builders.rs");
+    let ad_builders = [
+        repo_file("src/api/ad_builders/common.rs"),
+        repo_file("src/api/ad_builders/einsum.rs"),
+        repo_file("src/api/ad_builders/reduction.rs"),
+        repo_file("src/api/ad_builders/linalg_single.rs"),
+        repo_file("src/api/ad_builders/linalg_multi.rs"),
+        repo_file("src/api/ad_builders/linalg_multi/svd_qr.rs"),
+        repo_file("src/api/ad_builders/linalg_multi/lu_lstsq.rs"),
+        repo_file("src/api/ad_builders/linalg_multi/spectral.rs"),
+    ]
+    .join("\n");
 
     assert!(
         !scalar_builders.contains("with_cpu_runtime("),
