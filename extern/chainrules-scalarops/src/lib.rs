@@ -616,3 +616,6 @@ pub fn powi_rrule<S: ScalarAd>(x: S, exponent: i32, cotangent: S) -> S {
     }
     cotangent * (S::from_i32(exponent) * x.powi(exponent - 1)).conj()
 }
+
+#[cfg(test)]
+mod tests;

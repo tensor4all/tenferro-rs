@@ -1,3 +1,5 @@
+mod scalar_generic;
+
 use num_complex::Complex64;
 
 use super::*;
