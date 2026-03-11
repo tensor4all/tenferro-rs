@@ -125,19 +125,15 @@ fn internal_helpers_cover_normalization_and_error_branches() {
     assert_eq!(diag_roots, vec![0]);
     assert_eq!(as_slice(&diag_payload), &[1.0, 4.0]);
 
-    let err = normalize_payload_for_roots::<CpuBackend, _, f64>(
-        &mut ctx,
-        &vector(&[1.0, 2.0]),
-        &[0, 0],
-    )
-    .unwrap_err();
+    let err =
+        normalize_payload_for_roots::<CpuBackend, _, f64>(&mut ctx, &vector(&[1.0, 2.0]), &[0, 0])
+            .unwrap_err();
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 
     let rank1_subs = Subscripts::new(&[&[0]], &[0]);
     let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
-    let err =
-        einsum_with_subscripts_in_ctx::<CpuBackend, _, f64>(&mut ctx, &rank1_subs, &[&diag])
-            .unwrap_err();
+    let err = einsum_with_subscripts_in_ctx::<CpuBackend, _, f64>(&mut ctx, &rank1_subs, &[&diag])
+        .unwrap_err();
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 
     let err = usize_vec_to_u32(&[usize::MAX]).unwrap_err();

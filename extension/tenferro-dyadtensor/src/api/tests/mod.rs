@@ -223,8 +223,14 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
 
         let primals = [&a, &b];
         let tangents = [Some(&da), None];
-        let tangent =
-            sum_einsum_tangent_terms(ctx, "ij,jk->ik", &primals, &tangents, None)?.unwrap();
+        let tangent = sum_einsum_tangent_terms::<CpuBackend, _, f64>(
+            ctx,
+            "ij,jk->ik",
+            &primals,
+            &tangents,
+            None,
+        )?
+        .unwrap();
         let expected = tenferro_einsum::einsum::<Standard<f64>, CpuBackend>(
             ctx,
             "ij,jk->ik",
@@ -238,7 +244,7 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
         let structured_a = StructuredTensor::from_dense(a.clone());
         let structured_b = StructuredTensor::from_dense(b.clone());
         let structured_da = StructuredTensor::from_dense(da.clone());
-        let structured_tangent = sum_structured_einsum_tangent_terms(
+        let structured_tangent = sum_structured_einsum_tangent_terms::<CpuBackend, _, f64>(
             ctx,
             &subs,
             &[&structured_a, &structured_b],

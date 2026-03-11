@@ -162,6 +162,30 @@ pub(crate) fn normalize_output_tangent_shape<T: Scalar>(
         })
 }
 
+pub(crate) fn dense_input_snapshot_in_backend<B, C, T>(
+    ctx: &mut C,
+    input: &AdTensor<T>,
+    needs_tangent: bool,
+) -> Result<(Tensor<T>, Option<Tensor<T>>)>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    B: TensorPrims<Standard<T>, Context = C>,
+{
+    let primal = to_dense_in_ctx::<B, _, T>(ctx, input.structured_primal())?
+        .contiguous(MemoryOrder::ColumnMajor);
+    let tangent = if needs_tangent {
+        Some(match input.structured_tangent() {
+            Some(tangent) => {
+                to_dense_in_ctx::<B, _, T>(ctx, tangent)?.contiguous(MemoryOrder::ColumnMajor)
+            }
+            None => zero_like(&primal),
+        })
+    } else {
+        None
+    };
+    Ok((primal, tangent))
+}
+
 pub(crate) fn dense_input_snapshot_in_ctx<T>(
     ctx: &mut CpuContext,
     input: &AdTensor<T>,
@@ -171,19 +195,7 @@ where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
 {
-    let primal = to_dense_in_ctx::<CpuBackend, _, T>(ctx, input.structured_primal())?
-        .contiguous(MemoryOrder::ColumnMajor);
-    let tangent = if needs_tangent {
-        Some(match input.structured_tangent() {
-            Some(tangent) => {
-                to_dense_in_ctx::<CpuBackend, _, T>(ctx, tangent)?.contiguous(MemoryOrder::ColumnMajor)
-            }
-            None => zero_like(&primal),
-        })
-    } else {
-        None
-    };
-    Ok((primal, tangent))
+    dense_input_snapshot_in_backend::<CpuBackend, _, T>(ctx, input, needs_tangent)
 }
 
 pub(crate) fn compress_pullback_like<T>(
@@ -201,9 +213,27 @@ where
     }
 
     with_runtime_cpu_only(op_name, |ctx| {
-        compress_dense_to_layout_in_ctx::<CpuBackend, _, T>(ctx, &dense, layout)
-            .map(StructuredTensor::into_payload)
+        compress_pullback_like_in_backend::<CpuBackend, _, T>(ctx, op_name, dense, layout)
     })
+}
+
+pub(crate) fn compress_pullback_like_in_backend<B, C, T>(
+    ctx: &mut C,
+    op_name: &'static str,
+    grad: Tensor<T>,
+    layout: &StructuredTensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    B: TensorPrims<Standard<T>, Context = C>,
+{
+    let dense = normalize_pullback_shape(grad, layout.logical_dims(), op_name)?;
+    if layout.is_dense() {
+        return Ok(dense);
+    }
+
+    compress_dense_to_layout_in_ctx::<B, _, T>(ctx, &dense, layout)
+        .map(StructuredTensor::into_payload)
 }
 
 pub(crate) fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
@@ -341,8 +371,8 @@ pub(crate) fn collect_reverse_input_nodes<S: Scalar>(
         .collect()
 }
 
-pub(crate) fn sum_einsum_tangent_terms<T>(
-    ctx: &mut CpuContext,
+pub(crate) fn sum_einsum_tangent_terms<B, C, T>(
+    ctx: &mut C,
     subscripts: &str,
     primals: &[&Tensor<T>],
     tangents: &[Option<&Tensor<T>>],
@@ -350,7 +380,7 @@ pub(crate) fn sum_einsum_tangent_terms<T>(
 ) -> Result<Option<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    B: TensorPrims<Standard<T>, Context = C>,
 {
     let mut out_tangent: Option<Tensor<T>> = None;
 
@@ -361,13 +391,8 @@ where
 
         let mut term_operands: Vec<&Tensor<T>> = primals.to_vec();
         term_operands[k] = tangent_k;
-        let term = tf_einsum::einsum::<Standard<T>, CpuBackend>(
-            ctx,
-            subscripts,
-            &term_operands,
-            size_dict,
-        )
-        .map_err(Error::from)?;
+        let term = tf_einsum::einsum::<Standard<T>, B>(ctx, subscripts, &term_operands, size_dict)
+            .map_err(Error::from)?;
 
         out_tangent = Some(match out_tangent {
             None => term,
@@ -378,15 +403,15 @@ where
     Ok(out_tangent)
 }
 
-pub(crate) fn sum_structured_einsum_tangent_terms<T>(
-    ctx: &mut CpuContext,
+pub(crate) fn sum_structured_einsum_tangent_terms<B, C, T>(
+    ctx: &mut C,
     subscripts: &Subscripts,
     primals: &[&StructuredTensor<T>],
     tangents: &[Option<&StructuredTensor<T>>],
 ) -> Result<Option<StructuredTensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    B: TensorPrims<Standard<T>, Context = C>,
 {
     let mut out_tangent: Option<StructuredTensor<T>> = None;
 
@@ -397,8 +422,7 @@ where
 
         let mut term_operands: Vec<&StructuredTensor<T>> = primals.to_vec();
         term_operands[k] = tangent_k;
-        let term =
-            einsum_with_subscripts_in_ctx::<CpuBackend, _, T>(ctx, subscripts, &term_operands)?;
+        let term = einsum_with_subscripts_in_ctx::<B, _, T>(ctx, subscripts, &term_operands)?;
 
         out_tangent = Some(match out_tangent {
             None => term,

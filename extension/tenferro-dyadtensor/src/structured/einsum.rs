@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use chainrules_core::Differentiable as _;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
-use tenferro_prims::{CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext, TensorPrims};
+use tenferro_prims::{
+    CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext, TensorPrims,
+};
 use tenferro_tensor::Tensor;
 
 use crate::api::with_einsum_runtime;
@@ -82,13 +84,9 @@ where
     let output_labels = usize_vec_to_u32(tensor.axis_classes())?;
     let inputs = [input_labels.as_slice()];
     let subs = Subscripts::new(&inputs, &output_labels);
-    let out = tf_einsum::einsum_with_subscripts::<Standard<T>, B>(
-        ctx,
-        &subs,
-        &[tensor.payload()],
-        None,
-    )
-    .map_err(Error::from)?;
+    let out =
+        tf_einsum::einsum_with_subscripts::<Standard<T>, B>(ctx, &subs, &[tensor.payload()], None)
+            .map_err(Error::from)?;
     if out.dims() != tensor.logical_dims() {
         return Err(Error::InvalidAdTensor {
             message: format!(
@@ -127,9 +125,8 @@ where
     let output_labels = usize_vec_to_u32(&(0..layout.class_count()).collect::<Vec<_>>())?;
     let inputs = [input_labels.as_slice()];
     let subs = Subscripts::new(&inputs, &output_labels);
-    let payload =
-        tf_einsum::einsum_with_subscripts::<Standard<T>, B>(ctx, &subs, &[dense], None)
-            .map_err(Error::from)?;
+    let payload = tf_einsum::einsum_with_subscripts::<Standard<T>, B>(ctx, &subs, &[dense], None)
+        .map_err(Error::from)?;
     layout.with_payload_like(payload)
 }
 

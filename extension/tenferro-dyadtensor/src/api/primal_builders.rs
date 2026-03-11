@@ -10,10 +10,8 @@ pub struct EinsumBuilder<'a, T>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend:
-        TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend:
-        TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     subscripts: &'a str,
     operands: &'a [&'a Tensor<T>],
@@ -24,10 +22,8 @@ impl<'a, T> EinsumBuilder<'a, T>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend:
-        TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend:
-        TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     /// Sets optional size dictionary for output-only labels.
     /// # Examples
@@ -99,10 +95,8 @@ pub fn einsum<'a, T>(subscripts: &'a str, operands: &'a [&'a Tensor<T>]) -> Eins
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-    tenferro_prims::CudaBackend:
-        TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-    tenferro_prims::RocmBackend:
-        TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     EinsumBuilder {
         subscripts,

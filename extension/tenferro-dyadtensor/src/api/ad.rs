@@ -208,6 +208,8 @@ pub fn einsum<'a, T>(subscripts: &'a str, operands: &'a [&'a AdTensor<T>]) -> Re
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     super::einsum_ad(subscripts, operands).run()
 }
@@ -681,17 +683,40 @@ pub fn einsum_rrule<'a, T>(
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     let primals: Vec<&Tensor<T>> = operands.iter().map(|op| op.primal()).collect();
-    super::with_runtime_cpu_only("einsum_rrule", |ctx| {
-        tf_einsum::einsum_rrule::<Standard<T>, CpuBackend>(
-            ctx,
-            subscripts,
-            &primals,
-            cotangent.primal(),
-        )
-        .map_err(Error::from)
-    })
+    super::with_einsum_runtime::<T, _>(
+        "einsum_rrule",
+        |ctx| {
+            tf_einsum::einsum_rrule::<Standard<T>, CpuBackend>(
+                ctx,
+                subscripts,
+                &primals,
+                cotangent.primal(),
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tf_einsum::einsum_rrule::<Standard<T>, tenferro_prims::CudaBackend>(
+                ctx,
+                subscripts,
+                &primals,
+                cotangent.primal(),
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tf_einsum::einsum_rrule::<Standard<T>, tenferro_prims::RocmBackend>(
+                ctx,
+                subscripts,
+                &primals,
+                cotangent.primal(),
+            )
+            .map_err(Error::from)
+        },
+    )
 }
 
 /// Local forward-mode rule (JVP) for einsum.
@@ -705,6 +730,8 @@ pub fn einsum_frule<'a, T>(
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     if primals.len() != tangents.len() {
         return Err(Error::InvalidAdTensor {
@@ -722,15 +749,36 @@ where
         .map(|opt| opt.as_ref().map(|t| t.primal()))
         .collect();
 
-    super::with_runtime_cpu_only("einsum_frule", |ctx| {
-        tf_einsum::einsum_frule::<Standard<T>, CpuBackend>(
-            ctx,
-            subscripts,
-            &primal_refs,
-            &tangent_refs,
-        )
-        .map_err(Error::from)
-    })
+    super::with_einsum_runtime::<T, _>(
+        "einsum_frule",
+        |ctx| {
+            tf_einsum::einsum_frule::<Standard<T>, CpuBackend>(
+                ctx,
+                subscripts,
+                &primal_refs,
+                &tangent_refs,
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tf_einsum::einsum_frule::<Standard<T>, tenferro_prims::CudaBackend>(
+                ctx,
+                subscripts,
+                &primal_refs,
+                &tangent_refs,
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tf_einsum::einsum_frule::<Standard<T>, tenferro_prims::RocmBackend>(
+                ctx,
+                subscripts,
+                &primal_refs,
+                &tangent_refs,
+            )
+            .map_err(Error::from)
+        },
+    )
 }
 
 /// Local Hessian-vector product helper for einsum.
@@ -748,6 +796,8 @@ pub fn einsum_hvp<'a, T>(
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     if primals.len() != tangents.len() {
         return Err(Error::InvalidAdTensor {
@@ -765,17 +815,42 @@ where
         .map(|opt| opt.as_ref().map(|t| t.primal()))
         .collect();
 
-    super::with_runtime_cpu_only("einsum_hvp", |ctx| {
-        tf_einsum::einsum_hvp::<Standard<T>, CpuBackend>(
-            ctx,
-            subscripts,
-            &primal_refs,
-            &tangent_refs,
-            cotangent.primal(),
-            cotangent_tangent.primal(),
-        )
-        .map_err(Error::from)
-    })
+    super::with_einsum_runtime::<T, _>(
+        "einsum_hvp",
+        |ctx| {
+            tf_einsum::einsum_hvp::<Standard<T>, CpuBackend>(
+                ctx,
+                subscripts,
+                &primal_refs,
+                &tangent_refs,
+                cotangent.primal(),
+                cotangent_tangent.primal(),
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tf_einsum::einsum_hvp::<Standard<T>, tenferro_prims::CudaBackend>(
+                ctx,
+                subscripts,
+                &primal_refs,
+                &tangent_refs,
+                cotangent.primal(),
+                cotangent_tangent.primal(),
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tf_einsum::einsum_hvp::<Standard<T>, tenferro_prims::RocmBackend>(
+                ctx,
+                subscripts,
+                &primal_refs,
+                &tangent_refs,
+                cotangent.primal(),
+                cotangent_tangent.primal(),
+            )
+            .map_err(Error::from)
+        },
+    )
 }
 
 /// Local reverse-mode rule (VJP) for triangular solve.

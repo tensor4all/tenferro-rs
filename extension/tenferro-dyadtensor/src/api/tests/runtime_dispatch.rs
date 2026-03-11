@@ -30,8 +30,16 @@ fn unary_and_reduction_entrypoints_route_through_runtime_dispatch() {
         "AD entrypoints should route through runtime dispatch instead of with_cpu_runtime(...)"
     );
     assert!(
+        !ad_api.contains("with_runtime_cpu_only(\"einsum"),
+        "einsum AD entrypoints should dispatch through runtime-aware helpers instead of with_runtime_cpu_only(...)"
+    );
+    assert!(
         !ad_builders.contains("with_cpu_runtime("),
         "AD builders should route through runtime dispatch instead of with_cpu_runtime(...)"
+    );
+    assert!(
+        !ad_builders.contains("with_runtime_cpu_only(\"einsum"),
+        "einsum AD builders should dispatch through runtime-aware helpers instead of with_runtime_cpu_only(...)"
     );
 }
 
