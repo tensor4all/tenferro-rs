@@ -65,11 +65,15 @@ fn compression_and_tangent_accumulation_cover_dense_and_diag_paths() {
     let dense_layout = StructuredTensor::from_dense(matrix(&[1.0, 2.0, 3.0, 4.0], 2, 2));
     let diag_layout = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
 
-    let dense =
-        compress_dense_to_layout_in_ctx(&mut ctx, dense_layout.payload(), &dense_layout).unwrap();
+    let dense = compress_dense_to_layout_in_ctx::<CpuBackend, _, f64>(
+        &mut ctx,
+        dense_layout.payload(),
+        &dense_layout,
+    )
+    .unwrap();
     assert!(dense.is_dense());
 
-    let diag = compress_dense_to_layout_in_ctx(
+    let diag = compress_dense_to_layout_in_ctx::<CpuBackend, _, f64>(
         &mut ctx,
         &matrix(&[5.0, 7.0, 11.0, 13.0], 2, 2),
         &diag_layout,
@@ -77,8 +81,12 @@ fn compression_and_tangent_accumulation_cover_dense_and_diag_paths() {
     .unwrap();
     assert_eq!(as_slice(diag.payload()), &[5.0, 13.0]);
 
-    let err =
-        compress_dense_to_layout_in_ctx(&mut ctx, &vector(&[1.0, 2.0]), &diag_layout).unwrap_err();
+    let err = compress_dense_to_layout_in_ctx::<CpuBackend, _, f64>(
+        &mut ctx,
+        &vector(&[1.0, 2.0]),
+        &diag_layout,
+    )
+    .unwrap_err();
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 
     let diag_rhs = diag_layout.with_payload_like(vector(&[3.0, 4.0])).unwrap();
@@ -103,22 +111,33 @@ fn internal_helpers_cover_normalization_and_error_branches() {
     assert_eq!(rev.output, vec![1, 2]);
 
     let (same_payload, same_roots) =
-        normalize_payload_for_roots(&mut ctx, &vector(&[1.0, 2.0]), &[0]).unwrap();
+        normalize_payload_for_roots::<CpuBackend, _, f64>(&mut ctx, &vector(&[1.0, 2.0]), &[0])
+            .unwrap();
     assert_eq!(same_roots, vec![0]);
     assert_eq!(as_slice(&same_payload), &[1.0, 2.0]);
 
-    let (diag_payload, diag_roots) =
-        normalize_payload_for_roots(&mut ctx, &matrix(&[1.0, 2.0, 3.0, 4.0], 2, 2), &[0, 0])
-            .unwrap();
+    let (diag_payload, diag_roots) = normalize_payload_for_roots::<CpuBackend, _, f64>(
+        &mut ctx,
+        &matrix(&[1.0, 2.0, 3.0, 4.0], 2, 2),
+        &[0, 0],
+    )
+    .unwrap();
     assert_eq!(diag_roots, vec![0]);
     assert_eq!(as_slice(&diag_payload), &[1.0, 4.0]);
 
-    let err = normalize_payload_for_roots(&mut ctx, &vector(&[1.0, 2.0]), &[0, 0]).unwrap_err();
+    let err = normalize_payload_for_roots::<CpuBackend, _, f64>(
+        &mut ctx,
+        &vector(&[1.0, 2.0]),
+        &[0, 0],
+    )
+    .unwrap_err();
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 
     let rank1_subs = Subscripts::new(&[&[0]], &[0]);
     let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
-    let err = einsum_with_subscripts_in_ctx(&mut ctx, &rank1_subs, &[&diag]).unwrap_err();
+    let err =
+        einsum_with_subscripts_in_ctx::<CpuBackend, _, f64>(&mut ctx, &rank1_subs, &[&diag])
+            .unwrap_err();
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 
     let err = usize_vec_to_u32(&[usize::MAX]).unwrap_err();

@@ -45,8 +45,8 @@ fn linalg_entrypoints_report_runtime_capability_failures() {
         "linalg builders should use shared runtime dispatch instead of with_cpu_runtime(...)"
     );
     assert!(
-        !primal_builders.contains("with_cpu_runtime("),
-        "primal builders should use shared runtime dispatch instead of with_cpu_runtime(...)"
+        !primal_builders.contains("with_runtime_cpu_only("),
+        "primal builders should dispatch through runtime-aware helpers instead of with_runtime_cpu_only(...)"
     );
 }
 
@@ -55,7 +55,7 @@ fn structured_einsum_uses_shared_runtime_dispatch_path() {
     let structured_einsum = repo_file("src/structured/einsum.rs");
 
     assert!(
-        !structured_einsum.contains("with_cpu_runtime("),
+        !structured_einsum.contains("with_runtime_cpu_only("),
         "structured einsum should share the same runtime-dispatch path as the rest of dyadtensor"
     );
 }

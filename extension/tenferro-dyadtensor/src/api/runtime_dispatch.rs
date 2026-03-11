@@ -1,4 +1,8 @@
-use tenferro_prims::{CpuContext, CudaContext, RocmContext};
+use tenferro_algebra::{Scalar, Standard};
+use tenferro_prims::{
+    CpuBackend, CpuContext, CudaBackend, CudaContext, Extension, RocmBackend, RocmContext,
+    TensorPrims,
+};
 
 use crate::runtime::RuntimeContext;
 use crate::{Error, Result};
@@ -29,5 +33,33 @@ pub(crate) fn with_runtime_cpu_only<R>(
         cpu,
         |_ctx| Err(unsupported_runtime_capability(op, "cuda")),
         |_ctx| Err(unsupported_runtime_capability(op, "rocm")),
+    )
+}
+
+pub(crate) fn with_einsum_runtime<T: Scalar, R>(
+    op: &'static str,
+    cpu: impl FnOnce(&mut CpuContext) -> Result<R>,
+    cuda: impl FnOnce(&mut CudaContext) -> Result<R>,
+    rocm: impl FnOnce(&mut RocmContext) -> Result<R>,
+) -> Result<R>
+where
+    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    CudaBackend: TensorPrims<Standard<T>, Context = CudaContext>,
+    RocmBackend: TensorPrims<Standard<T>, Context = RocmContext>,
+{
+    with_runtime(
+        cpu,
+        |ctx| {
+            if !<CudaBackend as TensorPrims<Standard<T>>>::has_extension_for(Extension::Contract) {
+                return Err(unsupported_runtime_capability(op, "cuda"));
+            }
+            cuda(ctx)
+        },
+        |ctx| {
+            if !<RocmBackend as TensorPrims<Standard<T>>>::has_extension_for(Extension::Contract) {
+                return Err(unsupported_runtime_capability(op, "rocm"));
+            }
+            rocm(ctx)
+        },
     )
 }

@@ -51,7 +51,8 @@ where
                     .iter()
                     .map(|op| op.structured_primal())
                     .collect();
-                let primal_out = einsum_with_subscripts_in_ctx(ctx, &subs, &primals)?;
+                let primal_out =
+                    einsum_with_subscripts_in_ctx::<CpuBackend, _, T>(ctx, &subs, &primals)?;
 
                 let tangents = collect_structured_ad_tangents(self.operands);
                 let tangent_out = if has_forward(self.operands) || has_any_tangent(self.operands) {
@@ -100,7 +101,11 @@ where
                                 let grad = with_runtime_cpu_only(
                                     "einsum_ad_pullback_structured",
                                     |ctx| {
-                                        einsum_with_subscripts_in_ctx(ctx, &rev_subs, &rev_operands)
+                                        einsum_with_subscripts_in_ctx::<CpuBackend, _, T>(
+                                            ctx,
+                                            &rev_subs,
+                                            &rev_operands,
+                                        )
                                     },
                                 )?;
                                 input_grads.push((*node, grad.into_payload()));

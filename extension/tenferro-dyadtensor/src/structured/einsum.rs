@@ -3,10 +3,10 @@ use std::collections::{HashMap, HashSet};
 use chainrules_core::Differentiable as _;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
-use tenferro_prims::{CpuBackend, CpuContext, TensorPrims};
+use tenferro_prims::{CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext, TensorPrims};
 use tenferro_tensor::Tensor;
 
-use crate::api::with_runtime_cpu_only;
+use crate::api::with_einsum_runtime;
 use crate::{Error, Result};
 
 use super::meta::{plan_axis_classes_for_subscripts, OperandAxisClasses};
@@ -16,6 +16,8 @@ impl<T> StructuredTensor<T>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    CudaBackend: TensorPrims<Standard<T>, Context = CudaContext>,
+    RocmBackend: TensorPrims<Standard<T>, Context = RocmContext>,
 {
     /// Materialize this structured tensor into a dense payload tensor.
     ///
@@ -30,7 +32,12 @@ where
             return Ok(self.payload().clone());
         }
 
-        with_runtime_cpu_only("structured_to_dense", |ctx| to_dense_in_ctx(ctx, self))
+        with_einsum_runtime::<T, _>(
+            "structured_to_dense",
+            |ctx| to_dense_in_ctx::<CpuBackend, _, T>(ctx, self),
+            |ctx| to_dense_in_ctx::<CudaBackend, _, T>(ctx, self),
+            |ctx| to_dense_in_ctx::<RocmBackend, _, T>(ctx, self),
+        )
     }
 
     /// Contract/einsum structured operands while preserving compressed metadata.
@@ -50,19 +57,22 @@ where
             });
         }
 
-        with_runtime_cpu_only("structured_einsum", |ctx| {
-            einsum_with_subscripts_in_ctx(ctx, subscripts, operands)
-        })
+        with_einsum_runtime::<T, _>(
+            "structured_einsum",
+            |ctx| einsum_with_subscripts_in_ctx::<CpuBackend, _, T>(ctx, subscripts, operands),
+            |ctx| einsum_with_subscripts_in_ctx::<CudaBackend, _, T>(ctx, subscripts, operands),
+            |ctx| einsum_with_subscripts_in_ctx::<RocmBackend, _, T>(ctx, subscripts, operands),
+        )
     }
 }
 
-pub(crate) fn to_dense_in_ctx<T>(
-    ctx: &mut CpuContext,
+pub(crate) fn to_dense_in_ctx<B, C, T>(
+    ctx: &mut C,
     tensor: &StructuredTensor<T>,
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    B: TensorPrims<Standard<T>, Context = C>,
 {
     if tensor.is_dense() {
         return Ok(tensor.payload().clone());
@@ -72,7 +82,7 @@ where
     let output_labels = usize_vec_to_u32(tensor.axis_classes())?;
     let inputs = [input_labels.as_slice()];
     let subs = Subscripts::new(&inputs, &output_labels);
-    let out = tf_einsum::einsum_with_subscripts::<Standard<T>, CpuBackend>(
+    let out = tf_einsum::einsum_with_subscripts::<Standard<T>, B>(
         ctx,
         &subs,
         &[tensor.payload()],
@@ -91,14 +101,14 @@ where
     Ok(out)
 }
 
-pub(crate) fn compress_dense_to_layout_in_ctx<T>(
-    ctx: &mut CpuContext,
+pub(crate) fn compress_dense_to_layout_in_ctx<B, C, T>(
+    ctx: &mut C,
     dense: &Tensor<T>,
     layout: &StructuredTensor<T>,
 ) -> Result<StructuredTensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    B: TensorPrims<Standard<T>, Context = C>,
 {
     if dense.dims() != layout.logical_dims() {
         return Err(Error::InvalidAdTensor {
@@ -118,19 +128,19 @@ where
     let inputs = [input_labels.as_slice()];
     let subs = Subscripts::new(&inputs, &output_labels);
     let payload =
-        tf_einsum::einsum_with_subscripts::<Standard<T>, CpuBackend>(ctx, &subs, &[dense], None)
+        tf_einsum::einsum_with_subscripts::<Standard<T>, B>(ctx, &subs, &[dense], None)
             .map_err(Error::from)?;
     layout.with_payload_like(payload)
 }
 
-pub(crate) fn einsum_with_subscripts_in_ctx<T>(
-    ctx: &mut CpuContext,
+pub(crate) fn einsum_with_subscripts_in_ctx<B, C, T>(
+    ctx: &mut C,
     subscripts: &Subscripts,
     operands: &[&StructuredTensor<T>],
 ) -> Result<StructuredTensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    B: TensorPrims<Standard<T>, Context = C>,
 {
     let operand_meta: Vec<OperandAxisClasses> = operands
         .iter()
@@ -165,7 +175,8 @@ where
                 ),
             });
         }
-        let (normalized, roots) = normalize_payload_for_roots(ctx, operand.payload(), class_roots)?;
+        let (normalized, roots) =
+            normalize_payload_for_roots::<B, _, T>(ctx, operand.payload(), class_roots)?;
         normalized_payloads.push(normalized);
         normalized_roots.push(roots);
     }
@@ -179,7 +190,7 @@ where
     let payload_refs: Vec<&Tensor<T>> = normalized_payloads.iter().collect();
     let backend_subs = Subscripts::new(&input_refs, &output_labels_u32);
 
-    let compressed_output = tf_einsum::einsum_with_subscripts::<Standard<T>, CpuBackend>(
+    let compressed_output = tf_einsum::einsum_with_subscripts::<Standard<T>, B>(
         ctx,
         &backend_subs,
         &payload_refs,
@@ -254,14 +265,14 @@ fn first_duplicate_pair(ids: &[usize]) -> Option<(usize, usize)> {
     None
 }
 
-fn normalize_payload_for_roots<T>(
-    ctx: &mut CpuContext,
+fn normalize_payload_for_roots<B, C, T>(
+    ctx: &mut C,
     payload: &Tensor<T>,
     roots: &[usize],
 ) -> Result<(Tensor<T>, Vec<usize>)>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    B: TensorPrims<Standard<T>, Context = C>,
 {
     if payload.dims().len() != roots.len() {
         return Err(Error::InvalidAdTensor {
@@ -298,7 +309,7 @@ where
             .collect();
         let inputs = [input_labels.as_slice()];
         let subs = Subscripts::new(&inputs, &output_labels);
-        current_payload = tf_einsum::einsum_with_subscripts::<Standard<T>, CpuBackend>(
+        current_payload = tf_einsum::einsum_with_subscripts::<Standard<T>, B>(
             ctx,
             &subs,
             &[&current_payload],

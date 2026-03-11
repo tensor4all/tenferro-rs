@@ -171,11 +171,13 @@ where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
 {
-    let primal =
-        to_dense_in_ctx(ctx, input.structured_primal())?.contiguous(MemoryOrder::ColumnMajor);
+    let primal = to_dense_in_ctx::<CpuBackend, _, T>(ctx, input.structured_primal())?
+        .contiguous(MemoryOrder::ColumnMajor);
     let tangent = if needs_tangent {
         Some(match input.structured_tangent() {
-            Some(tangent) => to_dense_in_ctx(ctx, tangent)?.contiguous(MemoryOrder::ColumnMajor),
+            Some(tangent) => {
+                to_dense_in_ctx::<CpuBackend, _, T>(ctx, tangent)?.contiguous(MemoryOrder::ColumnMajor)
+            }
             None => zero_like(&primal),
         })
     } else {
@@ -199,7 +201,8 @@ where
     }
 
     with_runtime_cpu_only(op_name, |ctx| {
-        compress_dense_to_layout_in_ctx(ctx, &dense, layout).map(StructuredTensor::into_payload)
+        compress_dense_to_layout_in_ctx::<CpuBackend, _, T>(ctx, &dense, layout)
+            .map(StructuredTensor::into_payload)
     })
 }
 
@@ -394,7 +397,8 @@ where
 
         let mut term_operands: Vec<&StructuredTensor<T>> = primals.to_vec();
         term_operands[k] = tangent_k;
-        let term = einsum_with_subscripts_in_ctx(ctx, subscripts, &term_operands)?;
+        let term =
+            einsum_with_subscripts_in_ctx::<CpuBackend, _, T>(ctx, subscripts, &term_operands)?;
 
         out_tangent = Some(match out_tangent {
             None => term,
