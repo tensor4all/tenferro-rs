@@ -28,6 +28,21 @@
 - Use `thiserror` for public API error types.
 - Use `anyhow` only for internal glue where typed errors are not part of the public contract.
 
+## Build Environment
+
+- Do not treat NFS or other network filesystems as a normal location for Rust
+  development worktrees. Strongly prefer putting the repository or worktree
+  itself on local disk.
+- If a repository is on NFS or another network filesystem, explicitly warn the
+  user before running heavy Rust commands. State that compile and link times
+  can degrade severely and that local-disk worktrees are strongly preferred.
+- Continue on NFS only if the user explicitly wants to proceed anyway.
+- When proceeding on NFS, place Cargo build artifacts on local disk rather than
+  inside the repository checkout.
+- Prefer a stable repo-specific local target directory such as
+  `CARGO_TARGET_DIR=/tmp/<repo>-target` for `cargo build`, `cargo test`,
+  `cargo llvm-cov`, and similar heavy commands.
+
 ## File Organization
 
 Keep source files small and focused. Split by behavior or abstraction boundary, not by arbitrary line count.
