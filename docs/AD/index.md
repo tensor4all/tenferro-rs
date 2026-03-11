@@ -27,10 +27,14 @@ source of formula detail.
 
 ### `chainrules-scalarops`
 
-- Scalar arithmetic: `add`, `add_rrule`, `add_frule`
-- Unary scalar rules: `conj`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`
+- Scalar arithmetic: `add`, `sub`, `mul`, `div` plus matching `*_rrule` / `*_frule`
+- Unary scalar rules: `conj`, `sqrt`, `exp`, `log`
 - Binary scalar rules: `atan2`
 - Power helpers: `powf`, `powi`
+
+`chainrules-scalarops` intentionally stays small. Tensor-level wrappers such as
+`sin`, `cos`, `tanh`, `asin`, `pow`, `hypot`, `var`, and `std` are implemented
+one layer up in `tenferro-dyadtensor` by composing runtime-generic tensor prims.
 
 ### `tenferro-einsum`
 
@@ -59,7 +63,12 @@ source of formula detail.
 ### `tenferro-dyadtensor`
 
 - Eager tensor AD entrypoints: `ad::einsum`, `ad::sum`, `ad::mean`, `ad::var`, `ad::std`
-- Eager scalar wrappers: `ad::add`, `ad::atan2`, `ad::sqrt`, `ad::exp`, `ad::expm1`, `ad::log`, `ad::log1p`, `ad::sin`, `ad::cos`, `ad::tanh`
+- Eager scalar wrappers:
+  `ad::add`, `ad::atan2`, `ad::pow`, `ad::hypot`,
+  `ad::sqrt`, `ad::exp`, `ad::expm1`, `ad::log`, `ad::log1p`,
+  `ad::sin`, `ad::cos`, `ad::tanh`,
+  `ad::asin`, `ad::acos`, `ad::atan`,
+  `ad::sinh`, `ad::cosh`, `ad::asinh`, `ad::acosh`, `ad::atanh`
 - Builder-based linalg wrappers: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
 
 For a broader crate-by-crate support view, including primal coverage and

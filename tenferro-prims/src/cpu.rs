@@ -320,12 +320,6 @@ pub enum CpuPlan<T: Scalar> {
         comp_dims: Vec<usize>,
         _marker: PhantomData<T>,
     },
-    /// Plan for permutation.
-    Permute {
-        /// Permutation mapping (`perm[out_axis] = in_axis`).
-        perm: Vec<usize>,
-        _marker: PhantomData<T>,
-    },
     /// Plan for anti-trace (AD backward).
     AntiTrace {
         /// Paired axis positions in output tensor.
@@ -625,15 +619,15 @@ impl CpuContext {
 /// let mut ctx = CpuContext::new(4);
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let a_base = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let a = a_base.permute(&[1, 0]).unwrap();
 /// let mut b = Tensor::<f64>::zeros(&[4, 3], mem, col);
-/// let desc = PrimDescriptor::Permute {
-///     modes_a: vec![0, 1],
-///     modes_b: vec![1, 0],
-/// };
-/// let plan =
-///     <CpuBackend as TensorPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[3, 4], &[4, 3]])
-///         .unwrap();
+/// let plan = <CpuBackend as TensorPrims<Standard<f64>>>::plan(
+///     &mut ctx,
+///     &PrimDescriptor::MakeContiguous,
+///     &[&[4, 3], &[4, 3]],
+/// )
+/// .unwrap();
 /// <CpuBackend as TensorPrims<Standard<f64>>>::execute(
 ///     &mut ctx,
 ///     &plan,
@@ -834,23 +828,6 @@ impl CpuBackend {
                     _marker: PhantomData,
                 })
             }
-
-            PrimDescriptor::Permute { modes_a, modes_b } => {
-                // Permute expects 2 shapes: A (input), B (output)
-                validate_shape_count(shapes, 2, "Permute")?;
-                validate_rank(shapes[0], modes_a.len(), "Permute input A")?;
-                validate_rank(shapes[1], modes_b.len(), "Permute output B")?;
-                // perm[out_axis] = in_axis
-                let perm: Vec<usize> = modes_b
-                    .iter()
-                    .map(|m| mode_position(modes_a, *m))
-                    .collect::<Result<_>>()?;
-                Ok(CpuPlan::Permute {
-                    perm,
-                    _marker: PhantomData,
-                })
-            }
-
             PrimDescriptor::AntiTrace {
                 modes_a,
                 modes_c,
@@ -1000,35 +977,6 @@ impl CpuBackend {
 // ===========================================================================
 // CPU execute helpers for each operation
 // ===========================================================================
-
-fn execute_permute<T: Scalar>(
-    alpha: T,
-    input: &StridedView<T>,
-    beta: T,
-    output: &mut StridedViewMut<T>,
-    perm: &[usize],
-) -> Result<()> {
-    let permuted = input
-        .permute(perm)
-        .map_err(|e| Error::StrideError(e.to_string()))?;
-
-    if alpha == T::one() && beta == T::zero() {
-        // Fast path: use strided-perm HPTT-based copy
-        strided_perm::copy_into_par(output, &permuted)
-            .map_err(|e| Error::StrideError(e.to_string()))?;
-    } else {
-        let dims = output.dims().to_vec();
-        for_each_index(&dims, |idx| {
-            let val = alpha * permuted.get(idx);
-            if beta == T::zero() {
-                output.set(idx, val);
-            } else {
-                output.set(idx, val + beta * output.get(idx));
-            }
-        });
-    }
-    Ok(())
-}
 
 fn execute_make_contiguous<T: Scalar>(
     alpha: T,
@@ -2792,11 +2740,6 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
         let mut out_view = tensor_to_view_mut(output)?;
 
         match plan {
-            CpuPlan::Permute { perm, .. } => {
-                validate_execute_inputs(inputs, 1, "Permute")?;
-                execute_permute(alpha, view_refs[0], beta, &mut out_view, perm)
-            }
-
             CpuPlan::MakeContiguous { .. } => {
                 validate_execute_inputs(inputs, 1, "MakeContiguous")?;
                 execute_make_contiguous(alpha, view_refs[0], beta, &mut out_view)

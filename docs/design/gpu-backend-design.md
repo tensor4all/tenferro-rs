@@ -70,7 +70,6 @@ pub struct CudaContext {
 
 pub enum CudaPlan<T: ScalarBase> {
     Contract { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
-    Permute { plan_handle: *mut c_void, _marker: PhantomData<T> },
     Reduce { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
     Trace { plan_handle: *mut c_void, workspace_size: usize, _marker: PhantomData<T> },
     AntiTrace { _marker: PhantomData<T> },  // Composed via Contract(eye, ∂C)
@@ -78,7 +77,7 @@ pub enum CudaPlan<T: ScalarBase> {
     ElementwiseUnary { _marker: PhantomData<T> },
     ElementwiseMul { _marker: PhantomData<T> },
     BatchedGemm { _marker: PhantomData<T> },  // Via Contract subset
-    MakeContiguous { _marker: PhantomData<T> },  // n/a on GPU (native stride support)
+    MakeContiguous { _marker: PhantomData<T> },  // explicit materialization path
 }
 
 impl<S: ScalarBase> TensorPrims<Standard<S>> for CudaBackend {

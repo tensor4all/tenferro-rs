@@ -113,12 +113,6 @@ pub enum TropicalPlan<T: Scalar> {
         free_axes: Vec<usize>,
         _marker: PhantomData<T>,
     },
-    /// Plan for permutation.
-    Permute {
-        /// Permutation mapping: `perm[out_axis] = in_axis`.
-        perm: Vec<usize>,
-        _marker: PhantomData<T>,
-    },
     /// Plan for anti-trace (AD backward).
     AntiTrace {
         /// Paired axis positions in output.
@@ -852,46 +846,6 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
             })
         }
 
-        PrimDescriptor::Permute { modes_a, modes_b } => {
-            ensure_shape_count(shapes, 2, "Permute")?;
-            ensure_unique_modes(modes_a, "modes_a")?;
-            ensure_unique_modes(modes_b, "modes_b")?;
-            let a_shape = shapes[0];
-            let b_shape = shapes[1];
-            if modes_a.len() != a_shape.len()
-                || modes_b.len() != b_shape.len()
-                || modes_a.len() != modes_b.len()
-            {
-                return Err(Error::InvalidArgument(
-                    "Permute mode rank does not match shape rank".into(),
-                ));
-            }
-            for &m in modes_b {
-                if !modes_a.contains(&m) {
-                    return Err(Error::InvalidArgument(
-                        "Permute modes_b must be a permutation of modes_a".into(),
-                    ));
-                }
-            }
-            for (out_ax, &m) in modes_b.iter().enumerate() {
-                let in_ax = mode_position(modes_a, m)?;
-                if a_shape[in_ax] != b_shape[out_ax] {
-                    return Err(Error::InvalidArgument(
-                        "Permute output shape does not match permutation".into(),
-                    ));
-                }
-            }
-
-            let perm: Vec<usize> = modes_b
-                .iter()
-                .map(|m| mode_position(modes_a, *m))
-                .collect::<Result<_>>()?;
-            Ok(TropicalPlan::Permute {
-                perm,
-                _marker: PhantomData,
-            })
-        }
-
         PrimDescriptor::AntiTrace {
             modes_a,
             modes_c,
@@ -1127,15 +1081,6 @@ fn tropical_execute<T: Scalar>(
                 ));
             }
             execute_trace(alpha, inputs[0], beta, output, paired_axes, free_axes)
-        }
-
-        TropicalPlan::Permute { perm, .. } => {
-            if inputs.len() != 1 {
-                return Err(Error::InvalidArgument(
-                    "Permute execute requires 1 input tensor".into(),
-                ));
-            }
-            execute_permute(alpha, inputs[0], beta, output, perm)
         }
 
         TropicalPlan::AntiTrace {

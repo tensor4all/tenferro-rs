@@ -98,6 +98,21 @@ fn tensor_get<T: Scalar>(t: &Tensor<T>, idx: &[usize]) -> T {
     data[offset as usize]
 }
 
+fn permuted_view<T: Scalar>(t: &Tensor<T>, perm: &[usize]) -> Tensor<T> {
+    t.permute(perm).unwrap()
+}
+
+fn cpu_make_contiguous_plan<T: Scalar>(
+    ctx: &mut CpuContext,
+    input_dims: &[usize],
+) -> tenferro_device::Result<CpuPlan<T>> {
+    cpu_plan::<T>(
+        ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[input_dims, input_dims],
+    )
+}
+
 // ============================================================================
 // CpuContext
 // ============================================================================
@@ -132,17 +147,22 @@ fn plan_cache_hit_same_signature() {
     let mut ctx = CpuContext::new(1);
     assert!(ctx.plan_cache_mut().is_empty());
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-
     // First call: cache miss, builds and stores the plan.
-    let _plan1 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan1 = cpu_plan::<f64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 
     // Second call: cache hit, should not increase cache size.
-    let _plan2 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan2 = cpu_plan::<f64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 }
 
@@ -151,16 +171,21 @@ fn plan_cache_miss_different_shapes() {
     // Different shapes should produce separate cache entries.
     let mut ctx = CpuContext::new(1);
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-
-    let _plan1 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan1 = cpu_plan::<f64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 
     // Different shapes: 4x5 instead of 2x3
-    let _plan2 = cpu_plan::<f64>(&mut ctx, &desc, &[&[4, 5], &[5, 4]]).unwrap();
+    let _plan2 = cpu_plan::<f64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[5, 4], &[5, 4]],
+    )
+    .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 2);
 }
 
@@ -169,15 +194,20 @@ fn plan_cache_miss_different_scalar_type() {
     // Same descriptor and shapes but different scalar type should miss.
     let mut ctx = CpuContext::new(1);
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-
-    let _plan_f64 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan_f64 = cpu_plan::<f64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 
-    let _plan_f32 = cpu_plan::<f32>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan_f32 = cpu_plan::<f32>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 2);
 }
 
@@ -186,16 +216,16 @@ fn plan_cache_miss_different_descriptor() {
     // Same shapes but different descriptor should miss.
     let mut ctx = CpuContext::new(1);
 
-    let desc1 = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let desc2 = PrimDescriptor::MakeContiguous;
-
-    let _plan1 = cpu_plan::<f64>(&mut ctx, &desc1, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan1 = cpu_plan::<f64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 1);
 
-    let _plan2 = cpu_plan::<f64>(&mut ctx, &desc2, &[&[2, 3], &[2, 3]]).unwrap();
+    let desc2 = PrimDescriptor::ElementwiseUnary { op: UnaryOp::Conj };
+    let _plan2 = cpu_plan::<f64>(&mut ctx, &desc2, &[&[3, 2], &[3, 2]]).unwrap();
     assert_eq!(ctx.plan_cache_mut().len(), 2);
 }
 
@@ -256,27 +286,33 @@ fn plan_cache_complex64_separate_from_f64() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-
     // Build f64 plan
-    let _plan_f64 = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan_f64 = cpu_plan::<f64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
 
     // Build Complex64 plan with same shapes
-    let _plan_c64 = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let _plan_c64 = cpu_plan::<Complex64>(
+        &mut ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[&[3, 2], &[3, 2]],
+    )
+    .unwrap();
 
     // Should be 2 distinct cache entries
     assert_eq!(ctx.plan_cache_mut().len(), 2);
 
     // Execute Complex64 plan to verify it works correctly
-    let a = tensor_from_fn(&[2, 3], |idx| {
+    let base = tensor_from_fn(&[2, 3], |idx| {
         Complex64::new((idx[0] * 3 + idx[1] + 1) as f64, 0.0)
     });
-    let mut b = tensor_zeros::<Complex64>(&[3, 2]);
+    let a = permuted_view(&base, &[1, 0]);
+    let mut b = tensor_zeros::<Complex64>(a.dims());
 
-    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let plan = cpu_make_contiguous_plan::<Complex64>(&mut ctx, a.dims()).unwrap();
     cpu_execute(
         &mut ctx,
         &plan,
@@ -289,7 +325,7 @@ fn plan_cache_complex64_separate_from_f64() {
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&base, &[i, j]));
         }
     }
 }
@@ -310,70 +346,61 @@ fn cpu_has_extension_elementwise_mul() {
 }
 
 // ============================================================================
-// Permute (original f64 tests kept for backward compatibility)
+// MakeContiguous from a permuted view
 // ============================================================================
 
 #[test]
-fn permute_transpose_2x3() {
+fn make_contiguous_from_transposed_view_2x3() {
     let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] + 1 + idx[1] * 2) as f64);
-    let mut b = tensor_zeros::<f64>(&[3, 2]);
+    let base = tensor_from_fn(&[2, 3], |idx| (idx[0] + 1 + idx[1] * 2) as f64);
+    let a = permuted_view(&base, &[1, 0]);
+    let mut b = tensor_zeros::<f64>(a.dims());
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let plan = cpu_make_contiguous_plan::<f64>(&mut ctx, a.dims()).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&base, &[i, j]));
         }
     }
 }
 
 #[test]
-fn permute_with_alpha_beta() {
+fn make_contiguous_from_transposed_view_with_alpha_beta() {
     let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] + idx[1] * 2 + 1) as f64);
-    let mut b = tensor_from_fn(&[3, 2], |_| 1.0_f64);
+    let base = tensor_from_fn(&[2, 3], |idx| (idx[0] + idx[1] * 2 + 1) as f64);
+    let a = permuted_view(&base, &[1, 0]);
+    let mut b = tensor_from_fn(a.dims(), |_| 1.0_f64);
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-    // B = 2 * A^T + 3 * B
+    let plan = cpu_make_contiguous_plan::<f64>(&mut ctx, a.dims()).unwrap();
+    // B = 2 * contiguous(A^T) + 3 * B
     cpu_execute(&mut ctx, &plan, 2.0, &[&a], 3.0, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            let expected = 2.0 * tensor_get(&a, &[i, j]) + 3.0;
+            let expected = 2.0 * tensor_get(&base, &[i, j]) + 3.0;
             assert_eq!(tensor_get(&b, &[j, i]), expected);
         }
     }
 }
 
 #[test]
-fn permute_3d() {
+fn make_contiguous_from_permuted_view_3d() {
     let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3, 4], |idx| {
+    let base = tensor_from_fn(&[2, 3, 4], |idx| {
         (idx[0] * 100 + idx[1] * 10 + idx[2]) as f64
     });
-    let mut b = tensor_zeros::<f64>(&[4, 2, 3]);
+    let a = permuted_view(&base, &[2, 0, 1]);
+    let mut b = tensor_zeros::<f64>(a.dims());
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1, 2],
-        modes_b: vec![2, 0, 1],
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3, 4], &[4, 2, 3]]).unwrap();
+    let plan = cpu_make_contiguous_plan::<f64>(&mut ctx, a.dims()).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0, &[&a], 0.0, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
             for k in 0..4 {
-                assert_eq!(tensor_get(&b, &[k, i, j]), tensor_get(&a, &[i, j, k]));
+                assert_eq!(tensor_get(&b, &[k, i, j]), tensor_get(&base, &[i, j, k]));
             }
         }
     }
@@ -1196,24 +1223,21 @@ fn load_hiptensor_returns_error() {
 // (reduce_sum_with_alpha_beta standalone test moved to typed_prims_tests! macro)
 
 // ============================================================================
-// Complex64 permute (original test kept)
+// Complex64 MakeContiguous from permuted view
 // ============================================================================
 
 #[test]
-fn permute_complex64() {
+fn make_contiguous_complex64_from_transposed_view() {
     use num_complex::Complex64;
 
     let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3], |idx| {
+    let base = tensor_from_fn(&[2, 3], |idx| {
         Complex64::new((idx[0] * 3 + idx[1] + 1) as f64, 0.0)
     });
-    let mut b = tensor_zeros::<Complex64>(&[3, 2]);
+    let a = permuted_view(&base, &[1, 0]);
+    let mut b = tensor_zeros::<Complex64>(a.dims());
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = cpu_plan::<Complex64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let plan = cpu_make_contiguous_plan::<Complex64>(&mut ctx, a.dims()).unwrap();
     cpu_execute(
         &mut ctx,
         &plan,
@@ -1226,7 +1250,7 @@ fn permute_complex64() {
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&base, &[i, j]));
         }
     }
 }
@@ -1320,25 +1344,22 @@ fn resolve_conj_f64_conjugated_is_identity() {
 }
 
 // ============================================================================
-// f32 permute (original test kept)
+// f32 MakeContiguous from permuted view
 // ============================================================================
 
 #[test]
-fn permute_f32() {
+fn make_contiguous_f32_from_transposed_view() {
     let mut ctx = CpuContext::new(1);
-    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f32);
-    let mut b = tensor_zeros::<f32>(&[3, 2]);
+    let base = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f32);
+    let a = permuted_view(&base, &[1, 0]);
+    let mut b = tensor_zeros::<f32>(a.dims());
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = cpu_plan::<f32>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+    let plan = cpu_make_contiguous_plan::<f32>(&mut ctx, a.dims()).unwrap();
     cpu_execute(&mut ctx, &plan, 1.0_f32, &[&a], 0.0_f32, &mut b).unwrap();
 
     for i in 0..2 {
         for j in 0..3 {
-            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
+            assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&base, &[i, j]));
         }
     }
 }
@@ -1474,12 +1495,9 @@ fn plan_reduce_wrong_rank() {
 }
 
 #[test]
-fn plan_permute_wrong_shape_count() {
+fn plan_make_contiguous_wrong_shape_count() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
+    let desc = PrimDescriptor::MakeContiguous;
     // 3 shapes instead of 2
     let result = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 4], &[4, 3], &[1]]);
     assert!(result.is_err(), "expected error for wrong shape count");
@@ -1671,15 +1689,12 @@ fn plan_anti_diag_wrong_shape_count() {
 // ============================================================================
 
 #[test]
-fn execute_permute_wrong_input_count() {
+fn execute_make_contiguous_multiple_inputs() {
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-    let a = tensor_zeros::<f64>(&[2, 3]);
-    let b = tensor_zeros::<f64>(&[2, 3]);
+    let desc = PrimDescriptor::MakeContiguous;
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[3, 2], &[3, 2]]).unwrap();
+    let a = tensor_zeros::<f64>(&[3, 2]);
+    let b = tensor_zeros::<f64>(&[3, 2]);
     let mut c = tensor_zeros::<f64>(&[3, 2]);
     // Provide 2 inputs instead of 1
     let result = cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c);
@@ -1689,20 +1704,6 @@ fn execute_permute_wrong_input_count() {
         matches!(err, tenferro_device::Error::InvalidArgument(_)),
         "expected InvalidArgument, got: {err:?}"
     );
-}
-
-#[test]
-fn execute_permute_zero_inputs() {
-    let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-    let mut c = tensor_zeros::<f64>(&[3, 2]);
-    // Provide 0 inputs instead of 1
-    let result = cpu_execute(&mut ctx, &plan, 1.0, &[], 0.0, &mut c);
-    assert!(result.is_err(), "expected error for zero inputs");
 }
 
 #[test]
@@ -1931,18 +1932,15 @@ macro_rules! typed_prims_tests {
             };
 
             #[test]
-            fn permute_transpose_2x3() {
+            fn make_contiguous_from_transposed_view_2x3() {
                 let mut ctx = CpuContext::new(1);
-                let a = tensor_from_fn(&[2, 3], |idx| {
+                let base = tensor_from_fn(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] + 1 + idx[1] * 2)
                 });
-                let mut b = tensor_zeros::<$T>(&[3, 2]);
+                let a = permuted_view(&base, &[1, 0]);
+                let mut b = tensor_zeros::<$T>(a.dims());
 
-                let desc = PrimDescriptor::Permute {
-                    modes_a: vec![0, 1],
-                    modes_b: vec![1, 0],
-                };
-                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
+                let plan = cpu_make_contiguous_plan::<$T>(&mut ctx, a.dims()).unwrap();
                 cpu_execute(
                     &mut ctx,
                     &plan,
@@ -1955,25 +1953,22 @@ macro_rules! typed_prims_tests {
 
                 for i in 0..2 {
                     for j in 0..3 {
-                        assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&a, &[i, j]));
+                        assert_eq!(tensor_get(&b, &[j, i]), tensor_get(&base, &[i, j]));
                     }
                 }
             }
 
             #[test]
-            fn permute_with_alpha_beta() {
+            fn make_contiguous_from_transposed_view_with_alpha_beta() {
                 let mut ctx = CpuContext::new(1);
-                let a = tensor_from_fn(&[2, 3], |idx| {
+                let base = tensor_from_fn(&[2, 3], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] + idx[1] * 2 + 1)
                 });
-                let mut b = tensor_from_fn(&[3, 2], |_| <$T as TestScalar>::from_f64(1.0));
+                let a = permuted_view(&base, &[1, 0]);
+                let mut b = tensor_from_fn(a.dims(), |_| <$T as TestScalar>::from_f64(1.0));
 
-                let desc = PrimDescriptor::Permute {
-                    modes_a: vec![0, 1],
-                    modes_b: vec![1, 0],
-                };
-                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3], &[3, 2]]).unwrap();
-                // B = 2 * A^T + 3 * B
+                let plan = cpu_make_contiguous_plan::<$T>(&mut ctx, a.dims()).unwrap();
+                // B = 2 * contiguous(A^T) + 3 * B
                 cpu_execute(
                     &mut ctx,
                     &plan,
@@ -1986,7 +1981,8 @@ macro_rules! typed_prims_tests {
 
                 for i in 0..2 {
                     for j in 0..3 {
-                        let expected = <$T as TestScalar>::from_f64(2.0) * tensor_get(&a, &[i, j])
+                        let expected = <$T as TestScalar>::from_f64(2.0)
+                            * tensor_get(&base, &[i, j])
                             + <$T as TestScalar>::from_f64(3.0);
                         assert!(
                             <$T as TestScalar>::approx_eq(tensor_get(&b, &[j, i]), expected),
@@ -2002,18 +1998,15 @@ macro_rules! typed_prims_tests {
             }
 
             #[test]
-            fn permute_3d() {
+            fn make_contiguous_from_permuted_view_3d() {
                 let mut ctx = CpuContext::new(1);
-                let a = tensor_from_fn(&[2, 3, 4], |idx| {
+                let base = tensor_from_fn(&[2, 3, 4], |idx| {
                     <$T as TestScalar>::from_usize(idx[0] * 100 + idx[1] * 10 + idx[2])
                 });
-                let mut b = tensor_zeros::<$T>(&[4, 2, 3]);
+                let a = permuted_view(&base, &[2, 0, 1]);
+                let mut b = tensor_zeros::<$T>(a.dims());
 
-                let desc = PrimDescriptor::Permute {
-                    modes_a: vec![0, 1, 2],
-                    modes_b: vec![2, 0, 1],
-                };
-                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 3, 4], &[4, 2, 3]]).unwrap();
+                let plan = cpu_make_contiguous_plan::<$T>(&mut ctx, a.dims()).unwrap();
                 cpu_execute(
                     &mut ctx,
                     &plan,
@@ -2027,7 +2020,7 @@ macro_rules! typed_prims_tests {
                 for i in 0..2 {
                     for j in 0..3 {
                         for k in 0..4 {
-                            assert_eq!(tensor_get(&b, &[k, i, j]), tensor_get(&a, &[i, j, k]));
+                            assert_eq!(tensor_get(&b, &[k, i, j]), tensor_get(&base, &[i, j, k]));
                         }
                     }
                 }

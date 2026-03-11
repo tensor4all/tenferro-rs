@@ -39,6 +39,7 @@ mod primal_builders;
 mod runtime;
 mod runtime_dispatch;
 mod scalar_ad_builders;
+mod scalar_contracts;
 mod scalar_runtime;
 
 pub use ad_builders::*;

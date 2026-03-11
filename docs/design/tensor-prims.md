@@ -121,8 +121,8 @@ Current state by family:
   unary, binary, and reduction inventory, with truthful `false` capability
   reporting for unwired CUDA/ROCm cases.
 - `TensorAnalyticPrims` now has explicit CPU planning/execution for the phase-1
-  unary and binary inventory, while `Var` and `Std` remain reserved vocabulary
-  and are not yet executed in phase 1.
+  unary and binary inventory, and the current tensor-level surface also wires
+  `Var` and `Std` through the analytic reduction family.
 
 The public scalar and analytic vocabularies remain intentionally broader than
 the currently executed subset so later GPU and reduction work can land without
@@ -130,14 +130,14 @@ descriptor churn.
 
 ## Explicit Debt
 
-Two points are intentionally documented as current debt rather than final
-design:
+The remaining protocol debt is now narrower than it was at the start of `#441`.
 
-- legacy `PrimDescriptor::Permute` still exists in `tenferro-prims`
 - semiring-core and semiring-fast-path families still rely on legacy
   `TensorPrims<A>` compatibility paths
 
-The `Permute` cleanup remains follow-up work under `#441`.
+`PrimDescriptor::Permute` has been removed. Structural reordering now stays in
+`tenferro-tensor`, and prims only expose `MakeContiguous` as the explicit
+materialization boundary.
 
 ## Relationship to Linalg
 

@@ -1,8 +1,31 @@
 //! Tests for tenferro-tropical: scalar types, algebra, argmax, and TensorPrims.
 
 use num_traits::{One, Zero};
+use tenferro_algebra::{Algebra, Scalar};
+use tenferro_device::Result;
+use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tenferro_tropical::{MaxMul, MaxPlus, MinPlus};
+
+fn permuted_view<T: Scalar>(tensor: &Tensor<T>, perm: &[usize]) -> Tensor<T> {
+    tensor.permute(perm).unwrap()
+}
+
+fn tropical_make_contiguous_plan<Alg>(
+    ctx: &mut CpuContext,
+    input_dims: &[usize],
+) -> Result<<CpuBackend as TensorPrims<Alg>>::Plan<Alg::Scalar>>
+where
+    Alg: Algebra,
+    Alg::Scalar: Scalar,
+    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+{
+    <CpuBackend as TensorPrims<Alg>>::plan(
+        ctx,
+        &PrimDescriptor::MakeContiguous,
+        &[input_dims, input_dims],
+    )
+}
 
 // ============================================================================
 // Scalar arithmetic tests
@@ -940,9 +963,7 @@ fn maxplus_reduce_sum() {
 // ============================================================================
 
 #[test]
-fn maxplus_permute_transpose() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
+fn maxplus_make_contiguous_from_transposed_view() {
     // A = [[1, 3],    (2x2, col-major: [1, 2, 3, 4])
     //      [2, 4]]
     // Transpose: A^T = [[1, 2], [3, 4]]  (col-major: [1, 3, 2, 4])
@@ -950,7 +971,8 @@ fn maxplus_permute_transpose() {
 
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
 
-    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let base = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let a = permuted_view(&base, &[1, 0]);
     let mut c = Tensor::from_slice(
         &[MaxPlus::<f64>::zero(); 4],
         &[2, 2],
@@ -958,16 +980,9 @@ fn maxplus_permute_transpose() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
-        &mut ctx,
-        &desc,
-        &[&[2, 2], &[2, 2]],
-    )
-    .unwrap();
+    let plan =
+        tropical_make_contiguous_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, a.dims())
+            .unwrap();
     <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
         &mut ctx,
         &plan,
@@ -1626,16 +1641,14 @@ fn maxplus_anti_trace_vec_to_3d() {
 
 #[test]
 fn maxplus_permute_with_alpha_beta() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
-    // Tests permute with non-trivial alpha and beta:
-    // output = alpha * permute(input) ⊕ beta * output_old
+    // Tests MakeContiguous with non-trivial alpha and beta on a transposed view:
+    // output = alpha * contiguous(transposed_view(input)) ⊕ beta * output_old
     //
     // input = [[1, 3], [2, 4]]  (col-major: [1, 2, 3, 4])
-    // permute = transpose → [[1, 2], [3, 4]] (col-major: [1, 3, 2, 4])
+    // transpose view → [[1, 2], [3, 4]] (col-major: [1, 3, 2, 4])
     //
     // With alpha=MaxPlus(10.0), beta=MaxPlus(0.0):
-    //   alpha * permute = [11, 13, 12, 14]
+    //   alpha * contiguous(view) = [11, 13, 12, 14]
     //   beta * old = [0+5, 0+0, 0+0, 0+5] = [5, 0, 0, 5]
     //   result = max of each = [11, 13, 12, 14]
     let mut ctx = CpuContext::new(1);
@@ -1643,19 +1656,13 @@ fn maxplus_permute_with_alpha_beta() {
     let a_data = [MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)];
     let c_init = [MaxPlus(5.0), MaxPlus(0.0), MaxPlus(0.0), MaxPlus(5.0)];
 
-    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let base = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let a = permuted_view(&base, &[1, 0]);
     let mut c = Tensor::from_slice(&c_init, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
-        &mut ctx,
-        &desc,
-        &[&[2, 2], &[2, 2]],
-    )
-    .unwrap();
+    let plan =
+        tropical_make_contiguous_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, a.dims())
+            .unwrap();
     <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
         &mut ctx,
         &plan,
@@ -1666,9 +1673,9 @@ fn maxplus_permute_with_alpha_beta() {
     )
     .unwrap();
 
-    // alpha * permuted = 10 + [1, 3, 2, 4] = [11, 13, 12, 14]
+    // alpha * contiguous(view) = 10 + [1, 3, 2, 4] = [11, 13, 12, 14]
     // beta * old = 0 + [5, 0, 0, 5] = [5, 0, 0, 5]
-    // result = max(alpha*permuted, beta*old)
+    // result = max(alpha*contiguous(view), beta*old)
     let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 11.0); // max(11, 5)
     assert_eq!(c_data[1].0, 13.0); // max(13, 0)
@@ -1865,16 +1872,15 @@ fn minplus_reduce_column_min() {
 }
 
 #[test]
-fn maxmul_permute_transpose() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
+fn maxmul_make_contiguous_from_transposed_view() {
     // Verifies MaxMul algebra works for non-GEMM operations.
     // Transpose [[0.5, 0.3], [0.2, 0.9]] → [[0.5, 0.2], [0.3, 0.9]]
     let mut ctx = CpuContext::new(1);
 
     let a_data = [MaxMul(0.5), MaxMul(0.2), MaxMul(0.3), MaxMul(0.9)];
 
-    let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let base = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let a = permuted_view(&base, &[1, 0]);
     let mut c = Tensor::from_slice(
         &[MaxMul::<f64>::zero(); 4],
         &[2, 2],
@@ -1882,16 +1888,9 @@ fn maxmul_permute_transpose() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f64>>>::plan(
-        &mut ctx,
-        &desc,
-        &[&[2, 2], &[2, 2]],
-    )
-    .unwrap();
+    let plan =
+        tropical_make_contiguous_plan::<tenferro_tropical::MaxMulAlgebra<f64>>(&mut ctx, a.dims())
+            .unwrap();
     <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f64>>>::execute(
         &mut ctx,
         &plan,
@@ -2402,20 +2401,14 @@ fn tropical_plan_trace_output_shape_mismatch_returns_error() {
 }
 
 #[test]
-fn tropical_plan_permute_shape_mismatch_returns_error() {
+fn tropical_plan_make_contiguous_shape_mismatch_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    // Permuted output shape doesn't match: mode 0 has size 2, but output says 3
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
     let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
         &mut ctx,
-        &desc,
-        &[&[2, 3], &[2, 3]],
+        &PrimDescriptor::MakeContiguous,
+        &[&[2, 3], &[2, 2]],
     );
     assert!(matches!(result, Err(Error::InvalidArgument(_))));
 }
@@ -2587,16 +2580,11 @@ fn tropical_plan_batched_gemm_shape_mismatch_returns_error() {
 #[test]
 fn tropical_execute_wrong_input_arity_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Permute {
-        modes_a: vec![0, 1],
-        modes_b: vec![1, 0],
-    };
     let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
         &mut ctx,
-        &desc,
+        &PrimDescriptor::MakeContiguous,
         &[&[2, 2], &[2, 2]],
     )
     .unwrap();

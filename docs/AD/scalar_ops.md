@@ -6,26 +6,32 @@ This note records the scalar AD formulas implemented in
 
 ## Scope
 
-Implemented scalar basis:
+Implemented low-level scalar basis in `chainrules-scalarops`:
 
-- `add`
+- `add`, `sub`, `mul`, `div`
 - `conj`
 - `sqrt`
+- `exp`
+- `log`
+- `atan2`
 - `powf` (scalar exponent)
 - `powi` (integer exponent; a restricted `pow` case)
-- `exp`
-- `expm1`
-- `log`
-- `log1p`
-- `sin`
-- `cos`
-- `tanh`
-- `atan2`
+
+Additional tensor-level scalar/analytic rules are implemented in
+`tenferro-dyadtensor` by composing runtime-generic tensor primitives on top of
+that basis.
 
 Tensor-level wrappers built on top of those formulas:
 
-- pointwise: `add_ad`, `atan2_ad`, `sqrt_ad`, `exp_ad`, `expm1_ad`, `log_ad`, `log1p_ad`, `sin_ad`, `cos_ad`, `tanh_ad`
-- reductions: `mean_ad`, `var_ad`, `std_ad`
+- pointwise binary:
+  `add_ad`, `atan2_ad`, `pow_ad`, `hypot_ad`
+- pointwise unary:
+  `sqrt_ad`, `exp_ad`, `expm1_ad`, `log_ad`, `log1p_ad`,
+  `sin_ad`, `cos_ad`, `tanh_ad`,
+  `asin_ad`, `acos_ad`, `atan_ad`,
+  `sinh_ad`, `cosh_ad`, `asinh_ad`, `acosh_ad`, `atanh_ad`
+- reductions:
+  `sum_ad`, `mean_ad`, `var_ad`, `std_ad`
 
 Target scalar domains:
 
@@ -86,6 +92,26 @@ Let `g` be output cotangent, `x` input primal, `y = f(x)` output primal.
 - rrule: `(dx1, dx2) = (g, g)`
 - frule: `dy = dx1 + dx2`
 
+### `sub`
+
+- Primal: `y = x1 - x2`
+- rrule: `(dx1, dx2) = (g, -g)`
+- frule: `dy = dx1 - dx2`
+
+### `mul`
+
+- Primal: `y = x1 * x2`
+- rrule: `(dx1, dx2) = (g * conj(x2), g * conj(x1))`
+- frule: `dy = dx1 * conj(x2) + dx2 * conj(x1)`
+
+### `div`
+
+- Primal: `y = x1 / x2`
+- rrule:
+  - `dx1 = g / conj(x2)`
+  - `dx2 = g * conj(-x1 / x2^2)`
+- frule: `dy = dx1 / conj(x2) + dx2 * conj(-x1 / x2^2)`
+
 ### `powf` (fixed scalar exponent `a`)
 
 - Primal: `y = x^a`
@@ -142,6 +168,36 @@ This is `powf` with integer exponent semantics.
 - rrule: `dx = g * conj(1 - y^2)`
 - frule: `dy = dx * conj(1 - y^2)`
 
+## Tensor-Composite Rules in `tenferro-dyadtensor`
+
+The following rules are implemented one layer up by composing the scalar and
+tensor primitive families. They are not exported as standalone
+`chainrules-scalarops::*_rrule` / `*_frule` functions.
+
+### Unary analytic wrappers
+
+- `expm1`: derivative factor `exp(x)`
+- `log1p`: derivative factor `1 / (1 + x)`
+- `sin`: derivative factor `cos(x)`
+- `cos`: derivative factor `-sin(x)`
+- `asin`: derivative factor `1 / sqrt(1 - x^2)`
+- `acos`: derivative factor `-1 / sqrt(1 - x^2)`
+- `atan`: derivative factor `1 / (1 + x^2)`
+- `sinh`: derivative factor `cosh(x)`
+- `cosh`: derivative factor `sinh(x)`
+- `asinh`: derivative factor `1 / sqrt(1 + x^2)`
+- `acosh`: derivative factor `1 / sqrt(x^2 - 1)`
+- `atanh`: derivative factor `1 / (1 - x^2)`
+
+### Binary analytic wrappers
+
+- `pow(x, a)`:
+  - `dx = g * conj(a * x^(a - 1))`
+  - `da = g * conj(pow(x, a) * log(x))`
+- `hypot(x, y)` for real-valued inputs:
+  - `dx = g * x / hypot(x, y)`
+  - `dy = g * y / hypot(x, y)`
+
 ### `atan2` (real-valued inputs)
 
 Let `y = atan2(a, b)` with `a` as numerator-like input and `b` as
@@ -187,6 +243,26 @@ For `y = std(x)` with `y = sqrt(var(x))`:
 
 - rrule: `dx = g * c / (N * y)`
 - frule: `dy = dvar / (2y)`
+
+### `sum_ad`
+
+For `y = sum(x)` over all elements:
+
+- rrule: every element receives the same cotangent `g`
+- frule: `dy = sum(dx)`
+
+## Deferred Select-Style Ops
+
+The following families are intentionally not exposed yet:
+
+- `where`
+- AD wrappers for `maximum`, `minimum`, and `clamp*`
+- `xlogy` tensor-level AD wrappers
+
+The blocker is not CPU math itself. It is the absence of a dedicated
+boolean/predicate tensor substrate. Without that layer, branch-select rules
+would have to smuggle predicate semantics into scalar-only contracts, which is
+not the design direction for `#441`.
 
 ## API Placement
 

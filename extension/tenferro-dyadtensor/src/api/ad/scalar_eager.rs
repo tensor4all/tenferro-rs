@@ -1,4 +1,8 @@
 use super::*;
+use crate::api::scalar_contracts::{
+    CpuScalarAnalyticBackend, CudaScalarAnalyticBackend, GenericAdScalar, RealAdScalar,
+    RocmScalarAnalyticBackend,
+};
 
 macro_rules! define_scalar_unary_eager_ad_fn {
     ($fn_name:ident, $builder_fn:ident, $doc_op:literal, generic) => {
@@ -11,18 +15,10 @@ macro_rules! define_scalar_unary_eager_ad_fn {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::ad::", stringify!($fn_name), "(&x)?;\n```")]
         pub fn $fn_name<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
         where
-            T: Scalar + HasAlgebra<Algebra = Standard<T>> + chainrules_scalarops::ScalarAd + Copy + 'static,
-            CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+            T: GenericAdScalar,
+            CpuBackend: CpuScalarAnalyticBackend<T>,
+            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
+            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
         {
             super::super::$builder_fn(tensor).run()
         }
@@ -37,23 +33,10 @@ macro_rules! define_scalar_unary_eager_ad_fn {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::ad::", stringify!($fn_name), "(&x)?;\n```")]
         pub fn $fn_name<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
         where
-            T: Scalar
-                + HasAlgebra<Algebra = Standard<T>>
-                + chainrules_scalarops::ScalarAd<Real = T>
-                + Float
-                + Copy
-                + 'static,
-            CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+            T: RealAdScalar,
+            CpuBackend: CpuScalarAnalyticBackend<T>,
+            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
+            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
         {
             super::super::$builder_fn(tensor).run()
         }
@@ -71,18 +54,10 @@ macro_rules! define_scalar_binary_eager_ad_fn {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::ad::", stringify!($fn_name), "(&a, &b)?;\n```")]
         pub fn $fn_name<T>(lhs: &AdTensor<T>, rhs: &AdTensor<T>) -> Result<AdTensor<T>>
         where
-            T: Scalar + HasAlgebra<Algebra = Standard<T>> + chainrules_scalarops::ScalarAd + Copy + 'static,
-            CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+            T: GenericAdScalar,
+            CpuBackend: CpuScalarAnalyticBackend<T>,
+            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
+            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
         {
             super::super::$builder_fn(lhs, rhs).run()
         }
@@ -97,23 +72,10 @@ macro_rules! define_scalar_binary_eager_ad_fn {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::ad::", stringify!($fn_name), "(&a, &b)?;\n```")]
         pub fn $fn_name<T>(lhs: &AdTensor<T>, rhs: &AdTensor<T>) -> Result<AdTensor<T>>
         where
-            T: Scalar
-                + HasAlgebra<Algebra = Standard<T>>
-                + chainrules_scalarops::ScalarAd<Real = T>
-                + Float
-                + Copy
-                + 'static,
-            CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+            T: RealAdScalar,
+            CpuBackend: CpuScalarAnalyticBackend<T>,
+            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
+            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
         {
             super::super::$builder_fn(lhs, rhs).run()
         }
@@ -131,18 +93,10 @@ macro_rules! define_scalar_reduction_eager_ad_fn {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::ad::", stringify!($fn_name), "(&x)?;\n```")]
         pub fn $fn_name<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
         where
-            T: Scalar + HasAlgebra<Algebra = Standard<T>> + chainrules_scalarops::ScalarAd + Copy + 'static,
-            CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+            T: GenericAdScalar,
+            CpuBackend: CpuScalarAnalyticBackend<T>,
+            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
+            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
         {
             super::super::$builder_fn(tensor).run()
         }
@@ -157,23 +111,10 @@ macro_rules! define_scalar_reduction_eager_ad_fn {
         #[doc = concat!("```ignore\nlet out = tenferro_dyadtensor::ad::", stringify!($fn_name), "(&x)?;\n```")]
         pub fn $fn_name<T>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
         where
-            T: Scalar
-                + HasAlgebra<Algebra = Standard<T>>
-                + chainrules_scalarops::ScalarAd<Real = T>
-                + Float
-                + Copy
-                + 'static,
-            CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
-            CpuBackend: tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::CudaBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
-            tenferro_prims::RocmBackend:
-                tenferro_prims::TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
+            T: RealAdScalar,
+            CpuBackend: CpuScalarAnalyticBackend<T>,
+            tenferro_prims::CudaBackend: CudaScalarAnalyticBackend<T>,
+            tenferro_prims::RocmBackend: RocmScalarAnalyticBackend<T>,
         {
             super::super::$builder_fn(tensor).run()
         }

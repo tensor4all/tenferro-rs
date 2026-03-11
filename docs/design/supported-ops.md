@@ -33,6 +33,10 @@ here.
 - Binary: `Add`, `Sub`, `Mul`, `Div`, `Maximum`, `Minimum`, `ClampMin`, `ClampMax`
 - Reductions: `Sum`, `Prod`, `Mean`, `Max`, `Min`
 
+Predicate/select-style tensor ops are intentionally absent here today. `Where`
+and the AD surface for branch-select families need a dedicated boolean/predicate
+substrate before they can be added cleanly.
+
 ### Analytic family
 
 `TensorAnalyticPrims` currently exposes:
@@ -131,7 +135,12 @@ The following public primal ops do not yet have stateless linalg AD rules:
 
 - Einsum: `einsum`
 - Reductions: `sum`, `mean`, `var`, `std`
-- Scalar pointwise: `add`, `atan2`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`
+- Scalar pointwise:
+  `add`, `atan2`, `pow`, `hypot`,
+  `sqrt`, `exp`, `expm1`, `log`, `log1p`,
+  `sin`, `cos`, `tanh`,
+  `asin`, `acos`, `atan`,
+  `sinh`, `cosh`, `asinh`, `acosh`, `atanh`
 - Linalg: `svd`, `qr`, `lu`, `eigen`, `lstsq`, `cholesky`, `solve`, `inv`, `det`, `slogdet`, `eig`, `pinv`, `matrix_exp`, `solve_triangular`, `norm`
 
 ### Builder-based AD surface
@@ -139,7 +148,13 @@ The following public primal ops do not yet have stateless linalg AD rules:
 Builder APIs are implemented for:
 
 - Einsum: `einsum_ad`
-- Scalar/reduction: `add_ad`, `atan2_ad`, `sqrt_ad`, `exp_ad`, `expm1_ad`, `log_ad`, `log1p_ad`, `sin_ad`, `cos_ad`, `tanh_ad`, `mean_ad`, `var_ad`, `std_ad`
+- Scalar/reduction:
+  `add_ad`, `atan2_ad`, `pow_ad`, `hypot_ad`,
+  `sqrt_ad`, `exp_ad`, `expm1_ad`, `log_ad`, `log1p_ad`,
+  `sin_ad`, `cos_ad`, `tanh_ad`,
+  `asin_ad`, `acos_ad`, `atan_ad`,
+  `sinh_ad`, `cosh_ad`, `asinh_ad`, `acosh_ad`, `atanh_ad`,
+  `sum_ad`, `mean_ad`, `var_ad`, `std_ad`
 - Linalg: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
 
 ### Runtime status
@@ -164,9 +179,13 @@ The exported C surface currently focuses on a narrow, stable subset:
 This external crate provides the scalar formula basis reused by
 `tenferro-dyadtensor` tensor-level wrappers.
 
-- Arithmetic: `add`, `add_rrule`, `add_frule`
-- Unary analytic/scalar: `conj`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`
+- Arithmetic: `add`, `sub`, `mul`, `div` with matching `*_rrule` / `*_frule`
+- Unary analytic/scalar: `conj`, `sqrt`, `exp`, `log`
 - Binary analytic: `atan2`
 - Power helpers: `powf`, `powi`
+
+The broader tensor-level analytic families in `tenferro-dyadtensor` are built
+from these scalar formulas plus runtime-generic tensor primitives. They are not
+all exported directly from `chainrules-scalarops`.
 
 For formula details, see [AD Formula Notes](../AD/index.md).

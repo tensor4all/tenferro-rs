@@ -11,27 +11,27 @@ einsum engine.
 
 ---
 
-## The Problem: Permute + BatchedGemm Is Suboptimal
+## Historical Problem: Eager Reorder + BatchedGemm Is Suboptimal
 
 When an einsum contraction tree is executed step by step, each step typically
 involves:
 
-1. Permuting input operands into GEMM-compatible layout
+1. Reordering input operands into GEMM-compatible layout
 2. Executing GEMM
-3. Permuting the output for the next step
+3. Reordering the output for the next step
 
-If the einsum layer decomposes this into separate `PrimDescriptor::Permute` +
-`PrimDescriptor::BatchedGemm` calls, the `Permute` primitive must fully
-materialize the permuted tensor. This is suboptimal because:
+In the old design, decomposing this into separate eager reordering and
+`PrimDescriptor::BatchedGemm` calls forced materialization before the backend
+could reason about layout. This was suboptimal because:
 
 - **Unnecessary copies**: The contraction backend can often skip the copy
   entirely when strides are already compatible (`try_fuse_group` in strided-rs).
-  A separate `Permute` cannot know this.
+  A standalone reorder primitive cannot know this.
 
 - **Wrong copy strategy**: When a copy is needed, there are two iteration
   orders — source-stride-order and destination-stride-order (HPTT). The
-  optimal choice depends on cache state, which a standalone `Permute` cannot
-  know.
+  optimal choice depends on cache state, which a standalone reorder primitive
+  cannot know.
 
 ---
 
@@ -52,18 +52,19 @@ Backend advantages:
 - CPU: `try_fuse_group` copy elision, HPTT copy, global allocator reuse
 - GPU: maps directly to `cutensorContract` (single kernel launch)
 
-### Approach B: `permute_view` + `MakeContiguous` + `BatchedGemm`
+### Approach B: `permute` view + `MakeContiguous` + `BatchedGemm`
 
-The argument for `Contract` assumes that decomposing into `Permute` +
+The argument for `Contract` assumes that decomposing reordering +
 `BatchedGemm` forces materialization. This assumption breaks if we
 distinguish **two kinds of permutation**:
 
-- `PrimDescriptor::Permute`: data-moving operation (copies to new layout)
-- `Tensor::permute_view()`: metadata-only reordering (zero-copy, Tensor layer)
+- `Tensor::permute()`: metadata-only reordering (zero-copy, Tensor layer)
+- `PrimDescriptor::MakeContiguous`: explicit materialization when a packed
+  buffer is actually required
 
-If the einsum layer uses `permute_view` (not `PrimDescriptor::Permute`) to
-reorder axes, then `BatchedGemm` receives a `StridedView` with arbitrary
-strides. A `MakeContiguous` prim bridges this gap.
+If the einsum layer uses `permute` views to reorder axes, then `BatchedGemm`
+receives a `StridedView` with arbitrary strides. A `MakeContiguous` prim
+bridges this gap.
 
 ---
 
@@ -73,7 +74,7 @@ strides. A `MakeContiguous` prim bridges this gap.
 1. Axis classification (einsum layer)
    Classify modes into batch, lo (left-output), ro (right-output), sum (contracted).
 
-2. permute_view (Tensor layer, zero-copy)
+2. permute (Tensor layer, zero-copy)
    Reorder to canonical layout:
    A → [lo, sum, batch], B → [sum, ro, batch], C → [lo, ro, batch]
    Metadata-only: strides are reordered, no data movement.
@@ -101,18 +102,18 @@ No parameters needed. The operation:
 2. If yes: no-op (the backend returns immediately)
 3. If no: copies to col-major layout (tenferro convention)
 
-Since `permute_view` already reorders axes into canonical order, full-tensor
+Since `permute` already reorders axes into canonical order, full-tensor
 contiguity implies group-level fusability. There is no need for per-group
 `try_fuse_group` checks — a single full-tensor check suffices.
 
 ### Why This Works Without Copy Elision Loss
 
-The key insight is that `permute_view` produces a non-contiguous `StridedView`
+The key insight is that `permute` produces a non-contiguous `StridedView`
 with reordered strides, not a materialized copy. `MakeContiguous` then checks
 whether the data is already packed:
 
 - **Intermediate results** from previous contraction steps are typically
-  allocated as col-major buffers. After `permute_view`, the strides change but
+  allocated as col-major buffers. After `permute`, the strides change but
   the data is still packed (just in row-major order relative to the new axis
   names). `MakeContiguous` detects this and skips the copy. This is equivalent
   to `try_fuse_group` succeeding in the current strided-einsum2 design.
@@ -135,7 +136,7 @@ as an extended op remains preferable.
 
 ## Trade-offs
 
-| Aspect | `Contract` (Approach A) | `permute_view` + `MakeContiguous` + `BatchedGemm` (Approach B) |
+| Aspect | `Contract` (Approach A) | `permute` + `MakeContiguous` + `BatchedGemm` (Approach B) |
 |---|---|---|
 | Copy elision | Backend-internal `try_fuse_group` per group | Full-tensor contiguity check (slightly conservative) |
 | Backend complexity | Must implement full contraction pipeline | Only `MakeContiguous` + `BatchedGemm` (simpler) |
@@ -145,11 +146,11 @@ as an extended op remains preferable.
 **Conservative case**: When dimension groups are independently fusable but the
 full tensor is not contiguous (gap between groups), `MakeContiguous` copies
 unnecessarily. In practice this rarely occurs because intermediate results are
-col-major allocated and `permute_view` preserves packed layout.
+col-major allocated and `permute` preserves packed layout.
 
 ### Recommendation
 
-- **CPU backend**: Use `permute_view` + `MakeContiguous` + `BatchedGemm`.
+- **CPU backend**: Use `permute` + `MakeContiguous` + `BatchedGemm`.
   Simpler implementation, no extended op needed, minimal performance gap.
 - **GPU backend**: Use `Contract` extended op mapping to `cutensorContract`.
   Single kernel launch, no intermediate buffer.
