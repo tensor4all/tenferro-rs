@@ -209,7 +209,11 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
             .unwrap();
 
     with_cpu_runtime("runtime_helper", |ctx| {
-        let summed = payload_sum_in_ctx(ctx, &a)?;
+        let summed = super::scalar_runtime::scalar_full_reduction_primal(
+            "runtime_helper",
+            tenferro_prims::ScalarReductionOp::Sum,
+            &a,
+        )?;
         assert_eq!(summed.dims(), &[]);
         assert_eq!(scalar_from_rank0_tensor(&summed, "runtime_helper")?, 10.0);
         assert!(matches!(

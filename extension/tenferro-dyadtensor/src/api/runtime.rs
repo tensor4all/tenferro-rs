@@ -244,31 +244,6 @@ pub(crate) fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
     )
 }
 
-pub(crate) fn payload_sum_in_ctx<T>(ctx: &mut CpuContext, payload: &Tensor<T>) -> Result<Tensor<T>>
-where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
-{
-    if payload.dims().is_empty() {
-        return Ok(payload.clone());
-    }
-
-    let labels: Vec<u32> = (0..payload.dims().len())
-        .map(|idx| {
-            u32::try_from(idx).map_err(|_| Error::InvalidAdTensor {
-                message: format!(
-                    "payload rank {} exceeds u32 label space",
-                    payload.dims().len()
-                ),
-            })
-        })
-        .collect::<Result<_>>()?;
-    let inputs = [labels.as_slice()];
-    let subs = Subscripts::new(&inputs, &[]);
-    tf_einsum::einsum_with_subscripts::<Standard<T>, CpuBackend>(ctx, &subs, &[payload], None)
-        .map_err(Error::from)
-}
-
 pub(crate) fn scalar_from_rank0_tensor<T>(tensor: &Tensor<T>, op_name: &'static str) -> Result<T>
 where
     T: Scalar + Copy,

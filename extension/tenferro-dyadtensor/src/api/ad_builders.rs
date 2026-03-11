@@ -357,50 +357,69 @@ where
     pub fn run(self) -> Result<AdTensor<T>>
     where
         T: Copy + 'static,
+        CpuBackend: tenferro_prims::TensorScalarPrims<Standard<T>, Context = CpuContext>,
+        tenferro_prims::CudaBackend:
+            tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+        tenferro_prims::RocmBackend:
+            tenferro_prims::TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
     {
         let operands = [self.tensor];
-        with_runtime_cpu_only("sum_ad", |ctx| {
-            let primal =
-                StructuredTensor::from_dense(payload_sum_in_ctx(ctx, self.tensor.primal())?);
-            let tangent = if has_forward(&operands) || has_any_tangent(&operands) {
-                let tangent_payload = if let Some(tangent) = self.tensor.structured_tangent() {
-                    payload_sum_in_ctx(ctx, tangent.payload())?
-                } else {
-                    payload_sum_in_ctx(ctx, &zero_like(self.tensor.primal()))?
-                };
-                Some(StructuredTensor::from_dense(tangent_payload))
+        let primal =
+            StructuredTensor::from_dense(super::scalar_runtime::scalar_full_reduction_primal(
+                "sum_ad",
+                tenferro_prims::ScalarReductionOp::Sum,
+                self.tensor.primal(),
+            )?);
+        let tangent = if has_forward(&operands) || has_any_tangent(&operands) {
+            let tangent_input = if let Some(tangent) = self.tensor.structured_tangent() {
+                tangent.payload()
             } else {
-                None
+                &zero_like(self.tensor.primal())
             };
+            Some(StructuredTensor::from_dense(
+                super::scalar_runtime::scalar_full_reduction_primal(
+                    "sum_ad",
+                    tenferro_prims::ScalarReductionOp::Sum,
+                    tangent_input,
+                )?,
+            ))
+        } else {
+            None
+        };
 
-            let out = wrap_structured_ad_output("sum_ad", &operands, primal, tangent, 0)?;
+        let out = wrap_structured_ad_output("sum_ad", &operands, primal, tangent, 0)?;
 
-            if let AdValue::Reverse { node, tape, .. } = out.as_value() {
-                let input_node = collect_reverse_input_nodes(&operands)
-                    .into_iter()
-                    .next()
-                    .flatten();
-                let input_layout = self.tensor.structured_primal().clone();
-                let output_node = *node;
-                let tape_id = *tape;
+        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+            let input_node = collect_reverse_input_nodes(&operands)
+                .into_iter()
+                .next()
+                .flatten();
+            let input_layout = self.tensor.structured_primal().clone();
+            let output_node = *node;
+            let tape_id = *tape;
 
-                reverse_tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
-                    Box::new(move |cotangent| {
-                        let Some(input_node) = input_node else {
-                            return Ok(Vec::new());
-                        };
-                        let scalar = scalar_from_rank0_tensor(cotangent, "sum_ad")?;
-                        let payload = broadcast_scalar_like(scalar, input_layout.payload())?;
-                        let grad = input_layout.with_payload_like(payload)?;
-                        Ok(vec![(input_node, grad.into_payload())])
-                    }),
-                )?;
-            }
+            reverse_tape::register_rule::<T>(
+                tape_id,
+                output_node,
+                Box::new(move |cotangent| {
+                    let Some(input_node) = input_node else {
+                        return Ok(Vec::new());
+                    };
+                    with_runtime(
+                        |_ctx| {
+                            let scalar = scalar_from_rank0_tensor(cotangent, "sum_ad")?;
+                            let payload = broadcast_scalar_like(scalar, input_layout.payload())?;
+                            let grad = input_layout.with_payload_like(payload)?;
+                            Ok(vec![(input_node, grad.into_payload())])
+                        },
+                        |_ctx| Err(unsupported_runtime_capability("sum_ad_pullback", "cuda")),
+                        |_ctx| Err(unsupported_runtime_capability("sum_ad_pullback", "rocm")),
+                    )
+                }),
+            )?;
+        }
 
-            Ok(out)
-        })
+        Ok(out)
     }
 }
 

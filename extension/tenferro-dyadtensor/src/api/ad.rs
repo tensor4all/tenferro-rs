@@ -865,16 +865,40 @@ pub fn solve_triangular_rrule<T: Scalar>(
 where
     T: LinalgScalar + CpuLinalgScalar,
 {
-    super::with_runtime_cpu_only("solve_triangular_rrule", |ctx| {
-        tenferro_linalg::solve_triangular_rrule::<T, _>(
-            ctx,
-            a.primal(),
-            b.primal(),
-            cotangent.primal(),
-            upper,
-        )
-        .map_err(Error::from)
-    })
+    super::with_linalg_runtime::<T, _>(
+        "solve_triangular_rrule",
+        tenferro_linalg::backend::LinalgCapabilityOp::SolveTriangular,
+        |ctx| {
+            tenferro_linalg::solve_triangular_rrule::<T, _>(
+                ctx,
+                a.primal(),
+                b.primal(),
+                cotangent.primal(),
+                upper,
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tenferro_linalg::solve_triangular_rrule::<T, _>(
+                ctx,
+                a.primal(),
+                b.primal(),
+                cotangent.primal(),
+                upper,
+            )
+            .map_err(Error::from)
+        },
+        |ctx| {
+            tenferro_linalg::solve_triangular_rrule::<T, _>(
+                ctx,
+                a.primal(),
+                b.primal(),
+                cotangent.primal(),
+                upper,
+            )
+            .map_err(Error::from)
+        },
+    )
 }
 
 #[cfg(test)]
