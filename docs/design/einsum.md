@@ -67,7 +67,7 @@ pub fn einsum<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 /// Level 2: Pre-built subscripts — optimize + execute.
 pub fn einsum_with_subscripts<T, A, B>(
@@ -78,7 +78,7 @@ pub fn einsum_with_subscripts<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 /// Level 3: Pre-optimized tree — execute only.
 pub fn einsum_with_plan<T, A, B>(
@@ -89,7 +89,7 @@ pub fn einsum_with_plan<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 ```
 
 | Level | Parsing | Optimization | Execution | Use case |
@@ -119,7 +119,7 @@ pub fn einsum_into<T, A, B>(
 ) -> Result<()>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 pub fn einsum_with_subscripts_into<T, A, B>(
     ctx: &mut B::Context,
@@ -132,7 +132,7 @@ pub fn einsum_with_subscripts_into<T, A, B>(
 ) -> Result<()>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 pub fn einsum_with_plan_into<T, A, B>(
     ctx: &mut B::Context,
@@ -145,11 +145,12 @@ pub fn einsum_with_plan_into<T, A, B>(
 ) -> Result<()>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 ```
 
 The `_into` variants eliminate output allocation per call and enable
-accumulation semantics that map directly to `TensorPrims::execute` alpha/beta.
+accumulation semantics that map directly to the primitive families'
+`execute` alpha/beta contract.
 
 ### Consuming Variants
 
@@ -163,7 +164,7 @@ pub fn einsum_owned<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 /// Level 2: Consuming — optimize + execute.
 pub fn einsum_with_subscripts_owned<T, A, B>(
@@ -174,7 +175,7 @@ pub fn einsum_with_subscripts_owned<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 /// Level 3: Consuming — execute only.
 pub fn einsum_with_plan_owned<T, A, B>(
@@ -185,7 +186,7 @@ pub fn einsum_with_plan_owned<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 ```
 
 Input tensors are moved. The implementation may reuse their buffers for
@@ -282,7 +283,7 @@ fn einsum_impl<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    B: EinsumBackend<A>,
 {
     match operands.len() {
         0 => Err(Error::InvalidArgument("no inputs".into())),
@@ -300,9 +301,9 @@ where
 
 For each binary contraction, the engine chooses between:
 
-**Path A — Extended Contract available** (`has_extension_for(Contract)`):
+**Path A — Contract fast path available** (`TensorSemiringFastPath::has_fast_path(Contract)`):
 ```
-let desc = PrimDescriptor::Contract { modes_a, modes_b, modes_c };
+let desc = SemiringFastPathDescriptor::Contract { modes_a, modes_b, modes_c };
 let plan = B::plan(&mut ctx, &desc, &shapes)?;
 B::execute(&mut ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
 → backend handles diag, trace, permute, GEMM internally
@@ -312,12 +313,12 @@ B::execute(&mut ctx, &plan, alpha, &[&a, &b], beta, &mut c)?;
 ```
 1. diag(a, paired_axes)        // zero-copy stride trick on Tensor<T>
 2. diag(b, paired_axes)        // zero-copy stride trick on Tensor<T>
-3. trace/reduce(a, trace_axes) // TensorPrims::trace or TensorPrims::reduce
+3. trace/reduce(a, trace_axes) // TensorSemiringCore::Trace / ReduceAdd
 4. trace/reduce(b, trace_axes)
 5. permute(a, canonical)  // zero-copy metadata on Tensor<T>
 6. permute(b, canonical)
-7. make_contiguous(a)          // TensorPrims::make_contiguous (conditional copy)
-8. make_contiguous(b)          // TensorPrims::make_contiguous (conditional copy)
+7. make_contiguous(a)          // TensorSemiringCore::MakeContiguous
+8. make_contiguous(b)          // TensorSemiringCore::MakeContiguous
 9. batched_gemm(a, b, c)       // plan + execute BatchedGemm
 ```
 
@@ -350,9 +351,9 @@ the `permute + MakeContiguous + BatchedGemm` pipeline.
 | `ij→ji` (transpose) | `permute(A, [1,0])` |
 | `i→ij` (broadcast) | `repeat(A, j_dim)` (zero-copy on Tensor) |
 | `i→ii` (embed diagonal) | `anti_diag(A, [(0,1)])` |
-| `ij→i` (sum axis) | `reduce(A, axis=1, ReduceOp::Sum)` |
+| `ij→i` (sum axis) | `reduce_add(A, axis=1)` |
 
-### Systematic Unary Lowering with TensorPrims
+### Systematic Unary Lowering with Primitive Families
 
 To support trace and generative output patterns uniformly, unary lowering should
 follow a fixed classification and rewrite pipeline.
@@ -367,15 +368,15 @@ follow a fixed classification and rewrite pipeline.
    - `duplicate_output_labels`: repeated in output
 4. Lower in stages:
    - `diag` (Tensor view op) for `extract_labels`
-   - `trace` (`PrimDescriptor::Trace`) for `trace_labels`
-   - `reduce` (`PrimDescriptor::Reduce`) for non-output residual labels
+   - `trace` (`SemiringCoreDescriptor::Trace`) for `trace_labels`
+   - `reduce_add` (`SemiringCoreDescriptor::ReduceAdd`) for non-output residual labels
    - `permute` (Tensor view op) to canonical output order
    - `MakeContiguous` only when a downstream kernel needs packed storage
    - `repeat` (Tensor broadcast) for non-duplicate generative labels
    - `anti_diag` / `anti_trace` for output duplication and scalar-to-diagonal
      materialization
 
-This keeps TensorPrims usage explicit while preserving zero-copy
+This keeps primitive-family usage explicit while preserving zero-copy
 transformations (`diag`, `repeat`) at the Tensor layer.
 
 ### Pattern-to-Primitive Mapping
@@ -417,11 +418,11 @@ without spelling out the algebra explicitly at call sites.
 Backend selection is determined by `T: HasAlgebra → infers algebra A`:
 
 ```rust
-// impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend  → faer/cblas GEMM  [current]
-// impl TensorPrims<MaxPlus> for CpuBackend                 → tropical-gemm (tenferro-tropical)
-// impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend → cuTENSOR   [not yet implemented]
-// impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend → hipTensor  [not yet implemented]
-// impl TensorPrims<MyAlgebra> for CpuBackend               → user-provided kernels
+// impl<S: Scalar> TensorSemiringCore<Standard<S>> for CpuBackend  → faer/cblas GEMM  [current]
+// impl TensorSemiringCore<MaxPlus> for CpuBackend                 → tropical-gemm (tenferro-tropical)
+// impl<S: Scalar> TensorSemiringCore<Standard<S>> for CudaBackend → cuTENSOR   [partial]
+// impl<S: Scalar> TensorSemiringCore<Standard<S>> for RocmBackend → hipTensor  [stub]
+// impl TensorSemiringCore<MyAlgebra> for CpuBackend               → user-provided kernels
 ```
 
 See [algebra.md](./algebra.md) for `HasAlgebra` and `Semiring` details.
@@ -443,7 +444,7 @@ pub fn tracked_einsum<T, A, B>(
 ) -> AdResult<TrackedTensor<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    B: EinsumBackend<A>,
     Tensor<T>: Differentiable;
 ```
 
@@ -461,7 +462,7 @@ pub fn dual_einsum<T, A, B>(
 ) -> AdResult<DualTensor<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>,
+    B: EinsumBackend<A>,
     Tensor<T>: Differentiable;
 
 /// Reverse-mode rule (rrule) for einsum without building a global tape.
@@ -474,7 +475,7 @@ pub fn einsum_rrule<T, A, B>(
 ) -> Result<Vec<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 /// Forward-mode rule (frule) for einsum without building a global tape.
 /// Inputs without tangent should use `None`.
@@ -486,7 +487,7 @@ pub fn einsum_frule<T, A, B>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 
 /// Local HVP rule for einsum (forward-over-reverse).
 /// Returns (gradient, hvp) pairs for each input operand.
@@ -500,10 +501,10 @@ pub fn einsum_hvp<T, A, B>(
 ) -> Result<Vec<(Tensor<T>, Tensor<T>)>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 ```
 
-All AD functions take `ctx: &mut B::Context` and `B: TensorPrims<A>`,
+All AD functions take `ctx: &mut B::Context` and `B: EinsumBackend<A>`,
 matching the non-AD einsum functions.
 
 ### Adjoint Rules
@@ -528,7 +529,7 @@ Backward:
 
 $$\bar{A} = \operatorname{anti\_diag}(\operatorname{repeat}(\bar{y},\; i_{\text{dim}}),\; [(0,1)])$$
 
-Both VJP and JVP go through `TensorPrims` primitives, working on CPU and
+Both VJP and JVP go through the semiring primitive families, working on CPU and
 GPU uniformly (once GPU backends are available).
 
 > **Status: Not yet implemented.** GPU backends (`CudaBackend`, `RocmBackend`)

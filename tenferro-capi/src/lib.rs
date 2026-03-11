@@ -73,7 +73,7 @@ use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{einsum, einsum_frule, einsum_rrule};
 use tenferro_linalg::{svd, svd_frule, svd_rrule, SvdCotangent, SvdOptions};
-use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+use tenferro_prims::{CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 // ============================================================================
@@ -406,10 +406,17 @@ fn ensure_col_major(
         tensor.logical_memory_space(),
         MemoryOrder::ColumnMajor,
     );
-    let desc = PrimDescriptor::MakeContiguous;
+    let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [tensor.dims(), result.dims()];
-    let plan = CpuBackend::plan(ctx, &desc, &shapes)?;
-    CpuBackend::execute(ctx, &plan, 1.0, &[&tensor], 0.0, &mut result)?;
+    let plan = <CpuBackend as TensorSemiringCore<Standard<f64>>>::plan(ctx, &desc, &shapes)?;
+    <CpuBackend as TensorSemiringCore<Standard<f64>>>::execute(
+        ctx,
+        &plan,
+        1.0,
+        &[&tensor],
+        0.0,
+        &mut result,
+    )?;
     Ok(result)
 }
 

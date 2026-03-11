@@ -30,7 +30,7 @@ Every public type, trait, and function **must** include minimal but sufficient u
 
 **tenferro-rs** is a general-purpose tensor computation library in Rust (`tenferro-*` crates). It provides:
 - Dense tensor types with CPU/GPU support
-- cuTENSOR/hipTensor-compatible operation protocol (`TensorPrims<A>` trait, parameterized by algebra)
+- Family-based primitive execution protocol (`TensorSemiringCore/FastPath`, `TensorScalarPrims`, `TensorAnalyticPrims`)
 - High-level einsum with N-ary contraction tree optimization
 - Automatic differentiation (VJP/JVP) [future]
 - C FFI for Julia/Python integration (`tenferro-capi`)

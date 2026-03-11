@@ -13,7 +13,8 @@ use crate::subscripts::Subscripts;
 #[allow(unused_imports)]
 use crate::util::{compute_output_shape, tensor_get, unflatten_index};
 
-/// Execute a manual einsum without TensorPrims (for AD pullback).
+/// Execute a manual einsum without going through the primitive family planner
+/// (for AD pullback).
 /// Only supports 1-tensor and 2-tensor contractions.
 #[allow(dead_code)]
 pub(crate) fn manual_einsum<T: Scalar>(

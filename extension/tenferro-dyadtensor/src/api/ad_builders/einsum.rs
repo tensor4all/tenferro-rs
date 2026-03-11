@@ -26,7 +26,7 @@ fn structured_einsum_pullback_in_backend<B, C, T>(
 ) -> Result<Vec<(NodeId, Tensor<T>)>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    B: TensorPrims<Standard<T>, Context = C>,
+    B: DenseEinsumBackend<T, C>,
 {
     let mut input_grads = Vec::new();
 
@@ -58,7 +58,7 @@ fn dense_einsum_pullback_in_backend<B, C, T>(
 ) -> Result<Vec<(NodeId, Tensor<T>)>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    B: TensorPrims<Standard<T>, Context = C>,
+    B: DenseEinsumBackend<T, C>,
 {
     let primal_refs: Vec<&Tensor<T>> = primals.iter().collect();
     let gradients =
@@ -94,7 +94,7 @@ fn run_einsum_ad_in_backend<B, C, T>(
 ) -> Result<AdTensor<T>>
 where
     T: EinsumRuntimeValue,
-    B: TensorPrims<Standard<T>, Context = C>,
+    B: DenseEinsumBackend<T, C>,
 {
     if size_dict.is_none() && !subscripts.contains('(') {
         let subs = Subscripts::parse(subscripts).map_err(Error::from)?;

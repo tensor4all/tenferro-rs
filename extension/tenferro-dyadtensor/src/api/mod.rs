@@ -11,7 +11,7 @@ use tenferro_linalg::{
     LuFactorExResult, LuFactorResult, LuPivot, LuResult, NormKind, QrResult, SlogdetResult,
     SolveExResult, SvdOptions, SvdResult,
 };
-use tenferro_prims::{CpuBackend, TensorPrims};
+use tenferro_prims::CpuBackend;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad_value::{AdValue, NodeId};

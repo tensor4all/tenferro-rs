@@ -1,10 +1,11 @@
-//! [`TensorPrims`] implementations for tropical algebras on [`CpuBackend`].
+//! Semiring-family implementations for tropical algebras on [`CpuBackend`].
 //!
-//! Each tropical algebra gets its own `impl TensorPrims<XxxAlgebra> for CpuBackend`.
+//! Each tropical algebra gets its own `impl TensorSemiringCore<XxxAlgebra> for CpuBackend`
+//! plus a `TensorSemiringFastPath` impl that reports no optional fast paths.
 //! The orphan rule is satisfied because `XxxAlgebra` is defined in this crate.
 //!
-//! Extended operations (Contract, ElementwiseMul) are not supported for
-//! tropical algebras — `has_extension_for` always returns `false`.
+//! Optional fast paths (`Contract`, elementwise semiring binary ops) are not
+//! supported for tropical algebras.
 //!
 //! Because tropical scalar types redefine `Add` (= max/min) and `Mul` (= +/×),
 //! the standard ScalarBase-based helper functions work correctly: the expression
@@ -15,9 +16,12 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 
 use strided_view::{StridedView, StridedViewMut};
-use tenferro_algebra::{Algebra, Scalar};
+use tenferro_algebra::{Algebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
-use tenferro_prims::{CpuBackend, CpuContext, Extension, PrimDescriptor, ReduceOp, TensorPrims};
+use tenferro_prims::{
+    CpuBackend, CpuContext, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
+    TensorSemiringFastPath,
+};
 use tenferro_tensor::Tensor;
 use tropical_gemm::{TropicalMaxMul, TropicalMaxPlus, TropicalMinPlus, TropicalSemiring};
 
@@ -56,29 +60,32 @@ fn tensor_to_view_mut<T: Scalar>(t: &mut Tensor<T>) -> Result<StridedViewMut<'_,
 ///
 /// ```ignore
 /// use tenferro_device::LogicalMemorySpace;
-/// use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
+/// use tenferro_prims::{CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
-/// use tenferro_tropical::{MaxPlusAlgebra, TropicalPlan};
+/// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra, TropicalPlan};
 ///
 /// let mut ctx = CpuContext::new(1);
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-/// let mut c = Tensor::<f64>::zeros(&[3], mem, col);
-/// let desc = PrimDescriptor::Reduce {
+/// let a = Tensor::<MaxPlus<f64>>::zeros(&[3, 4], mem, col);
+/// let mut c = Tensor::<MaxPlus<f64>>::zeros(&[3], mem, col);
+/// let desc = SemiringCoreDescriptor::ReduceAdd {
 ///     modes_a: vec![0, 1],
 ///     modes_c: vec![0],
-///     op: ReduceOp::Sum,
 /// };
 /// let plan =
-///     <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan(&mut ctx, &desc, &[&[3, 4], &[3]])
+///     <CpuBackend as TensorSemiringCore<MaxPlusAlgebra<f64>>>::plan(
+///         &mut ctx,
+///         &desc,
+///         &[&[3, 4], &[3]],
+///     )
 ///         .unwrap();
-/// <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::execute(
+/// <CpuBackend as TensorSemiringCore<MaxPlusAlgebra<f64>>>::execute(
 ///     &mut ctx,
 ///     &plan,
-///     1.0,
+///     MaxPlus::one(),
 ///     &[&a],
-///     0.0,
+///     MaxPlus::zero(),
 ///     &mut c,
 /// )
 /// .unwrap();
@@ -101,8 +108,6 @@ pub enum TropicalPlan<T: Scalar> {
     Reduce {
         /// Axes to reduce over (positions in input).
         reduced_axes: Vec<usize>,
-        /// Reduction operation.
-        op: ReduceOp,
         _marker: PhantomData<T>,
     },
     /// Plan for trace under tropical algebra.
@@ -641,9 +646,12 @@ fn ensure_pair_labels_unique(paired: &[(u32, u32)], name: &str) -> Result<()> {
     Ok(())
 }
 
-fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Result<TropicalPlan<T>> {
+fn tropical_plan<T: Scalar>(
+    desc: &SemiringCoreDescriptor,
+    shapes: &[&[usize]],
+) -> Result<TropicalPlan<T>> {
     match desc {
-        PrimDescriptor::BatchedGemm {
+        SemiringCoreDescriptor::BatchedGemm {
             batch_dims,
             m,
             n,
@@ -695,12 +703,8 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
             })
         }
 
-        PrimDescriptor::Reduce {
-            modes_a,
-            modes_c,
-            op,
-        } => {
-            ensure_shape_count(shapes, 2, "Reduce")?;
+        SemiringCoreDescriptor::ReduceAdd { modes_a, modes_c } => {
+            ensure_shape_count(shapes, 2, "ReduceAdd")?;
             ensure_unique_modes(modes_a, "modes_a")?;
             ensure_unique_modes(modes_c, "modes_c")?;
             let a_shape = shapes[0];
@@ -734,12 +738,11 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
                 .collect();
             Ok(TropicalPlan::Reduce {
                 reduced_axes,
-                op: *op,
                 _marker: PhantomData,
             })
         }
 
-        PrimDescriptor::Trace {
+        SemiringCoreDescriptor::Trace {
             modes_a,
             modes_c,
             paired,
@@ -818,7 +821,7 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
             })
         }
 
-        PrimDescriptor::AntiTrace {
+        SemiringCoreDescriptor::AntiTrace {
             modes_a,
             modes_c,
             paired,
@@ -897,7 +900,7 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
             })
         }
 
-        PrimDescriptor::AntiDiag {
+        SemiringCoreDescriptor::AntiDiag {
             modes_a,
             modes_c,
             paired,
@@ -977,7 +980,7 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
             })
         }
 
-        PrimDescriptor::MakeContiguous => {
+        SemiringCoreDescriptor::MakeContiguous => {
             ensure_shape_count(shapes, 2, "MakeContiguous")?;
             if shapes[0] != shapes[1] {
                 return Err(Error::InvalidArgument(
@@ -988,12 +991,6 @@ fn tropical_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Resul
                 _marker: PhantomData,
             })
         }
-
-        PrimDescriptor::ElementwiseUnary { .. }
-        | PrimDescriptor::Contract { .. }
-        | PrimDescriptor::ElementwiseMul => Err(Error::InvalidArgument(
-            "tropical algebras do not support this operation".into(),
-        )),
     }
 }
 
@@ -1021,26 +1018,14 @@ fn tropical_execute<T: Scalar>(
             execute_batched_gemm_fallback(alpha, inputs, beta, output, batch_dims, *m, *n, *k)
         }
 
-        TropicalPlan::Reduce {
-            reduced_axes, op, ..
-        } => match op {
-            ReduceOp::Sum => {
-                if inputs.len() != 1 {
-                    return Err(Error::InvalidArgument(
-                        "Reduce execute requires 1 input tensor".into(),
-                    ));
-                }
-                execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes)
+        TropicalPlan::Reduce { reduced_axes, .. } => {
+            if inputs.len() != 1 {
+                return Err(Error::InvalidArgument(
+                    "ReduceAdd execute requires 1 input tensor".into(),
+                ));
             }
-            ReduceOp::Max | ReduceOp::Min => {
-                // For tropical types, "Sum" reduction already uses tropical addition
-                // (max or min), so ReduceOp::Sum is the correct choice for callers.
-                // Max/Min are not meaningful as separate ops for tropical scalars.
-                Err(Error::InvalidArgument(
-                    "use ReduceOp::Sum for tropical reduction (+ is already max/min)".into(),
-                ))
-            }
-        },
+            execute_reduce_sum(alpha, inputs[0], beta, output, reduced_axes)
+        }
 
         TropicalPlan::Trace {
             paired_axes,
@@ -1115,7 +1100,7 @@ fn execute_make_contiguous<T: Scalar>(
 }
 
 // ===========================================================================
-// impl TensorPrims<MaxPlusAlgebra> for CpuBackend
+// impl TensorSemiringCore<TropicalAlgebra> for CpuBackend
 // ===========================================================================
 
 /// Try to dispatch BatchedGemm to the SIMD-optimized path for a concrete type.
@@ -1152,15 +1137,15 @@ macro_rules! try_simd_dispatch {
     };
 }
 
-/// Generates `TensorPrims<$marker<S>>` impl for `CpuBackend` with SIMD dispatch.
+/// Generates semiring-family impls for `CpuBackend` with SIMD dispatch.
 ///
 /// The macro inlines SIMD dispatch for f64 and f32 variants of the given
 /// tropical scalar wrapper, then falls back to the generic `tropical_execute`.
 macro_rules! impl_tropical_prims {
     ($marker:ident, $wrapper:ident) => {
-        impl<S: Scalar + num_traits::Float> TensorPrims<$marker<S>> for CpuBackend
+        impl<S: Scalar + num_traits::Float> TensorSemiringCore<$marker<S>> for CpuBackend
         where
-            $marker<S>: Algebra<Scalar = $wrapper<S>>,
+            $marker<S>: Algebra<Scalar = $wrapper<S>> + Semiring<Scalar = $wrapper<S>>,
             $wrapper<S>: Scalar,
         {
             type Plan = TropicalPlan<$wrapper<S>>;
@@ -1168,7 +1153,7 @@ macro_rules! impl_tropical_prims {
 
             fn plan(
                 _ctx: &mut CpuContext,
-                desc: &PrimDescriptor,
+                desc: &SemiringCoreDescriptor,
                 shapes: &[&[usize]],
             ) -> Result<TropicalPlan<$wrapper<S>>> {
                 tropical_plan(desc, shapes)
@@ -1229,8 +1214,40 @@ macro_rules! impl_tropical_prims {
                 }
                 tropical_execute(plan, alpha, &view_refs, beta, &mut out_view)
             }
+        }
 
-            fn has_extension_for(_ext: Extension) -> bool {
+        impl<S: Scalar + num_traits::Float> TensorSemiringFastPath<$marker<S>> for CpuBackend
+        where
+            $marker<S>: Algebra<Scalar = $wrapper<S>> + Semiring<Scalar = $wrapper<S>>,
+            $wrapper<S>: Scalar,
+        {
+            type Plan = TropicalPlan<$wrapper<S>>;
+            type Context = CpuContext;
+
+            fn plan(
+                _ctx: &mut CpuContext,
+                _desc: &SemiringFastPathDescriptor,
+                _shapes: &[&[usize]],
+            ) -> Result<TropicalPlan<$wrapper<S>>> {
+                Err(Error::InvalidArgument(
+                    "tropical algebras do not support semiring fast paths".into(),
+                ))
+            }
+
+            fn execute(
+                _ctx: &mut CpuContext,
+                _plan: &TropicalPlan<$wrapper<S>>,
+                _alpha: $wrapper<S>,
+                _inputs: &[&Tensor<$wrapper<S>>],
+                _beta: $wrapper<S>,
+                _output: &mut Tensor<$wrapper<S>>,
+            ) -> Result<()> {
+                Err(Error::InvalidArgument(
+                    "tropical algebras do not support semiring fast paths".into(),
+                ))
+            }
+
+            fn has_fast_path(_desc: SemiringFastPathDescriptor) -> bool {
                 false
             }
         }
@@ -1240,3 +1257,6 @@ macro_rules! impl_tropical_prims {
 impl_tropical_prims!(MaxPlusAlgebra, MaxPlus);
 impl_tropical_prims!(MinPlusAlgebra, MinPlus);
 impl_tropical_prims!(MaxMulAlgebra, MaxMul);
+
+#[cfg(test)]
+mod tests;

@@ -5,7 +5,10 @@ use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::{Extension, PlanCache, PrimDescriptor, TensorPrims};
+use crate::{
+    PlanCache, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
+    TensorSemiringFastPath,
+};
 
 // ===========================================================================
 // CUDA stub types (used when `cuda` feature is NOT enabled)
@@ -109,13 +112,41 @@ impl CudaBackend {
 }
 
 #[cfg(not(feature = "cuda"))]
-impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
+impl<S: Scalar> TensorSemiringCore<Standard<S>> for CudaBackend {
     type Plan = CudaPlan<S>;
     type Context = CudaContext;
 
     fn plan(
         _ctx: &mut CudaContext,
-        _desc: &PrimDescriptor,
+        _desc: &SemiringCoreDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<CudaPlan<S>> {
+        Err(Error::DeviceError(
+            "CUDA backend not available: load cuTENSOR library first".into(),
+        ))
+    }
+
+    fn execute(
+        _ctx: &mut CudaContext,
+        _plan: &CudaPlan<S>,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
+    ) -> Result<()> {
+        Err(Error::DeviceError(
+            "CUDA backend not available: load cuTENSOR library first".into(),
+        ))
+    }
+}
+
+impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for CudaBackend {
+    type Plan = CudaPlan<S>;
+    type Context = CudaContext;
+
+    fn plan(
+        _ctx: &mut CudaContext,
+        _desc: &SemiringFastPathDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<CudaPlan<S>> {
         Err(Error::DeviceError(
@@ -136,7 +167,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         ))
     }
 
-    fn has_extension_for(_ext: Extension) -> bool {
+    fn has_fast_path(_desc: SemiringFastPathDescriptor) -> bool {
         false
     }
 }
@@ -189,8 +220,7 @@ impl Default for RocmContext {
 ///
 /// **Status: Not yet implemented.** This type exists as an API placeholder.
 ///
-/// Created by [`RocmBackend::plan`](TensorPrims::plan) and consumed by
-/// [`RocmBackend::execute`](TensorPrims::execute).
+/// Created by the semiring-family `plan` methods and consumed by `execute`.
 pub struct RocmPlan<T: Scalar> {
     _handle: *mut c_void,
     _workspace_size: usize,
@@ -206,8 +236,7 @@ pub struct RocmPlan<T: Scalar> {
 ///
 /// When implemented, will be loaded at runtime from a user-provided `.so`
 /// path with no compile-time ROCm SDK dependency. Will implement
-/// [`TensorPrims<Standard<T>>`](TensorPrims) for standard arithmetic on
-/// AMD GPUs.
+/// the semiring-family traits for standard arithmetic on AMD GPUs.
 ///
 /// hipTENSOR natively supports contraction, reduction, and elementwise
 /// building blocks. Structural `permute` stays a tensor view, and any required
@@ -235,7 +264,7 @@ impl RocmBackend {
     /// conjugation into a new non-conjugated tensor. Otherwise it returns a
     /// clone of `src`.
     ///
-    /// When implemented, will use `ElementwiseUnary(Conj)` via hipTENSOR
+    /// When implemented, will use the analytic/scalar family execution traits
     /// to produce a new tensor with `conjugated = false`.
     pub fn resolve_conj<T: Scalar + Conjugate>(
         _ctx: &mut RocmContext,
@@ -259,13 +288,41 @@ impl RocmBackend {
     }
 }
 
-impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
+impl<S: Scalar> TensorSemiringCore<Standard<S>> for RocmBackend {
     type Plan = RocmPlan<S>;
     type Context = RocmContext;
 
     fn plan(
         _ctx: &mut RocmContext,
-        _desc: &PrimDescriptor,
+        _desc: &SemiringCoreDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<RocmPlan<S>> {
+        Err(Error::DeviceError(
+            "ROCm backend not available: load hipTENSOR library first".into(),
+        ))
+    }
+
+    fn execute(
+        _ctx: &mut RocmContext,
+        _plan: &RocmPlan<S>,
+        _alpha: S,
+        _inputs: &[&Tensor<S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
+    ) -> Result<()> {
+        Err(Error::DeviceError(
+            "ROCm backend not available: load hipTENSOR library first".into(),
+        ))
+    }
+}
+
+impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for RocmBackend {
+    type Plan = RocmPlan<S>;
+    type Context = RocmContext;
+
+    fn plan(
+        _ctx: &mut RocmContext,
+        _desc: &SemiringFastPathDescriptor,
         _shapes: &[&[usize]],
     ) -> Result<RocmPlan<S>> {
         Err(Error::DeviceError(
@@ -286,9 +343,9 @@ impl<S: Scalar> TensorPrims<Standard<S>> for RocmBackend {
         ))
     }
 
-    fn has_extension_for(_ext: Extension) -> bool {
-        // Not yet implemented. When available, hipTENSOR will support
-        // Contract and ElementwiseMul for f32/f64/Complex.
+    fn has_fast_path(_desc: SemiringFastPathDescriptor) -> bool {
+        // Not yet implemented. When available, hipTENSOR will support the
+        // semiring fast-path family for contraction and elementwise binary ops.
         false
     }
 }

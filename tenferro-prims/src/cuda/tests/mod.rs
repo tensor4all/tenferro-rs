@@ -7,9 +7,17 @@ use tenferro_tensor::Tensor;
 use super::*;
 
 #[test]
-fn cuda_backend_feature_surface_matches_tensor_prims_contract() {
-    let _plan_fn: fn(&mut CudaContext, &PrimDescriptor, &[&[usize]]) -> Result<CudaPlan<f64>> =
-        <CudaBackend as TensorPrims<Standard<f64>>>::plan;
+fn cuda_backend_feature_surface_matches_family_contracts() {
+    let _core_plan_fn: fn(
+        &mut CudaContext,
+        &SemiringCoreDescriptor,
+        &[&[usize]],
+    ) -> Result<CudaPlan<f64>> = <CudaBackend as TensorSemiringCore<Standard<f64>>>::plan;
+    let _fast_plan_fn: fn(
+        &mut CudaContext,
+        &SemiringFastPathDescriptor,
+        &[&[usize]],
+    ) -> Result<CudaPlan<f64>> = <CudaBackend as TensorSemiringFastPath<Standard<f64>>>::plan;
     let _execute_fn: fn(
         &mut CudaContext,
         &CudaPlan<f64>,
@@ -17,11 +25,23 @@ fn cuda_backend_feature_surface_matches_tensor_prims_contract() {
         &[&Tensor<f64>],
         f64,
         &mut Tensor<f64>,
-    ) -> Result<()> = <CudaBackend as TensorPrims<Standard<f64>>>::execute;
+    ) -> Result<()> = <CudaBackend as TensorSemiringCore<Standard<f64>>>::execute;
 
-    assert!(<CudaBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::Contract));
     assert!(
-        <CudaBackend as TensorPrims<Standard<f64>>>::has_extension_for(Extension::ElementwiseMul)
+        <CudaBackend as TensorSemiringFastPath<Standard<f64>>>::has_fast_path(
+            SemiringFastPathDescriptor::Contract {
+                modes_a: vec![0],
+                modes_b: vec![0],
+                modes_c: vec![0],
+            }
+        )
+    );
+    assert!(
+        <CudaBackend as TensorSemiringFastPath<Standard<f64>>>::has_fast_path(
+            SemiringFastPathDescriptor::ElementwiseBinary {
+                op: SemiringBinaryOp::Mul,
+            }
+        )
     );
 }
 
@@ -63,9 +83,9 @@ fn cuda_make_contiguous_smoke_runs_on_device_tensors_when_runtime_is_available()
     )
     .unwrap();
     let input = base.permute(&[1, 0]).unwrap();
-    let plan = <CudaBackend as TensorPrims<Standard<f32>>>::plan(
+    let plan = <CudaBackend as TensorSemiringCore<Standard<f32>>>::plan(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &SemiringCoreDescriptor::MakeContiguous,
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
@@ -78,7 +98,7 @@ fn cuda_make_contiguous_smoke_runs_on_device_tensors_when_runtime_is_available()
         MemoryOrder::ColumnMajor,
     );
 
-    <CudaBackend as TensorPrims<Standard<f32>>>::execute(
+    <CudaBackend as TensorSemiringCore<Standard<f32>>>::execute(
         &mut ctx,
         &plan,
         1.0,

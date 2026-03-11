@@ -162,7 +162,7 @@ pub(crate) fn dense_input_snapshot_in_backend<B, C, T>(
 ) -> Result<(Tensor<T>, Option<Tensor<T>>)>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    B: TensorPrims<Standard<T>, Context = C>,
+    B: DenseEinsumBackend<T, C>,
 {
     let primal = to_dense_in_ctx::<B, _, T>(ctx, input.structured_primal())?
         .contiguous(MemoryOrder::ColumnMajor);
@@ -218,7 +218,7 @@ pub(crate) fn compress_pullback_like_in_backend<B, C, T>(
 ) -> Result<Tensor<T>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    B: TensorPrims<Standard<T>, Context = C>,
+    B: DenseEinsumBackend<T, C>,
 {
     let dense = normalize_pullback_shape(grad, layout.logical_dims(), op_name)?;
     if layout.is_dense() {
@@ -363,7 +363,7 @@ pub(crate) fn sum_einsum_tangent_terms<B, C, T>(
 ) -> Result<Option<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    B: TensorPrims<Standard<T>, Context = C>,
+    B: DenseEinsumBackend<T, C>,
 {
     let mut out_tangent: Option<Tensor<T>> = None;
 
@@ -394,7 +394,7 @@ pub(crate) fn sum_structured_einsum_tangent_terms<B, C, T>(
 ) -> Result<Option<StructuredTensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    B: TensorPrims<Standard<T>, Context = C>,
+    B: DenseEinsumBackend<T, C>,
 {
     let mut out_tangent: Option<StructuredTensor<T>> = None;
 

@@ -5,9 +5,9 @@ Provides dense tensor types with CPU/GPU support, a cuTENSOR/hipTensor-compatibl
 operation protocol, high-level einsum with N-ary contraction tree optimization,
 and automatic differentiation.
 
-**Current phase**: API skeleton (POC). Public signatures and documentation are
-in place; most function bodies use `todo!()`. The purpose of this phase is to
-validate the API design before writing implementations.
+**Current phase**: active implementation. The workspace now has working dense
+CPU functionality, partial/experimental GPU coverage, and a family-based
+primitive execution layer shared across einsum, tropical algebra, and linalg.
 
 See the [design documents](https://github.com/tensor4all/tenferro-rs/blob/main/docs/design/index.md)
 for architecture, API design, and future phase plans.
@@ -115,7 +115,7 @@ views. Factory functions: `zeros`, `ones`, `eye`. Triangular extraction:
 <a id="tenferro-prims"></a>
 ### [tenferro-prims](tenferro_prims/index.html) <small>(Layer 3)</small>
 
-Low-level tensor execution substrate. The current public direction is the split
+Low-level tensor execution substrate. The public primitive contract is the split
 protocol family:
 
 - `TensorSemiringCore`
@@ -123,8 +123,8 @@ protocol family:
 - `TensorScalarPrims`
 - `TensorAnalyticPrims`
 
-These family traits are currently backed by a migration layer over the legacy
-`TensorPrims<A>` surface.
+These family traits are the current execution surface; there is no longer a
+legacy monolithic primitive trait.
 
 <a id="tenferro-algebra"></a>
 ### [tenferro-algebra](tenferro_algebra/index.html) <small>(Shared)</small>
@@ -185,8 +185,9 @@ architecture with three tropical semirings: MaxPlus (⊕=max, ⊗=+),
 MinPlus (⊕=min, ⊗=+), and MaxMul (⊕=max, ⊗=×).
 
 Provides scalar wrappers (`MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`), algebra
-markers (`MaxPlusAlgebra`, etc.), `TensorPrims` implementations for each algebra,
-and `ArgmaxTracker` for recording winner indices during tropical forward passes.
+markers (`MaxPlusAlgebra`, etc.), semiring-family implementations for each
+algebra, and `ArgmaxTracker` for recording winner indices during tropical
+forward passes.
 
 <a id="tenferro-tropical-capi"></a>
 ### [tenferro-tropical-capi](tenferro_tropical_capi/index.html) <small>(Extension)</small>

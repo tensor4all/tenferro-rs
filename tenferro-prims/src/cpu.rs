@@ -1,5 +1,4 @@
-use std::any::{Any, TypeId};
-use std::cmp::Ordering;
+use std::any::TypeId;
 use std::marker::PhantomData;
 
 #[cfg(feature = "gemm-blas")]
@@ -20,7 +19,8 @@ use tenferro_tensor::Tensor;
 
 use crate::{
     for_each_index, mode_position, validate_execute_inputs, validate_rank, validate_shape_count,
-    validate_shape_eq, Extension, PlanCache, PrimDescriptor, ReduceOp, TensorPrims, UnaryOp,
+    validate_shape_eq, PlanCache, SemiringBinaryOp, SemiringCoreDescriptor,
+    SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
 };
 
 /// Trait for types that support strided GEMM via faer (zero-copy, zero-allocation).
@@ -285,8 +285,8 @@ fn build_contract_gemm_spec(
 
 /// CPU plan — concrete enum, no type erasure.
 ///
-/// Created by [`CpuBackend::plan`](TensorPrims::plan) and consumed by
-/// [`CpuBackend::execute`](TensorPrims::execute).
+/// Created by the family planners on [`CpuBackend`] and consumed by the
+/// semiring family executors.
 #[derive(Debug, Clone)]
 pub enum CpuPlan<T: Scalar> {
     /// Plan for batched GEMM.
@@ -301,12 +301,10 @@ pub enum CpuPlan<T: Scalar> {
         k: usize,
         _marker: PhantomData<T>,
     },
-    /// Plan for reduction.
-    Reduce {
+    /// Plan for semiring-add reduction.
+    ReduceAdd {
         /// Axes to reduce over (positions in input tensor).
         reduced_axes: Vec<usize>,
-        /// Reduction operation.
-        op: ReduceOp,
         _marker: PhantomData<T>,
     },
     /// Plan for trace.
@@ -346,12 +344,6 @@ pub enum CpuPlan<T: Scalar> {
         generative_comps: Vec<usize>,
         _marker: PhantomData<T>,
     },
-    /// Plan for element-wise unary operation.
-    ElementwiseUnary {
-        /// Unary operation.
-        op: UnaryOp,
-        _marker: PhantomData<T>,
-    },
     /// Plan for fused contraction.
     Contract {
         /// Mode labels for input A.
@@ -365,8 +357,12 @@ pub enum CpuPlan<T: Scalar> {
         gemm_spec: Option<ContractGemmSpec>,
         _marker: PhantomData<T>,
     },
-    /// Plan for element-wise multiplication (extended op).
-    ElementwiseMul { _marker: PhantomData<T> },
+    /// Plan for optional semiring binary fast paths.
+    ElementwiseBinary {
+        /// The semiring binary operation to apply.
+        op: SemiringBinaryOp,
+        _marker: PhantomData<T>,
+    },
     /// Plan for making a tensor contiguous.
     MakeContiguous { _marker: PhantomData<T> },
 }
@@ -606,14 +602,15 @@ impl CpuContext {
 ///
 /// Dispatched automatically when tensors reside on
 /// [`LogicalMemorySpace::MainMemory`](tenferro_device::LogicalMemorySpace::MainMemory).
-/// Implements [`TensorPrims<Standard<T>>`](TensorPrims) for standard arithmetic.
+/// Implements the semiring core and semiring fast-path families for
+/// [`Standard<T>`](tenferro_algebra::Standard).
 ///
 /// # Examples
 ///
 /// ```ignore
 /// use tenferro_algebra::Standard;
 /// use tenferro_device::LogicalMemorySpace;
-/// use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+/// use tenferro_prims::{CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let mut ctx = CpuContext::new(4);
@@ -622,13 +619,13 @@ impl CpuContext {
 /// let a_base = Tensor::<f64>::zeros(&[3, 4], mem, col);
 /// let a = a_base.permute(&[1, 0]).unwrap();
 /// let mut b = Tensor::<f64>::zeros(&[4, 3], mem, col);
-/// let plan = <CpuBackend as TensorPrims<Standard<f64>>>::plan(
+/// let plan = <CpuBackend as TensorSemiringCore<Standard<f64>>>::plan(
 ///     &mut ctx,
-///     &PrimDescriptor::MakeContiguous,
+///     &SemiringCoreDescriptor::MakeContiguous,
 ///     &[&[4, 3], &[4, 3]],
 /// )
 /// .unwrap();
-/// <CpuBackend as TensorPrims<Standard<f64>>>::execute(
+/// <CpuBackend as TensorSemiringCore<Standard<f64>>>::execute(
 ///     &mut ctx,
 ///     &plan,
 ///     1.0,
@@ -649,17 +646,11 @@ impl CpuBackend {
             || tid == TypeId::of::<Complex64>()
     }
 
-    fn supports_ordered_reduce_type<T: Scalar>() -> bool {
-        let tid = TypeId::of::<T>();
-        tid == TypeId::of::<f32>() || tid == TypeId::of::<f64>()
-    }
-
     /// Materialize a lazily-conjugated tensor.
     ///
     /// If `src.is_conjugated()` is `false`, returns a shallow clone.
-    /// If `true`, applies element-wise conjugation via
-    /// `ElementwiseUnary(Conj)` and returns a new tensor with
-    /// `conjugated = false`.
+    /// If `true`, applies element-wise conjugation directly and returns a new
+    /// tensor with `conjugated = false`.
     ///
     /// This is the equivalent of PyTorch's `torch.resolve_conj()`.
     ///
@@ -696,21 +687,18 @@ impl CpuBackend {
         .expect("from_slice should succeed with valid data and dims")
     }
 
-    /// Build a CPU plan from a descriptor and shapes (without cache lookup).
-    ///
-    /// This is the internal plan construction logic, factored out of
-    /// [`TensorPrims::plan`] so that the trait method can wrap it with
-    /// cache lookup/insert.
-    fn build_plan<T: Scalar>(desc: &PrimDescriptor, shapes: &[&[usize]]) -> Result<CpuPlan<T>> {
+    /// Build a CPU plan for semiring-core descriptors without cache lookup.
+    fn build_semiring_core_plan<T: Scalar>(
+        desc: &SemiringCoreDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<CpuPlan<T>> {
         match desc {
-            PrimDescriptor::BatchedGemm {
+            SemiringCoreDescriptor::BatchedGemm {
                 batch_dims,
                 m,
                 n,
                 k,
             } => {
-                // BatchedGemm expects 3 shapes: A, B, C
-                // Layout: [m/k, k/n, batch...] — batch dims are trailing
                 validate_shape_count(shapes, 3, "BatchedGemm")?;
                 if !Self::supports_batched_gemm_type::<T>() {
                     return Err(Error::InvalidArgument(format!(
@@ -744,60 +732,41 @@ impl CpuBackend {
                     _marker: PhantomData,
                 })
             }
-
-            PrimDescriptor::Reduce {
-                modes_a,
-                modes_c,
-                op,
-            } => {
-                // Reduce expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "Reduce")?;
-                validate_rank(shapes[0], modes_a.len(), "Reduce input A")?;
-                validate_rank(shapes[1], modes_c.len(), "Reduce output C")?;
-                if matches!(op, ReduceOp::Max | ReduceOp::Min)
-                    && !Self::supports_ordered_reduce_type::<T>()
-                {
-                    return Err(Error::InvalidArgument(format!(
-                        "Reduce Max/Min supports only f32 and f64 on CpuBackend (got {})",
-                        std::any::type_name::<T>()
-                    )));
-                }
-                // reduced_axes = positions in modes_a not present in modes_c
+            SemiringCoreDescriptor::ReduceAdd { modes_a, modes_c } => {
+                validate_shape_count(shapes, 2, "ReduceAdd")?;
+                validate_rank(shapes[0], modes_a.len(), "ReduceAdd input A")?;
+                validate_rank(shapes[1], modes_c.len(), "ReduceAdd output C")?;
                 let reduced_axes: Vec<usize> = modes_a
                     .iter()
                     .enumerate()
-                    .filter(|(_, m)| !modes_c.contains(m))
-                    .map(|(i, _)| i)
+                    .filter(|(_, mode)| !modes_c.contains(mode))
+                    .map(|(idx, _)| idx)
                     .collect();
-                // Validate: reduced_axes must be sorted, unique, and within rank
-                for w in reduced_axes.windows(2) {
-                    if w[0] >= w[1] {
+                for window in reduced_axes.windows(2) {
+                    if window[0] >= window[1] {
                         return Err(Error::InvalidArgument(format!(
-                            "Reduce: reduced_axes must be sorted and unique, got {reduced_axes:?}"
+                            "ReduceAdd: reduced_axes must be sorted and unique, got {reduced_axes:?}"
                         )));
                     }
                 }
                 if let Some(&last) = reduced_axes.last() {
                     if last >= modes_a.len() {
                         return Err(Error::InvalidArgument(format!(
-                            "Reduce: reduced axis {last} out of range for rank {}",
+                            "ReduceAdd: reduced axis {last} out of range for rank {}",
                             modes_a.len()
                         )));
                     }
                 }
-                Ok(CpuPlan::Reduce {
+                Ok(CpuPlan::ReduceAdd {
                     reduced_axes,
-                    op: *op,
                     _marker: PhantomData,
                 })
             }
-
-            PrimDescriptor::Trace {
+            SemiringCoreDescriptor::Trace {
                 modes_a,
                 modes_c,
                 paired,
             } => {
-                // Trace expects 2 shapes: A (input), C (output)
                 validate_shape_count(shapes, 2, "Trace")?;
                 validate_rank(shapes[0], modes_a.len(), "Trace input A")?;
                 validate_rank(shapes[1], modes_c.len(), "Trace output C")?;
@@ -807,7 +776,6 @@ impl CpuBackend {
                         Ok((mode_position(modes_a, *m1)?, mode_position(modes_a, *m2)?))
                     })
                     .collect::<Result<_>>()?;
-                // Validate that paired axes have equal dimensions
                 for &(ax1, ax2) in &paired_axes {
                     if shapes[0][ax1] != shapes[0][ax2] {
                         return Err(Error::InvalidArgument(format!(
@@ -818,7 +786,7 @@ impl CpuBackend {
                 }
                 let free_axes: Vec<usize> = modes_c
                     .iter()
-                    .map(|m| mode_position(modes_a, *m))
+                    .map(|mode| mode_position(modes_a, *mode))
                     .collect::<Result<_>>()?;
                 let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[0]);
                 Ok(CpuPlan::Trace {
@@ -828,12 +796,11 @@ impl CpuBackend {
                     _marker: PhantomData,
                 })
             }
-            PrimDescriptor::AntiTrace {
+            SemiringCoreDescriptor::AntiTrace {
                 modes_a,
                 modes_c,
                 paired,
             } => {
-                // AntiTrace expects 2 shapes: A (input), C (output)
                 validate_shape_count(shapes, 2, "AntiTrace")?;
                 validate_rank(shapes[0], modes_a.len(), "AntiTrace input A")?;
                 validate_rank(shapes[1], modes_c.len(), "AntiTrace output C")?;
@@ -843,7 +810,6 @@ impl CpuBackend {
                         Ok((mode_position(modes_c, *m1)?, mode_position(modes_c, *m2)?))
                     })
                     .collect::<Result<_>>()?;
-                // Validate that paired axes in output have equal dimensions
                 for &(ax1, ax2) in &paired_axes {
                     if shapes[1][ax1] != shapes[1][ax2] {
                         return Err(Error::InvalidArgument(format!(
@@ -854,7 +820,7 @@ impl CpuBackend {
                 }
                 let free_axes: Vec<usize> = modes_a
                     .iter()
-                    .map(|m| mode_position(modes_c, *m))
+                    .map(|mode| mode_position(modes_c, *mode))
                     .collect::<Result<_>>()?;
                 let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[1]);
                 Ok(CpuPlan::AntiTrace {
@@ -865,13 +831,11 @@ impl CpuBackend {
                     _marker: PhantomData,
                 })
             }
-
-            PrimDescriptor::AntiDiag {
+            SemiringCoreDescriptor::AntiDiag {
                 modes_a,
                 modes_c,
                 paired,
             } => {
-                // AntiDiag expects 2 shapes: A (input), C (output)
                 validate_shape_count(shapes, 2, "AntiDiag")?;
                 validate_rank(shapes[0], modes_a.len(), "AntiDiag input A")?;
                 validate_rank(shapes[1], modes_c.len(), "AntiDiag output C")?;
@@ -883,17 +847,16 @@ impl CpuBackend {
                     .collect::<Result<_>>()?;
                 let free_axes: Vec<usize> = modes_a
                     .iter()
-                    .map(|m| mode_position(modes_c, *m))
+                    .map(|mode| mode_position(modes_c, *mode))
                     .collect::<Result<_>>()?;
                 let (components, comp_dims) = compute_paired_components(&paired_axes, shapes[1]);
-                // Generative components: those whose axes have no overlap with free_axes
                 let free_ax_set: std::collections::HashSet<usize> =
                     free_axes.iter().copied().collect();
                 let generative_comps: Vec<usize> = components
                     .iter()
                     .enumerate()
                     .filter(|(_, comp)| comp.iter().all(|ax| !free_ax_set.contains(ax)))
-                    .map(|(i, _)| i)
+                    .map(|(idx, _)| idx)
                     .collect();
                 Ok(CpuPlan::AntiDiag {
                     paired_axes,
@@ -904,36 +867,37 @@ impl CpuBackend {
                     _marker: PhantomData,
                 })
             }
-
-            PrimDescriptor::ElementwiseUnary { op } => {
-                // ElementwiseUnary expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "ElementwiseUnary")?;
-                validate_shape_eq(shapes[1], shapes[0], "ElementwiseUnary output")?;
-                Ok(CpuPlan::ElementwiseUnary {
-                    op: *op,
+            SemiringCoreDescriptor::MakeContiguous => {
+                validate_shape_count(shapes, 2, "MakeContiguous")?;
+                validate_shape_eq(shapes[1], shapes[0], "MakeContiguous output")?;
+                Ok(CpuPlan::MakeContiguous {
                     _marker: PhantomData,
                 })
             }
+        }
+    }
 
-            PrimDescriptor::Contract {
+    /// Build a CPU plan for semiring fast-path descriptors without cache lookup.
+    fn build_semiring_fast_path_plan<T: Scalar>(
+        desc: &SemiringFastPathDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<CpuPlan<T>> {
+        match desc {
+            SemiringFastPathDescriptor::Contract {
                 modes_a,
                 modes_b,
                 modes_c,
             } => {
-                // Contract expects 3 shapes: A, B, C.
-                // When GEMM acceleration is available (gemm-blas feature), the
-                // plan builder tries to map the contraction to a batched GEMM.
-                // If the mode layout is incompatible with GEMM (e.g. non-trivial
-                // batch alignment), the plan falls back to the generic O(m·n·k)
-                // loop in execute_contract_generic. This is correct but slower.
                 validate_shape_count(shapes, 3, "Contract")?;
                 validate_rank(shapes[0], modes_a.len(), "Contract input A")?;
                 validate_rank(shapes[1], modes_b.len(), "Contract input B")?;
                 validate_rank(shapes[2], modes_c.len(), "Contract output C")?;
-                // Validate contracted dimensions match between A and B
-                for &mode in modes_a.iter() {
+                for &mode in modes_a {
                     if let Some(b_pos) = modes_b.iter().position(|&m| m == mode) {
-                        let a_pos = modes_a.iter().position(|&m| m == mode).unwrap();
+                        let a_pos = modes_a
+                            .iter()
+                            .position(|&m| m == mode)
+                            .expect("mode from modes_a must exist");
                         if shapes[0][a_pos] != shapes[1][b_pos] {
                             return Err(Error::InvalidArgument(format!(
                                 "Contract mode {mode} has mismatched dimensions: A={} vs B={}",
@@ -951,22 +915,12 @@ impl CpuBackend {
                     _marker: PhantomData,
                 })
             }
-
-            PrimDescriptor::ElementwiseMul => {
-                // ElementwiseMul expects 3 shapes: A, B, C
-                validate_shape_count(shapes, 3, "ElementwiseMul")?;
-                validate_shape_eq(shapes[1], shapes[0], "ElementwiseMul input B")?;
-                validate_shape_eq(shapes[2], shapes[0], "ElementwiseMul output C")?;
-                Ok(CpuPlan::ElementwiseMul {
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::MakeContiguous => {
-                // MakeContiguous expects 2 shapes: A (input), C (output)
-                validate_shape_count(shapes, 2, "MakeContiguous")?;
-                validate_shape_eq(shapes[1], shapes[0], "MakeContiguous output")?;
-                Ok(CpuPlan::MakeContiguous {
+            SemiringFastPathDescriptor::ElementwiseBinary { op } => {
+                validate_shape_count(shapes, 3, "ElementwiseBinary")?;
+                validate_shape_eq(shapes[1], shapes[0], "ElementwiseBinary input B")?;
+                validate_shape_eq(shapes[2], shapes[0], "ElementwiseBinary output C")?;
+                Ok(CpuPlan::ElementwiseBinary {
+                    op: *op,
                     _marker: PhantomData,
                 })
             }
@@ -1568,122 +1522,6 @@ fn execute_reduce_sum<T: Scalar>(
     Ok(())
 }
 
-fn extrema_prefers_candidate<T: Scalar>(candidate: T, current: T, op: ReduceOp) -> Result<bool> {
-    fn compare_ordered<T: PartialOrd>(candidate: &T, current: &T, op: ReduceOp) -> Result<bool> {
-        match candidate.partial_cmp(current) {
-            Some(Ordering::Greater) => Ok(matches!(op, ReduceOp::Max)),
-            Some(Ordering::Less) => Ok(matches!(op, ReduceOp::Min)),
-            Some(Ordering::Equal) => Ok(false),
-            None => Err(Error::InvalidArgument(format!(
-                "Reduce {:?} encountered unordered values (for example NaN)",
-                op
-            ))),
-        }
-    }
-
-    let candidate_any = &candidate as &dyn Any;
-    let current_any = &current as &dyn Any;
-
-    if let (Some(candidate), Some(current)) = (
-        candidate_any.downcast_ref::<f32>(),
-        current_any.downcast_ref::<f32>(),
-    ) {
-        return compare_ordered(candidate, current, op);
-    }
-    if let (Some(candidate), Some(current)) = (
-        candidate_any.downcast_ref::<f64>(),
-        current_any.downcast_ref::<f64>(),
-    ) {
-        return compare_ordered(candidate, current, op);
-    }
-
-    Err(Error::InvalidArgument(format!(
-        "Reduce Max/Min supports only f32 and f64 on CpuBackend (got {})",
-        std::any::type_name::<T>()
-    )))
-}
-
-fn execute_reduce_extrema<T: Scalar>(
-    alpha: T,
-    input: &StridedView<T>,
-    beta: T,
-    output: &mut StridedViewMut<T>,
-    reduced_axes: &[usize],
-    op: ReduceOp,
-) -> Result<()> {
-    let in_dims = input.dims().to_vec();
-    let out_dims = output.dims().to_vec();
-    let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
-    let reduced_total: usize = reduced_dims.iter().product();
-    if reduced_total == 0 {
-        return Err(Error::InvalidArgument(format!(
-            "Reduce {:?} requires a non-empty reduction domain",
-            op
-        )));
-    }
-
-    let mut red_idx = vec![0usize; reduced_dims.len()];
-    let mut in_idx = vec![0usize; in_dims.len()];
-    let mut error = None;
-
-    for_each_index(&out_dims, |out_idx| {
-        if error.is_some() {
-            return;
-        }
-
-        let mut best = None;
-        for red_flat in 0..reduced_total {
-            unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
-            let mut out_pos = 0;
-            let mut red_pos = 0;
-            for (ax, in_slot) in in_idx.iter_mut().enumerate().take(in_dims.len()) {
-                if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    *in_slot = red_idx[red_pos];
-                    red_pos += 1;
-                } else {
-                    *in_slot = out_idx[out_pos];
-                    out_pos += 1;
-                }
-            }
-
-            let candidate = input.get(&in_idx);
-            match best {
-                None => best = Some(candidate),
-                Some(current) => match extrema_prefers_candidate(candidate, current, op) {
-                    Ok(true) => best = Some(candidate),
-                    Ok(false) => best = Some(current),
-                    Err(err) => {
-                        error = Some(err);
-                        return;
-                    }
-                },
-            }
-        }
-
-        let best = match best {
-            Some(best) => best,
-            None => {
-                error = Some(Error::InvalidArgument(format!(
-                    "Reduce {:?} requires a non-empty reduction domain",
-                    op
-                )));
-                return;
-            }
-        };
-        let old = if beta == T::zero() {
-            T::zero()
-        } else {
-            beta * output.get(out_idx)
-        };
-        output.set(out_idx, alpha * best + old);
-    });
-
-    if let Some(err) = error {
-        return Err(err);
-    }
-    Ok(())
-}
-
 /// Unflatten a linear index into a pre-allocated buffer (column-major).
 fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
     debug_assert!(
@@ -1888,227 +1726,38 @@ fn execute_anti_diag<T: Scalar>(
     Ok(())
 }
 
-fn execute_elementwise_mul<T: Scalar>(
+fn execute_elementwise_binary<T: Scalar>(
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
     output: &mut StridedViewMut<T>,
+    op: SemiringBinaryOp,
 ) -> Result<()> {
     let a = inputs[0];
     let b = inputs[1];
 
     if beta == T::zero() {
-        // Hot path (>99% of einsum calls): C = alpha * A * B
-        // Delegate to strided-kernel which handles dimension fusing,
-        // cache-optimized block traversal, and SIMD dispatch.
         let alpha_val = alpha;
         strided_kernel::zip_map2_into(output, a, b, move |a_val, b_val| {
-            alpha_val * (a_val * b_val)
+            let fused = match op {
+                SemiringBinaryOp::Add => a_val + b_val,
+                SemiringBinaryOp::Mul => a_val * b_val,
+            };
+            alpha_val * fused
         })
         .map_err(|e| Error::DeviceError(e.to_string()))?;
     } else {
-        // Rare path: C = alpha * A * B + beta * C
-        // Cannot use zip_map2_into (overwrites dest, losing beta*C).
-        // Cannot alias dest with a zip_map3 source.
-        // Use index-based loop for correctness.
         let dims = output.dims().to_vec();
         for_each_index(&dims, |idx| {
-            let val = alpha * (a.get(idx) * b.get(idx));
+            let fused = match op {
+                SemiringBinaryOp::Add => a.get(idx) + b.get(idx),
+                SemiringBinaryOp::Mul => a.get(idx) * b.get(idx),
+            };
+            let val = alpha * fused;
             output.set(idx, val + beta * output.get(idx));
         });
     }
     Ok(())
-}
-
-/// Apply a unary function element-wise: C = alpha * f(A) + beta * C.
-fn execute_unary_map<T: Scalar>(
-    alpha: T,
-    input: &StridedView<T>,
-    beta: T,
-    output: &mut StridedViewMut<T>,
-    f: impl Fn(T) -> T,
-) -> Result<()> {
-    let dims = output.dims().to_vec();
-    for_each_index(&dims, |idx| {
-        let val = alpha * f(input.get(idx));
-        if beta == T::zero() {
-            output.set(idx, val);
-        } else {
-            output.set(idx, val + beta * output.get(idx));
-        }
-    });
-    Ok(())
-}
-
-/// Execute element-wise unary operation with type-based dispatch.
-///
-/// Since `Scalar` does not provide `Neg`, `Div`, or floating-point ops,
-/// we dispatch to concrete type implementations (f32, f64, Complex32, Complex64)
-/// at runtime using `TypeId`. This keeps the `TensorPrims` trait generic while
-/// supporting all standard unary operations on the CPU backend.
-fn execute_elementwise_unary<T: Scalar>(
-    alpha: T,
-    input: &StridedView<T>,
-    beta: T,
-    output: &mut StridedViewMut<T>,
-    op: &UnaryOp,
-) -> Result<()> {
-    match op {
-        UnaryOp::Conj => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() || tid == TypeId::of::<f32>() {
-                // Real types: conjugation is identity
-                execute_make_contiguous(alpha, input, beta, output)
-            } else if tid == TypeId::of::<Complex64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex64) };
-                    let r = x.conj();
-                    unsafe { *(&r as *const Complex64 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex32) };
-                    let r = x.conj();
-                    unsafe { *(&r as *const Complex32 as *const T) }
-                })
-            } else {
-                Err(Error::InvalidArgument(
-                    "Conj not supported for this scalar type".into(),
-                ))
-            }
-        }
-        UnaryOp::Negate => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    // SAFETY: T is f64; transmute is safe because we checked TypeId
-                    let x = unsafe { *(&v as *const T as *const f64) };
-                    let r = -x;
-                    unsafe { *(&r as *const f64 as *const T) }
-                })
-            } else if tid == TypeId::of::<f32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const f32) };
-                    let r = -x;
-                    unsafe { *(&r as *const f32 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex64) };
-                    let r = -x;
-                    unsafe { *(&r as *const Complex64 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex32) };
-                    let r = -x;
-                    unsafe { *(&r as *const Complex32 as *const T) }
-                })
-            } else {
-                Err(Error::InvalidArgument(
-                    "Negate not supported for this scalar type".into(),
-                ))
-            }
-        }
-        UnaryOp::Reciprocal => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const f64) };
-                    let r = 1.0_f64 / x;
-                    unsafe { *(&r as *const f64 as *const T) }
-                })
-            } else if tid == TypeId::of::<f32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const f32) };
-                    let r = 1.0_f32 / x;
-                    unsafe { *(&r as *const f32 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex64) };
-                    let r = Complex64::new(1.0, 0.0) / x;
-                    unsafe { *(&r as *const Complex64 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex32) };
-                    let r = Complex32::new(1.0, 0.0) / x;
-                    unsafe { *(&r as *const Complex32 as *const T) }
-                })
-            } else {
-                Err(Error::InvalidArgument(
-                    "Reciprocal not supported for this scalar type".into(),
-                ))
-            }
-        }
-        UnaryOp::Abs => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const f64) };
-                    let r = x.abs();
-                    unsafe { *(&r as *const f64 as *const T) }
-                })
-            } else if tid == TypeId::of::<f32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const f32) };
-                    let r = x.abs();
-                    unsafe { *(&r as *const f32 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex64>() {
-                // For complex, abs returns the modulus as a real number.
-                // But since T is Complex64, we return it as Complex64 with zero imaginary part.
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex64) };
-                    let r = Complex64::new(x.norm(), 0.0);
-                    unsafe { *(&r as *const Complex64 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex32) };
-                    let r = Complex32::new(x.norm(), 0.0);
-                    unsafe { *(&r as *const Complex32 as *const T) }
-                })
-            } else {
-                Err(Error::InvalidArgument(
-                    "Abs not supported for this scalar type".into(),
-                ))
-            }
-        }
-        UnaryOp::Sqrt => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const f64) };
-                    let r = x.sqrt();
-                    unsafe { *(&r as *const f64 as *const T) }
-                })
-            } else if tid == TypeId::of::<f32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const f32) };
-                    let r = x.sqrt();
-                    unsafe { *(&r as *const f32 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex64>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex64) };
-                    let r = x.sqrt();
-                    unsafe { *(&r as *const Complex64 as *const T) }
-                })
-            } else if tid == TypeId::of::<Complex32>() {
-                execute_unary_map(alpha, input, beta, output, |v| {
-                    let x = unsafe { *(&v as *const T as *const Complex32) };
-                    let r = x.sqrt();
-                    unsafe { *(&r as *const Complex32 as *const T) }
-                })
-            } else {
-                Err(Error::InvalidArgument(
-                    "Sqrt not supported for this scalar type".into(),
-                ))
-            }
-        }
-    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2697,29 +2346,151 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
     Ok(None)
 }
 
+fn execute_semiring_plan<S: Scalar>(
+    ctx: &mut CpuContext,
+    plan: &CpuPlan<S>,
+    alpha: S,
+    inputs: &[&Tensor<S>],
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()> {
+    let views: Vec<StridedView<S>> = inputs
+        .iter()
+        .map(|tensor| tensor_to_view(tensor))
+        .collect::<Result<Vec<_>>>()?;
+    let view_refs: Vec<&StridedView<S>> = views.iter().collect();
+    let mut out_view = tensor_to_view_mut(output)?;
+
+    match plan {
+        CpuPlan::MakeContiguous { .. } => {
+            validate_execute_inputs(inputs, 1, "MakeContiguous")?;
+            execute_make_contiguous(alpha, view_refs[0], beta, &mut out_view)
+        }
+        CpuPlan::BatchedGemm {
+            batch_dims,
+            m,
+            n,
+            k,
+            ..
+        } => {
+            validate_execute_inputs(inputs, 2, "BatchedGemm")?;
+            execute_batched_gemm(
+                ctx,
+                alpha,
+                &view_refs,
+                beta,
+                &mut out_view,
+                batch_dims,
+                *m,
+                *n,
+                *k,
+            )
+        }
+        CpuPlan::ReduceAdd { reduced_axes, .. } => {
+            validate_execute_inputs(inputs, 1, "ReduceAdd")?;
+            execute_reduce_sum(alpha, view_refs[0], beta, &mut out_view, reduced_axes)
+        }
+        CpuPlan::Trace {
+            components,
+            comp_dims,
+            free_axes,
+            ..
+        } => {
+            validate_execute_inputs(inputs, 1, "Trace")?;
+            execute_trace(
+                alpha,
+                view_refs[0],
+                beta,
+                &mut out_view,
+                components,
+                comp_dims,
+                free_axes,
+            )
+        }
+        CpuPlan::AntiTrace {
+            free_axes,
+            components,
+            comp_dims,
+            ..
+        } => {
+            validate_execute_inputs(inputs, 1, "AntiTrace")?;
+            execute_anti_trace(
+                alpha,
+                view_refs[0],
+                beta,
+                &mut out_view,
+                components,
+                comp_dims,
+                free_axes,
+            )
+        }
+        CpuPlan::AntiDiag {
+            free_axes,
+            components,
+            comp_dims,
+            generative_comps,
+            ..
+        } => {
+            validate_execute_inputs(inputs, 1, "AntiDiag")?;
+            execute_anti_diag(
+                alpha,
+                view_refs[0],
+                beta,
+                &mut out_view,
+                components,
+                comp_dims,
+                free_axes,
+                generative_comps,
+            )
+        }
+        CpuPlan::ElementwiseBinary { op, .. } => {
+            validate_execute_inputs(inputs, 2, "ElementwiseBinary")?;
+            execute_elementwise_binary(alpha, &view_refs, beta, &mut out_view, *op)
+        }
+        CpuPlan::Contract {
+            modes_a,
+            modes_b,
+            modes_c,
+            gemm_spec,
+            ..
+        } => {
+            validate_execute_inputs(inputs, 2, "Contract")?;
+            execute_contract(
+                alpha,
+                &view_refs,
+                beta,
+                &mut out_view,
+                modes_a,
+                modes_b,
+                modes_c,
+                gemm_spec.as_ref(),
+            )
+        }
+    }
+}
+
 // ===========================================================================
-// CPU backend TensorPrims implementation
+// CPU backend semiring family implementations
 // ===========================================================================
 
-impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
+impl<S: Scalar> TensorSemiringCore<Standard<S>> for CpuBackend {
     type Plan = CpuPlan<S>;
     type Context = CpuContext;
 
     fn plan(
         ctx: &mut CpuContext,
-        desc: &PrimDescriptor,
+        desc: &SemiringCoreDescriptor,
         shapes: &[&[usize]],
     ) -> Result<CpuPlan<S>> {
-        // Check cache first
-        if let Some(cached) = ctx.plan_cache.get::<CpuPlan<S>>(desc, shapes) {
+        if let Some(cached) = ctx
+            .plan_cache
+            .get::<CpuPlan<S>, SemiringCoreDescriptor>(desc, shapes)
+        {
             return Ok(cached);
         }
 
-        let plan = Self::build_plan::<S>(desc, shapes)?;
-
-        // Store in cache for future reuse
+        let plan = Self::build_semiring_core_plan::<S>(desc, shapes)?;
         ctx.plan_cache.insert(desc, shapes, plan.clone());
-
         Ok(plan)
     }
 
@@ -2731,150 +2502,50 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CpuBackend {
         beta: S,
         output: &mut Tensor<S>,
     ) -> Result<()> {
-        // Convert Tensor inputs to StridedView for internal dispatch
-        let views: Vec<StridedView<S>> = inputs
-            .iter()
-            .map(|t| tensor_to_view(t))
-            .collect::<Result<Vec<_>>>()?;
-        let view_refs: Vec<&StridedView<S>> = views.iter().collect();
-        let mut out_view = tensor_to_view_mut(output)?;
+        execute_semiring_plan(ctx, plan, alpha, inputs, beta, output)
+    }
+}
 
-        match plan {
-            CpuPlan::MakeContiguous { .. } => {
-                validate_execute_inputs(inputs, 1, "MakeContiguous")?;
-                execute_make_contiguous(alpha, view_refs[0], beta, &mut out_view)
-            }
+impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for CpuBackend {
+    type Plan = CpuPlan<S>;
+    type Context = CpuContext;
 
-            CpuPlan::BatchedGemm {
-                batch_dims,
-                m,
-                n,
-                k,
-                ..
-            } => {
-                validate_execute_inputs(inputs, 2, "BatchedGemm")?;
-                execute_batched_gemm(
-                    ctx,
-                    alpha,
-                    &view_refs,
-                    beta,
-                    &mut out_view,
-                    batch_dims,
-                    *m,
-                    *n,
-                    *k,
-                )
-            }
-
-            CpuPlan::Reduce {
-                reduced_axes, op, ..
-            } => {
-                validate_execute_inputs(inputs, 1, "Reduce")?;
-                match op {
-                    ReduceOp::Sum => {
-                        execute_reduce_sum(alpha, view_refs[0], beta, &mut out_view, reduced_axes)
-                    }
-                    ReduceOp::Max | ReduceOp::Min => execute_reduce_extrema(
-                        alpha,
-                        view_refs[0],
-                        beta,
-                        &mut out_view,
-                        reduced_axes,
-                        *op,
-                    ),
-                }
-            }
-
-            CpuPlan::Trace {
-                components,
-                comp_dims,
-                free_axes,
-                ..
-            } => {
-                validate_execute_inputs(inputs, 1, "Trace")?;
-                execute_trace(
-                    alpha,
-                    view_refs[0],
-                    beta,
-                    &mut out_view,
-                    components,
-                    comp_dims,
-                    free_axes,
-                )
-            }
-
-            CpuPlan::AntiTrace {
-                free_axes,
-                components,
-                comp_dims,
-                ..
-            } => {
-                validate_execute_inputs(inputs, 1, "AntiTrace")?;
-                execute_anti_trace(
-                    alpha,
-                    view_refs[0],
-                    beta,
-                    &mut out_view,
-                    components,
-                    comp_dims,
-                    free_axes,
-                )
-            }
-
-            CpuPlan::AntiDiag {
-                free_axes,
-                components,
-                comp_dims,
-                generative_comps,
-                ..
-            } => {
-                validate_execute_inputs(inputs, 1, "AntiDiag")?;
-                execute_anti_diag(
-                    alpha,
-                    view_refs[0],
-                    beta,
-                    &mut out_view,
-                    components,
-                    comp_dims,
-                    free_axes,
-                    generative_comps,
-                )
-            }
-
-            CpuPlan::ElementwiseUnary { op, .. } => {
-                validate_execute_inputs(inputs, 1, "ElementwiseUnary")?;
-                execute_elementwise_unary(alpha, view_refs[0], beta, &mut out_view, op)
-            }
-
-            CpuPlan::ElementwiseMul { .. } => {
-                validate_execute_inputs(inputs, 2, "ElementwiseMul")?;
-                execute_elementwise_mul(alpha, &view_refs, beta, &mut out_view)
-            }
-
-            CpuPlan::Contract {
-                modes_a,
-                modes_b,
-                modes_c,
-                gemm_spec,
-                ..
-            } => {
-                validate_execute_inputs(inputs, 2, "Contract")?;
-                execute_contract(
-                    alpha,
-                    &view_refs,
-                    beta,
-                    &mut out_view,
-                    modes_a,
-                    modes_b,
-                    modes_c,
-                    gemm_spec.as_ref(),
-                )
-            }
+    fn plan(
+        ctx: &mut CpuContext,
+        desc: &SemiringFastPathDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<CpuPlan<S>> {
+        if let Some(cached) = ctx
+            .plan_cache
+            .get::<CpuPlan<S>, SemiringFastPathDescriptor>(desc, shapes)
+        {
+            return Ok(cached);
         }
+
+        let plan = Self::build_semiring_fast_path_plan::<S>(desc, shapes)?;
+        ctx.plan_cache.insert(desc, shapes, plan.clone());
+        Ok(plan)
     }
 
-    fn has_extension_for(_ext: Extension) -> bool {
-        matches!(_ext, Extension::Contract | Extension::ElementwiseMul)
+    fn execute(
+        ctx: &mut CpuContext,
+        plan: &CpuPlan<S>,
+        alpha: S,
+        inputs: &[&Tensor<S>],
+        beta: S,
+        output: &mut Tensor<S>,
+    ) -> Result<()> {
+        execute_semiring_plan(ctx, plan, alpha, inputs, beta, output)
+    }
+
+    fn has_fast_path(desc: SemiringFastPathDescriptor) -> bool {
+        matches!(
+            desc,
+            SemiringFastPathDescriptor::Contract { .. }
+                | SemiringFastPathDescriptor::ElementwiseBinary {
+                    op: SemiringBinaryOp::Add | SemiringBinaryOp::Mul,
+                }
+        )
     }
 }
 

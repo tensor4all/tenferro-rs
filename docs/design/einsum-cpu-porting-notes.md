@@ -5,12 +5,17 @@ This document details how the einsum CPU implementation is structured in
 
 **Purpose**: Detect potential problems before implementation begins.
 
-See [tensor-prims.md](./tensor-prims.md) for the canonical `TensorPrims<A>`
-trait definition, `PrimDescriptor` enum, `PlanCache` key policy, and the
-`CpuBackend` / `CpuContext` type definitions referenced throughout this
-document. See [gpu-backend-design.md](./gpu-backend-design.md) for the
-GPU-specific plan lifecycle, stride-sensitive cache key policy, and the
-tropical GPU kernel integration plan.
+> Historical note (2026-03-12): this document predates the removal of the
+> legacy `TensorPrims<A>` surface. Read `TensorPrims<A>` as the semiring
+> primitive families (`TensorSemiringCore` / `TensorSemiringFastPath`) and
+> `PrimDescriptor` as the corresponding family descriptors.
+
+See [tensor-prims.md](./tensor-prims.md) for the canonical family-trait
+definitions, plan-cache key policy, and the `CpuBackend` / `CpuContext` type
+definitions referenced throughout this document. See
+[gpu-backend-design.md](./gpu-backend-design.md) for the GPU-specific plan
+lifecycle, stride-sensitive cache key policy, and the tropical GPU kernel
+integration plan.
 
 ## Reference Implementations
 

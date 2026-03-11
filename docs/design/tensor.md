@@ -223,7 +223,7 @@ pub fn einsum<T, A, B>(
 where
     T: Scalar + HasAlgebra<Algebra = A>,
     A: Semiring,
-    B: TensorPrims<A>;
+    B: EinsumBackend<A>;
 ```
 
 ### Ownership Safety Examples
@@ -337,7 +337,8 @@ Backends read `is_conjugated()` when building operation descriptors:
 
 ## Custom Element-Wise Operations
 
-For arbitrary user functions not in `TensorPrims`, use strided-kernel
+For arbitrary user functions not covered by the primitive family traits, use
+strided-kernel
 directly via `buffer().as_slice()`:
 
 ```rust

@@ -1,9 +1,12 @@
-//! Tests for tenferro-tropical: scalar types, algebra, argmax, and TensorPrims.
+//! Tests for tenferro-tropical: scalar types, algebra, argmax, and semiring families.
 
 use num_traits::{One, Zero};
-use tenferro_algebra::{Algebra, Scalar};
+use tenferro_algebra::{Scalar, Semiring};
 use tenferro_device::Result;
-use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
+use tenferro_prims::{
+    CpuBackend, CpuContext, SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor,
+    TensorSemiringCore, TensorSemiringFastPath,
+};
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tenferro_tropical::{MaxMul, MaxPlus, MinPlus};
 
@@ -11,18 +14,73 @@ fn permuted_view<T: Scalar>(tensor: &Tensor<T>, perm: &[usize]) -> Tensor<T> {
     tensor.permute(perm).unwrap()
 }
 
+fn tropical_core_plan<Alg>(
+    ctx: &mut CpuContext,
+    desc: &SemiringCoreDescriptor,
+    shapes: &[&[usize]],
+) -> Result<<CpuBackend as TensorSemiringCore<Alg>>::Plan>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar,
+    CpuBackend: TensorSemiringCore<Alg, Context = CpuContext>,
+{
+    <CpuBackend as TensorSemiringCore<Alg>>::plan(ctx, desc, shapes)
+}
+
+fn tropical_core_execute<Alg>(
+    ctx: &mut CpuContext,
+    plan: &<CpuBackend as TensorSemiringCore<Alg>>::Plan,
+    alpha: Alg::Scalar,
+    inputs: &[&Tensor<Alg::Scalar>],
+    beta: Alg::Scalar,
+    output: &mut Tensor<Alg::Scalar>,
+) -> Result<()>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar,
+    CpuBackend: TensorSemiringCore<Alg, Context = CpuContext>,
+{
+    <CpuBackend as TensorSemiringCore<Alg>>::execute(ctx, plan, alpha, inputs, beta, output)
+}
+
+fn tropical_fast_path_plan<Alg>(
+    ctx: &mut CpuContext,
+    desc: &SemiringFastPathDescriptor,
+    shapes: &[&[usize]],
+) -> Result<<CpuBackend as TensorSemiringFastPath<Alg>>::Plan>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar,
+    CpuBackend: TensorSemiringCore<Alg, Context = CpuContext>
+        + TensorSemiringFastPath<
+            Alg,
+            Context = CpuContext,
+            Plan = <CpuBackend as TensorSemiringCore<Alg>>::Plan,
+        >,
+{
+    <CpuBackend as TensorSemiringFastPath<Alg>>::plan(ctx, desc, shapes)
+}
+
+fn tropical_has_fast_path<Alg>(desc: SemiringFastPathDescriptor) -> bool
+where
+    Alg: Semiring,
+    CpuBackend: TensorSemiringFastPath<Alg>,
+{
+    <CpuBackend as TensorSemiringFastPath<Alg>>::has_fast_path(desc)
+}
+
 fn tropical_make_contiguous_plan<Alg>(
     ctx: &mut CpuContext,
     input_dims: &[usize],
-) -> Result<<CpuBackend as TensorPrims<Alg>>::Plan>
+) -> Result<<CpuBackend as TensorSemiringCore<Alg>>::Plan>
 where
-    Alg: Algebra,
+    Alg: Semiring,
     Alg::Scalar: Scalar,
-    CpuBackend: TensorPrims<Alg, Context = CpuContext>,
+    CpuBackend: TensorSemiringCore<Alg, Context = CpuContext>,
 {
-    <CpuBackend as TensorPrims<Alg>>::plan(
+    tropical_core_plan::<Alg>(
         ctx,
-        &PrimDescriptor::MakeContiguous,
+        &SemiringCoreDescriptor::MakeContiguous,
         &[input_dims, input_dims],
     )
 }
@@ -566,8 +624,6 @@ fn argmax_tracker_winner_index_rejects_out_of_bounds_position() {
 
 #[test]
 fn maxplus_matmul_2x2() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // A = [[1, 3],    B = [[0, 2],
     //      [2, 4]]         [1, 0]]
     //
@@ -592,19 +648,19 @@ fn maxplus_matmul_2x2() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -624,8 +680,6 @@ fn maxplus_matmul_2x2() {
 
 #[test]
 fn minplus_matmul_2x2() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // A = [[1, 3],    B = [[5, 2],
     //      [2, 4]]         [1, 6]]
     //
@@ -648,19 +702,19 @@ fn minplus_matmul_2x2() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -679,8 +733,6 @@ fn minplus_matmul_2x2() {
 
 #[test]
 fn maxmul_matmul_2x2() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // A = [[0.5, 0.3],    B = [[0.8, 0.1],
     //      [0.2, 0.9]]         [0.4, 0.6]]
     //
@@ -703,19 +755,19 @@ fn maxmul_matmul_2x2() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -738,8 +790,6 @@ fn maxmul_matmul_2x2() {
 
 #[test]
 fn shortest_path_minplus_bellman_ford_step() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Graph adjacency matrix (edge weights, +inf = no edge):
     // W = [[ 0,  1, +inf],
     //      [+inf, 0,  3 ],
@@ -802,19 +852,19 @@ fn shortest_path_minplus_bellman_ford_step() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 3,
         n: 1,
         k: 3,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3, 3], &[3, 1], &[3, 1]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -838,7 +888,7 @@ fn shortest_path_minplus_bellman_ford_step() {
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -857,8 +907,6 @@ fn shortest_path_minplus_bellman_ford_step() {
 
 #[test]
 fn viterbi_maxmul_hmm_step() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Transition matrix (2 states):
     // T = [[0.7, 0.3],
     //      [0.4, 0.6]]
@@ -883,19 +931,19 @@ fn viterbi_maxmul_hmm_step() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 1,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 1], &[2, 1]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -916,8 +964,6 @@ fn viterbi_maxmul_hmm_step() {
 
 #[test]
 fn maxplus_reduce_sum() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
-
     // A = [[1, 3],    (2x2, col-major: [1, 2, 3, 4])
     //      [2, 4]]
     //
@@ -932,18 +978,17 @@ fn maxplus_reduce_sum() {
     let mut c =
         Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -983,7 +1028,7 @@ fn maxplus_make_contiguous_from_transposed_view() {
     let plan =
         tropical_make_contiguous_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, a.dims())
             .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1007,8 +1052,6 @@ fn maxplus_make_contiguous_from_transposed_view() {
 
 #[test]
 fn maxplus_trace_3x3() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // A = [[10, 4, 7],   (3x3, column-major)
     //      [ 2, 8, 5],
     //      [ 6, 3, 1]]
@@ -1033,18 +1076,18 @@ fn maxplus_trace_3x3() {
     let mut c =
         Tensor::from_slice(&[MaxPlus::<f64>::zero()], &[], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::Trace {
+    let desc = SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3, 3], &[]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1060,8 +1103,6 @@ fn maxplus_trace_3x3() {
 
 #[test]
 fn maxplus_trace_partial_3d() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Partial trace: "iij->j" on a [2,2,3] tensor.
     // Result[j] = max_i(A[i,i,j]) = max of diagonal slices.
     //
@@ -1093,18 +1134,18 @@ fn maxplus_trace_partial_3d() {
     let mut c =
         Tensor::from_slice(&[MaxPlus::<f64>::zero(); 3], &[3], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::Trace {
+    let desc = SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1, 2],
         modes_c: vec![2],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2, 3], &[3]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1128,8 +1169,6 @@ fn maxplus_trace_partial_3d() {
 
 #[test]
 fn maxplus_anti_trace_scalar_to_diag() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // AntiTrace: scalar → 2x2 matrix with value on diagonal
     // input = MaxPlus(5.0) (scalar)
     // output[i,j] = alpha * input if i==j, else unchanged (beta * old)
@@ -1149,18 +1188,18 @@ fn maxplus_anti_trace_scalar_to_diag() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1188,8 +1227,6 @@ fn maxplus_anti_trace_scalar_to_diag() {
 
 #[test]
 fn maxplus_matmul_2x2_f32() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Same as maxplus_matmul_2x2 but with f32 — verifies f32 SIMD dispatch.
     // A = [[1, 3],    B = [[0, 2],
     //      [2, 4]]         [1, 0]]
@@ -1221,19 +1258,19 @@ fn maxplus_matmul_2x2_f32() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f32>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f32>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f32>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f32>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1252,8 +1289,6 @@ fn maxplus_matmul_2x2_f32() {
 
 #[test]
 fn minplus_matmul_2x2_f32() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // MinPlus f32 SIMD dispatch.
     // A = [[1, 3],    B = [[5, 2],
     //      [2, 4]]         [1, 6]]
@@ -1285,19 +1320,19 @@ fn minplus_matmul_2x2_f32() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f32>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f32>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f32>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f32>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -1316,8 +1351,6 @@ fn minplus_matmul_2x2_f32() {
 
 #[test]
 fn maxmul_matmul_2x2_f32() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // MaxMul f32 SIMD dispatch.
     // A = [[0.5, 0.3],    B = [[0.8, 0.1],
     //      [0.2, 0.9]]         [0.4, 0.6]]
@@ -1349,19 +1382,19 @@ fn maxmul_matmul_2x2_f32() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f32>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxMulAlgebra<f32>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f32>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f32>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -1384,8 +1417,6 @@ fn maxmul_matmul_2x2_f32() {
 
 #[test]
 fn maxplus_matmul_accumulate_with_beta() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Tests accumulation: C_new = alpha * (A ⊗ B) ⊕ beta * C_old
     // For MaxPlus with alpha=2, beta=1:
     //   C_new[i,j] = max(2 + max_k(A[i,k] + B[k,j]), 1 + C_old[i,j])
@@ -1414,19 +1445,19 @@ fn maxplus_matmul_accumulate_with_beta() {
     let b = Tensor::from_slice(&b_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
     let mut c = Tensor::from_slice(&c_init, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(2.0), // alpha
@@ -1450,8 +1481,6 @@ fn maxplus_matmul_accumulate_with_beta() {
 
 #[test]
 fn maxplus_anti_diag_vector_to_matrix() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // AntiDiag: input vector [a, b] → output matrix where column j gets a copy
     // of input[j] along the anti-diagonal pattern.
     //
@@ -1472,18 +1501,18 @@ fn maxplus_anti_diag_vector_to_matrix() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::AntiDiag {
+    let desc = SemiringCoreDescriptor::AntiDiag {
         modes_a: vec![0],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1507,8 +1536,6 @@ fn maxplus_anti_diag_vector_to_matrix() {
 
 #[test]
 fn maxplus_make_contiguous() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Test MakeContiguous: copy a strided (non-contiguous) view into a
     // contiguous buffer. Input is a transposed view of a 2x3 matrix.
     //
@@ -1541,14 +1568,14 @@ fn maxplus_make_contiguous() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::MakeContiguous;
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let desc = SemiringCoreDescriptor::MakeContiguous;
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1574,8 +1601,6 @@ fn maxplus_make_contiguous() {
 
 #[test]
 fn maxplus_anti_trace_vec_to_3d() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // AntiTrace with free axes: "j->iij" — backward of partial trace "iij->j".
     // Input: vector [a, b, c] (size 3, mode 2)
     // Output: tensor [2,2,3] where output[d,d,j] += alpha * input[j]
@@ -1596,18 +1621,18 @@ fn maxplus_anti_trace_vec_to_3d() {
     )
     .unwrap();
 
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![2],       // free axis: mode 2 (k dimension)
         modes_c: vec![0, 1, 2], // output: modes 0, 1, 2
         paired: vec![(0, 1)],   // diagonal on modes 0 and 1
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3], &[2, 2, 3]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1663,7 +1688,7 @@ fn maxplus_make_contiguous_from_transposed_view_with_alpha_beta() {
     let plan =
         tropical_make_contiguous_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, a.dims())
             .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(10.0), // alpha
@@ -1689,8 +1714,6 @@ fn maxplus_make_contiguous_from_transposed_view_with_alpha_beta() {
 
 #[test]
 fn maxplus_make_contiguous_with_alpha_beta() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // MakeContiguous with non-trivial alpha/beta exercises the slow path.
     // input = [10, 20] (contiguous)
     // alpha = MaxPlus(1.0), beta = MaxPlus(5.0)
@@ -1705,14 +1728,14 @@ fn maxplus_make_contiguous_with_alpha_beta() {
     let input = Tensor::from_slice(&in_data, &[2], MemoryOrder::ColumnMajor).unwrap();
     let mut output = Tensor::from_slice(&out_init, &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::MakeContiguous;
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let desc = SemiringCoreDescriptor::MakeContiguous;
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(1.0), // alpha
@@ -1733,8 +1756,6 @@ fn maxplus_make_contiguous_with_alpha_beta() {
 
 #[test]
 fn maxplus_reduce_with_beta_accumulate() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
-
     // Reduce with non-zero beta tests the accumulation path in execute_reduce_sum.
     // A = [[1, 3],    (col-major: [1, 2, 3, 4])
     //      [2, 4]]
@@ -1749,18 +1770,17 @@ fn maxplus_reduce_with_beta_accumulate() {
     let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
     let mut c = Tensor::from_slice(&c_init, &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha = one
@@ -1784,8 +1804,6 @@ fn maxplus_reduce_with_beta_accumulate() {
 
 #[test]
 fn maxplus_trace_with_beta_accumulate() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Trace with non-zero beta: C_new = max(alpha * trace, beta * C_old)
     // A = [[10, 4],    trace = max(10, 8) = 10
     //      [2,  8]]
@@ -1801,18 +1819,18 @@ fn maxplus_trace_with_beta_accumulate() {
     let a = Tensor::from_slice(&a_data, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
     let mut c = Tensor::from_slice(&c_init, &[], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::Trace {
+    let desc = SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha
@@ -1832,8 +1850,6 @@ fn maxplus_trace_with_beta_accumulate() {
 
 #[test]
 fn minplus_reduce_column_min() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
-
     // MinPlus "sum" is min. Reduce axis 1 = min over columns.
     // A = [[5, 1],   → result = [min(5,1), min(2,8)] = [1, 2]
     //      [2, 8]]
@@ -1845,18 +1861,17 @@ fn minplus_reduce_column_min() {
     let mut c =
         Tensor::from_slice(&[MinPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MinPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -1891,7 +1906,7 @@ fn maxmul_make_contiguous_from_transposed_view() {
     let plan =
         tropical_make_contiguous_plan::<tenferro_tropical::MaxMulAlgebra<f64>>(&mut ctx, a.dims())
             .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxMulAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -1915,8 +1930,6 @@ fn maxmul_make_contiguous_from_transposed_view() {
 
 #[test]
 fn maxplus_anti_trace_accumulate_beta() {
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
-
     // Anti-trace with beta != 0: output = beta * output_old, then add alpha * diag.
     // This exercises the scale_output function with beta != 0 && beta != 1.
     //
@@ -1937,18 +1950,18 @@ fn maxplus_anti_trace_accumulate_beta() {
     let input = Tensor::from_slice(&in_data, &[], MemoryOrder::ColumnMajor).unwrap();
     let mut output = Tensor::from_slice(&out_init, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 2]],
     )
     .unwrap();
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha
@@ -1969,63 +1982,29 @@ fn maxplus_anti_trace_accumulate_beta() {
 }
 
 // ============================================================================
-// Plan validation: ReduceOp::Max/Min returns error for tropical types
+// Reduction surface contract
 // ============================================================================
 
 #[test]
-fn tropical_reduce_max_op_returns_error() {
-    use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
-
-    // For tropical types, ReduceOp::Sum already implements the correct tropical
-    // reduction (max for MaxPlus, min for MinPlus). ReduceOp::Max is meaningless
-    // and should return an error.
+fn tropical_reduction_surface_only_exposes_semiring_add() {
     let mut ctx = CpuContext::new(1);
-
-    let a_data = [MaxPlus(1.0), MaxPlus(2.0)];
-
-    let a = Tensor::from_slice(&a_data, &[2], MemoryOrder::ColumnMajor).unwrap();
+    let a = Tensor::from_slice(
+        &[MaxPlus(1.0), MaxPlus(2.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
     let mut c =
         Tensor::from_slice(&[MaxPlus::<f64>::zero()], &[], MemoryOrder::ColumnMajor).unwrap();
-
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: vec![0],
         modes_c: vec![],
-        op: ReduceOp::Sum,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
-        &mut ctx,
-        &desc,
-        &[&[2], &[]],
-    )
-    .unwrap();
+    let plan =
+        tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, &desc, &[&[2], &[]])
+            .unwrap();
 
-    // Construct a ReduceOp::Max plan manually by planning with Sum then executing
-    // Actually, plan with Max directly:
-    let desc_max = PrimDescriptor::Reduce {
-        modes_a: vec![0],
-        modes_c: vec![],
-        op: ReduceOp::Max,
-    };
-    let plan_max = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
-        &mut ctx,
-        &desc_max,
-        &[&[2], &[]],
-    )
-    .unwrap();
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
-        &mut ctx,
-        &plan_max,
-        MaxPlus::one(),
-        &[&a],
-        MaxPlus::zero(),
-        &mut c,
-    )
-    .unwrap_err();
-    assert!(matches!(err, Error::InvalidArgument(_)));
-
-    // Also verify Sum works correctly (max(1, 2) = 2)
-    <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2034,6 +2013,7 @@ fn tropical_reduce_max_op_returns_error() {
         &mut c,
     )
     .unwrap();
+
     let c_data = c.buffer().as_slice().unwrap();
     assert_eq!(c_data[0].0, 2.0);
 }
@@ -2045,15 +2025,14 @@ fn tropical_reduce_max_op_returns_error() {
 #[test]
 fn tropical_plan_contract_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Contract {
+    let desc = SemiringFastPathDescriptor::Contract {
         modes_a: vec![0, 1],
         modes_b: vec![1, 2],
         modes_c: vec![0, 2],
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_fast_path_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3], &[3, 4], &[2, 4]],
@@ -2064,11 +2043,12 @@ fn tropical_plan_contract_returns_error() {
 #[test]
 fn tropical_plan_elementwise_mul_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::ElementwiseMul;
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let desc = SemiringFastPathDescriptor::ElementwiseBinary {
+        op: SemiringBinaryOp::Mul,
+    };
+    let result = tropical_fast_path_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2], &[2]],
@@ -2083,16 +2063,15 @@ fn tropical_plan_elementwise_mul_returns_error() {
 #[test]
 fn tropical_execute_gemm_wrong_arity_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 2,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
@@ -2108,7 +2087,7 @@ fn tropical_execute_gemm_wrong_arity_returns_error() {
     .unwrap();
 
     // Pass 1 input instead of 2
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2123,15 +2102,13 @@ fn tropical_execute_gemm_wrong_arity_returns_error() {
 #[test]
 fn tropical_execute_reduce_wrong_arity_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
@@ -2142,7 +2119,7 @@ fn tropical_execute_reduce_wrong_arity_returns_error() {
         Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2157,15 +2134,14 @@ fn tropical_execute_reduce_wrong_arity_returns_error() {
 #[test]
 fn tropical_execute_trace_wrong_arity_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Trace {
+    let desc = SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[]],
@@ -2176,7 +2152,7 @@ fn tropical_execute_trace_wrong_arity_returns_error() {
         Tensor::from_slice(&[MaxPlus::<f64>::zero()], &[], MemoryOrder::ColumnMajor).unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2191,15 +2167,14 @@ fn tropical_execute_trace_wrong_arity_returns_error() {
 #[test]
 fn tropical_execute_anti_trace_wrong_arity_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 2]],
@@ -2214,7 +2189,7 @@ fn tropical_execute_anti_trace_wrong_arity_returns_error() {
     .unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2229,15 +2204,14 @@ fn tropical_execute_anti_trace_wrong_arity_returns_error() {
 #[test]
 fn tropical_execute_anti_diag_wrong_arity_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::AntiDiag {
+    let desc = SemiringCoreDescriptor::AntiDiag {
         modes_a: vec![0],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 2]],
@@ -2252,7 +2226,7 @@ fn tropical_execute_anti_diag_wrong_arity_returns_error() {
     .unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2267,11 +2241,10 @@ fn tropical_execute_anti_diag_wrong_arity_returns_error() {
 #[test]
 fn tropical_execute_make_contiguous_wrong_arity_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::MakeContiguous;
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let desc = SemiringCoreDescriptor::MakeContiguous;
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2]],
@@ -2282,7 +2255,7 @@ fn tropical_execute_make_contiguous_wrong_arity_returns_error() {
         Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2295,25 +2268,32 @@ fn tropical_execute_make_contiguous_wrong_arity_returns_error() {
 }
 
 // ============================================================================
-// Extension not supported test
+// Fast-path capability test
 // ============================================================================
 
 #[test]
 fn tropical_no_extensions() {
-    use tenferro_prims::{CpuBackend, Extension, TensorPrims};
+    let contract = SemiringFastPathDescriptor::Contract {
+        modes_a: vec![],
+        modes_b: vec![],
+        modes_c: vec![],
+    };
+    let mul = SemiringFastPathDescriptor::ElementwiseBinary {
+        op: SemiringBinaryOp::Mul,
+    };
 
-    assert!(!<CpuBackend as TensorPrims<
+    assert!(!tropical_has_fast_path::<
         tenferro_tropical::MaxPlusAlgebra<f64>,
-    >>::has_extension_for(Extension::Contract));
-    assert!(!<CpuBackend as TensorPrims<
+    >(contract.clone()));
+    assert!(!tropical_has_fast_path::<
         tenferro_tropical::MaxPlusAlgebra<f64>,
-    >>::has_extension_for(Extension::ElementwiseMul));
-    assert!(!<CpuBackend as TensorPrims<
+    >(mul));
+    assert!(!tropical_has_fast_path::<
         tenferro_tropical::MinPlusAlgebra<f64>,
-    >>::has_extension_for(Extension::Contract));
-    assert!(!<CpuBackend as TensorPrims<
+    >(contract.clone()));
+    assert!(!tropical_has_fast_path::<
         tenferro_tropical::MaxMulAlgebra<f64>,
-    >>::has_extension_for(Extension::Contract));
+    >(contract));
 }
 
 // ============================================================================
@@ -2323,16 +2303,14 @@ fn tropical_no_extensions() {
 #[test]
 fn tropical_plan_reduce_mode_rank_mismatch_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
     // modes_a has 2 labels but shape has rank 3
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3, 4], &[2]],
@@ -2343,16 +2321,14 @@ fn tropical_plan_reduce_mode_rank_mismatch_returns_error() {
 #[test]
 fn tropical_plan_reduce_output_shape_mismatch_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, ReduceOp, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Reduce {
+    let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: vec![0, 1],
         modes_c: vec![0],
-        op: ReduceOp::Sum,
     };
     // Output shape [3] doesn't match input mode 0 which has size 2
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[3]],
@@ -2363,16 +2339,15 @@ fn tropical_plan_reduce_output_shape_mismatch_returns_error() {
 #[test]
 fn tropical_plan_trace_paired_dims_unequal_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
     // Paired axes have unequal dimensions (mode 0: size 2, mode 1: size 3)
-    let desc = PrimDescriptor::Trace {
+    let desc = SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3], &[]],
@@ -2383,16 +2358,15 @@ fn tropical_plan_trace_paired_dims_unequal_returns_error() {
 #[test]
 fn tropical_plan_trace_output_shape_mismatch_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
     // Free mode 2 has size 3 in input but output says size 4
-    let desc = PrimDescriptor::Trace {
+    let desc = SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1, 2],
         modes_c: vec![2],
         paired: vec![(0, 1)],
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2, 3], &[4]],
@@ -2405,9 +2379,9 @@ fn tropical_plan_make_contiguous_shape_mismatch_returns_error() {
     use tenferro_device::Error;
 
     let mut ctx = CpuContext::new(1);
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &SemiringCoreDescriptor::MakeContiguous,
         &[&[2, 3], &[2, 2]],
     );
     assert!(matches!(result, Err(Error::InvalidArgument(_))));
@@ -2416,16 +2390,15 @@ fn tropical_plan_make_contiguous_shape_mismatch_returns_error() {
 #[test]
 fn tropical_plan_anti_trace_paired_dims_unequal_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
     // AntiTrace: paired axes in output have unequal sizes (mode 0: size 2, mode 1: size 3)
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 3]],
@@ -2436,16 +2409,15 @@ fn tropical_plan_anti_trace_paired_dims_unequal_returns_error() {
 #[test]
 fn tropical_plan_anti_trace_input_shape_mismatch_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
     // AntiTrace: free axis (mode 2) has size 3 in input but size 4 in output
-    let desc = PrimDescriptor::AntiTrace {
+    let desc = SemiringCoreDescriptor::AntiTrace {
         modes_a: vec![2],
         modes_c: vec![0, 1, 2],
         paired: vec![(0, 1)],
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3], &[2, 2, 4]],
@@ -2456,16 +2428,15 @@ fn tropical_plan_anti_trace_input_shape_mismatch_returns_error() {
 #[test]
 fn tropical_plan_anti_diag_paired_dims_unequal_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
     // AntiDiag: paired axes in output have unequal sizes
-    let desc = PrimDescriptor::AntiDiag {
+    let desc = SemiringCoreDescriptor::AntiDiag {
         modes_a: vec![0],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 3]],
@@ -2476,16 +2447,15 @@ fn tropical_plan_anti_diag_paired_dims_unequal_returns_error() {
 #[test]
 fn tropical_plan_anti_diag_input_shape_mismatch_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
     // AntiDiag: free axis (mode 0) has size 2 in input but size 3 in output
-    let desc = PrimDescriptor::AntiDiag {
+    let desc = SemiringCoreDescriptor::AntiDiag {
         modes_a: vec![0],
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let result = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[3, 3]],
@@ -2496,15 +2466,14 @@ fn tropical_plan_anti_diag_input_shape_mismatch_returns_error() {
 #[test]
 fn tropical_plan_trace_empty_paired_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::Trace {
+    let desc = SemiringCoreDescriptor::Trace {
         modes_a: vec![0, 1],
         modes_c: vec![0],
         paired: vec![],
     };
-    let err = match <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let err = match tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
@@ -2518,16 +2487,15 @@ fn tropical_plan_trace_empty_paired_returns_error() {
 #[test]
 fn tropical_plan_antidiag_invalid_pair_anchor_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::AntiDiag {
+    let desc = SemiringCoreDescriptor::AntiDiag {
         modes_a: vec![0],
         modes_c: vec![0, 1],
         // first paired label must exist in modes_a, but here it's 1
         paired: vec![(1, 0)],
     };
-    let err = match <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let err = match tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 2]],
@@ -2541,17 +2509,16 @@ fn tropical_plan_antidiag_invalid_pair_anchor_returns_error() {
 #[test]
 fn tropical_plan_batched_gemm_shape_mismatch_returns_error() {
     use tenferro_device::Error;
-    use tenferro_prims::{CpuBackend, CpuContext, PrimDescriptor, TensorPrims};
 
     let mut ctx = CpuContext::new(1);
-    let desc = PrimDescriptor::BatchedGemm {
+    let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
         m: 2,
         n: 2,
         k: 3,
     };
     // B shape is wrong (should be [3, 2], here [4, 2])
-    let err = match <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let err = match tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3], &[4, 2], &[2, 2]],
@@ -2567,9 +2534,9 @@ fn tropical_execute_wrong_input_arity_returns_error() {
     use tenferro_device::Error;
 
     let mut ctx = CpuContext::new(1);
-    let plan = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::plan(
+    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
-        &PrimDescriptor::MakeContiguous,
+        &SemiringCoreDescriptor::MakeContiguous,
         &[&[2, 2], &[2, 2]],
     )
     .unwrap();
@@ -2582,7 +2549,7 @@ fn tropical_execute_wrong_input_arity_returns_error() {
     .unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = <CpuBackend as TensorPrims<tenferro_tropical::MaxPlusAlgebra<f64>>>::execute(
+    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),

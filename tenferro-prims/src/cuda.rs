@@ -10,9 +10,16 @@
 //! # Examples
 //!
 //! ```ignore
-//! use tenferro_prims::{CudaBackend, CudaContext, TensorPrims, PrimDescriptor};
+//! use tenferro_algebra::Standard;
+//! use tenferro_prims::{CudaBackend, CudaContext, SemiringCoreDescriptor, TensorSemiringCore};
 //!
 //! let (backend, mut ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
+//! let _plan = <CudaBackend as TensorSemiringCore<Standard<f64>>>::plan(
+//!     &mut ctx,
+//!     &SemiringCoreDescriptor::MakeContiguous,
+//!     &[&[2, 2], &[2, 2]],
+//! )
+//! .unwrap();
 //! ```
 
 use std::marker::PhantomData;
@@ -28,8 +35,8 @@ use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::*;
 use crate::{
-    validate_execute_inputs, validate_shape_count, Extension, PlanCache, PrimDescriptor, ReduceOp,
-    TensorPrims, UnaryOp,
+    validate_execute_inputs, validate_shape_count, PlanCache, SemiringBinaryOp,
+    SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
 };
 
 // ============================================================================
@@ -461,7 +468,7 @@ fn plan_reduction(
     build_cutensor_plan(handle, vtable, &op_desc)
 }
 
-/// Create a cuTENSOR elementwise binary plan (for ElementwiseMul).
+/// Create a cuTENSOR elementwise binary plan.
 fn plan_elementwise_binary(
     ctx: &mut CudaContext,
     data_type: CutensorDataType,
@@ -469,6 +476,7 @@ fn plan_elementwise_binary(
     modes: &[i32],
     shape: &[usize],
     strides: &[isize],
+    op: CutensorOperator,
 ) -> Result<(PlanWrapper, u64)> {
     let vtable = &ctx.vtable;
     let handle = ctx.handle.raw;
@@ -490,61 +498,11 @@ fn plan_elementwise_binary(
             CUTENSOR_OP_IDENTITY,
             desc_d.raw,
             modes.as_ptr(),
-            CUTENSOR_OP_MUL,
+            op,
             compute,
         )
     };
     check_status(status, "cutensorCreateElementwiseBinary")?;
-    let op_desc = OpDescWrapper {
-        raw: op_raw,
-        vtable: Arc::clone(vtable),
-    };
-    build_cutensor_plan(handle, vtable, &op_desc)
-}
-
-/// Create a cuTENSOR elementwise trinary plan (for ElementwiseUnary).
-///
-/// cuTENSOR's elementwise trinary: D = op_abc(op_ab(alpha * op_a(A), beta * op_b(B)), gamma * op_c(C))
-/// For unary case, we use A = input, B = input (identity), C = output, with appropriate operators.
-fn plan_elementwise_trinary(
-    ctx: &mut CudaContext,
-    data_type: CutensorDataType,
-    compute: cutensorComputeDescriptor_t,
-    op_a: CutensorOperator,
-    modes: &[i32],
-    shape: &[usize],
-    strides: &[isize],
-) -> Result<(PlanWrapper, u64)> {
-    let vtable = &ctx.vtable;
-    let handle = ctx.handle.raw;
-    // A, B, C, D all same shape
-    let desc_a = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
-    let desc_b = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
-    let desc_c = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
-    let desc_d = create_tensor_desc(handle, vtable, shape, strides, data_type)?;
-
-    let mut op_raw: cutensorOperationDescriptor_t = ptr::null_mut();
-    let status = unsafe {
-        (vtable.create_elementwise_trinary)(
-            handle,
-            &mut op_raw,
-            desc_a.raw,
-            modes.as_ptr(),
-            op_a,
-            desc_b.raw,
-            modes.as_ptr(),
-            CUTENSOR_OP_IDENTITY,
-            desc_c.raw,
-            modes.as_ptr(),
-            CUTENSOR_OP_IDENTITY,
-            desc_d.raw,
-            modes.as_ptr(),
-            CUTENSOR_OP_ADD, // op_ab
-            CUTENSOR_OP_ADD, // op_abc
-            compute,
-        )
-    };
-    check_status(status, "cutensorCreateElementwiseTrinary")?;
     let op_desc = OpDescWrapper {
         raw: op_raw,
         vtable: Arc::clone(vtable),
@@ -586,21 +544,27 @@ pub struct CudaContext {
 ///
 /// ```ignore
 /// use tenferro_algebra::Standard;
-/// use tenferro_prims::{CudaBackend, PrimDescriptor, TensorPrims};
+/// use tenferro_prims::{CudaBackend, SemiringCoreDescriptor, TensorSemiringCore};
 ///
 /// let (_, mut ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
-/// let plan = <CudaBackend as TensorPrims<Standard<f64>>>::plan(
+/// let plan = <CudaBackend as TensorSemiringCore<Standard<f64>>>::plan(
 ///     &mut ctx,
-///     &PrimDescriptor::MakeContiguous,
+///     &SemiringCoreDescriptor::MakeContiguous,
 ///     &[&[3, 2], &[3, 2]],
 /// )
 /// .unwrap();
 /// ```
+#[derive(Clone, Debug)]
+enum CudaPlanDescriptor {
+    Core(SemiringCoreDescriptor),
+    Fast(SemiringFastPathDescriptor),
+}
+
 pub struct CudaPlan<T: Scalar> {
     /// Compiled cuTENSOR plan (RAII — Drop calls cutensorDestroyPlan).
     plan: PlanWrapper,
-    /// Operation descriptor (for cache key matching and execute dispatch).
-    desc: PrimDescriptor,
+    /// Family descriptor (for execute dispatch).
+    desc: CudaPlanDescriptor,
     /// Required workspace size in bytes.
     workspace_size: u64,
     _marker: PhantomData<T>,
@@ -726,13 +690,13 @@ impl CudaBackend {
     }
 }
 
-impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
+impl<S: Scalar> TensorSemiringCore<Standard<S>> for CudaBackend {
     type Plan = CudaPlan<S>;
     type Context = CudaContext;
 
     fn plan(
         ctx: &mut CudaContext,
-        desc: &PrimDescriptor,
+        desc: &SemiringCoreDescriptor,
         shapes: &[&[usize]],
     ) -> Result<CudaPlan<S>> {
         cudarc::runtime::result::device::set(ctx.device_id as i32)
@@ -743,41 +707,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         let compute = scalar_compute_descriptor::<S>(&ctx.vtable)?;
 
         match desc {
-            PrimDescriptor::Contract {
-                modes_a,
-                modes_b,
-                modes_c,
-            } => {
-                validate_shape_count(shapes, 3, "Contract")?;
-                let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
-                let modes_b_i32: Vec<i32> = modes_b.iter().map(|&m| m as i32).collect();
-                let modes_c_i32: Vec<i32> = modes_c.iter().map(|&m| m as i32).collect();
-                let strides_a = default_col_major_strides(shapes[0]);
-                let strides_b = default_col_major_strides(shapes[1]);
-                let strides_c = default_col_major_strides(shapes[2]);
-                let (plan, ws) = plan_contraction(
-                    ctx,
-                    data_type,
-                    compute,
-                    &modes_a_i32,
-                    shapes[0],
-                    &strides_a,
-                    &modes_b_i32,
-                    shapes[1],
-                    &strides_b,
-                    &modes_c_i32,
-                    shapes[2],
-                    &strides_c,
-                )?;
-                Ok(CudaPlan {
-                    plan,
-                    desc: desc.clone(),
-                    workspace_size: ws,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::BatchedGemm {
+            SemiringCoreDescriptor::BatchedGemm {
                 batch_dims,
                 m: _,
                 n: _,
@@ -810,15 +740,15 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 )?;
                 Ok(CudaPlan {
                     plan,
-                    desc: desc.clone(),
+                    desc: CudaPlanDescriptor::Core(desc.clone()),
                     workspace_size: ws,
                     _marker: PhantomData,
                 })
             }
 
-            PrimDescriptor::Trace { .. }
-            | PrimDescriptor::AntiTrace { .. }
-            | PrimDescriptor::AntiDiag { .. } => {
+            SemiringCoreDescriptor::Trace { .. }
+            | SemiringCoreDescriptor::AntiTrace { .. }
+            | SemiringCoreDescriptor::AntiDiag { .. } => {
                 // These operations contract the input with an identity tensor.
                 // For Trace: C = sum_over_diag(A) via contraction with eye tensor
                 // For AntiTrace/AntiDiag: reverse operation
@@ -831,36 +761,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 ))
             }
 
-            PrimDescriptor::MakeContiguous => {
-                // Identity permutation: modes_a == modes_b = [0, 1, ..., ndim-1]
-                validate_shape_count(shapes, 2, "MakeContiguous")?;
-                let ndim = shapes[0].len();
-                let modes: Vec<i32> = (0..ndim as i32).collect();
-                let strides_a = default_col_major_strides(shapes[0]);
-                let strides_b = default_col_major_strides(shapes[1]);
-                let (plan, ws) = plan_permutation(
-                    ctx, data_type, compute, &modes, shapes[0], &strides_a, &modes, shapes[1],
-                    &strides_b,
-                )?;
-                Ok(CudaPlan {
-                    plan,
-                    desc: desc.clone(),
-                    workspace_size: ws,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::Reduce {
-                modes_a,
-                modes_c,
-                op,
-            } => {
-                validate_shape_count(shapes, 2, "Reduce")?;
-                let reduce_op = match op {
-                    ReduceOp::Sum => CUTENSOR_OP_ADD,
-                    ReduceOp::Max => CUTENSOR_OP_MAX,
-                    ReduceOp::Min => CUTENSOR_OP_MIN,
-                };
+            SemiringCoreDescriptor::ReduceAdd { modes_a, modes_c } => {
+                validate_shape_count(shapes, 2, "ReduceAdd")?;
                 let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
                 let modes_c_i32: Vec<i32> = modes_c.iter().map(|&m| m as i32).collect();
                 let strides_a = default_col_major_strides(shapes[0]);
@@ -875,46 +777,30 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                     &modes_c_i32,
                     shapes[1],
                     &strides_c,
-                    reduce_op,
+                    CUTENSOR_OP_ADD,
                 )?;
                 Ok(CudaPlan {
                     plan,
-                    desc: desc.clone(),
+                    desc: CudaPlanDescriptor::Core(desc.clone()),
                     workspace_size: ws,
                     _marker: PhantomData,
                 })
             }
 
-            PrimDescriptor::ElementwiseUnary { op } => {
-                validate_shape_count(shapes, 2, "ElementwiseUnary")?;
-                let op_a = match op {
-                    UnaryOp::Conj => CUTENSOR_OP_CONJ,
-                    _ => CUTENSOR_OP_IDENTITY,
-                };
+            SemiringCoreDescriptor::MakeContiguous => {
+                // Identity permutation: modes_a == modes_b = [0, 1, ..., ndim-1]
+                validate_shape_count(shapes, 2, "MakeContiguous")?;
                 let ndim = shapes[0].len();
                 let modes: Vec<i32> = (0..ndim as i32).collect();
-                let strides = default_col_major_strides(shapes[0]);
-                let (plan, ws) = plan_elementwise_trinary(
-                    ctx, data_type, compute, op_a, &modes, shapes[0], &strides,
+                let strides_a = default_col_major_strides(shapes[0]);
+                let strides_b = default_col_major_strides(shapes[1]);
+                let (plan, ws) = plan_permutation(
+                    ctx, data_type, compute, &modes, shapes[0], &strides_a, &modes, shapes[1],
+                    &strides_b,
                 )?;
                 Ok(CudaPlan {
                     plan,
-                    desc: desc.clone(),
-                    workspace_size: ws,
-                    _marker: PhantomData,
-                })
-            }
-
-            PrimDescriptor::ElementwiseMul => {
-                validate_shape_count(shapes, 3, "ElementwiseMul")?;
-                let ndim = shapes[0].len();
-                let modes: Vec<i32> = (0..ndim as i32).collect();
-                let strides = default_col_major_strides(shapes[0]);
-                let (plan, ws) =
-                    plan_elementwise_binary(ctx, data_type, compute, &modes, shapes[0], &strides)?;
-                Ok(CudaPlan {
-                    plan,
-                    desc: desc.clone(),
+                    desc: CudaPlanDescriptor::Core(desc.clone()),
                     workspace_size: ws,
                     _marker: PhantomData,
                 })
@@ -945,11 +831,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
         let beta_ptr = &beta as *const S as *const c_void;
 
         match &plan.desc {
-            PrimDescriptor::Contract { .. }
-            | PrimDescriptor::BatchedGemm { .. }
-            | PrimDescriptor::Trace { .. }
-            | PrimDescriptor::AntiTrace { .. }
-            | PrimDescriptor::AntiDiag { .. } => {
+            CudaPlanDescriptor::Core(SemiringCoreDescriptor::BatchedGemm { .. })
+            | CudaPlanDescriptor::Fast(SemiringFastPathDescriptor::Contract { .. }) => {
                 validate_execute_inputs(inputs, 2, "Contraction")?;
                 let a_ptr = inputs[0]
                     .buffer()
@@ -986,7 +869,7 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 check_status(status, "cutensorContract")
             }
 
-            PrimDescriptor::MakeContiguous => {
+            CudaPlanDescriptor::Core(SemiringCoreDescriptor::MakeContiguous) => {
                 validate_execute_inputs(inputs, 1, "MakeContiguous")?;
                 let a_ptr = inputs[0]
                     .buffer()
@@ -1005,8 +888,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 check_status(status, "cutensorPermute")
             }
 
-            PrimDescriptor::Reduce { .. } => {
-                validate_execute_inputs(inputs, 1, "Reduce")?;
+            CudaPlanDescriptor::Core(SemiringCoreDescriptor::ReduceAdd { .. }) => {
+                validate_execute_inputs(inputs, 1, "ReduceAdd")?;
                 let a_ptr = inputs[0]
                     .buffer()
                     .as_device_ptr()
@@ -1036,8 +919,8 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 check_status(status, "cutensorReduce")
             }
 
-            PrimDescriptor::ElementwiseMul => {
-                validate_execute_inputs(inputs, 2, "ElementwiseMul")?;
+            CudaPlanDescriptor::Fast(SemiringFastPathDescriptor::ElementwiseBinary { .. }) => {
+                validate_execute_inputs(inputs, 2, "ElementwiseBinary")?;
                 let a_ptr = inputs[0]
                     .buffer()
                     .as_device_ptr()
@@ -1072,48 +955,105 @@ impl<S: Scalar> TensorPrims<Standard<S>> for CudaBackend {
                 };
                 check_status(status, "cutensorElementwiseBinaryExecute")
             }
+        }
+    }
+}
 
-            PrimDescriptor::ElementwiseUnary { .. } => {
-                validate_execute_inputs(inputs, 1, "ElementwiseUnary")?;
-                let a_ptr = inputs[0]
-                    .buffer()
-                    .as_device_ptr()
-                    .ok_or_else(|| Error::DeviceError("input A not on GPU".into()))?
-                    as *const c_void;
-                // For trinary unary case: B = A, C = output
-                let b_ptr = a_ptr;
-                let c_ptr = output
-                    .buffer()
-                    .as_device_ptr()
-                    .ok_or_else(|| Error::DeviceError("output not on GPU".into()))?
-                    as *const c_void;
-                let d_ptr = c_ptr as *mut c_void;
+impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for CudaBackend {
+    type Plan = CudaPlan<S>;
+    type Context = CudaContext;
 
-                let beta_zero = S::zero();
-                let beta_zero_ptr = &beta_zero as *const S as *const c_void;
-                let gamma_ptr = beta_ptr;
+    fn plan(
+        ctx: &mut CudaContext,
+        desc: &SemiringFastPathDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<CudaPlan<S>> {
+        cudarc::runtime::result::device::set(ctx.device_id as i32)
+            .map_err(|e| Error::DeviceError(format!("CUDA runtime set-device failed: {e:?}")))?;
+        let data_type = scalar_data_type::<S>()?;
+        let compute = scalar_compute_descriptor::<S>(&ctx.vtable)?;
 
-                let status = unsafe {
-                    (ctx.vtable.elementwise_trinary_execute)(
-                        handle,
-                        plan.plan.raw,
-                        alpha_ptr,
-                        a_ptr,
-                        beta_zero_ptr,
-                        b_ptr,
-                        gamma_ptr,
-                        c_ptr,
-                        d_ptr,
-                        stream,
-                    )
+        match desc {
+            SemiringFastPathDescriptor::Contract {
+                modes_a,
+                modes_b,
+                modes_c,
+            } => {
+                validate_shape_count(shapes, 3, "Contract")?;
+                let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
+                let modes_b_i32: Vec<i32> = modes_b.iter().map(|&m| m as i32).collect();
+                let modes_c_i32: Vec<i32> = modes_c.iter().map(|&m| m as i32).collect();
+                let strides_a = default_col_major_strides(shapes[0]);
+                let strides_b = default_col_major_strides(shapes[1]);
+                let strides_c = default_col_major_strides(shapes[2]);
+                let (plan, ws) = plan_contraction(
+                    ctx,
+                    data_type,
+                    compute,
+                    &modes_a_i32,
+                    shapes[0],
+                    &strides_a,
+                    &modes_b_i32,
+                    shapes[1],
+                    &strides_b,
+                    &modes_c_i32,
+                    shapes[2],
+                    &strides_c,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: CudaPlanDescriptor::Fast(desc.clone()),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
+            }
+            SemiringFastPathDescriptor::ElementwiseBinary { op } => {
+                validate_shape_count(shapes, 3, "ElementwiseBinary")?;
+                let ndim = shapes[0].len();
+                let modes: Vec<i32> = (0..ndim as i32).collect();
+                let strides = default_col_major_strides(shapes[0]);
+                let cutensor_op = match op {
+                    SemiringBinaryOp::Add => CUTENSOR_OP_ADD,
+                    SemiringBinaryOp::Mul => CUTENSOR_OP_MUL,
                 };
-                check_status(status, "cutensorElementwiseTrinaryExecute")
+                let (plan, ws) = plan_elementwise_binary(
+                    ctx,
+                    data_type,
+                    compute,
+                    &modes,
+                    shapes[0],
+                    &strides,
+                    cutensor_op,
+                )?;
+                Ok(CudaPlan {
+                    plan,
+                    desc: CudaPlanDescriptor::Fast(desc.clone()),
+                    workspace_size: ws,
+                    _marker: PhantomData,
+                })
             }
         }
     }
 
-    fn has_extension_for(ext: Extension) -> bool {
-        matches!(ext, Extension::Contract | Extension::ElementwiseMul)
+    fn execute(
+        ctx: &mut CudaContext,
+        plan: &CudaPlan<S>,
+        alpha: S,
+        inputs: &[&Tensor<S>],
+        beta: S,
+        output: &mut Tensor<S>,
+    ) -> Result<()> {
+        <Self as TensorSemiringCore<Standard<S>>>::execute(ctx, plan, alpha, inputs, beta, output)
+    }
+
+    fn has_fast_path(desc: SemiringFastPathDescriptor) -> bool {
+        matches!(
+            desc,
+            SemiringFastPathDescriptor::Contract { .. }
+                | SemiringFastPathDescriptor::ElementwiseBinary {
+                    op: SemiringBinaryOp::Add | SemiringBinaryOp::Mul,
+                }
+        )
     }
 }
 

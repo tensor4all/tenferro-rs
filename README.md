@@ -52,7 +52,9 @@ A general-purpose tensor computation library in Rust with CPU support today and 
 `tenferro-rs` is a Rust workspace providing:
 
 - Dense tensor types with CPU support today and planned GPU support later
-- cuTENSOR/hipTensor-compatible operation protocol (`TensorPrims<A>` trait)
+- Family-based primitive execution protocol
+  (`TensorSemiringCore`, `TensorSemiringFastPath`, `TensorScalarPrims`,
+  `TensorAnalyticPrims`)
 - High-level einsum with N-ary contraction tree optimization
 - Automatic differentiation (VJP/JVP)
 - C FFI for Julia/Python integration
@@ -114,8 +116,9 @@ The API and internal architecture are strongly influenced by
 - **Tensor type** — `Tensor<T>` with reference-counted storage and zero-copy
   view operations (permute, broadcast, diagonal, narrow, select) mirrors
   `at::Tensor` / `c10::Storage`.
-- **Plan-based execution** — The `TensorPrims<A>` describe-plan-execute
-  protocol follows the cuTENSOR / BLAS pattern used by PyTorch's GPU backend.
+- **Plan-based execution** — The primitive family traits keep a
+  describe-plan-execute contract that follows the cuTENSOR / BLAS pattern used
+  by PyTorch's GPU backend.
 - **Automatic differentiation** — Tape-based reverse mode (VJP) and
   dual-number forward mode (JVP) follow PyTorch's autograd and `torch.func`
   design, factored into standalone `chainrules-core` / `chainrules` crates
@@ -130,7 +133,7 @@ The API and internal architecture are strongly influenced by
 
 Key differences from PyTorch: column-major default layout with `(m, n, *)`
 batch convention, compile-time generics (`Tensor<T>`) instead of runtime dtype
-dispatch, and algebra parameterization (`TensorPrims<A>`) enabling custom
+dispatch, and algebra-parameterized primitive families enabling custom
 semirings (e.g., tropical).
 
 For a detailed feature-by-feature mapping, see

@@ -19,11 +19,12 @@
 //!
 //! - **Algebra markers** ([`MaxPlusAlgebra<T>`], [`MinPlusAlgebra<T>`], [`MaxMulAlgebra<T>`]):
 //!   Zero-sized types used as the algebra parameter `Alg` in
-//!   [`TensorPrims<Alg>`](tenferro_prims::TensorPrims).
+//!   semiring-family execution traits such as
+//!   [`TensorSemiringCore<Alg>`](tenferro_prims::TensorSemiringCore).
 //!
-//! - **[`TensorPrims`](tenferro_prims::TensorPrims) implementations**:
-//!   `impl TensorPrims<MaxPlusAlgebra<f64>> for CpuBackend` etc. Orphan rule
-//!   compatible because algebra markers are defined locally.
+//! - **Semiring-family implementations**:
+//!   `impl TensorSemiringCore<MaxPlusAlgebra<f64>> for CpuBackend` etc. Orphan
+//!   rule compatible because algebra markers are defined locally.
 //!
 //! - **[`ArgmaxTracker`]**: Records winner indices during tropical forward
 //!   pass for use in automatic differentiation.
@@ -61,36 +62,36 @@
 //! ## Plan-based tropical contraction
 //!
 //! ```ignore
-//! use tenferro_algebra::Standard;
 //! use tenferro_device::LogicalMemorySpace;
-//! use tenferro_prims::{CpuBackend, TensorPrims, PrimDescriptor};
-//! use tenferro_prims::CpuContext;
+//! use tenferro_prims::{
+//!     CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore,
+//! };
 //! use tenferro_tensor::{MemoryOrder, Tensor};
-//! use tenferro_tropical::MaxPlusAlgebra;
+//! use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
 //!
 //! let mut ctx = CpuContext::new(1);
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col);
-//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col);
-//! let desc = PrimDescriptor::BatchedGemm {
+//! let a = Tensor::<MaxPlus<f64>>::zeros(&[3, 4], mem, col);
+//! let b = Tensor::<MaxPlus<f64>>::zeros(&[4, 5], mem, col);
+//! let mut c = Tensor::<MaxPlus<f64>>::zeros(&[3, 5], mem, col);
+//! let desc = SemiringCoreDescriptor::BatchedGemm {
 //!     batch_dims: vec![], m: 3, n: 5, k: 4,
 //! };
 //! // Under MaxPlusAlgebra<f64>, GEMM computes:
 //! //   C[i,j] = max_k (A[i,k] + B[k,j])
-//! let plan = <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::plan(
+//! let plan = <CpuBackend as TensorSemiringCore<MaxPlusAlgebra<f64>>>::plan(
 //!     &mut ctx,
 //!     &desc,
 //!     &[&[3, 4], &[4, 5], &[3, 5]],
 //! )
 //! .unwrap();
-//! <CpuBackend as TensorPrims<MaxPlusAlgebra<f64>>>::execute(
+//! <CpuBackend as TensorSemiringCore<MaxPlusAlgebra<f64>>>::execute(
 //!     &mut ctx,
 //!     &plan,
-//!     1.0,
+//!     MaxPlus::one(),
 //!     &[&a, &b],
-//!     0.0,
+//!     MaxPlus::zero(),
 //!     &mut c,
 //! )
 //! .unwrap();

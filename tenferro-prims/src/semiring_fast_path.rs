@@ -1,8 +1,6 @@
 use tenferro_algebra::Semiring;
-use tenferro_device::{Error, Result};
+use tenferro_device::Result;
 use tenferro_tensor::Tensor;
-
-use crate::{Extension, PrimDescriptor, TensorPrims};
 
 /// Semiring-valid optional binary fast-path operations.
 ///
@@ -52,30 +50,6 @@ pub enum SemiringFastPathDescriptor {
     },
 }
 
-impl SemiringFastPathDescriptor {
-    pub(crate) fn to_legacy(&self) -> Result<PrimDescriptor> {
-        match self {
-            Self::Contract {
-                modes_a,
-                modes_b,
-                modes_c,
-            } => Ok(PrimDescriptor::Contract {
-                modes_a: modes_a.clone(),
-                modes_b: modes_b.clone(),
-                modes_c: modes_c.clone(),
-            }),
-            Self::ElementwiseBinary {
-                op: SemiringBinaryOp::Mul,
-            } => Ok(PrimDescriptor::ElementwiseMul),
-            Self::ElementwiseBinary {
-                op: SemiringBinaryOp::Add,
-            } => Err(Error::InvalidArgument(
-                "ElementwiseBinary(Add) is not wired to the legacy prim surface yet".into(),
-            )),
-        }
-    }
-}
-
 /// Optional semiring performance paths.
 ///
 /// # Examples
@@ -118,47 +92,4 @@ pub trait TensorSemiringFastPath<Alg: Semiring> {
 
     /// Query whether the optional path is available.
     fn has_fast_path(desc: SemiringFastPathDescriptor) -> bool;
-}
-
-impl<Alg, B> TensorSemiringFastPath<Alg> for B
-where
-    Alg: Semiring,
-    B: TensorPrims<Alg>,
-{
-    type Plan = <B as TensorPrims<Alg>>::Plan;
-    type Context = <B as TensorPrims<Alg>>::Context;
-
-    fn plan(
-        ctx: &mut Self::Context,
-        desc: &SemiringFastPathDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<Self::Plan> {
-        let legacy = desc.to_legacy()?;
-        <B as TensorPrims<Alg>>::plan(ctx, &legacy, shapes)
-    }
-
-    fn execute(
-        ctx: &mut Self::Context,
-        plan: &Self::Plan,
-        alpha: Alg::Scalar,
-        inputs: &[&Tensor<Alg::Scalar>],
-        beta: Alg::Scalar,
-        output: &mut Tensor<Alg::Scalar>,
-    ) -> Result<()> {
-        <B as TensorPrims<Alg>>::execute(ctx, plan, alpha, inputs, beta, output)
-    }
-
-    fn has_fast_path(desc: SemiringFastPathDescriptor) -> bool {
-        match desc {
-            SemiringFastPathDescriptor::Contract { .. } => {
-                <B as TensorPrims<Alg>>::has_extension_for(Extension::Contract)
-            }
-            SemiringFastPathDescriptor::ElementwiseBinary {
-                op: SemiringBinaryOp::Mul,
-            } => <B as TensorPrims<Alg>>::has_extension_for(Extension::ElementwiseMul),
-            SemiringFastPathDescriptor::ElementwiseBinary {
-                op: SemiringBinaryOp::Add,
-            } => false,
-        }
-    }
 }

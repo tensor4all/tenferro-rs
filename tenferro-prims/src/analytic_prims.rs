@@ -131,7 +131,7 @@ pub trait TensorAnalyticPrims<Alg: Algebra> {
     /// Plan an analytic-family operation for the given input/output shapes.
     ///
     /// Public vocabulary may be broader than the currently wired execution
-    /// surface while the workspace migrates away from legacy `TensorPrims<A>`.
+    /// surface so later backend work can land without descriptor churn.
     fn plan(
         ctx: &mut Self::Context,
         desc: &AnalyticPrimsDescriptor,
