@@ -1,6 +1,208 @@
 use super::runtime::*;
 use super::*;
 
+macro_rules! dispatch_linalg_ad_runtime {
+    ($ty:ty, $capability:expr, $op:literal, |$ctx:ident, $backend:ident| $body:expr) => {{
+        with_linalg_runtime::<$ty, _>(
+            $op,
+            $capability,
+            |$ctx| {
+                type $backend = CpuBackend;
+                $body
+            },
+            |$ctx| {
+                type $backend = tenferro_prims::CudaBackend;
+                $body
+            },
+            |$ctx| {
+                type $backend = tenferro_prims::RocmBackend;
+                $body
+            },
+        )
+    }};
+}
+
+macro_rules! run_unary_tensor_ad {
+    (
+        ty = $ty:ty,
+        capability = $capability:expr,
+        op = $op_name:literal,
+        pullback = $pullback_op_name:literal,
+        input = $input:expr,
+        primal = |$primal_ctx:ident, $primal_backend:ident, $primal_tensor:ident| $primal_body:expr,
+        frule = |$frule_ctx:ident, $frule_backend:ident, $frule_tensor:ident, $frule_tangent:ident| $frule_body:expr,
+        rrule = |$rrule_ctx:ident, $rrule_backend:ident, $rrule_tensor:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
+    ) => {{
+        let operands = [$input];
+        let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let (input_primal, input_tangent) =
+            dispatch_linalg_ad_runtime!($ty, $capability, $op_name, |ctx, Backend| {
+                dense_input_snapshot_in_backend::<Backend, _, $ty>(ctx, $input, needs_tangent)
+            })?;
+
+        let (primal, tangent) = if needs_tangent {
+            let input_tangent = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: format!("{} missing materialized tangent", $op_name),
+            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                $ty,
+                $capability,
+                $op_name,
+                |$frule_ctx, $frule_backend| {
+                    let $frule_tensor = &input_primal;
+                    let $frule_tangent = &input_tangent;
+                    $frule_body
+                }
+            )?;
+            (p, Some(d))
+        } else {
+            let primal = dispatch_linalg_ad_runtime!(
+                $ty,
+                $capability,
+                $op_name,
+                |$primal_ctx, $primal_backend| {
+                    let $primal_tensor = &input_primal;
+                    $primal_body
+                }
+            )?;
+            (primal, None)
+        };
+
+        let out = wrap_dense_ad_output($op_name, &operands, primal, tangent, 0)?;
+
+        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+            let input_spec = collect_reverse_input_specs(&operands)
+                .into_iter()
+                .next()
+                .flatten();
+            let output_node = *node;
+            let tape_id = *tape;
+
+            reverse_tape::register_rule::<$ty>(
+                tape_id,
+                output_node,
+                Box::new(move |cotangent| {
+                    let grad = dispatch_linalg_ad_runtime!(
+                        $ty,
+                        $capability,
+                        $pullback_op_name,
+                        |$rrule_ctx, $rrule_backend| {
+                            let $rrule_tensor = &input_primal;
+                            let $rrule_cotangent = cotangent;
+                            $rrule_body
+                        }
+                    )?;
+
+                    let Some(spec) = &input_spec else {
+                        return Ok(Vec::new());
+                    };
+                    let grad = compress_pullback_like($op_name, grad, &spec.layout)?;
+                    Ok(vec![(spec.node, grad)])
+                }),
+            )?;
+        }
+
+        Ok(out)
+    }};
+}
+
+macro_rules! run_binary_tensor_ad {
+    (
+        ty = $ty:ty,
+        capability = $capability:expr,
+        op = $op_name:literal,
+        pullback = $pullback_op_name:literal,
+        lhs = $lhs:expr,
+        rhs = $rhs:expr,
+        primal = |$primal_ctx:ident, $primal_backend:ident, $lhs_primal:ident, $rhs_primal:ident| $primal_body:expr,
+        frule = |$frule_ctx:ident, $frule_backend:ident, $frule_lhs:ident, $frule_rhs:ident, $lhs_tangent:ident, $rhs_tangent:ident| $frule_body:expr,
+        rrule = |$rrule_ctx:ident, $rrule_backend:ident, $rrule_lhs:ident, $rrule_rhs:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
+    ) => {{
+        let operands = [$lhs, $rhs];
+        let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
+        let ((lhs_primal, lhs_tangent), (rhs_primal, rhs_tangent)) =
+            dispatch_linalg_ad_runtime!($ty, $capability, $op_name, |ctx, Backend| {
+                Ok((
+                    dense_input_snapshot_in_backend::<Backend, _, $ty>(ctx, $lhs, needs_tangent)?,
+                    dense_input_snapshot_in_backend::<Backend, _, $ty>(ctx, $rhs, needs_tangent)?,
+                ))
+            })?;
+
+        let (primal, tangent) = if needs_tangent {
+            let lhs_tangent = lhs_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: format!("{} missing materialized lhs tangent", $op_name),
+            })?;
+            let rhs_tangent = rhs_tangent.ok_or_else(|| Error::InvalidAdTensor {
+                message: format!("{} missing materialized rhs tangent", $op_name),
+            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                $ty,
+                $capability,
+                $op_name,
+                |$frule_ctx, $frule_backend| {
+                    let $frule_lhs = &lhs_primal;
+                    let $frule_rhs = &rhs_primal;
+                    let $lhs_tangent = &lhs_tangent;
+                    let $rhs_tangent = &rhs_tangent;
+                    $frule_body
+                }
+            )?;
+            (p, Some(d))
+        } else {
+            let primal = dispatch_linalg_ad_runtime!(
+                $ty,
+                $capability,
+                $op_name,
+                |$primal_ctx, $primal_backend| {
+                    let $lhs_primal = &lhs_primal;
+                    let $rhs_primal = &rhs_primal;
+                    $primal_body
+                }
+            )?;
+            (primal, None)
+        };
+
+        let out = wrap_dense_ad_output($op_name, &operands, primal, tangent, 0)?;
+
+        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+            let reverse_specs = collect_reverse_input_specs(&operands);
+            let output_node = *node;
+            let tape_id = *tape;
+
+            reverse_tape::register_rule::<$ty>(
+                tape_id,
+                output_node,
+                Box::new(move |cotangent| {
+                    let (grad_lhs, grad_rhs) = dispatch_linalg_ad_runtime!(
+                        $ty,
+                        $capability,
+                        $pullback_op_name,
+                        |$rrule_ctx, $rrule_backend| {
+                            let $rrule_lhs = &lhs_primal;
+                            let $rrule_rhs = &rhs_primal;
+                            let $rrule_cotangent = cotangent;
+                            $rrule_body
+                        }
+                    )?;
+
+                    let mut input_grads = Vec::new();
+                    if let Some(spec) = &reverse_specs[0] {
+                        let grad_lhs = compress_pullback_like($op_name, grad_lhs, &spec.layout)?;
+                        input_grads.push((spec.node, grad_lhs));
+                    }
+                    if let Some(spec) = &reverse_specs[1] {
+                        let grad_rhs = compress_pullback_like($op_name, grad_rhs, &spec.layout)?;
+                        input_grads.push((spec.node, grad_rhs));
+                    }
+                    Ok(input_grads)
+                }),
+            )?;
+        }
+
+        Ok(out)
+    }};
+}
+
 /// Builder for AD einsum.
 /// # Examples
 ///
@@ -438,175 +640,6 @@ where
     SumAdBuilder { tensor }
 }
 
-/// Builder for SVD.
-/// # Examples
-///
-/// ```text
-/// // Construct `SvdBuilder` via its corresponding operation constructor.
-/// ```
-
-fn run_unary_tensor_ad<T, FPrimal, FFrule, FRrule>(
-    op_name: &'static str,
-    pullback_op_name: &'static str,
-    input: &AdTensor<T>,
-    primal_fn: FPrimal,
-    frule_fn: FFrule,
-    rrule_fn: FRrule,
-) -> Result<AdTensor<T>>
-where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
-    FPrimal: FnOnce(&mut CpuContext, &Tensor<T>) -> Result<Tensor<T>>,
-    FFrule: FnOnce(
-        &mut CpuContext,
-        &Tensor<T>,
-        &Tensor<T>,
-    )
-        -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>,
-    FRrule: Fn(
-            &mut CpuContext,
-            &Tensor<T>,
-            &Tensor<T>,
-        ) -> std::result::Result<Tensor<T>, chainrules_core::AutodiffError>
-        + 'static,
-{
-    let operands = [input];
-    let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-    let (input_primal, input_tangent) = with_runtime_cpu_only(op_name, |ctx| {
-        dense_input_snapshot_in_ctx(ctx, input, needs_tangent)
-    })?;
-
-    let (primal, tangent) = if needs_tangent {
-        let in_tangent = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
-            message: format!("{op_name} missing materialized tangent"),
-        })?;
-        let (p, d) = with_runtime_cpu_only(op_name, |ctx| {
-            frule_fn(ctx, &input_primal, &in_tangent).map_err(Error::from)
-        })?;
-        (p, Some(d))
-    } else {
-        (
-            with_runtime_cpu_only(op_name, |ctx| primal_fn(ctx, &input_primal))?,
-            None,
-        )
-    };
-
-    let out = wrap_dense_ad_output(op_name, &operands, primal, tangent, 0)?;
-
-    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
-        let input_spec = collect_reverse_input_specs(&operands)
-            .into_iter()
-            .next()
-            .flatten();
-        let output_node = *node;
-        let tape_id = *tape;
-
-        reverse_tape::register_rule::<T>(
-            tape_id,
-            output_node,
-            Box::new(move |cotangent| {
-                let grad = with_runtime_cpu_only(pullback_op_name, |ctx| {
-                    rrule_fn(ctx, &input_primal, cotangent).map_err(Error::from)
-                })?;
-
-                let Some(spec) = &input_spec else {
-                    return Ok(Vec::new());
-                };
-                let grad = compress_pullback_like(op_name, grad, &spec.layout)?;
-                Ok(vec![(spec.node, grad)])
-            }),
-        )?;
-    }
-
-    Ok(out)
-}
-
-fn run_binary_tensor_ad<T, FPrimal, FFrule, FRrule>(
-    op_name: &'static str,
-    pullback_op_name: &'static str,
-    a: &AdTensor<T>,
-    b: &AdTensor<T>,
-    primal_fn: FPrimal,
-    frule_fn: FFrule,
-    rrule_fn: FRrule,
-) -> Result<AdTensor<T>>
-where
-    T: LinalgScalar<Real = T> + Float + CpuLinalgScalar + HasAlgebra<Algebra = Standard<T>>,
-    FPrimal: FnOnce(&mut CpuContext, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
-    FFrule: FnOnce(
-        &mut CpuContext,
-        &Tensor<T>,
-        &Tensor<T>,
-        &Tensor<T>,
-        &Tensor<T>,
-    )
-        -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>,
-    FRrule: Fn(
-            &mut CpuContext,
-            &Tensor<T>,
-            &Tensor<T>,
-            &Tensor<T>,
-        ) -> std::result::Result<(Tensor<T>, Tensor<T>), chainrules_core::AutodiffError>
-        + 'static,
-{
-    let operands = [a, b];
-    let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-    let ((a_primal, a_tangent), (b_primal, b_tangent)) = with_runtime_cpu_only(op_name, |ctx| {
-        Ok((
-            dense_input_snapshot_in_ctx(ctx, a, needs_tangent)?,
-            dense_input_snapshot_in_ctx(ctx, b, needs_tangent)?,
-        ))
-    })?;
-
-    let (primal, tangent) = if needs_tangent {
-        let ta = a_tangent.ok_or_else(|| Error::InvalidAdTensor {
-            message: format!("{op_name} missing materialized lhs tangent"),
-        })?;
-        let tb = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
-            message: format!("{op_name} missing materialized rhs tangent"),
-        })?;
-        let (p, d) = with_runtime_cpu_only(op_name, |ctx| {
-            frule_fn(ctx, &a_primal, &b_primal, &ta, &tb).map_err(Error::from)
-        })?;
-        (p, Some(d))
-    } else {
-        (
-            with_runtime_cpu_only(op_name, |ctx| primal_fn(ctx, &a_primal, &b_primal))?,
-            None,
-        )
-    };
-
-    let out = wrap_dense_ad_output(op_name, &operands, primal, tangent, 0)?;
-
-    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
-        let reverse_specs = collect_reverse_input_specs(&operands);
-        let output_node = *node;
-        let tape_id = *tape;
-
-        reverse_tape::register_rule::<T>(
-            tape_id,
-            output_node,
-            Box::new(move |cotangent| {
-                let (grad_a, grad_b) = with_runtime_cpu_only(pullback_op_name, |ctx| {
-                    rrule_fn(ctx, &a_primal, &b_primal, cotangent).map_err(Error::from)
-                })?;
-
-                let mut input_grads = Vec::new();
-                if let Some(spec) = &reverse_specs[0] {
-                    let grad_a = compress_pullback_like(op_name, grad_a, &spec.layout)?;
-                    input_grads.push((spec.node, grad_a));
-                }
-                if let Some(spec) = &reverse_specs[1] {
-                    let grad_b = compress_pullback_like(op_name, grad_b, &spec.layout)?;
-                    input_grads.push((spec.node, grad_b));
-                }
-                Ok(input_grads)
-            }),
-        )?;
-    }
-
-    Ok(out)
-}
-
 /// Builder for AD SVD.
 /// # Examples
 ///
@@ -642,25 +675,42 @@ where
     pub fn run(self) -> Result<AdSvdResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_runtime_cpu_only("svd_ad", |ctx| {
-            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
-        })?;
+        let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
+            T,
+            tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
+            "svd_ad",
+            |ctx, Backend| {
+                dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.tensor, needs_tangent)
+            }
+        )?;
 
         let (primal, tangent) = if needs_tangent {
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "svd_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_runtime_cpu_only("svd_ad", |ctx| {
-                tenferro_linalg::svd_frule::<T, _>(ctx, &input_primal, &dt, self.options)
-                    .map_err(Error::from)
-            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                T,
+                tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
+                "svd_ad",
+                |ctx, Backend| {
+                    let _ = std::marker::PhantomData::<Backend>;
+                    tenferro_linalg::svd_frule::<T, _>(ctx, &input_primal, &dt, self.options)
+                        .map_err(Error::from)
+                }
+            )?;
             (p, Some(d))
         } else {
             (
-                with_runtime_cpu_only("svd_ad", |ctx| {
-                    tenferro_linalg::svd::<T, CpuContext>(ctx, &input_primal, self.options)
-                        .map_err(Error::from)
-                })?,
+                dispatch_linalg_ad_runtime!(
+                    T,
+                    tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
+                    "svd_ad",
+                    |ctx, Backend| {
+                        let _ = std::marker::PhantomData::<Backend>;
+                        tenferro_linalg::svd::<T, _>(ctx, &input_primal, self.options)
+                            .map_err(Error::from)
+                    }
+                )?,
                 None,
             )
         };
@@ -692,19 +742,25 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("svd_ad_pullback_u", |ctx| {
-                            tenferro_linalg::svd_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::SvdCotangent {
-                                    u: Some(cotangent.clone()),
-                                    s: None,
-                                    vt: None,
-                                },
-                                options.as_ref(),
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
+                            "svd_ad_pullback_u",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::svd_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::SvdCotangent {
+                                        u: Some(cotangent.clone()),
+                                        s: None,
+                                        vt: None,
+                                    },
+                                    options.as_ref(),
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -721,19 +777,25 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("svd_ad_pullback_s", |ctx| {
-                            tenferro_linalg::svd_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::SvdCotangent {
-                                    u: None,
-                                    s: Some(cotangent.clone()),
-                                    vt: None,
-                                },
-                                options.as_ref(),
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
+                            "svd_ad_pullback_s",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::svd_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::SvdCotangent {
+                                        u: None,
+                                        s: Some(cotangent.clone()),
+                                        vt: None,
+                                    },
+                                    options.as_ref(),
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -750,19 +812,25 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("svd_ad_pullback_vt", |ctx| {
-                            tenferro_linalg::svd_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::SvdCotangent {
-                                    u: None,
-                                    s: None,
-                                    vt: Some(cotangent.clone()),
-                                },
-                                options.as_ref(),
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
+                            "svd_ad_pullback_vt",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::svd_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::SvdCotangent {
+                                        u: None,
+                                        s: None,
+                                        vt: Some(cotangent.clone()),
+                                    },
+                                    options.as_ref(),
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -814,23 +882,40 @@ where
     pub fn run(self) -> Result<AdQrResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_runtime_cpu_only("qr_ad", |ctx| {
-            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
-        })?;
+        let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
+            T,
+            tenferro_linalg::backend::LinalgCapabilityOp::Qr,
+            "qr_ad",
+            |ctx, Backend| {
+                dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.tensor, needs_tangent)
+            }
+        )?;
 
         let (primal, tangent) = if needs_tangent {
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "qr_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_runtime_cpu_only("qr_ad", |ctx| {
-                tenferro_linalg::qr_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
-            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                T,
+                tenferro_linalg::backend::LinalgCapabilityOp::Qr,
+                "qr_ad",
+                |ctx, Backend| {
+                    let _ = std::marker::PhantomData::<Backend>;
+                    tenferro_linalg::qr_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
+                }
+            )?;
             (p, Some(d))
         } else {
             (
-                with_runtime_cpu_only("qr_ad", |ctx| {
-                    tenferro_linalg::qr::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
-                })?,
+                dispatch_linalg_ad_runtime!(
+                    T,
+                    tenferro_linalg::backend::LinalgCapabilityOp::Qr,
+                    "qr_ad",
+                    |ctx, Backend| {
+                        let _ = std::marker::PhantomData::<Backend>;
+                        tenferro_linalg::qr::<T, _>(ctx, &input_primal).map_err(Error::from)
+                    }
+                )?,
                 None,
             )
         };
@@ -858,17 +943,23 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("qr_ad_pullback_q", |ctx| {
-                            tenferro_linalg::qr_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::QrCotangent {
-                                    q: Some(cotangent.clone()),
-                                    r: None,
-                                },
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::Qr,
+                            "qr_ad_pullback_q",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::qr_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::QrCotangent {
+                                        q: Some(cotangent.clone()),
+                                        r: None,
+                                    },
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -884,17 +975,23 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("qr_ad_pullback_r", |ctx| {
-                            tenferro_linalg::qr_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::QrCotangent {
-                                    q: None,
-                                    r: Some(cotangent.clone()),
-                                },
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::Qr,
+                            "qr_ad_pullback_r",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::qr_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::QrCotangent {
+                                        q: None,
+                                        r: Some(cotangent.clone()),
+                                    },
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -951,25 +1048,42 @@ where
     pub fn run(self) -> Result<AdLuResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_runtime_cpu_only("lu_ad", |ctx| {
-            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
-        })?;
+        let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
+            T,
+            tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
+            "lu_ad",
+            |ctx, Backend| {
+                dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.tensor, needs_tangent)
+            }
+        )?;
 
         let (primal, tangent) = if needs_tangent {
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "lu_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_runtime_cpu_only("lu_ad", |ctx| {
-                tenferro_linalg::lu_frule::<T, _>(ctx, &input_primal, &dt, self.pivot)
-                    .map_err(Error::from)
-            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                T,
+                tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
+                "lu_ad",
+                |ctx, Backend| {
+                    let _ = std::marker::PhantomData::<Backend>;
+                    tenferro_linalg::lu_frule::<T, _>(ctx, &input_primal, &dt, self.pivot)
+                        .map_err(Error::from)
+                }
+            )?;
             (p, Some(d))
         } else {
             (
-                with_runtime_cpu_only("lu_ad", |ctx| {
-                    tenferro_linalg::lu::<T, CpuContext>(ctx, &input_primal, self.pivot)
-                        .map_err(Error::from)
-                })?,
+                dispatch_linalg_ad_runtime!(
+                    T,
+                    tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
+                    "lu_ad",
+                    |ctx, Backend| {
+                        let _ = std::marker::PhantomData::<Backend>;
+                        tenferro_linalg::lu::<T, _>(ctx, &input_primal, self.pivot)
+                            .map_err(Error::from)
+                    }
+                )?,
                 None,
             )
         };
@@ -998,18 +1112,24 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("lu_ad_pullback_l", |ctx| {
-                            tenferro_linalg::lu_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::LuCotangent {
-                                    l: Some(cotangent.clone()),
-                                    u: None,
-                                },
-                                pivot,
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
+                            "lu_ad_pullback_l",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::lu_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::LuCotangent {
+                                        l: Some(cotangent.clone()),
+                                        u: None,
+                                    },
+                                    pivot,
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -1026,18 +1146,24 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("lu_ad_pullback_u", |ctx| {
-                            tenferro_linalg::lu_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::LuCotangent {
-                                    l: None,
-                                    u: Some(cotangent.clone()),
-                                },
-                                pivot,
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
+                            "lu_ad_pullback_u",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::lu_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::LuCotangent {
+                                        l: None,
+                                        u: Some(cotangent.clone()),
+                                    },
+                                    pivot,
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -1089,23 +1215,41 @@ where
     pub fn run(self) -> Result<AdEigenResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_runtime_cpu_only("eigen_ad", |ctx| {
-            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
-        })?;
+        let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
+            T,
+            tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
+            "eigen_ad",
+            |ctx, Backend| {
+                dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.tensor, needs_tangent)
+            }
+        )?;
 
         let (primal, tangent) = if needs_tangent {
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "eigen_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_runtime_cpu_only("eigen_ad", |ctx| {
-                tenferro_linalg::eigen_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
-            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                T,
+                tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
+                "eigen_ad",
+                |ctx, Backend| {
+                    let _ = std::marker::PhantomData::<Backend>;
+                    tenferro_linalg::eigen_frule::<T, _>(ctx, &input_primal, &dt)
+                        .map_err(Error::from)
+                }
+            )?;
             (p, Some(d))
         } else {
             (
-                with_runtime_cpu_only("eigen_ad", |ctx| {
-                    tenferro_linalg::eigen::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
-                })?,
+                dispatch_linalg_ad_runtime!(
+                    T,
+                    tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
+                    "eigen_ad",
+                    |ctx, Backend| {
+                        let _ = std::marker::PhantomData::<Backend>;
+                        tenferro_linalg::eigen::<T, _>(ctx, &input_primal).map_err(Error::from)
+                    }
+                )?,
                 None,
             )
         };
@@ -1133,17 +1277,23 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("eigen_ad_pullback_values", |ctx| {
-                            tenferro_linalg::eigen_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::EigenCotangent {
-                                    values: Some(cotangent.clone()),
-                                    vectors: None,
-                                },
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
+                            "eigen_ad_pullback_values",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::eigen_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::EigenCotangent {
+                                        values: Some(cotangent.clone()),
+                                        vectors: None,
+                                    },
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -1159,17 +1309,23 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("eigen_ad_pullback_vectors", |ctx| {
-                            tenferro_linalg::eigen_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::EigenCotangent {
-                                    values: None,
-                                    vectors: Some(cotangent.clone()),
-                                },
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
+                            "eigen_ad_pullback_vectors",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::eigen_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::EigenCotangent {
+                                        values: None,
+                                        vectors: Some(cotangent.clone()),
+                                    },
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -1218,13 +1374,17 @@ where
     pub fn run(self) -> Result<AdLstsqResult<T>> {
         let operands = [self.a, self.b];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let ((a_primal, a_tangent), (b_primal, b_tangent)) =
-            with_runtime_cpu_only("lstsq_ad", |ctx| {
+        let ((a_primal, a_tangent), (b_primal, b_tangent)) = dispatch_linalg_ad_runtime!(
+            T,
+            tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
+            "lstsq_ad",
+            |ctx, Backend| {
                 Ok((
-                    dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
-                    dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
+                    dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.a, needs_tangent)?,
+                    dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.b, needs_tangent)?,
                 ))
-            })?;
+            }
+        )?;
 
         let (primal, tangent) = if needs_tangent {
             let da = a_tangent.ok_or_else(|| Error::InvalidAdTensor {
@@ -1233,17 +1393,29 @@ where
             let db = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "lstsq_ad missing materialized rhs tangent".to_string(),
             })?;
-            let (p, d) = with_runtime_cpu_only("lstsq_ad", |ctx| {
-                tenferro_linalg::lstsq_frule::<T, CpuContext>(ctx, &a_primal, &b_primal, &da, &db)
-                    .map_err(Error::from)
-            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                T,
+                tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
+                "lstsq_ad",
+                |ctx, Backend| {
+                    let _ = std::marker::PhantomData::<Backend>;
+                    tenferro_linalg::lstsq_frule::<T, _>(ctx, &a_primal, &b_primal, &da, &db)
+                        .map_err(Error::from)
+                }
+            )?;
             (p, Some(d))
         } else {
             (
-                with_runtime_cpu_only("lstsq_ad", |ctx| {
-                    tenferro_linalg::lstsq::<T, CpuContext>(ctx, &a_primal, &b_primal)
-                        .map_err(Error::from)
-                })?,
+                dispatch_linalg_ad_runtime!(
+                    T,
+                    tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
+                    "lstsq_ad",
+                    |ctx, Backend| {
+                        let _ = std::marker::PhantomData::<Backend>;
+                        tenferro_linalg::lstsq::<T, _>(ctx, &a_primal, &b_primal)
+                            .map_err(Error::from)
+                    }
+                )?,
                 None,
             )
         };
@@ -1270,12 +1442,18 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("lstsq_ad_pullback_x", |ctx| {
-                            tenferro_linalg::lstsq_rrule::<T, CpuContext>(
-                                ctx, &a_primal, &b_primal, cotangent,
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
+                            "lstsq_ad_pullback_x",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::lstsq_rrule::<T, _>(
+                                    ctx, &a_primal, &b_primal, cotangent,
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
 
                         let mut input_grads = Vec::new();
                         if let Some(spec) = &reverse_specs[0] {
@@ -1352,13 +1530,24 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
-        run_unary_tensor_ad(
-            "cholesky_ad",
-            "cholesky_ad_pullback",
-            self.tensor,
-            |ctx, t| tenferro_linalg::cholesky::<T, CpuContext>(ctx, t).map_err(Error::from),
-            |ctx, t, dt| tenferro_linalg::cholesky_frule::<T, _>(ctx, t, dt),
-            |ctx, t, cotangent| tenferro_linalg::cholesky_rrule::<T, _>(ctx, t, cotangent),
+        run_unary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::Cholesky,
+            op = "cholesky_ad",
+            pullback = "cholesky_ad_pullback",
+            input = self.tensor,
+            primal = |ctx, Backend, tensor| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::cholesky::<T, _>(ctx, tensor).map_err(Error::from)
+            },
+            frule = |ctx, Backend, tensor, dt| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::cholesky_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
+            },
+            rrule = |ctx, Backend, tensor, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::cholesky_rrule::<T, _>(ctx, tensor, cotangent).map_err(Error::from)
+            },
         )
     }
 }
@@ -1395,15 +1584,25 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
-        run_binary_tensor_ad(
-            "solve_ad",
-            "solve_ad_pullback",
-            self.a,
-            self.b,
-            |ctx, a, b| tenferro_linalg::solve::<T, CpuContext>(ctx, a, b).map_err(Error::from),
-            |ctx, a, b, da, db| tenferro_linalg::solve_frule::<T, _>(ctx, a, b, da, db),
-            |ctx, a, b, cotangent| {
-                let grad = tenferro_linalg::solve_rrule::<T, _>(ctx, a, b, cotangent)?;
+        run_binary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::Solve,
+            op = "solve_ad",
+            pullback = "solve_ad_pullback",
+            lhs = self.a,
+            rhs = self.b,
+            primal = |ctx, Backend, a, b| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::solve::<T, _>(ctx, a, b).map_err(Error::from)
+            },
+            frule = |ctx, Backend, a, b, da, db| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::solve_frule::<T, _>(ctx, a, b, da, db).map_err(Error::from)
+            },
+            rrule = |ctx, Backend, a, b, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                let grad = tenferro_linalg::solve_rrule::<T, _>(ctx, a, b, cotangent)
+                    .map_err(Error::from)?;
                 Ok((grad.a, grad.b))
             },
         )
@@ -1441,13 +1640,24 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
-        run_unary_tensor_ad(
-            "inv_ad",
-            "inv_ad_pullback",
-            self.tensor,
-            |ctx, t| tenferro_linalg::inv::<T, CpuContext>(ctx, t).map_err(Error::from),
-            |ctx, t, dt| tenferro_linalg::inv_frule::<T, CpuContext>(ctx, t, dt),
-            |ctx, t, cotangent| tenferro_linalg::inv_rrule::<T, CpuContext>(ctx, t, cotangent),
+        run_unary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::Inv,
+            op = "inv_ad",
+            pullback = "inv_ad_pullback",
+            input = self.tensor,
+            primal = |ctx, Backend, tensor| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::inv::<T, _>(ctx, tensor).map_err(Error::from)
+            },
+            frule = |ctx, Backend, tensor, dt| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::inv_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
+            },
+            rrule = |ctx, Backend, tensor, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::inv_rrule::<T, _>(ctx, tensor, cotangent).map_err(Error::from)
+            },
         )
     }
 }
@@ -1483,13 +1693,24 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
-        run_unary_tensor_ad(
-            "det_ad",
-            "det_ad_pullback",
-            self.tensor,
-            |ctx, t| tenferro_linalg::det::<T, CpuContext>(ctx, t).map_err(Error::from),
-            |ctx, t, dt| tenferro_linalg::det_frule::<T, CpuContext>(ctx, t, dt),
-            |ctx, t, cotangent| tenferro_linalg::det_rrule::<T, CpuContext>(ctx, t, cotangent),
+        run_unary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::Det,
+            op = "det_ad",
+            pullback = "det_ad_pullback",
+            input = self.tensor,
+            primal = |ctx, Backend, tensor| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::det::<T, _>(ctx, tensor).map_err(Error::from)
+            },
+            frule = |ctx, Backend, tensor, dt| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::det_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
+            },
+            rrule = |ctx, Backend, tensor, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::det_rrule::<T, _>(ctx, tensor, cotangent).map_err(Error::from)
+            },
         )
     }
 }
@@ -1527,25 +1748,41 @@ where
     pub fn run(self) -> Result<AdSlogdetResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_runtime_cpu_only("slogdet_ad", |ctx| {
-            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
-        })?;
+        let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
+            T,
+            tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
+            "slogdet_ad",
+            |ctx, Backend| {
+                dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.tensor, needs_tangent)
+            }
+        )?;
 
         let (primal, tangent) = if needs_tangent {
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "slogdet_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_runtime_cpu_only("slogdet_ad", |ctx| {
-                tenferro_linalg::slogdet_frule::<T, CpuContext>(ctx, &input_primal, &dt)
-                    .map_err(Error::from)
-            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                T,
+                tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
+                "slogdet_ad",
+                |ctx, Backend| {
+                    let _ = std::marker::PhantomData::<Backend>;
+                    tenferro_linalg::slogdet_frule::<T, _>(ctx, &input_primal, &dt)
+                        .map_err(Error::from)
+                }
+            )?;
             (p, Some(d))
         } else {
             (
-                with_runtime_cpu_only("slogdet_ad", |ctx| {
-                    tenferro_linalg::slogdet::<T, CpuContext>(ctx, &input_primal)
-                        .map_err(Error::from)
-                })?,
+                dispatch_linalg_ad_runtime!(
+                    T,
+                    tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
+                    "slogdet_ad",
+                    |ctx, Backend| {
+                        let _ = std::marker::PhantomData::<Backend>;
+                        tenferro_linalg::slogdet::<T, _>(ctx, &input_primal).map_err(Error::from)
+                    }
+                )?,
                 None,
             )
         };
@@ -1586,16 +1823,22 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("slogdet_ad_pullback_logabsdet", |ctx| {
-                            tenferro_linalg::slogdet_rrule::<T, CpuContext>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::SlogdetCotangent {
-                                    logabsdet: Some(cotangent.clone()),
-                                },
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
+                            "slogdet_ad_pullback_logabsdet",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::slogdet_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::SlogdetCotangent {
+                                        logabsdet: Some(cotangent.clone()),
+                                    },
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("slogdet_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -1647,23 +1890,40 @@ where
     pub fn run(self) -> Result<AdEigResult<T>> {
         let operands = [self.tensor];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let (input_primal, input_tangent) = with_runtime_cpu_only("eig_ad", |ctx| {
-            dense_input_snapshot_in_ctx(ctx, self.tensor, needs_tangent)
-        })?;
+        let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
+            T,
+            tenferro_linalg::backend::LinalgCapabilityOp::Eig,
+            "eig_ad",
+            |ctx, Backend| {
+                dense_input_snapshot_in_backend::<Backend, _, T>(ctx, self.tensor, needs_tangent)
+            }
+        )?;
 
         let (primal, tangent) = if needs_tangent {
             let dt = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: "eig_ad missing materialized tangent".to_string(),
             })?;
-            let (p, d) = with_runtime_cpu_only("eig_ad", |ctx| {
-                tenferro_linalg::eig_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
-            })?;
+            let (p, d) = dispatch_linalg_ad_runtime!(
+                T,
+                tenferro_linalg::backend::LinalgCapabilityOp::Eig,
+                "eig_ad",
+                |ctx, Backend| {
+                    let _ = std::marker::PhantomData::<Backend>;
+                    tenferro_linalg::eig_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
+                }
+            )?;
             (p, Some(d))
         } else {
             (
-                with_runtime_cpu_only("eig_ad", |ctx| {
-                    tenferro_linalg::eig::<T, CpuContext>(ctx, &input_primal).map_err(Error::from)
-                })?,
+                dispatch_linalg_ad_runtime!(
+                    T,
+                    tenferro_linalg::backend::LinalgCapabilityOp::Eig,
+                    "eig_ad",
+                    |ctx, Backend| {
+                        let _ = std::marker::PhantomData::<Backend>;
+                        tenferro_linalg::eig::<T, _>(ctx, &input_primal).map_err(Error::from)
+                    }
+                )?,
                 None,
             )
         };
@@ -1691,17 +1951,23 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("eig_ad_pullback_values", |ctx| {
-                            tenferro_linalg::eig_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::EigCotangent {
-                                    values: Some(cotangent.clone()),
-                                    vectors: None,
-                                },
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::Eig,
+                            "eig_ad_pullback_values",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::eig_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::EigCotangent {
+                                        values: Some(cotangent.clone()),
+                                        vectors: None,
+                                    },
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -1717,17 +1983,23 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |cotangent| {
-                        let grad = with_runtime_cpu_only("eig_ad_pullback_vectors", |ctx| {
-                            tenferro_linalg::eig_rrule::<T, _>(
-                                ctx,
-                                &a_primal,
-                                &tenferro_linalg::EigCotangent {
-                                    values: None,
-                                    vectors: Some(cotangent.clone()),
-                                },
-                            )
-                            .map_err(Error::from)
-                        })?;
+                        let grad = dispatch_linalg_ad_runtime!(
+                            T,
+                            tenferro_linalg::backend::LinalgCapabilityOp::Eig,
+                            "eig_ad_pullback_vectors",
+                            |ctx, Backend| {
+                                let _ = std::marker::PhantomData::<Backend>;
+                                tenferro_linalg::eig_rrule::<T, _>(
+                                    ctx,
+                                    &a_primal,
+                                    &tenferro_linalg::EigCotangent {
+                                        values: None,
+                                        vectors: Some(cotangent.clone()),
+                                    },
+                                )
+                                .map_err(Error::from)
+                            }
+                        )?;
                         let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
@@ -1785,16 +2057,25 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
-        run_unary_tensor_ad(
-            "pinv_ad",
-            "pinv_ad_pullback",
-            self.tensor,
-            |ctx, t| {
-                tenferro_linalg::pinv::<T, CpuContext>(ctx, t, self.rcond).map_err(Error::from)
+        run_unary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::Pinv,
+            op = "pinv_ad",
+            pullback = "pinv_ad_pullback",
+            input = self.tensor,
+            primal = |ctx, Backend, tensor| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::pinv::<T, _>(ctx, tensor, self.rcond).map_err(Error::from)
             },
-            |ctx, t, dt| tenferro_linalg::pinv_frule::<T, CpuContext>(ctx, t, dt, self.rcond),
-            move |ctx, t, cotangent| {
-                tenferro_linalg::pinv_rrule::<T, CpuContext>(ctx, t, cotangent, self.rcond)
+            frule = |ctx, Backend, tensor, dt| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::pinv_frule::<T, _>(ctx, tensor, dt, self.rcond)
+                    .map_err(Error::from)
+            },
+            rrule = |ctx, Backend, tensor, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::pinv_rrule::<T, _>(ctx, tensor, cotangent, self.rcond)
+                    .map_err(Error::from)
             },
         )
     }
@@ -1834,14 +2115,24 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
-        run_unary_tensor_ad(
-            "matrix_exp_ad",
-            "matrix_exp_ad_pullback",
-            self.tensor,
-            |ctx, t| tenferro_linalg::matrix_exp::<T, CpuContext>(ctx, t).map_err(Error::from),
-            |ctx, t, dt| tenferro_linalg::matrix_exp_frule::<T, CpuContext>(ctx, t, dt),
-            |ctx, t, cotangent| {
-                tenferro_linalg::matrix_exp_rrule::<T, CpuContext>(ctx, t, cotangent)
+        run_unary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::MatrixExp,
+            op = "matrix_exp_ad",
+            pullback = "matrix_exp_ad_pullback",
+            input = self.tensor,
+            primal = |ctx, Backend, tensor| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::matrix_exp::<T, _>(ctx, tensor).map_err(Error::from)
+            },
+            frule = |ctx, Backend, tensor, dt| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::matrix_exp_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
+            },
+            rrule = |ctx, Backend, tensor, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::matrix_exp_rrule::<T, _>(ctx, tensor, cotangent)
+                    .map_err(Error::from)
             },
         )
     }
@@ -1894,79 +2185,32 @@ where
     where
         T: 'static,
     {
-        let operands = [self.a, self.b];
-        let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
-        let ((a_primal, a_tangent), (b_primal, b_tangent)) =
-            with_runtime_cpu_only("solve_triangular_ad", |ctx| {
-                Ok((
-                    dense_input_snapshot_in_ctx(ctx, self.a, needs_tangent)?,
-                    dense_input_snapshot_in_ctx(ctx, self.b, needs_tangent)?,
-                ))
-            })?;
-
-        let (primal, tangent) = if needs_tangent {
-            let ta = a_tangent.ok_or_else(|| Error::InvalidAdTensor {
-                message: "solve_triangular_ad missing materialized lhs tangent".to_string(),
-            })?;
-            let tb = b_tangent.ok_or_else(|| Error::InvalidAdTensor {
-                message: "solve_triangular_ad missing materialized rhs tangent".to_string(),
-            })?;
-
-            let (p, d) = with_runtime_cpu_only("solve_triangular_ad", |ctx| {
-                tenferro_linalg::solve_triangular_frule::<T, _>(
-                    ctx, &a_primal, &b_primal, &ta, &tb, self.upper,
-                )
-                .map_err(Error::from)
-            })?;
-            (p, Some(d))
-        } else {
-            (
-                with_runtime_cpu_only("solve_triangular_ad", |ctx| {
-                    tenferro_linalg::solve_triangular::<T, CpuContext>(
-                        ctx, &a_primal, &b_primal, self.upper,
-                    )
+        run_binary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::SolveTriangular,
+            op = "solve_triangular_ad",
+            pullback = "solve_triangular_ad_pullback",
+            lhs = self.a,
+            rhs = self.b,
+            primal = |ctx, Backend, a, b| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::solve_triangular::<T, _>(ctx, a, b, self.upper)
                     .map_err(Error::from)
-                })?,
-                None,
-            )
-        };
-
-        let out = wrap_dense_ad_output("solve_triangular_ad", &operands, primal, tangent, 0)?;
-
-        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
-            let reverse_specs = collect_reverse_input_specs(&operands);
-            let upper = self.upper;
-            let output_node = *node;
-            let tape_id = *tape;
-
-            reverse_tape::register_rule::<T>(
-                tape_id,
-                output_node,
-                Box::new(move |cotangent| {
-                    let grad = with_runtime_cpu_only("solve_triangular_ad_pullback", |ctx| {
-                        tenferro_linalg::solve_triangular_rrule::<T, _>(
-                            ctx, &a_primal, &b_primal, cotangent, upper,
-                        )
-                        .map_err(Error::from)
-                    })?;
-
-                    let mut input_grads = Vec::new();
-                    if let Some(spec) = &reverse_specs[0] {
-                        let grad_a =
-                            compress_pullback_like("solve_triangular_ad", grad.a, &spec.layout)?;
-                        input_grads.push((spec.node, grad_a));
-                    }
-                    if let Some(spec) = &reverse_specs[1] {
-                        let grad_b =
-                            compress_pullback_like("solve_triangular_ad", grad.b, &spec.layout)?;
-                        input_grads.push((spec.node, grad_b));
-                    }
-                    Ok(input_grads)
-                }),
-            )?;
-        }
-
-        Ok(out)
+            },
+            frule = |ctx, Backend, a, b, da, db| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::solve_triangular_frule::<T, _>(ctx, a, b, da, db, self.upper)
+                    .map_err(Error::from)
+            },
+            rrule = |ctx, Backend, a, b, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                let grad = tenferro_linalg::solve_triangular_rrule::<T, _>(
+                    ctx, a, b, cotangent, self.upper,
+                )
+                .map_err(Error::from)?;
+                Ok((grad.a, grad.b))
+            },
+        )
     }
 }
 
@@ -2016,14 +2260,24 @@ where
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
-        run_unary_tensor_ad(
-            "norm_ad",
-            "norm_ad_pullback",
-            self.tensor,
-            |ctx, t| tenferro_linalg::norm::<T, CpuContext>(ctx, t, self.kind).map_err(Error::from),
-            |ctx, t, dt| tenferro_linalg::norm_frule::<T, CpuContext>(ctx, t, dt, self.kind),
-            move |ctx, t, cotangent| {
-                tenferro_linalg::norm_rrule::<T, CpuContext>(ctx, t, cotangent, self.kind)
+        run_unary_tensor_ad!(
+            ty = T,
+            capability = tenferro_linalg::backend::LinalgCapabilityOp::Norm,
+            op = "norm_ad",
+            pullback = "norm_ad_pullback",
+            input = self.tensor,
+            primal = |ctx, Backend, tensor| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::norm::<T, _>(ctx, tensor, self.kind).map_err(Error::from)
+            },
+            frule = |ctx, Backend, tensor, dt| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::norm_frule::<T, _>(ctx, tensor, dt, self.kind).map_err(Error::from)
+            },
+            rrule = |ctx, Backend, tensor, cotangent| {
+                let _ = std::marker::PhantomData::<Backend>;
+                tenferro_linalg::norm_rrule::<T, _>(ctx, tensor, cotangent, self.kind)
+                    .map_err(Error::from)
             },
         )
     }

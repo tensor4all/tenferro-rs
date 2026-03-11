@@ -1,19 +1,31 @@
-# Scalar AD Rules (`conj`, `sqrt`, `powf`, `powi`, `exp`, `log`, `atan2`)
+# Scalar and Reduction AD Rules
 
-This note records the scalar AD formulas we align with before implementing
-`chainrules-scalarops` and exposing `AdScalar` APIs in `tenferro-dyadtensor`.
+This note records the scalar AD formulas implemented in
+`chainrules-scalarops` and the tensor-level wrappers exposed through
+`tenferro-dyadtensor`.
 
 ## Scope
 
-Target operations:
+Implemented scalar basis:
 
+- `add`
 - `conj`
 - `sqrt`
 - `powf` (scalar exponent)
 - `powi` (integer exponent; a restricted `pow` case)
 - `exp`
+- `expm1`
 - `log`
+- `log1p`
+- `sin`
+- `cos`
+- `tanh`
 - `atan2`
+
+Tensor-level wrappers built on top of those formulas:
+
+- pointwise: `add_ad`, `atan2_ad`, `sqrt_ad`, `exp_ad`, `expm1_ad`, `log_ad`, `log1p_ad`, `sin_ad`, `cos_ad`, `tanh_ad`
+- reductions: `mean_ad`, `var_ad`, `std_ad`
 
 Target scalar domains:
 
@@ -68,6 +80,12 @@ Let `g` be output cotangent, `x` input primal, `y = f(x)` output primal.
 - rrule: `dx = g / (2 * conj(y))`
 - frule: `dy = dx / (2 * conj(y))`
 
+### `add`
+
+- Primal: `y = x1 + x2`
+- rrule: `(dx1, dx2) = (g, g)`
+- frule: `dy = dx1 + dx2`
+
 ### `powf` (fixed scalar exponent `a`)
 
 - Primal: `y = x^a`
@@ -88,11 +106,41 @@ This is `powf` with integer exponent semantics.
 - rrule: `dx = g * conj(y)`
 - frule: `dy = dx * conj(y)`
 
+### `expm1`
+
+- Primal: `y = exp(x) - 1`
+- rrule: `dx = g * conj(exp(x))`
+- frule: `dy = dx * conj(exp(x))`
+
 ### `log`
 
 - Primal: `y = log(x)`
 - rrule: `dx = g / conj(x)`
 - frule: `dy = dx / conj(x)`
+
+### `log1p`
+
+- Primal: `y = log(1 + x)`
+- rrule: `dx = g / conj(1 + x)`
+- frule: `dy = dx / conj(1 + x)`
+
+### `sin`
+
+- Primal: `y = sin(x)`
+- rrule: `dx = g * conj(cos(x))`
+- frule: `dy = dx * conj(cos(x))`
+
+### `cos`
+
+- Primal: `y = cos(x)`
+- rrule: `dx = g * conj(-sin(x))`
+- frule: `dy = dx * conj(-sin(x))`
+
+### `tanh`
+
+- Primal: `y = tanh(x)`
+- rrule: `dx = g * conj(1 - y^2)`
+- frule: `dy = dx * conj(1 - y^2)`
 
 ### `atan2` (real-valued inputs)
 
@@ -113,13 +161,40 @@ Aligned with PyTorch:
 - Real-input/complex-intermediate gradients are projected back to real
   (`handle_r_to_c` equivalent).
 
+## Tensor Reduction Wrappers
+
+The tensor-level reduction builders in `tenferro-dyadtensor` reuse the scalar
+rules above plus runtime-generic tensor primitives.
+
+### `mean_ad`
+
+For `y = mean(x)` over all elements (`N = x.len()`):
+
+- rrule: every element receives `g / N`
+- frule: `dy = mean(dx)`
+
+### `var_ad`
+
+For `y = var(x)` with population normalization:
+
+- center: `c = x - mean(x)`
+- rrule: `dx = g * 2c / N`
+- frule: `dy = mean(2c * dx)`
+
+### `std_ad`
+
+For `y = std(x)` with `y = sqrt(var(x))`:
+
+- rrule: `dx = g * c / (N * y)`
+- frule: `dy = dvar / (2y)`
+
 ## API Placement
 
 Implementation placement:
 
-- formulas and helper projection (`handle_r_to_c` equivalent):
+- scalar formulas and helper projection (`handle_r_to_c` equivalent):
   `extern/chainrules-scalarops`
-- user-facing scalar AD API:
-  `extension/tenferro-dyadtensor::AdScalar`
-  and tensor-level generic unary/binary/reduction wrappers such as
-  `exp_ad`, `add_ad`, and `mean_ad`
+- tensor-level generic unary/binary/reduction wrappers:
+  `extension/tenferro-dyadtensor::scalar_ad_builders`
+- eager AD entrypoints:
+  `extension/tenferro-dyadtensor::ad`

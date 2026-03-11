@@ -11,13 +11,13 @@ pub(super) use tenferro_tensor::Tensor;
 pub(super) use crate::{reverse_tape, AdTensor, AdValue, Error, Result};
 
 pub(super) use super::super::runtime::{
-    broadcast_scalar_like, collect_reverse_input_specs, compress_pullback_like, has_any_tangent,
-    has_forward, scalar_from_rank0_tensor, wrap_dense_ad_output,
+    broadcast_scalar_like, collect_reverse_input_specs, compress_pullback_like,
+    dense_input_snapshot_in_runtime, has_any_tangent, has_forward, scalar_from_rank0_tensor,
+    wrap_dense_ad_output,
 };
 pub(super) use super::super::scalar_runtime::{
     analytic_binary_primal, analytic_full_reduction_primal, analytic_unary_primal,
-    dense_input_snapshot_in_runtime, scalar_binary_primal, scalar_full_reduction_primal,
-    scalar_unary_primal,
+    scalar_binary_primal, scalar_full_reduction_primal, scalar_unary_primal,
 };
 
 macro_rules! define_unary_ad_builder {

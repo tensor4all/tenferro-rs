@@ -9,6 +9,9 @@ use tenferro_prims::{CudaContext, RocmContext};
 use tenferro_tensor::MemoryOrder;
 
 mod runtime_dispatch;
+mod support;
+
+pub(crate) use support::with_cpu_runtime;
 
 fn as_slice<T: Scalar>(t: &Tensor<T>) -> &[T] {
     t.buffer()
@@ -319,7 +322,7 @@ fn einsum_ad_size_dict_forces_dense_path_and_registers_pullback() {
     let got_a = grads[0].as_ref().unwrap().payload();
     let got_b = grads[1].as_ref().unwrap().payload();
 
-    let expected = crate::api::with_cpu_runtime("einsum_dense_path_expected", |ctx| {
+    let expected = with_cpu_runtime("einsum_dense_path_expected", |ctx| {
         tenferro_einsum::einsum_rrule::<Standard<f64>, CpuBackend>(
             ctx,
             "ij,jk->ik",

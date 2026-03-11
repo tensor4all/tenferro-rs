@@ -1,7 +1,7 @@
 # AD Formula Notes
 
 Mathematical derivations for the automatic differentiation rules (rrule/frule)
-implemented in `tenferro-linalg`.
+implemented across the `tenferro-rs` workspace.
 
 ## Purpose
 
@@ -20,6 +20,51 @@ verification procedures (reconstruction checks, finite-difference gradient check
 
 ## Notes
 
+## Implemented AD Rules by Crate
+
+This section is the quick inventory; the per-operation notes below remain the
+source of formula detail.
+
+### `chainrules-scalarops`
+
+- Scalar arithmetic: `add`, `add_rrule`, `add_frule`
+- Unary scalar rules: `conj`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`
+- Binary scalar rules: `atan2`
+- Power helpers: `powf`, `powi`
+
+### `tenferro-einsum`
+
+- `einsum_rrule`
+- `einsum_frule`
+- `einsum_hvp`
+
+### `tenferro-linalg`
+
+- `svd_rrule`, `svd_frule`
+- `qr_rrule`, `qr_frule`
+- `lu_rrule`, `lu_frule`
+- `eigen_rrule`, `eigen_frule`
+- `lstsq_rrule`, `lstsq_frule`
+- `cholesky_rrule`, `cholesky_frule`
+- `solve_rrule`, `solve_frule`
+- `solve_triangular_rrule`, `solve_triangular_frule`
+- `inv_rrule`, `inv_frule`
+- `det_rrule`, `det_frule`
+- `slogdet_rrule`, `slogdet_frule`
+- `eig_rrule`, `eig_frule`
+- `pinv_rrule`, `pinv_frule`
+- `matrix_exp_rrule`, `matrix_exp_frule`
+- `norm_rrule`, `norm_frule`
+
+### `tenferro-dyadtensor`
+
+- Eager tensor AD entrypoints: `ad::einsum`, `ad::sum`, `ad::mean`, `ad::var`, `ad::std`
+- Eager scalar wrappers: `ad::add`, `ad::atan2`, `ad::sqrt`, `ad::exp`, `ad::expm1`, `ad::log`, `ad::log1p`, `ad::sin`, `ad::cos`, `ad::tanh`
+- Builder-based linalg wrappers: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
+
+For a broader crate-by-crate support view, including primal coverage and
+runtime status, see [Supported Operations by Crate](../design/supported-ops.md).
+
 | File | Operation | Description |
 |------|-----------|-------------|
 | [svd.md](./svd.md) | SVD (`svd_rrule`) | Reverse-mode rule for `A = U diag(S) Vt`; F-matrix, non-square corrections, complex gauge |
@@ -35,5 +80,5 @@ verification procedures (reconstruction checks, finite-difference gradient check
 | [pinv.md](./pinv.md) | Pseudoinverse (`pinv_rrule`) | AD rules for Moore-Penrose pseudoinverse |
 | [matrix_exp.md](./matrix_exp.md) | Matrix exponential (`matrix_exp_rrule`) | AD rules for `exp(A)` |
 | [norm.md](./norm.md) | Norm (`norm_rrule`) | AD rules for matrix and vector norms |
-| [scalar_ops.md](./scalar_ops.md) | Scalar ops (`conj`, `sqrt`, `powf`, `powi`) | PyTorch-aligned scalar rrule/frule conventions and `handle_r_to_c` projection note |
+| [scalar_ops.md](./scalar_ops.md) | Scalar and tensor pointwise/reduction ops | Scalar basis rules (`add`, `conj`, `sqrt`, `exp`, `log`, `atan2`, powers) plus tensor wrappers (`mean`, `var`, `std`, `sin`, `cos`, `tanh`, ...) |
 | [dyadtensor_reverse.md](./dyadtensor_reverse.md) | Dyadtensor reverse wiring | `.run()` pullback registration coverage, including mixed-type `eig` bridge pullback |

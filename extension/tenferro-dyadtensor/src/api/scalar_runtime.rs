@@ -4,64 +4,13 @@ use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_prims::{
     AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp, CpuBackend,
     CudaBackend, RocmBackend, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp,
-    ScalarUnaryOp, TensorAnalyticPrims, TensorPrims, TensorScalarPrims,
+    ScalarUnaryOp, TensorAnalyticPrims, TensorScalarPrims,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{AdTensor, Error, Result};
+use crate::{Error, Result};
 
-use super::runtime::{dense_input_snapshot_in_ctx, zero_like};
-use super::{unsupported_runtime_capability, with_runtime};
-
-pub(crate) fn dense_input_snapshot_in_runtime<T>(
-    op_name: &'static str,
-    input: &AdTensor<T>,
-    needs_tangent: bool,
-) -> Result<(Tensor<T>, Option<Tensor<T>>)>
-where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    CpuBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CpuContext>,
-{
-    with_runtime(
-        |ctx| dense_input_snapshot_in_ctx(ctx, input, needs_tangent),
-        |_ctx| {
-            if !input.is_dense() {
-                return Err(unsupported_runtime_capability(op_name, "cuda"));
-            }
-            let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
-            let tangent = if needs_tangent {
-                Some(
-                    input
-                        .tangent()
-                        .cloned()
-                        .unwrap_or_else(|| zero_like(&primal))
-                        .contiguous(MemoryOrder::ColumnMajor),
-                )
-            } else {
-                None
-            };
-            Ok((primal, tangent))
-        },
-        |_ctx| {
-            if !input.is_dense() {
-                return Err(unsupported_runtime_capability(op_name, "rocm"));
-            }
-            let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
-            let tangent = if needs_tangent {
-                Some(
-                    input
-                        .tangent()
-                        .cloned()
-                        .unwrap_or_else(|| zero_like(&primal))
-                        .contiguous(MemoryOrder::ColumnMajor),
-                )
-            } else {
-                None
-            };
-            Ok((primal, tangent))
-        },
-    )
-}
+use super::with_runtime;
 
 fn run_scalar_unary_backend<B, T>(
     ctx: &mut <B as TensorScalarPrims<Standard<T>>>::Context,

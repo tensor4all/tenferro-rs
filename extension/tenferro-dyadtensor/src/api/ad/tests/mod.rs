@@ -3,6 +3,7 @@ mod scalar_generic;
 use num_complex::Complex64;
 
 use super::*;
+use crate::api::tests::with_cpu_runtime;
 use crate::{
     AdScalar, AdValue, DynAdScalar, DynAdTensor, NodeId, RuntimeContext, StructuredTensor, TapeId,
 };
@@ -1255,7 +1256,7 @@ fn solve_builder_reverse_pullback_matches_rrule() {
     let grad_a = grads[0].as_ref().expect("missing solve dA");
     let grad_b = grads[1].as_ref().expect("missing solve dB");
 
-    let expected = crate::api::with_cpu_runtime("solve_rrule_expected", |ctx| {
+    let expected = with_cpu_runtime("solve_rrule_expected", |ctx| {
         tenferro_linalg::solve_rrule::<f64, _>(ctx, &a, &b, &cotangent).map_err(Error::from)
     })
     .unwrap();
@@ -1289,7 +1290,7 @@ fn norm_builder_reverse_pullback_l1_matches_rrule() {
     let grads = pullback_wrt(&out, &ad_cotangent, &[&ad_a_rev]).unwrap();
     let grad_a = grads[0].as_ref().expect("missing norm dA");
 
-    let expected = crate::api::with_cpu_runtime("norm_rrule_expected", |ctx| {
+    let expected = with_cpu_runtime("norm_rrule_expected", |ctx| {
         tenferro_linalg::norm_rrule::<f64, _>(ctx, &a, &cotangent, NormKind::L1)
             .map_err(Error::from)
     })
@@ -1401,7 +1402,7 @@ fn svd_builder_reverse_pullback_s_matches_rrule() {
     let grads = pullback_wrt(&out.s, &ad_cotangent, &[&ad_a_rev]).unwrap();
     let grad_a = grads[0].as_ref().expect("missing svd dA");
 
-    let expected = crate::api::with_cpu_runtime("svd_rrule_expected", |ctx| {
+    let expected = with_cpu_runtime("svd_rrule_expected", |ctx| {
         tenferro_linalg::svd_rrule::<f64, _>(
             ctx,
             &a,
@@ -1446,7 +1447,7 @@ fn lstsq_builder_reverse_pullback_x_matches_rrule() {
     let grad_a = grads[0].as_ref().expect("missing lstsq dA");
     let grad_b = grads[1].as_ref().expect("missing lstsq dB");
 
-    let expected = crate::api::with_cpu_runtime("lstsq_rrule_expected", |ctx| {
+    let expected = with_cpu_runtime("lstsq_rrule_expected", |ctx| {
         tenferro_linalg::lstsq_rrule::<f64, _>(ctx, &a, &b, &cotangent_x).map_err(Error::from)
     })
     .unwrap();
@@ -1479,7 +1480,7 @@ fn eig_builder_reverse_pullback_values_matches_rrule_for_real_wrt() {
     let grads = pullback_wrt_mixed(&out.values, &ad_cotangent, &[&ad_a_rev]).unwrap();
     let grad_a = grads[0].as_ref().expect("missing eig dA");
 
-    let expected = crate::api::with_cpu_runtime("eig_rrule_expected", |ctx| {
+    let expected = with_cpu_runtime("eig_rrule_expected", |ctx| {
         tenferro_linalg::eig_rrule::<f64, _>(
             ctx,
             &a,

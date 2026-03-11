@@ -5,6 +5,7 @@
 | Document | Description |
 |----------|-------------|
 | [architecture.md](./architecture.md) | Workspace layers, dependency direction, and protocol boundaries after the prims/linalg split |
+| [supported-ops.md](./supported-ops.md) | Deployable crate-by-crate inventory of currently supported primal and AD operations |
 | [device.md](./device.md) | `tenferro-device`: memory spaces, compute devices, error types, device selection |
 | [tensor-prims.md](./tensor-prims.md) | `tenferro-prims` protocol families: semiring core, semiring fast paths, scalar prims, analytic prims |
 | [einsum.md](./einsum.md) | Einsum public API (9 functions), N-ary contraction tree, algebra dispatch |

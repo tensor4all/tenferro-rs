@@ -1,13 +1,5 @@
 use super::*;
 
-#[cfg(test)]
-pub(crate) fn with_cpu_runtime<R>(
-    op: &'static str,
-    f: impl FnOnce(&mut CpuContext) -> Result<R>,
-) -> Result<R> {
-    with_runtime_cpu_only(op, f)
-}
-
 pub(crate) fn has_forward<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
     operands
         .iter()
@@ -186,16 +178,56 @@ where
     Ok((primal, tangent))
 }
 
-pub(crate) fn dense_input_snapshot_in_ctx<T>(
-    ctx: &mut CpuContext,
+pub(crate) fn dense_input_snapshot_in_runtime<T>(
+    op_name: &'static str,
     input: &AdTensor<T>,
     needs_tangent: bool,
 ) -> Result<(Tensor<T>, Option<Tensor<T>>)>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
-    dense_input_snapshot_in_backend::<CpuBackend, _, T>(ctx, input, needs_tangent)
+    with_runtime(
+        |ctx| dense_input_snapshot_in_backend::<CpuBackend, _, T>(ctx, input, needs_tangent),
+        |_ctx| {
+            if !input.is_dense() {
+                return Err(unsupported_runtime_capability(op_name, "cuda"));
+            }
+            let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
+            let tangent = if needs_tangent {
+                Some(
+                    input
+                        .tangent()
+                        .cloned()
+                        .unwrap_or_else(|| zero_like(&primal))
+                        .contiguous(MemoryOrder::ColumnMajor),
+                )
+            } else {
+                None
+            };
+            Ok((primal, tangent))
+        },
+        |_ctx| {
+            if !input.is_dense() {
+                return Err(unsupported_runtime_capability(op_name, "rocm"));
+            }
+            let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
+            let tangent = if needs_tangent {
+                Some(
+                    input
+                        .tangent()
+                        .cloned()
+                        .unwrap_or_else(|| zero_like(&primal))
+                        .contiguous(MemoryOrder::ColumnMajor),
+                )
+            } else {
+                None
+            };
+            Ok((primal, tangent))
+        },
+    )
 }
 
 pub(crate) fn compress_pullback_like<T>(
@@ -206,15 +238,19 @@ pub(crate) fn compress_pullback_like<T>(
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = CpuContext>,
+    tenferro_prims::CudaBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
+    tenferro_prims::RocmBackend: TensorPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
     let dense = normalize_pullback_shape(grad, layout.logical_dims(), op_name)?;
     if layout.is_dense() {
         return Ok(dense);
     }
 
-    with_runtime_cpu_only(op_name, |ctx| {
-        compress_pullback_like_in_backend::<CpuBackend, _, T>(ctx, op_name, dense, layout)
-    })
+    with_runtime(
+        |ctx| compress_pullback_like_in_backend::<CpuBackend, _, T>(ctx, op_name, dense, layout),
+        |_ctx| Err(unsupported_runtime_capability(op_name, "cuda")),
+        |_ctx| Err(unsupported_runtime_capability(op_name, "rocm")),
+    )
 }
 
 pub(crate) fn compress_pullback_like_in_backend<B, C, T>(

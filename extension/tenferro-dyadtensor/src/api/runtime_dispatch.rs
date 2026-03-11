@@ -27,17 +27,6 @@ pub(crate) fn with_runtime<R>(
     })
 }
 
-pub(crate) fn with_runtime_cpu_only<R>(
-    op: &'static str,
-    cpu: impl FnOnce(&mut CpuContext) -> Result<R>,
-) -> Result<R> {
-    with_runtime(
-        cpu,
-        |_ctx| Err(unsupported_runtime_capability(op, "cuda")),
-        |_ctx| Err(unsupported_runtime_capability(op, "rocm")),
-    )
-}
-
 pub(crate) fn with_einsum_runtime<T: Scalar, R>(
     op: &'static str,
     cpu: impl FnOnce(&mut CpuContext) -> Result<R>,

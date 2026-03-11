@@ -50,4 +50,4 @@ pub(crate) use runtime_dispatch::*;
 pub use scalar_ad_builders::*;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
