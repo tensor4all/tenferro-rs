@@ -18,7 +18,7 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad_value::{AdValue, NodeId};
 use crate::reverse_tape;
-use crate::runtime::{with_default_runtime, RuntimeContext};
+use crate::runtime::with_default_runtime;
 use crate::structured::{
     accumulate_structured_tangent, compress_dense_to_layout_in_ctx, einsum_with_subscripts_in_ctx,
     reverse_subscripts, to_dense_in_ctx, StructuredTensor,
@@ -37,6 +37,7 @@ mod ad_builders;
 mod linalg_builders;
 mod primal_builders;
 mod runtime;
+mod runtime_dispatch;
 mod scalar_ad_builders;
 mod scalar_runtime;
 
@@ -44,6 +45,7 @@ pub use ad_builders::*;
 pub use linalg_builders::*;
 pub use primal_builders::*;
 pub(crate) use runtime::*;
+pub(crate) use runtime_dispatch::*;
 pub use scalar_ad_builders::*;
 
 #[cfg(test)]

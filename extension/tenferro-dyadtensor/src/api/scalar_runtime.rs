@@ -8,11 +8,10 @@ use tenferro_prims::{
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::runtime::RuntimeContext;
 use crate::{AdTensor, Error, Result};
 
 use super::runtime::{dense_input_snapshot_in_ctx, zero_like};
-use super::with_default_runtime;
+use super::{unsupported_runtime_capability, with_runtime};
 
 pub(crate) fn dense_input_snapshot_in_runtime<T>(
     op_name: &'static str,
@@ -23,15 +22,11 @@ where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     CpuBackend: TensorPrims<Standard<T>, Context = tenferro_prims::CpuContext>,
 {
-    with_default_runtime(|runtime| match runtime {
-        RuntimeContext::Cpu(ctx) => dense_input_snapshot_in_ctx(ctx, input, needs_tangent),
-        RuntimeContext::Cuda(_) | RuntimeContext::Rocm(_) => {
-            let runtime_name = runtime.name();
+    with_runtime(
+        |ctx| dense_input_snapshot_in_ctx(ctx, input, needs_tangent),
+        |_ctx| {
             if !input.is_dense() {
-                return Err(Error::UnsupportedRuntimeOp {
-                    op: op_name,
-                    runtime: runtime_name,
-                });
+                return Err(unsupported_runtime_capability(op_name, "cuda"));
             }
             let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
             let tangent = if needs_tangent {
@@ -46,8 +41,26 @@ where
                 None
             };
             Ok((primal, tangent))
-        }
-    })
+        },
+        |_ctx| {
+            if !input.is_dense() {
+                return Err(unsupported_runtime_capability(op_name, "rocm"));
+            }
+            let primal = input.primal().clone().contiguous(MemoryOrder::ColumnMajor);
+            let tangent = if needs_tangent {
+                Some(
+                    input
+                        .tangent()
+                        .cloned()
+                        .unwrap_or_else(|| zero_like(&primal))
+                        .contiguous(MemoryOrder::ColumnMajor),
+                )
+            } else {
+                None
+            };
+            Ok((primal, tangent))
+        },
+    )
 }
 
 fn run_scalar_unary_backend<B, T>(
@@ -185,20 +198,11 @@ where
     CudaBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
     RocmBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
-    with_default_runtime(|runtime| {
-        let runtime_name = runtime.name();
-        match runtime {
-            RuntimeContext::Cpu(ctx) => {
-                run_scalar_unary_backend::<CpuBackend, T>(ctx, runtime_name, op_name, op, input)
-            }
-            RuntimeContext::Cuda(ctx) => {
-                run_scalar_unary_backend::<CudaBackend, T>(ctx, runtime_name, op_name, op, input)
-            }
-            RuntimeContext::Rocm(ctx) => {
-                run_scalar_unary_backend::<RocmBackend, T>(ctx, runtime_name, op_name, op, input)
-            }
-        }
-    })
+    with_runtime(
+        |ctx| run_scalar_unary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
+        |ctx| run_scalar_unary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input),
+        |ctx| run_scalar_unary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input),
+    )
 }
 
 pub(crate) fn scalar_binary_primal<T>(
@@ -213,30 +217,11 @@ where
     CudaBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
     RocmBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
-    with_default_runtime(|runtime| {
-        let runtime_name = runtime.name();
-        match runtime {
-            RuntimeContext::Cpu(ctx) => {
-                run_scalar_binary_backend::<CpuBackend, T>(ctx, runtime_name, op_name, op, lhs, rhs)
-            }
-            RuntimeContext::Cuda(ctx) => run_scalar_binary_backend::<CudaBackend, T>(
-                ctx,
-                runtime_name,
-                op_name,
-                op,
-                lhs,
-                rhs,
-            ),
-            RuntimeContext::Rocm(ctx) => run_scalar_binary_backend::<RocmBackend, T>(
-                ctx,
-                runtime_name,
-                op_name,
-                op,
-                lhs,
-                rhs,
-            ),
-        }
-    })
+    with_runtime(
+        |ctx| run_scalar_binary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, lhs, rhs),
+        |ctx| run_scalar_binary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, lhs, rhs),
+        |ctx| run_scalar_binary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, lhs, rhs),
+    )
 }
 
 pub(crate) fn scalar_full_reduction_primal<T>(
@@ -250,32 +235,11 @@ where
     CudaBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
     RocmBackend: TensorScalarPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
-    with_default_runtime(|runtime| {
-        let runtime_name = runtime.name();
-        match runtime {
-            RuntimeContext::Cpu(ctx) => run_scalar_full_reduction_backend::<CpuBackend, T>(
-                ctx,
-                runtime_name,
-                op_name,
-                op,
-                input,
-            ),
-            RuntimeContext::Cuda(ctx) => run_scalar_full_reduction_backend::<CudaBackend, T>(
-                ctx,
-                runtime_name,
-                op_name,
-                op,
-                input,
-            ),
-            RuntimeContext::Rocm(ctx) => run_scalar_full_reduction_backend::<RocmBackend, T>(
-                ctx,
-                runtime_name,
-                op_name,
-                op,
-                input,
-            ),
-        }
-    })
+    with_runtime(
+        |ctx| run_scalar_full_reduction_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
+        |ctx| run_scalar_full_reduction_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input),
+        |ctx| run_scalar_full_reduction_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input),
+    )
 }
 
 pub(crate) fn analytic_unary_primal<T>(
@@ -289,18 +253,9 @@ where
     CudaBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::CudaContext>,
     RocmBackend: TensorAnalyticPrims<Standard<T>, Context = tenferro_prims::RocmContext>,
 {
-    with_default_runtime(|runtime| {
-        let runtime_name = runtime.name();
-        match runtime {
-            RuntimeContext::Cpu(ctx) => {
-                run_analytic_unary_backend::<CpuBackend, T>(ctx, runtime_name, op_name, op, input)
-            }
-            RuntimeContext::Cuda(ctx) => {
-                run_analytic_unary_backend::<CudaBackend, T>(ctx, runtime_name, op_name, op, input)
-            }
-            RuntimeContext::Rocm(ctx) => {
-                run_analytic_unary_backend::<RocmBackend, T>(ctx, runtime_name, op_name, op, input)
-            }
-        }
-    })
+    with_runtime(
+        |ctx| run_analytic_unary_backend::<CpuBackend, T>(ctx, "cpu", op_name, op, input),
+        |ctx| run_analytic_unary_backend::<CudaBackend, T>(ctx, "cuda", op_name, op, input),
+        |ctx| run_analytic_unary_backend::<RocmBackend, T>(ctx, "rocm", op_name, op, input),
+    )
 }

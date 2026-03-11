@@ -4,17 +4,7 @@ pub(crate) fn with_cpu_runtime<R>(
     op: &'static str,
     f: impl FnOnce(&mut CpuContext) -> Result<R>,
 ) -> Result<R> {
-    with_default_runtime(|runtime| match runtime {
-        RuntimeContext::Cpu(ctx) => f(ctx),
-        RuntimeContext::Cuda(_) => Err(Error::UnsupportedRuntimeOp {
-            op,
-            runtime: "cuda",
-        }),
-        RuntimeContext::Rocm(_) => Err(Error::UnsupportedRuntimeOp {
-            op,
-            runtime: "rocm",
-        }),
-    })
+    with_runtime_cpu_only(op, f)
 }
 
 pub(crate) fn has_forward<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
