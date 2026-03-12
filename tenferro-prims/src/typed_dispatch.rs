@@ -1,3 +1,24 @@
+macro_rules! matches_any_type_id {
+    ($tid:expr; $($ty:ty),+ $(,)?) => {{
+        false $(|| $tid == std::any::TypeId::of::<$ty>())+
+    }};
+}
+
+pub(crate) use matches_any_type_id;
+
+macro_rules! dispatch_type_id {
+    ($tid:expr, $concrete:ident, [$($ty:ty),+ $(,)?], $body:block) => {{
+        $(
+            if $tid == std::any::TypeId::of::<$ty>() {
+                type $concrete = $ty;
+                $body
+            }
+        ) else+
+    }};
+}
+
+pub(crate) use dispatch_type_id;
+
 macro_rules! cast_strided_view {
     ($view:expr, $from:ty, $to:ty) => {{
         unsafe {
@@ -31,22 +52,12 @@ pub(crate) use cast_scalar_value;
 macro_rules! dispatch_standard_scalar_type {
     ($generic:ty, $concrete:ident, $body:block) => {{
         let tid = std::any::TypeId::of::<$generic>();
-        if tid == std::any::TypeId::of::<f64>() {
-            type $concrete = f64;
+        $crate::typed_dispatch::dispatch_type_id!(
+            tid,
+            $concrete,
+            [f64, f32, num_complex::Complex64, num_complex::Complex32],
             $body
-        }
-        if tid == std::any::TypeId::of::<f32>() {
-            type $concrete = f32;
-            $body
-        }
-        if tid == std::any::TypeId::of::<num_complex::Complex64>() {
-            type $concrete = num_complex::Complex64;
-            $body
-        }
-        if tid == std::any::TypeId::of::<num_complex::Complex32>() {
-            type $concrete = num_complex::Complex32;
-            $body
-        }
+        )
     }};
 }
 
@@ -55,14 +66,7 @@ pub(crate) use dispatch_standard_scalar_type;
 macro_rules! dispatch_real_scalar_type {
     ($generic:ty, $concrete:ident, $body:block) => {{
         let tid = std::any::TypeId::of::<$generic>();
-        if tid == std::any::TypeId::of::<f64>() {
-            type $concrete = f64;
-            $body
-        }
-        if tid == std::any::TypeId::of::<f32>() {
-            type $concrete = f32;
-            $body
-        }
+        $crate::typed_dispatch::dispatch_type_id!(tid, $concrete, [f64, f32], $body)
     }};
 }
 
@@ -71,14 +75,12 @@ pub(crate) use dispatch_real_scalar_type;
 macro_rules! dispatch_complex_scalar_type {
     ($generic:ty, $concrete:ident, $body:block) => {{
         let tid = std::any::TypeId::of::<$generic>();
-        if tid == std::any::TypeId::of::<num_complex::Complex64>() {
-            type $concrete = num_complex::Complex64;
+        $crate::typed_dispatch::dispatch_type_id!(
+            tid,
+            $concrete,
+            [num_complex::Complex64, num_complex::Complex32],
             $body
-        }
-        if tid == std::any::TypeId::of::<num_complex::Complex32>() {
-            type $concrete = num_complex::Complex32;
-            $body
-        }
+        )
     }};
 }
 

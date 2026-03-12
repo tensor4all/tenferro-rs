@@ -8,6 +8,7 @@ use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
+use crate::typed_dispatch::matches_any_type_id;
 use crate::{for_each_index, validate_rank, validate_shape_count, validate_shape_eq};
 
 pub(crate) trait CpuScalarValue:
@@ -174,13 +175,10 @@ where
 
 pub(crate) fn is_supported_scalar_type<T: Scalar + 'static>() -> bool {
     let tid = TypeId::of::<T>();
-    tid == TypeId::of::<f32>()
-        || tid == TypeId::of::<f64>()
-        || tid == TypeId::of::<Complex32>()
-        || tid == TypeId::of::<Complex64>()
+    matches_any_type_id!(tid; f32, f64, Complex32, Complex64)
 }
 
 pub(crate) fn is_supported_ordered_real_type<T: Scalar + 'static>() -> bool {
     let tid = TypeId::of::<T>();
-    tid == TypeId::of::<f32>() || tid == TypeId::of::<f64>()
+    matches_any_type_id!(tid; f32, f64)
 }
