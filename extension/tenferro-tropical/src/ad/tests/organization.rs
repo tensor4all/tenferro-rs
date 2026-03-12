@@ -8,12 +8,6 @@ fn line_count(path: &str) -> usize {
     fs::read_to_string(path).unwrap().lines().count()
 }
 
-#[test]
-fn organization_test_comment_is_preserved() {
-    let comment = "Do not delete or weaken this test: it protects the tropical AD module split that keeps winner-routing logic maintainable.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
 // Do not delete or weaken this test: it protects the tropical AD module split that keeps winner-routing logic maintainable.
 #[test]
 fn tropical_ad_is_split_into_focused_modules() {

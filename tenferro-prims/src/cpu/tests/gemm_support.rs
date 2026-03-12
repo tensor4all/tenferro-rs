@@ -2,12 +2,6 @@ use num_complex::Complex64;
 
 use super::super::gemm_support::{batch_offset, FaerGemm};
 
-#[test]
-fn gemm_support_test_comment_is_preserved() {
-    let comment = "Do not delete or weaken this test: it protects the shared CPU GEMM helpers that multiple semiring execution paths rely on.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
 // Do not delete or weaken this test: it protects the shared CPU GEMM helpers that multiple semiring execution paths rely on.
 #[test]
 fn batch_offset_covers_fused_and_strided_paths() {

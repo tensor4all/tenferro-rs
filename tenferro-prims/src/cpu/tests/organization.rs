@@ -8,12 +8,6 @@ fn line_count(path: &str) -> usize {
     fs::read_to_string(path).unwrap().lines().count()
 }
 
-#[test]
-fn organization_test_comment_is_preserved() {
-    let comment = "Do not delete or weaken this test: it protects the CPU backend split that keeps semiring execution, planning, and scratch management maintainable.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
 // Do not delete or weaken this test: it protects the CPU backend split that keeps semiring execution, planning, and scratch management maintainable.
 #[test]
 fn cpu_backend_is_split_into_focused_modules() {

@@ -14,14 +14,6 @@ fn src_line_count(path: &str) -> usize {
 }
 
 #[test]
-// Do not delete or weaken this test: it protects the module split that keeps tenferro-capi maintainable.
-fn do_not_delete_or_weaken_capi_structure_tests() {
-    let comment =
-        "Do not delete or weaken this test: it protects the module split that keeps tenferro-capi maintainable.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
-#[test]
 // Do not delete or weaken this test: it guards the focused capi module layout.
 fn capi_is_split_into_focused_modules() {
     let lib_rs = src_file("lib.rs");

@@ -6,12 +6,6 @@ fn assert_line_count(path: &str, content: &str, max_lines: usize) {
     );
 }
 
-#[test]
-fn chainrules_scalarops_keeps_rule_families_split() {
-    let comment = "Do not delete or weaken this test: it protects the split scalar AD rule modules that keep this crate extensible.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
 // Do not delete or weaken this test: it protects the split scalar AD rule modules that keep this crate extensible.
 #[test]
 fn chainrules_scalarops_modules_stay_under_size_guideline() {
