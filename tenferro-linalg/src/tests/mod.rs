@@ -16,7 +16,7 @@ fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
 }
 
 #[test]
-fn vector_norm_paths_are_covered_in_crate_unit_tests() {
+fn vector_norm_primal_rrule_and_frule_match_expected_values() {
     let mut ctx = CpuContext::new(1);
     let x = Tensor::from_slice(&[3.0_f64, -4.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let dx = Tensor::from_slice(&[0.25_f64, -0.5], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -36,7 +36,7 @@ fn vector_norm_paths_are_covered_in_crate_unit_tests() {
 }
 
 #[test]
-fn private_scalar_and_validation_helpers_are_covered_in_crate_unit_tests() {
+fn linalg_scalar_helpers_and_validation_accept_valid_inputs() {
     assert_eq!(<f64 as LinalgScalar>::abs_real(&black_box(-1.5_f64)), 1.5);
     assert_eq!(<f32 as LinalgScalar>::abs_real(&black_box(-1.5_f32)), 1.5);
     assert!(black_box(<f32 as LinalgScalar>::real_epsilon()) > 0.0);
@@ -85,14 +85,14 @@ fn private_scalar_and_validation_helpers_are_covered_in_crate_unit_tests() {
     let scalar = scalar_from::<f32>(1.25).unwrap();
     assert_eq!(scalar, 1.25_f32);
 
-    let ad_err = to_ad_err(Error::InvalidArgument("coverage".into()));
+    let ad_err = to_ad_err(Error::InvalidArgument("invalid shape".into()));
     assert!(
-        matches!(ad_err, chainrules_core::AutodiffError::InvalidArgument(msg) if msg.contains("coverage"))
+        matches!(ad_err, chainrules_core::AutodiffError::InvalidArgument(msg) if msg.contains("invalid shape"))
     );
 }
 
 #[test]
-fn private_validation_helpers_cover_remaining_error_paths() {
+fn validation_helpers_reject_invalid_shapes_and_axes() {
     let wrong_rank_rhs =
         Tensor::from_slice(&[1.0_f64, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let err = validate_lstsq_rhs(&wrong_rank_rhs, 2, &[2]).unwrap_err();

@@ -30,7 +30,7 @@ fn assert_close_c64(actual: Complex64, expected: Complex64) {
 }
 
 #[test]
-fn scalar_ad_real_impls_cover_remaining_methods() {
+fn scalar_ad_real_impls_match_std_real_ops() {
     let x32 = 0.25_f32;
     assert_close_f32(<f32 as ScalarAd>::expm1(x32), x32.exp_m1());
     assert_close_f32(<f32 as ScalarAd>::log1p(x32), x32.ln_1p());
@@ -55,7 +55,7 @@ fn scalar_ad_real_impls_cover_remaining_methods() {
 }
 
 #[test]
-fn scalar_ad_complex_impls_cover_remaining_methods() {
+fn scalar_ad_complex_impls_match_std_complex_ops() {
     let x32 = Complex32::new(0.25, -0.5);
     assert_close_c32(<Complex32 as ScalarAd>::conj(x32), x32.conj());
     assert_close_c32(<Complex32 as ScalarAd>::sqrt(x32), x32.sqrt());
@@ -112,7 +112,7 @@ fn scalar_ad_complex_impls_cover_remaining_methods() {
 }
 
 #[test]
-fn handle_r_to_c_and_real_ops_cover_direct_entrypoints() {
+fn direct_entrypoints_match_real_projection_and_atan2_formulas() {
     assert_eq!(handle_r_to_c_f32(Complex32::new(2.0, -5.0)), 2.0);
     assert_eq!(handle_r_to_c_f64(Complex64::new(-3.0, 1.5)), -3.0);
 
@@ -125,7 +125,7 @@ fn handle_r_to_c_and_real_ops_cover_direct_entrypoints() {
 }
 
 #[test]
-fn unary_helpers_cover_remaining_forward_and_reverse_paths() {
+fn unary_entrypoints_match_forward_and_reverse_formulas() {
     let complex = Complex32::new(1.0, -2.0);
     assert_eq!(conj(complex), complex.conj());
     let (_y, dy) = conj_frule(complex, Complex32::new(3.0, 4.0));

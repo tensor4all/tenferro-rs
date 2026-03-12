@@ -937,7 +937,7 @@ fn faer_backend_eig_general_complex64_nan_returns_error() {
 }
 
 // ========================================================================
-// Complex32 coverage and additional complex error paths migrated from
+// Complex32 behavior and additional complex error paths migrated from
 // integration tests so the public API does not need to expose these cases.
 // ========================================================================
 
