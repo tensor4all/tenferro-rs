@@ -31,6 +31,84 @@ fn ad_builders_are_split_into_focused_modules() {
 }
 
 #[test]
+fn api_tests_are_split_into_focused_modules() {
+    for relative in [
+        "src/api/tests/mod.rs",
+        "src/api/tests/support.rs",
+        "src/api/tests/runtime_surface.rs",
+        "src/api/tests/runtime_helpers.rs",
+        "src/api/tests/runtime_dispatch.rs",
+        "src/api/tests/builder_coverage.rs",
+    ] {
+        assert!(
+            repo_path(relative).exists(),
+            "expected split API test module to exist: {relative}"
+        );
+    }
+}
+
+#[test]
+fn split_api_test_modules_stay_under_size_guideline() {
+    for relative in [
+        "src/api/tests/support.rs",
+        "src/api/tests/runtime_surface.rs",
+        "src/api/tests/runtime_helpers.rs",
+        "src/api/tests/runtime_dispatch.rs",
+        "src/api/tests/builder_coverage.rs",
+    ] {
+        let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
+        let line_count = contents.lines().count();
+        assert!(
+            line_count <= 500,
+            "{relative} should stay focused; found {line_count} lines"
+        );
+    }
+}
+
+#[test]
+fn ad_tests_are_split_into_focused_modules() {
+    for relative in [
+        "src/api/ad/tests/mod.rs",
+        "src/api/ad/tests/support.rs",
+        "src/api/ad/tests/eager_surface.rs",
+        "src/api/ad/tests/einsum_one_stage_real.rs",
+        "src/api/ad/tests/einsum_one_stage_complex.rs",
+        "src/api/ad/tests/einsum_two_stage.rs",
+        "src/api/ad/tests/linalg_finite_difference.rs",
+        "src/api/ad/tests/builder_pullbacks.rs",
+        "src/api/ad/tests/structured_pullbacks.rs",
+        "src/api/ad/tests/scalar_generic.rs",
+    ] {
+        assert!(
+            repo_path(relative).exists(),
+            "expected split AD test module to exist: {relative}"
+        );
+    }
+}
+
+#[test]
+fn split_ad_test_modules_stay_under_size_guideline() {
+    for relative in [
+        "src/api/ad/tests/support.rs",
+        "src/api/ad/tests/eager_surface.rs",
+        "src/api/ad/tests/einsum_one_stage_real.rs",
+        "src/api/ad/tests/einsum_one_stage_complex.rs",
+        "src/api/ad/tests/einsum_two_stage.rs",
+        "src/api/ad/tests/linalg_finite_difference.rs",
+        "src/api/ad/tests/builder_pullbacks.rs",
+        "src/api/ad/tests/structured_pullbacks.rs",
+        "src/api/ad/tests/scalar_generic.rs",
+    ] {
+        let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
+        let line_count = contents.lines().count();
+        assert!(
+            line_count <= 500,
+            "{relative} should stay focused; found {line_count} lines"
+        );
+    }
+}
+
+#[test]
 fn split_ad_builder_modules_stay_under_size_guideline() {
     for relative in [
         "src/api/ad_builders/common.rs",

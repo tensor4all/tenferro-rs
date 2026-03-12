@@ -28,16 +28,13 @@ where
             op = "cholesky_ad",
             pullback = "cholesky_ad_pullback",
             input = self.tensor,
-            primal = |ctx, Backend, tensor| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, tensor| {
                 tenferro_linalg::cholesky::<T, _>(ctx, tensor).map_err(Error::from)
             },
-            frule = |ctx, Backend, tensor, dt| {
-                let _ = std::marker::PhantomData::<Backend>;
+            frule = |ctx, tensor, dt| {
                 tenferro_linalg::cholesky_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
             },
-            rrule = |ctx, Backend, tensor, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, tensor, cotangent| {
                 tenferro_linalg::cholesky_rrule::<T, _>(ctx, tensor, cotangent).map_err(Error::from)
             },
         )
@@ -83,16 +80,11 @@ where
             pullback = "solve_ad_pullback",
             lhs = self.a,
             rhs = self.b,
-            primal = |ctx, Backend, a, b| {
-                let _ = std::marker::PhantomData::<Backend>;
-                tenferro_linalg::solve::<T, _>(ctx, a, b).map_err(Error::from)
-            },
-            frule = |ctx, Backend, a, b, da, db| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, a, b| tenferro_linalg::solve::<T, _>(ctx, a, b).map_err(Error::from),
+            frule = |ctx, a, b, da, db| {
                 tenferro_linalg::solve_frule::<T, _>(ctx, a, b, da, db).map_err(Error::from)
             },
-            rrule = |ctx, Backend, a, b, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, a, b, cotangent| {
                 let grad = tenferro_linalg::solve_rrule::<T, _>(ctx, a, b, cotangent)
                     .map_err(Error::from)?;
                 Ok((grad.a, grad.b))
@@ -138,16 +130,11 @@ where
             op = "inv_ad",
             pullback = "inv_ad_pullback",
             input = self.tensor,
-            primal = |ctx, Backend, tensor| {
-                let _ = std::marker::PhantomData::<Backend>;
-                tenferro_linalg::inv::<T, _>(ctx, tensor).map_err(Error::from)
-            },
-            frule = |ctx, Backend, tensor, dt| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, tensor| tenferro_linalg::inv::<T, _>(ctx, tensor).map_err(Error::from),
+            frule = |ctx, tensor, dt| {
                 tenferro_linalg::inv_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
             },
-            rrule = |ctx, Backend, tensor, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, tensor, cotangent| {
                 tenferro_linalg::inv_rrule::<T, _>(ctx, tensor, cotangent).map_err(Error::from)
             },
         )
@@ -191,16 +178,11 @@ where
             op = "det_ad",
             pullback = "det_ad_pullback",
             input = self.tensor,
-            primal = |ctx, Backend, tensor| {
-                let _ = std::marker::PhantomData::<Backend>;
-                tenferro_linalg::det::<T, _>(ctx, tensor).map_err(Error::from)
-            },
-            frule = |ctx, Backend, tensor, dt| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, tensor| tenferro_linalg::det::<T, _>(ctx, tensor).map_err(Error::from),
+            frule = |ctx, tensor, dt| {
                 tenferro_linalg::det_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
             },
-            rrule = |ctx, Backend, tensor, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, tensor, cotangent| {
                 tenferro_linalg::det_rrule::<T, _>(ctx, tensor, cotangent).map_err(Error::from)
             },
         )
@@ -256,17 +238,14 @@ where
             op = "pinv_ad",
             pullback = "pinv_ad_pullback",
             input = self.tensor,
-            primal = |ctx, Backend, tensor| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, tensor| {
                 tenferro_linalg::pinv::<T, _>(ctx, tensor, self.rcond).map_err(Error::from)
             },
-            frule = |ctx, Backend, tensor, dt| {
-                let _ = std::marker::PhantomData::<Backend>;
+            frule = |ctx, tensor, dt| {
                 tenferro_linalg::pinv_frule::<T, _>(ctx, tensor, dt, self.rcond)
                     .map_err(Error::from)
             },
-            rrule = |ctx, Backend, tensor, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, tensor, cotangent| {
                 tenferro_linalg::pinv_rrule::<T, _>(ctx, tensor, cotangent, self.rcond)
                     .map_err(Error::from)
             },
@@ -314,16 +293,13 @@ where
             op = "matrix_exp_ad",
             pullback = "matrix_exp_ad_pullback",
             input = self.tensor,
-            primal = |ctx, Backend, tensor| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, tensor| {
                 tenferro_linalg::matrix_exp::<T, _>(ctx, tensor).map_err(Error::from)
             },
-            frule = |ctx, Backend, tensor, dt| {
-                let _ = std::marker::PhantomData::<Backend>;
+            frule = |ctx, tensor, dt| {
                 tenferro_linalg::matrix_exp_frule::<T, _>(ctx, tensor, dt).map_err(Error::from)
             },
-            rrule = |ctx, Backend, tensor, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, tensor, cotangent| {
                 tenferro_linalg::matrix_exp_rrule::<T, _>(ctx, tensor, cotangent)
                     .map_err(Error::from)
             },
@@ -385,18 +361,15 @@ where
             pullback = "solve_triangular_ad_pullback",
             lhs = self.a,
             rhs = self.b,
-            primal = |ctx, Backend, a, b| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, a, b| {
                 tenferro_linalg::solve_triangular::<T, _>(ctx, a, b, self.upper)
                     .map_err(Error::from)
             },
-            frule = |ctx, Backend, a, b, da, db| {
-                let _ = std::marker::PhantomData::<Backend>;
+            frule = |ctx, a, b, da, db| {
                 tenferro_linalg::solve_triangular_frule::<T, _>(ctx, a, b, da, db, self.upper)
                     .map_err(Error::from)
             },
-            rrule = |ctx, Backend, a, b, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, a, b, cotangent| {
                 let grad = tenferro_linalg::solve_triangular_rrule::<T, _>(
                     ctx, a, b, cotangent, self.upper,
                 )
@@ -459,16 +432,13 @@ where
             op = "norm_ad",
             pullback = "norm_ad_pullback",
             input = self.tensor,
-            primal = |ctx, Backend, tensor| {
-                let _ = std::marker::PhantomData::<Backend>;
+            primal = |ctx, tensor| {
                 tenferro_linalg::norm::<T, _>(ctx, tensor, self.kind).map_err(Error::from)
             },
-            frule = |ctx, Backend, tensor, dt| {
-                let _ = std::marker::PhantomData::<Backend>;
+            frule = |ctx, tensor, dt| {
                 tenferro_linalg::norm_frule::<T, _>(ctx, tensor, dt, self.kind).map_err(Error::from)
             },
-            rrule = |ctx, Backend, tensor, cotangent| {
-                let _ = std::marker::PhantomData::<Backend>;
+            rrule = |ctx, tensor, cotangent| {
                 tenferro_linalg::norm_rrule::<T, _>(ctx, tensor, cotangent, self.kind)
                     .map_err(Error::from)
             },
