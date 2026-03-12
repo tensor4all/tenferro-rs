@@ -1,39 +1,9 @@
-use std::cell::RefCell;
-
 use tenferro_algebra::Standard;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
-use tenferro_prims::{CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore};
+use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringContextFor, TensorSemiringCore};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::LinalgScalar;
-
-thread_local! {
-    static PRIMS_CTX: RefCell<Option<CpuContext>> = const { RefCell::new(None) };
-}
-
-pub(crate) fn batched_gemm_via_prims<T>(
-    a: &[T],
-    m: usize,
-    k: usize,
-    b: &[T],
-    n: usize,
-) -> Result<Vec<T>>
-where
-    T: LinalgScalar,
-{
-    PRIMS_CTX.with(|ctx_cell| {
-        let mut ctx_slot = ctx_cell.borrow_mut();
-        if ctx_slot.is_none() {
-            *ctx_slot = Some(CpuContext::try_new(1)?);
-        }
-        let Some(ctx) = ctx_slot.as_mut() else {
-            return Err(Error::DeviceError(
-                "failed to initialize thread-local CpuContext".into(),
-            ));
-        };
-        batched_gemm_with_semiring_core::<T, CpuBackend>(ctx, a, m, k, b, n)
-    })
-}
 
 pub(crate) fn batched_gemm_with_semiring_core<T, Backend>(
     ctx: &mut <Backend as TensorSemiringCore<Standard<T>>>::Context,
@@ -84,6 +54,24 @@ where
     c_tensor
         .try_into_data_vec()
         .ok_or_else(|| Error::DeviceError("expected owned CPU output tensor".into()))
+}
+
+pub(crate) fn batched_gemm_with_semiring_context<T, C>(
+    ctx: &mut C,
+    a: &[T],
+    m: usize,
+    k: usize,
+    b: &[T],
+    n: usize,
+) -> Result<Vec<T>>
+where
+    T: LinalgScalar,
+    C: TensorSemiringContextFor<Standard<T>>,
+{
+    batched_gemm_with_semiring_core::<
+        T,
+        <C as TensorSemiringContextFor<Standard<T>>>::SemiringBackend,
+    >(ctx, a, m, k, b, n)
 }
 
 #[cfg(test)]

@@ -39,13 +39,14 @@ where
 
 /// Solve `A X = B` for complex square matrices.
 pub(crate) fn complex_solve_nn<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     a: &[Cx<T>],
     b: &[Cx<T>],
     n: usize,
 ) -> AdResult<Vec<Cx<T>>>
 where
     T: KernelLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
 {
     let nn = 2 * n;
     let mut a_real = vec![T::zero(); nn * nn];
@@ -65,8 +66,8 @@ where
         }
     }
 
-    let mut x_real = vec![T::zero(); nn * nn];
-    backend::cpu::solve_slices(&a_real, &b_real, nn, nn, &mut x_real).map_err(to_ad_err)?;
+    let x_real =
+        backend::slice_bridge::solve_vec(ctx, &a_real, &b_real, nn, nn).map_err(to_ad_err)?;
 
     let zero = Cx::new(T::zero(), T::zero());
     let mut result = vec![zero; n * n];

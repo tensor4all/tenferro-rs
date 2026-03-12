@@ -3,7 +3,7 @@ use tenferro_prims::{CpuBackend, CpuContext, TensorSemiringCore};
 
 use num_complex::{Complex32, Complex64};
 
-use super::{batched_gemm_via_prims, batched_gemm_with_semiring_core};
+use super::{batched_gemm_with_semiring_context, batched_gemm_with_semiring_core};
 
 struct SemiringCoreOnlyCpuBackend;
 
@@ -38,11 +38,12 @@ where
 }
 
 #[test]
-fn batched_gemm_via_prims_multiplies_real_col_major_matrices() {
+fn batched_gemm_with_semiring_context_multiplies_real_col_major_matrices() {
+    let mut ctx = CpuContext::new(1);
     let a = vec![1.0_f64, 2.0, 3.0, 4.0];
     let b = vec![5.0_f64, 6.0, 7.0, 8.0];
 
-    let c = batched_gemm_via_prims(&a, 2, 2, &b, 2).unwrap();
+    let c = batched_gemm_with_semiring_context(&mut ctx, &a, 2, 2, &b, 2).unwrap();
 
     assert_eq!(c, vec![23.0, 34.0, 31.0, 46.0]);
 }
@@ -62,7 +63,8 @@ fn generic_batched_gemm_bridge_accepts_semiring_core_only_backend() {
 }
 
 #[test]
-fn batched_gemm_via_prims_multiplies_complex_col_major_matrices() {
+fn batched_gemm_with_semiring_context_multiplies_complex_col_major_matrices() {
+    let mut ctx = CpuContext::new(1);
     let a = vec![
         Complex64::new(1.0, 0.0),
         Complex64::new(2.0, 0.0),
@@ -76,7 +78,7 @@ fn batched_gemm_via_prims_multiplies_complex_col_major_matrices() {
         Complex64::new(8.0, 0.0),
     ];
 
-    let c = batched_gemm_via_prims(&a, 2, 2, &b, 2).unwrap();
+    let c = batched_gemm_with_semiring_context(&mut ctx, &a, 2, 2, &b, 2).unwrap();
 
     assert_eq!(
         c,
@@ -90,7 +92,8 @@ fn batched_gemm_via_prims_multiplies_complex_col_major_matrices() {
 }
 
 #[test]
-fn batched_gemm_via_prims_multiplies_complex32_col_major_matrices() {
+fn batched_gemm_with_semiring_context_multiplies_complex32_col_major_matrices() {
+    let mut ctx = CpuContext::new(1);
     let a = vec![
         Complex32::new(1.0, 0.0),
         Complex32::new(2.0, 0.0),
@@ -104,7 +107,7 @@ fn batched_gemm_via_prims_multiplies_complex32_col_major_matrices() {
         Complex32::new(8.0, 0.0),
     ];
 
-    let c = batched_gemm_via_prims(&a, 2, 2, &b, 2).unwrap();
+    let c = batched_gemm_with_semiring_context(&mut ctx, &a, 2, 2, &b, 2).unwrap();
 
     assert_eq!(
         c,

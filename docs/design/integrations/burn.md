@@ -139,13 +139,13 @@ Key point: tenferro's internal `Tape` / `TrackedTensor` are **not used**. Only t
 
 ### Crate Structure
 
-A new bridge crate `tenferro-burn`:
+The bridge crate `tenferro-burn`:
 
 ```
 tenferro-burn/
 ├── Cargo.toml
 └── src/
-    ├── lib.rs          — TensorNetworkBackend trait, public API
+    ├── lib.rs          — TensorNetworkOps trait, public API, checked wrappers
     ├── convert.rs      — Burn tensor ↔ tenferro tensor conversion
     ├── forward.rs      — Forward implementations for concrete backends
     └── backward.rs     — Autodiff<B> implementations (Backward trait impls)
@@ -155,24 +155,24 @@ tenferro-burn/
 
 ```rust
 use burn::tensor::Tensor;
-use tenferro_burn::TensorNetworkBackend;
+use tenferro_burn::TensorNetworkOps;
 
 // User-facing function
-pub fn einsum<B: TensorNetworkBackend, const D: usize>(
+pub fn try_einsum<B: TensorNetworkOps, const D: usize>(
     subscripts: &str,
-    inputs: &[Tensor<B, D>],
-) -> Tensor<B, D>;
+    inputs: Vec<Tensor<B, D>>,
+) -> tenferro_burn::Result<Tensor<B, D>>;
 
 // Used inside a Burn Module
-struct HybridModel<B: TensorNetworkBackend> {
+struct HybridModel<B: TensorNetworkOps> {
     linear: burn::nn::Linear<B>,
     tn_core: Tensor<B, 3>,  // tensor network parameter, optimized by Burn
 }
 
-impl<B: TensorNetworkBackend> HybridModel<B> {
+impl<B: TensorNetworkOps> HybridModel<B> {
     fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
         let h = self.linear.forward(x);
-        tenferro_burn::einsum("ij,jkl,lm->im", &[h, self.tn_core.clone(), ...])
+        tenferro_burn::einsum("ij,jkl,lm->im", vec![h, self.tn_core.clone(), ...])
     }
 }
 ```
@@ -180,35 +180,26 @@ impl<B: TensorNetworkBackend> HybridModel<B> {
 ### Backend Extension Trait
 
 ```rust
-pub trait TensorNetworkBackend: burn::tensor::backend::Backend {
+pub trait TensorNetworkOps: burn::tensor::backend::Backend<FloatElem = f64> {
     /// N-ary einsum contraction.
-    fn einsum(
+    fn tn_einsum(
         subscripts: &str,
         inputs: Vec<FloatTensor<Self>>,
     ) -> FloatTensor<Self>;
-
-    /// Truncated SVD.
-    fn svd_truncated(
-        tensor: FloatTensor<Self>,
-        rank: usize,
-    ) -> (FloatTensor<Self>, FloatTensor<Self>, FloatTensor<Self>);
 }
-
-pub trait TensorNetworkAutodiffBackend:
-    TensorNetworkBackend + burn::tensor::backend::AutodiffBackend {}
 ```
 
 ### Backward Implementation Sketch
 
 ```rust
-impl<B: TensorNetworkBackend, C: CheckpointStrategy>
-    TensorNetworkBackend for Autodiff<B, C>
+impl<B: TensorNetworkOps, C: CheckpointStrategy>
+    TensorNetworkOps for Autodiff<B, C>
 {
-    fn einsum(subscripts: &str, inputs: Vec<FloatTensor<Self>>) -> FloatTensor<Self> {
+    fn tn_einsum(subscripts: &str, inputs: Vec<FloatTensor<Self>>) -> FloatTensor<Self> {
         #[derive(Debug)]
         struct EinsumBackward { subscripts: String }
 
-        impl<B: TensorNetworkBackend> Backward<B, /* N */> for EinsumBackward {
+        impl<B: TensorNetworkOps> Backward<B, /* N */> for EinsumBackward {
             type State = (String, Vec<NodeId> /* checkpointed inputs */);
 
             fn backward(self, ops: Ops<Self::State, _>, grads: &mut Gradients, checkpointer: &mut Checkpointer) {
@@ -252,6 +243,19 @@ tenferro has its own AD engine (`chainrules::Tape`), but using two separate AD t
 ### Why start with NdArray backend?
 
 NdArray is Burn's simplest CPU backend (pure Rust, no external dependencies). It's ideal for correctness testing. GPU backends (CubeCL) can be added later with the same trait pattern.
+
+### Why checked helpers plus panic wrappers?
+
+The bridge now keeps two layers on purpose:
+
+- checked helpers (`try_einsum`, `try_burn_to_tenferro`, `try_tenferro_to_burn`)
+  handle invalid subscripts, malformed nested einsum trees, and conversion
+  failures explicitly
+- convenience wrappers (`einsum`, `burn_to_tenferro`, `tenferro_to_burn`)
+  panic only at the outer ergonomic boundary
+
+This keeps library internals free of scattered `expect(...)` sites while
+preserving the small POC-facing API.
 
 ## Implementation Phases
 

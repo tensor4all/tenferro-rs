@@ -38,15 +38,16 @@ pub(crate) fn matrix_1_norm<T: LinalgScalar>(a: &[T], n: usize) -> T::Real {
 
 /// Multiply two n x n column-major matrices using the backend.
 pub(crate) fn backend_mat_mul_nn<T: KernelLinalgScalar, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     a: &[T],
     b: &[T],
     n: usize,
 ) -> Result<Vec<T>>
 where
     T: KernelLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
 {
-    prims_bridge::batched_gemm_via_prims(a, n, n, b, n)
+    prims_bridge::batched_gemm_with_semiring_context(ctx, a, n, n, b, n)
 }
 
 /// Compute `result = alpha * a + beta * b` element-wise for flat slices.
@@ -89,6 +90,7 @@ pub(crate) fn matrix_exp_single<T: KernelLinalgScalar, C>(
 ) -> Result<Vec<T>>
 where
     T: KernelLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
 {
     if n == 0 {
         return Ok(Vec::new());
@@ -164,8 +166,7 @@ where
     mat_linear_combine(neg_one, &u, T::one(), &v, &mut lhs);
     let rhs = mat_add(&u, &v);
 
-    let mut result = vec![T::zero(); nn];
-    backend::cpu::solve_slices(&lhs, &rhs, n, n, &mut result)?;
+    let mut result = backend::slice_bridge::solve_vec(ctx, &lhs, &rhs, n, n)?;
 
     for _ in 0..s {
         result = backend_mat_mul_nn(ctx, &result, &result, n)?;
@@ -182,6 +183,7 @@ pub(crate) fn matrix_power_single<T: KernelLinalgScalar, C>(
 ) -> Result<Vec<T>>
 where
     T: KernelLinalgScalar,
+    C: backend::TensorLinalgContextFor<T>,
 {
     if exponent == 1 {
         return Ok(a.to_vec());

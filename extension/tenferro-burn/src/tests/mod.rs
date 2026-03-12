@@ -1,3 +1,5 @@
+mod organization;
+
 use burn::backend::{Autodiff, NdArray};
 use burn::tensor::{Tensor, TensorPrimitive};
 use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};

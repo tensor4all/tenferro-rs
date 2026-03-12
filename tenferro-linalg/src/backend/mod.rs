@@ -56,6 +56,7 @@ pub(crate) mod faer_backend;
 
 // Tensor-level API and types
 pub(crate) mod cpu_tensor_impl;
+pub(crate) mod slice_bridge;
 pub mod tensor_api;
 pub mod tensor_context;
 pub(crate) mod tensor_helpers;

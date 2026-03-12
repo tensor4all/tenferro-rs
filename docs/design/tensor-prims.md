@@ -115,6 +115,8 @@ Current state by family:
 
 - `TensorSemiringCore` and `TensorSemiringFastPath` are the sole semiring
   execution contracts for CPU/CUDA/ROCm backends.
+- `TensorSemiringContextFor<Alg>` is the context-side bridge higher layers use
+  when they need semiring execution without naming a concrete backend type.
 - `TensorScalarPrims` has explicit CPU planning/execution for the phase-1
   unary, binary, and reduction inventory, with truthful `false` capability
   reporting for unwired CUDA/ROCm cases.

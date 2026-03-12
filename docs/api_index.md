@@ -203,16 +203,18 @@ Reuses `TfeTensorF64` handles from `tenferro-capi`.
 Bridge between the [Burn](https://burn.dev) deep learning framework and tenferro
 tensor network operations. Defines `TensorNetworkOps` backend extension trait
 with `tn_einsum`, implements forward pass for `NdArray<f64>` and backward pass
-for `Autodiff<B, C>`, and provides Burn tensor / tenferro tensor conversion
-utilities.
+for `Autodiff<B, C>`, and provides both checked (`try_einsum`,
+`try_burn_to_tenferro`, `try_tenferro_to_burn`) and convenience panic-wrapper
+conversion/einsum utilities.
 
 <a id="tenferro-mdarray"></a>
 ### [tenferro-mdarray](tenferro_mdarray/index.html) <small>(Extension)</small>
 
 Bridge between [mdarray](https://crates.io/crates/mdarray) multidimensional
-arrays and tenferro tensors. Provides `mdarray_to_tensor` and `tensor_to_mdarray`
-conversion functions for bidirectional data exchange between
-`Array<T, DynRank>` and `Tensor<T>`.
+arrays and tenferro tensors. Provides checked
+(`try_mdarray_to_tensor`, `try_tensor_to_mdarray`) and convenience
+(`mdarray_to_tensor`, `tensor_to_mdarray`) conversion functions for
+bidirectional data exchange between `Array<T, DynRank>` and `Tensor<T>`.
 
 <a id="tenferro-dyadtensor"></a>
 ### [tenferro-dyadtensor](tenferro_dyadtensor/index.html) <small>(Extension)</small>
