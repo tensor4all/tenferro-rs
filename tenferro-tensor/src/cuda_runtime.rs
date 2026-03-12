@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use cudarc::driver::{result as cuda_result, CudaContext};
+use tenferro_algebra::Scalar;
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 
-use super::*;
+use crate::{DataBuffer, Tensor};
 
 fn cuda_error(operation: &str, err: impl std::fmt::Debug) -> Error {
     Error::DeviceError(format!("{operation} failed: {err:?}"))
@@ -45,13 +47,8 @@ fn copy_host_buffer_to_gpu<T: Scalar>(
         let _ = unsafe { cuda_result::free_sync(device_ptr) };
     };
 
-    Ok(DataBuffer {
-        inner: Arc::new(BufferInner::Gpu {
-            device_ptr: device_ptr as *mut T,
-            len: host_data.len(),
-            space: target,
-            release: Some(Box::new(release)),
-        }),
+    Ok(unsafe {
+        DataBuffer::from_gpu_parts(device_ptr as *mut T, host_data.len(), target, release)
     })
 }
 
@@ -87,11 +84,10 @@ fn copy_gpu_buffer_to_host<T: Scalar>(
 }
 
 fn transferred_fw_grad<T: Scalar>(
-    source: &Option<Box<Tensor<T>>>,
+    source: Option<&Tensor<T>>,
     target: LogicalMemorySpace,
 ) -> Result<Option<Box<Tensor<T>>>> {
     source
-        .as_ref()
         .map(|fw_grad| fw_grad.to_memory_space_async(target).map(Box::new))
         .transpose()
 }
@@ -101,17 +97,17 @@ fn rebuild_tensor_in_space<T: Scalar>(
     buffer: DataBuffer<T>,
     target: LogicalMemorySpace,
 ) -> Result<Tensor<T>> {
-    Ok(Tensor {
+    Ok(Tensor::from_parts(
         buffer,
-        dims: source.dims.clone(),
-        strides: source.strides.clone(),
-        offset: source.offset,
-        logical_memory_space: target,
-        preferred_compute_device: source.preferred_compute_device,
-        event: None,
-        conjugated: source.conjugated,
-        fw_grad: transferred_fw_grad(&source.fw_grad, target)?,
-    })
+        Arc::from(source.dims()),
+        Arc::from(source.strides()),
+        source.offset(),
+        target,
+        source.preferred_compute_device(),
+        None,
+        source.is_conjugated(),
+        transferred_fw_grad(source.fw_grad(), target)?,
+    ))
 }
 
 pub(super) fn transfer_tensor<T: Scalar>(
@@ -121,14 +117,15 @@ pub(super) fn transfer_tensor<T: Scalar>(
     match (source.logical_memory_space, target) {
         (LogicalMemorySpace::MainMemory, LogicalMemorySpace::GpuMemory { .. }) => {
             let host_data = source
-                .buffer
+                .buffer()
                 .as_slice()
                 .ok_or_else(|| Error::DeviceError("CPU tensor is not host-accessible".into()))?;
             let buffer = copy_host_buffer_to_gpu(host_data, target)?;
             rebuild_tensor_in_space(source, buffer, target)
         }
         (LogicalMemorySpace::GpuMemory { .. }, LogicalMemorySpace::MainMemory) => {
-            let host_data = copy_gpu_buffer_to_host(&source.buffer, source.logical_memory_space)?;
+            let host_data =
+                copy_gpu_buffer_to_host(source.buffer(), source.logical_memory_space())?;
             rebuild_tensor_in_space(source, DataBuffer::from_vec(host_data), target)
         }
         (LogicalMemorySpace::GpuMemory { .. }, LogicalMemorySpace::GpuMemory { .. }) => Err(

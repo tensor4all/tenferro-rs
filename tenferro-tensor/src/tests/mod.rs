@@ -1,7 +1,11 @@
 use super::*;
+use tenferro_device::LogicalMemorySpace;
+
+mod buffer;
 
 #[cfg(feature = "cuda")]
 mod cuda;
+mod organization;
 
 #[test]
 fn tensor_debug_is_summary_style() {
