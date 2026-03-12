@@ -208,8 +208,8 @@ from the public tensor-level linalg boundary.
 - It mirrors PyTorch’s public behavior more closely: real input may still
   produce complex eigenpairs.
 
-The packed representation can still exist internally as a compatibility layer
-inside the CPU adapter while the public backend API remains canonical.
+The packed representation can still exist internally as a CPU-only private
+representation while the public backend API remains canonical.
 
 ## Context and Workspace
 

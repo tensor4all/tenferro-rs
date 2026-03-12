@@ -262,9 +262,9 @@ trace, permute, broadcast, anti-diag) through `TensorPrims::plan()` /
 repeated plan generation on repeated calls with the same shapes. No direct
 calls to strided-kernel from the einsum layer.
 
-**Next action**: N/A — decision is recorded. Update `tenferro-prims/src/cpu.rs`
-and `tenferro-einsum/src/lib.rs` to implement accordingly when moving out of
-POC phase. Cache key policy details are in
+**Next action**: N/A — decision is recorded. Update the current
+`tenferro-prims/src/cpu/` module tree and `tenferro-einsum` implementation to
+implement accordingly when moving out of POC phase. Cache key policy details are in
 [tensor-prims.md](./tensor-prims.md) under "PlanCache".
 
 **Success condition**: `single_tensor_einsum` is implemented entirely via
@@ -377,9 +377,9 @@ write-to-diagonal for anti_diag). No dependency on strided-einsum2 or on the
 [gpu-backend-design.md](./gpu-backend-design.md) under "AntiTrace / AntiDiag
 GPU Implementation".
 
-**Next action**: N/A — decision is recorded. Implement the loop bodies in
-`tenferro-prims/src/cpu.rs` under `CpuBackend::execute()` for the
-`PrimDescriptor::AntiTrace` and `PrimDescriptor::AntiDiag` arms.
+**Next action**: N/A — decision is recorded. Implement the loop bodies in the
+current CPU reduction modules (`tenferro-prims/src/cpu/reduction.rs`) for the
+anti-trace and anti-diag execution paths.
 
 **Success condition**: Unit tests for anti_trace and anti_diag pass on CPU;
 gradient correctness verified via finite-difference check for a `trace()`

@@ -1,3 +1,6 @@
+mod coverage;
+mod organization;
+
 #[test]
 fn phase1_scalar_rules_cover_exp_log_and_atan2() {
     let (exp_y, exp_dy) = crate::exp_frule(1.0_f64, 0.25_f64);

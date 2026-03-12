@@ -124,7 +124,7 @@ protocol family:
 - `TensorAnalyticPrims`
 
 These family traits are the current execution surface; there is no longer a
-legacy monolithic primitive trait.
+monolithic primitive trait surface.
 
 <a id="tenferro-algebra"></a>
 ### [tenferro-algebra](tenferro_algebra/index.html) <small>(Shared)</small>

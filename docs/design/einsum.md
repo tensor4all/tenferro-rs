@@ -33,9 +33,17 @@ impl Subscripts {
 }
 ```
 
-> **Status: Partially implemented.** The parser accepts parenthesized notation
-> (e.g. `"ij,(jk,kl)->il"`) but **silently discards the grouping**. The
-> optimizer picks contraction order regardless of parentheses. See #144.
+> **Status: Implemented.** Parenthesized notation
+> (e.g. `"ij,(jk,kl)->il"`) is preserved through `NestedEinsum` and executed in
+> the requested contraction order.
+
+The production module layout is also intentionally split:
+
+- `src/api/borrowed.rs` for allocating eager entrypoints
+- `src/api/owned.rs` for consuming variants
+- `src/api/into.rs` for accumulating `_into` variants
+- `src/ad/reverse_rule.rs`, `src/ad/tracked.rs`, and `src/ad/rules.rs` for AD
+  machinery
 
 ### ContractionTree
 

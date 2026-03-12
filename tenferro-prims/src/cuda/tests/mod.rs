@@ -1,3 +1,5 @@
+mod organization;
+
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_device::Result;

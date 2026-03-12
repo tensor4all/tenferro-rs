@@ -251,13 +251,18 @@ plan caching) and **tenferro-prims** (`TensorPrims` GPU impl):
 > strided-einsum2 (binary contraction pipeline) → **tenferro-prims**
 > strided-opteinsum + omeinsum-rs (N-ary engine) → **tenferro-einsum**
 
-### TensorPrims<A> Architecture
+### Historical TensorPrims<A> Architecture
 
-The design uses a **universal set** of primitive operations for
-`tenferro-prims` that synthesizes the best of both codebases.
-The converged design uses a single `TensorPrims<A>` trait parameterized
-by algebra `A`, with a cuTENSOR-compatible plan-based execution model
-(`PrimDescriptor → plan → execute`) and dynamic extension queries:
+This section preserves the original comparison terminology. In the current
+workspace, the single `TensorPrims<A>` surface has been replaced by the
+family-native contracts `TensorSemiringCore`, `TensorSemiringFastPath`,
+`TensorScalarPrims`, and `TensorAnalyticPrims`.
+
+Historically, the design used a **universal set** of primitive operations for
+`tenferro-prims` that synthesized the best of both codebases through a single
+`TensorPrims<A>` trait parameterized by algebra `A`, with a cuTENSOR-compatible
+plan-based execution model (`PrimDescriptor → plan → execute`) and dynamic
+extension queries:
 
 **Core ops (universal set, required for all backends)**:
 
