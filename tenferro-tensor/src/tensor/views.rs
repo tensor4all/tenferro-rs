@@ -262,7 +262,14 @@ impl<T: Scalar> Tensor<T> {
             )));
         }
 
-        let offset = self.offset + start as isize * self.strides[dim];
+        let offset = (start as isize)
+            .checked_mul(self.strides[dim])
+            .and_then(|delta| self.offset.checked_add(delta))
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "narrow offset overflow for start {start} in dimension {dim}"
+                ))
+            })?;
         let mut new_dims = self.dims.to_vec();
         new_dims[dim] = length;
         Ok(self.shared_view_with(Arc::from(new_dims), self.strides.clone(), offset))
