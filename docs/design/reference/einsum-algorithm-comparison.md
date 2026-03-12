@@ -5,6 +5,11 @@ This document compares the contraction and permutation algorithm optimizations i
 the "best of both" merge into **tenferro-prims** (binary contraction pipeline)
 and **tenferro-einsum** (N-ary engine, algebra dispatch).
 
+> Historical note: this comparison predates the family-trait cutover. Mentions
+> of `TensorPrims`, `PrimDescriptor`, and `Extension` in the body should be
+> read as historical terminology for the corresponding semiring/scalar/analytic
+> family contracts.
+
 ## 1. Binary Contraction Pipeline
 
 ### strided-rs (strided-einsum2)

@@ -750,7 +750,7 @@ implemented.
 | **Tensor type, storage, views** | `tenferro-tensor` | `Tensor<T>`, `DataBuffer<T>`, view ops |
 | **Device enum, errors** | `tenferro-device` | `Device`, `Error`/`Result` |
 | **Algebra dispatch** | `tenferro-algebra` | `HasAlgebra`, `Semiring` (compile-time, not runtime) |
-| **TensorPrims (GEMM, reduce, etc.)** | `tenferro-prims` | `TensorPrims<A>` trait (plan-based execution) |
+| **Execution prim families (GEMM, reduce, pointwise)** | `tenferro-prims` | `TensorSemiringCore/FastPath`, `TensorScalarPrims`, `TensorAnalyticPrims` |
 | **Einsum with contraction tree** | `tenferro-einsum` | `Subscripts`, `ContractionTree`, opt_einsum-style optimization |
 | **Linalg decompositions + AD** | `tenferro-linalg` | SVD/QR/LU/eigen with `(m, n, *)` col-major convention |
 | **AD core traits** | `chainrules-core` | `Differentiable`, `ReverseRule`, `ForwardRule` |
@@ -765,7 +765,7 @@ implemented.
 | **Memory layout** | Row-major (C-contiguous) default | Col-major (Fortran-contiguous) default |
 | **Batch convention** | `(*, m, n)` — last 2 dims | `(m, n, *)` — first 2 dims |
 | **Type dispatch** | Runtime (dynamic dtype/device) | Compile-time generics `Tensor<T>` |
-| **Algebra dispatch** | N/A (always standard arithmetic) | `TensorPrims<A>` parameterized by algebra |
+| **Algebra dispatch** | N/A (always standard arithmetic) | semiring-family traits parameterized by algebra |
 | **AD system** | Integrated (autograd built into Tensor) | Separated (chainrules-core + chainrules) |
 | **Backend dispatch** | Runtime dispatcher with dispatch keys | Trait-based static dispatch |
 

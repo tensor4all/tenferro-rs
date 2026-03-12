@@ -66,6 +66,7 @@ pub use tensor_api::{
     tfe_tensor_f64_ndim, tfe_tensor_f64_release, tfe_tensor_f64_shape, tfe_tensor_f64_zeros,
 };
 
+#[cfg(test)]
 pub(crate) use handle::{handle_to_ref, tensor_to_handle};
 
 #[cfg(test)]

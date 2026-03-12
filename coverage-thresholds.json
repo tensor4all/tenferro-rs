@@ -47,9 +47,18 @@
     "extension/tenferro-tropical-capi/src/lib.rs"
   ],
   "files": {
+    "extension/tenferro-tropical-capi/src/status.rs": 45,
+    "extension/tenferro-tropical/src/ad/backward.rs": 75,
+    "extension/tenferro-tropical/src/ad/tracked.rs": 75,
+    "extension/tenferro-tropical/src/prims_impls.rs": 73,
+    "extension/tenferro-tropical/src/prims_plan.rs": 78,
     "extension/tenferro-tropical/src/prims.rs": 79,
     "extern/chainrules-scalarops/src/lib.rs": 59,
+    "tenferro-capi/src/dlpack.rs": 60,
+    "tenferro-capi/src/handle.rs": 50,
     "tenferro-capi/src/lib.rs": 65,
+    "tenferro-capi/src/status.rs": 70,
+    "tenferro-capi/src/tensor_api.rs": 75,
     "tenferro-einsum/src/lib.rs": 65,
     "tenferro-linalg/src/lib.rs": 95,
     "tenferro-linalg/src/backend/faer_backend.rs": 97,

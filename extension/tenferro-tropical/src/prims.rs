@@ -1,4 +1,5 @@
-//! Semiring-family implementations for tropical algebras on [`CpuBackend`].
+//! Semiring-family implementations for tropical algebras on
+//! [`tenferro_prims::CpuBackend`].
 //!
 //! Each tropical algebra gets its own `impl TensorSemiringCore<XxxAlgebra> for CpuBackend`
 //! plus a `TensorSemiringFastPath` impl that reports no optional fast paths.

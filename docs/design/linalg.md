@@ -93,19 +93,19 @@ surfaces such as factorization contracts with pivots or `info` metadata.
 
 ## Current Implementation Status
 
-The crate already routes backend-facing structured execution through
-`tenferro-linalg-prims`. Some composite internals still use migration helpers
-that are backed by the legacy prim implementation, but the architectural
-boundary is now:
+The architectural boundary is now active rather than transitional:
 
-- `tenferro-linalg` for public/composite logic
-- `tenferro-prims` and `tenferro-linalg-prims` for execution
+- `tenferro-linalg` owns public/composite logic and AD formulas
+- `tenferro-prims` owns semiring/scalar/analytic execution
+- `tenferro-linalg-prims` owns backend-facing structured linalg kernels
 
-Current debt that should not be treated as the desired end state:
+Current debt is mainly about capability breadth and composite coverage:
 
-- some composite and structured paths still rely on `ensure_cpu_backend(...)`
-- some linalg composites still depend on CPU-local migration helpers
-- primal parity is broader than VJP/JVP/HVP parity for several newer families
+- some composite families still bottom out in CPU-only kernels because GPU
+  capability is not implemented yet
+- public primal parity is broader than VJP/JVP/HVP parity for several newer
+  families
+- some structured results are intentionally primal-only
 
 ## Non-Goals
 
