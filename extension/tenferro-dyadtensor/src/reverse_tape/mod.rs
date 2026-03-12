@@ -1,15 +1,3 @@
-use std::any::{Any, TypeId};
-use std::cell::RefCell;
-use std::collections::HashMap;
-
-use chainrules_core::Differentiable as _;
-use chainrules_scalarops::ScalarAd;
-use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Scalar;
-use tenferro_tensor::Tensor;
-
-use crate::{Error, NodeId, Result, TapeId};
-
 mod registry;
 mod scalar_pullback;
 mod tensor_pullback;

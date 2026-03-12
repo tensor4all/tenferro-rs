@@ -1,6 +1,8 @@
-use crate::context::{set_global_context, with_global_context, GlobalContextGuard};
-use crate::{Error, Result};
+use crate::context::{set_runtime_context, with_runtime_context};
+use crate::Result;
 use tenferro_prims::{CpuContext, CudaContext, RocmContext};
+
+pub use crate::context::DefaultRuntimeGuard;
 
 /// Runtime execution context used by builder `.run()` entry points.
 ///
@@ -8,7 +10,7 @@ use tenferro_prims::{CpuContext, CudaContext, RocmContext};
 ///
 /// - `Cpu`: supported by builder `.run()` paths.
 /// - `Cuda`/`Rocm`: accepted as context values, but current builder execution
-///   paths return [`Error::UnsupportedRuntimeOp`].
+///   paths return [`crate::Error::UnsupportedRuntimeOp`].
 ///
 /// # Examples
 ///
@@ -76,13 +78,14 @@ impl From<RocmContext> for RuntimeContext {
 ///
 /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 /// ```
-pub fn set_default_runtime(ctx: RuntimeContext) -> GlobalContextGuard<RuntimeContext> {
-    set_global_context(ctx)
+pub fn set_default_runtime(ctx: RuntimeContext) -> DefaultRuntimeGuard {
+    set_runtime_context(ctx)
 }
 
 /// Runs `f` with the default runtime context.
 ///
-/// Returns [`Error::RuntimeNotConfigured`] when runtime is not configured.
+/// Returns [`crate::Error::RuntimeNotConfigured`] when runtime is not
+/// configured.
 ///
 /// # Examples
 ///
@@ -95,10 +98,7 @@ pub fn set_default_runtime(ctx: RuntimeContext) -> GlobalContextGuard<RuntimeCon
 /// assert_eq!(name, "cpu");
 /// ```
 pub fn with_default_runtime<R>(f: impl FnOnce(&mut RuntimeContext) -> Result<R>) -> Result<R> {
-    with_global_context::<RuntimeContext, _>(f).map_err(|err| match err {
-        Error::MissingGlobalContext { .. } => Error::RuntimeNotConfigured,
-        other => other,
-    })
+    with_runtime_context(f)
 }
 
 #[cfg(test)]

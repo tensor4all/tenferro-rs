@@ -1,5 +1,12 @@
+use std::collections::HashMap;
+
+use chainrules_core::Differentiable as _;
+use tenferro_algebra::Scalar;
+use tenferro_tensor::Tensor;
+
+use crate::{Error, NodeId, Result, TapeId};
+
 use super::registry::{bridge_pullback, is_no_tensor_rules_error, with_tensor_rules};
-use super::*;
 
 fn accumulate_into<T: Scalar>(
     totals: &mut HashMap<NodeId, Tensor<T>>,

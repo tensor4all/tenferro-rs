@@ -1,3 +1,5 @@
+mod organization;
+
 use super::*;
 
 #[test]

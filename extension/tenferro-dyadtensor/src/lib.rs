@@ -14,10 +14,15 @@
 //! assert_eq!(x.dims(), &[2, 2]);
 //! assert!(x.is_diag());
 //! ```
+//!
+//! Builder `.run()` execution is configured through [`set_default_runtime`],
+//! while reverse-mode
+//! bookkeeping keeps one tape-local rule store per tape rather than a generic
+//! global context map.
 
 pub mod ad_value;
 pub mod api;
-pub mod context;
+mod context;
 pub mod dyn_types;
 pub mod error;
 pub mod policy;
@@ -38,13 +43,10 @@ pub use api::{
     std_ad, sum_ad, svd, svd_ad, tanh_ad, var_ad, AdEigResult, AdEigenResult, AdLstsqResult,
     AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
 };
-pub use context::{
-    set_global_context, try_with_global_context, with_global_context, GlobalContextGuard,
-};
 pub use dyn_types::{DynAdScalar, DynAdTensor, DynScalar, DynTensor, ScalarType};
 pub use error::{Error, Result};
 pub use policy::DiffPolicy;
-pub use runtime::{set_default_runtime, with_default_runtime, RuntimeContext};
+pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use structured::meta::{
     plan_axis_classes_for_subscripts, AxisClassMergePlan, AxisClassPlanError, OperandAxisClassPlan,
     OperandAxisClasses,

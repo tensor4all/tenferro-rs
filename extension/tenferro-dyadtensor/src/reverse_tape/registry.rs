@@ -1,5 +1,13 @@
-use super::*;
+use std::any::{Any, TypeId};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::hash::Hash;
+
+use chainrules_scalarops::ScalarAd;
+use tenferro_algebra::Scalar;
+use tenferro_tensor::Tensor;
+
+use crate::{Error, NodeId, Result, TapeId};
 
 pub(super) type PullbackRule<T> =
     Box<dyn Fn(&Tensor<T>) -> Result<Vec<(NodeId, Tensor<T>)>> + 'static>;
@@ -11,11 +19,11 @@ pub(super) type ScalarMixedRule<TOut, TIn> =
     Box<dyn Fn(&TOut) -> Result<Vec<(NodeId, TIn)>> + 'static>;
 pub(super) type ScalarPullbackRule<T> = Box<dyn Fn(&T) -> Result<Vec<(NodeId, T)>> + 'static>;
 
-pub(super) struct TapeRules<T: Scalar> {
-    pub(super) rules: HashMap<NodeId, PullbackRule<T>>,
+pub(super) struct NodeRuleStore<R> {
+    pub(super) rules: HashMap<NodeId, R>,
 }
 
-impl<T: Scalar> TapeRules<T> {
+impl<R> NodeRuleStore<R> {
     fn new() -> Self {
         Self {
             rules: HashMap::new(),
@@ -23,91 +31,200 @@ impl<T: Scalar> TapeRules<T> {
     }
 }
 
-struct TapeBridgeRules<TOut: Scalar, TIn: Scalar> {
-    rules: HashMap<NodeId, BridgeRule<TOut, TIn>>,
+pub(super) type TapeRules<T> = NodeRuleStore<PullbackRule<T>>;
+type TapeBridgeRules<TOut, TIn> = NodeRuleStore<BridgeRule<TOut, TIn>>;
+type TapeScalarBridgeRules<TOut, TIn> = NodeRuleStore<ScalarBridgeRule<TOut, TIn>>;
+type TapeScalarMixedRules<TOut, TIn> = NodeRuleStore<ScalarMixedRule<TOut, TIn>>;
+pub(super) type TapeScalarRules<T> = NodeRuleStore<ScalarPullbackRule<T>>;
+
+type UnaryTypeKey = TypeId;
+type BinaryTypeKey = (TypeId, TypeId);
+
+#[inline]
+fn unary_type_key<T: 'static>() -> UnaryTypeKey {
+    TypeId::of::<T>()
 }
 
-impl<TOut: Scalar, TIn: Scalar> TapeBridgeRules<TOut, TIn> {
+#[inline]
+fn binary_type_key<TOut: 'static, TIn: 'static>() -> BinaryTypeKey {
+    (TypeId::of::<TOut>(), TypeId::of::<TIn>())
+}
+
+struct TapeRuleStore {
+    tensor_rules: HashMap<UnaryTypeKey, Box<dyn Any>>,
+    bridge_rules: HashMap<BinaryTypeKey, Box<dyn Any>>,
+    scalar_bridge_rules: HashMap<BinaryTypeKey, Box<dyn Any>>,
+    scalar_mixed_rules: HashMap<BinaryTypeKey, Box<dyn Any>>,
+    scalar_rules: HashMap<UnaryTypeKey, Box<dyn Any>>,
+}
+
+impl TapeRuleStore {
     fn new() -> Self {
         Self {
-            rules: HashMap::new(),
+            tensor_rules: HashMap::new(),
+            bridge_rules: HashMap::new(),
+            scalar_bridge_rules: HashMap::new(),
+            scalar_mixed_rules: HashMap::new(),
+            scalar_rules: HashMap::new(),
         }
+    }
+
+    fn tensor_rules_mut<T: Scalar + 'static>(&mut self) -> &mut TapeRules<T> {
+        typed_bucket_mut(
+            &mut self.tensor_rules,
+            unary_type_key::<T>(),
+            TapeRules::<T>::new,
+        )
+    }
+
+    fn scalar_rules_mut<T: ScalarAd + 'static>(&mut self) -> &mut TapeScalarRules<T> {
+        typed_bucket_mut(
+            &mut self.scalar_rules,
+            unary_type_key::<T>(),
+            TapeScalarRules::<T>::new,
+        )
+    }
+
+    fn bridge_rules_mut<TOut: Scalar + 'static, TIn: Scalar + 'static>(
+        &mut self,
+    ) -> &mut TapeBridgeRules<TOut, TIn> {
+        typed_bucket_mut(
+            &mut self.bridge_rules,
+            binary_type_key::<TOut, TIn>(),
+            TapeBridgeRules::<TOut, TIn>::new,
+        )
+    }
+
+    fn scalar_bridge_rules_mut<TOut: Scalar + 'static, TIn: ScalarAd + 'static>(
+        &mut self,
+    ) -> &mut TapeScalarBridgeRules<TOut, TIn> {
+        typed_bucket_mut(
+            &mut self.scalar_bridge_rules,
+            binary_type_key::<TOut, TIn>(),
+            TapeScalarBridgeRules::<TOut, TIn>::new,
+        )
+    }
+
+    fn scalar_mixed_rules_mut<TOut: ScalarAd + 'static, TIn: ScalarAd + 'static>(
+        &mut self,
+    ) -> &mut TapeScalarMixedRules<TOut, TIn> {
+        typed_bucket_mut(
+            &mut self.scalar_mixed_rules,
+            binary_type_key::<TOut, TIn>(),
+            TapeScalarMixedRules::<TOut, TIn>::new,
+        )
+    }
+
+    fn tensor_rules<T: Scalar + 'static>(&self, tape: TapeId) -> Result<&TapeRules<T>> {
+        typed_bucket_ref(
+            &self.tensor_rules,
+            &unary_type_key::<T>(),
+            || Error::InvalidAdTensor {
+                message: format!("no reverse rules registered for tape {}", tape.0),
+            },
+            || Error::InvalidAdTensor {
+                message: "reverse tape registry type mismatch".to_string(),
+            },
+        )
+    }
+
+    fn scalar_rules<T: ScalarAd + 'static>(&self, tape: TapeId) -> Result<&TapeScalarRules<T>> {
+        typed_bucket_ref(
+            &self.scalar_rules,
+            &unary_type_key::<T>(),
+            || Error::InvalidAdScalar {
+                message: format!("no reverse scalar rules registered for tape {}", tape.0),
+            },
+            || Error::InvalidAdScalar {
+                message: "reverse scalar tape registry type mismatch".to_string(),
+            },
+        )
+    }
+
+    fn bridge_rules<TOut: Scalar + 'static, TIn: Scalar + 'static>(
+        &self,
+    ) -> Result<Option<&TapeBridgeRules<TOut, TIn>>> {
+        typed_bucket_opt_ref(&self.bridge_rules, &binary_type_key::<TOut, TIn>(), || {
+            Error::InvalidAdTensor {
+                message: "reverse tape bridge registry type mismatch".to_string(),
+            }
+        })
+    }
+
+    fn scalar_bridge_rules<TOut: Scalar + 'static, TIn: ScalarAd + 'static>(
+        &self,
+    ) -> Result<Option<&TapeScalarBridgeRules<TOut, TIn>>> {
+        typed_bucket_opt_ref(
+            &self.scalar_bridge_rules,
+            &binary_type_key::<TOut, TIn>(),
+            || Error::InvalidAdScalar {
+                message: "reverse scalar bridge registry type mismatch".to_string(),
+            },
+        )
+    }
+
+    fn scalar_mixed_rules<TOut: ScalarAd + 'static, TIn: ScalarAd + 'static>(
+        &self,
+    ) -> Result<Option<&TapeScalarMixedRules<TOut, TIn>>> {
+        typed_bucket_opt_ref(
+            &self.scalar_mixed_rules,
+            &binary_type_key::<TOut, TIn>(),
+            || Error::InvalidAdScalar {
+                message: "reverse scalar mixed registry type mismatch".to_string(),
+            },
+        )
     }
 }
 
-struct TapeScalarBridgeRules<TOut: Scalar, TIn: ScalarAd> {
-    rules: HashMap<NodeId, ScalarBridgeRule<TOut, TIn>>,
-}
-
-impl<TOut: Scalar, TIn: ScalarAd> TapeScalarBridgeRules<TOut, TIn> {
-    fn new() -> Self {
-        Self {
-            rules: HashMap::new(),
-        }
-    }
-}
-
-struct TapeScalarMixedRules<TOut: ScalarAd, TIn: ScalarAd> {
-    rules: HashMap<NodeId, ScalarMixedRule<TOut, TIn>>,
-}
-
-impl<TOut: ScalarAd, TIn: ScalarAd> TapeScalarMixedRules<TOut, TIn> {
-    fn new() -> Self {
-        Self {
-            rules: HashMap::new(),
-        }
-    }
-}
-
-pub(super) struct TapeScalarRules<T: ScalarAd> {
-    pub(super) rules: HashMap<NodeId, ScalarPullbackRule<T>>,
-}
-
-impl<T: ScalarAd> TapeScalarRules<T> {
-    fn new() -> Self {
-        Self {
-            rules: HashMap::new(),
-        }
-    }
-}
-
-type RuleRegistry = HashMap<(u64, TypeId), Box<dyn Any>>;
-type BridgeRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
-type ScalarBridgeRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
-type ScalarMixedRegistry = HashMap<(u64, TypeId, TypeId), Box<dyn Any>>;
-type ScalarRuleRegistry = HashMap<(u64, TypeId), Box<dyn Any>>;
-
-fn typed_registry_state_mut<S: 'static, K: Eq + Hash>(
-    registry: &mut HashMap<K, Box<dyn Any>>,
+fn typed_bucket_mut<S: 'static, K: Eq + Hash>(
+    bucket: &mut HashMap<K, Box<dyn Any>>,
     key: K,
     init: impl FnOnce() -> S,
 ) -> &mut S {
-    let entry = registry.entry(key).or_insert_with(|| Box::new(init()));
+    let entry = bucket.entry(key).or_insert_with(|| Box::new(init()));
     match entry.downcast_mut::<S>() {
         Some(state) => state,
         None => unreachable!("reverse tape registry invariant violated"),
     }
 }
 
-fn typed_registry_state_ref<'a, S: 'static, K: Eq + Hash>(
-    registry: &'a HashMap<K, Box<dyn Any>>,
+fn typed_bucket_ref<'a, S: 'static, K: Eq + Hash>(
+    bucket: &'a HashMap<K, Box<dyn Any>>,
     key: &K,
     missing: impl FnOnce() -> Error,
     mismatch: impl FnOnce() -> Error,
 ) -> Result<&'a S> {
-    let state_any = registry.get(key).ok_or_else(missing)?;
+    let state_any = bucket.get(key).ok_or_else(missing)?;
     state_any.downcast_ref::<S>().ok_or_else(mismatch)
 }
 
-fn typed_registry_state_opt_ref<'a, S: 'static, K: Eq + Hash>(
-    registry: &'a HashMap<K, Box<dyn Any>>,
+fn typed_bucket_opt_ref<'a, S: 'static, K: Eq + Hash>(
+    bucket: &'a HashMap<K, Box<dyn Any>>,
     key: &K,
     mismatch: impl FnOnce() -> Error,
 ) -> Result<Option<&'a S>> {
-    let Some(state_any) = registry.get(key) else {
+    let Some(state_any) = bucket.get(key) else {
         return Ok(None);
     };
     state_any.downcast_ref::<S>().ok_or_else(mismatch).map(Some)
+}
+
+fn with_tape_store_mut<R>(tape: TapeId, f: impl FnOnce(&mut TapeRuleStore) -> R) -> R {
+    TAPE_RULE_STORES.with(|stores| {
+        let mut stores = stores.borrow_mut();
+        let store = stores.entry(tape.0).or_insert_with(TapeRuleStore::new);
+        f(store)
+    })
+}
+
+fn with_tape_store_ref<R>(
+    tape: TapeId,
+    f: impl FnOnce(Option<&TapeRuleStore>) -> Result<R>,
+) -> Result<R> {
+    TAPE_RULE_STORES.with(|stores| {
+        let stores = stores.borrow();
+        f(stores.get(&tape.0))
+    })
 }
 
 pub(super) fn is_no_tensor_rules_error(err: &Error) -> bool {
@@ -129,11 +246,7 @@ pub(super) fn is_no_scalar_rules_error(err: &Error) -> bool {
 }
 
 thread_local! {
-    static REVERSE_RULE_REGISTRY: RefCell<RuleRegistry> = RefCell::new(HashMap::new());
-    static REVERSE_BRIDGE_REGISTRY: RefCell<BridgeRegistry> = RefCell::new(HashMap::new());
-    static REVERSE_SCALAR_BRIDGE_REGISTRY: RefCell<ScalarBridgeRegistry> = RefCell::new(HashMap::new());
-    static REVERSE_SCALAR_MIXED_REGISTRY: RefCell<ScalarMixedRegistry> = RefCell::new(HashMap::new());
-    static REVERSE_SCALAR_RULE_REGISTRY: RefCell<ScalarRuleRegistry> = RefCell::new(HashMap::new());
+    static TAPE_RULE_STORES: RefCell<HashMap<u64, TapeRuleStore>> = RefCell::new(HashMap::new());
 }
 
 pub(crate) fn register_rule<T: Scalar + 'static>(
@@ -141,11 +254,8 @@ pub(crate) fn register_rule<T: Scalar + 'static>(
     node: NodeId,
     rule: PullbackRule<T>,
 ) {
-    REVERSE_RULE_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let key = (tape.0, TypeId::of::<T>());
-        let typed = typed_registry_state_mut(&mut registry, key, TapeRules::<T>::new);
-        typed.rules.insert(node, rule);
+    with_tape_store_mut(tape, |store| {
+        store.tensor_rules_mut::<T>().rules.insert(node, rule);
     })
 }
 
@@ -154,11 +264,11 @@ pub(crate) fn register_bridge_rule<TOut: Scalar + 'static, TIn: Scalar + 'static
     node: NodeId,
     rule: BridgeRule<TOut, TIn>,
 ) {
-    REVERSE_BRIDGE_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
-        let typed = typed_registry_state_mut(&mut registry, key, TapeBridgeRules::<TOut, TIn>::new);
-        typed.rules.insert(node, rule);
+    with_tape_store_mut(tape, |store| {
+        store
+            .bridge_rules_mut::<TOut, TIn>()
+            .rules
+            .insert(node, rule);
     })
 }
 
@@ -167,12 +277,11 @@ pub(crate) fn register_scalar_bridge_rule<TOut: Scalar + 'static, TIn: ScalarAd 
     node: NodeId,
     rule: ScalarBridgeRule<TOut, TIn>,
 ) {
-    REVERSE_SCALAR_BRIDGE_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
-        let typed =
-            typed_registry_state_mut(&mut registry, key, TapeScalarBridgeRules::<TOut, TIn>::new);
-        typed.rules.insert(node, rule);
+    with_tape_store_mut(tape, |store| {
+        store
+            .scalar_bridge_rules_mut::<TOut, TIn>()
+            .rules
+            .insert(node, rule);
     })
 }
 
@@ -181,12 +290,11 @@ pub(crate) fn register_scalar_mixed_rule<TOut: ScalarAd + 'static, TIn: ScalarAd
     node: NodeId,
     rule: ScalarMixedRule<TOut, TIn>,
 ) {
-    REVERSE_SCALAR_MIXED_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
-        let typed =
-            typed_registry_state_mut(&mut registry, key, TapeScalarMixedRules::<TOut, TIn>::new);
-        typed.rules.insert(node, rule);
+    with_tape_store_mut(tape, |store| {
+        store
+            .scalar_mixed_rules_mut::<TOut, TIn>()
+            .rules
+            .insert(node, rule);
     })
 }
 
@@ -195,11 +303,8 @@ pub(crate) fn register_scalar_rule<T: ScalarAd + 'static>(
     node: NodeId,
     rule: ScalarPullbackRule<T>,
 ) {
-    REVERSE_SCALAR_RULE_REGISTRY.with(|registry| {
-        let mut registry = registry.borrow_mut();
-        let key = (tape.0, TypeId::of::<T>());
-        let typed = typed_registry_state_mut(&mut registry, key, TapeScalarRules::<T>::new);
-        typed.rules.insert(node, rule);
+    with_tape_store_mut(tape, |store| {
+        store.scalar_rules_mut::<T>().rules.insert(node, rule);
     })
 }
 
@@ -208,16 +313,11 @@ pub(super) fn bridge_pullback<TOut: Scalar + 'static, TIn: Scalar + 'static>(
     output_node: NodeId,
     cotangent: &Tensor<TOut>,
 ) -> Result<Vec<(NodeId, Tensor<TIn>)>> {
-    REVERSE_BRIDGE_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
-        let Some(state) =
-            typed_registry_state_opt_ref::<TapeBridgeRules<TOut, TIn>, _>(&registry, &key, || {
-                Error::InvalidAdTensor {
-                    message: "reverse tape bridge registry type mismatch".to_string(),
-                }
-            })?
-        else {
+    with_tape_store_ref(tape, |store| {
+        let Some(store) = store else {
+            return Ok(Vec::new());
+        };
+        let Some(state) = store.bridge_rules::<TOut, TIn>()? else {
             return Ok(Vec::new());
         };
         let Some(rule) = state.rules.get(&output_node) else {
@@ -232,17 +332,11 @@ pub(super) fn bridge_pullback_scalar<TOut: Scalar + 'static, TIn: ScalarAd + 'st
     output_node: NodeId,
     cotangent: &Tensor<TOut>,
 ) -> Result<Vec<(NodeId, TIn)>> {
-    REVERSE_SCALAR_BRIDGE_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
-        let Some(state) = typed_registry_state_opt_ref::<TapeScalarBridgeRules<TOut, TIn>, _>(
-            &registry,
-            &key,
-            || Error::InvalidAdScalar {
-                message: "reverse scalar bridge registry type mismatch".to_string(),
-            },
-        )?
-        else {
+    with_tape_store_ref(tape, |store| {
+        let Some(store) = store else {
+            return Ok(Vec::new());
+        };
+        let Some(state) = store.scalar_bridge_rules::<TOut, TIn>()? else {
             return Ok(Vec::new());
         };
         let Some(rule) = state.rules.get(&output_node) else {
@@ -257,17 +351,11 @@ pub(super) fn bridge_pullback_scalar_mixed<TOut: ScalarAd + 'static, TIn: Scalar
     output_node: NodeId,
     cotangent: &TOut,
 ) -> Result<Vec<(NodeId, TIn)>> {
-    REVERSE_SCALAR_MIXED_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        let key = (tape.0, TypeId::of::<TOut>(), TypeId::of::<TIn>());
-        let Some(state) = typed_registry_state_opt_ref::<TapeScalarMixedRules<TOut, TIn>, _>(
-            &registry,
-            &key,
-            || Error::InvalidAdScalar {
-                message: "reverse scalar mixed registry type mismatch".to_string(),
-            },
-        )?
-        else {
+    with_tape_store_ref(tape, |store| {
+        let Some(store) = store else {
+            return Ok(Vec::new());
+        };
+        let Some(state) = store.scalar_mixed_rules::<TOut, TIn>()? else {
             return Ok(Vec::new());
         };
         let Some(rule) = state.rules.get(&output_node) else {
@@ -281,20 +369,11 @@ pub(super) fn with_tensor_rules<T: Scalar + 'static, R>(
     tape: TapeId,
     f: impl FnOnce(&TapeRules<T>) -> Result<R>,
 ) -> Result<R> {
-    REVERSE_RULE_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        let key = (tape.0, TypeId::of::<T>());
-        let state = typed_registry_state_ref::<TapeRules<T>, _>(
-            &registry,
-            &key,
-            || Error::InvalidAdTensor {
-                message: format!("no reverse rules registered for tape {}", tape.0),
-            },
-            || Error::InvalidAdTensor {
-                message: "reverse tape registry type mismatch".to_string(),
-            },
-        )?;
-        f(state)
+    with_tape_store_ref(tape, |store| {
+        let store = store.ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("no reverse rules registered for tape {}", tape.0),
+        })?;
+        f(store.tensor_rules::<T>(tape)?)
     })
 }
 
@@ -302,19 +381,10 @@ pub(super) fn with_scalar_rules<T: ScalarAd + 'static, R>(
     tape: TapeId,
     f: impl FnOnce(&TapeScalarRules<T>) -> Result<R>,
 ) -> Result<R> {
-    REVERSE_SCALAR_RULE_REGISTRY.with(|registry| {
-        let registry = registry.borrow();
-        let key = (tape.0, TypeId::of::<T>());
-        let state = typed_registry_state_ref::<TapeScalarRules<T>, _>(
-            &registry,
-            &key,
-            || Error::InvalidAdScalar {
-                message: format!("no reverse scalar rules registered for tape {}", tape.0),
-            },
-            || Error::InvalidAdScalar {
-                message: "reverse scalar tape registry type mismatch".to_string(),
-            },
-        )?;
-        f(state)
+    with_tape_store_ref(tape, |store| {
+        let store = store.ok_or_else(|| Error::InvalidAdScalar {
+            message: format!("no reverse scalar rules registered for tape {}", tape.0),
+        })?;
+        f(store.scalar_rules::<T>(tape)?)
     })
 }
