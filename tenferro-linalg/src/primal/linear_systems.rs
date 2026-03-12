@@ -15,7 +15,7 @@ where
 
 /// Solve a square linear system with numerical status information.
 pub fn solve_ex<T: KernelLinalgScalar, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<SolveExResult<T>>
@@ -48,9 +48,12 @@ where
         let a_slice = &a_data[a_start..a_start + mat_size];
         let b_slice = &b_data[b_start..b_start + rhs_size];
         let x_out = &mut solution[batch * rhs_size..(batch + 1) * rhs_size];
-        if backend::cpu::solve_slices(a_slice, b_slice, n, rhs.nrhs, x_out).is_err() {
-            x_out.fill(T::zero());
-            info[batch] = 1;
+        match backend::slice_bridge::solve_vec(ctx, a_slice, b_slice, n, rhs.nrhs) {
+            Ok(solution_b) => x_out.copy_from_slice(&solution_b),
+            Err(_) => {
+                x_out.fill(T::zero());
+                info[batch] = 1;
+            }
         }
     }
 
@@ -61,7 +64,7 @@ where
 }
 
 /// Compute the inverse of a square matrix.
-pub fn inv<T: KernelLinalgScalar, C>(_ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
+pub fn inv<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
@@ -87,7 +90,8 @@ where
         let start = offset + b * mat_size;
         let a_b = &data[start..start + mat_size];
         let x_out = &mut inv_data[b * mat_size..(b + 1) * mat_size];
-        backend::cpu::solve_slices(a_b, &eye_mat, n, n, x_out)?;
+        let inverse_b = backend::slice_bridge::solve_vec(ctx, a_b, &eye_mat, n, n)?;
+        x_out.copy_from_slice(&inverse_b);
     }
 
     let dims = output_dims(&[n, n], batch_dims);
@@ -118,7 +122,7 @@ where
 
 /// Compute the determinant of a square matrix.
 pub fn det<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
@@ -139,12 +143,19 @@ where
     let mut perm = vec![0usize; n];
     let mut l_buf = vec![T::zero(); n * n];
     let mut u_buf = vec![T::zero(); n * n];
+    let mut visited = vec![false; n];
 
     for (b, det_slot) in det_data.iter_mut().enumerate().take(bc) {
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        backend::cpu::lu_slices(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        let (pivot_vec, l_result, u_result) =
+            backend::slice_bridge::lu_factor_vec(ctx, batch_data, n, n)?;
+        perm.iter_mut()
+            .zip(pivot_vec.iter())
+            .for_each(|(dst, &pivot)| *dst = pivot as usize);
+        l_buf.copy_from_slice(&l_result);
+        u_buf.copy_from_slice(&u_result);
 
         let mut d = T::one();
         for i in 0..n {
@@ -152,7 +163,7 @@ where
         }
 
         let mut sign = 1i32;
-        let mut visited = vec![false; n];
+        visited.fill(false);
         for i in 0..n {
             if !visited[i] {
                 visited[i] = true;
@@ -186,7 +197,7 @@ where
 
 /// Compute sign and log-absolute-determinant of a square matrix.
 pub fn slogdet<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<SlogdetResult<T>>
 where
@@ -208,12 +219,19 @@ where
     let mut perm = vec![0usize; n];
     let mut l_buf = vec![T::zero(); n * n];
     let mut u_buf = vec![T::zero(); n * n];
+    let mut visited = vec![false; n];
 
     for b in 0..bc {
         let start = offset + b * mat_size;
         let batch_data = &data[start..start + mat_size];
 
-        backend::cpu::lu_slices(batch_data, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+        let (pivot_vec, l_result, u_result) =
+            backend::slice_bridge::lu_factor_vec(ctx, batch_data, n, n)?;
+        perm.iter_mut()
+            .zip(pivot_vec.iter())
+            .for_each(|(dst, &pivot)| *dst = pivot as usize);
+        l_buf.copy_from_slice(&l_result);
+        u_buf.copy_from_slice(&u_result);
 
         let mut log_abs = T::zero();
         let mut sign = T::one();
@@ -226,7 +244,7 @@ where
         }
 
         let mut perm_sign = 1i32;
-        let mut visited = vec![false; n];
+        visited.fill(false);
         for i in 0..n {
             if !visited[i] {
                 visited[i] = true;

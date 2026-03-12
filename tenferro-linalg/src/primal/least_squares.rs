@@ -54,7 +54,8 @@ where
             qtb[i] = sum;
         }
 
-        backend::cpu::solve_triangular_slices(r_b, &qtb, k, 1, true, &mut x_buf)?;
+        let x_solution = backend::slice_bridge::solve_triangular_vec(ctx, r_b, &qtb, k, 1, true)?;
+        x_buf.copy_from_slice(&x_solution);
         x_data[batch * n..(batch + 1) * n].copy_from_slice(&x_buf);
 
         let a_contiguous = a.contiguous(MemoryOrder::ColumnMajor);
@@ -90,7 +91,7 @@ where
 
 /// Compute the Cholesky decomposition with numerical status information.
 pub fn cholesky_ex<T: KernelLinalgScalar, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<CholeskyExResult<T>>
 where
@@ -114,9 +115,12 @@ where
         let start = offset + batch * mat_size;
         let a_slice = &data[start..start + mat_size];
         let l_out = &mut factors[batch * mat_size..(batch + 1) * mat_size];
-        if backend::cpu::cholesky_slices(a_slice, n, l_out).is_err() {
-            l_out.fill(T::zero());
-            info[batch] = 1;
+        match backend::slice_bridge::cholesky_vec(ctx, a_slice, n) {
+            Ok(factor_b) => l_out.copy_from_slice(&factor_b),
+            Err(_) => {
+                l_out.fill(T::zero());
+                info[batch] = 1;
+            }
         }
     }
 

@@ -181,6 +181,7 @@ mod plan_cache;
 mod registry;
 mod scalar_cpu;
 mod scalar_prims;
+mod semiring_context;
 mod semiring_core;
 mod semiring_fast_path;
 mod typed_dispatch;
@@ -202,6 +203,7 @@ pub use plan_cache::*;
 #[doc(hidden)]
 pub use scalar_cpu::CpuScalarPlan;
 pub use scalar_prims::*;
+pub use semiring_context::*;
 pub use semiring_core::*;
 pub use semiring_fast_path::*;
 

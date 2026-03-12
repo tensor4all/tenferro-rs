@@ -184,6 +184,33 @@ The exported C surface currently focuses on a narrow, stable subset:
 - SVD entrypoints
 - AD rule entrypoints for the supported FFI tensor/value wrappers
 
+## `tenferro-burn`
+
+### Burn bridge surface
+
+- Checked helpers: `try_einsum`, `try_burn_to_tenferro`, `try_tenferro_to_burn`
+- Convenience wrappers: `einsum`, `burn_to_tenferro`, `tenferro_to_burn`
+- Backend extension trait: `TensorNetworkOps`
+
+### Runtime status
+
+- Current execution lowers through CPU tenferro tensors after checked conversion.
+- `NdArray<f64>` forward execution and `Autodiff<B, C>` backward execution are implemented.
+- Invalid subscripts, malformed nested einsum trees, and conversion failures now flow through checked helpers before any public panic-wrapper boundary.
+
+## `tenferro-mdarray`
+
+### mdarray bridge surface
+
+- Checked helpers: `try_mdarray_to_tensor`, `try_tensor_to_mdarray`
+- Convenience wrappers: `mdarray_to_tensor`, `tensor_to_mdarray`
+
+### Runtime status
+
+- Both conversion directions are eager copy paths.
+- Zero-copy interoperability is intentionally unsupported.
+- Conversion helpers are CPU-buffer oriented and reject non-owned/non-CPU materialization through checked errors.
+
 ## `chainrules-scalarops`
 
 This external crate provides the scalar formula basis reused by

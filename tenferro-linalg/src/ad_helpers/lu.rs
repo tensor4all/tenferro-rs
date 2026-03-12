@@ -78,7 +78,7 @@ pub(crate) fn pack_lu_factors<T: LinalgScalar>(
 }
 
 pub(crate) fn lu_solve_impl<T: KernelLinalgScalar, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     factors: &Tensor<T>,
     pivots: &[usize],
     b: &Tensor<T>,
@@ -122,15 +122,18 @@ where
 
         unpack_packed_lu_square(factor_slice, n, &mut lower, &mut upper);
         apply_lu_permutation(pivot_slice, rhs_slice, n, rhs.nrhs, &mut permuted_rhs)?;
-        backend::cpu::solve_triangular_slices(&lower, &permuted_rhs, n, rhs.nrhs, false, &mut tmp)?;
-        backend::cpu::solve_triangular_slices(
-            &upper,
-            &tmp,
+        let tmp_solution = backend::slice_bridge::solve_triangular_vec(
+            ctx,
+            &lower,
+            &permuted_rhs,
             n,
             rhs.nrhs,
-            true,
-            &mut out[batch * rhs_size..(batch + 1) * rhs_size],
+            false,
         )?;
+        tmp.copy_from_slice(&tmp_solution);
+        let out_solution =
+            backend::slice_bridge::solve_triangular_vec(ctx, &upper, &tmp, n, rhs.nrhs, true)?;
+        out[batch * rhs_size..(batch + 1) * rhs_size].copy_from_slice(&out_solution);
     }
 
     tensor_from_data(out, &rhs.output_dims)

@@ -2,7 +2,13 @@
 //!
 //! [`TensorLinalgContextFor<T>`] binds a context type to its backend,
 //! enabling generic `solve(&mut ctx, ...)` calls while preserving the
-//! backend-marker pattern from [`TensorLinalgBackend`].
+//! backend-marker pattern from [`TensorLinalgBackend`]. The trait also
+//! inherits the semiring-side context bridge used by matrix helper paths,
+//! so high-level linalg code can stay generic without spelling concrete
+//! backend names.
+
+use tenferro_algebra::Standard;
+use tenferro_prims::TensorSemiringContextFor;
 
 use super::tensor_api::TensorLinalgBackend;
 use crate::KernelLinalgScalar;
@@ -31,7 +37,9 @@ use crate::KernelLinalgScalar;
 ///     // dispatch through the backend
 /// }
 /// ```
-pub trait TensorLinalgContextFor<T: KernelLinalgScalar> {
+pub trait TensorLinalgContextFor<T: KernelLinalgScalar>:
+    TensorSemiringContextFor<Standard<T>>
+{
     /// The backend type that this context is associated with.
     type Backend: TensorLinalgBackend<T, Context = Self>;
 }

@@ -10,6 +10,8 @@ use burn::tensor::ops::FloatTensor;
 use burn::tensor::{Tensor as BurnTensor, TensorData, TensorPrimitive};
 use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
 
+use crate::{panic_on_error, Error, Result};
+
 fn row_major_strides(dims: &[usize]) -> Vec<isize> {
     let ndim = dims.len();
     if ndim == 0 {
@@ -24,7 +26,8 @@ fn row_major_strides(dims: &[usize]) -> Vec<isize> {
     strides
 }
 
-/// Convert a Burn backend tensor primitive into a tenferro `Tensor<f64>`.
+/// Fallibly convert a Burn backend tensor primitive into a tenferro
+/// `Tensor<f64>`.
 ///
 /// # Current Limitations
 ///
@@ -36,21 +39,42 @@ fn row_major_strides(dims: &[usize]) -> Vec<isize> {
 ///
 /// ```ignore
 /// use burn::backend::NdArray;
+/// use tenferro_burn::convert::try_burn_to_tenferro;
+///
+/// let burn_prim: <NdArray<f64> as burn::tensor::backend::Backend>::FloatTensorPrimitive =
+///     todo!();
+/// let tenferro_t = try_burn_to_tenferro::<NdArray<f64>>(burn_prim).unwrap();
+/// ```
+pub fn try_burn_to_tenferro<B: Backend<FloatElem = f64>>(
+    tensor: FloatTensor<B>,
+) -> Result<TfTensor<f64>> {
+    let data = BurnTensor::<B, 1>::from_primitive(TensorPrimitive::Float(tensor)).into_data();
+    let dims = data.shape.clone();
+    let values = data.into_vec::<f64>().map_err(|_| {
+        Error::InvalidArgument("burn_to_tenferro only supports f64 float tensors".into())
+    })?;
+
+    TfTensor::from_vec(values, &dims, &row_major_strides(&dims), 0).map_err(|err| {
+        Error::InvalidArgument(format!("Burn TensorData must be dense row-major: {err}"))
+    })
+}
+
+/// Convert a Burn backend tensor primitive into a tenferro `Tensor<f64>`,
+/// panicking if conversion fails.
+///
+/// # Examples
+///
+/// ```ignore
+/// use burn::backend::NdArray;
 /// use tenferro_burn::convert::burn_to_tenferro;
 ///
 /// let burn_prim: <NdArray<f64> as burn::tensor::backend::Backend>::FloatTensorPrimitive =
 ///     todo!();
-/// let tenferro_t: tenferro_tensor::Tensor<f64> = burn_to_tenferro::<NdArray<f64>>(burn_prim);
+/// let tenferro_t = burn_to_tenferro::<NdArray<f64>>(burn_prim);
+/// assert_eq!(tenferro_t.dims().len(), 1);
 /// ```
 pub fn burn_to_tenferro<B: Backend<FloatElem = f64>>(tensor: FloatTensor<B>) -> TfTensor<f64> {
-    let data = BurnTensor::<B, 1>::from_primitive(TensorPrimitive::Float(tensor)).into_data();
-    let dims = data.shape.clone();
-    let values = data
-        .into_vec::<f64>()
-        .expect("burn_to_tenferro only supports f64 float tensors");
-
-    TfTensor::from_vec(values, &dims, &row_major_strides(&dims), 0)
-        .expect("Burn TensorData always provides a dense row-major layout")
+    panic_on_error(try_burn_to_tenferro::<B>(tensor))
 }
 
 /// Convert a tenferro `Tensor<f64>` into a Burn backend tensor primitive.
@@ -70,21 +94,43 @@ pub fn burn_to_tenferro<B: Backend<FloatElem = f64>>(tensor: FloatTensor<B>) -> 
 /// ```ignore
 /// use burn::backend::NdArray;
 /// use burn::backend::ndarray::NdArrayDevice;
-/// use tenferro_burn::convert::tenferro_to_burn;
+/// use tenferro_burn::convert::try_tenferro_to_burn;
 ///
 /// let tenferro_t: tenferro_tensor::Tensor<f64> = todo!();
 /// let device = NdArrayDevice::Cpu;
-/// let burn_prim = tenferro_to_burn::<NdArray<f64>>(tenferro_t, &device);
+/// let burn_prim = try_tenferro_to_burn::<NdArray<f64>>(tenferro_t, &device).unwrap();
+/// ```
+pub fn try_tenferro_to_burn<B: Backend<FloatElem = f64>>(
+    tensor: TfTensor<f64>,
+    device: &B::Device,
+) -> Result<FloatTensor<B>> {
+    let row_major = tensor.into_contiguous(MemoryOrder::RowMajor);
+    let dims = row_major.dims().to_vec();
+    let data = row_major
+        .try_into_data_vec()
+        .ok_or(Error::InternalInvariant(
+            "into_contiguous must return a uniquely-owned CPU buffer",
+        ))?;
+
+    Ok(B::float_from_data(TensorData::new(data, dims), device))
+}
+
+/// Convert a tenferro `Tensor<f64>` into a Burn backend tensor primitive,
+/// panicking if conversion fails.
+///
+/// # Examples
+///
+/// ```ignore
+/// use burn::backend::NdArray;
+/// use tenferro_burn::convert::tenferro_to_burn;
+///
+/// let device = Default::default();
+/// let tenferro_t: tenferro_tensor::Tensor<f64> = todo!();
+/// let _burn_prim = tenferro_to_burn::<NdArray<f64>>(tenferro_t, &device);
 /// ```
 pub fn tenferro_to_burn<B: Backend<FloatElem = f64>>(
     tensor: TfTensor<f64>,
     device: &B::Device,
 ) -> FloatTensor<B> {
-    let row_major = tensor.into_contiguous(MemoryOrder::RowMajor);
-    let dims = row_major.dims().to_vec();
-    let data = row_major
-        .try_into_data_vec()
-        .expect("into_contiguous returns a uniquely-owned CPU buffer");
-
-    B::float_from_data(TensorData::new(data, dims), device)
+    panic_on_error(try_tenferro_to_burn::<B>(tensor, device))
 }

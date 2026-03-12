@@ -168,6 +168,18 @@ pub(crate) fn with_linalg_runtime<T: LinalgRuntimeValue, R>(
     )
 }
 
+macro_rules! runtime_slot_closure {
+    ($slot:ty, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
+        |$ctx| {
+            type $backend = <$slot as crate::api::RuntimeSlot>::SemiringBackend;
+            let $runtime = <$slot as crate::api::RuntimeSlot>::NAME;
+            $body
+        }
+    }};
+}
+
+pub(crate) use runtime_slot_closure;
+
 macro_rules! dispatch_einsum_runtime {
     ($ty:ty, $op:expr, |$ctx:ident, $backend:ident| $body:expr) => {{
         dispatch_einsum_runtime!($ty, $op, |$ctx, $backend, _runtime| $body)
@@ -175,24 +187,18 @@ macro_rules! dispatch_einsum_runtime {
     ($ty:ty, $op:expr, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
         crate::api::with_einsum_runtime::<$ty, _>(
             $op,
-            |$ctx| {
-                type $backend =
-                    <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
-                let $runtime = <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::NAME;
-                $body
-            },
-            |$ctx| {
-                type $backend =
-                    <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
-                let $runtime = <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::NAME;
-                $body
-            },
-            |$ctx| {
-                type $backend =
-                    <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
-                let $runtime = <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::NAME;
-                $body
-            },
+            crate::api::runtime_slot_closure!(
+                crate::api::CpuRuntimeSlot,
+                |$ctx, $backend, $runtime| $body
+            ),
+            crate::api::runtime_slot_closure!(
+                crate::api::CudaRuntimeSlot,
+                |$ctx, $backend, $runtime| $body
+            ),
+            crate::api::runtime_slot_closure!(
+                crate::api::RocmRuntimeSlot,
+                |$ctx, $backend, $runtime| $body
+            ),
         )
     }};
 }
@@ -202,24 +208,18 @@ pub(crate) use dispatch_einsum_runtime;
 macro_rules! dispatch_standard_runtime {
     ($op:expr, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
         crate::api::with_runtime(
-            |$ctx| {
-                type $backend =
-                    <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
-                let $runtime = <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::NAME;
-                $body
-            },
-            |$ctx| {
-                type $backend =
-                    <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
-                let $runtime = <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::NAME;
-                $body
-            },
-            |$ctx| {
-                type $backend =
-                    <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
-                let $runtime = <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::NAME;
-                $body
-            },
+            crate::api::runtime_slot_closure!(
+                crate::api::CpuRuntimeSlot,
+                |$ctx, $backend, $runtime| $body
+            ),
+            crate::api::runtime_slot_closure!(
+                crate::api::CudaRuntimeSlot,
+                |$ctx, $backend, $runtime| $body
+            ),
+            crate::api::runtime_slot_closure!(
+                crate::api::RocmRuntimeSlot,
+                |$ctx, $backend, $runtime| $body
+            ),
         )
     }};
 }

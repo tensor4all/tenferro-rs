@@ -138,15 +138,14 @@ where
         let da_proj = if upper { triu(da_b, n) } else { tril(da_b, n) };
 
         // dA * x, treating x as n x nrhs in column-major layout.
-        let da_x =
-            prims_bridge::batched_gemm_via_prims(&da_proj, n, n, x_b, nrhs).map_err(to_ad_err)?;
+        let da_x = prims_bridge::batched_gemm_with_semiring_context(ctx, &da_proj, n, n, x_b, nrhs)
+            .map_err(to_ad_err)?;
 
         // RHS tangent: dB - dA * x
         let rhs = sub_vec(db_b, &da_x);
 
         // dX from triangular solve with the same structure.
-        let mut dx_b = vec![T::zero(); n * nrhs];
-        backend::cpu::solve_triangular_slices(a_b, &rhs, n, nrhs, upper, &mut dx_b)
+        let dx_b = backend::slice_bridge::solve_triangular_vec(ctx, a_b, &rhs, n, nrhs, upper)
             .map_err(to_ad_err)?;
 
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b);
