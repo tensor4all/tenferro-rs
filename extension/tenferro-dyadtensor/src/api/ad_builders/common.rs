@@ -1,4 +1,7 @@
 macro_rules! dispatch_linalg_ad_runtime {
+    ($ty:ty, $capability:expr, $op:literal, |$ctx:ident| $body:expr) => {{
+        with_linalg_runtime::<$ty, _>($op, $capability, |$ctx| $body, |$ctx| $body, |$ctx| $body)
+    }};
     ($ty:ty, $capability:expr, $op:literal, |$ctx:ident, $backend:ident| $body:expr) => {{
         with_linalg_runtime::<$ty, _>(
             $op,
@@ -26,9 +29,9 @@ macro_rules! run_unary_tensor_ad {
         op = $op_name:literal,
         pullback = $pullback_op_name:literal,
         input = $input:expr,
-        primal = |$primal_ctx:ident, $primal_backend:ident, $primal_tensor:ident| $primal_body:expr,
-        frule = |$frule_ctx:ident, $frule_backend:ident, $frule_tensor:ident, $frule_tangent:ident| $frule_body:expr,
-        rrule = |$rrule_ctx:ident, $rrule_backend:ident, $rrule_tensor:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
+        primal = |$primal_ctx:ident, $primal_tensor:ident| $primal_body:expr,
+        frule = |$frule_ctx:ident, $frule_tensor:ident, $frule_tangent:ident| $frule_body:expr,
+        rrule = |$rrule_ctx:ident, $rrule_tensor:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
     ) => {{
         let operands = [$input];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -41,27 +44,17 @@ macro_rules! run_unary_tensor_ad {
             let input_tangent = input_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: format!("{} missing materialized tangent", $op_name),
             })?;
-            let (p, d) = dispatch_linalg_ad_runtime!(
-                $ty,
-                $capability,
-                $op_name,
-                |$frule_ctx, $frule_backend| {
-                    let $frule_tensor = &input_primal;
-                    let $frule_tangent = &input_tangent;
-                    $frule_body
-                }
-            )?;
+            let (p, d) = dispatch_linalg_ad_runtime!($ty, $capability, $op_name, |$frule_ctx| {
+                let $frule_tensor = &input_primal;
+                let $frule_tangent = &input_tangent;
+                $frule_body
+            })?;
             (p, Some(d))
         } else {
-            let primal = dispatch_linalg_ad_runtime!(
-                $ty,
-                $capability,
-                $op_name,
-                |$primal_ctx, $primal_backend| {
-                    let $primal_tensor = &input_primal;
-                    $primal_body
-                }
-            )?;
+            let primal = dispatch_linalg_ad_runtime!($ty, $capability, $op_name, |$primal_ctx| {
+                let $primal_tensor = &input_primal;
+                $primal_body
+            })?;
             (primal, None)
         };
 
@@ -83,7 +76,7 @@ macro_rules! run_unary_tensor_ad {
                         $ty,
                         $capability,
                         $pullback_op_name,
-                        |$rrule_ctx, $rrule_backend| {
+                        |$rrule_ctx| {
                             let $rrule_tensor = &input_primal;
                             let $rrule_cotangent = cotangent;
                             $rrule_body
@@ -111,9 +104,9 @@ macro_rules! run_binary_tensor_ad {
         pullback = $pullback_op_name:literal,
         lhs = $lhs:expr,
         rhs = $rhs:expr,
-        primal = |$primal_ctx:ident, $primal_backend:ident, $lhs_primal:ident, $rhs_primal:ident| $primal_body:expr,
-        frule = |$frule_ctx:ident, $frule_backend:ident, $frule_lhs:ident, $frule_rhs:ident, $lhs_tangent:ident, $rhs_tangent:ident| $frule_body:expr,
-        rrule = |$rrule_ctx:ident, $rrule_backend:ident, $rrule_lhs:ident, $rrule_rhs:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
+        primal = |$primal_ctx:ident, $lhs_primal:ident, $rhs_primal:ident| $primal_body:expr,
+        frule = |$frule_ctx:ident, $frule_lhs:ident, $frule_rhs:ident, $lhs_tangent:ident, $rhs_tangent:ident| $frule_body:expr,
+        rrule = |$rrule_ctx:ident, $rrule_lhs:ident, $rrule_rhs:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
     ) => {{
         let operands = [$lhs, $rhs];
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -132,30 +125,20 @@ macro_rules! run_binary_tensor_ad {
             let rhs_tangent = rhs_tangent.ok_or_else(|| Error::InvalidAdTensor {
                 message: format!("{} missing materialized rhs tangent", $op_name),
             })?;
-            let (p, d) = dispatch_linalg_ad_runtime!(
-                $ty,
-                $capability,
-                $op_name,
-                |$frule_ctx, $frule_backend| {
-                    let $frule_lhs = &lhs_primal;
-                    let $frule_rhs = &rhs_primal;
-                    let $lhs_tangent = &lhs_tangent;
-                    let $rhs_tangent = &rhs_tangent;
-                    $frule_body
-                }
-            )?;
+            let (p, d) = dispatch_linalg_ad_runtime!($ty, $capability, $op_name, |$frule_ctx| {
+                let $frule_lhs = &lhs_primal;
+                let $frule_rhs = &rhs_primal;
+                let $lhs_tangent = &lhs_tangent;
+                let $rhs_tangent = &rhs_tangent;
+                $frule_body
+            })?;
             (p, Some(d))
         } else {
-            let primal = dispatch_linalg_ad_runtime!(
-                $ty,
-                $capability,
-                $op_name,
-                |$primal_ctx, $primal_backend| {
-                    let $lhs_primal = &lhs_primal;
-                    let $rhs_primal = &rhs_primal;
-                    $primal_body
-                }
-            )?;
+            let primal = dispatch_linalg_ad_runtime!($ty, $capability, $op_name, |$primal_ctx| {
+                let $lhs_primal = &lhs_primal;
+                let $rhs_primal = &rhs_primal;
+                $primal_body
+            })?;
             (primal, None)
         };
 
@@ -174,7 +157,7 @@ macro_rules! run_binary_tensor_ad {
                         $ty,
                         $capability,
                         $pullback_op_name,
-                        |$rrule_ctx, $rrule_backend| {
+                        |$rrule_ctx| {
                             let $rrule_lhs = &lhs_primal;
                             let $rrule_rhs = &rhs_primal;
                             let $rrule_cotangent = cotangent;

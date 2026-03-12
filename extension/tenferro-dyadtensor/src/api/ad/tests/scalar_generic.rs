@@ -1,3 +1,4 @@
+use super::{max_abs_diff, tensor_from_vec_f64 as tensor_from_slice};
 use crate::{NodeId, TapeId};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -7,26 +8,6 @@ use crate::{
     exp_ad, expm1_ad, hypot_ad, log1p_ad, log_ad, mean_ad, pow_ad, set_default_runtime, sin_ad,
     sinh_ad, sqrt_ad, std_ad, tanh_ad, var_ad, AdTensor, RuntimeContext,
 };
-
-fn tensor_from_slice(data: &[f64], dims: &[usize]) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
-}
-
-fn tensor_to_vec(tensor: &Tensor<f64>) -> Vec<f64> {
-    let tensor = tensor.contiguous(MemoryOrder::ColumnMajor);
-    let offset = tensor.offset() as usize;
-    let len: usize = tensor.dims().iter().product();
-    tensor.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
-}
-
-fn max_abs_diff(actual: &Tensor<f64>, expected: &Tensor<f64>) -> f64 {
-    assert_eq!(actual.dims(), expected.dims());
-    tensor_to_vec(actual)
-        .iter()
-        .zip(tensor_to_vec(expected).iter())
-        .map(|(a, b)| (a - b).abs())
-        .fold(0.0_f64, f64::max)
-}
 
 #[test]
 fn ad_unary_binary_reduction_generic_surface_exists() {

@@ -53,8 +53,7 @@ where
                 T,
                 tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
                 "lu_ad",
-                |ctx, Backend| {
-                    let _ = std::marker::PhantomData::<Backend>;
+                |ctx| {
                     tenferro_linalg::lu_frule::<T, _>(ctx, &input_primal, &dt, self.pivot)
                         .map_err(Error::from)
                 }
@@ -66,8 +65,7 @@ where
                     T,
                     tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
                     "lu_ad",
-                    |ctx, Backend| {
-                        let _ = std::marker::PhantomData::<Backend>;
+                    |ctx| {
                         tenferro_linalg::lu::<T, _>(ctx, &input_primal, self.pivot)
                             .map_err(Error::from)
                     }
@@ -104,8 +102,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
                             "lu_ad_pullback_l",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::lu_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -138,8 +135,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::LuFactor,
                             "lu_ad_pullback_u",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::lu_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -227,8 +223,7 @@ where
                 T,
                 tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
                 "lstsq_ad",
-                |ctx, Backend| {
-                    let _ = std::marker::PhantomData::<Backend>;
+                |ctx| {
                     tenferro_linalg::lstsq_frule::<T, _>(ctx, &a_primal, &b_primal, &da, &db)
                         .map_err(Error::from)
                 }
@@ -240,8 +235,7 @@ where
                     T,
                     tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
                     "lstsq_ad",
-                    |ctx, Backend| {
-                        let _ = std::marker::PhantomData::<Backend>;
+                    |ctx| {
                         tenferro_linalg::lstsq::<T, _>(ctx, &a_primal, &b_primal)
                             .map_err(Error::from)
                     }
@@ -276,8 +270,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
                             "lstsq_ad_pullback_x",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::lstsq_rrule::<T, _>(
                                     ctx, &a_primal, &b_primal, cotangent,
                                 )

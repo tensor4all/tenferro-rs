@@ -49,8 +49,7 @@ where
                 T,
                 tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
                 "slogdet_ad",
-                |ctx, Backend| {
-                    let _ = std::marker::PhantomData::<Backend>;
+                |ctx| {
                     tenferro_linalg::slogdet_frule::<T, _>(ctx, &input_primal, &dt)
                         .map_err(Error::from)
                 }
@@ -62,8 +61,7 @@ where
                     T,
                     tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
                     "slogdet_ad",
-                    |ctx, Backend| {
-                        let _ = std::marker::PhantomData::<Backend>;
+                    |ctx| {
                         tenferro_linalg::slogdet::<T, _>(ctx, &input_primal).map_err(Error::from)
                     }
                 )?,
@@ -111,8 +109,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::Slogdet,
                             "slogdet_ad_pullback_logabsdet",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::slogdet_rrule::<T, _>(
                                     ctx,
                                     &a_primal,

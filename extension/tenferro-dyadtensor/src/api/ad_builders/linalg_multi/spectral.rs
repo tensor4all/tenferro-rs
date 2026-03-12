@@ -41,8 +41,7 @@ where
                 T,
                 tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
                 "eigen_ad",
-                |ctx, Backend| {
-                    let _ = std::marker::PhantomData::<Backend>;
+                |ctx| {
                     tenferro_linalg::eigen_frule::<T, _>(ctx, &input_primal, &dt)
                         .map_err(Error::from)
                 }
@@ -54,8 +53,7 @@ where
                     T,
                     tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
                     "eigen_ad",
-                    |ctx, Backend| {
-                        let _ = std::marker::PhantomData::<Backend>;
+                    |ctx| {
                         tenferro_linalg::eigen::<T, _>(ctx, &input_primal).map_err(Error::from)
                     }
                 )?,
@@ -90,8 +88,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
                             "eigen_ad_pullback_values",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::eigen_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -122,8 +119,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::EigenSym,
                             "eigen_ad_pullback_vectors",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::eigen_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -199,8 +195,7 @@ where
                 T,
                 tenferro_linalg::backend::LinalgCapabilityOp::Eig,
                 "eig_ad",
-                |ctx, Backend| {
-                    let _ = std::marker::PhantomData::<Backend>;
+                |ctx| {
                     tenferro_linalg::eig_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
                 }
             )?;
@@ -211,10 +206,7 @@ where
                     T,
                     tenferro_linalg::backend::LinalgCapabilityOp::Eig,
                     "eig_ad",
-                    |ctx, Backend| {
-                        let _ = std::marker::PhantomData::<Backend>;
-                        tenferro_linalg::eig::<T, _>(ctx, &input_primal).map_err(Error::from)
-                    }
+                    |ctx| { tenferro_linalg::eig::<T, _>(ctx, &input_primal).map_err(Error::from) }
                 )?,
                 None,
             )
@@ -247,8 +239,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::Eig,
                             "eig_ad_pullback_values",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::eig_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -279,8 +270,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::Eig,
                             "eig_ad_pullback_vectors",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::eig_rrule::<T, _>(
                                     ctx,
                                     &a_primal,

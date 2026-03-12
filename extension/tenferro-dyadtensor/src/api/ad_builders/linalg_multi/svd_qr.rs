@@ -53,8 +53,7 @@ where
                 T,
                 tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
                 "svd_ad",
-                |ctx, Backend| {
-                    let _ = std::marker::PhantomData::<Backend>;
+                |ctx| {
                     tenferro_linalg::svd_frule::<T, _>(ctx, &input_primal, &dt, self.options)
                         .map_err(Error::from)
                 }
@@ -66,8 +65,7 @@ where
                     T,
                     tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
                     "svd_ad",
-                    |ctx, Backend| {
-                        let _ = std::marker::PhantomData::<Backend>;
+                    |ctx| {
                         tenferro_linalg::svd::<T, _>(ctx, &input_primal, self.options)
                             .map_err(Error::from)
                     }
@@ -107,8 +105,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
                             "svd_ad_pullback_u",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::svd_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -142,8 +139,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
                             "svd_ad_pullback_s",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::svd_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -177,8 +173,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
                             "svd_ad_pullback_vt",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::svd_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -260,8 +255,7 @@ where
                 T,
                 tenferro_linalg::backend::LinalgCapabilityOp::Qr,
                 "qr_ad",
-                |ctx, Backend| {
-                    let _ = std::marker::PhantomData::<Backend>;
+                |ctx| {
                     tenferro_linalg::qr_frule::<T, _>(ctx, &input_primal, &dt).map_err(Error::from)
                 }
             )?;
@@ -272,10 +266,7 @@ where
                     T,
                     tenferro_linalg::backend::LinalgCapabilityOp::Qr,
                     "qr_ad",
-                    |ctx, Backend| {
-                        let _ = std::marker::PhantomData::<Backend>;
-                        tenferro_linalg::qr::<T, _>(ctx, &input_primal).map_err(Error::from)
-                    }
+                    |ctx| { tenferro_linalg::qr::<T, _>(ctx, &input_primal).map_err(Error::from) }
                 )?,
                 None,
             )
@@ -308,8 +299,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::Qr,
                             "qr_ad_pullback_q",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::qr_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
@@ -340,8 +330,7 @@ where
                             T,
                             tenferro_linalg::backend::LinalgCapabilityOp::Qr,
                             "qr_ad_pullback_r",
-                            |ctx, Backend| {
-                                let _ = std::marker::PhantomData::<Backend>;
+                            |ctx| {
                                 tenferro_linalg::qr_rrule::<T, _>(
                                     ctx,
                                     &a_primal,
