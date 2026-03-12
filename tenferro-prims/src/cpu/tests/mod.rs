@@ -1,3 +1,4 @@
+mod context;
 mod organization;
 
 #[cfg(feature = "gemm-faer")]

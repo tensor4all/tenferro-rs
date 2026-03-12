@@ -23,6 +23,15 @@ unsafe extern "C" fn import_fixture_deleter(managed: *mut DLManagedTensorVersion
     fixture.calls.fetch_add(1, Ordering::SeqCst);
 }
 
+unsafe extern "C" fn boxed_i64_slice_deleter(managed: *mut DLManagedTensorVersioned) {
+    let managed = unsafe { Box::from_raw(managed) };
+    if !managed.manager_ctx.is_null() {
+        unsafe {
+            drop(Box::from_raw(managed.manager_ctx as *mut [i64; 1]));
+        }
+    }
+}
+
 fn import_fixture_managed(
     device_type: i32,
     device_id: i32,
@@ -63,6 +72,20 @@ fn import_fixture_managed(
     }));
 
     (managed, calls)
+}
+
+fn import_fixture_with_tensor(
+    dl_tensor: DLTensor,
+    deleter: Option<unsafe extern "C" fn(*mut DLManagedTensorVersioned)>,
+    manager_ctx: *mut c_void,
+) -> *mut DLManagedTensorVersioned {
+    Box::into_raw(Box::new(DLManagedTensorVersioned {
+        version: DLPackVersion { major: 1, minor: 0 },
+        manager_ctx,
+        deleter,
+        flags: 0,
+        dl_tensor,
+    }))
 }
 
 #[test]
@@ -138,4 +161,96 @@ fn dlpack_import_rejects_unsupported_device_and_consumes_input() {
     assert!(handle.is_null());
     assert_eq!(status, TFE_INVALID_ARGUMENT);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn dlpack_export_rejects_null_tensor_pointer() {
+    let mut status = TFE_INTERNAL_ERROR;
+    let managed = unsafe { tfe_tensor_f64_to_dlpack(std::ptr::null_mut(), &mut status) };
+    assert!(managed.is_null());
+    assert_eq!(status, TFE_INVALID_ARGUMENT);
+}
+
+#[test]
+fn dlpack_import_rejects_negative_ndim() {
+    let managed = import_fixture_with_tensor(
+        DLTensor {
+            data: std::ptr::dangling_mut::<f64>() as *mut c_void,
+            device: DLDevice {
+                device_type: KDLCPU,
+                device_id: 0,
+            },
+            ndim: -1,
+            dtype: DLDataType {
+                code: KDLFLOAT,
+                bits: 64,
+                lanes: 1,
+            },
+            shape: std::ptr::null_mut(),
+            strides: std::ptr::null_mut(),
+            byte_offset: 0,
+        },
+        None,
+        std::ptr::null_mut(),
+    );
+
+    let mut status = TFE_INTERNAL_ERROR;
+    let handle = unsafe { tfe_tensor_f64_from_dlpack(managed, &mut status) };
+    assert!(handle.is_null());
+    assert_eq!(status, TFE_INVALID_ARGUMENT);
+}
+
+#[test]
+fn dlpack_import_rejects_null_shape_and_null_data_for_non_empty_tensor() {
+    let managed_missing_shape = import_fixture_with_tensor(
+        DLTensor {
+            data: std::ptr::dangling_mut::<f64>() as *mut c_void,
+            device: DLDevice {
+                device_type: KDLCPU,
+                device_id: 0,
+            },
+            ndim: 1,
+            dtype: DLDataType {
+                code: KDLFLOAT,
+                bits: 64,
+                lanes: 1,
+            },
+            shape: std::ptr::null_mut(),
+            strides: std::ptr::null_mut(),
+            byte_offset: 0,
+        },
+        None,
+        std::ptr::null_mut(),
+    );
+
+    let mut status = TFE_INTERNAL_ERROR;
+    let handle = unsafe { tfe_tensor_f64_from_dlpack(managed_missing_shape, &mut status) };
+    assert!(handle.is_null());
+    assert_eq!(status, TFE_INVALID_ARGUMENT);
+
+    let mut shape = Box::new([1_i64]);
+    let managed_missing_data = import_fixture_with_tensor(
+        DLTensor {
+            data: std::ptr::null_mut(),
+            device: DLDevice {
+                device_type: KDLCPU,
+                device_id: 0,
+            },
+            ndim: 1,
+            dtype: DLDataType {
+                code: KDLFLOAT,
+                bits: 64,
+                lanes: 1,
+            },
+            shape: shape.as_mut_ptr(),
+            strides: std::ptr::null_mut(),
+            byte_offset: 0,
+        },
+        Some(boxed_i64_slice_deleter),
+        Box::into_raw(shape) as *mut c_void,
+    );
+
+    let handle = unsafe { tfe_tensor_f64_from_dlpack(managed_missing_data, &mut status) };
+    assert!(handle.is_null());
+    assert_eq!(status, TFE_INVALID_ARGUMENT);
 }

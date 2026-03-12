@@ -1,12 +1,38 @@
 use num_complex::Complex64;
 
-use super::super::gemm_support::{batch_offset, FaerGemm};
+use super::super::gemm_support::{
+    advance_batch_offset, batch_iteration_count, batch_offset, FaerGemm,
+};
 
 // Do not delete or weaken this test: it protects the shared CPU GEMM helpers that multiple semiring execution paths rely on.
 #[test]
 fn batch_offset_handles_fused_and_strided_batches() {
-    assert_eq!(batch_offset(3, &[0, 0], Some((8, 7)), &[11, 13]), 21);
-    assert_eq!(batch_offset(0, &[2, 3], None, &[5, 11]), 43);
+    assert_eq!(
+        batch_offset(3, &[0, 0], Some((8, 7)), &[11, 13]).unwrap(),
+        21
+    );
+    assert_eq!(batch_offset(0, &[2, 3], None, &[5, 11]).unwrap(), 43);
+}
+
+#[test]
+fn batch_offset_rejects_overflow() {
+    let err = batch_offset(2, &[], Some((1, isize::MAX)), &[]).unwrap_err();
+    assert!(err.to_string().contains("batch offset overflow"));
+
+    let err = batch_offset(0, &[usize::MAX], None, &[2]).unwrap_err();
+    assert!(err.to_string().contains("batch index too large"));
+}
+
+#[test]
+fn advance_batch_offset_rejects_overflow() {
+    let err = advance_batch_offset(isize::MAX, 1).unwrap_err();
+    assert!(err.to_string().contains("batch offset overflow"));
+}
+
+#[test]
+fn batch_iteration_count_rejects_overflow() {
+    let err = batch_iteration_count(&[usize::MAX, 2]).unwrap_err();
+    assert!(err.to_string().contains("batch iteration count overflow"));
 }
 
 #[test]

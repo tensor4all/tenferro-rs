@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use tenferro_algebra::Scalar;
+
 const MAX_POOLED_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 
 /// Typed buffer pool using BTreeMap for O(log n) best-fit allocation.
@@ -9,7 +11,7 @@ pub(crate) struct BufferPool<T> {
     total_bytes: usize,
 }
 
-impl<T> BufferPool<T> {
+impl<T: Scalar> BufferPool<T> {
     pub fn new() -> Self {
         Self {
             buffers: BTreeMap::new(),
@@ -17,9 +19,7 @@ impl<T> BufferPool<T> {
         }
     }
 
-    /// Take a buffer of at least `len` elements from the pool.
-    /// Returns an uninitialized buffer (caller must fill before reading).
-    #[allow(clippy::uninit_vec)]
+    /// Take a zero-initialized buffer of at least `len` elements from the pool.
     pub fn take(&mut self, len: usize) -> Vec<T> {
         // Find smallest buffer with capacity >= len
         let mut found_cap = None;
@@ -35,13 +35,10 @@ impl<T> BufferPool<T> {
                 self.buffers.remove(&cap);
             }
             self.total_bytes -= cap * std::mem::size_of::<T>();
-            // Safety: capacity >= len; caller writes all elements before reading.
-            unsafe { buf.set_len(len) };
+            buf.resize(len, T::zero());
             return buf;
         }
-        let mut buf = Vec::with_capacity(len);
-        unsafe { buf.set_len(len) };
-        buf
+        vec![T::zero(); len]
     }
 
     /// Return a buffer to the pool for reuse.
@@ -57,7 +54,7 @@ impl<T> BufferPool<T> {
     }
 }
 
-impl<T> Default for BufferPool<T> {
+impl<T: Scalar> Default for BufferPool<T> {
     fn default() -> Self {
         Self::new()
     }

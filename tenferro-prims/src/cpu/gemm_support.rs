@@ -1,6 +1,5 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
-#[cfg(feature = "gemm-blas")]
 use tenferro_device::{Error, Result};
 
 /// Trait for types that support strided GEMM via faer (zero-copy, zero-allocation).
@@ -115,15 +114,42 @@ pub(super) fn batch_offset(
     idx: &[usize],
     fused: Option<(usize, isize)>,
     batch_strides: &[isize],
-) -> isize {
+) -> Result<isize> {
     if let Some((_, step)) = fused {
-        flat as isize * step
+        checked_mul_offset(flat, step)
     } else {
         idx.iter()
             .zip(batch_strides)
-            .map(|(&i, &s)| i as isize * s)
-            .sum()
+            .try_fold(0isize, |acc, (&i, &s)| {
+                let term = checked_mul_offset(i, s)?;
+                acc.checked_add(term)
+                    .ok_or_else(|| Error::InvalidArgument("batch offset overflow".into()))
+            })
     }
+}
+
+#[inline]
+pub(super) fn advance_batch_offset(offset: isize, step: isize) -> Result<isize> {
+    offset
+        .checked_add(step)
+        .ok_or_else(|| Error::InvalidArgument("batch offset overflow".into()))
+}
+
+#[inline]
+pub(super) fn batch_iteration_count(batch_dims: &[usize]) -> Result<usize> {
+    batch_dims.iter().try_fold(1usize, |acc, &dim| {
+        acc.checked_mul(dim)
+            .ok_or_else(|| Error::InvalidArgument("batch iteration count overflow".into()))
+    })
+}
+
+#[inline]
+fn checked_mul_offset(index: usize, stride: isize) -> Result<isize> {
+    let index = isize::try_from(index)
+        .map_err(|_| Error::InvalidArgument("batch index too large for isize".into()))?;
+    index
+        .checked_mul(stride)
+        .ok_or_else(|| Error::InvalidArgument("batch offset overflow".into()))
 }
 
 #[cfg(feature = "gemm-blas")]
