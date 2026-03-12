@@ -1,9 +1,9 @@
 use super::*;
-use crate::LinalgScalar;
+use crate::KernelLinalgScalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 /// Convert a slice of f64 pairs into scalar type T for test matrices.
-trait TestScalar: LinalgScalar {
+trait TestScalar: KernelLinalgScalar {
     fn from_f64(v: f64) -> Self;
 }
 
@@ -185,7 +185,7 @@ cpu_backend_tests!(complex32_tests, num_complex::Complex32);
 fn run_generic_backend_solve_smoke<B, T>()
 where
     B: TensorLinalgBackend<T, Context = tenferro_prims::CpuContext>,
-    T: TestScalar + CpuLinalgScalar,
+    T: TestScalar,
 {
     let mut ctx = tenferro_prims::CpuContext::new(1);
     let a = make::<T>(&[2.0, 1.0, 1.0, 3.0], &[2, 2]);
@@ -197,7 +197,7 @@ where
 fn run_generic_backend_qr_smoke<B, T>()
 where
     B: TensorLinalgBackend<T, Context = tenferro_prims::CpuContext>,
-    T: TestScalar + CpuLinalgScalar,
+    T: TestScalar,
 {
     let mut ctx = tenferro_prims::CpuContext::new(1);
     let a = make::<T>(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);

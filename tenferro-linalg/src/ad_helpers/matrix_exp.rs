@@ -37,14 +37,14 @@ pub(crate) fn matrix_1_norm<T: LinalgScalar>(a: &[T], n: usize) -> T::Real {
 }
 
 /// Multiply two n x n column-major matrices using the backend.
-pub(crate) fn backend_mat_mul_nn<T: LinalgScalar, C>(
+pub(crate) fn backend_mat_mul_nn<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     b: &[T],
     n: usize,
 ) -> Result<Vec<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     prims_bridge::batched_gemm_via_prims(a, n, n, b, n)
 }
@@ -82,13 +82,13 @@ pub(crate) fn mat_add<T: LinalgScalar>(a: &[T], b: &[T]) -> Vec<T> {
 }
 
 /// Compute matrix exponential of a single n x n column-major matrix.
-pub(crate) fn matrix_exp_single<T: LinalgScalar, C>(
+pub(crate) fn matrix_exp_single<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &[T],
     n: usize,
 ) -> Result<Vec<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     if n == 0 {
         return Ok(Vec::new());
@@ -174,14 +174,14 @@ where
     Ok(result)
 }
 
-pub(crate) fn matrix_power_single<T: LinalgScalar, C>(
+pub(crate) fn matrix_power_single<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &[T],
     n: usize,
     exponent: u64,
 ) -> Result<Vec<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     if exponent == 1 {
         return Ok(a.to_vec());

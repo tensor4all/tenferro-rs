@@ -19,7 +19,7 @@ use super::*;
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn lstsq_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lstsq_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -27,7 +27,7 @@ pub fn lstsq_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
     tangent_b: &Tensor<T>,
 ) -> AdResult<(LstsqResult<T>, LstsqResult<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -101,13 +101,13 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (l, dl) = cholesky_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn cholesky_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn cholesky_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

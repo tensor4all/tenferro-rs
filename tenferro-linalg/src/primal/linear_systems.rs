@@ -1,7 +1,11 @@
 use super::*;
 
 /// Solve a square linear system `A x = b`.
-pub fn solve<T: LinalgScalar, C>(ctx: &mut C, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
+pub fn solve<T: KernelLinalgScalar, C>(
+    ctx: &mut C,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
@@ -10,13 +14,13 @@ where
 }
 
 /// Solve a square linear system with numerical status information.
-pub fn solve_ex<T: LinalgScalar, C>(
+pub fn solve_ex<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<SolveExResult<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -57,9 +61,9 @@ where
 }
 
 /// Compute the inverse of a square matrix.
-pub fn inv<T: LinalgScalar, C>(_ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
+pub fn inv<T: KernelLinalgScalar, C>(_ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -91,9 +95,9 @@ where
 }
 
 /// Compute the inverse with numerical status information.
-pub fn inv_ex<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<InvExResult<T>>
+pub fn inv_ex<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<InvExResult<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -113,12 +117,12 @@ where
 }
 
 /// Compute the determinant of a square matrix.
-pub fn det<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn det<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     _ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -181,12 +185,12 @@ where
 }
 
 /// Compute sign and log-absolute-determinant of a square matrix.
-pub fn slogdet<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn slogdet<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     _ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<SlogdetResult<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

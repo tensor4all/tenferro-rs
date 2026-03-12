@@ -20,14 +20,14 @@ use super::*;
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lu_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     pivot: LuPivot,
 ) -> AdResult<(LuResult<T>, LuResult<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -155,13 +155,13 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn eigen_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn eigen_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(EigenResult<T>, EigenResult<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

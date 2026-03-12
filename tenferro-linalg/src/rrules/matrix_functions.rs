@@ -25,13 +25,13 @@ use super::*;
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = matrix_exp_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn matrix_exp_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn matrix_exp_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

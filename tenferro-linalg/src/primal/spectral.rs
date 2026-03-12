@@ -1,7 +1,10 @@
 use super::*;
 
 /// Compute the eigendecomposition of a general (non-symmetric) square matrix.
-pub fn eig<T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float, C>(
+pub fn eig<
+    T: KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
+    C,
+>(
     ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<EigResult<T>>
@@ -16,7 +19,7 @@ where
     })
 }
 
-pub(crate) fn require_linalg_support<T: LinalgScalar, C>(
+pub(crate) fn require_linalg_support<T: KernelLinalgScalar, C>(
     capability: backend::LinalgCapabilityOp,
     op: &str,
 ) -> Result<()>
@@ -34,13 +37,13 @@ where
 }
 
 /// Compute the Moore-Penrose pseudoinverse of a matrix.
-pub fn pinv<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn pinv<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     rcond: Option<f64>,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -102,9 +105,9 @@ where
 }
 
 /// Compute the matrix exponential `exp(A)` of a square matrix.
-pub fn matrix_exp<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
+pub fn matrix_exp<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

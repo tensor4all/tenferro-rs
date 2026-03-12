@@ -26,13 +26,13 @@ use super::*;
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (exp_a, dexp_a) = matrix_exp_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn matrix_exp_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn matrix_exp_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

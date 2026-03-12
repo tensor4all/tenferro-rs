@@ -33,3 +33,25 @@ fn cpu_only_kernel_paths_fail_through_capability_not_backend_name() {
         "primal linalg paths should not identify unsupported runtimes through direct backend type checks"
     );
 }
+
+#[test]
+fn public_linalg_layers_do_not_spell_cpu_scalar_contracts() {
+    let public_layers = [
+        "src/lib.rs",
+        "src/primal/mod.rs",
+        "src/frules/mod.rs",
+        "src/rrules/mod.rs",
+        "src/ad_helpers/mod.rs",
+        "src/backend/tensor_api.rs",
+        "src/backend/tensor_context.rs",
+    ]
+    .into_iter()
+    .map(repo_file)
+    .collect::<Vec<_>>()
+    .join("\n");
+
+    assert!(
+        !public_layers.contains("CpuLinalgScalar"),
+        "public linalg layers should depend on backend-generic kernel scalar contracts rather than CPU-specific scalar names"
+    );
+}

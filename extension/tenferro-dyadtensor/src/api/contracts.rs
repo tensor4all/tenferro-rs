@@ -4,7 +4,7 @@ use chainrules_scalarops::ScalarAd;
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
-use tenferro_linalg::{backend::CpuLinalgScalar, LinalgScalar};
+use tenferro_linalg::{KernelLinalgScalar, LinalgScalar};
 
 #[doc(hidden)]
 /// Hidden bound for values that participate in the standard dyadtensor runtime.
@@ -112,15 +112,9 @@ impl<T> RealAdRuntimeValue for T where T: GenericAdRuntimeValue + ScalarAd<Real 
 /// fn require_linalg<T: tenferro_dyadtensor::api::contracts::LinalgRuntimeValue>() {}
 /// require_linalg::<f64>();
 /// ```
-pub trait LinalgRuntimeValue:
-    EinsumRuntimeValue + LinalgScalar + CpuLinalgScalar + 'static
-{
-}
+pub trait LinalgRuntimeValue: EinsumRuntimeValue + KernelLinalgScalar + 'static {}
 
-impl<T> LinalgRuntimeValue for T where
-    T: EinsumRuntimeValue + LinalgScalar + CpuLinalgScalar + 'static
-{
-}
+impl<T> LinalgRuntimeValue for T where T: EinsumRuntimeValue + KernelLinalgScalar + 'static {}
 
 #[doc(hidden)]
 /// Hidden shorthand for real-valued linalg runtime values.

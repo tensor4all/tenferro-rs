@@ -20,14 +20,14 @@ use super::*;
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
-pub fn solve_rrule<T: LinalgScalar, C>(
+pub fn solve_rrule<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<SolveGrad<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -84,7 +84,7 @@ where
 /// - `G = A^{-H} x̄` solved with conjugate-transposed triangular structure
 /// - `b̄ = G`
 /// - `Ā = proj(-G x^H)` where `proj = triu` for upper, `tril` for lower
-pub fn solve_triangular_rrule<T: LinalgScalar, C>(
+pub fn solve_triangular_rrule<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -92,7 +92,7 @@ pub fn solve_triangular_rrule<T: LinalgScalar, C>(
     upper: bool,
 ) -> AdResult<SolveGrad<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -170,13 +170,13 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = inv_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn inv_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn inv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -230,13 +230,13 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
 /// let grad_a = det_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn det_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn det_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -296,13 +296,13 @@ where
 /// };
 /// let grad_a = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn slogdet_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn slogdet_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &SlogdetCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

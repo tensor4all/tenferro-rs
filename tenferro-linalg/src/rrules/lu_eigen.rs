@@ -23,14 +23,14 @@ use super::*;
 /// };
 /// let grad_a = lu_rrule(&mut ctx, &a, &cotangent, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lu_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &LuCotangent<T>,
     pivot: LuPivot,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -247,13 +247,13 @@ where
 /// };
 /// let grad_a = eigen_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn eigen_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn eigen_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &EigenCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

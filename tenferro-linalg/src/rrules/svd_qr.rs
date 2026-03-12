@@ -25,14 +25,14 @@ use super::*;
 /// };
 /// let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
-pub fn svd_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn svd_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &SvdCotangent<T>,
     options: Option<&SvdOptions>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -226,13 +226,13 @@ where
 /// };
 /// let grad_a = qr_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn qr_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn qr_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &QrCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

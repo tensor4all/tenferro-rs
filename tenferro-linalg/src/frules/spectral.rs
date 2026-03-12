@@ -25,7 +25,7 @@ use super::*;
 /// let (result, dresult) = eig_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn eig_frule<
-    T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
+    T: KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
     C,
 >(
     ctx: &mut C,
@@ -33,7 +33,7 @@ pub fn eig_frule<
     tangent: &Tensor<T>,
 ) -> AdResult<(EigResult<T>, EigResult<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -119,14 +119,14 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (pinv_a, dpinv_a) = pinv_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
-pub fn pinv_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn pinv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     rcond: Option<f64>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

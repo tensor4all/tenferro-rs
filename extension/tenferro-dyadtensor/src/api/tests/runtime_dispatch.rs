@@ -150,6 +150,10 @@ fn runtime_helpers_stay_capability_driven() {
         "semantic runtime value traits should not hard-code runtime context triples"
     );
     assert!(
+        !contracts.contains("CpuLinalgScalar"),
+        "semantic runtime value traits should not leak CPU-specific scalar contracts into the generic dyadtensor surface"
+    );
+    assert!(
         runtime_dispatch.contains("trait RuntimeSlot"),
         "runtime dispatch should centralize concrete runtime slot metadata instead of repeating ad hoc backend/context wiring"
     );

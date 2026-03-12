@@ -1,13 +1,13 @@
 use super::*;
 
 /// Raise a square matrix to an integer power.
-pub fn matrix_power<T: LinalgScalar, C>(
+pub fn matrix_power<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     exponent: i64,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

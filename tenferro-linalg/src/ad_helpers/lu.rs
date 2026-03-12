@@ -1,6 +1,6 @@
 use super::*;
 
-pub(crate) fn lu_factor_impl<T: LinalgScalar, C>(
+pub(crate) fn lu_factor_impl<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<LuFactorExResult<T>>
@@ -77,14 +77,14 @@ pub(crate) fn pack_lu_factors<T: LinalgScalar>(
     tensor_from_data(packed, &output_dims(&[m, n], batch_dims))
 }
 
-pub(crate) fn lu_solve_impl<T: LinalgScalar, C>(
+pub(crate) fn lu_solve_impl<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     factors: &Tensor<T>,
     pivots: &[usize],
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
 {
     let (n, batch_dims) = validate_square(factors)?;

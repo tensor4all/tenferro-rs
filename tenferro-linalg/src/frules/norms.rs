@@ -17,14 +17,14 @@ use super::*;
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (n, dn) = norm_frule(&mut ctx, &a, &da, NormKind::Fro).unwrap();
 /// ```
-pub fn norm_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn norm_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     kind: NormKind,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

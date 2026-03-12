@@ -67,6 +67,9 @@ contracts used by `tenferro-linalg`:
 - `solve`
 - `solve_triangular`
 
+The backend-facing dtype contract is `KernelLinalgScalar`, with LAPACK-specific
+eig helpers isolated behind `LapackEigScalar`.
+
 ## `tenferro-einsum`
 
 ### Primal

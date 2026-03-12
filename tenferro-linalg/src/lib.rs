@@ -3,7 +3,9 @@
 //! Batched matrix linear algebra decompositions with AD rules.
 //!
 //! CPU decompositions and solvers are fully implemented via the
-//! [`faer`](https://crates.io/crates/faer) backend. GPU backends are planned.
+//! [`faer`](https://crates.io/crates/faer) backend. CUDA/HIP linalg contracts
+//! are already part of the public surface, but backend coverage there remains
+//! partial and capability-gated.
 //!
 //! This crate provides SVD, QR, LU, eigendecomposition, Cholesky, least squares,
 //! linear solve, matrix inverse, determinant, pseudoinverse, matrix exponential,
@@ -220,7 +222,7 @@ pub use primal::*;
 pub use result_types::*;
 pub use rrules::*;
 #[doc(inline)]
-pub use tenferro_linalg_prims::{LinalgCapabilityOp, LinalgScalar};
+pub use tenferro_linalg_prims::{KernelLinalgScalar, LinalgCapabilityOp, LinalgScalar};
 
 #[cfg(test)]
 mod tests;

@@ -16,7 +16,7 @@ use super::tensor_helpers::{
     batch_count, ensure_col_major, extract_contiguous_slice, validate_matrix_shape,
     validate_solve_rhs_shape, validate_square,
 };
-use crate::LinalgScalar;
+use crate::KernelLinalgScalar;
 
 /// Create a tensor from data in column-major layout.
 fn tensor_from_data<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>> {
@@ -31,8 +31,7 @@ pub(crate) fn solve<T>(
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
@@ -68,8 +67,7 @@ pub(crate) fn solve_triangular<T>(
     upper: bool,
 ) -> Result<Tensor<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
@@ -103,8 +101,7 @@ pub(crate) fn qr<T>(
     a: &Tensor<T>,
 ) -> Result<QrTensorResult<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -147,8 +144,7 @@ pub(crate) fn thin_svd<T>(
     a: &Tensor<T>,
 ) -> Result<SvdTensorResult<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -195,8 +191,7 @@ pub(crate) fn lu_factor<T>(
     a: &Tensor<T>,
 ) -> Result<LuTensorResult<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     let k = m.min(n);
@@ -243,8 +238,7 @@ where
 /// Cholesky decomposition via the selected CPU slice backend.
 pub(crate) fn cholesky<T>(_ctx: &mut tenferro_prims::CpuContext, a: &Tensor<T>) -> Result<Tensor<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -275,8 +269,7 @@ pub(crate) fn eigen_sym<T>(
     a: &Tensor<T>,
 ) -> Result<EigenTensorResult<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -326,8 +319,7 @@ pub(crate) fn eig<T>(
     a: &Tensor<T>,
 ) -> Result<EigTensorResult<T>>
 where
-    T: LinalgScalar,
-    T: super::cpu::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
@@ -337,7 +329,7 @@ where
     let a_off = a_contig.offset() as usize;
     let mat_size = n * n;
 
-    let (val_ri_len, vec_ri_len) = T::eig_buffer_sizes(n);
+    let (val_ri_len, vec_ri_len) = super::cpu::eig_buffer_sizes::<T>(n);
 
     let mut val_ri = vec![T::zero(); val_ri_len];
     let mut vec_ri = vec![T::zero(); vec_ri_len];
@@ -349,7 +341,7 @@ where
         let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
         super::cpu::eig_slices(a_slice, n, &mut val_ri, &mut vec_ri)?;
 
-        T::eig_ri_to_complex(
+        super::cpu::eig_ri_to_complex::<T>(
             n,
             &val_ri,
             &vec_ri,

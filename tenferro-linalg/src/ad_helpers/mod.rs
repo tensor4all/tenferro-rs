@@ -6,7 +6,7 @@ mod matrix_exp;
 mod matrix_ops;
 mod validation;
 
-use crate::{backend, prims_bridge, LuFactorExResult, NormKind};
+use crate::{backend, prims_bridge, KernelLinalgScalar, LuFactorExResult, NormKind};
 use chainrules_core::AdResult;
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};

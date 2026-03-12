@@ -3,8 +3,10 @@
 //! The actual provider implementation is selected at compile time via
 //! `linalg-faer` or `linalg-lapack` features.
 
+use std::any::TypeId;
+
 use num_complex::{Complex32, Complex64};
-use tenferro_linalg_prims::LapackEigScalar;
+use tenferro_linalg_prims::{KernelLinalgScalar, LapackEigScalar};
 
 use super::tensor_api::TensorLinalgBackend;
 use super::tensor_context::TensorLinalgContextFor;
@@ -25,10 +27,10 @@ mod private {
     use num_complex::{Complex32, Complex64};
 
     use super::{LinalgBackend, SelectedCpuSliceBackend};
-    use crate::LinalgScalar;
+    use crate::KernelLinalgScalar;
     use tenferro_device::Result;
 
-    pub trait CpuLinalgOps: LinalgScalar {
+    pub trait CpuLinalgOps: KernelLinalgScalar + super::LapackEigScalar {
         fn solve_slices(
             a: &[Self],
             b: &[Self],
@@ -163,25 +165,58 @@ mod private {
     impl_cpu_linalg_ops!(Complex32);
 }
 
-/// Scalar types supported by the CPU linalg provider selected at build time.
-pub trait CpuLinalgScalar: private::CpuLinalgOps + LapackEigScalar {}
+macro_rules! cast_slice {
+    ($slice:expr, $from:ty, $to:ty) => {{
+        unsafe { &*($slice as *const [$from] as *const [$to]) }
+    }};
+}
 
-impl CpuLinalgScalar for f64 {}
-impl CpuLinalgScalar for f32 {}
-impl CpuLinalgScalar for Complex64 {}
-impl CpuLinalgScalar for Complex32 {}
+macro_rules! cast_slice_mut {
+    ($slice:expr, $from:ty, $to:ty) => {{
+        unsafe { &mut *($slice as *mut [$from] as *mut [$to]) }
+    }};
+}
 
-pub(crate) fn solve_slices<T: CpuLinalgScalar>(
+macro_rules! dispatch_kernel_linalg_scalar_type {
+    ($generic:ty, $concrete:ident, $body:block) => {{
+        let tid = TypeId::of::<$generic>();
+        if tid == TypeId::of::<f64>() {
+            type $concrete = f64;
+            $body
+        } else if tid == TypeId::of::<f32>() {
+            type $concrete = f32;
+            $body
+        } else if tid == TypeId::of::<Complex64>() {
+            type $concrete = Complex64;
+            $body
+        } else if tid == TypeId::of::<Complex32>() {
+            type $concrete = Complex32;
+            $body
+        } else {
+            unreachable!("KernelLinalgScalar must be one of the standard linalg dtypes")
+        }
+    }};
+}
+
+pub(crate) fn solve_slices<T: KernelLinalgScalar>(
     a: &[T],
     b: &[T],
     n: usize,
     nrhs: usize,
     x: &mut [T],
 ) -> Result<()> {
-    <T as private::CpuLinalgOps>::solve_slices(a, b, n, nrhs, x)
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        <Concrete as private::CpuLinalgOps>::solve_slices(
+            cast_slice!(a, T, Concrete),
+            cast_slice!(b, T, Concrete),
+            n,
+            nrhs,
+            cast_slice_mut!(x, T, Concrete),
+        )
+    })
 }
 
-pub(crate) fn solve_triangular_slices<T: CpuLinalgScalar>(
+pub(crate) fn solve_triangular_slices<T: KernelLinalgScalar>(
     a: &[T],
     b: &[T],
     n: usize,
@@ -189,10 +224,19 @@ pub(crate) fn solve_triangular_slices<T: CpuLinalgScalar>(
     upper: bool,
     x: &mut [T],
 ) -> Result<()> {
-    <T as private::CpuLinalgOps>::solve_triangular_slices(a, b, n, nrhs, upper, x)
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        <Concrete as private::CpuLinalgOps>::solve_triangular_slices(
+            cast_slice!(a, T, Concrete),
+            cast_slice!(b, T, Concrete),
+            n,
+            nrhs,
+            upper,
+            cast_slice_mut!(x, T, Concrete),
+        )
+    })
 }
 
-pub(crate) fn thin_svd_slices<T: CpuLinalgScalar>(
+pub(crate) fn thin_svd_slices<T: KernelLinalgScalar>(
     a: &[T],
     m: usize,
     n: usize,
@@ -200,20 +244,38 @@ pub(crate) fn thin_svd_slices<T: CpuLinalgScalar>(
     s: &mut [T::Real],
     vt: &mut [T],
 ) -> Result<()> {
-    <T as private::CpuLinalgOps>::thin_svd_slices(a, m, n, u, s, vt)
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        type ConcreteReal = <Concrete as crate::LinalgScalar>::Real;
+        <Concrete as private::CpuLinalgOps>::thin_svd_slices(
+            cast_slice!(a, T, Concrete),
+            m,
+            n,
+            cast_slice_mut!(u, T, Concrete),
+            cast_slice_mut!(s, T::Real, ConcreteReal),
+            cast_slice_mut!(vt, T, Concrete),
+        )
+    })
 }
 
-pub(crate) fn qr_slices<T: CpuLinalgScalar>(
+pub(crate) fn qr_slices<T: KernelLinalgScalar>(
     a: &[T],
     m: usize,
     n: usize,
     q: &mut [T],
     r: &mut [T],
 ) -> Result<()> {
-    <T as private::CpuLinalgOps>::qr_slices(a, m, n, q, r)
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        <Concrete as private::CpuLinalgOps>::qr_slices(
+            cast_slice!(a, T, Concrete),
+            m,
+            n,
+            cast_slice_mut!(q, T, Concrete),
+            cast_slice_mut!(r, T, Concrete),
+        )
+    })
 }
 
-pub(crate) fn lu_slices<T: CpuLinalgScalar>(
+pub(crate) fn lu_slices<T: KernelLinalgScalar>(
     a: &[T],
     m: usize,
     n: usize,
@@ -221,29 +283,84 @@ pub(crate) fn lu_slices<T: CpuLinalgScalar>(
     l: &mut [T],
     u_out: &mut [T],
 ) -> Result<()> {
-    <T as private::CpuLinalgOps>::lu_slices(a, m, n, perm, l, u_out)
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        <Concrete as private::CpuLinalgOps>::lu_slices(
+            cast_slice!(a, T, Concrete),
+            m,
+            n,
+            perm,
+            cast_slice_mut!(l, T, Concrete),
+            cast_slice_mut!(u_out, T, Concrete),
+        )
+    })
 }
 
-pub(crate) fn cholesky_slices<T: CpuLinalgScalar>(a: &[T], n: usize, l: &mut [T]) -> Result<()> {
-    <T as private::CpuLinalgOps>::cholesky_slices(a, n, l)
+pub(crate) fn cholesky_slices<T: KernelLinalgScalar>(a: &[T], n: usize, l: &mut [T]) -> Result<()> {
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        <Concrete as private::CpuLinalgOps>::cholesky_slices(
+            cast_slice!(a, T, Concrete),
+            n,
+            cast_slice_mut!(l, T, Concrete),
+        )
+    })
 }
 
-pub(crate) fn eigen_sym_slices<T: CpuLinalgScalar>(
+pub(crate) fn eigen_sym_slices<T: KernelLinalgScalar>(
     a: &[T],
     n: usize,
     values: &mut [T::Real],
     vectors: &mut [T],
 ) -> Result<()> {
-    <T as private::CpuLinalgOps>::eigen_sym_slices(a, n, values, vectors)
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        type ConcreteReal = <Concrete as crate::LinalgScalar>::Real;
+        <Concrete as private::CpuLinalgOps>::eigen_sym_slices(
+            cast_slice!(a, T, Concrete),
+            n,
+            cast_slice_mut!(values, T::Real, ConcreteReal),
+            cast_slice_mut!(vectors, T, Concrete),
+        )
+    })
 }
 
-pub(crate) fn eig_slices<T: CpuLinalgScalar>(
+pub(crate) fn eig_slices<T: KernelLinalgScalar>(
     a: &[T],
     n: usize,
     values_ri: &mut [T],
     vectors_ri: &mut [T],
 ) -> Result<()> {
-    <T as private::CpuLinalgOps>::eig_slices(a, n, values_ri, vectors_ri)
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        <Concrete as private::CpuLinalgOps>::eig_slices(
+            cast_slice!(a, T, Concrete),
+            n,
+            cast_slice_mut!(values_ri, T, Concrete),
+            cast_slice_mut!(vectors_ri, T, Concrete),
+        )
+    })
+}
+
+pub(crate) fn eig_buffer_sizes<T: KernelLinalgScalar>(n: usize) -> (usize, usize) {
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        <Concrete as LapackEigScalar>::eig_buffer_sizes(n)
+    })
+}
+
+pub(crate) fn eig_ri_to_complex<T: KernelLinalgScalar>(
+    n: usize,
+    val_ri: &[T],
+    vec_ri: &[T],
+    values_out: &mut [T::Complex],
+    vectors_out: &mut [T::Complex],
+) {
+    dispatch_kernel_linalg_scalar_type!(T, Concrete, {
+        type ConcreteComplex = <Concrete as crate::LinalgScalar>::Complex;
+        <Concrete as LapackEigScalar>::eig_ri_to_complex(
+            n,
+            cast_slice!(val_ri, T, Concrete),
+            cast_slice!(vec_ri, T, Concrete),
+            cast_slice_mut!(values_out, T::Complex, ConcreteComplex),
+            cast_slice_mut!(vectors_out, T::Complex, ConcreteComplex),
+        )
+    })
 }
 
 /// Marker type for the CPU tensor linalg backend.
@@ -264,7 +381,7 @@ pub struct CpuTensorLinalgBackend;
 
 impl<T> TensorLinalgBackend<T> for CpuTensorLinalgBackend
 where
-    T: CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     type Context = tenferro_prims::CpuContext;
 
@@ -334,7 +451,7 @@ where
 
 impl<T> TensorLinalgContextFor<T> for tenferro_prims::CpuContext
 where
-    T: CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     type Backend = CpuTensorLinalgBackend;
 }

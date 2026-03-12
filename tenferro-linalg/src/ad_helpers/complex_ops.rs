@@ -38,14 +38,14 @@ where
 }
 
 /// Solve `A X = B` for complex square matrices.
-pub(crate) fn complex_solve_nn<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub(crate) fn complex_solve_nn<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     _ctx: &mut C,
     a: &[Cx<T>],
     b: &[Cx<T>],
     n: usize,
 ) -> AdResult<Vec<Cx<T>>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let nn = 2 * n;
     let mut a_real = vec![T::zero(); nn * nn];
