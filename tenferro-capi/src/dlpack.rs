@@ -142,17 +142,25 @@ impl Drop for ImportedDLPackGuard {
     }
 }
 
-fn row_major_strides(dims: &[usize]) -> Vec<isize> {
+fn row_major_strides(dims: &[usize]) -> tenferro_device::Result<Vec<isize>> {
     let ndim = dims.len();
     if ndim == 0 {
-        return vec![];
+        return Ok(vec![]);
     }
     let mut strides = vec![0isize; ndim];
     strides[ndim - 1] = 1;
     for i in (0..ndim - 1).rev() {
-        strides[i] = strides[i + 1] * dims[i + 1] as isize;
+        let dim = isize::try_from(dims[i + 1]).map_err(|_| {
+            tenferro_device::Error::InvalidArgument(format!(
+                "dimension {} too large for stride calculation",
+                dims[i + 1]
+            ))
+        })?;
+        strides[i] = strides[i + 1].checked_mul(dim).ok_or_else(|| {
+            tenferro_device::Error::StrideError("stride overflow in row-major inference".into())
+        })?;
     }
-    strides
+    Ok(strides)
 }
 
 fn required_buffer_len(
@@ -418,7 +426,10 @@ pub unsafe extern "C" fn tfe_tensor_f64_from_dlpack(
                 })?;
 
             let strides = if dl.strides.is_null() {
-                row_major_strides(&dims)
+                row_major_strides(&dims).map_err(|err| {
+                    set_last_error(&format!("from_dlpack: {}", err));
+                    TFE_INVALID_ARGUMENT
+                })?
             } else {
                 std::slice::from_raw_parts(dl.strides, ndim)
                     .iter()
