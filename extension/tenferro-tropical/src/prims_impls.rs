@@ -24,32 +24,38 @@ use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 /// All tropical scalar types are #[repr(transparent)] over their inner type,
 /// so the transmute is sound.
 macro_rules! try_simd_dispatch {
-    ($T:ty, $concrete_ty:ty, $inputs:expr, $alpha:expr, $beta:expr,
-     $output:expr, $batch_dims:expr, $m:expr, $n:expr, $k:expr) => {
-        if TypeId::of::<$T>() == TypeId::of::<$concrete_ty>() {
-            let a = unsafe {
-                &*($inputs[0] as *const StridedView<$T> as *const StridedView<$concrete_ty>)
-            };
-            let b = unsafe {
-                &*($inputs[1] as *const StridedView<$T> as *const StridedView<$concrete_ty>)
-            };
-            let out = unsafe {
-                &mut *($output as *mut StridedViewMut<$T> as *mut StridedViewMut<$concrete_ty>)
-            };
-            let alpha = unsafe { *(&$alpha as *const $T as *const $concrete_ty) };
-            let beta = unsafe { *(&$beta as *const $T as *const $concrete_ty) };
-            return execute_batched_gemm_optimized(
-                alpha,
-                &[a, b],
-                beta,
-                out,
-                $batch_dims,
-                $m,
-                $n,
-                $k,
-            );
-        }
-    };
+    ($T:ty, [$($concrete_ty:ty),+ $(,)?], $inputs:expr, $alpha:expr, $beta:expr,
+     $output:expr, $batch_dims:expr, $m:expr, $n:expr, $k:expr) => {{
+        let tid = TypeId::of::<$T>();
+        $(
+            if tid == TypeId::of::<$concrete_ty>() {
+                let a = unsafe {
+                    &*($inputs[0] as *const StridedView<$T> as *const StridedView<$concrete_ty>)
+                };
+                let b = unsafe {
+                    &*($inputs[1] as *const StridedView<$T> as *const StridedView<$concrete_ty>)
+                };
+                let out = unsafe {
+                    &mut *(
+                        $output as *mut StridedViewMut<$T>
+                            as *mut StridedViewMut<$concrete_ty>
+                    )
+                };
+                let alpha = unsafe { *(&$alpha as *const $T as *const $concrete_ty) };
+                let beta = unsafe { *(&$beta as *const $T as *const $concrete_ty) };
+                return execute_batched_gemm_optimized(
+                    alpha,
+                    &[a, b],
+                    beta,
+                    out,
+                    $batch_dims,
+                    $m,
+                    $n,
+                    $k,
+                );
+            }
+        )+
+    }};
 }
 
 macro_rules! impl_tropical_prims {
@@ -100,19 +106,7 @@ macro_rules! impl_tropical_prims {
                     }
                     try_simd_dispatch!(
                         $wrapper<S>,
-                        $wrapper<f64>,
-                        &view_refs,
-                        alpha,
-                        beta,
-                        &mut out_view,
-                        batch_dims,
-                        *m,
-                        *n,
-                        *k
-                    );
-                    try_simd_dispatch!(
-                        $wrapper<S>,
-                        $wrapper<f32>,
+                        [$wrapper<f64>, $wrapper<f32>],
                         &view_refs,
                         alpha,
                         beta,
