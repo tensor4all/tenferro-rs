@@ -183,6 +183,7 @@ mod scalar_cpu;
 mod scalar_prims;
 mod semiring_core;
 mod semiring_fast_path;
+mod typed_dispatch;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.

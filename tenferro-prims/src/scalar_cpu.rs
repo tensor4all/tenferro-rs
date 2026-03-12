@@ -1,6 +1,3 @@
-use std::any::TypeId;
-
-use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
@@ -13,6 +10,10 @@ use crate::family_cpu_common::{
 use crate::family_cpu_reduction::{
     execute_extrema_reduction, execute_mean_reduction, execute_prod_reduction,
     execute_sum_reduction,
+};
+use crate::typed_dispatch::{
+    cast_scalar_value, cast_strided_view, cast_strided_view_mut, dispatch_complex_scalar_type,
+    dispatch_real_scalar_type, dispatch_standard_scalar_type,
 };
 use crate::{
     validate_execute_inputs, CpuBackend, CpuContext, ScalarBinaryOp, ScalarPrimsDescriptor,
@@ -182,35 +183,13 @@ fn execute_scalar_unary<T: Scalar + 'static>(
     output: &mut strided_view::StridedViewMut<T>,
     op: ScalarUnaryOp,
 ) -> Result<()> {
-    macro_rules! dispatch {
-        ($ty:ty, $body:expr) => {{
-            let input = unsafe {
-                &*(input as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return $body(alpha, input, beta, output, op);
-        }};
-    }
-
-    let tid = TypeId::of::<T>();
-    if tid == TypeId::of::<f64>() {
-        dispatch!(f64, execute_scalar_unary_typed::<f64>);
-    }
-    if tid == TypeId::of::<f32>() {
-        dispatch!(f32, execute_scalar_unary_typed::<f32>);
-    }
-    if tid == TypeId::of::<Complex64>() {
-        dispatch!(Complex64, execute_scalar_unary_typed::<Complex64>);
-    }
-    if tid == TypeId::of::<Complex32>() {
-        dispatch!(Complex32, execute_scalar_unary_typed::<Complex32>);
-    }
+    dispatch_standard_scalar_type!(T, Concrete, {
+        let input = cast_strided_view!(input, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_scalar_unary_typed::<Concrete>(alpha, input, beta, output, op);
+    });
 
     Err(Error::InvalidArgument(format!(
         "scalar unary operation {op:?} is not supported for {}",
@@ -226,39 +205,22 @@ fn execute_scalar_binary<T: Scalar + 'static>(
     output: &mut strided_view::StridedViewMut<T>,
     op: ScalarBinaryOp,
 ) -> Result<()> {
-    macro_rules! dispatch {
-        ($ty:ty, $body:expr) => {{
-            let lhs = unsafe {
-                &*(lhs as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let rhs = unsafe {
-                &*(rhs as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return $body(alpha, lhs, rhs, beta, output, op);
-        }};
-    }
-
-    let tid = TypeId::of::<T>();
-    if tid == TypeId::of::<f64>() {
-        dispatch!(f64, execute_scalar_binary_real::<f64>);
-    }
-    if tid == TypeId::of::<f32>() {
-        dispatch!(f32, execute_scalar_binary_real::<f32>);
-    }
-    if tid == TypeId::of::<Complex64>() {
-        dispatch!(Complex64, execute_scalar_binary_complex::<Complex64>);
-    }
-    if tid == TypeId::of::<Complex32>() {
-        dispatch!(Complex32, execute_scalar_binary_complex::<Complex32>);
-    }
+    dispatch_real_scalar_type!(T, Concrete, {
+        let lhs = cast_strided_view!(lhs, T, Concrete);
+        let rhs = cast_strided_view!(rhs, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_scalar_binary_real::<Concrete>(alpha, lhs, rhs, beta, output, op);
+    });
+    dispatch_complex_scalar_type!(T, Concrete, {
+        let lhs = cast_strided_view!(lhs, T, Concrete);
+        let rhs = cast_strided_view!(rhs, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_scalar_binary_complex::<Concrete>(alpha, lhs, rhs, beta, output, op);
+    });
 
     Err(Error::InvalidArgument(format!(
         "scalar binary operation {op:?} is not supported for {}",
@@ -274,100 +236,63 @@ fn execute_scalar_reduction<T: Scalar + 'static>(
     reduced_axes: &[usize],
     op: ScalarReductionOp,
 ) -> Result<()> {
-    macro_rules! dispatch_any {
-        ($ty:ty, $body:expr) => {{
-            let input = unsafe {
-                &*(input as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return $body(alpha, input, beta, output, reduced_axes);
-        }};
-    }
-    macro_rules! dispatch_real {
-        ($ty:ty, $want_max:expr) => {{
-            let input = unsafe {
-                &*(input as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return execute_extrema_reduction(alpha, input, beta, output, reduced_axes, $want_max);
-        }};
-    }
-
     match op {
         ScalarReductionOp::Sum => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                dispatch_any!(f64, execute_sum_reduction::<f64>);
-            }
-            if tid == TypeId::of::<f32>() {
-                dispatch_any!(f32, execute_sum_reduction::<f32>);
-            }
-            if tid == TypeId::of::<Complex64>() {
-                dispatch_any!(Complex64, execute_sum_reduction::<Complex64>);
-            }
-            if tid == TypeId::of::<Complex32>() {
-                dispatch_any!(Complex32, execute_sum_reduction::<Complex32>);
-            }
+            dispatch_standard_scalar_type!(T, Concrete, {
+                let input = cast_strided_view!(input, T, Concrete);
+                let output = cast_strided_view_mut!(output, T, Concrete);
+                let alpha = cast_scalar_value!(alpha, T, Concrete);
+                let beta = cast_scalar_value!(beta, T, Concrete);
+                return execute_sum_reduction::<Concrete>(alpha, input, beta, output, reduced_axes);
+            });
         }
         ScalarReductionOp::Prod => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                dispatch_any!(f64, execute_prod_reduction::<f64>);
-            }
-            if tid == TypeId::of::<f32>() {
-                dispatch_any!(f32, execute_prod_reduction::<f32>);
-            }
-            if tid == TypeId::of::<Complex64>() {
-                dispatch_any!(Complex64, execute_prod_reduction::<Complex64>);
-            }
-            if tid == TypeId::of::<Complex32>() {
-                dispatch_any!(Complex32, execute_prod_reduction::<Complex32>);
-            }
+            dispatch_standard_scalar_type!(T, Concrete, {
+                let input = cast_strided_view!(input, T, Concrete);
+                let output = cast_strided_view_mut!(output, T, Concrete);
+                let alpha = cast_scalar_value!(alpha, T, Concrete);
+                let beta = cast_scalar_value!(beta, T, Concrete);
+                return execute_prod_reduction::<Concrete>(
+                    alpha,
+                    input,
+                    beta,
+                    output,
+                    reduced_axes,
+                );
+            });
         }
         ScalarReductionOp::Mean => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                dispatch_any!(f64, execute_mean_reduction::<f64>);
-            }
-            if tid == TypeId::of::<f32>() {
-                dispatch_any!(f32, execute_mean_reduction::<f32>);
-            }
-            if tid == TypeId::of::<Complex64>() {
-                dispatch_any!(Complex64, execute_mean_reduction::<Complex64>);
-            }
-            if tid == TypeId::of::<Complex32>() {
-                dispatch_any!(Complex32, execute_mean_reduction::<Complex32>);
-            }
+            dispatch_standard_scalar_type!(T, Concrete, {
+                let input = cast_strided_view!(input, T, Concrete);
+                let output = cast_strided_view_mut!(output, T, Concrete);
+                let alpha = cast_scalar_value!(alpha, T, Concrete);
+                let beta = cast_scalar_value!(beta, T, Concrete);
+                return execute_mean_reduction::<Concrete>(
+                    alpha,
+                    input,
+                    beta,
+                    output,
+                    reduced_axes,
+                );
+            });
         }
         ScalarReductionOp::Max => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                dispatch_real!(f64, true);
-            }
-            if tid == TypeId::of::<f32>() {
-                dispatch_real!(f32, true);
-            }
+            dispatch_real_scalar_type!(T, Concrete, {
+                let input = cast_strided_view!(input, T, Concrete);
+                let output = cast_strided_view_mut!(output, T, Concrete);
+                let alpha = cast_scalar_value!(alpha, T, Concrete);
+                let beta = cast_scalar_value!(beta, T, Concrete);
+                return execute_extrema_reduction(alpha, input, beta, output, reduced_axes, true);
+            });
         }
         ScalarReductionOp::Min => {
-            let tid = TypeId::of::<T>();
-            if tid == TypeId::of::<f64>() {
-                dispatch_real!(f64, false);
-            }
-            if tid == TypeId::of::<f32>() {
-                dispatch_real!(f32, false);
-            }
+            dispatch_real_scalar_type!(T, Concrete, {
+                let input = cast_strided_view!(input, T, Concrete);
+                let output = cast_strided_view_mut!(output, T, Concrete);
+                let alpha = cast_scalar_value!(alpha, T, Concrete);
+                let beta = cast_scalar_value!(beta, T, Concrete);
+                return execute_extrema_reduction(alpha, input, beta, output, reduced_axes, false);
+            });
         }
     }
 

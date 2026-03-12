@@ -4,13 +4,7 @@ use chainrules_scalarops::ScalarAd;
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
-use tenferro_einsum::EinsumBackend;
-use tenferro_linalg::backend::{TensorLinalgBackend, TensorLinalgContextFor};
 use tenferro_linalg::{backend::CpuLinalgScalar, LinalgScalar};
-use tenferro_prims::{
-    CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
-    TensorAnalyticPrims, TensorScalarPrims, TensorSemiringCore, TensorSemiringFastPath,
-};
 
 #[doc(hidden)]
 /// Hidden bound for values that participate in the standard dyadtensor runtime.
@@ -36,57 +30,7 @@ impl<T> StandardRuntimeValue for T where T: Scalar + HasAlgebra<Algebra = Standa
 /// ```
 pub trait EinsumRuntimeValue: StandardRuntimeValue {}
 
-impl<T> EinsumRuntimeValue for T
-where
-    T: StandardRuntimeValue,
-    CpuBackend: TensorSemiringCore<Standard<T>, Context = CpuContext>
-        + TensorSemiringFastPath<
-            Standard<T>,
-            Context = CpuContext,
-            Plan = <CpuBackend as TensorSemiringCore<Standard<T>>>::Plan,
-        >,
-    CudaBackend: TensorSemiringCore<Standard<T>, Context = CudaContext>
-        + TensorSemiringFastPath<
-            Standard<T>,
-            Context = CudaContext,
-            Plan = <CudaBackend as TensorSemiringCore<Standard<T>>>::Plan,
-        >,
-    RocmBackend: TensorSemiringCore<Standard<T>, Context = RocmContext>
-        + TensorSemiringFastPath<
-            Standard<T>,
-            Context = RocmContext,
-            Plan = <RocmBackend as TensorSemiringCore<Standard<T>>>::Plan,
-        >,
-{
-}
-
-#[doc(hidden)]
-/// Hidden shorthand for a backend/context pair that can execute dense einsum.
-pub trait DenseEinsumBackend<T, C>:
-    EinsumBackend<Standard<T>>
-    + TensorSemiringCore<Standard<T>, Context = C>
-    + TensorSemiringFastPath<
-        Standard<T>,
-        Context = C,
-        Plan = <Self as TensorSemiringCore<Standard<T>>>::Plan,
-    >
-where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-{
-}
-
-impl<T, C, B> DenseEinsumBackend<T, C> for B
-where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
-    B: EinsumBackend<Standard<T>>
-        + TensorSemiringCore<Standard<T>, Context = C>
-        + TensorSemiringFastPath<
-            Standard<T>,
-            Context = C,
-            Plan = <B as TensorSemiringCore<Standard<T>>>::Plan,
-        >,
-{
-}
+impl<T> EinsumRuntimeValue for T where T: StandardRuntimeValue {}
 
 #[doc(hidden)]
 /// Hidden bound for values that support scalar pointwise and reduction primitives.
@@ -99,14 +43,7 @@ where
 /// ```
 pub trait ScalarRuntimeValue: StandardRuntimeValue + Copy {}
 
-impl<T> ScalarRuntimeValue for T
-where
-    T: StandardRuntimeValue + Copy,
-    CpuBackend: TensorScalarPrims<Standard<T>, Context = CpuContext>,
-    CudaBackend: TensorScalarPrims<Standard<T>, Context = CudaContext>,
-    RocmBackend: TensorScalarPrims<Standard<T>, Context = RocmContext>,
-{
-}
+impl<T> ScalarRuntimeValue for T where T: StandardRuntimeValue + Copy {}
 
 #[doc(hidden)]
 /// Hidden bound for values that support analytic pointwise and reduction primitives.
@@ -119,14 +56,7 @@ where
 /// ```
 pub trait AnalyticRuntimeValue: ScalarRuntimeValue {}
 
-impl<T> AnalyticRuntimeValue for T
-where
-    T: ScalarRuntimeValue,
-    CpuBackend: TensorAnalyticPrims<Standard<T>, Context = CpuContext>,
-    CudaBackend: TensorAnalyticPrims<Standard<T>, Context = CudaContext>,
-    RocmBackend: TensorAnalyticPrims<Standard<T>, Context = RocmContext>,
-{
-}
+impl<T> AnalyticRuntimeValue for T where T: ScalarRuntimeValue {}
 
 #[doc(hidden)]
 /// Hidden shorthand for values that support einsum, scalar, and analytic runtime families.
@@ -187,20 +117,7 @@ pub trait LinalgRuntimeValue:
 {
 }
 
-impl<T> LinalgRuntimeValue for T
-where
-    T: EinsumRuntimeValue + LinalgScalar + CpuLinalgScalar + 'static,
-    CpuContext: TensorLinalgContextFor<T>,
-    CudaContext: TensorLinalgContextFor<T>,
-    RocmContext: TensorLinalgContextFor<T>,
-    <CpuContext as TensorLinalgContextFor<T>>::Backend:
-        TensorLinalgBackend<T, Context = CpuContext>,
-    <CudaContext as TensorLinalgContextFor<T>>::Backend:
-        TensorLinalgBackend<T, Context = CudaContext>,
-    <RocmContext as TensorLinalgContextFor<T>>::Backend:
-        TensorLinalgBackend<T, Context = RocmContext>,
-{
-}
+impl<T> LinalgRuntimeValue for T where T: EinsumRuntimeValue + LinalgScalar + CpuLinalgScalar + 'static {}
 
 #[doc(hidden)]
 /// Hidden shorthand for real-valued linalg runtime values.
