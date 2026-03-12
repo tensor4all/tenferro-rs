@@ -3,7 +3,9 @@
 This document details how the einsum CPU implementation is structured in
 `tenferro-prims` and `tenferro-einsum`.
 
-**Purpose**: Detect potential problems before implementation begins.
+**Purpose**: Detect potential problems before implementation began. Treat the
+design choices recorded here as historical implementation notes rather than
+live API guidance.
 
 > Historical note (2026-03-12): this document predates the removal of the
 > legacy `TensorPrims<A>` surface. Read `TensorPrims<A>` as the semiring

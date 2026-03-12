@@ -10,7 +10,6 @@ use super::AdScalar;
 
 fn unary_ad_scalar_op<T, P, F, R>(
     value: AdScalar<T>,
-    op_name: &'static str,
     primal_rule: P,
     frule: F,
     rrule: R,
@@ -50,8 +49,7 @@ where
                         rrule(input_primal, output_primal, *cotangent),
                     )])
                 }),
-            )
-            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            );
             AdScalar::new_reverse(output_primal, output_node, tape, tangent)
         }
     }
@@ -65,7 +63,6 @@ impl<T> AdScalar<T> {
     {
         unary_ad_scalar_op(
             self,
-            "conj",
             scalarops::conj,
             scalarops::conj_frule,
             |_input, _output, cotangent| scalarops::conj_rrule(cotangent),
@@ -79,7 +76,6 @@ impl<T> AdScalar<T> {
     {
         unary_ad_scalar_op(
             self,
-            "sqrt",
             scalarops::sqrt,
             scalarops::sqrt_frule,
             |_input, output, cotangent| scalarops::sqrt_rrule(output, cotangent),
@@ -94,7 +90,6 @@ impl<T> AdScalar<T> {
     {
         unary_ad_scalar_op(
             self,
-            "powf",
             move |primal| scalarops::powf(primal, exponent),
             move |primal, tangent| scalarops::powf_frule(primal, exponent, tangent),
             move |input, _output, cotangent| scalarops::powf_rrule(input, exponent, cotangent),
@@ -108,7 +103,6 @@ impl<T> AdScalar<T> {
     {
         unary_ad_scalar_op(
             self,
-            "powi",
             move |primal| scalarops::powi(primal, exponent),
             move |primal, tangent| scalarops::powi_frule(primal, exponent, tangent),
             move |input, _output, cotangent| scalarops::powi_rrule(input, exponent, cotangent),
@@ -125,7 +119,6 @@ where
     fn neg(self) -> Self::Output {
         unary_ad_scalar_op(
             self,
-            "neg",
             |primal| -primal,
             |primal, tangent| (-primal, -tangent),
             |_input, _output, cotangent| -cotangent,

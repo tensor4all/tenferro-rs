@@ -198,10 +198,11 @@ fn validate_subscripts_ranks(
 
 fn build_node_offsets(operands: &[OperandAxisClasses]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(operands.len() + 1);
-    offsets.push(0);
+    let mut next_offset = 0usize;
+    offsets.push(next_offset);
     for operand in operands {
-        let last = *offsets.last().expect("offsets is never empty");
-        offsets.push(last + operand.axis_classes.len());
+        next_offset += operand.axis_classes.len();
+        offsets.push(next_offset);
     }
     offsets
 }

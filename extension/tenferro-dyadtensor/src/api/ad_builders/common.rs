@@ -96,7 +96,7 @@ macro_rules! run_unary_tensor_ad {
                     let grad = compress_pullback_like($op_name, grad, &spec.layout)?;
                     Ok(vec![(spec.node, grad)])
                 }),
-            )?;
+            );
         }
 
         Ok(out)
@@ -193,7 +193,7 @@ macro_rules! run_binary_tensor_ad {
                     }
                     Ok(input_grads)
                 }),
-            )?;
+            );
         }
 
         Ok(out)

@@ -12,7 +12,7 @@ use tenferro_tropical::ad::{
 use tenferro_tropical::{MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra};
 
 use crate::ffi_utils::{
-    collect_operand_handles, collect_optional_tangent_handles, parse_subscripts,
+    collect_operand_handles, collect_optional_tangent_handles, cpu_context, parse_subscripts,
 };
 use crate::handle::{handle_to_ref, tensor_to_handle};
 use crate::status::{finalize_ptr, finalize_void, map_device_error};
@@ -40,7 +40,7 @@ where
         .map(|tensor| promote_to_tropical::<T>(*tensor).map_err(|err| map_device_error(&err)))
         .collect::<std::result::Result<_, _>>()?;
     let tropical_refs: Vec<&Tensor<T>> = tropical_operands.iter().collect();
-    let mut ctx = CpuContext::new(1);
+    let mut ctx = cpu_context()?;
     let output = einsum::<Alg, CpuBackend>(&mut ctx, subscripts, &tropical_refs, None)
         .map_err(|err| map_device_error(&err))?;
     let output = extract_inner::<T>(&output).map_err(|err| map_device_error(&err))?;
@@ -77,7 +77,7 @@ where
         .collect::<std::result::Result<_, _>>()?;
     let tropical_refs: Vec<&Tensor<T>> = tropical_operands.iter().collect();
     let cotangent = handle_to_ref(cotangent);
-    let mut ctx = CpuContext::new(1);
+    let mut ctx = cpu_context()?;
     let grads = tropical_einsum_rrule::<T, Alg, CpuBackend>(
         &mut ctx,
         subscripts,
@@ -122,7 +122,7 @@ where
         .map(|tensor| promote_to_tropical::<T>(*tensor).map_err(|err| map_device_error(&err)))
         .collect::<std::result::Result<_, _>>()?;
     let tropical_refs: Vec<&Tensor<T>> = tropical_primals.iter().collect();
-    let mut ctx = CpuContext::new(1);
+    let mut ctx = cpu_context()?;
     let output = tropical_einsum_frule::<T, Alg, CpuBackend>(
         &mut ctx,
         subscripts,

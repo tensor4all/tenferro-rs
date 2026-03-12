@@ -119,7 +119,7 @@ fn binary_ad_scalar_try_op<T: scalarops::ScalarAd + 'static>(
                     }
                     Ok(grads)
                 }),
-            )?;
+            );
 
             Ok(AdScalar::new_reverse(primal, output_node, tape, tangent))
         }

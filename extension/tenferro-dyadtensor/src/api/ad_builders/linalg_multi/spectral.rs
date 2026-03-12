@@ -106,7 +106,7 @@ where
                         let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_vectors.as_value() {
@@ -138,7 +138,7 @@ where
                         let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
         }
 
@@ -263,7 +263,7 @@ where
                         let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_vectors.as_value() {
@@ -295,7 +295,7 @@ where
                         let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
         }
 

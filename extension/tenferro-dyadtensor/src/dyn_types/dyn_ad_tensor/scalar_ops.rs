@@ -145,7 +145,7 @@ where
                 }
                 Ok(input_grads)
             }),
-        )?;
+        );
 
         if let Some(node) = scalar_node {
             crate::reverse_tape::register_scalar_bridge_rule::<T, T>(
@@ -160,7 +160,7 @@ where
                     )?;
                     Ok(vec![(node, scalar_grad)])
                 }),
-            )?;
+            );
         }
 
         return AdTensor::new_reverse(structured_primal, output_node, tape, structured_tangent);

@@ -1,9 +1,11 @@
 use std::os::raw::c_char;
 
 use tenferro_capi::{tfe_status_t, TfeTensorF64, TFE_INVALID_ARGUMENT};
+use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor;
 
 use crate::handle::handle_to_ref;
+use crate::status::map_device_error;
 
 pub(crate) unsafe fn parse_subscripts<'a>(
     subscripts: *const c_char,
@@ -52,4 +54,8 @@ pub(crate) unsafe fn collect_optional_tangent_handles<'a>(
             }
         })
         .collect())
+}
+
+pub(crate) fn cpu_context() -> std::result::Result<CpuContext, tfe_status_t> {
+    CpuContext::try_new(1).map_err(|err| map_device_error(&err))
 }

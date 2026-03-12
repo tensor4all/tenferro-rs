@@ -8,6 +8,8 @@ use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 #[cfg(feature = "gemm-blas")]
 use std::ptr::NonNull;
+#[cfg(feature = "gemm-blas")]
+use tenferro_device::{Error, Result};
 
 /// Alignment for all scratch allocations (cache-line / AVX-512).
 #[cfg(feature = "gemm-blas")]
@@ -105,16 +107,15 @@ pub(super) struct ScratchPool {
 impl ScratchPool {
     /// Obtain a scratch buffer holding at least `len` elements of `T`.
     /// Contents are **uninitialized**; callers must overwrite before reading.
-    pub(super) fn take<T>(&mut self, len: usize) -> ScratchBuf<T> {
+    pub(super) fn take<T>(&mut self, len: usize) -> Result<ScratchBuf<T>> {
         debug_assert!(
             SCRATCH_ALIGN >= std::mem::align_of::<T>(),
             "SCRATCH_ALIGN ({SCRATCH_ALIGN}) < align_of::<T> ({})",
             std::mem::align_of::<T>(),
         );
-        let needed = match len.checked_mul(std::mem::size_of::<T>()) {
-            Some(size) => size,
-            None => panic!("scratch size overflow"),
-        };
+        let needed = len.checked_mul(std::mem::size_of::<T>()).ok_or_else(|| {
+            Error::InvalidArgument("scratch buffer size overflowed usize".to_string())
+        })?;
         let raw = self
             .pool
             .range(needed..)
@@ -132,12 +133,12 @@ impl ScratchPool {
             Some(buf) => (buf.ptr, buf.cap_bytes),
             None => {
                 if needed == 0 {
-                    return ScratchBuf {
+                    return Ok(ScratchBuf {
                         ptr: NonNull::dangling(),
                         cap_bytes: 0,
                         len: 0,
                         _marker: PhantomData,
-                    };
+                    });
                 }
                 let layout = scratch_layout(needed);
                 let ptr = unsafe { alloc::alloc(layout) };
@@ -147,12 +148,12 @@ impl ScratchPool {
                 (unsafe { NonNull::new_unchecked(ptr) }, needed)
             }
         };
-        ScratchBuf {
+        Ok(ScratchBuf {
             ptr,
             cap_bytes,
             len,
             _marker: PhantomData,
-        }
+        })
     }
 
     /// Return a scratch buffer to the pool for later reuse.

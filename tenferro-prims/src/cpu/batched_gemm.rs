@@ -70,9 +70,9 @@ pub(super) fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
         return gemm_fn(alpha, a_mat, b_mat, beta, c_mat, m, n, k);
     }
 
-    let mut a_mat = ctx.take_scratch::<T>(m * k);
-    let mut b_mat = ctx.take_scratch::<T>(k * n);
-    let mut c_mat = ctx.take_scratch::<T>(m * n);
+    let mut a_mat = ctx.take_scratch::<T>(m * k)?;
+    let mut b_mat = ctx.take_scratch::<T>(k * n)?;
+    let mut c_mat = ctx.take_scratch::<T>(m * n)?;
 
     let do_batch = |a_off: isize,
                     b_off: isize,

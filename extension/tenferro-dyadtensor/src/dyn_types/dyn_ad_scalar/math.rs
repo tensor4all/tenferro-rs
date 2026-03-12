@@ -95,13 +95,11 @@ impl DynAdScalar {
             Self::F64(v) => Self::F64(v),
             Self::C32(v) => Self::F32(crate::ad_value::map_ad_value_mixed_linear(
                 v,
-                "real_part",
                 |z| z.re,
                 |cotangent| Complex32::new(cotangent, 0.0),
             )),
             Self::C64(v) => Self::F64(crate::ad_value::map_ad_value_mixed_linear(
                 v,
-                "real_part",
                 |z| z.re,
                 |cotangent| Complex64::new(cotangent, 0.0),
             )),
@@ -111,25 +109,19 @@ impl DynAdScalar {
     /// AD-preserving extraction of the imaginary component.
     pub fn imag_part(&self) -> Self {
         match self.clone() {
-            Self::F32(v) => Self::F32(crate::ad_value::map_ad_value_same_type_linear(
-                v,
-                "imag_part",
-                |_| 0.0_f32,
-            )),
-            Self::F64(v) => Self::F64(crate::ad_value::map_ad_value_same_type_linear(
-                v,
-                "imag_part",
-                |_| 0.0_f64,
-            )),
+            Self::F32(v) => Self::F32(crate::ad_value::map_ad_value_same_type_linear(v, |_| {
+                0.0_f32
+            })),
+            Self::F64(v) => Self::F64(crate::ad_value::map_ad_value_same_type_linear(v, |_| {
+                0.0_f64
+            })),
             Self::C32(v) => Self::F32(crate::ad_value::map_ad_value_mixed_linear(
                 v,
-                "imag_part",
                 |z| z.im,
                 |cotangent| Complex32::new(0.0, cotangent),
             )),
             Self::C64(v) => Self::F64(crate::ad_value::map_ad_value_mixed_linear(
                 v,
-                "imag_part",
                 |z| z.im,
                 |cotangent| Complex64::new(0.0, cotangent),
             )),

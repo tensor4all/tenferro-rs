@@ -32,6 +32,7 @@ context:
 |----------|-------------|
 | [linalg-backend-api.md](./linalg-backend-api.md) | Earlier proposal for a tensor-level linalg backend layer |
 | [linalg-gemm-prims.md](./linalg-gemm-prims.md) | Earlier migration notes for GEMM-backed linalg helpers |
+| [einsum-cpu-porting-notes.md](./einsum-cpu-porting-notes.md) | Earlier CPU einsum porting notes, preserved as historical design record |
 
 ## AD Formula Notes
 

@@ -14,13 +14,11 @@ impl DynAdTensor {
             Self::F64(v) => Ok(Self::F64(v.clone())),
             Self::C32(v) => Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
                 v,
-                "real_part",
                 |z| z.re,
                 |cotangent| Complex32::new(cotangent, 0.0),
             )?)),
             Self::C64(v) => Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
                 v,
-                "real_part",
                 |z| z.re,
                 |cotangent| Complex64::new(cotangent, 0.0),
             )?)),
@@ -30,25 +28,19 @@ impl DynAdTensor {
     /// AD-preserving extraction of the imaginary component.
     pub fn imag_part(&self) -> Result<Self> {
         match self {
-            Self::F32(v) => Ok(Self::F32(map_ad_tensor_same_type_linear_typed(
-                v,
-                "imag_part",
-                |_| 0.0_f32,
-            )?)),
-            Self::F64(v) => Ok(Self::F64(map_ad_tensor_same_type_linear_typed(
-                v,
-                "imag_part",
-                |_| 0.0_f64,
-            )?)),
+            Self::F32(v) => Ok(Self::F32(map_ad_tensor_same_type_linear_typed(v, |_| {
+                0.0_f32
+            })?)),
+            Self::F64(v) => Ok(Self::F64(map_ad_tensor_same_type_linear_typed(v, |_| {
+                0.0_f64
+            })?)),
             Self::C32(v) => Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
                 v,
-                "imag_part",
                 |z| z.im,
                 |cotangent| Complex32::new(0.0, cotangent),
             )?)),
             Self::C64(v) => Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
                 v,
-                "imag_part",
                 |z| z.im,
                 |cotangent| Complex64::new(0.0, cotangent),
             )?)),
@@ -61,13 +53,11 @@ impl DynAdTensor {
             (Self::F32(re), Self::F32(im)) => {
                 let re_c = map_ad_tensor_mixed_linear_typed(
                     &re,
-                    "compose_complex",
                     |x| Complex32::new(x, 0.0),
                     |cotangent| cotangent.re,
                 )?;
                 let im_c = map_ad_tensor_mixed_linear_typed(
                     &im,
-                    "compose_complex",
                     |y| Complex32::new(0.0, y),
                     |cotangent| cotangent.im,
                 )?;
@@ -77,13 +67,11 @@ impl DynAdTensor {
             (Self::F64(re), Self::F64(im)) => {
                 let re_c = map_ad_tensor_mixed_linear_typed(
                     &re,
-                    "compose_complex",
                     |x| Complex64::new(x, 0.0),
                     |cotangent| cotangent.re,
                 )?;
                 let im_c = map_ad_tensor_mixed_linear_typed(
                     &im,
-                    "compose_complex",
                     |y| Complex64::new(0.0, y),
                     |cotangent| cotangent.im,
                 )?;

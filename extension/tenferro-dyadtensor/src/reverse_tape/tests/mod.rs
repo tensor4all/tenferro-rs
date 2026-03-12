@@ -20,8 +20,7 @@ fn pullback_wrt_scalars_seeds_output_when_only_scalar_bridge_is_registered() {
             let sum = cotangent.buffer().as_slice().unwrap().iter().copied().sum();
             Ok(vec![(scalar_node, sum)])
         }),
-    )
-    .unwrap();
+    );
 
     let grads = pullback_wrt_scalars::<f64, f64>(
         tape,
@@ -45,14 +44,12 @@ fn pullback_wrt_scalars_propagates_registered_scalar_rule_chain() {
         tape,
         output_node,
         Box::new(move |_| Ok(vec![(intermediate, 2.0_f64)])),
-    )
-    .unwrap();
+    );
     register_scalar_rule::<f64>(
         tape,
         intermediate,
         Box::new(move |cotangent| Ok(vec![(leaf_a, *cotangent), (leaf_b, *cotangent * 3.0)])),
-    )
-    .unwrap();
+    );
 
     let grads = pullback_wrt_scalars::<f64, f64>(
         tape,

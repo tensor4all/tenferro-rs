@@ -1,0 +1,125 @@
+//! BLAS/LAPACK backend for linear algebra operations.
+//!
+//! This backend implements [`super::LinalgBackend`] for
+//! `f32`, `f64`, `Complex32`, and `Complex64` using:
+//! - LAPACK wrappers from the [`lapack`](https://crates.io/crates/lapack) crate
+//! - CBLAS symbols from the [`cblas-sys`](https://crates.io/crates/cblas-sys) crate
+//!
+//! Symbol providers are selected at compile time via crate features
+//! (`provider-src` / `provider-inject` and `src-*`).
+
+use num_complex::{Complex32, Complex64};
+use tenferro_device::Result;
+
+use super::LinalgBackend;
+
+mod complex;
+mod helpers;
+mod real;
+
+pub(crate) use helpers::{
+    as_i32, check_info_cholesky, check_info_nonnegative, check_info_success, check_len,
+    fill_zero_upper, lwork_from_query_c32, lwork_from_query_c64, lwork_from_query_f32,
+    lwork_from_query_f64, pivots_to_forward_perm, split_lu, write_real_eig_general_output,
+};
+
+/// LAPACK/CBLAS backend with compile-time selectable symbol provider.
+///
+/// This backend is stateless; `&mut self` is accepted for API uniformity
+/// and future workspace reuse.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg::backend::{BlasLapackBackend, LinalgBackend};
+///
+/// let mut backend = BlasLapackBackend::new();
+/// let a = [1.0_f64, 0.0, 0.0, 1.0]; // 2x2 identity, col-major
+/// let mut u = [0.0; 4];
+/// let mut s = [0.0; 2];
+/// let mut vt = [0.0; 4];
+/// backend.thin_svd(&a, 2, 2, &mut u, &mut s, &mut vt).unwrap();
+/// ```
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlasLapackBackend;
+
+impl BlasLapackBackend {
+    /// Create a new backend instance.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_linalg::backend::BlasLapackBackend;
+    ///
+    /// let backend = BlasLapackBackend::new();
+    /// let _ = backend;
+    /// ```
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+real::impl_lapack_backend_real!(
+    f64,
+    dgesvd,
+    dgeqrf,
+    dorgqr,
+    dgetrf,
+    dpotrf,
+    dsyev,
+    dgesv,
+    dtrtrs,
+    dgeev,
+    cblas_sys::cblas_dgemm,
+    lwork_from_query_f64
+);
+
+real::impl_lapack_backend_real!(
+    f32,
+    sgesvd,
+    sgeqrf,
+    sorgqr,
+    sgetrf,
+    spotrf,
+    ssyev,
+    sgesv,
+    strtrs,
+    sgeev,
+    cblas_sys::cblas_sgemm,
+    lwork_from_query_f32
+);
+
+complex::impl_lapack_backend_complex!(
+    Complex64,
+    f64,
+    zgesvd,
+    zgeqrf,
+    zungqr,
+    zgetrf,
+    zpotrf,
+    zheev,
+    zgesv,
+    ztrtrs,
+    zgeev,
+    cblas_sys::cblas_zgemm,
+    lwork_from_query_c64
+);
+
+complex::impl_lapack_backend_complex!(
+    Complex32,
+    f32,
+    cgesvd,
+    cgeqrf,
+    cungqr,
+    cgetrf,
+    cpotrf,
+    cheev,
+    cgesv,
+    ctrtrs,
+    cgeev,
+    cblas_sys::cblas_cgemm,
+    lwork_from_query_c32
+);
+
+#[cfg(test)]
+mod tests;

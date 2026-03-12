@@ -1,13 +1,12 @@
-use std::any::TypeId;
-
-use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar};
+use tenferro_device::{Error, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::PlanCache;
 
 #[cfg(feature = "gemm-blas")]
 use super::scratch::{ScratchBuf, ScratchPool};
+use crate::family_cpu_common;
 
 /// CPU execution context.
 ///
@@ -21,8 +20,11 @@ use super::scratch::{ScratchBuf, ScratchPool};
 /// ```
 /// use tenferro_prims::CpuContext;
 ///
-/// let mut ctx = CpuContext::new(4); // 4-thread pool
+/// # fn demo() -> tenferro_device::Result<()> {
+/// let mut ctx = CpuContext::try_new(4)?; // 4-thread pool
 /// assert_eq!(ctx.num_threads(), 4);
+/// # Ok(())
+/// # }
 /// ```
 pub struct CpuContext {
     pub(super) pool: rayon::ThreadPool,
@@ -33,17 +35,63 @@ pub struct CpuContext {
 
 impl CpuContext {
     /// Create a new CPU context with the given number of threads.
-    pub fn new(num_threads: usize) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tenferro_device::Error::InvalidArgument`] when
+    /// `num_threads == 0`, or [`tenferro_device::Error::DeviceError`] when the
+    /// underlying Rayon thread-pool construction fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # fn demo() -> tenferro_device::Result<()> {
+    /// use tenferro_prims::CpuContext;
+    ///
+    /// let ctx = CpuContext::try_new(2)?;
+    /// assert_eq!(ctx.num_threads(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn try_new(num_threads: usize) -> Result<Self> {
+        if num_threads == 0 {
+            return Err(Error::InvalidArgument(
+                "CpuContext::try_new requires num_threads >= 1".into(),
+            ));
+        }
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(num_threads)
             .build()
-            .unwrap_or_else(|e| panic!("failed to build rayon thread pool: {e}"));
-        Self {
+            .map_err(|e| Error::DeviceError(format!("failed to build rayon thread pool: {e}")))?;
+        Ok(Self {
             pool,
             plan_cache: PlanCache::new(),
             #[cfg(feature = "gemm-blas")]
             scratch: ScratchPool::default(),
-        }
+        })
+    }
+
+    /// Create a new CPU context with the given number of threads.
+    ///
+    /// This is a convenience wrapper around [`CpuContext::try_new`]. Production
+    /// code should generally prefer the fallible constructor so context setup
+    /// errors stay in the normal `Result` flow.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`CpuContext::try_new`] returns an error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_prims::CpuContext;
+    ///
+    /// let ctx = CpuContext::new(1);
+    /// assert_eq!(ctx.num_threads(), 1);
+    /// ```
+    pub fn new(num_threads: usize) -> Self {
+        Self::try_new(num_threads)
+            .unwrap_or_else(|e| panic!("failed to initialize CpuContext: {e}"))
     }
 
     /// Returns the number of threads in the pool.
@@ -62,7 +110,7 @@ impl CpuContext {
     }
 
     #[cfg(feature = "gemm-blas")]
-    pub(super) fn take_scratch<T>(&mut self, len: usize) -> ScratchBuf<T> {
+    pub(super) fn take_scratch<T>(&mut self, len: usize) -> Result<ScratchBuf<T>> {
         self.scratch.take(len)
     }
 
@@ -87,7 +135,7 @@ impl CpuContext {
 /// use tenferro_prims::{CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
-/// let mut ctx = CpuContext::new(4);
+/// let mut ctx = CpuContext::try_new(4).unwrap();
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let a_base = Tensor::<f64>::zeros(&[3, 4], mem, col);
@@ -113,11 +161,7 @@ pub struct CpuBackend;
 
 impl CpuBackend {
     pub(super) fn supports_batched_gemm_type<T: Scalar>() -> bool {
-        let tid = TypeId::of::<T>();
-        tid == TypeId::of::<f32>()
-            || tid == TypeId::of::<f64>()
-            || tid == TypeId::of::<Complex32>()
-            || tid == TypeId::of::<Complex64>()
+        family_cpu_common::is_supported_scalar_type::<T>()
     }
 
     /// Materialize a lazily-conjugated tensor.
@@ -133,6 +177,7 @@ impl CpuBackend {
     /// ```ignore
     /// use tenferro_prims::{CpuBackend, CpuContext};
     ///
+    /// let mut ctx = CpuContext::try_new(1).unwrap();
     /// let a_conj = a.into_conj(); // lazy
     /// let a_resolved = CpuBackend::resolve_conj(&mut ctx, &a_conj);
     /// assert!(!a_resolved.is_conjugated());

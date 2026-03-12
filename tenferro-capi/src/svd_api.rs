@@ -2,10 +2,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_device::LogicalMemorySpace;
 use tenferro_linalg::{svd, svd_frule, svd_rrule, SvdCotangent, SvdOptions};
-use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::ffi_utils::read_usize_slice;
+use crate::ffi_utils::{cpu_context, read_usize_slice};
 use crate::handle::{handle_to_ref, tensor_to_handle, TfeTensorF64};
 use crate::status::{
     finalize_ptr, finalize_void, map_ad_error, map_device_error, tfe_status_t,
@@ -218,7 +217,7 @@ pub unsafe extern "C" fn tfe_svd_f64(
         let (matrix, left_dims, right_dims) = matricize(t, left_indices, right_indices)?;
 
         let opts = build_svd_options(max_rank, cutoff);
-        let mut ctx = CpuContext::new(1);
+        let mut ctx = cpu_context()?;
         let result = svd(&mut ctx, &matrix, opts.as_ref()).map_err(|e| map_device_error(&e))?;
 
         let k = result.s.len();
@@ -329,7 +328,7 @@ pub unsafe extern "C" fn tfe_svd_rrule_f64(
         };
 
         let opts = build_svd_options(max_rank, cutoff);
-        let mut ctx = CpuContext::new(1);
+        let mut ctx = cpu_context()?;
         let grad_matrix = svd_rrule(&mut ctx, &matrix, &cotangent, opts.as_ref())
             .map_err(|e| map_ad_error(&e))?;
         let grad = grad_matrix_to_public(
@@ -399,7 +398,7 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
         };
 
         let opts = build_svd_options(max_rank, cutoff);
-        let mut ctx = CpuContext::new(1);
+        let mut ctx = cpu_context()?;
         let (_primal, tangent_result) =
             svd_frule(&mut ctx, &matrix, &tang, opts.as_ref()).map_err(|e| map_ad_error(&e))?;
 

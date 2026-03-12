@@ -1,5 +1,10 @@
 # Tensor-Level Linalg Backend API
 
+> Historical proposal: this document captures the design discussion that led to
+> the eventual `tenferro-linalg-prims` split. It is not the source of truth for
+> the current workspace layout. See `linalg-prims.md`, `linalg.md`, and
+> `architecture.md` for the current contracts.
+
 ## Summary
 
 This document proposes a new tensor-level backend layer for `tenferro-linalg`.

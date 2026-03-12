@@ -2,9 +2,9 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use tenferro_algebra::Standard;
 use tenferro_einsum::{einsum, einsum_frule, einsum_rrule};
-use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro_prims::CpuBackend;
 
-use crate::ffi_utils::{read_c_str, read_optional_tensor_refs, read_tensor_refs};
+use crate::ffi_utils::{cpu_context, read_c_str, read_optional_tensor_refs, read_tensor_refs};
 use crate::handle::{ensure_col_major, handle_to_ref, tensor_to_handle, TfeTensorF64};
 use crate::status::{
     finalize_ptr, finalize_void, map_device_error, tfe_status_t, TFE_INVALID_ARGUMENT,
@@ -40,7 +40,7 @@ pub unsafe extern "C" fn tfe_einsum_f64(
         let subs = read_c_str(subscripts, "einsum subscripts")?;
         let ops = read_tensor_refs(operands, num_operands, "einsum operands")?;
 
-        let mut ctx = CpuContext::new(1);
+        let mut ctx = cpu_context()?;
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, None)
             .and_then(|t| ensure_col_major(&mut ctx, t))
             .map(tensor_to_handle)
@@ -87,7 +87,7 @@ pub unsafe extern "C" fn tfe_einsum_rrule_f64(
         let ops = read_tensor_refs(operands, num_operands, "einsum_rrule operands")?;
         let cot = handle_to_ref(cotangent);
 
-        let mut ctx = CpuContext::new(1);
+        let mut ctx = cpu_context()?;
         let grads = einsum_rrule::<Standard<f64>, CpuBackend>(&mut ctx, subs, &ops, cot)
             .map_err(|e| map_device_error(&e))?;
 
@@ -139,7 +139,7 @@ pub unsafe extern "C" fn tfe_einsum_frule_f64(
         let tangent_refs =
             read_optional_tensor_refs(tangents, num_operands, "einsum_frule tangents")?;
 
-        let mut ctx = CpuContext::new(1);
+        let mut ctx = cpu_context()?;
         einsum_frule::<Standard<f64>, CpuBackend>(&mut ctx, subs, &primal_refs, &tangent_refs)
             .and_then(|t| ensure_col_major(&mut ctx, t))
             .map(tensor_to_handle)

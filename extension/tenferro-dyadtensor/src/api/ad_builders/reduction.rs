@@ -75,7 +75,7 @@ where
                     let grad = input_layout.with_payload_like(payload)?;
                     Ok(vec![(input_node, grad.into_payload())])
                 }),
-            )?;
+            );
         }
 
         Ok(out)

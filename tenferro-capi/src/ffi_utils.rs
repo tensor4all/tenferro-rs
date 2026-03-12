@@ -1,10 +1,11 @@
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
+use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor;
 
 use crate::handle::{handle_to_ref, TfeTensorF64};
-use crate::status::{set_last_error, StatusResult, TFE_INVALID_ARGUMENT};
+use crate::status::{map_device_error, set_last_error, StatusResult, TFE_INVALID_ARGUMENT};
 
 pub(crate) unsafe fn read_c_str<'a>(ptr: *const c_char, arg: &str) -> StatusResult<&'a str> {
     if ptr.is_null() {
@@ -77,4 +78,8 @@ pub(crate) unsafe fn read_optional_tensor_refs<'a>(
             }
         })
         .collect())
+}
+
+pub(crate) fn cpu_context() -> StatusResult<CpuContext> {
+    CpuContext::try_new(1).map_err(|err| map_device_error(&err))
 }

@@ -156,9 +156,9 @@ and execution. The remaining gap is breadth, not existence:
 ### 2. Structural reorder now lives in `tenferro-tensor`
 
 The current design keeps `permute` in `tenferro-tensor` as a view and uses
-`MakeContiguous` as the execution boundary. `PrimDescriptor::Permute` has now
-been removed from `tenferro-prims`, which aligns the public substrate with the
-intended semiring-core design.
+`MakeContiguous` as the execution boundary. The old materializing `Permute`
+primitive has now been removed from `tenferro-prims`, which aligns the public
+substrate with the intended semiring-core design.
 
 ### 3. `tenferro-linalg` is public/composite in design and production, but backend breadth is uneven
 

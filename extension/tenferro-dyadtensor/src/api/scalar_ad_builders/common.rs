@@ -310,7 +310,7 @@ where
                 let grad = compress_pullback_like(op_name, grad, &spec.layout)?;
                 Ok(vec![(spec.node, grad)])
             }),
-        )?;
+        );
     }
 
     Ok(out)
@@ -383,7 +383,7 @@ where
                 }
                 Ok(input_grads)
             }),
-        )?;
+        );
     }
 
     Ok(out)
