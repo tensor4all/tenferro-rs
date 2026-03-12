@@ -246,7 +246,7 @@ tenferro-prims ──→ tenferro-tensor   (prims depends on tensor)
 ### DataBuffer GPU variant
 
 ```rust
-// tenferro-tensor/src/lib.rs
+// tenferro-tensor/src/buffer.rs
 enum BufferInner<T> {
     Owned(Vec<T>),                    // CPU, Rust-owned
     External { ptr, len, release },   // CPU, externally-owned (DLPack)
@@ -269,7 +269,7 @@ enum BufferInner<T> {
 ### CompletionEvent
 
 ```rust
-// tenferro-tensor/src/lib.rs
+// tenferro-tensor/src/completion_event.rs
 pub struct CompletionEvent {
     inner: CompletionEventInner,
 }
@@ -290,20 +290,20 @@ enum CompletionEventInner {
 
 ## Conjugation on GPU
 
-`Tensor::conj()` の現在の実装は `buffer.as_slice()` を直接イテレート
-するため GPU メモリでは動作しない。
+`Tensor::conj()` は現在すでに lazy で、`Arc` 共有のまま
+`conjugated` フラグを反転するだけである。
 
 ### 対応方針
 
 cuTENSOR は tensor descriptor に `CUTENSOR_OP_CONJ` を指定でき、
 lazy conjugation をネイティブにサポートする。
 
-1. **Tensor に conjugated フラグを追加** — メタデータのみ（zero-cost）
+1. **Tensor の conjugated フラグを維持** — メタデータのみ（zero-cost）
 2. **plan() 時に descriptor に CONJ op を設定** — cuTENSOR が内部処理
-3. **materialize が必要な場合** — ElementwiseUnary 経由 or CPU 転送
+3. **materialize が必要な場合** — `resolve_conj()` などの explicit path を使う
 
-standalone `conj()` で実データをコピーする場合は CPU 転送が必要。
-ただし einsum 内部での conjugation は lazy flag で十分。
+standalone `conj()` 自体は CPU/GPU とも lazy のままでよい。実データ化が
+必要な場面だけ explicit materialization path を通す。
 
 ---
 
@@ -316,11 +316,11 @@ standalone `conj()` で実データをコピーする場合は CPU 転送が必�
 | RocmBackend stub | tenferro-prims/src/lib.rs | 型定義 + `todo!()` |
 | BackendRegistry stub | tenferro-prims/src/lib.rs | 型定義 |
 | CpuBackend 分離 | tenferro-prims/src/cpu/ | planning / execution / GEMM / scratch を分離 |
-| DataBuffer Gpu variant | tenferro-tensor/src/lib.rs | BufferInner に Gpu 追加 |
-| CompletionEvent 拡張 | tenferro-tensor/src/lib.rs | Cuda/Rocm variant 追加 |
+| DataBuffer Gpu variant | tenferro-tensor/src/buffer.rs | BufferInner に Gpu 追加 |
+| CompletionEvent 拡張 | tenferro-tensor/src/completion_event.rs | Cuda/Rocm variant 追加 |
 | libloading 依存追加 | workspace Cargo.toml | workspace dependency |
-| Tensor conjugated flag | tenferro-tensor/src/lib.rs | lazy conjugation 用 |
-| Arc\<BufferInner\> | tenferro-tensor/src/lib.rs | DataBuffer を Arc 共有に変更。clone() は浅い、conj() は lazy |
+| Tensor conjugated flag | tenferro-tensor/src/tensor/mod.rs | lazy conjugation 用 |
+| Arc\<BufferInner\> | tenferro-tensor/src/buffer.rs | DataBuffer を Arc 共有に変更。clone() は浅い、conj() は lazy |
 | resolve_conj stubs | tenferro-prims/src/lib.rs | 各バックエンドに resolve_conj() 追加 |
 | `ScalarUnaryOp::Conj` | tenferro-prims scalar family | resolve_conj 用の scalar unary op |
 | prims → tensor dep | tenferro-prims/Cargo.toml | resolve_conj が Tensor<T> を扱うため |

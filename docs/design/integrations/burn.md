@@ -285,4 +285,4 @@ NdArray is Burn's simplest CPU backend (pure Rust, no external dependencies). It
 - Burn autodiff internals: `burn/crates/burn-autodiff/src/ops/backward.rs`
 - Burn backend trait: `burn/crates/burn-backend/src/backend/base.rs`
 - tenferro chainrules-core: `tenferro-rs/extern/chainrules-core/src/lib.rs`
-- tenferro tensor type: `tenferro-rs/tenferro-tensor/src/lib.rs`
+- tenferro tensor type: `tenferro-rs/tenferro-tensor/src/tensor/mod.rs`
