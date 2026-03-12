@@ -170,6 +170,7 @@ Builder APIs are implemented for:
 - API contract: runtime-generic across CPU, CUDA, and ROCm
 - `chainrules_api::einsum` is backend-parametric over `tenferro-einsum::EinsumBackend`; callers choose the backend via the runtime context type
 - Structured tensor materialization and compressed einsum reuse the same einsum runtime-dispatch layer rather than maintaining separate CPU/CUDA/ROCm builder paths
+- Builder execution uses an explicit default-runtime holder, and reverse-mode bookkeeping keeps one tape-local rule store per tape instead of a generic global context map
 - Actual execution today:
   - CPU paths are implemented for the operations listed above
   - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution

@@ -223,4 +223,6 @@ Dynamic dyadic tensor API that layers runtime-selected scalar/tensor types,
 structured tensor layouts, and AD-aware operation builders on top of the core
 tenferro crates. It provides the higher-level builder surface used by eager
 einsum and linalg flows, plus dynamic wrappers for forward- and reverse-mode
-execution.
+execution. Builder `.run()` entrypoints execute through an explicit default
+runtime holder, while reverse-mode bookkeeping uses a tape-local rule store
+instead of a generic global context map.

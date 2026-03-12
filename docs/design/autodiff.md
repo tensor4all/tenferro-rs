@@ -281,6 +281,9 @@ backend contracts in production code.
   `with_cpu_runtime(...)`
 - linalg and einsum AD entrypoints now dispatch through the relevant family
   traits and runtime slots
+- builder `.run()` now relies on an explicit default-runtime holder, while
+  reverse-mode bookkeeping uses one tape-local rule store per tape instead of
+  a generic global context map
 - many public examples still instantiate `CpuContext` directly because CPU is
   the most complete backend today, not because the API contract is CPU-only
 

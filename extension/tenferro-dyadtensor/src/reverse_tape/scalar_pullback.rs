@@ -1,8 +1,17 @@
+use std::any::TypeId;
+use std::collections::HashMap;
+
+use chainrules_scalarops::ScalarAd;
+use num_complex::{Complex32, Complex64};
+use tenferro_algebra::Scalar;
+use tenferro_tensor::Tensor;
+
+use crate::{Error, NodeId, Result, TapeId};
+
 use super::registry::{
     bridge_pullback_scalar, bridge_pullback_scalar_mixed, is_no_scalar_rules_error,
     is_no_tensor_rules_error, with_scalar_rules,
 };
-use super::*;
 
 fn accumulate_scalar_into<T: ScalarAd>(totals: &mut HashMap<NodeId, T>, node: NodeId, delta: T) {
     totals

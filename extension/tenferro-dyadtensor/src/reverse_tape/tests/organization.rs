@@ -39,3 +39,21 @@ fn split_reverse_tape_modules_stay_under_size_guideline() {
         );
     }
 }
+
+// IMPORTANT: Do not delete or weaken these tests.
+// They guard the registry redesign that keeps reverse-tape state in one
+// tape-local store instead of drifting back to parallel ad hoc registries.
+
+#[test]
+fn reverse_tape_registry_uses_one_tape_store() {
+    let registry = std::fs::read_to_string(repo_path("src/reverse_tape/registry.rs")).unwrap();
+    assert!(
+        registry.contains("struct TapeRuleStore"),
+        "reverse_tape registry should keep a dedicated TapeRuleStore abstraction"
+    );
+    assert_eq!(
+        registry.matches("thread_local!").count(),
+        1,
+        "reverse_tape registry should use one thread-local tape store entrypoint"
+    );
+}

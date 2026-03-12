@@ -26,7 +26,9 @@ This repository currently provides:
   - Linalg AD: corresponding `*_ad(...)` operations
 
 All operation entry points are builder-based and execute via `.run()` using
-the default runtime context.
+the default runtime context. Runtime selection uses an explicit runtime holder,
+and reverse-mode bookkeeping keeps one tape-local rule store per tape rather
+than a generic global context map.
 
 ```rust
 use tenferro_dyadtensor::{qr, set_default_runtime, RuntimeContext};

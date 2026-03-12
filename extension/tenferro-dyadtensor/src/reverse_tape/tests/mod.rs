@@ -1,6 +1,7 @@
 mod organization;
 
 use super::*;
+use crate::{Error, NodeId, TapeId};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn f64_vec(values: &[f64]) -> Tensor<f64> {

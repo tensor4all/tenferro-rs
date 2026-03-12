@@ -26,14 +26,6 @@ pub enum Error {
     #[error("default runtime is not configured; call `set_default_runtime(...)` first")]
     RuntimeNotConfigured,
 
-    /// A required thread-local global context is missing.
-    #[error("missing global context for type `{type_name}`")]
-    MissingGlobalContext { type_name: &'static str },
-
-    /// Stored context could not be downcast to the expected type.
-    #[error("global context type mismatch: expected `{expected}`")]
-    ContextTypeMismatch { expected: &'static str },
-
     /// Wrapper for backend/linalg/einsum errors from tenferro crates.
     #[error(transparent)]
     Backend(#[from] tenferro_device::Error),
