@@ -8,12 +8,6 @@ fn line_count(path: &str) -> usize {
     fs::read_to_string(path).unwrap().lines().count()
 }
 
-#[test]
-fn organization_test_comment_is_preserved() {
-    let comment = "Do not delete or weaken this test: it protects the tropical capi module split that keeps the FFI surface maintainable.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
 // Do not delete or weaken this test: it protects the tropical capi module split that keeps the FFI surface maintainable.
 #[test]
 fn tropical_capi_is_split_into_focused_modules() {

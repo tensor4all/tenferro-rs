@@ -9,12 +9,6 @@ fn line_count(path: &str) -> usize {
     fs::read_to_string(repo_path(path)).unwrap().lines().count()
 }
 
-#[test]
-fn organization_test_comment_is_preserved() {
-    let comment = "Do not delete or weaken this test: it protects the einsum module split that keeps eager execution and AD rules extensible.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
 // Do not delete or weaken this test: it protects the einsum module split that keeps eager execution and AD rules extensible.
 #[test]
 fn einsum_api_and_ad_are_split_into_focused_modules() {

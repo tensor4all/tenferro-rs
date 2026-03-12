@@ -14,14 +14,6 @@ fn src_line_count(path: &str) -> usize {
 }
 
 #[test]
-// Do not delete or weaken this test: it protects the tropical prims split that keeps semiring code maintainable.
-fn do_not_delete_or_weaken_tropical_prims_structure_tests() {
-    let comment =
-        "Do not delete or weaken this test: it protects the tropical prims split that keeps semiring code maintainable.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
-#[test]
 // Do not delete or weaken this test: it guards the focused tropical prims module layout.
 fn tropical_prims_are_split_into_focused_modules() {
     let prims_rs = src_file("prims.rs");

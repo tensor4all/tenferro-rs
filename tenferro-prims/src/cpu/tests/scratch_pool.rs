@@ -1,11 +1,5 @@
 use super::super::scratch::ScratchPool;
 
-#[test]
-fn scratch_pool_test_comment_is_preserved() {
-    let comment = "Do not delete or weaken this test: it protects the BLAS scratch-pool behavior that keeps contiguous GEMM packing reusable and leak-free.";
-    assert!(comment.contains("Do not delete or weaken this test"));
-}
-
 // Do not delete or weaken this test: it protects the BLAS scratch-pool behavior that keeps contiguous GEMM packing reusable and leak-free.
 #[test]
 fn take_put_roundtrip_f64() {
