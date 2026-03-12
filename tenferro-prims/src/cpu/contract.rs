@@ -8,11 +8,13 @@ use crate::typed_dispatch::{
 };
 use crate::SemiringBinaryOp;
 
-use super::gemm_support::FaerGemm;
 use super::plan::{build_contract_gemm_spec, ContractGemmSpec};
 
+#[cfg(feature = "gemm-faer")]
+use super::gemm_support::FaerGemm;
+
 #[cfg(feature = "gemm-blas")]
-use super::gemm_support::{gemm_c32, gemm_c64, gemm_f32, gemm_f64};
+use super::gemm_support::BlasGemm;
 
 pub(super) fn execute_elementwise_binary<T: Scalar>(
     alpha: T,
@@ -456,26 +458,6 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         None => return Ok(None),
     };
 
-    #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
-    macro_rules! dispatch_dense_contract {
-        (f64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
-            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_f64)?;
-            return Ok(Some(()));
-        }};
-        (f32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
-            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_f32)?;
-            return Ok(Some(()));
-        }};
-        (Complex64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
-            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_c64)?;
-            return Ok(Some(()));
-        }};
-        (Complex32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
-            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_c32)?;
-            return Ok(Some(()));
-        }};
-    }
-
     dispatch_standard_scalar_type!(T, Concrete, {
         let a = cast_strided_view!(inputs[0], T, Concrete);
         let b = cast_strided_view!(inputs[1], T, Concrete);
@@ -490,7 +472,16 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         }
         #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
         {
-            dispatch_dense_contract!(Concrete, a, b, alpha, beta, c);
+            run_dense(
+                alpha,
+                a,
+                b,
+                beta,
+                c,
+                &layout,
+                <Concrete as BlasGemm>::contiguous_gemm,
+            )?;
+            return Ok(Some(()));
         }
     });
     Ok(None)

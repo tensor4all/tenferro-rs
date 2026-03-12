@@ -93,6 +93,20 @@ impl_faer_gemm!(Complex64);
 #[cfg(feature = "gemm-faer")]
 impl_faer_gemm!(Complex32);
 
+#[cfg(feature = "gemm-blas")]
+pub(super) trait BlasGemm: Scalar {
+    fn contiguous_gemm(
+        alpha: Self,
+        a: &[Self],
+        b: &[Self],
+        beta: Self,
+        c: &mut [Self],
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<()>;
+}
+
 /// Compute batch offset for one operand: fused path uses flat index × step,
 /// strided path uses multi-index dot product with strides.
 #[inline]
@@ -148,6 +162,22 @@ pub(super) fn gemm_f64(
 }
 
 #[cfg(feature = "gemm-blas")]
+impl BlasGemm for f64 {
+    fn contiguous_gemm(
+        alpha: Self,
+        a: &[Self],
+        b: &[Self],
+        beta: Self,
+        c: &mut [Self],
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<()> {
+        gemm_f64(alpha, a, b, beta, c, m, n, k)
+    }
+}
+
+#[cfg(feature = "gemm-blas")]
 pub(super) fn gemm_f32(
     alpha: f32,
     a: &[f32],
@@ -180,6 +210,22 @@ pub(super) fn gemm_f32(
         );
     }
     Ok(())
+}
+
+#[cfg(feature = "gemm-blas")]
+impl BlasGemm for f32 {
+    fn contiguous_gemm(
+        alpha: Self,
+        a: &[Self],
+        b: &[Self],
+        beta: Self,
+        c: &mut [Self],
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<()> {
+        gemm_f32(alpha, a, b, beta, c, m, n, k)
+    }
 }
 
 #[cfg(feature = "gemm-blas")]
@@ -220,6 +266,22 @@ pub(super) fn gemm_c64(
 }
 
 #[cfg(feature = "gemm-blas")]
+impl BlasGemm for Complex64 {
+    fn contiguous_gemm(
+        alpha: Self,
+        a: &[Self],
+        b: &[Self],
+        beta: Self,
+        c: &mut [Self],
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<()> {
+        gemm_c64(alpha, a, b, beta, c, m, n, k)
+    }
+}
+
+#[cfg(feature = "gemm-blas")]
 pub(super) fn gemm_c32(
     alpha: Complex32,
     a: &[Complex32],
@@ -254,4 +316,20 @@ pub(super) fn gemm_c32(
         );
     }
     Ok(())
+}
+
+#[cfg(feature = "gemm-blas")]
+impl BlasGemm for Complex32 {
+    fn contiguous_gemm(
+        alpha: Self,
+        a: &[Self],
+        b: &[Self],
+        beta: Self,
+        c: &mut [Self],
+        m: usize,
+        n: usize,
+        k: usize,
+    ) -> Result<()> {
+        gemm_c32(alpha, a, b, beta, c, m, n, k)
+    }
 }

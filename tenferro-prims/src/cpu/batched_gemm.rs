@@ -8,10 +8,13 @@ use crate::typed_dispatch::{
 };
 
 use super::context::CpuContext;
-use super::gemm_support::{batch_offset, FaerGemm};
+use super::gemm_support::batch_offset;
+
+#[cfg(feature = "gemm-faer")]
+use super::gemm_support::FaerGemm;
 
 #[cfg(feature = "gemm-blas")]
-use super::gemm_support::{gemm_c32, gemm_c64, gemm_f32, gemm_f64};
+use super::gemm_support::BlasGemm;
 
 /// Fallback for the OpenBLAS backend, which requires contiguous column-major data.
 /// Packs strided A, B, C into scratch buffers, calls contiguous gemm, unpacks C.
@@ -286,66 +289,6 @@ pub(super) fn execute_batched_gemm<T: Scalar + 'static>(
     n: usize,
     k: usize,
 ) -> Result<()> {
-    #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
-    macro_rules! dispatch_blas_gemm {
-        (f64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
-            return execute_batched_gemm_contiguous(
-                _ctx,
-                $alpha,
-                &[$a, $b],
-                $beta,
-                $out,
-                batch_dims,
-                m,
-                n,
-                k,
-                gemm_f64,
-            );
-        }};
-        (f32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
-            return execute_batched_gemm_contiguous(
-                _ctx,
-                $alpha,
-                &[$a, $b],
-                $beta,
-                $out,
-                batch_dims,
-                m,
-                n,
-                k,
-                gemm_f32,
-            );
-        }};
-        (Complex64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
-            return execute_batched_gemm_contiguous(
-                _ctx,
-                $alpha,
-                &[$a, $b],
-                $beta,
-                $out,
-                batch_dims,
-                m,
-                n,
-                k,
-                gemm_c64,
-            );
-        }};
-        (Complex32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
-            return execute_batched_gemm_contiguous(
-                _ctx,
-                $alpha,
-                &[$a, $b],
-                $beta,
-                $out,
-                batch_dims,
-                m,
-                n,
-                k,
-                gemm_c32,
-            );
-        }};
-    }
-
     dispatch_standard_scalar_type!(T, Concrete, {
         let a = cast_strided_view!(inputs[0], T, Concrete);
         let b = cast_strided_view!(inputs[1], T, Concrete);
@@ -359,7 +302,18 @@ pub(super) fn execute_batched_gemm<T: Scalar + 'static>(
         }
         #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
         {
-            dispatch_blas_gemm!(Concrete, a, b, alpha, beta, out);
+            return execute_batched_gemm_contiguous(
+                _ctx,
+                alpha,
+                &[a, b],
+                beta,
+                out,
+                batch_dims,
+                m,
+                n,
+                k,
+                <Concrete as BlasGemm>::contiguous_gemm,
+            );
         }
     });
 

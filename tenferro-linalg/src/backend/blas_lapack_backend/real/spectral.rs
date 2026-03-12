@@ -126,4 +126,4 @@ macro_rules! impl_real_spectral {
     };
 }
 
-pub(super) use impl_real_spectral;
+pub(crate) use impl_real_spectral;

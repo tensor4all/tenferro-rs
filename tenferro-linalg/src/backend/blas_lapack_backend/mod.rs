@@ -8,10 +8,9 @@
 //! Symbol providers are selected at compile time via crate features
 //! (`provider-src` / `provider-inject` and `src-*`).
 
+use super::LinalgBackend;
 use num_complex::{Complex32, Complex64};
 use tenferro_device::Result;
-
-use super::LinalgBackend;
 
 mod complex;
 mod helpers;
@@ -59,67 +58,83 @@ impl BlasLapackBackend {
     }
 }
 
-real::impl_lapack_backend_real!(
-    f64,
-    dgesvd,
-    dgeqrf,
-    dorgqr,
-    dgetrf,
-    dpotrf,
-    dsyev,
-    dgesv,
-    dtrtrs,
-    dgeev,
-    cblas_sys::cblas_dgemm,
-    lwork_from_query_f64
-);
+impl LinalgBackend<f64> for BlasLapackBackend {
+    type Real = f64;
 
-real::impl_lapack_backend_real!(
-    f32,
-    sgesvd,
-    sgeqrf,
-    sorgqr,
-    sgetrf,
-    spotrf,
-    ssyev,
-    sgesv,
-    strtrs,
-    sgeev,
-    cblas_sys::cblas_sgemm,
-    lwork_from_query_f32
-);
+    real::decompositions::impl_real_decompositions!(
+        f64,
+        dgesvd,
+        dgeqrf,
+        dorgqr,
+        dgetrf,
+        dpotrf,
+        lwork_from_query_f64
+    );
+    real::linear_systems::impl_real_linear_systems!(f64, dgesv, dtrtrs, cblas_sys::cblas_dgemm);
+    real::spectral::impl_real_spectral!(f64, dsyev, dgeev, lwork_from_query_f64);
+}
 
-complex::impl_lapack_backend_complex!(
-    Complex64,
-    f64,
-    zgesvd,
-    zgeqrf,
-    zungqr,
-    zgetrf,
-    zpotrf,
-    zheev,
-    zgesv,
-    ztrtrs,
-    zgeev,
-    cblas_sys::cblas_zgemm,
-    lwork_from_query_c64
-);
+impl LinalgBackend<f32> for BlasLapackBackend {
+    type Real = f32;
 
-complex::impl_lapack_backend_complex!(
-    Complex32,
-    f32,
-    cgesvd,
-    cgeqrf,
-    cungqr,
-    cgetrf,
-    cpotrf,
-    cheev,
-    cgesv,
-    ctrtrs,
-    cgeev,
-    cblas_sys::cblas_cgemm,
-    lwork_from_query_c32
-);
+    real::decompositions::impl_real_decompositions!(
+        f32,
+        sgesvd,
+        sgeqrf,
+        sorgqr,
+        sgetrf,
+        spotrf,
+        lwork_from_query_f32
+    );
+    real::linear_systems::impl_real_linear_systems!(f32, sgesv, strtrs, cblas_sys::cblas_sgemm);
+    real::spectral::impl_real_spectral!(f32, ssyev, sgeev, lwork_from_query_f32);
+}
+
+impl LinalgBackend<Complex64> for BlasLapackBackend {
+    type Real = f64;
+
+    complex::decompositions::impl_complex_decompositions!(
+        Complex64,
+        f64,
+        zgesvd,
+        zgeqrf,
+        zungqr,
+        zgetrf,
+        zpotrf,
+        lwork_from_query_c64
+    );
+    complex::linear_systems::impl_complex_linear_systems!(
+        Complex64,
+        f64,
+        zgesv,
+        ztrtrs,
+        cblas_sys::cblas_zgemm
+    );
+    complex::spectral::impl_complex_spectral!(Complex64, f64, zheev, zgeev, lwork_from_query_c64);
+}
+
+impl LinalgBackend<Complex32> for BlasLapackBackend {
+    type Real = f32;
+
+    complex::decompositions::impl_complex_decompositions!(
+        Complex32,
+        f32,
+        cgesvd,
+        cgeqrf,
+        cungqr,
+        cgetrf,
+        cpotrf,
+        lwork_from_query_c32
+    );
+    complex::linear_systems::impl_complex_linear_systems!(
+        Complex32,
+        f32,
+        cgesv,
+        ctrtrs,
+        cblas_sys::cblas_cgemm
+    );
+    complex::spectral::impl_complex_spectral!(Complex32, f32, cheev, cgeev, lwork_from_query_c32);
+}
 
 #[cfg(test)]
 mod tests;

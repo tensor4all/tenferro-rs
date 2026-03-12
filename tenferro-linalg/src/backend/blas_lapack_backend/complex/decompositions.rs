@@ -253,4 +253,4 @@ macro_rules! impl_complex_decompositions {
     };
 }
 
-pub(super) use impl_complex_decompositions;
+pub(crate) use impl_complex_decompositions;

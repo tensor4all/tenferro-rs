@@ -130,4 +130,4 @@ macro_rules! impl_complex_spectral {
     };
 }
 
-pub(super) use impl_complex_spectral;
+pub(crate) use impl_complex_spectral;

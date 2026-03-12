@@ -115,4 +115,4 @@ macro_rules! impl_complex_linear_systems {
     };
 }
 
-pub(super) use impl_complex_linear_systems;
+pub(crate) use impl_complex_linear_systems;

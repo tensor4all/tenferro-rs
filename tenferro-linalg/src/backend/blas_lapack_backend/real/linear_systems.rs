@@ -112,4 +112,4 @@ macro_rules! impl_real_linear_systems {
     };
 }
 
-pub(super) use impl_real_linear_systems;
+pub(crate) use impl_real_linear_systems;

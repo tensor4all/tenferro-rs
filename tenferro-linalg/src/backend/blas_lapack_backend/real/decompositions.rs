@@ -246,4 +246,4 @@ macro_rules! impl_real_decompositions {
     };
 }
 
-pub(super) use impl_real_decompositions;
+pub(crate) use impl_real_decompositions;
