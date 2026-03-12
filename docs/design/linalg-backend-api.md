@@ -1,5 +1,10 @@
 # Tensor-Level Linalg Backend API
 
+> Historical proposal: this document captures the design discussion that led to
+> the eventual `tenferro-linalg-prims` split. It is not the source of truth for
+> the current workspace layout. See `linalg-prims.md`, `linalg.md`, and
+> `architecture.md` for the current contracts.
+
 ## Summary
 
 This document proposes a new tensor-level backend layer for `tenferro-linalg`.
@@ -208,8 +213,8 @@ from the public tensor-level linalg boundary.
 - It mirrors PyTorch’s public behavior more closely: real input may still
   produce complex eigenpairs.
 
-The packed representation can still exist internally as a compatibility layer
-inside the CPU adapter while the public backend API remains canonical.
+The packed representation can still exist internally as a CPU-only private
+representation while the public backend API remains canonical.
 
 ## Context and Workspace
 

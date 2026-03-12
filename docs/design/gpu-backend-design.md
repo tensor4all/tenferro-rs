@@ -40,14 +40,25 @@ GPU backends.
 ```
 tenferro-prims/src/
     lib.rs          — family traits, descriptors, shared types
-    cpu.rs          — CpuBackend, CpuContext, CpuPlan
-    cuda.rs         — CudaBackend, CudaContext, CudaPlan, CutensorVtable
+    cpu/mod.rs      — CpuBackend, CpuContext, CpuPlan
+    cpu/planning.rs      — semiring-core / fast-path planning
+    cpu/execution.rs     — semiring execution dispatch
+    cpu/batched_gemm.rs  — CPU GEMM execution paths
+    cpu/contract.rs      — contract fallback + GEMM specialization
+    cpu/reduction.rs     — reduce/trace/anti-trace/anti-diag kernels
+    cpu/gemm_support.rs  — shared GEMM helpers and dtype dispatch
+    cpu/scratch.rs       — BLAS scratch-pool management
+    cuda/mod.rs     — CudaBackend, CudaContext, CudaPlan
+    cuda/planning.rs     — cuTENSOR descriptor/plan builders
+    cuda/execution.rs    — family dispatch for plan/execute
+    cuda/scalar_type.rs  — scalar dtype/compute-descriptor mapping
+    cuda/wrappers.rs     — RAII wrappers for cuTENSOR handles/descriptors/plans
     rocm.rs         — RocmBackend, RocmContext, RocmPlan, RocmTensorVtable
     registry.rs     — BackendRegistry
 ```
-
-Note: CPU backend code (currently inline in `lib.rs`) moves to `cpu.rs`
-as part of this restructuring.
+The current CPU backend is already split under `src/cpu/` for the same
+reason as CUDA: planning, execution, scratch management, and contract/GEMM
+specialization should not collapse back into one dispatcher file.
 
 ---
 
@@ -56,7 +67,7 @@ as part of this restructuring.
 ### CudaBackend / RocmBackend
 
 ```rust
-// cuda.rs
+// cuda/mod.rs
 pub struct CudaBackend {
     vtable: CutensorVtable,
     handle: *mut c_void,    // cutensorHandle_t
@@ -304,7 +315,7 @@ standalone `conj()` で実データをコピーする場合は CPU 転送が必�
 | CudaBackend stub | tenferro-prims/src/lib.rs | 型定義 + `todo!()` |
 | RocmBackend stub | tenferro-prims/src/lib.rs | 型定義 + `todo!()` |
 | BackendRegistry stub | tenferro-prims/src/lib.rs | 型定義 |
-| CpuBackend 分離 | tenferro-prims/src/cpu.rs | 既存コードをモジュール分離 |
+| CpuBackend 分離 | tenferro-prims/src/cpu/ | planning / execution / GEMM / scratch を分離 |
 | DataBuffer Gpu variant | tenferro-tensor/src/lib.rs | BufferInner に Gpu 追加 |
 | CompletionEvent 拡張 | tenferro-tensor/src/lib.rs | Cuda/Rocm variant 追加 |
 | libloading 依存追加 | workspace Cargo.toml | workspace dependency |

@@ -121,7 +121,7 @@ where
                         let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_u.as_value() {
@@ -155,7 +155,7 @@ where
                         let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
         }
 
@@ -296,7 +296,7 @@ where
                         }
                         Ok(input_grads)
                     }),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_residual.as_value() {
@@ -318,7 +318,7 @@ where
                         }
                         Ok(input_grads)
                     }),
-                )?;
+                );
             }
         }
 

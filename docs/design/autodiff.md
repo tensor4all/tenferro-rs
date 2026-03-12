@@ -272,16 +272,21 @@ Current AD tests should cover at least:
 - detached tangent query behavior for `grad_tangent`
 - graph-connected higher-order behavior for supported `grad_variable` cases
 
-## Current Runtime Debt
+## Current Runtime Status
 
-The current eager AD surface is not fully backend-generic yet.
+The current eager AD surface uses runtime dispatch and capability-driven
+backend contracts in production code.
 
-- `extension/tenferro-dyadtensor` still uses `with_cpu_runtime(...)` in several
-  eager builder and pullback paths
-- many public examples still instantiate `CpuContext` directly
-- this should be read as migration debt, not as the intended final AD
-  abstraction
+- `extension/tenferro-dyadtensor` no longer routes production paths through
+  `with_cpu_runtime(...)`
+- linalg and einsum AD entrypoints now dispatch through the relevant family
+  traits and runtime slots
+- many public examples still instantiate `CpuContext` directly because CPU is
+  the most complete backend today, not because the API contract is CPU-only
 
-The dense parity audit tracks this separately from missing AD formulas because
-an operation can be mathematically differentiated while still leaking a CPU-only
-runtime path.
+The remaining debt is now mostly breadth:
+
+- unsupported backend capabilities still surface as truthful capability
+  failures
+- AD formula coverage is broader for some families than others
+- GPU custom pointwise/reduction kernels are still incomplete

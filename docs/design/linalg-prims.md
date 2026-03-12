@@ -85,10 +85,10 @@ High-level linalg code may depend on both families:
 
 ## Current Status
 
-The crate exists and is already wired into backend implementations. During the
-migration, some implementations are still delegated through existing local
-backend helpers, but the public backend-facing source of truth is
-`tenferro-linalg-prims`.
+The crate exists and is wired into backend implementations as the canonical
+backend-facing linalg contract. Some concrete backends still use local helper
+modules internally, but those helpers now sit behind `tenferro-linalg-prims`
+instead of acting as a competing public abstraction.
 
 One important current debt is that `LinalgScalar` still carries
 LAPACK-oriented eigendecomposition helper requirements. That helper surface is

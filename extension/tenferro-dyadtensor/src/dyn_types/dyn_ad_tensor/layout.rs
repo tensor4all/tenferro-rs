@@ -97,7 +97,7 @@ where
                         contiguous.reshape(&old_dims).map_err(Error::from)?,
                     )])
                 }),
-            )?;
+            );
             AdTensor::new_reverse(output_primal, output_node, tape, output_tangent)
         }
     }
@@ -254,7 +254,7 @@ where
                         take_prefix_pullback_typed(cotangent, axis, &original_dims)?,
                     )])
                 }),
-            )?;
+            );
             AdTensor::new_reverse(output_primal, output_node, tape, output_tangent)
         }
     }
@@ -301,7 +301,7 @@ where
                 tape,
                 output_node,
                 Box::new(move |cotangent| Ok(vec![(input_node, cotangent.clone())])),
-            )?;
+            );
             AdTensor::new_reverse(output_primal, output_node, tape, output_tangent)
         }
     }

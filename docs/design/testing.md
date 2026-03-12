@@ -7,10 +7,10 @@ Tests are split into two layers:
 1. **Unit tests** — inside the tenferro-rs workspace. Run via `cargo test` in seconds. No external data required.
 2. **Benchmark / integration tests** — external performance and compatibility gates run after correctness work is green.
 
-For the current prims/linalg redesign, correctness work is intentionally driven
-first. Performance verification is still required before merge, but it is run as
-the final phase after the protocol migration compiles and passes functional
-tests.
+For the current prims/linalg architecture, correctness work is intentionally
+driven first. Performance verification is still required before merge, but it
+is run as the final phase after the protocol changes compile and pass
+functional tests.
 
 ## Performance Gates
 

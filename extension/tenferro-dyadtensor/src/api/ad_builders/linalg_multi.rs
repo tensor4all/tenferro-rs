@@ -95,7 +95,7 @@ where
                     tape_id,
                     output_node,
                     Box::new(move |_cotangent| Ok(vec![(spec.node, zero.clone())])),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_logabsdet.as_value() {
@@ -126,7 +126,7 @@ where
                         let grad = compress_pullback_like("slogdet_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
         }
 

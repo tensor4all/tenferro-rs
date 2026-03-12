@@ -121,6 +121,8 @@ fn structured_einsum_uses_shared_runtime_dispatch_path() {
 #[test]
 fn runtime_helpers_stay_capability_driven() {
     let runtime_helpers = repo_file("src/api/runtime.rs");
+    let runtime_dispatch = repo_file("src/api/runtime_dispatch.rs");
+    let contracts = repo_file("src/api/contracts.rs");
     let reduction_builders = repo_file("src/api/ad_builders/reduction.rs");
 
     assert!(
@@ -134,5 +136,21 @@ fn runtime_helpers_stay_capability_driven() {
     assert!(
         !reduction_builders.contains("unsupported_runtime_capability(\"sum_ad_pullback\""),
         "sum_ad pullback should rely on transfer-aware runtime helpers rather than hard-coded CPU-only runtime failures"
+    );
+    assert!(
+        !contracts.contains("CpuBackend")
+            && !contracts.contains("CudaBackend")
+            && !contracts.contains("RocmBackend"),
+        "semantic runtime value traits should not hard-code the backend matrix"
+    );
+    assert!(
+        !contracts.contains("CpuContext")
+            && !contracts.contains("CudaContext")
+            && !contracts.contains("RocmContext"),
+        "semantic runtime value traits should not hard-code runtime context triples"
+    );
+    assert!(
+        runtime_dispatch.contains("trait RuntimeSlot"),
+        "runtime dispatch should centralize concrete runtime slot metadata instead of repeating ad hoc backend/context wiring"
     );
 }

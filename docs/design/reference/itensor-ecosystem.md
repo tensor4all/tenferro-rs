@@ -111,8 +111,9 @@ external libraries. Unique to tenferro, but not an obstacle.
 
 ### Prims layer (tenferro-prims)
 
-`TensorPrims<A>` operates on `StridedView<T>`. Individual dense blocks
-within a block sparse tensor can delegate to `batched_gemm` etc.
+The semiring/scalar/analytic execution families in `tenferro-prims` operate on
+`StridedView<T>`. Individual dense blocks within a block sparse tensor can
+delegate to `batched_gemm` and related family operations.
 
 ### Named Index layer
 

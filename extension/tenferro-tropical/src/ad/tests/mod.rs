@@ -1,7 +1,11 @@
+mod organization;
+
+use super::common::col_major_flat_index;
 use super::*;
 use crate::MaxPlus;
 use crate::MaxPlusAlgebra;
 use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 

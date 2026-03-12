@@ -12,11 +12,7 @@ pub(super) fn fresh_ad_scalar_node_id() -> NodeId {
     NodeId(NEXT_AD_SCALAR_NODE_ID.fetch_add(1, Ordering::Relaxed))
 }
 
-pub(crate) fn map_ad_value_same_type_linear<T, M>(
-    value: AdValue<T>,
-    op_name: &'static str,
-    map: M,
-) -> AdValue<T>
+pub(crate) fn map_ad_value_same_type_linear<T, M>(value: AdValue<T>, map: M) -> AdValue<T>
 where
     T: scalarops::ScalarAd + 'static,
     M: Fn(T) -> T + Copy + 'static,
@@ -40,8 +36,7 @@ where
                 tape,
                 output_node,
                 Box::new(move |cotangent| Ok(vec![(input_node, map(*cotangent))])),
-            )
-            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            );
             AdValue::Reverse {
                 primal: output_primal,
                 node: output_node,
@@ -54,7 +49,6 @@ where
 
 pub(crate) fn map_ad_value_mixed_linear<TIn, TOut, P, R>(
     value: AdValue<TIn>,
-    op_name: &'static str,
     primal_map: P,
     reverse_map: R,
 ) -> AdValue<TOut>
@@ -83,8 +77,7 @@ where
                 tape,
                 output_node,
                 Box::new(move |cotangent| Ok(vec![(input_node, reverse_map(*cotangent))])),
-            )
-            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            );
             AdValue::Reverse {
                 primal: output_primal,
                 node: output_node,

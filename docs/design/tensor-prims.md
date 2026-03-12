@@ -122,6 +122,20 @@ Current state by family:
   unary and binary inventory, and the current tensor-level surface also wires
   `Var` and `Std` through the analytic reduction family.
 
+The backend code is also split by concern instead of a single dispatcher file:
+
+- CPU keeps `mod.rs` for public backend/context types and shared tensor-view
+  helpers, `planning.rs` for semiring planning, `execution.rs` for family
+  dispatch, `batched_gemm.rs` and `contract.rs` for the heavier GEMM paths,
+  `reduction.rs` for reduce/trace kernels, `gemm_support.rs` for dtype-specific
+  GEMM helpers, and `scratch.rs` for BLAS scratch-pool reuse.
+- CUDA keeps `mod.rs` for backend/context types and runtime loading,
+  `planning.rs` for cuTENSOR descriptor/plan construction,
+  `execution.rs` for family dispatch, `scalar_type.rs` for dtype mapping,
+  and `wrappers.rs` for RAII handle management.
+- Einsum keeps eager API entrypoints and AD rules in separate module trees so
+  new execution APIs do not accumulate AD-specific wiring in the same file.
+
 The public scalar and analytic vocabularies remain intentionally broader than
 the currently executed subset so later GPU and reduction work can land without
 descriptor churn.

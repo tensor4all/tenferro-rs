@@ -25,26 +25,32 @@ impl BinaryOp {
     }
 }
 
-pub(crate) fn promote_f32_to_c32(value: AdValue<f32>, op_name: &'static str) -> AdValue<Complex32> {
-    map_ad_value_mixed_linear(value, op_name, |x| Complex32::new(x, 0.0), |z| z.re)
+pub(crate) fn promote_f32_to_c32(
+    value: AdValue<f32>,
+    _op_name: &'static str,
+) -> AdValue<Complex32> {
+    map_ad_value_mixed_linear(value, |x| Complex32::new(x, 0.0), |z| z.re)
 }
 
-pub(crate) fn promote_f64_to_c64(value: AdValue<f64>, op_name: &'static str) -> AdValue<Complex64> {
-    map_ad_value_mixed_linear(value, op_name, |x| Complex64::new(x, 0.0), |z| z.re)
+pub(crate) fn promote_f64_to_c64(
+    value: AdValue<f64>,
+    _op_name: &'static str,
+) -> AdValue<Complex64> {
+    map_ad_value_mixed_linear(value, |x| Complex64::new(x, 0.0), |z| z.re)
 }
 
 pub(super) fn embed_f32_to_c32_imag(
     value: AdValue<f32>,
-    op_name: &'static str,
+    _op_name: &'static str,
 ) -> AdValue<Complex32> {
-    map_ad_value_mixed_linear(value, op_name, |y| Complex32::new(0.0, y), |z| z.im)
+    map_ad_value_mixed_linear(value, |y| Complex32::new(0.0, y), |z| z.im)
 }
 
 pub(super) fn embed_f64_to_c64_imag(
     value: AdValue<f64>,
-    op_name: &'static str,
+    _op_name: &'static str,
 ) -> AdValue<Complex64> {
-    map_ad_value_mixed_linear(value, op_name, |y| Complex64::new(0.0, y), |z| z.im)
+    map_ad_value_mixed_linear(value, |y| Complex64::new(0.0, y), |z| z.im)
 }
 
 fn apply_binary_ad<T: ScalarAd + 'static>(

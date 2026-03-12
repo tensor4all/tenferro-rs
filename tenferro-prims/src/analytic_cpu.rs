@@ -1,6 +1,4 @@
-use std::any::TypeId;
-
-use num_complex::{Complex32, Complex64, ComplexFloat};
+use num_complex::ComplexFloat;
 use num_traits::Float;
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_device::{Error, Result};
@@ -13,6 +11,10 @@ use crate::family_cpu_common::{
     CpuScalarValue, ReductionPlanSpec,
 };
 use crate::family_cpu_reduction::{execute_std_reduction, execute_variance_reduction};
+use crate::typed_dispatch::{
+    cast_scalar_value, cast_strided_view, cast_strided_view_mut, dispatch_complex_scalar_type,
+    dispatch_real_scalar_type, dispatch_standard_scalar_type,
+};
 use crate::{
     validate_execute_inputs, AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp,
     AnalyticUnaryOp, CpuBackend, CpuContext, TensorAnalyticPrims,
@@ -175,35 +177,13 @@ fn execute_analytic_unary<T: Scalar + 'static>(
     output: &mut strided_view::StridedViewMut<T>,
     op: AnalyticUnaryOp,
 ) -> Result<()> {
-    macro_rules! dispatch {
-        ($ty:ty) => {{
-            let input = unsafe {
-                &*(input as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return execute_analytic_unary_typed(alpha, input, beta, output, op);
-        }};
-    }
-
-    let tid = TypeId::of::<T>();
-    if tid == TypeId::of::<f64>() {
-        dispatch!(f64);
-    }
-    if tid == TypeId::of::<f32>() {
-        dispatch!(f32);
-    }
-    if tid == TypeId::of::<Complex64>() {
-        dispatch!(Complex64);
-    }
-    if tid == TypeId::of::<Complex32>() {
-        dispatch!(Complex32);
-    }
+    dispatch_standard_scalar_type!(T, Concrete, {
+        let input = cast_strided_view!(input, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_analytic_unary_typed(alpha, input, beta, output, op);
+    });
 
     Err(Error::InvalidArgument(format!(
         "analytic unary operation {op:?} is not supported for {}",
@@ -219,58 +199,22 @@ fn execute_analytic_binary<T: Scalar + 'static>(
     output: &mut strided_view::StridedViewMut<T>,
     op: AnalyticBinaryOp,
 ) -> Result<()> {
-    macro_rules! dispatch_real {
-        ($ty:ty) => {{
-            let lhs = unsafe {
-                &*(lhs as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let rhs = unsafe {
-                &*(rhs as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return execute_analytic_binary_real(alpha, lhs, rhs, beta, output, op);
-        }};
-    }
-    macro_rules! dispatch_complex {
-        ($ty:ty) => {{
-            let lhs = unsafe {
-                &*(lhs as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let rhs = unsafe {
-                &*(rhs as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return execute_analytic_binary_complex(alpha, lhs, rhs, beta, output, op);
-        }};
-    }
-
-    let tid = TypeId::of::<T>();
-    if tid == TypeId::of::<f64>() {
-        dispatch_real!(f64);
-    }
-    if tid == TypeId::of::<f32>() {
-        dispatch_real!(f32);
-    }
-    if tid == TypeId::of::<Complex64>() {
-        dispatch_complex!(Complex64);
-    }
-    if tid == TypeId::of::<Complex32>() {
-        dispatch_complex!(Complex32);
-    }
+    dispatch_real_scalar_type!(T, Concrete, {
+        let lhs = cast_strided_view!(lhs, T, Concrete);
+        let rhs = cast_strided_view!(rhs, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_analytic_binary_real(alpha, lhs, rhs, beta, output, op);
+    });
+    dispatch_complex_scalar_type!(T, Concrete, {
+        let lhs = cast_strided_view!(lhs, T, Concrete);
+        let rhs = cast_strided_view!(rhs, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_analytic_binary_complex(alpha, lhs, rhs, beta, output, op);
+    });
 
     Err(Error::InvalidArgument(format!(
         "analytic binary operation {op:?} is not supported for {}",
@@ -302,29 +246,13 @@ fn execute_analytic_reduction<T: Scalar + 'static>(
     reduced_axes: &[usize],
     op: AnalyticReductionOp,
 ) -> Result<()> {
-    macro_rules! dispatch_real {
-        ($ty:ty) => {{
-            let input = unsafe {
-                &*(input as *const strided_view::StridedView<T>
-                    as *const strided_view::StridedView<$ty>)
-            };
-            let output = unsafe {
-                &mut *(output as *mut strided_view::StridedViewMut<T>
-                    as *mut strided_view::StridedViewMut<$ty>)
-            };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return execute_analytic_reduction_real(alpha, input, beta, output, reduced_axes, op);
-        }};
-    }
-
-    let tid = TypeId::of::<T>();
-    if tid == TypeId::of::<f64>() {
-        dispatch_real!(f64);
-    }
-    if tid == TypeId::of::<f32>() {
-        dispatch_real!(f32);
-    }
+    dispatch_real_scalar_type!(T, Concrete, {
+        let input = cast_strided_view!(input, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_analytic_reduction_real(alpha, input, beta, output, reduced_axes, op);
+    });
 
     Err(Error::InvalidArgument(format!(
         "analytic reduction {op:?} is not supported for {}",

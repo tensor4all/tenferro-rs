@@ -11,7 +11,6 @@ use crate::{reverse_tape, AdTensor, AdValue, Error, NodeId, Result, TapeId};
 
 pub(super) fn map_ad_tensor_same_type_linear_typed<T, F>(
     input: &AdTensor<T>,
-    op_name: &'static str,
     map: F,
 ) -> Result<AdTensor<T>>
 where
@@ -45,8 +44,7 @@ where
                 Box::new(move |cotangent| {
                     Ok(vec![(input_node, tensor_map_unary_typed(cotangent, map)?)])
                 }),
-            )
-            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            );
             AdValue::Reverse {
                 primal: output_primal,
                 node: output_node,
@@ -60,7 +58,6 @@ where
 
 pub(super) fn map_ad_tensor_mixed_linear_typed<TIn, TOut, P, R>(
     input: &AdTensor<TIn>,
-    op_name: &'static str,
     primal_map: P,
     reverse_map: R,
 ) -> Result<AdTensor<TOut>>
@@ -119,8 +116,7 @@ where
                         tensor_map_unary_typed(cotangent, reverse_map)?,
                     )])
                 }),
-            )
-            .unwrap_or_else(|e| panic!("{op_name}: {e}"));
+            );
             AdValue::Reverse {
                 primal: output_primal,
                 node: output_node,
@@ -263,7 +259,7 @@ where
                     }
                     Ok(input_grads)
                 }),
-            )?;
+            );
             Ok(AdValue::Reverse {
                 primal,
                 node: output_node,
@@ -277,7 +273,7 @@ where
                 rhs_tape,
                 output_node,
                 Box::new(move |cotangent: &Tensor<T>| Ok(vec![(rhs_node, cotangent.clone())])),
-            )?;
+            );
             Ok(AdValue::Reverse {
                 primal,
                 node: output_node,

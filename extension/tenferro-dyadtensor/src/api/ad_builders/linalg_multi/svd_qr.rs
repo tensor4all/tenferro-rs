@@ -125,7 +125,7 @@ where
                         let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_s.as_value() {
@@ -160,7 +160,7 @@ where
                         let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_vt.as_value() {
@@ -195,7 +195,7 @@ where
                         let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
         }
 
@@ -324,7 +324,7 @@ where
                         let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
 
             if let AdValue::Reverse { node, tape, .. } = out_r.as_value() {
@@ -356,7 +356,7 @@ where
                         let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
                         Ok(vec![(spec.node, grad)])
                     }),
-                )?;
+                );
             }
         }
 
