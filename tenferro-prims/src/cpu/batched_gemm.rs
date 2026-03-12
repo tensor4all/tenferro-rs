@@ -8,7 +8,7 @@ use crate::typed_dispatch::{
 };
 
 use super::context::CpuContext;
-use super::gemm_support::batch_offset;
+use super::gemm_support::{advance_batch_offset, batch_iteration_count, batch_offset};
 
 #[cfg(feature = "gemm-faer")]
 use super::gemm_support::FaerGemm;
@@ -130,7 +130,7 @@ pub(super) fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
         let a_fused = try_fuse_group(batch_dims, a_batch);
         let b_fused = try_fuse_group(batch_dims, b_batch);
         let c_fused = try_fuse_group(batch_dims, c_batch);
-        let total: usize = batch_dims.iter().product();
+        let total = batch_iteration_count(batch_dims)?;
 
         if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
             (a_fused, b_fused, c_fused)
@@ -143,16 +143,28 @@ pub(super) fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
                     result = Err(e);
                     break;
                 }
-                a_off += a_step;
-                b_off += b_step;
-                c_off += c_step;
+                match (
+                    advance_batch_offset(a_off, a_step),
+                    advance_batch_offset(b_off, b_step),
+                    advance_batch_offset(c_off, c_step),
+                ) {
+                    (Ok(next_a), Ok(next_b), Ok(next_c)) => {
+                        a_off = next_a;
+                        b_off = next_b;
+                        c_off = next_c;
+                    }
+                    _ => {
+                        result = Err(Error::InvalidArgument("batch offset overflow".into()));
+                        break;
+                    }
+                }
             }
         } else {
             let mut idx = vec![0usize; nb];
             for flat in 0..total {
-                let a_off = batch_offset(flat, &idx, a_fused, a_batch);
-                let b_off = batch_offset(flat, &idx, b_fused, b_batch);
-                let c_off = batch_offset(flat, &idx, c_fused, c_batch);
+                let a_off = batch_offset(flat, &idx, a_fused, a_batch)?;
+                let b_off = batch_offset(flat, &idx, b_fused, b_batch)?;
+                let c_off = batch_offset(flat, &idx, c_fused, c_batch)?;
                 if let Err(e) = do_batch(a_off, b_off, c_off, &mut a_mat, &mut b_mat, &mut c_mat) {
                     result = Err(e);
                     break;
@@ -237,7 +249,7 @@ pub(super) fn execute_batched_gemm_strided<T: FaerGemm>(
         let a_fused = try_fuse_group(batch_dims, a_batch);
         let b_fused = try_fuse_group(batch_dims, b_batch);
         let c_fused = try_fuse_group(batch_dims, c_batch);
-        let total: usize = batch_dims.iter().product();
+        let total = batch_iteration_count(batch_dims)?;
 
         if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
             (a_fused, b_fused, c_fused)
@@ -247,16 +259,16 @@ pub(super) fn execute_batched_gemm_strided<T: FaerGemm>(
             let mut c_off = 0isize;
             for _ in 0..total {
                 do_batch(a_off, b_off, c_off);
-                a_off += a_step;
-                b_off += b_step;
-                c_off += c_step;
+                a_off = advance_batch_offset(a_off, a_step)?;
+                b_off = advance_batch_offset(b_off, b_step)?;
+                c_off = advance_batch_offset(c_off, c_step)?;
             }
         } else {
             let mut idx = vec![0usize; nb];
             for flat in 0..total {
-                let a_off = batch_offset(flat, &idx, a_fused, a_batch);
-                let b_off = batch_offset(flat, &idx, b_fused, b_batch);
-                let c_off = batch_offset(flat, &idx, c_fused, c_batch);
+                let a_off = batch_offset(flat, &idx, a_fused, a_batch)?;
+                let b_off = batch_offset(flat, &idx, b_fused, b_batch)?;
+                let c_off = batch_offset(flat, &idx, c_fused, c_batch)?;
                 do_batch(a_off, b_off, c_off);
 
                 if flat + 1 < total {

@@ -6,17 +6,20 @@ fn take_returns_correct_length() {
     let buf = pool.take(100);
     assert_eq!(buf.len(), 100);
     assert!(buf.capacity() >= 100);
+    assert!(buf.iter().all(|&x| x == 0.0));
 }
 
 #[test]
 fn return_and_reuse() {
     let mut pool = BufferPool::<f64>::new();
-    let buf = pool.take(100);
+    let mut buf = pool.take(100);
+    buf.fill(7.0);
     let ptr = buf.as_ptr();
     pool.return_buf(buf);
     let buf2 = pool.take(50);
     assert_eq!(buf2.as_ptr(), ptr);
     assert_eq!(buf2.len(), 50);
+    assert!(buf2.iter().all(|&x| x == 0.0));
 }
 
 #[test]
