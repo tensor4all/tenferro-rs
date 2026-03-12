@@ -778,7 +778,7 @@ fn contract_generic_fallback_with_b_only_mode() {
     }
 }
 
-// (elementwise_unary_conj_identity standalone test covered by typed_prims_tests! macro)
+// (elementwise_unary_conj_identity standalone test is exercised by the typed_prims_tests! macro)
 
 // ============================================================================
 // ElementwiseUnary -- Conj for complex types

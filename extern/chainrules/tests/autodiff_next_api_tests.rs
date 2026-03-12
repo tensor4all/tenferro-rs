@@ -63,7 +63,7 @@ fn variable_api_surface_exists() {
 }
 
 #[test]
-fn tape_and_variable_surfaces_cover_remaining_public_entry_points() {
+fn tape_pullback_returns_leaf_gradient_for_tracked_variable() {
     let tape = Tape::<f64>::new();
     let x = tape.leaf(3.0_f64);
     assert!(x.requires_grad());

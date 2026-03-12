@@ -4,13 +4,13 @@ use super::super::gemm_support::{batch_offset, FaerGemm};
 
 // Do not delete or weaken this test: it protects the shared CPU GEMM helpers that multiple semiring execution paths rely on.
 #[test]
-fn batch_offset_covers_fused_and_strided_paths() {
+fn batch_offset_handles_fused_and_strided_batches() {
     assert_eq!(batch_offset(3, &[0, 0], Some((8, 7)), &[11, 13]), 21);
     assert_eq!(batch_offset(0, &[2, 3], None, &[5, 11]), 43);
 }
 
 #[test]
-fn faer_strided_gemm_covers_replace_and_scaled_add_paths() {
+fn faer_strided_gemm_replaces_or_accumulates_output() {
     unsafe fn run<T>(alpha: T, beta: T, a: &[T], b: &[T], c: &mut [T])
     where
         T: FaerGemm + tenferro_algebra::Scalar,

@@ -3265,7 +3265,7 @@ fn norm_fro_frule_fd() {
 }
 
 // ============================================================================
-// Coverage: f32 forward tests
+// f32 forward tests
 // ============================================================================
 
 /// Create a column-major tensor from a flat vec of f32 and shape.
@@ -3516,7 +3516,7 @@ fn slogdet_f32() {
 }
 
 // ============================================================================
-// Coverage: Complex32 backend tests
+// Complex32 backend tests
 // ============================================================================
 
 /// Create a column-major tensor from Complex32.
@@ -3722,7 +3722,7 @@ fn solve_triangular_complex32() {
 }
 
 // ============================================================================
-// Coverage: Additional Complex64 backend tests (operations not yet tested)
+// Additional Complex64 backend tests (operations not yet tested)
 // ============================================================================
 
 #[test]
@@ -3802,7 +3802,7 @@ fn matrix_exp_complex64() {
 }
 
 // ============================================================================
-// Coverage: solve_triangular forward (upper and lower)
+// solve_triangular forward (upper and lower)
 // ============================================================================
 
 #[test]
@@ -3850,7 +3850,7 @@ fn solve_triangular_upper_multi_rhs() {
 }
 
 // ============================================================================
-// Coverage: norm Nuclear and Spectral forward + AD
+// norm Nuclear and Spectral forward + AD
 // ============================================================================
 
 #[test]
@@ -3932,7 +3932,7 @@ fn norm_spectral_frule_fd() {
 }
 
 // ============================================================================
-// Coverage: SVD with cutoff option
+// SVD with cutoff option
 // ============================================================================
 
 #[test]
@@ -3966,7 +3966,7 @@ fn svd_with_default_options() {
 }
 
 // ============================================================================
-// Coverage: batch dimension tests
+// batch dimension tests
 // ============================================================================
 
 #[test]
@@ -4076,7 +4076,7 @@ fn norm_batched_fro() {
 }
 
 // ============================================================================
-// Coverage: lstsq forward happy path
+// lstsq forward happy path
 // ============================================================================
 
 #[test]
@@ -4102,7 +4102,7 @@ fn lstsq_underdetermined_returns_error() {
 }
 
 // ============================================================================
-// Coverage: error paths for validation functions
+// error paths for validation functions
 // ============================================================================
 
 #[test]
@@ -4233,7 +4233,7 @@ fn norm_vector_error_cases_return_errors() {
 }
 
 // ============================================================================
-// Coverage: Non-square SVD rrule with full cotangent (dU, dS, dVt)
+// Non-square SVD rrule with full cotangent (dU, dS, dVt)
 // ============================================================================
 
 #[test]
@@ -4286,7 +4286,7 @@ fn svd_rrule_wide_with_dvt_cotangent() {
 }
 
 // ============================================================================
-// Coverage: SVD frule for non-square (tall m>k and wide n>k)
+// SVD frule for non-square (tall m>k and wide n>k)
 // ============================================================================
 
 #[test]
@@ -4320,7 +4320,7 @@ fn svd_frule_wide_matrix() {
 }
 
 // ============================================================================
-// Coverage: QR frule and rrule for non-square
+// QR frule and rrule for non-square
 // ============================================================================
 
 #[test]
@@ -4365,7 +4365,7 @@ fn qr_frule_wide_matrix() {
 // faer's LU backend panics on non-square input (faer requires m == n).
 
 // ============================================================================
-// Coverage: lstsq rrule
+// lstsq rrule
 // ============================================================================
 
 #[test]
@@ -4384,7 +4384,7 @@ fn lstsq_rrule_basic() {
 }
 
 // ============================================================================
-// Coverage: eigen rrule with vectors cotangent
+// eigen rrule with vectors cotangent
 // ============================================================================
 
 #[test]
@@ -4412,7 +4412,7 @@ fn eigen_rrule_with_vectors_cotangent() {
 }
 
 // ============================================================================
-// Coverage: matrix_exp edge cases
+// matrix_exp edge cases
 // ============================================================================
 
 #[test]
@@ -4441,7 +4441,7 @@ fn matrix_exp_f32() {
 }
 
 // ============================================================================
-// Coverage: pinv forward with threshold
+// pinv forward with threshold
 // ============================================================================
 
 #[test]
@@ -4462,7 +4462,7 @@ fn pinv_with_threshold() {
 }
 
 // ============================================================================
-// Coverage: eig forward for general non-symmetric (covers interleaved ri)
+// eig forward for a general non-symmetric matrix with complex-valued eigenpairs
 // ============================================================================
 
 #[test]
@@ -4489,7 +4489,7 @@ fn eig_3x3_general() {
 }
 
 // ============================================================================
-// Coverage: norm_rrule cotangent shape validation
+// norm_rrule cotangent shape validation
 // ============================================================================
 
 #[test]
@@ -4511,7 +4511,7 @@ fn norm_rrule_cotangent_batch_mismatch() {
 }
 
 // ============================================================================
-// Coverage: norm_rrule for batched Nuclear and Spectral
+// norm_rrule for batched Nuclear and Spectral
 // ============================================================================
 
 #[test]
@@ -4544,7 +4544,7 @@ fn norm_spectral_batched() {
 }
 
 // ============================================================================
-// Coverage: solve with vector RHS (nrhs=1 path)
+// solve with vector RHS (nrhs=1 path)
 // ============================================================================
 
 #[test]
@@ -4559,7 +4559,7 @@ fn solve_vector_rhs() {
 }
 
 // ============================================================================
-// Coverage: solve_triangular with vector RHS
+// solve_triangular with vector RHS
 // ============================================================================
 
 #[test]
@@ -4575,7 +4575,7 @@ fn solve_triangular_vector_rhs() {
 }
 
 // ============================================================================
-// Coverage: solve_triangular batched
+// solve_triangular batched
 // ============================================================================
 
 #[test]
@@ -4591,7 +4591,7 @@ fn solve_triangular_batched() {
 }
 
 // ============================================================================
-// Coverage: lstsq batched
+// lstsq batched
 // ============================================================================
 
 #[test]
@@ -4611,7 +4611,7 @@ fn lstsq_batched() {
 }
 
 // ============================================================================
-// Coverage: pinv batched
+// pinv batched
 // ============================================================================
 
 #[test]
@@ -4631,7 +4631,7 @@ fn pinv_batched() {
 // faer's LU backend panics on non-square input (faer requires m == n).
 
 // ============================================================================
-// Coverage: lu_rrule execution (covers ~120 lines in lib.rs)
+// lu_rrule execution across representative cotangent combinations
 // ============================================================================
 
 #[test]
@@ -4770,7 +4770,7 @@ fn lu_rrule_rejects_u_cotangent_shape_mismatch() {
 }
 
 // ============================================================================
-// Coverage: eig_rrule with vectors cotangent (EigCotangent)
+// eig_rrule with vectors cotangent (EigCotangent)
 // ============================================================================
 
 #[test]
@@ -4835,7 +4835,7 @@ fn eig_rrule_with_both_values_and_vectors() {
 }
 
 // ============================================================================
-// Coverage: solve_rrule and solve_frule with multi-RHS
+// solve_rrule and solve_frule with multi-RHS
 // ============================================================================
 
 fn assert_close_slices(label: &str, got: &[f64], expected: &[f64], atol: f64) {
@@ -5260,7 +5260,7 @@ fn solve_rrule_complex64_matches_manual_formula() {
 }
 
 // ============================================================================
-// Coverage: lstsq_frule
+// lstsq_frule
 // ============================================================================
 
 #[test]
@@ -5282,12 +5282,12 @@ fn lstsq_frule_basic() {
 }
 
 // ============================================================================
-// Coverage: pinv_rrule and pinv_frule
+// pinv_rrule and pinv_frule
 // ============================================================================
 
 #[test]
 fn pinv_rrule_execution() {
-    // Exercise pinv_rrule (covers ~50 lines in lib.rs).
+    // Exercise pinv_rrule for the singular-value thresholding path.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let ap = pinv(&mut ctx, &a, None).unwrap();
@@ -5302,7 +5302,7 @@ fn pinv_rrule_execution() {
 
 #[test]
 fn pinv_frule_execution() {
-    // Exercise pinv_frule (covers ~50 lines in lib.rs).
+    // Exercise pinv_frule for the singular-value thresholding path.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0], &[3, 2]);
     let da = make_tensor(vec![0.1; 6], &[3, 2]);
@@ -5316,12 +5316,12 @@ fn pinv_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: norm_rrule Nuclear & Spectral
+// norm_rrule Nuclear & Spectral
 // ============================================================================
 
 #[test]
 fn norm_nuclear_rrule_execution() {
-    // Exercise norm_rrule Nuclear path (covers ~10 lines).
+    // Exercise norm_rrule for the nuclear norm path.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let co = make_tensor(vec![1.0], &[]);
@@ -5335,7 +5335,7 @@ fn norm_nuclear_rrule_execution() {
 
 #[test]
 fn norm_spectral_rrule_execution() {
-    // Exercise norm_rrule Spectral path (covers ~10 lines).
+    // Exercise norm_rrule for the spectral norm path.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let co = make_tensor(vec![1.0], &[]);
@@ -5351,7 +5351,7 @@ fn norm_spectral_rrule_execution() {
 }
 
 // ============================================================================
-// Coverage: norm_frule Nuclear & Spectral
+// norm_frule Nuclear & Spectral
 // ============================================================================
 
 #[test]
@@ -5381,7 +5381,7 @@ fn norm_spectral_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: qr_frule and qr_rrule execution (to cover non-square projector terms)
+// qr_frule and qr_rrule execution for non-square projector terms
 // ============================================================================
 
 #[test]
@@ -5426,7 +5426,7 @@ fn qr_frule_tall_execution() {
 }
 
 // ============================================================================
-// Coverage: svd_rrule non-square correction paths
+// svd_rrule non-square correction paths
 // ============================================================================
 
 #[test]
@@ -5480,7 +5480,7 @@ fn svd_rrule_wide_with_all_cotangents() {
 }
 
 // ============================================================================
-// Coverage: svd_frule non-square paths
+// svd_frule non-square paths
 // ============================================================================
 
 #[test]
@@ -5514,7 +5514,7 @@ fn svd_frule_wide_all_outputs() {
 }
 
 // ============================================================================
-// Coverage: lu_frule execution
+// lu_frule execution
 // ============================================================================
 
 #[test]
@@ -5537,7 +5537,7 @@ fn lu_frule_square_execution() {
 }
 
 // ============================================================================
-// Coverage: cholesky_rrule and cholesky_frule execution
+// cholesky_rrule and cholesky_frule execution
 // ============================================================================
 
 #[test]
@@ -5569,7 +5569,7 @@ fn cholesky_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: eigen_frule execution
+// eigen_frule execution
 // ============================================================================
 
 #[test]
@@ -5587,7 +5587,7 @@ fn eigen_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: slogdet_rrule execution
+// slogdet_rrule execution
 // ============================================================================
 
 #[test]
@@ -5607,7 +5607,7 @@ fn slogdet_rrule_execution() {
 }
 
 // ============================================================================
-// Coverage: slogdet_frule execution
+// slogdet_frule execution
 // ============================================================================
 
 #[test]
@@ -5621,7 +5621,7 @@ fn slogdet_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: det_rrule and det_frule execution
+// det_rrule and det_frule execution
 // ============================================================================
 
 #[test]
@@ -5648,7 +5648,7 @@ fn det_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: inv_rrule and inv_frule execution
+// inv_rrule and inv_frule execution
 // ============================================================================
 
 #[test]
@@ -5679,7 +5679,7 @@ fn inv_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: matrix_exp_rrule and matrix_exp_frule execution
+// matrix_exp_rrule and matrix_exp_frule execution
 // ============================================================================
 
 #[test]
@@ -5710,7 +5710,7 @@ fn matrix_exp_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: eig_frule execution
+// eig_frule execution
 // ============================================================================
 
 #[test]
@@ -5724,12 +5724,12 @@ fn eig_frule_execution() {
 }
 
 // ============================================================================
-// Coverage: lstsq_rrule full execution
+// lstsq_rrule full execution
 // ============================================================================
 
 #[test]
 fn lstsq_rrule_full_execution() {
-    // Exercise lstsq_rrule with a tall matrix to cover all lines.
+    // Exercise lstsq_rrule on a tall matrix with both gradient outputs.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
@@ -5754,7 +5754,7 @@ fn lstsq_rrule_full_execution() {
 // Note: solve_triangular now has frule support, but rrule is still not exposed.
 
 // ============================================================================
-// Coverage: additional validation error paths and branch coverage
+// additional validation and edge-case paths
 // ============================================================================
 
 #[test]
@@ -5803,7 +5803,7 @@ fn solve_rhs_2d_batch_mismatch() {
 
 #[test]
 fn solve_triangular_rhs_2d_batch_mismatch() {
-    // Also covers lines 321-325 via solve_triangular path.
+    // Exercise the same RHS batch validation path through solve_triangular.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 1, 3]);
@@ -6013,7 +6013,7 @@ fn norm_rrule_batched_fro_correct_cotangent() {
 
 #[test]
 fn norm_frule_batched_fro() {
-    // Exercise norm_frule with batched input to cover batched paths.
+    // Exercise norm_frule with batched input.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0, 2.0, 0.0, 0.0, 2.0], &[2, 2, 2]);
     let da = make_tensor(vec![0.1, 0.0, 0.0, 0.1, 0.2, 0.0, 0.0, 0.2], &[2, 2, 2]);
@@ -6045,7 +6045,7 @@ fn norm_frule_zero_matrix() {
 
 #[test]
 fn svd_rrule_no_cotangent() {
-    // Covers svd_rrule with all cotangents None.
+    // svd_rrule with all cotangents omitted should return a zero gradient.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.0, 0.0, 1.0], &[2, 2]);
     let co = SvdCotangent {
@@ -6065,7 +6065,7 @@ fn svd_rrule_no_cotangent() {
 
 #[test]
 fn qr_rrule_r_only_cotangent() {
-    // Covers qr_rrule with q=None.
+    // qr_rrule should accept an R-only cotangent.
     let mut ctx = CpuContext::new(1);
     let a = make_tensor(vec![1.0, 0.5, 0.5, 1.0], &[2, 2]);
     let result = qr(&mut ctx, &a).unwrap();

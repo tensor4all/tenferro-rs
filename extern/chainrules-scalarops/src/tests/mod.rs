@@ -1,8 +1,8 @@
-mod coverage;
+mod behavior;
 mod organization;
 
 #[test]
-fn phase1_scalar_rules_cover_exp_log_and_atan2() {
+fn exp_log_and_atan2_rules_match_expected_derivatives() {
     let (exp_y, exp_dy) = crate::exp_frule(1.0_f64, 0.25_f64);
     assert!((exp_y - std::f64::consts::E).abs() < 1.0e-12);
     assert!((exp_dy - 0.25_f64 * std::f64::consts::E).abs() < 1.0e-12);
