@@ -176,17 +176,20 @@ macro_rules! dispatch_einsum_runtime {
         crate::api::with_einsum_runtime::<$ty, _>(
             $op,
             |$ctx| {
-                type $backend = <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
+                type $backend =
+                    <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
                 let $runtime = <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::NAME;
                 $body
             },
             |$ctx| {
-                type $backend = <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
+                type $backend =
+                    <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
                 let $runtime = <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::NAME;
                 $body
             },
             |$ctx| {
-                type $backend = <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
+                type $backend =
+                    <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
                 let $runtime = <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::NAME;
                 $body
             },
@@ -200,17 +203,20 @@ macro_rules! dispatch_standard_runtime {
     ($op:expr, |$ctx:ident, $backend:ident, $runtime:ident| $body:expr) => {{
         crate::api::with_runtime(
             |$ctx| {
-                type $backend = <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
+                type $backend =
+                    <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
                 let $runtime = <crate::api::CpuRuntimeSlot as crate::api::RuntimeSlot>::NAME;
                 $body
             },
             |$ctx| {
-                type $backend = <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
+                type $backend =
+                    <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
                 let $runtime = <crate::api::CudaRuntimeSlot as crate::api::RuntimeSlot>::NAME;
                 $body
             },
             |$ctx| {
-                type $backend = <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
+                type $backend =
+                    <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::SemiringBackend;
                 let $runtime = <crate::api::RocmRuntimeSlot as crate::api::RuntimeSlot>::NAME;
                 $body
             },

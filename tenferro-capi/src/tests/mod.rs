@@ -1,3 +1,5 @@
+mod organization;
+
 use std::os::raw::c_void;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},

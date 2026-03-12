@@ -117,7 +117,10 @@ pub trait LinalgRuntimeValue:
 {
 }
 
-impl<T> LinalgRuntimeValue for T where T: EinsumRuntimeValue + LinalgScalar + CpuLinalgScalar + 'static {}
+impl<T> LinalgRuntimeValue for T where
+    T: EinsumRuntimeValue + LinalgScalar + CpuLinalgScalar + 'static
+{
+}
 
 #[doc(hidden)]
 /// Hidden shorthand for real-valued linalg runtime values.

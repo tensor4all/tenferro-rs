@@ -34,6 +34,9 @@ use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::*;
+use crate::typed_dispatch::{
+    dispatch_complex_scalar_type, dispatch_real_scalar_type, dispatch_standard_scalar_type,
+};
 use crate::{
     validate_execute_inputs, validate_shape_count, PlanCache, SemiringBinaryOp,
     SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
@@ -295,38 +298,54 @@ fn build_cutensor_plan(
 
 /// Get cuTENSOR data type for a Scalar type, returning an error if unsupported.
 fn scalar_data_type<T: Scalar>() -> Result<CutensorDataType> {
-    use std::any::TypeId;
-    let tid = TypeId::of::<T>();
-    if tid == TypeId::of::<f32>() {
-        Ok(CUTENSOR_R_32F)
-    } else if tid == TypeId::of::<f64>() {
-        Ok(CUTENSOR_R_64F)
-    } else if tid == TypeId::of::<Complex32>() {
-        Ok(CUTENSOR_C_32F)
-    } else if tid == TypeId::of::<Complex64>() {
-        Ok(CUTENSOR_C_64F)
-    } else {
-        Err(Error::DeviceError(
-            "Unsupported scalar type for CUDA backend".into(),
-        ))
+    macro_rules! cutensor_data_type_for {
+        (f32) => {
+            CUTENSOR_R_32F
+        };
+        (f64) => {
+            CUTENSOR_R_64F
+        };
+        (Complex32) => {
+            CUTENSOR_C_32F
+        };
+        (Complex64) => {
+            CUTENSOR_C_64F
+        };
     }
+
+    dispatch_standard_scalar_type!(T, Concrete, {
+        return Ok(cutensor_data_type_for!(Concrete));
+    });
+
+    Err(Error::DeviceError(
+        "Unsupported scalar type for CUDA backend".into(),
+    ))
 }
 
 /// Get cuTENSOR compute descriptor for a Scalar type, returning an error if unsupported.
 fn scalar_compute_descriptor<T: Scalar>(
     vtable: &CutensorVtable,
 ) -> Result<cutensorComputeDescriptor_t> {
-    use std::any::TypeId;
-    let tid = TypeId::of::<T>();
-    if tid == TypeId::of::<f32>() || tid == TypeId::of::<Complex32>() {
-        Ok(vtable.compute_desc_32f)
-    } else if tid == TypeId::of::<f64>() || tid == TypeId::of::<Complex64>() {
-        Ok(vtable.compute_desc_64f)
-    } else {
-        Err(Error::DeviceError(
-            "Unsupported scalar type for CUDA backend".into(),
-        ))
-    }
+    dispatch_real_scalar_type!(T, Concrete, {
+        let _ = std::marker::PhantomData::<Concrete>;
+        return if std::mem::size_of::<Concrete>() == std::mem::size_of::<f32>() {
+            Ok(vtable.compute_desc_32f)
+        } else {
+            Ok(vtable.compute_desc_64f)
+        };
+    });
+    dispatch_complex_scalar_type!(T, Concrete, {
+        let _ = std::marker::PhantomData::<Concrete>;
+        return if std::mem::size_of::<Concrete>() == std::mem::size_of::<Complex32>() {
+            Ok(vtable.compute_desc_32f)
+        } else {
+            Ok(vtable.compute_desc_64f)
+        };
+    });
+
+    Err(Error::DeviceError(
+        "Unsupported scalar type for CUDA backend".into(),
+    ))
 }
 
 /// Create a cuTENSOR contraction plan.

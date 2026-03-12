@@ -1,3 +1,5 @@
+mod organization;
+
 use num_traits::{One, Zero};
 use tenferro_algebra::Scalar;
 use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore};

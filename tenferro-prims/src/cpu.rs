@@ -17,6 +17,9 @@ use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
+use crate::typed_dispatch::{
+    cast_scalar_value, cast_strided_view, cast_strided_view_mut, dispatch_standard_scalar_type,
+};
 use crate::{
     for_each_index, mode_position, validate_execute_inputs, validate_rank, validate_shape_count,
     validate_shape_eq, PlanCache, SemiringBinaryOp, SemiringCoreDescriptor,
@@ -1410,67 +1413,82 @@ fn execute_batched_gemm<T: Scalar + 'static>(
     n: usize,
     k: usize,
 ) -> Result<()> {
-    let tid = TypeId::of::<T>();
-
-    macro_rules! dispatch_gemm {
-        ($ty:ty, strided) => {{
-            let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<$ty>) };
-            let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<$ty>) };
-            let out =
-                unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<$ty>) };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            return execute_batched_gemm_strided(alpha, &[a, b], beta, out, batch_dims, m, n, k);
-        }};
-        ($ty:ty, contiguous, $gemm_fn:expr) => {{
-            let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<$ty>) };
-            let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<$ty>) };
-            let out =
-                unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<$ty>) };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
+    #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
+    macro_rules! dispatch_blas_gemm {
+        (f64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
             return execute_batched_gemm_contiguous(
                 _ctx,
-                alpha,
-                &[a, b],
-                beta,
-                out,
+                $alpha,
+                &[$a, $b],
+                $beta,
+                $out,
                 batch_dims,
                 m,
                 n,
                 k,
-                $gemm_fn,
+                gemm_f64,
+            );
+        }};
+        (f32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
+            return execute_batched_gemm_contiguous(
+                _ctx,
+                $alpha,
+                &[$a, $b],
+                $beta,
+                $out,
+                batch_dims,
+                m,
+                n,
+                k,
+                gemm_f32,
+            );
+        }};
+        (Complex64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
+            return execute_batched_gemm_contiguous(
+                _ctx,
+                $alpha,
+                &[$a, $b],
+                $beta,
+                $out,
+                batch_dims,
+                m,
+                n,
+                k,
+                gemm_c64,
+            );
+        }};
+        (Complex32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $out:expr) => {{
+            return execute_batched_gemm_contiguous(
+                _ctx,
+                $alpha,
+                &[$a, $b],
+                $beta,
+                $out,
+                batch_dims,
+                m,
+                n,
+                k,
+                gemm_c32,
             );
         }};
     }
 
-    if tid == TypeId::of::<f64>() {
-        #[cfg(feature = "gemm-faer")]
-        dispatch_gemm!(f64, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_gemm!(f64, contiguous, gemm_f64);
-    }
+    dispatch_standard_scalar_type!(T, Concrete, {
+        let a = cast_strided_view!(inputs[0], T, Concrete);
+        let b = cast_strided_view!(inputs[1], T, Concrete);
+        let out = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
 
-    if tid == TypeId::of::<f32>() {
         #[cfg(feature = "gemm-faer")]
-        dispatch_gemm!(f32, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_gemm!(f32, contiguous, gemm_f32);
-    }
-
-    if tid == TypeId::of::<Complex64>() {
-        #[cfg(feature = "gemm-faer")]
-        dispatch_gemm!(Complex64, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_gemm!(Complex64, contiguous, gemm_c64);
-    }
-
-    if tid == TypeId::of::<Complex32>() {
-        #[cfg(feature = "gemm-faer")]
-        dispatch_gemm!(Complex32, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_gemm!(Complex32, contiguous, gemm_c32);
-    }
+        {
+            return execute_batched_gemm_strided(alpha, &[a, b], beta, out, batch_dims, m, n, k);
+        }
+        #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
+        {
+            dispatch_blas_gemm!(Concrete, a, b, alpha, beta, out);
+        }
+    });
 
     Err(Error::InvalidArgument(format!(
         "BatchedGemm supports only f32, f64, Complex32, and Complex64 (got {})",
@@ -2296,53 +2314,43 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
     };
 
     // === Dispatch based on concrete type ===
-    let tid = TypeId::of::<T>();
+    #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
+    macro_rules! dispatch_dense_contract {
+        (f64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
+            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_f64)?;
+            return Ok(Some(()));
+        }};
+        (f32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
+            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_f32)?;
+            return Ok(Some(()));
+        }};
+        (Complex64, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
+            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_c64)?;
+            return Ok(Some(()));
+        }};
+        (Complex32, $a:expr, $b:expr, $alpha:expr, $beta:expr, $c:expr) => {{
+            run_dense($alpha, $a, $b, $beta, $c, &layout, gemm_c32)?;
+            return Ok(Some(()));
+        }};
+    }
 
-    macro_rules! dispatch_contract {
-        ($ty:ty, strided) => {{
-            let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<$ty>) };
-            let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<$ty>) };
-            let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<$ty>) };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
+    dispatch_standard_scalar_type!(T, Concrete, {
+        let a = cast_strided_view!(inputs[0], T, Concrete);
+        let b = cast_strided_view!(inputs[1], T, Concrete);
+        let c = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+
+        #[cfg(feature = "gemm-faer")]
+        {
             run_strided(alpha, a, b, beta, c, &layout)?;
             return Ok(Some(()));
-        }};
-        ($ty:ty, dense, $gemm_fn:expr) => {{
-            let a = unsafe { &*(inputs[0] as *const StridedView<T> as *const StridedView<$ty>) };
-            let b = unsafe { &*(inputs[1] as *const StridedView<T> as *const StridedView<$ty>) };
-            let c = unsafe { &mut *(output as *mut StridedViewMut<T> as *mut StridedViewMut<$ty>) };
-            let alpha = unsafe { *(&alpha as *const T as *const $ty) };
-            let beta = unsafe { *(&beta as *const T as *const $ty) };
-            run_dense(alpha, a, b, beta, c, &layout, $gemm_fn)?;
-            return Ok(Some(()));
-        }};
-    }
-
-    if tid == TypeId::of::<f64>() {
-        #[cfg(feature = "gemm-faer")]
-        dispatch_contract!(f64, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_contract!(f64, dense, gemm_f64);
-    }
-    if tid == TypeId::of::<f32>() {
-        #[cfg(feature = "gemm-faer")]
-        dispatch_contract!(f32, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_contract!(f32, dense, gemm_f32);
-    }
-    if tid == TypeId::of::<Complex64>() {
-        #[cfg(feature = "gemm-faer")]
-        dispatch_contract!(Complex64, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_contract!(Complex64, dense, gemm_c64);
-    }
-    if tid == TypeId::of::<Complex32>() {
-        #[cfg(feature = "gemm-faer")]
-        dispatch_contract!(Complex32, strided);
-        #[cfg(feature = "gemm-blas")]
-        dispatch_contract!(Complex32, dense, gemm_c32);
-    }
+        }
+        #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
+        {
+            dispatch_dense_contract!(Concrete, a, b, alpha, beta, c);
+        }
+    });
     Ok(None)
 }
 
