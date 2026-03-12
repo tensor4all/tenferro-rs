@@ -24,14 +24,14 @@ use super::*;
 /// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
 /// let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
-pub fn svd_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn svd_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
     options: Option<&SvdOptions>,
 ) -> AdResult<(SvdResult<T>, SvdResult<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -205,13 +205,13 @@ where
 /// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn qr_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn qr_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(QrResult<T>, QrResult<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

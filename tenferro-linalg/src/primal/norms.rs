@@ -1,7 +1,7 @@
 use super::*;
 
 /// Solve a triangular linear system `A x = b`.
-pub fn solve_triangular<T: LinalgScalar, C>(
+pub fn solve_triangular<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -15,13 +15,13 @@ where
 }
 
 /// Compute a norm.
-pub fn norm<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn norm<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     kind: NormKind,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -166,13 +166,13 @@ where
 }
 
 /// Compute the matrix condition number with a selected norm convention.
-pub fn cond<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn cond<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     kind: NormKind,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

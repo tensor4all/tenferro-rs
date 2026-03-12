@@ -21,14 +21,14 @@ use super::*;
 /// let grad = lstsq_rrule(&mut ctx, &a, &b, &dx).unwrap();
 /// // grad.a: cotangent for A, grad.b: cotangent for b
 /// ```
-pub fn lstsq_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lstsq_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent_x: &Tensor<T>,
 ) -> AdResult<LstsqGrad<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -105,13 +105,13 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let grad_a = cholesky_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn cholesky_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn cholesky_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

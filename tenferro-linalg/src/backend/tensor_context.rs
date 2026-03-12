@@ -5,7 +5,7 @@
 //! backend-marker pattern from [`TensorLinalgBackend`].
 
 use super::tensor_api::TensorLinalgBackend;
-use crate::LinalgScalar;
+use crate::KernelLinalgScalar;
 
 /// Bridge trait that maps a context type to its backend.
 ///
@@ -25,13 +25,13 @@ use crate::LinalgScalar;
 ///
 /// fn do_work<T, C>(ctx: &mut C)
 /// where
-///     T: tenferro_linalg::LinalgScalar,
+///     T: tenferro_linalg::KernelLinalgScalar,
 ///     C: TensorLinalgContextFor<T>,
 /// {
 ///     // dispatch through the backend
 /// }
 /// ```
-pub trait TensorLinalgContextFor<T: LinalgScalar> {
+pub trait TensorLinalgContextFor<T: KernelLinalgScalar> {
     /// The backend type that this context is associated with.
     type Backend: TensorLinalgBackend<T, Context = Self>;
 }

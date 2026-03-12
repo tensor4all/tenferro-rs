@@ -44,7 +44,7 @@ Status labels in the matrix use:
 | Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Yes | `einsum` is strong, `Permute` is gone from the prim surface, and semiring execution now routes directly through the family contracts; the remaining gap is GPU capability breadth, not legacy layering |
 | Scalar (`TensorScalarPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Neg/Conj/Abs/Reciprocal/Real/Imag/Square`, binary `Add/Sub/Mul/Div/Maximum/Minimum/Clamp*`, and reductions `Sum/Prod/Mean/Max/Min`; predicate/select tensor ops such as `where` are still absent |
 | Analytic (`TensorAnalyticPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Sqrt/Rsqrt/Exp/Expm1/Log/Log1p/Sin/Cos/Tan/Tanh/Asin/Acos/Atan/Sinh/Cosh/Asinh/Acosh/Atanh`, binary `Pow/Atan2/Hypot/Xlogy`, and reductions `Var/Std`; GPU custom-kernel coverage is still absent |
-| Linalg kernel (`tenferro-linalg-prims`) | Yes | Partial | Partial | Partial | Partial | Partial | Solve/factorization kernels exist, but CPU eig helpers still leak through `LinalgScalar` and some execution still routes through CPU-local helpers |
+| Linalg kernel (`tenferro-linalg-prims`) | Yes | Partial | Partial | Partial | Partial | Partial | Solve/factorization kernels exist and now gate on backend-generic `KernelLinalgScalar`; the remaining gap is backend breadth, not CPU-named scalar contracts |
 | Linalg composite (`tenferro-linalg`) | Yes | Partial | Partial | Partial | Partial | Partial | Public coverage is broad and production entrypoints are capability-driven; the remaining gap is that several composites still bottom out in CPU-only kernels because broader backend support is missing |
 | Dyadtensor / AD surface | Partial | Partial | Partial | Partial | Partial | Partial | Eager builders now cover scalar/analytic unary, binary, and reduction families including `add`, `atan2`, `pow`, `hypot`, `exp`, `log`, `sin`, `cos`, `tanh`, `asin`, `acos`, `atan`, hyperbolic families, `sum`, `mean`, `var`, and `std`; predicate/select families are still missing and some AD families remain CPU-complete only |
 
@@ -167,12 +167,16 @@ capability-driven. The remaining issue is not legacy layering; it is that some
 composite paths still bottom out in CPU-only kernels because broader backend
 coverage has not landed yet.
 
-### 4. `tenferro-linalg-prims` still mixes generic scalar semantics with LAPACK-specific helpers
+### 4. `tenferro-linalg-prims` now separates backend-generic kernel scalars from LAPACK-specific helpers
 
-`LinalgScalar` currently carries eigendecomposition buffer conversion helpers
-that only make sense for the current CPU LAPACK-style path. That makes the
-trait broader than the true cross-backend contract. This is the concrete layer
-problem addressed by `#445`.
+The backend contract now distinguishes:
+
+- `KernelLinalgScalar` for dtypes supported by backend kernel implementations
+- `LapackEigScalar` for the narrower CPU eig helper path
+
+That keeps public/high-level linalg and dyadtensor bounds free of CPU-specific
+names while still allowing the CPU backend to own its concrete eig buffer
+conversion details.
 
 ### 5. Dyadtensor runtime is generic at the API boundary, but backend coverage is still mixed
 
@@ -209,7 +213,7 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
   dyadtensor runtime surface
 - Keep composite linalg paths lowering through capability-driven contracts as
   more backends land
-- Split LAPACK eig helpers out of `LinalgScalar`
+- Keep `KernelLinalgScalar` and `LapackEigScalar` separate as backend breadth grows
 
 ### Public API and family gaps
 

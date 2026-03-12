@@ -17,14 +17,14 @@ use super::*;
 /// let cotangent = Tensor::<f64>::ones(&[], mem, col);
 /// let grad_a = norm_rrule(&mut ctx, &a, &cotangent, NormKind::Fro).unwrap();
 /// ```
-pub fn norm_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn norm_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
     kind: NormKind,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

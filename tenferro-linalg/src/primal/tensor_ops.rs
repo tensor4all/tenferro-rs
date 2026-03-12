@@ -1,7 +1,11 @@
 use super::*;
 
 /// Compute the cross product along the leading vector axis.
-pub fn cross<T: LinalgScalar, C>(_ctx: &mut C, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>
+pub fn cross<T: KernelLinalgScalar, C>(
+    _ctx: &mut C,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
@@ -92,7 +96,7 @@ where
 }
 
 /// Form the explicit product of Householder reflectors.
-pub fn householder_product<T: LinalgScalar, C>(
+pub fn householder_product<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     a: &Tensor<T>,
     tau: &Tensor<T>,
@@ -177,7 +181,7 @@ where
 }
 
 /// Build a Vandermonde matrix from leading-dimension vectors.
-pub fn vander<T: LinalgScalar, C>(
+pub fn vander<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     x: &Tensor<T>,
     columns: Option<usize>,
@@ -230,13 +234,13 @@ where
 }
 
 /// Invert a tensorized square operator.
-pub fn tensorinv<T: LinalgScalar, C>(
+pub fn tensorinv<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     ind: usize,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -272,14 +276,14 @@ where
 }
 
 /// Solve a tensorized linear system.
-pub fn tensorsolve<T: LinalgScalar, C>(
+pub fn tensorsolve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     dims: Option<&[usize]>,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

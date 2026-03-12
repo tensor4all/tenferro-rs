@@ -90,7 +90,12 @@ backend-facing linalg contract. Some concrete backends still use local helper
 modules internally, but those helpers now sit behind `tenferro-linalg-prims`
 instead of acting as a competing public abstraction.
 
-One important current debt is that `LinalgScalar` still carries
-LAPACK-oriented eigendecomposition helper requirements. That helper surface is
-more specific than the true backend-generic scalar contract and should be
-isolated into a narrower CPU-oriented trait.
+The scalar side is intentionally split:
+
+- `LinalgScalar` describes the general scalar behavior shared by linalg code
+- `KernelLinalgScalar` marks the dtypes that backend kernel contracts currently
+  support
+- `LapackEigScalar` isolates the narrower CPU eig buffer conversion helpers
+
+That separation keeps public/high-level linalg APIs backend-generic without
+leaking CPU-specific scalar trait names.

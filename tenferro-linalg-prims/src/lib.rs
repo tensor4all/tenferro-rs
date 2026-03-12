@@ -49,6 +49,21 @@ pub trait LinalgScalar:
     fn conj(&self) -> Self;
 }
 
+/// Scalar types with concrete backend kernel support in the current workspace.
+///
+/// This marker keeps public/high-level linalg bounds generic over backends
+/// without leaking provider-specific names such as `Cpu*` into higher layers.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg_prims::KernelLinalgScalar;
+///
+/// fn needs_kernel_scalar<T: KernelLinalgScalar>(x: T) -> T { x }
+/// assert_eq!(needs_kernel_scalar(1.0_f64), 1.0);
+/// ```
+pub trait KernelLinalgScalar: LinalgScalar {}
+
 /// LAPACK-oriented eigen helper contract for CPU eigendecomposition paths.
 ///
 /// This trait is intentionally narrower than [`LinalgScalar`]. It exists so
@@ -78,149 +93,94 @@ pub trait LapackEigScalar: LinalgScalar {
     );
 }
 
-impl LinalgScalar for f64 {
-    type Real = f64;
-    type Complex = Complex64;
+macro_rules! impl_real_linalg_scalar {
+    ($ty:ty, $complex:ty) => {
+        impl LinalgScalar for $ty {
+            type Real = $ty;
+            type Complex = $complex;
 
-    fn abs_real(&self) -> f64 {
-        num_traits::Float::abs(*self)
-    }
+            fn abs_real(&self) -> $ty {
+                num_traits::Float::abs(*self)
+            }
 
-    fn real_epsilon() -> f64 {
-        <f64 as num_traits::Float>::epsilon()
-    }
+            fn real_epsilon() -> $ty {
+                <$ty as num_traits::Float>::epsilon()
+            }
 
-    fn conj(&self) -> f64 {
-        *self
-    }
-}
-
-impl LapackEigScalar for f64 {
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (2 * n, 2 * n * n)
-    }
-
-    fn eig_ri_to_complex(
-        n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex64],
-        vectors_out: &mut [Complex64],
-    ) {
-        for i in 0..n {
-            values_out[i] = Complex64::new(val_ri[2 * i], val_ri[2 * i + 1]);
+            fn conj(&self) -> $ty {
+                *self
+            }
         }
-        for k in 0..(n * n) {
-            vectors_out[k] = Complex64::new(vec_ri[2 * k], vec_ri[2 * k + 1]);
+
+        impl KernelLinalgScalar for $ty {}
+
+        impl LapackEigScalar for $ty {
+            fn eig_buffer_sizes(n: usize) -> (usize, usize) {
+                (2 * n, 2 * n * n)
+            }
+
+            fn eig_ri_to_complex(
+                n: usize,
+                val_ri: &[Self],
+                vec_ri: &[Self],
+                values_out: &mut [$complex],
+                vectors_out: &mut [$complex],
+            ) {
+                for i in 0..n {
+                    values_out[i] = <$complex>::new(val_ri[2 * i], val_ri[2 * i + 1]);
+                }
+                for k in 0..(n * n) {
+                    vectors_out[k] = <$complex>::new(vec_ri[2 * k], vec_ri[2 * k + 1]);
+                }
+            }
         }
-    }
+    };
 }
 
-impl LinalgScalar for f32 {
-    type Real = f32;
-    type Complex = Complex32;
+macro_rules! impl_complex_linalg_scalar {
+    ($ty:ty, $real:ty) => {
+        impl LinalgScalar for $ty {
+            type Real = $real;
+            type Complex = $ty;
 
-    fn abs_real(&self) -> f32 {
-        num_traits::Float::abs(*self)
-    }
+            fn abs_real(&self) -> $real {
+                self.norm()
+            }
 
-    fn real_epsilon() -> f32 {
-        <f32 as num_traits::Float>::epsilon()
-    }
+            fn real_epsilon() -> $real {
+                <$real as num_traits::Float>::epsilon()
+            }
 
-    fn conj(&self) -> f32 {
-        *self
-    }
-}
-
-impl LapackEigScalar for f32 {
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (2 * n, 2 * n * n)
-    }
-
-    fn eig_ri_to_complex(
-        n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex32],
-        vectors_out: &mut [Complex32],
-    ) {
-        for i in 0..n {
-            values_out[i] = Complex32::new(val_ri[2 * i], val_ri[2 * i + 1]);
+            fn conj(&self) -> $ty {
+                self.conj()
+            }
         }
-        for k in 0..(n * n) {
-            vectors_out[k] = Complex32::new(vec_ri[2 * k], vec_ri[2 * k + 1]);
+
+        impl KernelLinalgScalar for $ty {}
+
+        impl LapackEigScalar for $ty {
+            fn eig_buffer_sizes(n: usize) -> (usize, usize) {
+                (n, n * n)
+            }
+
+            fn eig_ri_to_complex(
+                _n: usize,
+                val_ri: &[Self],
+                vec_ri: &[Self],
+                values_out: &mut [$ty],
+                vectors_out: &mut [$ty],
+            ) {
+                values_out.copy_from_slice(val_ri);
+                vectors_out.copy_from_slice(vec_ri);
+            }
         }
-    }
+    };
 }
 
-impl LinalgScalar for Complex64 {
-    type Real = f64;
-    type Complex = Complex64;
-
-    fn abs_real(&self) -> f64 {
-        self.norm()
-    }
-
-    fn real_epsilon() -> f64 {
-        <f64 as num_traits::Float>::epsilon()
-    }
-
-    fn conj(&self) -> Complex64 {
-        self.conj()
-    }
-}
-
-impl LapackEigScalar for Complex64 {
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (n, n * n)
-    }
-
-    fn eig_ri_to_complex(
-        _n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex64],
-        vectors_out: &mut [Complex64],
-    ) {
-        values_out.copy_from_slice(val_ri);
-        vectors_out.copy_from_slice(vec_ri);
-    }
-}
-
-impl LinalgScalar for Complex32 {
-    type Real = f32;
-    type Complex = Complex32;
-
-    fn abs_real(&self) -> f32 {
-        self.norm()
-    }
-
-    fn real_epsilon() -> f32 {
-        <f32 as num_traits::Float>::epsilon()
-    }
-
-    fn conj(&self) -> Complex32 {
-        self.conj()
-    }
-}
-
-impl LapackEigScalar for Complex32 {
-    fn eig_buffer_sizes(n: usize) -> (usize, usize) {
-        (n, n * n)
-    }
-
-    fn eig_ri_to_complex(
-        _n: usize,
-        val_ri: &[Self],
-        vec_ri: &[Self],
-        values_out: &mut [Complex32],
-        vectors_out: &mut [Complex32],
-    ) {
-        values_out.copy_from_slice(val_ri);
-        vectors_out.copy_from_slice(vec_ri);
-    }
-}
+impl_real_linalg_scalar!(f64, Complex64);
+impl_real_linalg_scalar!(f32, Complex32);
+impl_complex_linalg_scalar!(Complex64, f64);
+impl_complex_linalg_scalar!(Complex32, f32);
 
 /// Result of a tensor-level QR decomposition.
 ///
@@ -332,7 +292,7 @@ pub enum LinalgCapabilityOp {
     Norm,
 }
 
-pub trait TensorLinalgPrims<T: LinalgScalar> {
+pub trait TensorLinalgPrims<T: KernelLinalgScalar> {
     type Context;
 
     fn has_linalg_support(op: LinalgCapabilityOp) -> bool;

@@ -1,13 +1,13 @@
 use super::*;
 
 /// Solve the least squares problem: `x = argmin ||Ax - b||²`.
-pub fn lstsq<T: LinalgScalar, C>(
+pub fn lstsq<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<LstsqResult<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -80,7 +80,7 @@ where
 }
 
 /// Compute the Cholesky decomposition of a Hermitian positive-definite matrix.
-pub fn cholesky<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
+pub fn cholesky<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
@@ -89,12 +89,12 @@ where
 }
 
 /// Compute the Cholesky decomposition with numerical status information.
-pub fn cholesky_ex<T: LinalgScalar, C>(
+pub fn cholesky_ex<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<CholeskyExResult<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

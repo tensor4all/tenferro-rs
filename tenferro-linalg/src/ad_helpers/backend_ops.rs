@@ -1,7 +1,7 @@
 use super::*;
 
 /// Mat mul via LinalgBackend, returning `Vec` for convenience in AD code.
-pub(crate) fn backend_mat_mul<T: LinalgScalar, C>(
+pub(crate) fn backend_mat_mul<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     m: usize,
@@ -10,13 +10,13 @@ pub(crate) fn backend_mat_mul<T: LinalgScalar, C>(
     n: usize,
 ) -> AdResult<Vec<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     prims_bridge::batched_gemm_via_prims(a, m, k, b, n).map_err(to_ad_err)
 }
 
 /// Solve via LinalgBackend, returning `Vec` for convenience in AD code.
-pub(crate) fn backend_solve<T: LinalgScalar, C>(
+pub(crate) fn backend_solve<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     b: &[T],
@@ -24,7 +24,7 @@ pub(crate) fn backend_solve<T: LinalgScalar, C>(
     nrhs: usize,
 ) -> AdResult<Vec<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let mut x = vec![T::zero(); n * nrhs];
     backend::cpu::solve_slices(a, b, n, nrhs, &mut x).map_err(to_ad_err)?;
@@ -32,7 +32,7 @@ where
 }
 
 /// Solve triangular via LinalgBackend, returning `Vec` for convenience in AD code.
-pub(crate) fn backend_solve_tri<T: LinalgScalar, C>(
+pub(crate) fn backend_solve_tri<T: KernelLinalgScalar, C>(
     _ctx: &mut C,
     a: &[T],
     b: &[T],
@@ -41,7 +41,7 @@ pub(crate) fn backend_solve_tri<T: LinalgScalar, C>(
     upper: bool,
 ) -> AdResult<Vec<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let mut x = vec![T::zero(); n * nrhs];
     backend::cpu::solve_triangular_slices(a, b, n, nrhs, upper, &mut x).map_err(to_ad_err)?;
@@ -49,14 +49,14 @@ where
 }
 
 /// Thin SVD via LinalgBackend, returning `(U, S, V)` for convenience in AD code.
-pub(crate) fn backend_thin_svd<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub(crate) fn backend_thin_svd<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     _ctx: &mut C,
     a: &[T],
     m: usize,
     n: usize,
 ) -> AdResult<(Vec<T>, Vec<T>, Vec<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let k = m.min(n);
     let mut u = vec![T::zero(); m * k];
@@ -68,14 +68,14 @@ where
 }
 
 /// QR decomposition via LinalgBackend, returning `(Q, R)` for convenience in AD code.
-pub(crate) fn backend_qr<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub(crate) fn backend_qr<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     _ctx: &mut C,
     a: &[T],
     m: usize,
     n: usize,
 ) -> AdResult<(Vec<T>, Vec<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
 {
     let k = m.min(n);
     let mut q = vec![T::zero(); m * k];

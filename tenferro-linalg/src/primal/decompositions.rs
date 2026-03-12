@@ -35,7 +35,7 @@ use super::*;
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn svd<T: LinalgScalar, C>(
+pub fn svd<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     options: Option<&SvdOptions>,
@@ -144,7 +144,7 @@ where
 /// # Errors
 ///
 /// Returns an error if the input has fewer than 2 dimensions.
-pub fn qr<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<QrResult<T>>
+pub fn qr<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<QrResult<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
@@ -182,7 +182,7 @@ where
 /// let no_pivot = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
 /// assert!(no_pivot.p.is_none());
 /// ```
-pub fn lu<T: LinalgScalar, C>(
+pub fn lu<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     pivot: LuPivot,
@@ -271,7 +271,10 @@ where
 }
 
 /// Compute the packed LU factorization of a batched matrix.
-pub fn lu_factor<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<LuFactorResult<T>>
+pub fn lu_factor<T: KernelLinalgScalar, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+) -> Result<LuFactorResult<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
@@ -284,7 +287,7 @@ where
 }
 
 /// Compute the packed LU factorization with numerical status information.
-pub fn lu_factor_ex<T: LinalgScalar, C>(
+pub fn lu_factor_ex<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<LuFactorExResult<T>>
@@ -296,14 +299,14 @@ where
 }
 
 /// Solve `A x = b` from a packed LU factorization.
-pub fn lu_solve<T: LinalgScalar, C>(
+pub fn lu_solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     factors: &Tensor<T>,
     pivots: &[usize],
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -314,7 +317,10 @@ where
 /// Compute the eigendecomposition of a batched square matrix.
 ///
 /// Input shape: `(n, n, *)`.
-pub fn eigen<T: LinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<EigenResult<T, T::Real>>
+pub fn eigen<T: KernelLinalgScalar, C>(
+    ctx: &mut C,
+    tensor: &Tensor<T>,
+) -> Result<EigenResult<T, T::Real>>
 where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,

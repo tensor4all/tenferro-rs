@@ -8,7 +8,7 @@ use super::tensor_api::{
     TensorLinalgBackend,
 };
 use super::tensor_context::TensorLinalgContextFor;
-use crate::LinalgScalar;
+use crate::KernelLinalgScalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
@@ -30,7 +30,7 @@ fn unsupported<T>() -> Result<T> {
     ))
 }
 
-impl<T: LinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
+impl<T: KernelLinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
     type Context = tenferro_prims::CudaContext;
 
     fn has_linalg_support(_op: super::tensor_api::LinalgCapabilityOp) -> bool {
@@ -68,7 +68,7 @@ impl<T: LinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
     }
 }
 
-impl<T: LinalgScalar> TensorLinalgContextFor<T> for tenferro_prims::CudaContext {
+impl<T: KernelLinalgScalar> TensorLinalgContextFor<T> for tenferro_prims::CudaContext {
     type Backend = CudaTensorLinalgBackend;
 }
 

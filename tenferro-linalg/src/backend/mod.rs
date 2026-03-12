@@ -83,7 +83,6 @@ pub use tensor_context::TensorLinalgContextFor;
 // CPU backend (public)
 #[cfg(feature = "linalg-lapack")]
 pub use blas_lapack_backend::BlasLapackBackend;
-pub use cpu::CpuLinalgScalar;
 pub use cpu::CpuTensorLinalgBackend;
 
 // GPU backend stubs (public)

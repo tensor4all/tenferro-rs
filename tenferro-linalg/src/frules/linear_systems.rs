@@ -19,7 +19,7 @@ use super::*;
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn solve_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -27,7 +27,7 @@ pub fn solve_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
     tangent_b: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -77,7 +77,7 @@ where
 ///
 /// where `proj(dA)` keeps only the active triangular part
 /// (`triu` when `upper=true`, `tril` when `upper=false`).
-pub fn solve_triangular_frule<T: LinalgScalar, C>(
+pub fn solve_triangular_frule<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -86,7 +86,7 @@ pub fn solve_triangular_frule<T: LinalgScalar, C>(
     upper: bool,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -175,13 +175,13 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (a_inv, da_inv) = inv_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn inv_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn inv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -233,13 +233,13 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (d, dd) = det_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn det_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn det_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -295,13 +295,13 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn slogdet_frule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn slogdet_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
 ) -> AdResult<(SlogdetResult<T>, SlogdetResult<T>)>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

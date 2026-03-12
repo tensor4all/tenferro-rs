@@ -29,7 +29,7 @@ use super::*;
 /// let grad_a = eig_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn eig_rrule<
-    T: LinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
+    T: KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
     C,
 >(
     ctx: &mut C,
@@ -37,7 +37,7 @@ pub fn eig_rrule<
     cotangent: &EigCotangent<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -122,14 +122,14 @@ where
 /// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col);
 /// let grad_a = pinv_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
-pub fn pinv_rrule<T: LinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn pinv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &Tensor<T>,
     rcond: Option<f64>,
 ) -> AdResult<Tensor<T>>
 where
-    T: backend::CpuLinalgScalar,
+    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
