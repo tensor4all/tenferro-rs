@@ -1,11 +1,97 @@
 use std::collections::BTreeMap;
 
+use num_complex::{Complex32, Complex64};
+use num_traits::{Float, ToPrimitive, Zero};
 use serde_json::Value;
+use tenferro_linalg_prims::LinalgScalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::db::DbTensor;
 
-fn move_core_dims_to_front(tensor: Tensor<f64>, core_rank: usize) -> Result<Tensor<f64>, String> {
+pub trait OracleDbScalar: LinalgScalar + Copy {
+    const ORACLE_DTYPE: &'static str;
+
+    fn decode_json_value(value: &Value) -> Result<Self, String>;
+}
+
+fn decode_json_real<R: Float + ToPrimitive + num_traits::NumCast>(
+    value: &Value,
+) -> Result<R, String> {
+    match value {
+        Value::Number(num) => {
+            let as_f64 = num
+                .as_f64()
+                .ok_or_else(|| "failed to decode numeric oracle payload".to_string())?;
+            num_traits::NumCast::from(as_f64)
+                .ok_or_else(|| format!("failed to cast oracle payload {as_f64}"))
+        }
+        Value::String(text) if text == "NaN" => Ok(R::nan()),
+        Value::String(text) if text == "Infinity" => Ok(R::infinity()),
+        Value::String(text) if text == "-Infinity" => Ok(R::neg_infinity()),
+        _ => Err("expected numeric oracle payload".to_string()),
+    }
+}
+
+impl OracleDbScalar for f64 {
+    const ORACLE_DTYPE: &'static str = "float64";
+
+    fn decode_json_value(value: &Value) -> Result<Self, String> {
+        decode_json_real(value)
+    }
+}
+
+impl OracleDbScalar for f32 {
+    const ORACLE_DTYPE: &'static str = "float32";
+
+    fn decode_json_value(value: &Value) -> Result<Self, String> {
+        decode_json_real(value)
+    }
+}
+
+impl OracleDbScalar for Complex64 {
+    const ORACLE_DTYPE: &'static str = "complex128";
+
+    fn decode_json_value(value: &Value) -> Result<Self, String> {
+        let Value::Array(parts) = value else {
+            return Err("expected [real, imag] complex payload".to_string());
+        };
+        if parts.len() != 2 {
+            return Err(format!(
+                "expected 2 complex payload entries, got {}",
+                parts.len()
+            ));
+        }
+        Ok(Self::from_parts(
+            decode_json_real(&parts[0])?,
+            decode_json_real(&parts[1])?,
+        ))
+    }
+}
+
+impl OracleDbScalar for Complex32 {
+    const ORACLE_DTYPE: &'static str = "complex64";
+
+    fn decode_json_value(value: &Value) -> Result<Self, String> {
+        let Value::Array(parts) = value else {
+            return Err("expected [real, imag] complex payload".to_string());
+        };
+        if parts.len() != 2 {
+            return Err(format!(
+                "expected 2 complex payload entries, got {}",
+                parts.len()
+            ));
+        }
+        Ok(Self::from_parts(
+            decode_json_real(&parts[0])?,
+            decode_json_real(&parts[1])?,
+        ))
+    }
+}
+
+fn move_core_dims_to_front<T: tenferro_algebra::Scalar>(
+    tensor: Tensor<T>,
+    core_rank: usize,
+) -> Result<Tensor<T>, String> {
     let rank = tensor.ndim();
     if core_rank == 0 || rank <= core_rank {
         return Ok(tensor);
@@ -25,11 +111,11 @@ fn move_core_dims_to_front(tensor: Tensor<f64>, core_rank: usize) -> Result<Tens
         .map_err(|err| format!("failed to permute tensor {:?}: {err}", tensor.dims()))
 }
 
-pub fn decode_f64_tensor_with_core_rank(
+pub fn decode_tensor_with_core_rank<T: OracleDbScalar>(
     encoded: &DbTensor,
     core_rank: usize,
-) -> Result<Tensor<f64>, String> {
-    if encoded.dtype != "float64" {
+) -> Result<Tensor<T>, String> {
+    if encoded.dtype != T::ORACLE_DTYPE {
         return Err(format!("unsupported tensor dtype {}", encoded.dtype));
     }
     if encoded.order != "row_major" {
@@ -37,29 +123,31 @@ pub fn decode_f64_tensor_with_core_rank(
     }
     let mut flat = Vec::with_capacity(encoded.data.len());
     for value in &encoded.data {
-        let number = match value {
-            Value::Number(num) => num
-                .as_f64()
-                .ok_or_else(|| "failed to decode float64 value".to_string())?,
-            _ => {
-                return Err("expected float64 tensor payload to contain JSON numbers".to_string());
-            }
-        };
-        flat.push(number);
+        flat.push(T::decode_json_value(value)?);
     }
     let stored = Tensor::from_slice(&flat, &encoded.shape, MemoryOrder::RowMajor)
         .map_err(|err| format!("failed to decode tensor: {err}"))?;
     move_core_dims_to_front(stored, core_rank)
 }
 
-pub fn tensor_data_col_major(tensor: &Tensor<f64>) -> Vec<f64> {
+pub fn decode_f64_tensor_with_core_rank(
+    encoded: &DbTensor,
+    core_rank: usize,
+) -> Result<Tensor<f64>, String> {
+    decode_tensor_with_core_rank(encoded, core_rank)
+}
+
+pub fn tensor_data_col_major<T: tenferro_algebra::Scalar + Copy>(tensor: &Tensor<T>) -> Vec<T> {
     let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
     let offset = contiguous.offset() as usize;
     let len = contiguous.dims().iter().product::<usize>();
     contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
-pub fn tensor_from_col_major(data: Vec<f64>, dims: &[usize]) -> Tensor<f64> {
+pub fn tensor_from_col_major<T: tenferro_algebra::Scalar>(
+    data: Vec<T>,
+    dims: &[usize],
+) -> Tensor<T> {
     Tensor::from_slice(&data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
@@ -82,18 +170,63 @@ pub fn elementwise_sign_mul(primal: &Tensor<f64>, cotangent: &Tensor<f64>) -> Te
     tensor_from_col_major(data, primal.dims())
 }
 
-pub fn tensor_add(left: &Tensor<f64>, right: &Tensor<f64>) -> Tensor<f64> {
+pub fn elementwise_abs_jvp<T: OracleDbScalar>(
+    primal: &Tensor<T>,
+    tangent: &Tensor<T>,
+) -> Tensor<T::Real> {
+    let primal_data = tensor_data_col_major(primal);
+    let tangent_data = tensor_data_col_major(tangent);
+    let data: Vec<T::Real> = primal_data
+        .iter()
+        .zip(tangent_data.iter())
+        .map(|(z, dz)| {
+            let mag = z.abs_real();
+            if mag == T::Real::zero() {
+                T::Real::zero()
+            } else {
+                ((*z).conj() * *dz).real_part() / mag
+            }
+        })
+        .collect();
+    tensor_from_col_major(data, primal.dims())
+}
+
+pub fn elementwise_abs_vjp<T: OracleDbScalar>(
+    primal: &Tensor<T>,
+    cotangent: &Tensor<T::Real>,
+) -> Tensor<T> {
+    let primal_data = tensor_data_col_major(primal);
+    let cotangent_data = tensor_data_col_major(cotangent);
+    let data: Vec<T> = primal_data
+        .iter()
+        .zip(cotangent_data.iter())
+        .map(|(z, co)| {
+            let mag = z.abs_real();
+            if mag == T::Real::zero() {
+                T::zero()
+            } else {
+                *z * T::from_real(*co / mag)
+            }
+        })
+        .collect();
+    tensor_from_col_major(data, primal.dims())
+}
+
+pub fn tensor_add<T: OracleDbScalar>(left: &Tensor<T>, right: &Tensor<T>) -> Tensor<T> {
     let left_data = tensor_data_col_major(left);
     let right_data = tensor_data_col_major(right);
-    let data: Vec<f64> = left_data
+    let data: Vec<T> = left_data
         .iter()
         .zip(right_data.iter())
-        .map(|(a, b)| a + b)
+        .map(|(a, b)| *a + *b)
         .collect();
     tensor_from_col_major(data, left.dims())
 }
 
-pub fn batched_matmul(left: &Tensor<f64>, right: &Tensor<f64>) -> Result<Tensor<f64>, String> {
+pub fn batched_matmul<T: OracleDbScalar>(
+    left: &Tensor<T>,
+    right: &Tensor<T>,
+) -> Result<Tensor<T>, String> {
     let left_dims = left.dims();
     let right_dims = right.dims();
     if left_dims.len() < 2 || right_dims.len() < 2 {
@@ -120,7 +253,7 @@ pub fn batched_matmul(left: &Tensor<f64>, right: &Tensor<f64>) -> Result<Tensor<
     let bc = batch_count(left_batch);
     let left_data = tensor_data_col_major(left);
     let right_data = tensor_data_col_major(right);
-    let mut out = vec![0.0; m * n * bc];
+    let mut out = vec![T::zero(); m * n * bc];
 
     for batch in 0..bc {
         let left_offset = batch * m * k;
@@ -130,7 +263,9 @@ pub fn batched_matmul(left: &Tensor<f64>, right: &Tensor<f64>) -> Result<Tensor<
             for p in 0..k {
                 let right_val = right_data[right_offset + p + j * k];
                 for i in 0..m {
-                    out[out_offset + i + j * m] += left_data[left_offset + i + p * m] * right_val;
+                    let out_index = out_offset + i + j * m;
+                    out[out_index] =
+                        out[out_index] + left_data[left_offset + i + p * m] * right_val;
                 }
             }
         }
@@ -141,7 +276,7 @@ pub fn batched_matmul(left: &Tensor<f64>, right: &Tensor<f64>) -> Result<Tensor<
     Ok(tensor_from_col_major(out, &dims))
 }
 
-pub fn batched_transpose(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> {
+pub fn batched_transpose<T: OracleDbScalar>(tensor: &Tensor<T>) -> Result<Tensor<T>, String> {
     let dims = tensor.dims();
     if dims.len() < 2 {
         return Err("batched_transpose requires rank >= 2 tensor".to_string());
@@ -151,13 +286,41 @@ pub fn batched_transpose(tensor: &Tensor<f64>) -> Result<Tensor<f64>, String> {
     let batch_dims = &dims[2..];
     let bc = batch_count(batch_dims);
     let data = tensor_data_col_major(tensor);
-    let mut out = vec![0.0; data.len()];
+    let mut out = vec![T::zero(); data.len()];
 
     for batch in 0..bc {
         let offset = batch * m * n;
         for j in 0..n {
             for i in 0..m {
                 out[batch * n * m + j + i * n] = data[offset + i + j * m];
+            }
+        }
+    }
+
+    let mut out_dims = vec![n, m];
+    out_dims.extend_from_slice(batch_dims);
+    Ok(tensor_from_col_major(out, &out_dims))
+}
+
+pub fn batched_adjoint_transpose<T: OracleDbScalar>(
+    tensor: &Tensor<T>,
+) -> Result<Tensor<T>, String> {
+    let dims = tensor.dims();
+    if dims.len() < 2 {
+        return Err("batched_adjoint_transpose requires rank >= 2 tensor".to_string());
+    }
+    let m = dims[0];
+    let n = dims[1];
+    let batch_dims = &dims[2..];
+    let bc = batch_count(batch_dims);
+    let data = tensor_data_col_major(tensor);
+    let mut out = vec![T::zero(); data.len()];
+
+    for batch in 0..bc {
+        let offset = batch * m * n;
+        for j in 0..n {
+            for i in 0..m {
+                out[batch * n * m + j + i * n] = data[offset + i + j * m].conj();
             }
         }
     }
@@ -199,6 +362,41 @@ pub fn compare_tensors(
         if diff > allowed {
             return Err(format!(
                 "{label}: mismatch at index {index}: expected={exp}, actual={act}, diff={diff}, allowed={allowed}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn compare_tensors_typed<T: OracleDbScalar>(
+    label: &str,
+    expected: &Tensor<T>,
+    actual: &Tensor<T>,
+    rtol: f64,
+    atol: f64,
+) -> Result<(), String> {
+    if expected.dims() != actual.dims() {
+        return Err(format!(
+            "{label}: shape mismatch expected {:?} got {:?}",
+            expected.dims(),
+            actual.dims()
+        ));
+    }
+    let expected_data = tensor_data_col_major(expected);
+    let actual_data = tensor_data_col_major(actual);
+    for (index, (exp, act)) in expected_data.iter().zip(actual_data.iter()).enumerate() {
+        let exp_abs = exp
+            .abs_real()
+            .to_f64()
+            .ok_or_else(|| format!("{label}: failed to convert expected magnitude"))?;
+        let act_diff = (*exp - *act)
+            .abs_real()
+            .to_f64()
+            .ok_or_else(|| format!("{label}: failed to convert actual difference"))?;
+        let allowed = atol + rtol * exp_abs;
+        if act_diff > allowed {
+            return Err(format!(
+                "{label}: mismatch at index {index}: diff={act_diff}, allowed={allowed}, expected={exp:?}, actual={act:?}"
             ));
         }
     }

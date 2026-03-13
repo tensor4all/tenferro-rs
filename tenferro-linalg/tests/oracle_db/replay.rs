@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use num_complex::{Complex32, Complex64};
+use num_traits::{Float, NumCast, ToPrimitive};
 use tenferro_linalg::{
     cholesky_frule, cholesky_rrule, cross, eigen, eigen_frule, eigen_rrule, householder_product,
     inv_frule, inv_rrule, lu_rrule, norm_frule, norm_rrule, pinv, pinv_frule, pinv_rrule, qr_frule,
@@ -7,6 +9,7 @@ use tenferro_linalg::{
     svd_frule, svd_rrule, tensorinv, tensorsolve, vander, EigenCotangent, LuCotangent, LuPivot,
     NormKind, QrCotangent, SolveGrad, SvdCotangent,
 };
+use tenferro_linalg_prims::KernelLinalgScalar;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor;
 
@@ -14,8 +17,10 @@ use crate::db::{
     case_files, default_oracle_db_root, load_case_records, CaseRecord, DbTensor, ProbeRecord,
 };
 use crate::decode::{
-    batched_matmul, batched_transpose, compare_tensor_maps, decode_f64_tensor_with_core_rank,
-    elementwise_sign_mul, tensor_add, tensor_data_col_major, tensor_map_inner_product,
+    batched_adjoint_transpose, batched_matmul, batched_transpose, compare_tensor_maps,
+    compare_tensors_typed, decode_f64_tensor_with_core_rank, decode_tensor_with_core_rank,
+    elementwise_abs_jvp, elementwise_abs_vjp, elementwise_sign_mul, tensor_add,
+    tensor_data_col_major, tensor_from_col_major, tensor_map_inner_product, OracleDbScalar,
 };
 use crate::hvp::{central_diff_tensor_maps, perturb_input_map};
 use crate::support::{classify_record, ExpectedErrorKind, RecordSupport, ReplayKind};
@@ -97,9 +102,6 @@ enum TriangularOrientation {
 fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
     match classify_record(record) {
         RecordSupport::Supported(kind) => {
-            if record.dtype != "float64" {
-                return Err(format!("unsupported success dtype {}", record.dtype));
-            }
             let hvp_checked = match kind {
                 ReplayKind::SolveIdentity => {
                     if record.op == "lu_solve" {
@@ -128,10 +130,6 @@ fn replay_case(record: &CaseRecord) -> Result<ReplayOutcome, String> {
             Ok(ReplayOutcome::ExpectedError)
         }
         RecordSupport::Unsupported { .. } => Ok(ReplayOutcome::Unsupported),
-        RecordSupport::Unknown => Err(format!(
-            "unclassified oracle family {}/{}/{} ({})",
-            record.op, record.family, record.observable.kind, record.expected_behavior
-        )),
     }
 }
 
@@ -3091,104 +3089,326 @@ fn replay_qr(record: &CaseRecord) -> Result<bool, String> {
     Ok(hvp_checked)
 }
 
-fn svd_observable_jvp(
-    family: &str,
-    primal_u: &Tensor<f64>,
-    primal_vt: &Tensor<f64>,
-    du: &Tensor<f64>,
-    ds: &Tensor<f64>,
-    dvt: &Tensor<f64>,
-) -> Result<BTreeMap<String, Tensor<f64>>, String> {
-    match family {
-        "u_abs" => Ok(BTreeMap::from([(
-            String::from("u"),
-            elementwise_sign_mul(primal_u, du),
-        )])),
-        "s" => Ok(BTreeMap::from([(String::from("s"), ds.clone())])),
-        "vh_abs" => Ok(BTreeMap::from([
-            (String::from("s"), ds.clone()),
-            (String::from("vh"), elementwise_sign_mul(primal_vt, dvt)),
-        ])),
-        "uvh_product" => Ok(BTreeMap::from([
-            (String::from("s"), ds.clone()),
-            (
-                String::from("uvh"),
-                tensor_add(
+#[derive(Clone, Debug)]
+enum SvdObservable<T: OracleDbScalar>
+where
+    T::Real: OracleDbScalar,
+{
+    UAbs {
+        u: Tensor<T::Real>,
+    },
+    S {
+        s: Tensor<T::Real>,
+    },
+    VhAbs {
+        s: Tensor<T::Real>,
+        vh: Tensor<T::Real>,
+    },
+    UvhProduct {
+        s: Tensor<T::Real>,
+        uvh: Tensor<T>,
+    },
+}
+
+fn decode_svd_input_tensor<T: OracleDbScalar>(
+    encoded: &BTreeMap<String, DbTensor>,
+) -> Result<Tensor<T>, String> {
+    let tensor = encoded
+        .get("a")
+        .ok_or_else(|| "missing SVD input tensor a".to_string())?;
+    decode_tensor_with_core_rank(tensor, 2)
+}
+
+fn tensor_real_inner_product_typed<T: OracleDbScalar>(
+    left: &Tensor<T>,
+    right: &Tensor<T>,
+) -> Result<f64, String> {
+    if left.dims() != right.dims() {
+        return Err(format!(
+            "real inner-product shape mismatch: left {:?}, right {:?}",
+            left.dims(),
+            right.dims()
+        ));
+    }
+    let left_data = tensor_data_col_major(left);
+    let right_data = tensor_data_col_major(right);
+    left_data
+        .iter()
+        .zip(right_data.iter())
+        .try_fold(0.0, |acc, (lhs, rhs)| {
+            ((*lhs).conj() * *rhs)
+                .real_part()
+                .to_f64()
+                .map(|value| acc + value)
+                .ok_or_else(|| "failed to convert inner-product contribution to f64".to_string())
+        })
+}
+
+fn scalar_from_f64<T: OracleDbScalar>(value: f64) -> Result<T, String> {
+    let real = NumCast::from(value).ok_or_else(|| format!("failed to cast scalar step {value}"))?;
+    Ok(T::from_real(real))
+}
+
+fn perturb_tensor_typed<T: OracleDbScalar>(
+    base: &Tensor<T>,
+    direction: &Tensor<T>,
+    scale: f64,
+) -> Result<Tensor<T>, String> {
+    if base.dims() != direction.dims() {
+        return Err(format!(
+            "tensor perturbation shape mismatch: base {:?}, direction {:?}",
+            base.dims(),
+            direction.dims()
+        ));
+    }
+    let base_data = tensor_data_col_major(base);
+    let direction_data = tensor_data_col_major(direction);
+    let scale_t = scalar_from_f64::<T>(scale)?;
+    let data: Vec<T> = base_data
+        .iter()
+        .zip(direction_data.iter())
+        .map(|(x, dx)| *x + *dx * scale_t)
+        .collect();
+    Ok(tensor_from_col_major(data, base.dims()))
+}
+
+fn central_diff_tensor_typed<T: OracleDbScalar>(
+    plus: &Tensor<T>,
+    minus: &Tensor<T>,
+    step: f64,
+) -> Result<Tensor<T>, String> {
+    if step <= 0.0 {
+        return Err(format!(
+            "central difference requires positive step, got {step}"
+        ));
+    }
+    if plus.dims() != minus.dims() {
+        return Err(format!(
+            "central-diff shape mismatch: plus {:?}, minus {:?}",
+            plus.dims(),
+            minus.dims()
+        ));
+    }
+    let plus_data = tensor_data_col_major(plus);
+    let minus_data = tensor_data_col_major(minus);
+    let denom = scalar_from_f64::<T>(2.0 * step)?;
+    let data: Vec<T> = plus_data
+        .iter()
+        .zip(minus_data.iter())
+        .map(|(p, m)| (*p - *m) / denom)
+        .collect();
+    Ok(tensor_from_col_major(data, plus.dims()))
+}
+
+impl<T> SvdObservable<T>
+where
+    T: OracleDbScalar,
+    T::Real: OracleDbScalar,
+{
+    fn decode(record: &CaseRecord, encoded: &BTreeMap<String, DbTensor>) -> Result<Self, String> {
+        match record.family.as_str() {
+            "u_abs" => Ok(Self::UAbs {
+                u: decode_tensor_with_core_rank(
+                    encoded.get("u").ok_or_else(|| {
+                        format!("missing SVD observable u for {}", record.case_id)
+                    })?,
+                    2,
+                )?,
+            }),
+            "s" => Ok(Self::S {
+                s: decode_tensor_with_core_rank(
+                    encoded.get("s").ok_or_else(|| {
+                        format!("missing SVD observable s for {}", record.case_id)
+                    })?,
+                    1,
+                )?,
+            }),
+            "vh_abs" => Ok(Self::VhAbs {
+                s: decode_tensor_with_core_rank(
+                    encoded.get("s").ok_or_else(|| {
+                        format!("missing SVD observable s for {}", record.case_id)
+                    })?,
+                    1,
+                )?,
+                vh: decode_tensor_with_core_rank(
+                    encoded.get("vh").ok_or_else(|| {
+                        format!("missing SVD observable vh for {}", record.case_id)
+                    })?,
+                    2,
+                )?,
+            }),
+            "uvh_product" => Ok(Self::UvhProduct {
+                s: decode_tensor_with_core_rank(
+                    encoded.get("s").ok_or_else(|| {
+                        format!("missing SVD observable s for {}", record.case_id)
+                    })?,
+                    1,
+                )?,
+                uvh: decode_tensor_with_core_rank(
+                    encoded.get("uvh").ok_or_else(|| {
+                        format!("missing SVD observable uvh for {}", record.case_id)
+                    })?,
+                    2,
+                )?,
+            }),
+            other => Err(format!("unsupported svd family {other}")),
+        }
+    }
+
+    fn from_jvp(
+        family: &str,
+        primal_u: &Tensor<T>,
+        primal_vt: &Tensor<T>,
+        du: &Tensor<T>,
+        ds: &Tensor<T::Real>,
+        dvt: &Tensor<T>,
+    ) -> Result<Self, String> {
+        match family {
+            "u_abs" => Ok(Self::UAbs {
+                u: elementwise_abs_jvp(primal_u, du),
+            }),
+            "s" => Ok(Self::S { s: ds.clone() }),
+            "vh_abs" => Ok(Self::VhAbs {
+                s: ds.clone(),
+                vh: elementwise_abs_jvp(primal_vt, dvt),
+            }),
+            "uvh_product" => Ok(Self::UvhProduct {
+                s: ds.clone(),
+                uvh: tensor_add(
                     &batched_matmul(du, primal_vt)?,
                     &batched_matmul(primal_u, dvt)?,
                 ),
-            ),
-        ])),
-        _ => Err(format!("unsupported svd family {family}")),
-    }
-}
-
-fn svd_observable_cotangent(
-    family: &str,
-    primal_u: &Tensor<f64>,
-    primal_vt: &Tensor<f64>,
-    observable_cotangent: &BTreeMap<String, Tensor<f64>>,
-) -> Result<SvdCotangent<f64>, String> {
-    match family {
-        "u_abs" => Ok(SvdCotangent {
-            u: Some(elementwise_sign_mul(
-                primal_u,
-                observable_cotangent.get("u").unwrap(),
-            )),
-            s: None,
-            vt: None,
-        }),
-        "s" => Ok(SvdCotangent {
-            u: None,
-            s: Some(observable_cotangent.get("s").unwrap().clone()),
-            vt: None,
-        }),
-        "vh_abs" => Ok(SvdCotangent {
-            u: None,
-            s: Some(observable_cotangent.get("s").unwrap().clone()),
-            vt: Some(elementwise_sign_mul(
-                primal_vt,
-                observable_cotangent.get("vh").unwrap(),
-            )),
-        }),
-        "uvh_product" => {
-            let cot_uvh = observable_cotangent.get("uvh").unwrap();
-            let vt_t = batched_transpose(primal_vt)?;
-            let u_t = batched_transpose(primal_u)?;
-            Ok(SvdCotangent {
-                u: Some(batched_matmul(cot_uvh, &vt_t)?),
-                s: Some(observable_cotangent.get("s").unwrap().clone()),
-                vt: Some(batched_matmul(&u_t, cot_uvh)?),
-            })
+            }),
+            other => Err(format!("unsupported svd family {other}")),
         }
-        _ => Err(format!("unsupported svd family {family}")),
+    }
+
+    fn to_cotangent(
+        &self,
+        primal_u: &Tensor<T>,
+        primal_vt: &Tensor<T>,
+    ) -> Result<SvdCotangent<T, T::Real>, String> {
+        match self {
+            Self::UAbs { u } => Ok(SvdCotangent {
+                u: Some(elementwise_abs_vjp(primal_u, u)),
+                s: None,
+                vt: None,
+            }),
+            Self::S { s } => Ok(SvdCotangent {
+                u: None,
+                s: Some(s.clone()),
+                vt: None,
+            }),
+            Self::VhAbs { s, vh } => Ok(SvdCotangent {
+                u: None,
+                s: Some(s.clone()),
+                vt: Some(elementwise_abs_vjp(primal_vt, vh)),
+            }),
+            Self::UvhProduct { s, uvh } => {
+                let v = batched_adjoint_transpose(primal_vt)?;
+                let u_h = batched_adjoint_transpose(primal_u)?;
+                Ok(SvdCotangent {
+                    u: Some(batched_matmul(uvh, &v)?),
+                    s: Some(s.clone()),
+                    vt: Some(batched_matmul(&u_h, uvh)?),
+                })
+            }
+        }
+    }
+
+    fn compare(&self, label: &str, actual: &Self, rtol: f64, atol: f64) -> Result<(), String> {
+        match (self, actual) {
+            (Self::UAbs { u: exp }, Self::UAbs { u: act }) => {
+                compare_tensors_typed::<T::Real>(label, exp, act, rtol, atol)
+            }
+            (Self::S { s: exp }, Self::S { s: act }) => {
+                compare_tensors_typed::<T::Real>(label, exp, act, rtol, atol)
+            }
+            (
+                Self::VhAbs {
+                    s: exp_s,
+                    vh: exp_vh,
+                },
+                Self::VhAbs {
+                    s: act_s,
+                    vh: act_vh,
+                },
+            ) => {
+                compare_tensors_typed::<T::Real>(&format!("{label}.s"), exp_s, act_s, rtol, atol)?;
+                compare_tensors_typed::<T::Real>(&format!("{label}.vh"), exp_vh, act_vh, rtol, atol)
+            }
+            (
+                Self::UvhProduct {
+                    s: exp_s,
+                    uvh: exp_uvh,
+                },
+                Self::UvhProduct {
+                    s: act_s,
+                    uvh: act_uvh,
+                },
+            ) => {
+                compare_tensors_typed::<T::Real>(&format!("{label}.s"), exp_s, act_s, rtol, atol)?;
+                compare_tensors_typed::<T>(&format!("{label}.uvh"), exp_uvh, act_uvh, rtol, atol)
+            }
+            _ => Err(format!("{label}: SVD observable family mismatch")),
+        }
+    }
+
+    fn real_inner_product(&self, other: &Self) -> Result<f64, String> {
+        match (self, other) {
+            (Self::UAbs { u: lhs }, Self::UAbs { u: rhs }) => {
+                tensor_real_inner_product_typed(lhs, rhs)
+            }
+            (Self::S { s: lhs }, Self::S { s: rhs }) => tensor_real_inner_product_typed(lhs, rhs),
+            (
+                Self::VhAbs {
+                    s: lhs_s,
+                    vh: lhs_vh,
+                },
+                Self::VhAbs {
+                    s: rhs_s,
+                    vh: rhs_vh,
+                },
+            ) => Ok(tensor_real_inner_product_typed(lhs_s, rhs_s)?
+                + tensor_real_inner_product_typed(lhs_vh, rhs_vh)?),
+            (
+                Self::UvhProduct {
+                    s: lhs_s,
+                    uvh: lhs_uvh,
+                },
+                Self::UvhProduct {
+                    s: rhs_s,
+                    uvh: rhs_uvh,
+                },
+            ) => Ok(tensor_real_inner_product_typed(lhs_s, rhs_s)?
+                + tensor_real_inner_product_typed(lhs_uvh, rhs_uvh)?),
+            _ => Err("SVD observable family mismatch during adjoint validation".to_string()),
+        }
     }
 }
 
-fn replay_svd(record: &CaseRecord) -> Result<bool, String> {
-    let inputs = decode_inputs(record)?;
+fn replay_svd_typed<T>(record: &CaseRecord) -> Result<bool, String>
+where
+    T: OracleDbScalar + KernelLinalgScalar,
+    T::Real: OracleDbScalar + Float,
+{
+    let input = decode_svd_input_tensor::<T>(&record.inputs)?;
     let probe = probe(record)?;
-    let direction = decode_input_map_like(record, &probe.direction)?;
-    let cotangent = decode_observable_map(record, &probe.cotangent)?;
-    let expected_jvp_fd = decode_observable_map(record, &probe.fd_ref.jvp)?;
-    let expected_jvp_torch = decode_observable_map(record, &probe.pytorch_ref.jvp)?;
-    let expected_vjp = decode_input_map_like(record, &probe.pytorch_ref.vjp)?;
+    let direction = decode_svd_input_tensor::<T>(&probe.direction)?;
+    let cotangent = SvdObservable::<T>::decode(record, &probe.cotangent)?;
+    let expected_jvp_fd = SvdObservable::<T>::decode(record, &probe.fd_ref.jvp)?;
+    let expected_jvp_torch = SvdObservable::<T>::decode(record, &probe.pytorch_ref.jvp)?;
+    let expected_vjp = decode_svd_input_tensor::<T>(&probe.pytorch_ref.vjp)?;
     let (rtol, atol) = comparison(record)?;
 
     let mut ctx = CpuContext::new(1);
-    let (result, dresult) = svd_frule(
-        &mut ctx,
-        inputs.get("a").unwrap(),
-        direction.get("a").unwrap(),
-        None,
-    )
-    .map_err(|err| format!("svd_frule failed: {err}"))?;
-    let cotangent_raw =
-        svd_observable_cotangent(record.family.as_str(), &result.u, &result.vt, &cotangent)?;
-    let grad = svd_rrule(&mut ctx, inputs.get("a").unwrap(), &cotangent_raw, None)
+    let (result, dresult) = svd_frule(&mut ctx, &input, &direction, None)
+        .map_err(|err| format!("svd_frule failed: {err}"))?;
+    let cotangent_raw = cotangent.to_cotangent(&result.u, &result.vt)?;
+    let grad = svd_rrule(&mut ctx, &input, &cotangent_raw, None)
         .map_err(|err| format!("svd_rrule failed: {err}"))?;
 
-    let actual_jvp = svd_observable_jvp(
+    let actual_jvp = SvdObservable::<T>::from_jvp(
         record.family.as_str(),
         &result.u,
         &result.vt,
@@ -3196,29 +3416,69 @@ fn replay_svd(record: &CaseRecord) -> Result<bool, String> {
         &dresult.s,
         &dresult.vt,
     )?;
-    let actual_vjp = BTreeMap::from([(String::from("a"), grad)]);
 
-    compare_tensor_maps("svd.jvp.fd", &expected_jvp_fd, &actual_jvp, rtol, atol)?;
-    compare_tensor_maps(
-        "svd.jvp.torch",
-        &expected_jvp_torch,
-        &actual_jvp,
-        rtol,
-        atol,
-    )?;
-    compare_tensor_maps("svd.vjp", &expected_vjp, &actual_vjp, rtol, atol)?;
-    let hvp_checked = validate_hvp("svd", record, &inputs, &direction, probe, |perturbed| {
-        let mut ctx = CpuContext::new(1);
-        let primal = svd(&mut ctx, perturbed.get("a").unwrap(), None)
-            .map_err(|err| format!("svd failed during HVP replay: {err}"))?;
-        let cotangent_raw =
-            svd_observable_cotangent(record.family.as_str(), &primal.u, &primal.vt, &cotangent)?;
-        let grad = svd_rrule(&mut ctx, perturbed.get("a").unwrap(), &cotangent_raw, None)
-            .map_err(|err| format!("svd_rrule failed during HVP replay: {err}"))?;
-        Ok(BTreeMap::from([(String::from("a"), grad)]))
-    })?;
-    check_adjoint_identity(record, &cotangent, &actual_jvp, &actual_vjp, &direction)?;
+    expected_jvp_fd.compare("svd.jvp.fd", &actual_jvp, rtol, atol)?;
+    expected_jvp_torch.compare("svd.jvp.torch", &actual_jvp, rtol, atol)?;
+    compare_tensors_typed::<T>("svd.vjp.a", &expected_vjp, &grad, rtol, atol)?;
+
+    let hvp_checked = match (probe.pytorch_ref.hvp.as_ref(), probe.fd_ref.hvp.as_ref()) {
+        (Some(expected_torch), Some(expected_fd)) => {
+            let expected_hvp_torch = decode_svd_input_tensor::<T>(expected_torch)?;
+            let expected_hvp_fd = decode_svd_input_tensor::<T>(expected_fd)?;
+            let step = probe.fd_ref.step;
+            let plus_input = perturb_tensor_typed(&input, &direction, step)?;
+            let minus_input = perturb_tensor_typed(&input, &direction, -step)?;
+            let evaluate_grad = |perturbed: &Tensor<T>| -> Result<Tensor<T>, String> {
+                let mut ctx = CpuContext::new(1);
+                let primal = svd(&mut ctx, perturbed, None)
+                    .map_err(|err| format!("svd failed during HVP replay: {err}"))?;
+                let cotangent_raw = cotangent.to_cotangent(&primal.u, &primal.vt)?;
+                svd_rrule(&mut ctx, perturbed, &cotangent_raw, None)
+                    .map_err(|err| format!("svd_rrule failed during HVP replay: {err}"))
+            };
+            let grad_plus = evaluate_grad(&plus_input)?;
+            let grad_minus = evaluate_grad(&minus_input)?;
+            let actual_hvp = central_diff_tensor_typed(&grad_plus, &grad_minus, step)?;
+            let (second_rtol, second_atol) = second_order_comparison(record)?;
+            compare_tensors_typed::<T>(
+                "svd.hvp.fd.a",
+                &expected_hvp_fd,
+                &actual_hvp,
+                second_rtol,
+                second_atol,
+            )?;
+            compare_tensors_typed::<T>(
+                "svd.hvp.torch.a",
+                &expected_hvp_torch,
+                &actual_hvp,
+                second_rtol,
+                second_atol,
+            )?;
+            true
+        }
+        (None, None) => false,
+        _ => return Err(format!("half-present HVP payload for {}", record.case_id)),
+    };
+
+    let lhs = cotangent.real_inner_product(&actual_jvp)?;
+    let rhs = tensor_real_inner_product_typed(&grad, &direction)?;
+    let allowed = atol + rtol * lhs.abs();
+    if (lhs - rhs).abs() > allowed {
+        return Err(format!(
+            "adjoint identity mismatch: lhs={lhs}, rhs={rhs}, allowed={allowed}"
+        ));
+    }
     Ok(hvp_checked)
+}
+
+fn replay_svd(record: &CaseRecord) -> Result<bool, String> {
+    match record.dtype.as_str() {
+        "float32" => replay_svd_typed::<f32>(record),
+        "float64" => replay_svd_typed::<f64>(record),
+        "complex64" => replay_svd_typed::<Complex32>(record),
+        "complex128" => replay_svd_typed::<Complex64>(record),
+        other => Err(format!("unsupported SVD replay dtype {other}")),
+    }
 }
 
 fn replay_eigen(record: &CaseRecord) -> Result<bool, String> {

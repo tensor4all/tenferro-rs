@@ -28,7 +28,22 @@ pub enum RecordSupport {
     Supported(ReplayKind),
     ExpectedError(ExpectedErrorKind),
     Unsupported { reason: &'static str },
-    Unknown,
+}
+
+fn float64_only(dtype: &str) -> bool {
+    dtype == "float64"
+}
+
+fn svd_replay_dtype(dtype: &str) -> bool {
+    matches!(dtype, "float32" | "float64" | "complex64" | "complex128")
+}
+
+fn supported_if(dtype_ok: bool, kind: ReplayKind, reason: &'static str) -> RecordSupport {
+    if dtype_ok {
+        RecordSupport::Supported(kind)
+    } else {
+        RecordSupport::Unsupported { reason }
+    }
 }
 
 pub fn classify_record(record: &CaseRecord) -> RecordSupport {
@@ -40,43 +55,73 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
     ) {
         ("solve", "identity", "identity", "success")
         | ("solve_ex", "identity", "identity", "success")
-        | ("lu_solve", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::SolveIdentity)
-        }
+        | ("lu_solve", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::SolveIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
         ("cholesky", "identity", "identity", "success")
-        | ("cholesky_ex", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::CholeskyIdentity)
-        }
-        ("inv_ex", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::InvIdentity)
-        }
+        | ("cholesky_ex", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::CholeskyIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
+        ("inv_ex", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::InvIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
         ("lu_factor", "identity", "identity", "success")
-        | ("lu_factor_ex", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::LuFactorIdentity)
-        }
-        ("cond", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::CondIdentity)
-        }
-        ("matrix_power", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::MatrixPowerIdentity)
-        }
-        ("qr", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::QrIdentity)
-        }
-        ("svd", "u_abs", "svd_u_abs", "success") => RecordSupport::Supported(ReplayKind::SvdUAbs),
-        ("svd", "s", "svd_s", "success") => RecordSupport::Supported(ReplayKind::SvdS),
-        ("svd", "vh_abs", "svd_vh_abs", "success") => {
-            RecordSupport::Supported(ReplayKind::SvdVhAbs)
-        }
-        ("svd", "uvh_product", "svd_uvh_product", "success") => {
-            RecordSupport::Supported(ReplayKind::SvdUvhProduct)
-        }
-        ("eigh", "values_vectors_abs", "eigh_values_vectors_abs", "success") => {
-            RecordSupport::Supported(ReplayKind::EighValuesVectorsAbs)
-        }
-        ("pinv_singular", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::PinvSingularIdentity)
-        }
+        | ("lu_factor_ex", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::LuFactorIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
+        ("cond", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::CondIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
+        ("matrix_power", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::MatrixPowerIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
+        ("qr", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::QrIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
+        ("svd", "u_abs", "svd_u_abs", "success") => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::SvdUAbs,
+            "tenferro replay currently supports SVD only for float32/float64/complex64/complex128",
+        ),
+        ("svd", "s", "svd_s", "success") => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::SvdS,
+            "tenferro replay currently supports SVD only for float32/float64/complex64/complex128",
+        ),
+        ("svd", "vh_abs", "svd_vh_abs", "success") => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::SvdVhAbs,
+            "tenferro replay currently supports SVD only for float32/float64/complex64/complex128",
+        ),
+        ("svd", "uvh_product", "svd_uvh_product", "success") => supported_if(
+            svd_replay_dtype(&record.dtype),
+            ReplayKind::SvdUvhProduct,
+            "tenferro replay currently supports SVD only for float32/float64/complex64/complex128",
+        ),
+        ("eigh", "values_vectors_abs", "eigh_values_vectors_abs", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::EighValuesVectorsAbs,
+            "tenferro replay currently supports this family only for float64",
+        ),
+        ("pinv_singular", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::PinvSingularIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
         ("svd", "gauge_ill_defined", "svd_uvh_product", "error")
         | ("eigh", "gauge_ill_defined", "eigh_values_vectors_abs", "error") => {
             RecordSupport::ExpectedError(ExpectedErrorKind::GaugeIllDefined)
@@ -88,9 +133,11 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         | ("tensorinv", "identity", "identity", "success")
         | ("tensorsolve", "identity", "identity", "success")
         | ("vander", "identity", "identity", "success")
-        | ("vecdot", "identity", "identity", "success") => {
-            RecordSupport::Supported(ReplayKind::NumericalIdentity)
-        }
+        | ("vecdot", "identity", "identity", "success") => supported_if(
+            float64_only(&record.dtype),
+            ReplayKind::NumericalIdentity,
+            "tenferro replay currently supports this family only for float64",
+        ),
         ("det", "identity", "identity", "success")
         | ("eigvals", "identity", "identity", "success")
         | ("eigvalsh", "identity", "identity", "success")
@@ -114,6 +161,8 @@ pub fn classify_record(record: &CaseRecord) -> RecordSupport {
         | ("solve_triangular", "identity", "identity", "success") => RecordSupport::Unsupported {
             reason: "tenferro replay does not implement this solver/decomposition family yet",
         },
-        _ => RecordSupport::Unknown,
+        _ => RecordSupport::Unsupported {
+            reason: "tenferro replay does not implement this oracle family yet",
+        },
     }
 }

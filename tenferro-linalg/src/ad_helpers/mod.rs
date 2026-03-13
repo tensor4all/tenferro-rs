@@ -4,6 +4,7 @@ mod layout;
 mod lu;
 mod matrix_exp;
 mod matrix_ops;
+mod svd;
 mod validation;
 
 use crate::{backend, prims_bridge, KernelLinalgScalar, LuFactorExResult, NormKind};
@@ -19,4 +20,5 @@ pub(crate) use layout::*;
 pub(crate) use lu::*;
 pub(crate) use matrix_exp::*;
 pub(crate) use matrix_ops::*;
+pub(crate) use svd::*;
 pub(crate) use validation::*;

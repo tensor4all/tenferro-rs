@@ -8,12 +8,15 @@ from pathlib import Path
 from generators.pytorch_v1 import build_case_spec_index
 from generators.runtime import (
     apply_spec_observable,
+    build_call_metadata,
     build_input_map,
     build_observable_function,
     build_scalarized_observable_function,
     compute_fd_hvp,
     compute_pytorch_hvp,
     import_generation_runtime,
+    import_scalar_generation_runtime,
+    lookup_upstream_opinfo,
     map_allclose,
     sample_inputs_for_spec,
     tensor_map_to_tuple,
@@ -32,6 +35,14 @@ class ReplayResult:
     failures: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class PreparedSample:
+    sample: object
+    inputs: dict[str, object]
+    op_args: list[object]
+    op_kwargs: dict[str, object]
+
+
 SAMPLE_INPUT_SEED = 17
 
 
@@ -39,6 +50,39 @@ def _map_equal(torch, expected: dict[str, object], actual: dict[str, object]) ->
     if expected.keys() != actual.keys():
         return False
     return all(torch.equal(expected[name], actual[name]) for name in expected)
+
+
+def _map_close(
+    torch,
+    expected: dict[str, object],
+    actual: dict[str, object],
+    *,
+    comparison: dict,
+) -> bool:
+    if expected.keys() != actual.keys():
+        return False
+    first_order = _first_order_comparison(comparison)
+    rtol = max(float(first_order["rtol"]), 1e-8)
+    atol = max(float(first_order["atol"]), 1e-9)
+    return all(
+        expected[name].shape == actual[name].shape
+        and expected[name].dtype == actual[name].dtype
+        and torch.allclose(
+            expected[name],
+            actual[name],
+            rtol=rtol,
+            atol=atol,
+            equal_nan=True,
+        )
+        for name in expected
+    )
+
+
+def _scalar_allclose(torch, lhs, rhs, *, rtol: float, atol: float) -> bool:
+    common_dtype = torch.promote_types(lhs.dtype, rhs.dtype)
+    lhs_cast = lhs.to(dtype=common_dtype)
+    rhs_cast = rhs.to(dtype=common_dtype)
+    return torch.allclose(lhs_cast, rhs_cast, rtol=rtol, atol=atol, equal_nan=True)
 
 
 def _decode_record_inputs(record: dict) -> dict[str, object]:
@@ -102,7 +146,8 @@ def validate_live_success_probe(
 
     lhs = tensor_map_inner_product(torch, cotangent, fd_jvp)
     rhs = tensor_map_inner_product(torch, pytorch_vjp, direction)
-    if not torch.allclose(
+    if not _scalar_allclose(
+        torch,
         lhs,
         rhs,
         rtol=first_order["rtol"],
@@ -126,15 +171,60 @@ def validate_live_success_probe(
         raise ValueError("live PyTorch HVP and live FD-HVP disagree")
 
 
-def _find_candidate_samples(torch, spec, record_inputs: dict[str, object]) -> list[object]:
-    _, linalg = import_generation_runtime()
-    samples = sample_inputs_for_spec(torch, linalg, spec, seed=SAMPLE_INPUT_SEED)
+def _find_candidate_samples(
+    torch,
+    spec,
+    record_inputs: dict[str, object],
+    *,
+    comparison: dict,
+    dtype_name: str = "float64",
+    op_args: list[object] | None = None,
+    op_kwargs: dict[str, object] | None = None,
+    prepared_samples: list[PreparedSample] | None = None,
+) -> list[object]:
+    metadata_args = [] if op_args is None else op_args
+    metadata_kwargs = {} if op_kwargs is None else op_kwargs
+    if prepared_samples is None:
+        prepared_samples = _prepare_samples_for_spec_dtype(torch, spec, dtype_name=dtype_name)
     candidates: list[object] = []
-    for sample in samples:
-        sample_inputs = build_input_map(torch, spec, sample)
-        if _map_equal(torch, record_inputs, sample_inputs):
-            candidates.append(sample)
+    for prepared in prepared_samples:
+        if _map_close(
+            torch,
+            record_inputs,
+            prepared.inputs,
+            comparison=comparison,
+        ):
+            if metadata_args or metadata_kwargs or getattr(spec, "inventory_kind", "linalg") == "scalar":
+                if prepared.op_args != metadata_args or prepared.op_kwargs != metadata_kwargs:
+                    continue
+            candidates.append(prepared.sample)
     return candidates
+
+
+def _prepare_samples_for_spec_dtype(torch, spec, *, dtype_name: str) -> list[PreparedSample]:
+    if getattr(spec, "inventory_kind", "linalg") == "scalar":
+        _, runtime_source = import_scalar_generation_runtime()
+    else:
+        _, runtime_source = import_generation_runtime()
+    samples = sample_inputs_for_spec(
+        torch,
+        runtime_source,
+        spec,
+        seed=SAMPLE_INPUT_SEED,
+        dtype=getattr(torch, dtype_name),
+    )
+    prepared: list[PreparedSample] = []
+    for sample in samples:
+        sample_args, sample_kwargs = build_call_metadata(torch, sample, spec=spec)
+        prepared.append(
+            PreparedSample(
+                sample=sample,
+                inputs=build_input_map(torch, spec, sample),
+                op_args=sample_args,
+                op_kwargs=sample_kwargs,
+            )
+        )
+    return prepared
 
 
 def _replay_success_case_for_sample(
@@ -152,20 +242,40 @@ def _replay_success_case_for_sample(
     stored_fd_jvp: dict[str, object],
     fd_step: float,
     stored_fd_hvp: dict[str, object] | None,
+    op_args: list[object],
+    op_kwargs: dict[str, object],
 ) -> str | None:
     comparison = record["comparison"]
     input_names = tuple(inputs.keys())
     first_order = _first_order_comparison(comparison)
     second_order = _second_order_comparison(comparison)
+    if getattr(spec, "inventory_kind", "linalg") == "scalar":
+        _, runtime_source = import_scalar_generation_runtime()
+    else:
+        _, runtime_source = import_generation_runtime()
+    opinfo = lookup_upstream_opinfo(runtime_source, spec)
 
     try:
-        observable = apply_spec_observable(torch, spec, sample, inputs)
+        observable = apply_spec_observable(
+            torch,
+            spec,
+            sample,
+            inputs,
+            linalg=runtime_source,
+            opinfo=opinfo,
+            op_args=op_args,
+            op_kwargs=op_kwargs,
+        )
         output_names = tuple(observable.keys())
         observable_fn = build_observable_function(
             torch,
             spec,
             sample,
             input_names,
+            linalg=runtime_source,
+            opinfo=opinfo,
+            op_args=op_args,
+            op_kwargs=op_kwargs,
             output_names=output_names,
         )
         _, jvp_tuple = torch.func.jvp(
@@ -183,8 +293,26 @@ def _replay_success_case_for_sample(
         pytorch_vjp = zeros_like_input_map(torch, inputs, grads)
         plus_inputs = {name: tensor + fd_step * direction[name] for name, tensor in inputs.items()}
         minus_inputs = {name: tensor - fd_step * direction[name] for name, tensor in inputs.items()}
-        plus_output = apply_spec_observable(torch, spec, sample, plus_inputs)
-        minus_output = apply_spec_observable(torch, spec, sample, minus_inputs)
+        plus_output = apply_spec_observable(
+            torch,
+            spec,
+            sample,
+            plus_inputs,
+            linalg=runtime_source,
+            opinfo=opinfo,
+            op_args=op_args,
+            op_kwargs=op_kwargs,
+        )
+        minus_output = apply_spec_observable(
+            torch,
+            spec,
+            sample,
+            minus_inputs,
+            linalg=runtime_source,
+            opinfo=opinfo,
+            op_args=op_args,
+            op_kwargs=op_kwargs,
+        )
         fd_jvp = {
             name: (plus_output[name] - minus_output[name]) / (2.0 * fd_step)
             for name in output_names
@@ -274,11 +402,17 @@ def _replay_success_case_for_sample(
     return None
 
 
-def _replay_success_case(record: dict) -> None:
+def _replay_success_case(
+    record: dict,
+    *,
+    prepared_sample_cache: dict[tuple[str, str, str], list[PreparedSample]],
+) -> None:
     import torch
 
     spec = build_case_spec_index()[(record["op"], record["family"])]
     inputs = _decode_record_inputs(record)
+    op_args = list(record.get("op_args", []))
+    op_kwargs = dict(record.get("op_kwargs", {}))
     (
         direction,
         cotangent,
@@ -291,8 +425,26 @@ def _replay_success_case(record: dict) -> None:
         _decode_success_probe(record)
     )
     stored_fd_jvp = decode_tensor_map(record["probes"][0]["fd_ref"]["jvp"])
+    cache_key = (record["op"], record["family"], record["dtype"])
+    prepared_samples = prepared_sample_cache.get(cache_key)
+    if prepared_samples is None:
+        prepared_samples = _prepare_samples_for_spec_dtype(
+            torch,
+            spec,
+            dtype_name=record["dtype"],
+        )
+        prepared_sample_cache[cache_key] = prepared_samples
 
-    candidates = _find_candidate_samples(torch, spec, inputs)
+    candidates = _find_candidate_samples(
+        torch,
+        spec,
+        inputs,
+        comparison=record["comparison"],
+        dtype_name=record["dtype"],
+        op_args=op_args,
+        op_kwargs=op_kwargs,
+        prepared_samples=prepared_samples,
+    )
     if not candidates:
         raise ValueError("no matching PyTorch SampleInput found for record inputs")
 
@@ -312,6 +464,8 @@ def _replay_success_case(record: dict) -> None:
             stored_fd_jvp=stored_fd_jvp,
             fd_step=fd_step,
             stored_fd_hvp=stored_fd_hvp,
+            op_args=op_args,
+            op_kwargs=op_kwargs,
         )
         if mismatch is None:
             return
@@ -352,10 +506,14 @@ def replay_case_file(path: Path, *, limit: int | None = None) -> ReplayResult:
     """Replay one JSONL case file and report verification failures."""
     result = ReplayResult()
     records = load_case_file(path)
+    prepared_sample_cache: dict[tuple[str, str, str], list[PreparedSample]] = {}
     for record in records[:limit]:
         try:
             if record["expected_behavior"] == "success":
-                _replay_success_case(record)
+                _replay_success_case(
+                    record,
+                    prepared_sample_cache=prepared_sample_cache,
+                )
             elif record["expected_behavior"] == "error":
                 _replay_error_case(record)
             else:

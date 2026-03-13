@@ -126,6 +126,8 @@ def _compare_values(
             return
         if not isinstance(actual, (int, float)):
             raise ValueError(f"type mismatch at {path}: expected float, got {type(actual).__name__}")
+        if math.isnan(expected) and math.isnan(float(actual)):
+            return
         if not math.isclose(expected, float(actual), rel_tol=active_rtol, abs_tol=active_atol):
             raise ValueError(f"numeric mismatch at {path}: {expected} != {actual}")
         return

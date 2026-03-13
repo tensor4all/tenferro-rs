@@ -15,11 +15,11 @@ use super::*;
 /// assert!(cotangent.s.is_none());
 /// ```
 #[derive(Debug)]
-pub struct SvdCotangent<T: Scalar> {
+pub struct SvdCotangent<T: Scalar, R: Scalar = T> {
     /// Cotangent for `u`.
     pub u: Option<Tensor<T>>,
     /// Cotangent for `s`.
-    pub s: Option<Tensor<T>>,
+    pub s: Option<Tensor<R>>,
     /// Cotangent for `vt`.
     pub vt: Option<Tensor<T>>,
 }

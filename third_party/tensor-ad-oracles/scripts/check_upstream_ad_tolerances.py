@@ -14,9 +14,13 @@ if str(REPO_ROOT) not in sys.path:
 from generators.pytorch_v1 import build_case_spec_index
 from generators.tolerance_audit import hvp_residuals, max_abs_diff, max_rel_diff
 from generators.upstream_inventory import resolve_upstream_ad_tolerance
+from generators.upstream_scalar_inventory import resolve_upstream_scalar_ad_tolerance
 from generators.runtime import map_allclose
 from validators.case_loader import iter_case_files, load_case_file
 from validators.encoding import decode_tensor_map
+
+
+UPSTREAM_AD_AUDIT_DTYPES = {"float64", "complex128"}
 
 
 @dataclass(frozen=True)
@@ -45,6 +49,8 @@ def audit_against_upstream_ad_tolerances(
         for record in load_case_file(path):
             if record["expected_behavior"] != "success":
                 continue
+            if record["dtype"] not in UPSTREAM_AD_AUDIT_DTYPES:
+                continue
             key = (record["op"], record["family"], record["dtype"])
             probe = record["probes"][0]
             pytorch_jvp = decode_tensor_map(probe["pytorch_ref"]["jvp"])
@@ -64,7 +70,12 @@ def audit_against_upstream_ad_tolerances(
     for key, residuals in sorted(first_order.items()):
         op, family, dtype = key
         spec = spec_index[(op, family)]
-        upstream = resolve_upstream_ad_tolerance(
+        resolver = (
+            resolve_upstream_scalar_ad_tolerance
+            if spec.inventory_kind == "scalar"
+            else resolve_upstream_ad_tolerance
+        )
+        upstream = resolver(
             spec.upstream_name,
             spec.upstream_variant_name,
             order="first_order",
@@ -74,6 +85,8 @@ def audit_against_upstream_ad_tolerances(
         path = cases_root / op / f"{family}.jsonl"
         for record in load_case_file(path):
             if record["expected_behavior"] != "success":
+                continue
+            if record["dtype"] != dtype:
                 continue
             probe = record["probes"][0]
             pytorch_jvp = decode_tensor_map(probe["pytorch_ref"]["jvp"])
@@ -101,7 +114,12 @@ def audit_against_upstream_ad_tolerances(
     for key, residuals in sorted(second_order.items()):
         op, family, dtype = key
         spec = spec_index[(op, family)]
-        upstream = resolve_upstream_ad_tolerance(
+        resolver = (
+            resolve_upstream_scalar_ad_tolerance
+            if spec.inventory_kind == "scalar"
+            else resolve_upstream_ad_tolerance
+        )
+        upstream = resolver(
             spec.upstream_name,
             spec.upstream_variant_name,
             order="second_order",
@@ -111,6 +129,8 @@ def audit_against_upstream_ad_tolerances(
         path = cases_root / op / f"{family}.jsonl"
         for record in load_case_file(path):
             if record["expected_behavior"] != "success":
+                continue
+            if record["dtype"] != dtype:
                 continue
             probe = record["probes"][0]
             if "hvp" not in probe["pytorch_ref"] or "hvp" not in probe["fd_ref"]:

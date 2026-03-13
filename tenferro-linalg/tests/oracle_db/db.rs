@@ -35,7 +35,8 @@ pub struct ErrorComparison {
 pub enum Comparison {
     Success {
         first_order: ComparisonTolerance,
-        second_order: ComparisonTolerance,
+        #[serde(default)]
+        second_order: Option<ComparisonTolerance>,
     },
     Error(ErrorComparison),
 }
@@ -50,7 +51,7 @@ impl Comparison {
 
     pub fn second_order(&self) -> Option<&ComparisonTolerance> {
         match self {
-            Comparison::Success { second_order, .. } => Some(second_order),
+            Comparison::Success { second_order, .. } => second_order.as_ref(),
             Comparison::Error(_) => None,
         }
     }
@@ -129,9 +130,7 @@ impl CaseRecord {
     fn validate(self) -> Result<Self, String> {
         match self.expected_behavior.as_str() {
             "success" => {
-                if self.comparison.first_order().is_none()
-                    || self.comparison.second_order().is_none()
-                {
+                if self.comparison.first_order().is_none() {
                     return Err(format!(
                         "success case {} must use success comparison schema",
                         self.case_id
@@ -162,6 +161,85 @@ impl CaseRecord {
     }
 }
 
+fn is_json_token_boundary(ch: Option<u8>) -> bool {
+    match ch {
+        None => true,
+        Some(b' ' | b'\t' | b'\r' | b'\n' | b',' | b':' | b'[' | b']' | b'{' | b'}') => true,
+        Some(_) => false,
+    }
+}
+
+fn normalize_nonfinite_json_literals(raw: &str) -> std::borrow::Cow<'_, str> {
+    if !raw.contains("NaN") && !raw.contains("Infinity") {
+        return std::borrow::Cow::Borrowed(raw);
+    }
+
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len() + 16);
+    let mut index = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if in_string {
+            out.push(byte as char);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            index += 1;
+            continue;
+        }
+
+        if byte == b'"' {
+            in_string = true;
+            out.push('"');
+            index += 1;
+            continue;
+        }
+
+        let prev = if index == 0 {
+            None
+        } else {
+            Some(bytes[index - 1])
+        };
+        let next = |len: usize| bytes.get(index + len).copied();
+        if raw[index..].starts_with("NaN")
+            && is_json_token_boundary(prev)
+            && is_json_token_boundary(next(3))
+        {
+            out.push_str("\"NaN\"");
+            index += 3;
+            continue;
+        }
+        if raw[index..].starts_with("-Infinity")
+            && is_json_token_boundary(prev)
+            && is_json_token_boundary(next(9))
+        {
+            out.push_str("\"-Infinity\"");
+            index += 9;
+            continue;
+        }
+        if raw[index..].starts_with("Infinity")
+            && is_json_token_boundary(prev)
+            && is_json_token_boundary(next(8))
+        {
+            out.push_str("\"Infinity\"");
+            index += 8;
+            continue;
+        }
+
+        out.push(byte as char);
+        index += 1;
+    }
+
+    std::borrow::Cow::Owned(out)
+}
+
 pub fn parse_case_record_value(value: Value) -> Result<CaseRecord, String> {
     let record: CaseRecord = serde_json::from_value(value)
         .map_err(|err| format!("failed to parse case record: {err}"))?;
@@ -169,8 +247,9 @@ pub fn parse_case_record_value(value: Value) -> Result<CaseRecord, String> {
 }
 
 fn parse_case_record_str(raw: &str) -> Result<CaseRecord, String> {
-    let record: CaseRecord =
-        serde_json::from_str(raw).map_err(|err| format!("failed to parse case record: {err}"))?;
+    let normalized = normalize_nonfinite_json_literals(raw);
+    let record: CaseRecord = serde_json::from_str(&normalized)
+        .map_err(|err| format!("failed to parse case record: {err}"))?;
     record.validate()
 }
 

@@ -7,5 +7,6 @@ __all__ = [
     "probes",
     "pytorch_v1",
     "tolerance_audit",
+    "upstream_scalar_inventory",
     "upstream_inventory",
 ]

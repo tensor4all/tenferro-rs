@@ -46,11 +46,6 @@ pub(crate) fn eye<T: LinalgScalar>(n: usize) -> Vec<T> {
     data
 }
 
-/// Hadamard (element-wise) product.
-pub(crate) fn hadamard<T: LinalgScalar>(a: &[T], b: &[T]) -> Vec<T> {
-    a.iter().zip(b.iter()).map(|(&x, &y)| x * y).collect()
-}
-
 /// Extract lower triangular part (including diagonal).
 pub(crate) fn tril<T: LinalgScalar>(data: &[T], n: usize) -> Vec<T> {
     let mut result = vec![T::zero(); n * n];
