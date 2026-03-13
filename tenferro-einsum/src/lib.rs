@@ -250,37 +250,21 @@
 // Internal modules
 pub(crate) mod ad;
 pub(crate) mod api;
-mod backend;
-mod binary;
-mod classify;
-mod dispatch;
-mod execute;
-mod manual;
-mod nested;
-mod notation;
-mod plan;
-mod pool;
-mod prepare;
-mod subscripts;
-mod tree;
-mod unary;
-mod util;
+mod execution;
+mod planning;
+mod syntax;
 
 // Public re-exports: types
-pub use backend::{BackendContext, EinsumBackend};
-pub use nested::NestedEinsum;
-pub use subscripts::Subscripts;
-pub use tree::ContractionTree;
+pub use execution::{BackendContext, EinsumBackend};
+pub use planning::ContractionTree;
+pub use syntax::{NestedEinsum, Subscripts};
 
 // Public re-exports: functions
 pub use api::{
-    einsum, einsum_into, einsum_owned, einsum_with_path, einsum_with_path_into, einsum_with_plan,
-    einsum_with_plan_into, einsum_with_plan_owned, einsum_with_subscripts,
-    einsum_with_subscripts_into, einsum_with_subscripts_owned,
-};
-pub use binary::{
-    einsum_binary, einsum_binary_into, einsum_binary_with_subscripts,
-    einsum_binary_with_subscripts_into,
+    einsum, einsum_binary, einsum_binary_into, einsum_binary_with_subscripts,
+    einsum_binary_with_subscripts_into, einsum_into, einsum_owned, einsum_with_path,
+    einsum_with_path_into, einsum_with_plan, einsum_with_plan_into, einsum_with_plan_owned,
+    einsum_with_subscripts, einsum_with_subscripts_into, einsum_with_subscripts_owned,
 };
 
 pub use ad::{
@@ -288,7 +272,7 @@ pub use ad::{
 };
 
 #[cfg(feature = "profile-dispatch")]
-pub use dispatch::print_and_reset_profile;
+pub use execution::print_and_reset_profile;
 
 // ============================================================================
 // Tests

@@ -5,10 +5,10 @@ use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore};
 use tenferro_tensor::Tensor;
 
-use crate::backend::BackendContext;
-use crate::classify::compute_permutation;
-use crate::pool::BufferPool;
-use crate::util::alloc_tensor_from_pool;
+use crate::execution::backend::BackendContext;
+use crate::execution::pool::BufferPool;
+use crate::execution::util::alloc_tensor_from_pool;
+use crate::planning::classify::compute_permutation;
 
 #[cfg(feature = "profile-dispatch")]
 use std::sync::atomic::{AtomicU64, Ordering};

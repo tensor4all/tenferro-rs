@@ -7,8 +7,8 @@ use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_tensor::Tensor;
 
 use crate::api::einsum;
-use crate::backend::{BackendContext, EinsumBackend};
-use crate::subscripts::Subscripts;
+use crate::execution::backend::{BackendContext, EinsumBackend};
+use crate::syntax::subscripts::Subscripts;
 
 use super::reverse_rule::EinsumReverseRule;
 use super::rules::einsum_frule_impl;

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::classify::classify_modes;
-use crate::tree::ContractionTree;
+use crate::planning::classify::classify_modes;
+use crate::planning::tree::ContractionTree;
 
 /// Pre-computed information for reducing axes unique to one operand.
 pub(crate) struct ReducePlan {

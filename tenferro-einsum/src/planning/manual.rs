@@ -9,9 +9,9 @@ use tenferro_algebra::Scalar;
 use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::subscripts::Subscripts;
 #[allow(unused_imports)]
-use crate::util::{compute_output_shape, tensor_get, unflatten_index};
+use crate::execution::util::{compute_output_shape, tensor_get, unflatten_index};
+use crate::syntax::subscripts::Subscripts;
 
 /// Execute a manual einsum without going through the primitive family planner
 /// (for AD pullback).

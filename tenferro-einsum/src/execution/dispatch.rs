@@ -11,12 +11,12 @@ use tenferro_prims::{
 };
 use tenferro_tensor::Tensor;
 
-use crate::backend::{BackendContext, BackendPlan, EinsumBackend};
-use crate::classify::compute_permutation;
-use crate::plan::{GemmPlan, ReducePlan, StepPlan};
-use crate::pool::BufferPool;
-use crate::prepare::prepare_one_operand;
-use crate::util::alloc_tensor_from_pool;
+use crate::execution::backend::{BackendContext, BackendPlan, EinsumBackend};
+use crate::execution::pool::BufferPool;
+use crate::execution::util::alloc_tensor_from_pool;
+use crate::planning::classify::compute_permutation;
+use crate::planning::plan::{GemmPlan, ReducePlan, StepPlan};
+use crate::planning::prepare::prepare_one_operand;
 
 #[cfg(feature = "profile-dispatch")]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -41,7 +41,7 @@ static GEMM_CALLS_TINY: AtomicU64 = AtomicU64::new(0);
 /// Reset and print accumulated dispatch profiling counters.
 #[cfg(feature = "profile-dispatch")]
 pub fn print_and_reset_profile() {
-    crate::prepare::print_and_reset_prepare_profile();
+    crate::planning::prepare::print_and_reset_prepare_profile();
     let calls = CALL_COUNT.swap(0, Ordering::Relaxed);
     let prepare = PREPARE_NS.swap(0, Ordering::Relaxed);
     let gemm = GEMM_NS.swap(0, Ordering::Relaxed);

@@ -5,8 +5,8 @@ use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::api::{einsum_with_subscripts, einsum_with_subscripts_into};
-use crate::backend::{BackendContext, EinsumBackend};
-use crate::subscripts::Subscripts;
+use crate::execution::backend::{BackendContext, EinsumBackend};
+use crate::syntax::subscripts::Subscripts;
 
 fn ensure_binary_subscripts(subscripts: &Subscripts) -> Result<()> {
     if subscripts.inputs.len() != 2 {

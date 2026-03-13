@@ -2,9 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use tenferro_device::{Error, Result};
 
-use crate::plan::{compile_step_plans, StepPlan};
-use crate::subscripts::Subscripts;
-use crate::util::{build_size_dict, compute_output_shape, contraction_cost, intermediate_subs};
+use crate::execution::util::{
+    build_size_dict, compute_output_shape, contraction_cost, intermediate_subs,
+};
+use crate::planning::plan::{compile_step_plans, StepPlan};
+use crate::syntax::subscripts::Subscripts;
 
 /// A single step in the contraction sequence.
 pub(crate) struct ContractionStep {

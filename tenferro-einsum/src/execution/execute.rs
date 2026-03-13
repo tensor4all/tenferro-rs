@@ -8,13 +8,13 @@ use tenferro_prims::{
 };
 use tenferro_tensor::Tensor;
 
-use crate::backend::{BackendContext, BackendPlan, EinsumBackend};
-use crate::dispatch::execute_pairwise_with_plan;
-use crate::nested::NestedEinsum;
-use crate::pool::BufferPool;
-use crate::tree::ContractionTree;
-use crate::unary::execute_single_tensor_einsum;
-use crate::util::{alloc_tensor_from_pool, infer_memory_space};
+use crate::execution::backend::{BackendContext, BackendPlan, EinsumBackend};
+use crate::execution::dispatch::execute_pairwise_with_plan;
+use crate::execution::pool::BufferPool;
+use crate::execution::unary::execute_single_tensor_einsum;
+use crate::execution::util::{alloc_tensor_from_pool, infer_memory_space};
+use crate::planning::tree::ContractionTree;
+use crate::syntax::nested::NestedEinsum;
 
 // Import einsum_with_subscripts for recursive NestedEinsum execution.
 use crate::api::einsum_with_subscripts;

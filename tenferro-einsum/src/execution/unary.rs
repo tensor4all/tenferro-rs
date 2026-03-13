@@ -5,10 +5,10 @@ use tenferro_device::Result;
 use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::backend::BackendContext;
-use crate::classify::compute_permutation;
-use crate::pool::BufferPool;
-use crate::util::alloc_tensor_from_pool;
+use crate::execution::backend::BackendContext;
+use crate::execution::pool::BufferPool;
+use crate::execution::util::alloc_tensor_from_pool;
+use crate::planning::classify::compute_permutation;
 
 fn copy_structural_permute<Alg, Backend>(
     ctx: &mut BackendContext<Alg, Backend>,

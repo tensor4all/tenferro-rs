@@ -3,9 +3,9 @@ use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;
-use crate::plan::{GemmPlan, ReducePlan, StepPlan};
+use crate::execution::util::{tensor_get, unflatten_index};
+use crate::planning::plan::{GemmPlan, ReducePlan, StepPlan};
 use crate::tests::semiring_backend::SemiringOnlyCpuBackend;
-use crate::util::{tensor_get, unflatten_index};
 
 fn tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()

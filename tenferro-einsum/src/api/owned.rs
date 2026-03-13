@@ -4,9 +4,9 @@ use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
-use crate::backend::{BackendContext, EinsumBackend};
-use crate::subscripts::Subscripts;
-use crate::tree::ContractionTree;
+use crate::execution::backend::{BackendContext, EinsumBackend};
+use crate::planning::tree::ContractionTree;
+use crate::syntax::subscripts::Subscripts;
 
 use super::borrowed::{einsum, einsum_with_plan, einsum_with_subscripts};
 

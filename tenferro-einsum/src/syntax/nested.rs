@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use tenferro_device::{Error, Result};
 
-use crate::notation::{char_to_label, split_and_validate_notation};
-use crate::subscripts::Subscripts;
+use crate::syntax::notation::{char_to_label, split_and_validate_notation};
+use crate::syntax::subscripts::Subscripts;
 
 /// Recursive einsum tree that preserves parenthesized grouping.
 ///

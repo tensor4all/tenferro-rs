@@ -4,10 +4,10 @@ use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::api::{einsum, einsum_with_subscripts};
-use crate::backend::{BackendContext, EinsumBackend};
-use crate::execute::execute_nested;
-use crate::nested::NestedEinsum;
-use crate::subscripts::Subscripts;
+use crate::execution::backend::{BackendContext, EinsumBackend};
+use crate::execution::execute::execute_nested;
+use crate::syntax::nested::NestedEinsum;
+use crate::syntax::subscripts::Subscripts;
 
 /// Dual einsum (forward-mode JVP propagation).
 ///

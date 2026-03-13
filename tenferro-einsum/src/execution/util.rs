@@ -4,8 +4,8 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::pool::BufferPool;
-use crate::subscripts::Subscripts;
+use crate::execution::pool::BufferPool;
+use crate::syntax::subscripts::Subscripts;
 
 pub(crate) const MAX_POOLED_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 
