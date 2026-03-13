@@ -8,6 +8,65 @@ from tests.test_encoding import FakeTensor
 
 
 class MaterializeTests(unittest.TestCase):
+    def test_skippable_hvp_runtime_error_matches_forward_view_assertion(self) -> None:
+        exc = RuntimeError(
+            "INTERNAL ASSERT FAILED: Expected the output of forward differentiable view operations "
+            "to have the tangent have the same layout as primal"
+        )
+
+        self.assertTrue(pytorch_v1._is_skippable_hvp_runtime_error(exc))  # noqa: SLF001
+
+    def test_skippable_hvp_runtime_error_rejects_unrelated_runtime_error(self) -> None:
+        exc = RuntimeError("some unrelated failure")
+
+        self.assertFalse(pytorch_v1._is_skippable_hvp_runtime_error(exc))  # noqa: SLF001
+
+    def test_supported_dtype_names_for_linalg_spec_follow_spec_metadata(self) -> None:
+        class FakeTorch:
+            float64 = "float64"
+            complex128 = "complex128"
+            float32 = "float32"
+            complex64 = "complex64"
+
+        class FakeOpInfo:
+            @staticmethod
+            def supported_dtypes(device_type):
+                self = None
+                del self
+                assert device_type == "cpu"
+                return {
+                    "float64",
+                    "complex128",
+                    "float32",
+                    "complex64",
+                }
+
+        spec = pytorch_v1.build_case_spec_index()[("svd", "u_abs")]
+
+        dtype_names = pytorch_v1._supported_dtype_names_for_spec(  # noqa: SLF001
+            FakeTorch(),
+            FakeOpInfo(),
+            spec,
+        )
+
+        self.assertEqual(dtype_names, spec.supported_dtype_names)
+
+    def test_build_provenance_preserves_optional_comment(self) -> None:
+        spec = pytorch_v1.build_case_spec_index()[("solve", "identity")]
+
+        provenance = pytorch_v1.build_provenance(
+            spec,
+            source_commit="deadbeef",
+            seed=17,
+            torch_version="2.8.0",
+            comment="from PyTorch OpInfo complex SVD success coverage",
+        )
+
+        self.assertEqual(
+            provenance["comment"],
+            "from PyTorch OpInfo complex SVD success coverage",
+        )
+
     def test_case_output_path_uses_op_and_family_jsonl(self) -> None:
         spec = pytorch_v1.build_case_spec_index()[("svd", "s")]
 
@@ -40,6 +99,7 @@ class MaterializeTests(unittest.TestCase):
             source_commit="deadbeef",
             seed=17,
             torch_version="2.8.0",
+            comment="solve identity smoke case",
         )
         case = pytorch_v1.make_success_case(
             spec,
@@ -64,6 +124,7 @@ class MaterializeTests(unittest.TestCase):
         self.assertEqual(case["observable"], {"kind": "identity"})
         self.assertEqual(case["expected_behavior"], "success")
         self.assertEqual(case["family"], "identity")
+        self.assertEqual(case["provenance"]["comment"], "solve identity smoke case")
 
     def test_make_error_case_sets_empty_probes(self) -> None:
         spec = pytorch_v1.build_case_spec_index()[("svd", "gauge_ill_defined")]
@@ -72,6 +133,7 @@ class MaterializeTests(unittest.TestCase):
             source_commit="deadbeef",
             seed=23,
             torch_version="2.8.0",
+            comment="gauge error smoke case",
         )
         case = pytorch_v1.make_error_case(
             spec,
@@ -85,6 +147,7 @@ class MaterializeTests(unittest.TestCase):
         self.assertEqual(case["expected_behavior"], "error")
         self.assertEqual(case["comparison"]["kind"], "expect_error")
         self.assertEqual(case["probes"], [])
+        self.assertEqual(case["provenance"]["comment"], "gauge error smoke case")
 
     def test_materialize_success_case_encodes_raw_probe_payloads(self) -> None:
         spec = pytorch_v1.build_case_spec_index()[("solve", "identity")]
@@ -93,6 +156,7 @@ class MaterializeTests(unittest.TestCase):
             source_commit="deadbeef",
             seed=17,
             torch_version="2.8.0",
+            comment="solve materialization coverage",
         )
 
         case = pytorch_v1.materialize_success_case(
@@ -122,6 +186,7 @@ class MaterializeTests(unittest.TestCase):
         self.assertEqual(case["probes"][0]["pytorch_ref"]["hvp"]["a"]["data"], [0.7, 0.8, 0.9, 1.0])
         self.assertEqual(case["probes"][0]["fd_ref"]["hvp"]["a"]["data"], [0.7, 0.8, 0.9, 1.0])
         self.assertEqual(case["observable"], {"kind": "identity"})
+        self.assertEqual(case["provenance"]["comment"], "solve materialization coverage")
 
 
 if __name__ == "__main__":

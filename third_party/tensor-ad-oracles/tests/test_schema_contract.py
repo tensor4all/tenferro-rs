@@ -100,6 +100,7 @@ class SchemaContractTests(unittest.TestCase):
                 "source_file": "torch/testing/_internal/opinfo/definitions/linalg.py",
                 "source_function": "sample_inputs_linalg_solve",
                 "source_commit": "deadbeef",
+                "comment": "from PyTorch OpInfo",
                 "generator": "python-pytorch-v1",
                 "seed": 17,
                 "torch_version": "2.10.0",
@@ -204,6 +205,106 @@ class SchemaContractTests(unittest.TestCase):
                 "source_file": "torch/testing/_internal/opinfo/definitions/linalg.py",
                 "source_function": "sample_inputs_linalg_solve",
                 "source_commit": "deadbeef",
+                "comment": "HVP-capable solve case",
+                "generator": "python-pytorch-v1",
+                "seed": 17,
+                "torch_version": "2.10.0",
+                "fd_policy_version": "v1",
+            },
+        }
+
+        jsonschema.validate(case, schema)
+
+    def test_schema_accepts_generic_call_metadata_and_single_precision_dtypes(self) -> None:
+        try:
+            import jsonschema
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"jsonschema unavailable: {exc}")
+
+        schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+        case = {
+            "schema_version": 1,
+            "case_id": "sum_f32_identity_001",
+            "op": "sum",
+            "dtype": "float32",
+            "family": "identity",
+            "expected_behavior": "success",
+            "inputs": {
+                "input": {
+                    "dtype": "float32",
+                    "shape": [2, 2],
+                    "order": "row_major",
+                    "data": [1.0, 2.0, 3.0, 4.0],
+                }
+            },
+            "op_args": [0],
+            "op_kwargs": {
+                "keepdim": True,
+                "dim_list": [0, 1],
+                "dtype_arg": "float32",
+            },
+            "observable": {"kind": "identity"},
+            "comparison": {
+                "first_order": {"kind": "allclose", "rtol": 1e-5, "atol": 1e-6}
+            },
+            "probes": [
+                {
+                    "probe_id": "p0",
+                    "direction": {
+                        "input": {
+                            "dtype": "float32",
+                            "shape": [2, 2],
+                            "order": "row_major",
+                            "data": [1.0, 0.0, 0.0, 1.0],
+                        }
+                    },
+                    "cotangent": {
+                        "value": {
+                            "dtype": "float32",
+                            "shape": [2],
+                            "order": "row_major",
+                            "data": [1.0, 1.0],
+                        }
+                    },
+                    "pytorch_ref": {
+                        "jvp": {
+                            "value": {
+                                "dtype": "float32",
+                                "shape": [2],
+                                "order": "row_major",
+                                "data": [1.0, 1.0],
+                            }
+                        },
+                        "vjp": {
+                            "input": {
+                                "dtype": "float32",
+                                "shape": [2, 2],
+                                "order": "row_major",
+                                "data": [1.0, 1.0, 1.0, 1.0],
+                            }
+                        },
+                    },
+                    "fd_ref": {
+                        "method": "central_difference",
+                        "stencil_order": 2,
+                        "step": 1e-3,
+                        "jvp": {
+                            "value": {
+                                "dtype": "float32",
+                                "shape": [2],
+                                "order": "row_major",
+                                "data": [1.0, 1.0],
+                            }
+                        },
+                    },
+                }
+            ],
+            "provenance": {
+                "source_repo": "pytorch",
+                "source_file": "torch/testing/_internal/opinfo/definitions/reductions.py",
+                "source_function": "sample_inputs_reduction",
+                "source_commit": "deadbeef",
+                "comment": "single-precision structured metadata coverage",
                 "generator": "python-pytorch-v1",
                 "seed": 17,
                 "torch_version": "2.10.0",
@@ -289,6 +390,7 @@ class SchemaContractTests(unittest.TestCase):
                 "source_file": "torch/testing/_internal/opinfo/definitions/linalg.py",
                 "source_function": "sample_inputs_linalg_solve",
                 "source_commit": "deadbeef",
+                "comment": "optional args and kwargs coverage",
                 "generator": "python-pytorch-v1",
                 "seed": 17,
                 "torch_version": "2.10.0",
@@ -328,6 +430,7 @@ class SchemaContractTests(unittest.TestCase):
                 "source_file": "test/test_linalg.py",
                 "source_function": "test_invariance_error_spectral_decompositions",
                 "source_commit": "deadbeef",
+                "comment": "complex SVD gauge-ill-defined error coverage",
                 "generator": "python-pytorch-v1",
                 "seed": 17,
                 "torch_version": "2.10.0",

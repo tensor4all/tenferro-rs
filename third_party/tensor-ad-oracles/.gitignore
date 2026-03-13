@@ -4,3 +4,4 @@ __pycache__/
 .venv/
 .venv31212/
 .worktrees/
+target/

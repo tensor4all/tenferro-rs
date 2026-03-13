@@ -1,0 +1,44 @@
+project:
+  type: website
+  output-dir: ../target/docs-site
+  render:
+    - index.md
+    - math/**/*.md
+    - math-registry.md
+  resources:
+    - math/registry.json
+
+format:
+  html:
+    theme: flatly
+    toc: true
+    code-overflow: wrap
+    html-math-method: katex
+
+website:
+  title: "tensor-ad-oracles Math Notes"
+  sidebar:
+    style: docked
+    contents:
+      - index.md
+      - section: "Math Notes"
+        contents:
+          - math/index.md
+          - math/scalar_ops.md
+          - math/svd.md
+          - math/qr.md
+          - math/lu.md
+          - math/cholesky.md
+          - math/eigen.md
+          - math/eig.md
+          - math/inv.md
+          - math/det.md
+          - math/solve.md
+          - math/lstsq.md
+          - math/pinv.md
+          - math/matrix_exp.md
+          - math/norm.md
+          - math/dyadtensor_reverse.md
+      - section: "Reference"
+        contents:
+          - math-registry.md

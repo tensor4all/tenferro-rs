@@ -33,9 +33,14 @@ class SolveGenerationTests(unittest.TestCase):
             self.skipTest(f"uv generation dependencies unavailable: {exc}")
 
         records = pytorch_v1.generate_solve_identity_records(limit=24)
+        spec = pytorch_v1.build_case_spec_index()[("solve", "identity")]
 
-        self.assertEqual(len(records), 24)
-        self.assertEqual(records[-1]["case_id"], "solve_f64_identity_024")
+        self.assertEqual(len(records), 24 * len(spec.supported_dtype_names))
+        self.assertEqual(
+            {record["dtype"] for record in records},
+            set(spec.supported_dtype_names),
+        )
+        self.assertEqual(records[-1]["case_id"], "solve_c64_identity_024")
 
     def test_generate_solve_identity_records_is_deterministic(self) -> None:
         try:
@@ -58,8 +63,9 @@ class SolveGenerationTests(unittest.TestCase):
             self.skipTest(f"uv generation dependencies unavailable: {exc}")
 
         records = pytorch_v1.generate_solve_identity_records(limit=1)
+        spec = pytorch_v1.build_case_spec_index()[("solve", "identity")]
 
-        self.assertEqual(len(records), 1)
+        self.assertEqual(len(records), len(spec.supported_dtype_names))
         record = records[0]
         self.assertEqual(record["op"], "solve")
         self.assertEqual(record["family"], "identity")
@@ -79,7 +85,7 @@ class SolveGenerationTests(unittest.TestCase):
 
             self.assertEqual(out_path, Path(tmpdir) / "solve" / "identity.jsonl")
             saved = [json.loads(line) for line in out_path.read_text(encoding="utf-8").splitlines()]
-            self.assertEqual(len(saved), 1)
+            self.assertEqual(len(saved), len(spec.supported_dtype_names))
             self.assertEqual(saved[0]["case_id"], record["case_id"])
 
 

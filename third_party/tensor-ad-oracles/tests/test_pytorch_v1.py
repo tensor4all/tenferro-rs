@@ -1,4 +1,5 @@
 import io
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -18,6 +19,9 @@ class PytorchV1RegistryTests(unittest.TestCase):
         )
         self.assertEqual(registry["solve"], ("identity",))
         self.assertEqual(registry["qr"], ("identity",))
+        self.assertEqual(registry["abs"], ("identity",))
+        self.assertEqual(registry["add"], ("identity",))
+        self.assertEqual(registry["sum"], ("identity",))
 
     def test_ensure_runtime_dependencies_raises_clear_error_when_missing(self) -> None:
         real_import = __import__
@@ -58,7 +62,7 @@ class PytorchV1RegistryTests(unittest.TestCase):
     def test_build_case_spec_index_returns_expected_specs(self) -> None:
         index = pytorch_v1.build_case_spec_index()
 
-        self.assertEqual(len(index), 42)
+        self.assertGreater(len(index), 42)
         self.assertEqual(
             index[("svd", "u_abs")].observable_kind,
             "svd_u_abs",
@@ -85,6 +89,19 @@ class PytorchV1RegistryTests(unittest.TestCase):
         )
         self.assertTrue(index[("solve", "identity")].hvp_enabled)
         self.assertTrue(index[("svd", "u_abs")].hvp_enabled)
+        self.assertEqual(index[("abs", "identity")].inventory_kind, "scalar")
+        self.assertEqual(index[("sum", "identity")].upstream_name, "sum")
+        self.assertTrue(index[("add", "identity")].hvp_enabled)
+
+    def test_build_case_spec_index_tracks_publishable_dtype_coverage(self) -> None:
+        index = pytorch_v1.build_case_spec_index()
+
+        self.assertIn("float64", index[("svd", "u_abs")].supported_dtype_names)
+        self.assertIn("complex128", index[("svd", "u_abs")].supported_dtype_names)
+        self.assertEqual(
+            index[("svd", "gauge_ill_defined")].supported_dtype_names,
+            ("complex128",),
+        )
 
     def test_main_list_prints_case_registry(self) -> None:
         stdout = io.StringIO()
@@ -98,6 +115,9 @@ class PytorchV1RegistryTests(unittest.TestCase):
         self.assertIn("pinv_singular: identity", output)
         self.assertIn("inv: identity", output)
         self.assertIn("eig: values_vectors_abs", output)
+        self.assertIn("abs: identity", output)
+        self.assertIn("add: identity", output)
+        self.assertIn("sum: identity", output)
 
     def test_build_case_families_includes_full_supported_mapping_subset(self) -> None:
         registry = pytorch_v1.build_case_families()
@@ -105,6 +125,38 @@ class PytorchV1RegistryTests(unittest.TestCase):
         self.assertEqual(registry["inv"], ("identity",))
         self.assertEqual(registry["multi_dot"], ("identity",))
         self.assertEqual(registry["eig"], ("values_vectors_abs",))
+
+    def test_build_supported_scalar_mapping_index_includes_representative_families(
+        self,
+    ) -> None:
+        supported = pytorch_v1.build_supported_scalar_mapping_index()
+
+        self.assertEqual(
+            {(spec.op, spec.family) for spec in supported[("abs", "")]},
+            {("abs", "identity")},
+        )
+        self.assertEqual(
+            {(spec.op, spec.family) for spec in supported[("add", "")]},
+            {("add", "identity")},
+        )
+        self.assertEqual(
+            {(spec.op, spec.family) for spec in supported[("sum", "")]},
+            {("sum", "identity")},
+        )
+        self.assertEqual(
+            {(spec.op, spec.family) for spec in supported[("nn.functional.prelu", "")]},
+            {("nn_functional_prelu", "identity")},
+        )
+
+    def test_build_scalar_case_spec_index_preserves_upstream_metadata(self) -> None:
+        index = pytorch_v1.build_scalar_case_spec_index()
+
+        self.assertEqual(index[("abs", "identity")].observable_kind, "identity")
+        self.assertEqual(index[("add", "identity")].source_function, "sample_inputs_add_sub")
+        self.assertEqual(index[("sum", "identity")].source_function, "sample_inputs_func")
+        self.assertEqual(index[("nn_functional_prelu", "identity")].upstream_name, "nn.functional.prelu")
+        self.assertEqual(index[("sum", "identity")].inventory_kind, "scalar")
+        self.assertTrue(index[("add", "identity")].hvp_enabled)
 
     def test_main_materialize_solve_identity_writes_file(self) -> None:
         try:
@@ -157,7 +209,8 @@ class PytorchV1RegistryTests(unittest.TestCase):
             lines = (Path(tmpdir) / "solve" / "identity.jsonl").read_text(
                 encoding="utf-8"
             ).splitlines()
-            self.assertEqual(len(lines), 24)
+            spec = pytorch_v1.build_case_spec_index()[("solve", "identity")]
+            self.assertEqual(len(lines), 24 * len(spec.supported_dtype_names))
 
     def test_main_materialize_inv_identity_writes_file(self) -> None:
         try:
@@ -210,6 +263,69 @@ class PytorchV1RegistryTests(unittest.TestCase):
             self.assertTrue(
                 (Path(tmpdir) / "eig" / "values_vectors_abs.jsonl").exists()
             )
+
+    def test_main_materialize_svd_u_abs_writes_complex_success_record_with_comment(
+        self,
+    ) -> None:
+        try:
+            import torch  # noqa: F401
+            import expecttest  # noqa: F401
+        except Exception as exc:
+            self.skipTest(f"uv generation dependencies unavailable: {exc}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with redirect_stdout(io.StringIO()):
+                exit_code = pytorch_v1.main(
+                    [
+                        "--materialize",
+                        "svd",
+                        "--family",
+                        "u_abs",
+                        "--limit",
+                        "1",
+                        "--cases-root",
+                        tmpdir,
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            lines = (Path(tmpdir) / "svd" / "u_abs.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+            records = [json.loads(line) for line in lines]
+            complex_record = next(
+                record for record in records if record["dtype"] == "complex128"
+            )
+            self.assertEqual(complex_record["observable"]["kind"], "svd_u_abs")
+            self.assertEqual(
+                complex_record["provenance"]["comment"],
+                "from PyTorch OpInfo complex SVD success coverage",
+            )
+
+    def test_main_materialize_abs_identity_writes_file(self) -> None:
+        try:
+            import torch  # noqa: F401
+            import expecttest  # noqa: F401
+        except Exception as exc:
+            self.skipTest(f"uv generation dependencies unavailable: {exc}")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with redirect_stdout(io.StringIO()):
+                exit_code = pytorch_v1.main(
+                    [
+                        "--materialize",
+                        "abs",
+                        "--family",
+                        "identity",
+                        "--limit",
+                        "1",
+                        "--cases-root",
+                        tmpdir,
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((Path(tmpdir) / "abs" / "identity.jsonl").exists())
 
     def test_main_materialize_all_writes_every_family(self) -> None:
         try:

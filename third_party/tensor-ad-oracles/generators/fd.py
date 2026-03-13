@@ -5,7 +5,9 @@ from __future__ import annotations
 
 FD_POLICY_VERSION = "v1"
 BASE_STEPS = {
+    "float32": 1e-3,
     "float64": 1e-6,
+    "complex64": 1e-4,
     "complex128": 1e-7,
 }
 

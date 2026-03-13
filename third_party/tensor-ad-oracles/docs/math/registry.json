@@ -1,0 +1,1061 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "op": "__radd__",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-__radd__"
+    },
+    {
+      "op": "__rdiv__",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-__rdiv__"
+    },
+    {
+      "op": "__rmod__",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-__rmod__"
+    },
+    {
+      "op": "__rmul__",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-__rmul__"
+    },
+    {
+      "op": "__rpow__",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-__rpow__"
+    },
+    {
+      "op": "__rsub__",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-__rsub__"
+    },
+    {
+      "op": "abs",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-abs"
+    },
+    {
+      "op": "acos",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-acos"
+    },
+    {
+      "op": "acosh",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-acosh"
+    },
+    {
+      "op": "add",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-add"
+    },
+    {
+      "op": "amax",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-amax"
+    },
+    {
+      "op": "amin",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-amin"
+    },
+    {
+      "op": "angle",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-angle"
+    },
+    {
+      "op": "asin",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-asin"
+    },
+    {
+      "op": "asinh",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-asinh"
+    },
+    {
+      "op": "atan",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-atan"
+    },
+    {
+      "op": "atan2",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-atan2"
+    },
+    {
+      "op": "atanh",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-atanh"
+    },
+    {
+      "op": "cdouble",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-cdouble"
+    },
+    {
+      "op": "ceil",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-ceil"
+    },
+    {
+      "op": "cholesky",
+      "family": "identity",
+      "note_path": "docs/math/cholesky.md",
+      "anchor": "family-cholesky-identity"
+    },
+    {
+      "op": "cholesky_ex",
+      "family": "identity",
+      "note_path": "docs/math/cholesky.md",
+      "anchor": "family-cholesky-ex-identity"
+    },
+    {
+      "op": "clamp_max",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-clamp_max"
+    },
+    {
+      "op": "clamp_min",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-clamp_min"
+    },
+    {
+      "op": "complex",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-complex"
+    },
+    {
+      "op": "cond",
+      "family": "identity",
+      "note_path": "docs/math/norm.md",
+      "anchor": "family-cond-identity"
+    },
+    {
+      "op": "conj",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-conj"
+    },
+    {
+      "op": "conj_physical",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-conj_physical"
+    },
+    {
+      "op": "copysign",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-copysign"
+    },
+    {
+      "op": "cos",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-cos"
+    },
+    {
+      "op": "cosh",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-cosh"
+    },
+    {
+      "op": "cross",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-cross"
+    },
+    {
+      "op": "deg2rad",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-deg2rad"
+    },
+    {
+      "op": "det",
+      "family": "identity",
+      "note_path": "docs/math/det.md",
+      "anchor": "family-det-identity"
+    },
+    {
+      "op": "diagonal",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-diagonal"
+    },
+    {
+      "op": "digamma",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-digamma"
+    },
+    {
+      "op": "div_no_rounding_mode",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-div_no_rounding_mode"
+    },
+    {
+      "op": "double",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-double"
+    },
+    {
+      "op": "eig",
+      "family": "values_vectors_abs",
+      "note_path": "docs/math/eig.md",
+      "anchor": "family-values-vectors-abs"
+    },
+    {
+      "op": "eigh",
+      "family": "gauge_ill_defined",
+      "note_path": "docs/math/eigen.md",
+      "anchor": "family-gauge-ill-defined"
+    },
+    {
+      "op": "eigh",
+      "family": "values_vectors_abs",
+      "note_path": "docs/math/eigen.md",
+      "anchor": "family-values-vectors-abs"
+    },
+    {
+      "op": "eigvals",
+      "family": "identity",
+      "note_path": "docs/math/eig.md",
+      "anchor": "family-eigvals-identity"
+    },
+    {
+      "op": "eigvalsh",
+      "family": "identity",
+      "note_path": "docs/math/eigen.md",
+      "anchor": "family-eigvalsh-identity"
+    },
+    {
+      "op": "erf",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-erf"
+    },
+    {
+      "op": "erfc",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-erfc"
+    },
+    {
+      "op": "erfinv",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-erfinv"
+    },
+    {
+      "op": "exp",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-exp"
+    },
+    {
+      "op": "exp2",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-exp2"
+    },
+    {
+      "op": "expm1",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-expm1"
+    },
+    {
+      "op": "fill",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-fill"
+    },
+    {
+      "op": "float_power",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-float_power"
+    },
+    {
+      "op": "floor",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-floor"
+    },
+    {
+      "op": "fmax",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-fmax"
+    },
+    {
+      "op": "fmin",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-fmin"
+    },
+    {
+      "op": "frac",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-frac"
+    },
+    {
+      "op": "frexp",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-frexp"
+    },
+    {
+      "op": "householder_product",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-householder_product"
+    },
+    {
+      "op": "hypot",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-hypot"
+    },
+    {
+      "op": "i0",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-i0"
+    },
+    {
+      "op": "imag",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-imag"
+    },
+    {
+      "op": "inv",
+      "family": "identity",
+      "note_path": "docs/math/inv.md",
+      "anchor": "family-inv-identity"
+    },
+    {
+      "op": "inv_ex",
+      "family": "identity",
+      "note_path": "docs/math/inv.md",
+      "anchor": "family-inv-ex-identity"
+    },
+    {
+      "op": "ldexp",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-ldexp"
+    },
+    {
+      "op": "lgamma",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-lgamma"
+    },
+    {
+      "op": "log",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-log"
+    },
+    {
+      "op": "log10",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-log10"
+    },
+    {
+      "op": "log1p",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-log1p"
+    },
+    {
+      "op": "log2",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-log2"
+    },
+    {
+      "op": "logaddexp",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-logaddexp"
+    },
+    {
+      "op": "logit",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-logit"
+    },
+    {
+      "op": "lstsq_grad_oriented",
+      "family": "identity",
+      "note_path": "docs/math/lstsq.md",
+      "anchor": "family-lstsq-grad-oriented-identity"
+    },
+    {
+      "op": "lu",
+      "family": "identity",
+      "note_path": "docs/math/lu.md",
+      "anchor": "family-lu-identity"
+    },
+    {
+      "op": "lu_factor",
+      "family": "identity",
+      "note_path": "docs/math/lu.md",
+      "anchor": "family-lu-factor-identity"
+    },
+    {
+      "op": "lu_factor_ex",
+      "family": "identity",
+      "note_path": "docs/math/lu.md",
+      "anchor": "family-lu-factor-ex-identity"
+    },
+    {
+      "op": "lu_solve",
+      "family": "identity",
+      "note_path": "docs/math/solve.md",
+      "anchor": "family-lu-solve-identity"
+    },
+    {
+      "op": "matrix_norm",
+      "family": "identity",
+      "note_path": "docs/math/norm.md",
+      "anchor": "family-matrix-norm-identity"
+    },
+    {
+      "op": "matrix_power",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-matrix_power"
+    },
+    {
+      "op": "max_binary",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-max_binary"
+    },
+    {
+      "op": "maximum",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-maximum"
+    },
+    {
+      "op": "mean",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-mean"
+    },
+    {
+      "op": "min_binary",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-min_binary"
+    },
+    {
+      "op": "minimum",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-minimum"
+    },
+    {
+      "op": "mul",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-mul"
+    },
+    {
+      "op": "multi_dot",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-multi_dot"
+    },
+    {
+      "op": "mvlgamma_mvlgamma_p_1",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-mvlgamma_mvlgamma_p_1"
+    },
+    {
+      "op": "mvlgamma_mvlgamma_p_3",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-mvlgamma_mvlgamma_p_3"
+    },
+    {
+      "op": "mvlgamma_mvlgamma_p_5",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-mvlgamma_mvlgamma_p_5"
+    },
+    {
+      "op": "nan_to_num",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nan_to_num"
+    },
+    {
+      "op": "nanmean",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nanmean"
+    },
+    {
+      "op": "nansum",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nansum"
+    },
+    {
+      "op": "neg",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-neg"
+    },
+    {
+      "op": "nn_functional_celu",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_celu"
+    },
+    {
+      "op": "nn_functional_elu",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_elu"
+    },
+    {
+      "op": "nn_functional_hardshrink",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_hardshrink"
+    },
+    {
+      "op": "nn_functional_hardsigmoid",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_hardsigmoid"
+    },
+    {
+      "op": "nn_functional_hardtanh",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_hardtanh"
+    },
+    {
+      "op": "nn_functional_logsigmoid",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_logsigmoid"
+    },
+    {
+      "op": "nn_functional_mish",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_mish"
+    },
+    {
+      "op": "nn_functional_prelu",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_prelu"
+    },
+    {
+      "op": "nn_functional_relu",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_relu"
+    },
+    {
+      "op": "nn_functional_relu6",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_relu6"
+    },
+    {
+      "op": "nn_functional_rrelu",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_rrelu"
+    },
+    {
+      "op": "nn_functional_selu",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_selu"
+    },
+    {
+      "op": "nn_functional_silu",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_silu"
+    },
+    {
+      "op": "nn_functional_softplus",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_softplus"
+    },
+    {
+      "op": "nn_functional_softshrink",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_softshrink"
+    },
+    {
+      "op": "nn_functional_softsign",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_softsign"
+    },
+    {
+      "op": "nn_functional_tanhshrink",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_tanhshrink"
+    },
+    {
+      "op": "nn_functional_threshold",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-nn_functional_threshold"
+    },
+    {
+      "op": "norm",
+      "family": "identity",
+      "note_path": "docs/math/norm.md",
+      "anchor": "family-norm-identity"
+    },
+    {
+      "op": "pinv",
+      "family": "identity",
+      "note_path": "docs/math/pinv.md",
+      "anchor": "family-pinv-identity"
+    },
+    {
+      "op": "pinv_hermitian",
+      "family": "identity",
+      "note_path": "docs/math/pinv.md",
+      "anchor": "family-pinv-hermitian-identity"
+    },
+    {
+      "op": "pinv_singular",
+      "family": "identity",
+      "note_path": "docs/math/pinv.md",
+      "anchor": "family-pinv-singular-identity"
+    },
+    {
+      "op": "polar",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-polar"
+    },
+    {
+      "op": "polygamma_polygamma_n_0",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-polygamma_polygamma_n_0"
+    },
+    {
+      "op": "polygamma_polygamma_n_1",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-polygamma_polygamma_n_1"
+    },
+    {
+      "op": "polygamma_polygamma_n_2",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-polygamma_polygamma_n_2"
+    },
+    {
+      "op": "polygamma_polygamma_n_3",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-polygamma_polygamma_n_3"
+    },
+    {
+      "op": "polygamma_polygamma_n_4",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-polygamma_polygamma_n_4"
+    },
+    {
+      "op": "positive",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-positive"
+    },
+    {
+      "op": "pow",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-pow"
+    },
+    {
+      "op": "prod",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-prod"
+    },
+    {
+      "op": "qr",
+      "family": "identity",
+      "note_path": "docs/math/qr.md",
+      "anchor": "family-identity"
+    },
+    {
+      "op": "rad2deg",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-rad2deg"
+    },
+    {
+      "op": "real",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-real"
+    },
+    {
+      "op": "reciprocal",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-reciprocal"
+    },
+    {
+      "op": "round",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-round"
+    },
+    {
+      "op": "round_decimals_0",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-round_decimals_0"
+    },
+    {
+      "op": "round_decimals_3",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-round_decimals_3"
+    },
+    {
+      "op": "round_decimals_neg_3",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-round_decimals_neg_3"
+    },
+    {
+      "op": "rsqrt",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-rsqrt"
+    },
+    {
+      "op": "rsub",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-rsub"
+    },
+    {
+      "op": "sgn",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sgn"
+    },
+    {
+      "op": "sigmoid",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sigmoid"
+    },
+    {
+      "op": "sign",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sign"
+    },
+    {
+      "op": "sin",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sin"
+    },
+    {
+      "op": "sinc",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sinc"
+    },
+    {
+      "op": "sinh",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sinh"
+    },
+    {
+      "op": "slogdet",
+      "family": "identity",
+      "note_path": "docs/math/det.md",
+      "anchor": "family-slogdet-identity"
+    },
+    {
+      "op": "solve",
+      "family": "identity",
+      "note_path": "docs/math/solve.md",
+      "anchor": "family-solve-identity"
+    },
+    {
+      "op": "solve_ex",
+      "family": "identity",
+      "note_path": "docs/math/solve.md",
+      "anchor": "family-solve-ex-identity"
+    },
+    {
+      "op": "solve_triangular",
+      "family": "identity",
+      "note_path": "docs/math/solve.md",
+      "anchor": "family-solve-triangular-identity"
+    },
+    {
+      "op": "special_entr",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_entr"
+    },
+    {
+      "op": "special_erfcx",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_erfcx"
+    },
+    {
+      "op": "special_i0e",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_i0e"
+    },
+    {
+      "op": "special_i1",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_i1"
+    },
+    {
+      "op": "special_i1e",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_i1e"
+    },
+    {
+      "op": "special_log_ndtr",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_log_ndtr"
+    },
+    {
+      "op": "special_ndtr",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_ndtr"
+    },
+    {
+      "op": "special_ndtri",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_ndtri"
+    },
+    {
+      "op": "special_polygamma_special_polygamma_n_0",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_polygamma_special_polygamma_n_0"
+    },
+    {
+      "op": "special_xlog1py",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-special_xlog1py"
+    },
+    {
+      "op": "sqrt",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sqrt"
+    },
+    {
+      "op": "square",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-square"
+    },
+    {
+      "op": "std",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-std"
+    },
+    {
+      "op": "std_unbiased",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-std_unbiased"
+    },
+    {
+      "op": "sub",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sub"
+    },
+    {
+      "op": "sum",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-sum"
+    },
+    {
+      "op": "svd",
+      "family": "gauge_ill_defined",
+      "note_path": "docs/math/svd.md",
+      "anchor": "family-gauge-ill-defined"
+    },
+    {
+      "op": "svd",
+      "family": "s",
+      "note_path": "docs/math/svd.md",
+      "anchor": "family-s"
+    },
+    {
+      "op": "svd",
+      "family": "u_abs",
+      "note_path": "docs/math/svd.md",
+      "anchor": "family-u-abs"
+    },
+    {
+      "op": "svd",
+      "family": "uvh_product",
+      "note_path": "docs/math/svd.md",
+      "anchor": "family-uvh-product"
+    },
+    {
+      "op": "svd",
+      "family": "vh_abs",
+      "note_path": "docs/math/svd.md",
+      "anchor": "family-vh-abs"
+    },
+    {
+      "op": "svdvals",
+      "family": "identity",
+      "note_path": "docs/math/svd.md",
+      "anchor": "family-svdvals-identity"
+    },
+    {
+      "op": "tan",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-tan"
+    },
+    {
+      "op": "tanh",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-tanh"
+    },
+    {
+      "op": "tensorinv",
+      "family": "identity",
+      "note_path": "docs/math/inv.md",
+      "anchor": "family-tensorinv-identity"
+    },
+    {
+      "op": "tensorsolve",
+      "family": "identity",
+      "note_path": "docs/math/solve.md",
+      "anchor": "family-tensorsolve-identity"
+    },
+    {
+      "op": "true_divide",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-true_divide"
+    },
+    {
+      "op": "trunc",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-trunc"
+    },
+    {
+      "op": "vander",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-vander"
+    },
+    {
+      "op": "var",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-var"
+    },
+    {
+      "op": "var_unbiased",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-var_unbiased"
+    },
+    {
+      "op": "vecdot",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-vecdot"
+    },
+    {
+      "op": "vector_norm",
+      "family": "identity",
+      "note_path": "docs/math/norm.md",
+      "anchor": "family-vector-norm-identity"
+    },
+    {
+      "op": "xlogy",
+      "family": "identity",
+      "note_path": "docs/math/scalar_ops.md",
+      "anchor": "op-xlogy"
+    }
+  ]
+}

@@ -15,7 +15,9 @@
     "dtype": {
       "type": "string",
       "enum": [
+        "float32",
         "float64",
+        "complex64",
         "complex128"
       ]
     },
@@ -88,6 +90,22 @@
           "if": {
             "properties": {
               "dtype": {
+                "const": "float32"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/tensor_real_data"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dtype": {
                 "const": "float64"
               }
             }
@@ -96,6 +114,22 @@
             "properties": {
               "data": {
                 "$ref": "#/$defs/tensor_real_data"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "dtype": {
+                "const": "complex64"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "$ref": "#/$defs/tensor_complex_data"
               }
             }
           }
@@ -124,6 +158,34 @@
       "additionalProperties": {
         "$ref": "#/$defs/tensor"
       }
+    },
+    "json_value": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json_value"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/json_value"
+          }
+        }
+      ]
     },
     "observable": {
       "type": "object",
@@ -307,6 +369,10 @@
           "type": "string",
           "minLength": 1
         },
+        "comment": {
+          "type": "string",
+          "minLength": 1
+        },
         "generator": {
           "type": "string",
           "minLength": 1
@@ -366,6 +432,18 @@
         },
         "inputs": {
           "$ref": "#/$defs/tensor_map"
+        },
+        "op_args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/json_value"
+          }
+        },
+        "op_kwargs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/json_value"
+          }
         },
         "observable": {
           "$ref": "#/$defs/observable"

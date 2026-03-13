@@ -33,9 +33,21 @@ def import_generation_runtime():
     return torch, linalg
 
 
+def import_scalar_generation_runtime():
+    import torch
+    from torch.testing._internal import common_methods_invocations as cmi
+
+    ensure_pinned_torch_version(torch)
+    return torch, cmi
+
+
 def dtype_name(torch, dtype) -> str:
+    if dtype == torch.float32:
+        return "float32"
     if dtype == torch.float64:
         return "float64"
+    if dtype == torch.complex64:
+        return "complex64"
     if dtype == torch.complex128:
         return "complex128"
     raise ValueError(f"unsupported torch dtype for v1 generation: {dtype}")
@@ -107,14 +119,15 @@ def lookup_upstream_opinfo(linalg, spec):
     )
 
 
-def sample_inputs_for_spec(torch, linalg, spec, *, seed: int):
+def sample_inputs_for_spec(torch, linalg, spec, *, seed: int, dtype=None):
     rng_state = torch.random.get_rng_state()
     py_state = random.getstate()
     try:
         torch.manual_seed(seed)
         random.seed(seed)
         opinfo = lookup_upstream_opinfo(linalg, spec)
-        return list(opinfo.sample_inputs("cpu", torch.float64, requires_grad=True))
+        sample_dtype = torch.float64 if dtype is None else dtype
+        return list(opinfo.sample_inputs("cpu", sample_dtype, requires_grad=True))
     finally:
         torch.random.set_rng_state(rng_state)
         random.setstate(py_state)
@@ -138,7 +151,170 @@ def _is_differentiable_input_tensor(torch, value) -> bool:
     )
 
 
-def _bind_sample_tensors(torch, sample, inputs: dict[str, object]):
+def _contains_input_tensor(torch, value) -> bool:
+    if _is_differentiable_input_tensor(torch, value):
+        return True
+    if isinstance(value, tuple):
+        return any(_contains_input_tensor(torch, item) for item in value)
+    if isinstance(value, list):
+        return any(_contains_input_tensor(torch, item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_input_tensor(torch, item) for item in value.values())
+    return False
+
+
+def _contains_any_tensor(value) -> bool:
+    try:
+        import torch
+    except Exception:
+        torch = None
+    if torch is not None and isinstance(value, torch.Tensor):
+        return True
+    if isinstance(value, tuple):
+        return any(_contains_any_tensor(item) for item in value)
+    if isinstance(value, list):
+        return any(_contains_any_tensor(item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_any_tensor(item) for item in value.values())
+    return False
+
+
+def _is_metadata_tensor_kwarg(spec, key: str, value) -> bool:
+    try:
+        import torch
+    except Exception:
+        return False
+    return (
+        getattr(spec, "upstream_name", None) == "linalg.pinv"
+        and key == "rtol"
+        and isinstance(value, torch.Tensor)
+    )
+
+
+def _canonical_scalar_tensor_metadata(value):
+    if value.numel() != 1:
+        raise ValueError("only scalar tensor metadata is supported")
+    item = value.detach().cpu().reshape(-1)[0].item()
+    if isinstance(item, complex):
+        return [float(item.real), float(item.imag)]
+    if isinstance(item, bool):
+        return item
+    if isinstance(item, int):
+        return int(item)
+    return float(item)
+
+
+def _canonical_metadata_value(torch, sample_value, value):
+    if isinstance(value, tuple):
+        return [
+            _canonical_metadata_value(torch, sample_item, item)
+            for sample_item, item in zip(sample_value, value, strict=True)
+        ]
+    if isinstance(value, list):
+        return [
+            _canonical_metadata_value(torch, sample_item, item)
+            for sample_item, item in zip(sample_value, value, strict=True)
+        ]
+    if isinstance(value, dict):
+        return {
+            key: _canonical_metadata_value(torch, sample_value[key], item)
+            for key, item in value.items()
+        }
+    if isinstance(value, torch.dtype):
+        return dtype_name(torch, value)
+    if isinstance(value, torch.memory_format):
+        memory_format_names = {
+            torch.contiguous_format: "contiguous_format",
+            torch.channels_last: "channels_last",
+            torch.channels_last_3d: "channels_last_3d",
+            torch.preserve_format: "preserve_format",
+        }
+        if value not in memory_format_names:
+            raise ValueError(f"unsupported torch memory_format for JSON metadata: {value!r}")
+        return memory_format_names[value]
+    if isinstance(value, torch.device):
+        return str(value)
+    if isinstance(value, torch.layout):
+        if value == torch.strided:
+            return "strided"
+        raise ValueError(f"unsupported torch layout for JSON metadata: {value!r}")
+    return value
+
+
+def _restore_metadata_like(torch, sample_value, metadata_value):
+    if isinstance(sample_value, tuple):
+        return tuple(
+            _restore_metadata_like(torch, sample_item, metadata_item)
+            for sample_item, metadata_item in zip(sample_value, metadata_value, strict=True)
+        )
+    if isinstance(sample_value, list):
+        return [
+            _restore_metadata_like(torch, sample_item, metadata_item)
+            for sample_item, metadata_item in zip(sample_value, metadata_value, strict=True)
+        ]
+    if isinstance(sample_value, dict):
+        return {
+            key: _restore_metadata_like(torch, sample_value[key], metadata_value[key])
+            for key in sample_value
+        }
+    if isinstance(sample_value, torch.Tensor):
+        if isinstance(metadata_value, torch.Tensor):
+            return metadata_value
+        if isinstance(metadata_value, list):
+            if len(metadata_value) != 2:
+                raise ValueError(f"unsupported complex tensor metadata payload: {metadata_value!r}")
+            scalar = complex(float(metadata_value[0]), float(metadata_value[1]))
+        else:
+            scalar = metadata_value
+        return torch.tensor(
+            scalar,
+            dtype=sample_value.dtype,
+            device=sample_value.device,
+        ).reshape(sample_value.shape)
+    if isinstance(sample_value, torch.dtype):
+        if isinstance(metadata_value, torch.dtype):
+            return metadata_value
+        return getattr(torch, metadata_value)
+    if isinstance(sample_value, torch.memory_format):
+        if isinstance(metadata_value, torch.memory_format):
+            return metadata_value
+        return getattr(torch, metadata_value)
+    if isinstance(sample_value, torch.device):
+        if isinstance(metadata_value, torch.device):
+            return metadata_value
+        return torch.device(metadata_value)
+    if isinstance(sample_value, torch.layout):
+        if isinstance(metadata_value, torch.layout):
+            return metadata_value
+        if metadata_value == "strided":
+            return torch.strided
+        raise ValueError(f"unsupported JSON layout metadata: {metadata_value!r}")
+    return metadata_value
+
+
+def build_call_metadata(torch, sample, *, spec=None) -> tuple[list[object], dict[str, object]]:
+    op_args = [
+        _canonical_metadata_value(torch, arg, arg) for arg in sample.args if not _contains_any_tensor(arg)
+    ]
+    op_kwargs = {}
+    for key, value in sample.kwargs.items():
+        if _contains_any_tensor(value):
+            if _is_metadata_tensor_kwarg(spec, key, value):
+                op_kwargs[key] = _canonical_scalar_tensor_metadata(value)
+            continue
+        op_kwargs[key] = _canonical_metadata_value(torch, value, value)
+    return op_args, op_kwargs
+
+
+def _bind_sample_tensors(
+    torch,
+    spec,
+    sample,
+    inputs: dict[str, object],
+    *,
+    op_args: list[object] | tuple[object, ...] | None = None,
+    op_kwargs: dict[str, object] | None = None,
+):
     index_ref = [0]
 
     def replace(value):
@@ -150,18 +326,60 @@ def _bind_sample_tensors(torch, sample, inputs: dict[str, object]):
             return tuple(replace(item) for item in value)
         if isinstance(value, list):
             return [replace(item) for item in value]
+        if isinstance(value, dict):
+            return {key: replace(item) for key, item in value.items()}
         return value
 
-    return replace(sample.input), replace(sample.args)
+    input_value = replace(sample.input)
+    arg_iter = iter(op_args or ())
+    args = []
+    for value in sample.args:
+        if _contains_input_tensor(torch, value):
+            args.append(replace(value))
+        else:
+            metadata_value = next(arg_iter, value)
+            args.append(_restore_metadata_like(torch, value, metadata_value))
+    kwargs = {}
+    metadata_kwargs = op_kwargs or {}
+    for key, value in sample.kwargs.items():
+        if _is_metadata_tensor_kwarg(spec, key, value):
+            metadata_value = metadata_kwargs.get(key, value)
+            kwargs[key] = _restore_metadata_like(torch, value, metadata_value)
+            continue
+        if _contains_input_tensor(torch, value):
+            kwargs[key] = replace(value)
+        else:
+            metadata_value = metadata_kwargs.get(key, value)
+            kwargs[key] = _restore_metadata_like(torch, value, metadata_value)
+    for key, value in metadata_kwargs.items():
+        if key not in kwargs:
+            kwargs[key] = value
+    return input_value, tuple(args), kwargs
 
 
-def _call_upstream_op(torch, opinfo, sample, inputs: dict[str, object]):
-    input_value, args = _bind_sample_tensors(torch, sample, inputs)
+def call_upstream_op(
+    torch,
+    spec,
+    opinfo,
+    sample,
+    inputs: dict[str, object],
+    *,
+    op_args: list[object] | tuple[object, ...] | None = None,
+    op_kwargs: dict[str, object] | None = None,
+):
+    input_value, args, kwargs = _bind_sample_tensors(
+        torch,
+        spec,
+        sample,
+        inputs,
+        op_args=op_args,
+        op_kwargs=op_kwargs,
+    )
     wrapper = getattr(opinfo, "gradcheck_wrapper", None)
     wrapper_name = getattr(wrapper, "__name__", None)
     if wrapper is not None and wrapper_name != "<lambda>":
-        return wrapper(opinfo.op, input_value, *args, **sample.kwargs)
-    return opinfo.op(input_value, *args, **sample.kwargs)
+        return wrapper(opinfo.op, input_value, *args, **kwargs)
+    return opinfo.op(input_value, *args, **kwargs)
 
 
 def apply_spec_observable(
@@ -172,13 +390,23 @@ def apply_spec_observable(
     *,
     linalg=None,
     opinfo=None,
+    op_args: list[object] | tuple[object, ...] | None = None,
+    op_kwargs: dict[str, object] | None = None,
     preserve_identity_keys: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     if opinfo is None:
         if linalg is None:
             _, linalg = import_generation_runtime()
         opinfo = lookup_upstream_opinfo(linalg, spec)
-    result = _call_upstream_op(torch, opinfo, sample, inputs)
+    result = call_upstream_op(
+        torch,
+        spec,
+        opinfo,
+        sample,
+        inputs,
+        op_args=op_args,
+        op_kwargs=op_kwargs,
+    )
     return observables.apply_observable(
         spec.observable_kind,
         result,
@@ -197,9 +425,18 @@ def map_allclose(torch, expected: dict[str, object], actual: dict[str, object], 
     if expected.keys() != actual.keys():
         return False
     return all(
-        torch.allclose(expected[name], actual[name], rtol=rtol, atol=atol)
+        torch.allclose(expected[name], actual[name], rtol=rtol, atol=atol, equal_nan=True)
         for name in expected
     )
+
+
+def tensor_map_isfinite(tensor_map: dict[str, object]) -> bool:
+    for tensor in tensor_map.values():
+        if tensor.numel() == 0:
+            continue
+        if not tensor.isfinite().all().item():
+            return False
+    return True
 
 
 def _uses_hermitian_wrapper(spec) -> bool:
@@ -241,6 +478,16 @@ def _collect_tensor_inputs(torch, spec, value, out: dict[str, object], index_ref
             is_primary_input=(index == 0),
         )
         return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if (
+                key == "rtol"
+                and getattr(spec, "upstream_name", None) == "linalg.pinv"
+                and _is_differentiable_input_tensor(torch, item)
+            ):
+                continue
+            _collect_tensor_inputs(torch, spec, item, out, index_ref)
+        return
     if isinstance(value, (tuple, list)):
         for item in value:
             _collect_tensor_inputs(torch, spec, item, out, index_ref)
@@ -251,6 +498,7 @@ def build_input_map(torch, spec, sample) -> dict[str, object]:
     index_ref = [0]
     _collect_tensor_inputs(torch, spec, sample.input, inputs, index_ref)
     _collect_tensor_inputs(torch, spec, sample.args, inputs, index_ref)
+    _collect_tensor_inputs(torch, spec, sample.kwargs, inputs, index_ref)
     if not inputs:
         raise ValueError(f"unsupported sample has no tensor inputs: {spec.op}")
     return inputs
@@ -280,6 +528,8 @@ def build_observable_function(
     *,
     linalg=None,
     opinfo=None,
+    op_args: list[object] | tuple[object, ...] | None = None,
+    op_kwargs: dict[str, object] | None = None,
     output_names: tuple[str, ...] | None = None,
 ) -> Callable[..., tuple[object, ...]]:
     def observable_fn(*args):
@@ -291,6 +541,8 @@ def build_observable_function(
             inputs,
             linalg=linalg,
             opinfo=opinfo,
+            op_args=op_args,
+            op_kwargs=op_kwargs,
             preserve_identity_keys=output_names,
         )
         return tensor_map_to_tuple(output)
