@@ -129,22 +129,16 @@
 // Re-export all core traits so downstream can depend on just `chainrules`.
 pub use chainrules_core::*;
 
-mod autograd_context;
-mod forward;
-mod results;
-mod tape;
-mod tracked;
-mod variable;
+mod engine;
+mod ops;
 
-pub use autograd_context::AutogradContext;
-pub use forward::DualTensor;
-pub use results::{Gradients, HvpResult, PullbackPlan};
-pub use tape::Tape;
-pub use tracked::TrackedTensor;
-pub use variable::{BackwardOptions, Variable};
+pub use engine::{
+    AutogradContext, BackwardOptions, DualTensor, Gradients, HvpResult, PullbackPlan, Tape,
+    TrackedTensor, Variable,
+};
 
 /// Monomorphic AD operation helpers for [`Variable`].
-pub mod autograd;
+pub use ops::autograd;
 
 /// Test-only graph builders used by API contract tests.
-pub mod test_support;
+pub use ops::test_support;

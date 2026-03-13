@@ -10,11 +10,9 @@ use tenferro_prims::{
 };
 use tenferro_tensor::Tensor;
 
-use super::prims_execute::{
-    execute_batched_gemm_optimized, tropical_execute, TropicalGemmDispatch,
-};
-use super::prims_plan::{tropical_plan, TropicalPlan};
-use super::prims_view::{tensor_to_view, tensor_to_view_mut};
+use super::execute::{execute_batched_gemm_optimized, tropical_execute, TropicalGemmDispatch};
+use super::plan::{tropical_plan, TropicalPlan};
+use super::view::{tensor_to_view, tensor_to_view_mut};
 use crate::algebra::{MaxMulAlgebra, MaxPlusAlgebra, MinPlusAlgebra};
 use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 

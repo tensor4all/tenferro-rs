@@ -1,5 +1,5 @@
 use crate::{
-    autograd_context::VariableNodeKind, variable::effective_retain_graph, AdResult, AutodiffError,
+    engine::effective_retain_graph, engine::VariableNodeKind, AdResult, AutodiffError,
     AutogradContext, BackwardOptions, NodeId, ReverseRule, Variable,
 };
 use std::marker::PhantomData;

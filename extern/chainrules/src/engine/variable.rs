@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 
-use crate::autograd_context::AutogradContext;
+use crate::engine::AutogradContext;
 use crate::{AdResult, AutodiffError, Differentiable, NodeId};
 
 pub(crate) fn effective_retain_graph(retain_graph: Option<bool>, create_graph: bool) -> bool {

@@ -5,7 +5,7 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_prims::SemiringCoreDescriptor;
 
-use super::prims_view::mode_position;
+use super::view::mode_position;
 
 /// Execution plan for tropical primitive operations on CPU.
 ///

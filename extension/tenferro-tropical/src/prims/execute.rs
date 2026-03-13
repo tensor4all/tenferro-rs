@@ -3,8 +3,8 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tropical_gemm::{TropicalMaxMul, TropicalMaxPlus, TropicalMinPlus, TropicalSemiring};
 
-use super::prims_plan::TropicalPlan;
-use super::prims_view::{for_each_index, scale_output, unflatten_index};
+use super::plan::TropicalPlan;
+use super::view::{for_each_index, scale_output, unflatten_index};
 use crate::scalar::{MaxMul, MaxPlus, MinPlus};
 
 /// Trait for dispatching to SIMD-optimized tropical GEMM via tropical-gemm crate.

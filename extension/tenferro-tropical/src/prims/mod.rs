@@ -13,26 +13,22 @@
 //! `sum = sum + a * b` becomes `sum = max(sum, a_val + b_val)` for MaxPlus,
 //! which is exactly tropical GEMM.
 
-#[path = "prims_execute.rs"]
-mod prims_execute;
-#[path = "prims_impls.rs"]
-mod prims_impls;
-#[path = "prims_plan.rs"]
-mod prims_plan;
-#[path = "prims_view.rs"]
-mod prims_view;
+mod execute;
+mod impls;
+mod plan;
+mod view;
 
-pub use self::prims_plan::TropicalPlan;
+pub use self::plan::TropicalPlan;
 
 #[allow(unused_imports)]
-pub(crate) use self::prims_execute::{
+pub(crate) use self::execute::{
     execute_anti_diag, execute_anti_trace, execute_batched_gemm_fallback, execute_make_contiguous,
     execute_trace, tropical_execute,
 };
 #[allow(unused_imports)]
-pub(crate) use self::prims_plan::tropical_plan;
+pub(crate) use self::plan::tropical_plan;
 #[allow(unused_imports)]
-pub(crate) use self::prims_view::{
+pub(crate) use self::view::{
     for_each_index, scale_output, tensor_to_view, tensor_to_view_mut, unflatten_index,
 };
 

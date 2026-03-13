@@ -1,8 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::results::Gradients;
-use crate::tracked::TrackedTensor;
+use crate::engine::{Gradients, TrackedTensor};
 use crate::{AdResult, AutodiffError, Differentiable, HvpResult, NodeId, ReverseRule};
 
 struct TapeNode<V: Differentiable> {
