@@ -180,6 +180,21 @@ There is no fallback heterogeneous graph path for `V::Tangent != V`. If
 higher-order graph-connected gradients are needed, the operation/type is simply
 unsupported in the current phase unless it fits the `V::Tangent = V` path.
 
+## DyadTensor Code Layout
+
+`tenferro-dyadtensor` keeps the implementation tree aligned with the way users
+follow operations:
+
+- `core/` owns AD values and dynamic wrappers
+- `runtime/` owns default-runtime selection and capability dispatch
+- `tape/` owns reverse-mode rule storage
+- `ops/einsum`, `ops/scalar`, `ops/reduction`, and `ops/linalg/*` keep primal
+  entry points, eager AD entry points, builders, and tests near the operation
+  family they implement
+
+This avoids the older bucket-style layout where one `svd` path had to be traced
+across unrelated roots such as `api/`, `dyn_types/`, and `reverse_tape/`.
+
 ## Context and Mutation Semantics
 
 - `AutogradContext<V>` is shared through `Arc<Mutex<_>>`

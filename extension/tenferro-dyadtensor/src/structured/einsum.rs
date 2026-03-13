@@ -5,7 +5,8 @@ use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_tensor::Tensor;
 
-use crate::api::{dispatch_einsum_runtime, DenseEinsumBackend, EinsumRuntimeValue};
+use crate::runtime::contracts::EinsumRuntimeValue;
+use crate::runtime::dispatch::{dispatch_einsum_runtime, DenseEinsumBackend};
 use crate::{Error, Result};
 
 use super::meta::{plan_axis_classes_for_subscripts, OperandAxisClasses};

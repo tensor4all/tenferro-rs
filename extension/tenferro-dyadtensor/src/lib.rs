@@ -19,22 +19,33 @@
 //! while reverse-mode
 //! bookkeeping keeps one tape-local rule store per tape rather than a generic
 //! global context map.
+//!
+//! Module map:
+//!
+//! - [`core`] defines AD values plus dynamic wrappers.
+//! - [`runtime`] owns default-runtime selection and runtime dispatch.
+//! - `tape` owns reverse-mode pullback storage.
+//! - [`ops`] is operation-first: `einsum`, `scalar`, `reduction`, and
+//!   `linalg/*` each keep primal and AD wiring together.
+//! - [`StructuredTensor`] and `structured` handle structured layouts.
 
-pub mod ad_value;
-pub mod api;
-mod context;
-pub mod dyn_types;
+pub mod core;
 pub mod error;
+pub mod ops;
 pub mod policy;
-mod reverse_tape;
 pub mod runtime;
 mod structured;
+mod tape;
 pub mod traits;
 
-pub use ad_value::{AdMode, AdScalar, AdTensor, AdValue, NodeId, TapeId};
-pub use api::ad;
-pub use api::chainrules_api;
-pub use api::{
+pub use core::{
+    AdMode, AdScalar, AdTensor, AdValue, DynAdScalar, DynAdTensor, DynScalar, DynTensor, NodeId,
+    ScalarType, TapeId,
+};
+pub use error::{Error, Result};
+pub use ops::ad;
+pub use ops::chainrules_api;
+pub use ops::{
     acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cholesky,
     cholesky_ad, cos_ad, cosh_ad, det, det_ad, eig, eig_ad, eigen, eigen_ad, einsum, einsum_ad,
     exp_ad, expm1_ad, hypot_ad, inv, inv_ad, log1p_ad, log_ad, lstsq, lstsq_ad, lu, lu_ad,
@@ -43,8 +54,6 @@ pub use api::{
     std_ad, sum_ad, svd, svd_ad, tanh_ad, var_ad, AdEigResult, AdEigenResult, AdLstsqResult,
     AdLuResult, AdQrResult, AdSlogdetResult, AdSvdResult,
 };
-pub use dyn_types::{DynAdScalar, DynAdTensor, DynScalar, DynTensor, ScalarType};
-pub use error::{Error, Result};
 pub use policy::DiffPolicy;
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use structured::meta::{
