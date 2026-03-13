@@ -21,7 +21,7 @@ fn lib_rs_does_not_reexport_generic_global_context_helpers() {
 
 #[test]
 fn runtime_context_storage_is_runtime_specific() {
-    let context = std::fs::read_to_string(repo_path("src/context.rs")).unwrap();
+    let context = std::fs::read_to_string(repo_path("src/runtime/context.rs")).unwrap();
     assert!(
         context.contains("DEFAULT_RUNTIME"),
         "runtime holder should store a dedicated default runtime slot"

@@ -225,4 +225,7 @@ tenferro crates. It provides the higher-level builder surface used by eager
 einsum and linalg flows, plus dynamic wrappers for forward- and reverse-mode
 execution. Builder `.run()` entrypoints execute through an explicit default
 runtime holder, while reverse-mode bookkeeping uses a tape-local rule store
-instead of a generic global context map.
+instead of a generic global context map. The implementation tree is now
+operation-first: `ops/einsum`, `ops/scalar`, `ops/reduction`, and
+`ops/linalg/*` group primal and AD wiring by family rather than by internal
+bucket.
