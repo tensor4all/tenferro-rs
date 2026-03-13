@@ -150,14 +150,17 @@ fn row_major_strides(dims: &[usize]) -> tenferro_device::Result<Vec<isize>> {
     let mut strides = vec![0isize; ndim];
     strides[ndim - 1] = 1;
     for i in (0..ndim - 1).rev() {
-        let dim = isize::try_from(dims[i + 1]).map_err(|_| {
+        let axis = i + 1;
+        let dim = isize::try_from(dims[axis]).map_err(|_| {
             tenferro_device::Error::InvalidArgument(format!(
-                "dimension {} too large for stride calculation",
-                dims[i + 1]
+                "dimension {axis} (size={}) too large for stride calculation",
+                dims[axis]
             ))
         })?;
         strides[i] = strides[i + 1].checked_mul(dim).ok_or_else(|| {
-            tenferro_device::Error::StrideError("stride overflow in row-major inference".into())
+            tenferro_device::Error::StrideError(format!(
+                "stride overflow in row-major inference at dimension {axis} (size={dim})"
+            ))
         })?;
     }
     Ok(strides)
