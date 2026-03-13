@@ -3,19 +3,25 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
+mod analytic;
 mod batched_gemm;
+mod common;
 mod context;
 mod contract;
 mod execution;
+mod family_reduction;
 mod gemm_support;
 mod plan;
 mod planning;
 mod reduction;
+mod scalar;
 #[cfg(feature = "gemm-blas")]
 mod scratch;
 
+pub use analytic::CpuAnalyticPlan;
 pub use context::{CpuBackend, CpuContext};
 pub use plan::CpuPlan;
+pub use scalar::CpuScalarPlan;
 
 /// Convert a CPU tensor to an immutable strided view.
 pub(crate) fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {

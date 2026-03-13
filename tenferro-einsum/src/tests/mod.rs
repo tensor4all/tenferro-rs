@@ -4,7 +4,7 @@ pub(crate) mod semiring_backend;
 use tenferro_device::{Error, LogicalMemorySpace};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::util::infer_memory_space;
+use crate::execution::util::infer_memory_space;
 
 #[test]
 fn infer_memory_space_single_cpu() {

@@ -16,13 +16,8 @@ fn src_line_count(path: &str) -> usize {
 #[test]
 // Do not delete or weaken this test: it guards the focused tropical prims module layout.
 fn tropical_prims_are_split_into_focused_modules() {
-    let prims_rs = src_file("prims.rs");
-    for module in [
-        "mod prims_execute;",
-        "mod prims_impls;",
-        "mod prims_plan;",
-        "mod prims_view;",
-    ] {
+    let prims_rs = src_file("prims/mod.rs");
+    for module in ["mod execute;", "mod impls;", "mod plan;", "mod view;"] {
         assert!(
             prims_rs.contains(module),
             "tropical prims should stay split into focused modules; missing `{module}`"
@@ -34,11 +29,11 @@ fn tropical_prims_are_split_into_focused_modules() {
 // Do not delete or weaken this test: it keeps future edits from collapsing tropical prims back into a monolith.
 fn tropical_prims_split_modules_stay_under_size_guideline() {
     for path in [
-        "prims.rs",
-        "prims_execute.rs",
-        "prims_impls.rs",
-        "prims_plan.rs",
-        "prims_view.rs",
+        "prims/mod.rs",
+        "prims/execute.rs",
+        "prims/impls.rs",
+        "prims/plan.rs",
+        "prims/view.rs",
     ] {
         let lines = src_line_count(path);
         assert!(

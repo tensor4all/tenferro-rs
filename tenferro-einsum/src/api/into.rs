@@ -4,12 +4,12 @@ use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
-use crate::backend::{BackendContext, EinsumBackend};
-use crate::execute::{execute_nested, execute_tree};
-use crate::nested::NestedEinsum;
-use crate::pool::BufferPool;
-use crate::subscripts::Subscripts;
-use crate::tree::ContractionTree;
+use crate::execution::backend::{BackendContext, EinsumBackend};
+use crate::execution::execute::{execute_nested, execute_tree};
+use crate::execution::pool::BufferPool;
+use crate::planning::tree::ContractionTree;
+use crate::syntax::nested::NestedEinsum;
+use crate::syntax::subscripts::Subscripts;
 
 use super::borrowed::canonicalize_col_major_operands;
 

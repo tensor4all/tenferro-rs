@@ -6,7 +6,7 @@ use crate::cuda_ffi::{
     cutensorComputeDescriptor_t, CutensorDataType, CutensorVtable, CUTENSOR_C_32F, CUTENSOR_C_64F,
     CUTENSOR_R_32F, CUTENSOR_R_64F,
 };
-use crate::typed_dispatch::{
+use crate::infra::typed_dispatch::{
     dispatch_complex_scalar_type, dispatch_real_scalar_type, dispatch_standard_scalar_type,
 };
 

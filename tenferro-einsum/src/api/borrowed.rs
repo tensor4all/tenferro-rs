@@ -5,13 +5,13 @@ use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad::einsum_frule_impl;
-use crate::backend::{BackendContext, EinsumBackend};
-use crate::execute::{execute_nested, execute_tree};
-use crate::nested::NestedEinsum;
-use crate::pool::BufferPool;
-use crate::subscripts::Subscripts;
-use crate::tree::ContractionTree;
-use crate::util::{compute_output_shape, infer_memory_space};
+use crate::execution::backend::{BackendContext, EinsumBackend};
+use crate::execution::execute::{execute_nested, execute_tree};
+use crate::execution::pool::BufferPool;
+use crate::execution::util::{compute_output_shape, infer_memory_space};
+use crate::planning::tree::ContractionTree;
+use crate::syntax::nested::NestedEinsum;
+use crate::syntax::subscripts::Subscripts;
 
 pub(super) fn canonicalize_col_major_operands<T: Scalar>(
     operands: &[&Tensor<T>],

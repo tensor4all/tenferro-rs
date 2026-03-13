@@ -1,4 +1,5 @@
 mod analytic_phase1;
+mod organization;
 mod scalar_phase1;
 
 use tenferro_algebra::Standard;

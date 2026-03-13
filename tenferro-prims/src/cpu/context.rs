@@ -2,11 +2,11 @@ use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::PlanCache;
+use crate::infra::plan_cache::PlanCache;
 
 #[cfg(feature = "gemm-blas")]
 use super::scratch::{ScratchBuf, ScratchPool};
-use crate::family_cpu_common;
+use crate::cpu::common;
 
 /// CPU execution context.
 ///
@@ -161,7 +161,7 @@ pub struct CpuBackend;
 
 impl CpuBackend {
     pub(super) fn supports_batched_gemm_type<T: Scalar>() -> bool {
-        family_cpu_common::is_supported_scalar_type::<T>()
+        common::is_supported_scalar_type::<T>()
     }
 
     /// Materialize a lazily-conjugated tensor.
