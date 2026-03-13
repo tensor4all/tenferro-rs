@@ -63,12 +63,6 @@ pub fn generate_support_report(root: &Path) -> Result<String, String> {
                     totals.unsupported_records += 1;
                     *unsupported.entry((key, reason)).or_default() += 1;
                 }
-                RecordSupport::Unknown => {
-                    return Err(format!(
-                        "unclassified oracle family {}/{}/{}",
-                        key.op, key.family, key.observable
-                    ));
-                }
             }
         }
     }
@@ -133,4 +127,10 @@ pub fn generate_support_report(root: &Path) -> Result<String, String> {
     }
 
     Ok(out)
+}
+
+pub fn write_checked_in_report(root: &Path) -> Result<(), String> {
+    let rendered = generate_support_report(root)?;
+    std::fs::write(checked_in_report_path(), rendered)
+        .map_err(|err| format!("failed to write checked-in oracle support report: {err}"))
 }

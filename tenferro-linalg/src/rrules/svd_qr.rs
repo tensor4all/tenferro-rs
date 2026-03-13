@@ -25,14 +25,15 @@ use super::*;
 /// };
 /// let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
-pub fn svd_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn svd_rrule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
-    cotangent: &SvdCotangent<T>,
+    cotangent: &SvdCotangent<T, T::Real>,
     options: Option<&SvdOptions>,
 ) -> AdResult<Tensor<T>>
 where
     T: KernelLinalgScalar,
+    T::Real: num_traits::Float,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
@@ -45,9 +46,9 @@ where
     // Regularization for the F-matrix: prevents division by zero when two
     // singular values are (nearly) equal.  We use max(1e-40, T::epsilon())
     // so that on f32 (where 1e-40 underflows to 0) we still get a safe floor.
-    let eta: T = {
-        let raw: T = scalar_from(1e-40).map_err(to_ad_err)?;
-        let eps = T::epsilon();
+    let eta: T::Real = {
+        let raw: T::Real = scalar_from(1e-40).map_err(to_ad_err)?;
+        let eps = T::real_epsilon();
         if raw < eps {
             eps
         } else {
@@ -56,8 +57,21 @@ where
     };
 
     let (u_data, _) = extract_data(&result.u)?;
-    let (s_data, _) = extract_data(&result.s)?;
+    let s_data = extract_data_scalar(&result.s)?;
     let (vt_data, _) = extract_data(&result.vt)?;
+    let du_data = cotangent
+        .u
+        .as_ref()
+        .map(extract_data)
+        .transpose()?
+        .map(|(data, _)| data);
+    let ds_data = cotangent.s.as_ref().map(extract_data_scalar).transpose()?;
+    let dvt_data = cotangent
+        .vt
+        .as_ref()
+        .map(extract_data)
+        .transpose()?
+        .map(|(data, _)| data);
 
     let mut grad_a = vec![T::zero(); m * n * bc];
 
@@ -65,131 +79,94 @@ where
         let u_b = &u_data[b * m * k..(b + 1) * m * k];
         let s_b = &s_data[b * k..(b + 1) * k];
         let vt_b = &vt_data[b * k * n..(b + 1) * k * n];
-        // V = Vt^T: n×k
-        let v_b = transpose(vt_b, k, n);
+        let v_b = adjoint_transpose(vt_b, k, n);
 
-        // Build F-matrix (k×k): F_ij = 1/(s_j² - s_i²) for i≠j, 0 diagonal
-        let mut f_mat = vec![T::zero(); k * k];
-        for i in 0..k {
-            for j in 0..k {
-                if i != j {
-                    let denom = s_b[j] * s_b[j] - s_b[i] * s_b[i];
-                    f_mat[i + j * k] = T::one()
-                        / (denom
-                            + eta
-                                * if denom >= T::zero() {
-                                    T::one()
-                                } else {
-                                    -T::one()
-                                });
-                }
-            }
-        }
-
-        // Start building inner matrix Gamma (k×k)
         let mut gamma = vec![T::zero(); k * k];
 
-        // From dS cotangent: add diag(dS)
-        if let Some(ref ds) = cotangent.s {
-            let (ds_data, _) = extract_data(ds)?;
+        if let Some(ds_data) = ds_data.as_ref() {
             let ds_b = &ds_data[b * k..(b + 1) * k];
             for i in 0..k {
-                gamma[i + i * k] = gamma[i + i * k] + ds_b[i];
+                gamma[i + i * k] = gamma[i + i * k] + T::from_real(ds_b[i]);
             }
         }
 
-        // From dU cotangent: F ⊙ (U^T dU + (U^T dU)^T) * S
-        if let Some(ref du) = cotangent.u {
-            let (du_data, _) = extract_data(du)?;
+        if let Some(du_data) = du_data.as_ref() {
             let du_b = &du_data[b * m * k..(b + 1) * m * k];
-            // U^T dU (k×k)
-            let ut_du = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, du_b, k)?;
+            let uh_du = backend_mat_mul(ctx, &adjoint_transpose(u_b, m, k), k, m, du_b, k)?;
             for i in 0..k {
+                let s_inv = stable_inverse_sigma(s_b[i], eta);
+                gamma[i + i * k] =
+                    gamma[i + i * k] + imag_axis_component(uh_du[i + i * k])? * T::from_real(s_inv);
                 for j in 0..k {
-                    let skew = ut_du[i + j * k] - ut_du[j + i * k];
-                    gamma[i + j * k] = gamma[i + j * k] + f_mat[i + j * k] * skew * s_b[j];
+                    if i == j {
+                        continue;
+                    }
+                    let gap_inv = T::from_real(stable_inverse_gap(s_b[i], s_b[j], eta));
+                    let skew = uh_du[i + j * k] - uh_du[j + i * k].conj();
+                    gamma[i + j * k] = gamma[i + j * k] + gap_inv * skew * T::from_real(s_b[j]);
                 }
             }
         }
 
-        // From dVt cotangent: S * F ⊙ (V^T dV + (V^T dV)^T)
-        if let Some(ref dvt) = cotangent.vt {
-            let (dvt_data, _) = extract_data(dvt)?;
+        if let Some(dvt_data) = dvt_data.as_ref() {
             let dvt_b = &dvt_data[b * k * n..(b + 1) * k * n];
-            // dV = dVt^T (n×k)
-            let dv_b = transpose(dvt_b, k, n);
-            // V^T dV (k×k)
-            let vt_dv = backend_mat_mul(ctx, &transpose(&v_b, n, k), k, n, &dv_b, k)?;
+            let dv_b = adjoint_transpose(dvt_b, k, n);
+            let vh_dv = backend_mat_mul(ctx, vt_b, k, n, &dv_b, k)?;
             for i in 0..k {
                 for j in 0..k {
-                    let skew = vt_dv[i + j * k] - vt_dv[j + i * k];
-                    gamma[i + j * k] = gamma[i + j * k] + s_b[i] * f_mat[i + j * k] * skew;
+                    if i == j {
+                        continue;
+                    }
+                    let gap_inv = T::from_real(stable_inverse_gap(s_b[i], s_b[j], eta));
+                    let skew = vh_dv[i + j * k] - vh_dv[j + i * k].conj();
+                    gamma[i + j * k] = gamma[i + j * k] + T::from_real(s_b[i]) * gap_inv * skew;
                 }
             }
         }
 
-        // Core: dA_core = U * Gamma * V^T (m×k × k×k × k×n = m×n)
         let u_gamma = backend_mat_mul(ctx, u_b, m, k, &gamma, k)?;
-        let da_core = backend_mat_mul(ctx, &u_gamma, m, k, &transpose(&v_b, n, k), n)?;
+        let da_core = backend_mat_mul(ctx, &u_gamma, m, k, vt_b, n)?;
 
-        // Copy core to output
         for i in 0..m * n {
             grad_a[b * m * n + i] = da_core[i];
         }
 
-        // Non-square correction: (I - UU^T) dU S_inv^T V^T when m > k
         if m > k {
-            if let Some(ref du) = cotangent.u {
-                let (du_data, _) = extract_data(du)?;
+            if let Some(du_data) = du_data.as_ref() {
                 let du_b = &du_data[b * m * k..(b + 1) * m * k];
-                // dU * diag(1/S) (m×k)
                 let mut du_sinv = vec![T::zero(); m * k];
                 for j in 0..k {
-                    let sinv = if s_b[j].abs() > eta {
-                        T::one() / s_b[j]
-                    } else {
-                        T::zero()
-                    };
+                    let sinv = T::from_real(stable_inverse_sigma(s_b[j], eta));
                     for i in 0..m {
                         du_sinv[i + j * m] = du_b[i + j * m] * sinv;
                     }
                 }
-                // (I - UU^T) * du_sinv * V^T
-                let inner = backend_mat_mul(ctx, &transpose(u_b, m, k), k, m, &du_sinv, k)?;
+                let inner = backend_mat_mul(ctx, &adjoint_transpose(u_b, m, k), k, m, &du_sinv, k)?;
                 let uut_du = backend_mat_mul(ctx, u_b, m, k, &inner, k)?;
                 let proj = sub_vec(&du_sinv, &uut_du);
-                let correction = backend_mat_mul(ctx, &proj, m, k, &transpose(&v_b, n, k), n)?;
+                let correction = backend_mat_mul(ctx, &proj, m, k, vt_b, n)?;
                 for i in 0..m * n {
                     grad_a[b * m * n + i] = grad_a[b * m * n + i] + correction[i];
                 }
             }
         }
 
-        // Non-square correction for n > k: U S_inv^T (I - VV^T) dV^T
         if n > k {
-            if let Some(ref dvt) = cotangent.vt {
-                let (dvt_data, _) = extract_data(dvt)?;
+            if let Some(dvt_data) = dvt_data.as_ref() {
                 let dvt_b = &dvt_data[b * k * n..(b + 1) * k * n];
-                let dv_b = transpose(dvt_b, k, n);
-                // diag(1/S) * dV^T (k×n) = diag(1/S) * Vt_cotangent
-                // But we need dV (n×k), so: (I - VV^T) dV → project
-                let inner = backend_mat_mul(ctx, &transpose(&v_b, n, k), k, n, &dv_b, k)?;
+                let dv_b = adjoint_transpose(dvt_b, k, n);
+                let inner = backend_mat_mul(ctx, vt_b, k, n, &dv_b, k)?;
                 let vvt_dv = backend_mat_mul(ctx, &v_b, n, k, &inner, k)?;
                 let proj_dv = sub_vec(&dv_b, &vvt_dv);
-                // U * diag(1/S) * proj_dv^T
                 let mut u_sinv = vec![T::zero(); m * k];
                 for j in 0..k {
-                    let sinv = if s_b[j].abs() > eta {
-                        T::one() / s_b[j]
-                    } else {
-                        T::zero()
-                    };
+                    let sinv = T::from_real(stable_inverse_sigma(s_b[j], eta));
                     for i in 0..m {
                         u_sinv[i + j * m] = u_b[i + j * m] * sinv;
                     }
                 }
                 let correction =
-                    backend_mat_mul(ctx, &u_sinv, m, k, &transpose(&proj_dv, n, k), n)?;
+                    backend_mat_mul(ctx, &u_sinv, m, k, &adjoint_transpose(&proj_dv, n, k), n)?;
                 for i in 0..m * n {
                     grad_a[b * m * n + i] = grad_a[b * m * n + i] + correction[i];
                 }

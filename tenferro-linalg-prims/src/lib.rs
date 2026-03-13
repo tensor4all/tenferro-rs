@@ -15,6 +15,7 @@
 //! ```
 
 use num_complex::{Complex32, Complex64};
+use num_traits::Zero;
 use tenferro_algebra::Scalar;
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
@@ -47,6 +48,16 @@ pub trait LinalgScalar:
     fn real_epsilon() -> Self::Real;
     /// Return the algebraic conjugate.
     fn conj(&self) -> Self;
+    /// Build a scalar from explicit real/imaginary parts.
+    fn from_parts(real: Self::Real, imag: Self::Real) -> Self;
+    /// Build a scalar from the associated real field.
+    fn from_real(real: Self::Real) -> Self {
+        Self::from_parts(real, Self::Real::zero())
+    }
+    /// Return the real part in the associated real field.
+    fn real_part(&self) -> Self::Real;
+    /// Return the imaginary part in the associated real field.
+    fn imag_part(&self) -> Self::Real;
 }
 
 /// Scalar types with concrete backend kernel support in the current workspace.
@@ -110,6 +121,18 @@ macro_rules! impl_real_linalg_scalar {
             fn conj(&self) -> $ty {
                 *self
             }
+
+            fn from_parts(real: Self::Real, _imag: Self::Real) -> Self {
+                real
+            }
+
+            fn real_part(&self) -> Self::Real {
+                *self
+            }
+
+            fn imag_part(&self) -> Self::Real {
+                0.0
+            }
         }
 
         impl KernelLinalgScalar for $ty {}
@@ -153,6 +176,18 @@ macro_rules! impl_complex_linalg_scalar {
 
             fn conj(&self) -> $ty {
                 self.conj()
+            }
+
+            fn from_parts(real: Self::Real, imag: Self::Real) -> Self {
+                <$ty>::new(real, imag)
+            }
+
+            fn real_part(&self) -> Self::Real {
+                self.re
+            }
+
+            fn imag_part(&self) -> Self::Real {
+                self.im
             }
         }
 
