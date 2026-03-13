@@ -59,11 +59,11 @@
     "tenferro-linalg/src/lib.rs": 95,
     "tenferro-linalg/src/backend/faer_backend/mod.rs": 50,
     "tenferro-linalg/src/backend/faer_backend.rs": 97,
-    "tenferro-prims/src/analytic_cpu.rs": 69,
-    "tenferro-prims/src/analytic_prims.rs": 6,
-    "tenferro-prims/src/family_cpu_common.rs": 70,
-    "tenferro-prims/src/family_cpu_reduction.rs": 56,
-    "tenferro-prims/src/scalar_cpu.rs": 51,
-    "tenferro-prims/src/scalar_prims.rs": 6
+    "tenferro-prims/src/cpu/analytic.rs": 69,
+    "tenferro-prims/src/cpu/common.rs": 70,
+    "tenferro-prims/src/cpu/family_reduction.rs": 56,
+    "tenferro-prims/src/cpu/scalar.rs": 51,
+    "tenferro-prims/src/families/analytic.rs": 6,
+    "tenferro-prims/src/families/scalar.rs": 6
   }
 }

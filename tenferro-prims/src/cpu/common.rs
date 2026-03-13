@@ -8,7 +8,7 @@ use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
-use crate::typed_dispatch::matches_any_type_id;
+use crate::infra::typed_dispatch::matches_any_type_id;
 use crate::{for_each_index, validate_rank, validate_shape_count, validate_shape_eq};
 
 pub(crate) trait CpuScalarValue:

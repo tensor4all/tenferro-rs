@@ -3,7 +3,7 @@ use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
-use crate::typed_dispatch::{
+use crate::infra::typed_dispatch::{
     cast_scalar_value, cast_strided_view, cast_strided_view_mut, dispatch_standard_scalar_type,
 };
 

@@ -2,16 +2,16 @@ use tenferro_algebra::{Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::cpu::{tensor_to_view, tensor_to_view_mut};
-use crate::family_cpu_common::{
+use crate::cpu::common::{
     execute_binary_map, execute_unary_map, is_supported_ordered_real_type,
     is_supported_scalar_type, plan_reduction, validate_pointwise_shapes, CpuScalarValue,
 };
-use crate::family_cpu_reduction::{
+use crate::cpu::family_reduction::{
     execute_extrema_reduction, execute_mean_reduction, execute_prod_reduction,
     execute_sum_reduction,
 };
-use crate::typed_dispatch::{
+use crate::cpu::{tensor_to_view, tensor_to_view_mut};
+use crate::infra::typed_dispatch::{
     cast_scalar_value, cast_strided_view, cast_strided_view_mut, dispatch_complex_scalar_type,
     dispatch_real_scalar_type, dispatch_standard_scalar_type,
 };

@@ -170,21 +170,11 @@ extern crate cblas_inject as _;
 #[cfg(feature = "provider-src")]
 extern crate cblas_src as _;
 
-mod analytic_cpu;
-mod analytic_prims;
 mod cpu;
-mod family_cpu_common;
-mod family_cpu_reduction;
+mod families;
+mod infra;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
-mod plan_cache;
-mod registry;
-mod scalar_cpu;
-mod scalar_prims;
-mod semiring_context;
-mod semiring_core;
-mod semiring_fast_path;
-mod typed_dispatch;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.
@@ -196,16 +186,12 @@ mod cuda_ffi;
 mod gpu_stubs;
 
 #[doc(hidden)]
-pub use analytic_cpu::CpuAnalyticPlan;
-pub use analytic_prims::*;
-pub use cpu::*;
-pub use plan_cache::*;
+pub use cpu::CpuAnalyticPlan;
 #[doc(hidden)]
-pub use scalar_cpu::CpuScalarPlan;
-pub use scalar_prims::*;
-pub use semiring_context::*;
-pub use semiring_core::*;
-pub use semiring_fast_path::*;
+pub use cpu::CpuScalarPlan;
+pub use cpu::*;
+pub use families::*;
+pub use infra::*;
 
 #[cfg(feature = "cuda")]
 pub use cuda::*;
@@ -223,8 +209,6 @@ pub use gpu_stubs::CudaPlan;
 pub use gpu_stubs::RocmBackend;
 pub use gpu_stubs::RocmContext;
 pub use gpu_stubs::RocmPlan;
-
-pub use registry::*;
 
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};

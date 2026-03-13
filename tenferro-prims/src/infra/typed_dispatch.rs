@@ -52,7 +52,7 @@ pub(crate) use cast_scalar_value;
 macro_rules! dispatch_standard_scalar_type {
     ($generic:ty, $concrete:ident, $body:block) => {{
         let tid = std::any::TypeId::of::<$generic>();
-        $crate::typed_dispatch::dispatch_type_id!(
+        $crate::infra::typed_dispatch::dispatch_type_id!(
             tid,
             $concrete,
             [f64, f32, num_complex::Complex64, num_complex::Complex32],
@@ -66,7 +66,7 @@ pub(crate) use dispatch_standard_scalar_type;
 macro_rules! dispatch_real_scalar_type {
     ($generic:ty, $concrete:ident, $body:block) => {{
         let tid = std::any::TypeId::of::<$generic>();
-        $crate::typed_dispatch::dispatch_type_id!(tid, $concrete, [f64, f32], $body)
+        $crate::infra::typed_dispatch::dispatch_type_id!(tid, $concrete, [f64, f32], $body)
     }};
 }
 
@@ -75,7 +75,7 @@ pub(crate) use dispatch_real_scalar_type;
 macro_rules! dispatch_complex_scalar_type {
     ($generic:ty, $concrete:ident, $body:block) => {{
         let tid = std::any::TypeId::of::<$generic>();
-        $crate::typed_dispatch::dispatch_type_id!(
+        $crate::infra::typed_dispatch::dispatch_type_id!(
             tid,
             $concrete,
             [num_complex::Complex64, num_complex::Complex32],

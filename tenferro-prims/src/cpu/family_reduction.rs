@@ -6,7 +6,7 @@ use strided_view::{StridedArray, StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
-use crate::family_cpu_common::{execute_unary_map, CpuScalarValue};
+use crate::cpu::common::{execute_unary_map, CpuScalarValue};
 use crate::for_each_index;
 
 fn scalar_from_usize<S: CpuScalarValue>(value: usize) -> Result<S> {
