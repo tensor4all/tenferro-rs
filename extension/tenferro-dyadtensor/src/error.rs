@@ -56,6 +56,10 @@ pub enum Error {
     /// AD operation is not available for the requested mode.
     #[error("AD operation `{op}` is not supported for the provided inputs")]
     UnsupportedAdOp { op: &'static str },
+
+    /// Linalg operation is available only for dense tensor inputs.
+    #[error("linalg operation `{op}` requires dense tensor inputs")]
+    UnsupportedStructuredLinalg { op: &'static str },
 }
 
 /// Convenience result alias.

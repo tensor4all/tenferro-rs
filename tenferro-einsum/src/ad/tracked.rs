@@ -1,6 +1,5 @@
-use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use chainrules::{autograd, AdResult, Differentiable, TrackedValue, Variable};
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
@@ -18,14 +17,13 @@ use super::rules::einsum_frule_impl;
 /// # Examples
 ///
 /// ```ignore
-/// use std::cell::RefCell;
-/// use std::rc::Rc;
+/// use std::sync::{Arc, Mutex};
 /// use chainrules::Tape;
 /// use tenferro_algebra::Standard;
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
-/// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+/// let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 /// let tape = Tape::<tenferro_tensor::Tensor<f64>>::new();
 /// let a = tape.leaf(a_tensor);
 /// let b = tape.leaf(b_tensor);
@@ -33,29 +31,43 @@ use super::rules::einsum_frule_impl;
 /// let _ = out.node_id();
 /// ```
 pub fn tracked_einsum<Alg: 'static, Backend>(
-    ctx: Rc<RefCell<BackendContext<Alg, Backend>>>,
+    ctx: Arc<Mutex<BackendContext<Alg, Backend>>>,
     subscripts: &str,
     operands: &[&TrackedValue<Tensor<Alg::Scalar>>],
 ) -> AdResult<TrackedValue<Tensor<Alg::Scalar>>>
 where
-    Alg: Semiring,
+    Alg: Semiring + Send + Sync,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: EinsumBackend<Alg> + 'static,
+    Backend: EinsumBackend<Alg> + Send + Sync + 'static,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
+    BackendContext<Alg, Backend>: Send,
 {
     let subs = Subscripts::parse(subscripts)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.value()).collect();
-    let output = einsum::<Alg, Backend>(&mut *ctx.borrow_mut(), subscripts, &primals, None)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+    let output = einsum::<Alg, Backend>(
+        &mut *ctx.lock().map_err(|_| {
+            chainrules::AutodiffError::InvalidArgument(
+                "tracked_einsum backend context lock is poisoned".to_string(),
+            )
+        })?,
+        subscripts,
+        &primals,
+        None,
+    )
+    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
         operands.iter().map(|op| op.tangent()).collect();
     let tangent_out = if tangents.iter().any(Option::is_some) {
         Some(
             einsum_frule_impl::<Alg, Backend>(
-                &mut *ctx.borrow_mut(),
+                &mut *ctx.lock().map_err(|_| {
+                    chainrules::AutodiffError::InvalidArgument(
+                        "tracked_einsum backend context lock is poisoned".to_string(),
+                    )
+                })?,
                 &subs,
                 None,
                 &primals,
@@ -106,41 +118,54 @@ where
 /// # Examples
 ///
 /// ```ignore
-/// use std::cell::RefCell;
-/// use std::rc::Rc;
+/// use std::sync::{Arc, Mutex};
 /// use chainrules::Variable;
 /// use tenferro_algebra::Standard;
 /// use tenferro_einsum::variable_einsum;
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
-/// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+/// let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 /// let out = variable_einsum::<Standard<f64>, CpuBackend>(ctx, "ij,jk->ik", &[&a, &b]).unwrap();
 /// let _ = out.value();
 /// ```
 pub fn variable_einsum<Alg: 'static, Backend>(
-    ctx: Rc<RefCell<BackendContext<Alg, Backend>>>,
+    ctx: Arc<Mutex<BackendContext<Alg, Backend>>>,
     subscripts: &str,
     operands: &[&Variable<Tensor<Alg::Scalar>>],
 ) -> AdResult<Variable<Tensor<Alg::Scalar>>>
 where
-    Alg: Semiring,
+    Alg: Semiring + Send + Sync,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: EinsumBackend<Alg> + 'static,
+    Backend: EinsumBackend<Alg> + Send + Sync + 'static,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>> + 'static,
+    BackendContext<Alg, Backend>: Send,
 {
     let subs = Subscripts::parse(subscripts)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.value()).collect();
-    let output = einsum::<Alg, Backend>(&mut *ctx.borrow_mut(), subscripts, &primals, None)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+    let output = einsum::<Alg, Backend>(
+        &mut *ctx.lock().map_err(|_| {
+            chainrules::AutodiffError::InvalidArgument(
+                "variable_einsum backend context lock is poisoned".to_string(),
+            )
+        })?,
+        subscripts,
+        &primals,
+        None,
+    )
+    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
         operands.iter().map(|op| op.tangent()).collect();
     let tangent_out = if tangents.iter().any(Option::is_some) {
         Some(
             einsum_frule_impl::<Alg, Backend>(
-                &mut *ctx.borrow_mut(),
+                &mut *ctx.lock().map_err(|_| {
+                    chainrules::AutodiffError::InvalidArgument(
+                        "variable_einsum backend context lock is poisoned".to_string(),
+                    )
+                })?,
                 &subs,
                 None,
                 &primals,

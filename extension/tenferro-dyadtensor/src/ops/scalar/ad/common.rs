@@ -273,7 +273,7 @@ where
     T: GenericAdRuntimeValue,
     FPrimal: Fn(&Tensor<T>) -> Result<Tensor<T>>,
     FTangent: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
-    FPullback: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>> + 'static,
+    FPullback: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>> + Send + Sync + 'static,
 {
     let operands = [input];
     let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -328,6 +328,8 @@ where
     FPrimal: Fn(&Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
     FTangent: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<Tensor<T>>,
     FPullback: Fn(&Tensor<T>, &Tensor<T>, &Tensor<T>, &Tensor<T>) -> Result<(Tensor<T>, Tensor<T>)>
+        + Send
+        + Sync
         + 'static,
 {
     let operands = [lhs, rhs];

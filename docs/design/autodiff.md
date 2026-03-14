@@ -41,7 +41,7 @@ It does not provide an execution engine.
 - `DualValue<V>`: forward-mode value+tangent wrapper
 - `Variable<V>`: torch-like reverse-mode wrapper with `.grad()` / `.hvp()`
 - `BackwardOptions<V>`
-- `AutogradContext<V>`
+- `AutogradGraph<V>`
 
 There is no heterogeneous tape surface in the current design. A graph contains
 exactly one value type `V`.
@@ -57,7 +57,7 @@ Examples:
 The reverse-mode model is intentionally monomorphic.
 
 - Every `Tape<V>` contains only values of type `V`
-- Every `Variable<V>` in an `AutogradContext<V>` shares the same `V`
+- Every `Variable<V>` in an `AutogradGraph<V>` shares the same `V`
 - Downstream custom-type AD remains supported through `Differentiable`
   implementations and operation-specific rules
 
@@ -212,12 +212,12 @@ across unrelated roots such as `api/`, `dyn_types/`, and `reverse_tape/`.
 
 ## Context and Mutation Semantics
 
-- `AutogradContext<V>` is shared through `Arc<Mutex<_>>`
-- backward execution is single-threaded per context in this phase
+- `AutogradGraph<V>` is shared through `Arc<Mutex<_>>`
+- backward execution is single-threaded per graph in this phase
 - `Variable<V>::backward` and `backward_hvp` accumulate into stored buffers
 - `autograd::grad_*` query APIs do not mutate stored `.grad()` / `.hvp()`
   buffers
-- `zero_grad()` is explicit per leaf; there is no context-wide reset helper
+- `zero_grad()` is explicit per leaf; there is no graph-wide reset helper
 
 ## Custom Types
 

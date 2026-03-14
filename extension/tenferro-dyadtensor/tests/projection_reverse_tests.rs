@@ -1,14 +1,16 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{DynAdTensor, DynTape, Error};
+use tenferro_dyadtensor::{DynAdTensor, Error};
 
 mod support;
 
-use support::{reverse_rank0_c64, reverse_rank0_f64, reverse_vector_c64, scalar_c64, vector_f64};
+use support::{
+    reverse_rank0_c64, reverse_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64, scalar_c64,
+    vector_f64,
+};
 
 #[test]
 fn scalar_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape = DynTape::new();
-    let z = reverse_rank0_c64(Complex64::new(3.0, -4.0), &tape);
+    let z = reverse_rank0_c64(Complex64::new(3.0, -4.0));
 
     let err = match z.real_part() {
         Ok(_) => panic!("real_part reverse should be unsupported"),
@@ -19,8 +21,7 @@ fn scalar_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
 
 #[test]
 fn scalar_complex_imag_part_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape = DynTape::new();
-    let z = reverse_rank0_c64(Complex64::new(3.0, -4.0), &tape);
+    let z = reverse_rank0_c64(Complex64::new(3.0, -4.0));
 
     let err = match z.imag_part() {
         Ok(_) => panic!("imag_part reverse should be unsupported"),
@@ -31,9 +32,8 @@ fn scalar_complex_imag_part_reverse_is_unsupported_on_homogeneous_tape() {
 
 #[test]
 fn scalar_compose_complex_reverse_splits_cotangent_back_into_real_components() {
-    let tape = DynTape::new();
-    let re = reverse_rank0_f64(2.0, &tape);
-    let im = reverse_rank0_f64(-3.0, &tape);
+    let re = reverse_rank0_f64(2.0);
+    let im = reverse_rank0_f64_like(-3.0, &re);
 
     let z = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();
     let cotangent = DynAdTensor::new_primal(scalar_c64(Complex64::new(0.5, -1.25)));
@@ -66,11 +66,7 @@ fn scalar_compose_complex_reverse_splits_cotangent_back_into_real_components() {
 
 #[test]
 fn tensor_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape = DynTape::new();
-    let x = reverse_vector_c64(
-        &[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
-        &tape,
-    );
+    let x = reverse_vector_c64(&[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)]);
 
     let err = match x.real_part() {
         Ok(_) => panic!("real_part reverse should be unsupported"),

@@ -26,7 +26,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdEigenResult<T>> {
         let operands = [self.tensor];
-        ensure_dense_linalg_ad_inputs("eigen_ad_structured", &operands)?;
+        ensure_dense_linalg_inputs("eigen", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -188,7 +188,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdEigResult<T>> {
         let operands = [self.tensor];
-        ensure_dense_linalg_ad_inputs("eig_ad_structured", &operands)?;
+        ensure_dense_linalg_inputs("eig", &operands)?;
         if has_reverse(&operands) {
             return Err(Error::UnsupportedAdOp { op: "eig_ad" });
         }

@@ -4,6 +4,9 @@
 //! Core numeric tests are parameterized across f32, f64, and Complex64 via the
 //! `typed_einsum_tests!` macro at the bottom of this file.
 
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
+
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{
@@ -19,6 +22,14 @@ const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 const MEM: LogicalMemorySpace = LogicalMemorySpace::MainMemory;
 
 type S = Standard<f64>;
+
+fn poison_mutex<T>(mutex: &Arc<Mutex<T>>) {
+    let mutex = Arc::clone(mutex);
+    let _ = catch_unwind(AssertUnwindSafe(move || {
+        let _guard = mutex.lock().unwrap();
+        panic!("poison backend mutex");
+    }));
+}
 
 /// Helper: read a scalar (0-d) tensor value.
 fn scalar_val(t: &Tensor<f64>) -> f64 {
@@ -981,10 +992,9 @@ fn einsum_wrong_operand_count() {
 #[test]
 fn tracked_einsum_matmul_pullback() {
     use chainrules::Tape;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
     // Create tape and leaf tensors
     let tape = Tape::<Tensor<f64>>::new();
@@ -1043,7 +1053,7 @@ fn tracked_einsum_matmul_pullback() {
     // Numerical verification: d(loss)/dA = 2 * C @ B^T
     // C = A @ B
     let c_val = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ij,jk->ik",
         &[&a_data, &b_data],
         None,
@@ -1051,7 +1061,7 @@ fn tracked_einsum_matmul_pullback() {
     .expect("einsum for C");
     // grad_C = 2 * C (since loss = sum C_{ik}^2)
     let two_c = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ij,->ij",
         &[
             &c_val,
@@ -1061,13 +1071,21 @@ fn tracked_einsum_matmul_pullback() {
     )
     .expect("scale by 2");
     // grad_A = grad_C @ B^T = einsum("ik,jk->ij", [2*C, B])
-    let expected_ga =
-        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
-            .expect("expected grad_A");
+    let expected_ga = einsum::<S, CpuBackend>(
+        &mut ctx.lock().unwrap(),
+        "ik,jk->ij",
+        &[&two_c, &b_data],
+        None,
+    )
+    .expect("expected grad_A");
     // grad_B = A^T @ grad_C = einsum("ij,ik->jk", [A, 2*C])
-    let expected_gb =
-        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,ik->jk", &[&a_data, &two_c], None)
-            .expect("expected grad_B");
+    let expected_gb = einsum::<S, CpuBackend>(
+        &mut ctx.lock().unwrap(),
+        "ij,ik->jk",
+        &[&a_data, &two_c],
+        None,
+    )
+    .expect("expected grad_B");
 
     for i in 0..2 {
         for j in 0..3 {
@@ -1094,10 +1112,9 @@ fn tracked_einsum_matmul_pullback() {
 #[test]
 fn tracked_einsum_rejects_mixed_tapes() {
     use chainrules::Tape;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
     let tape1 = Tape::<Tensor<f64>>::new();
     let tape2 = Tape::<Tensor<f64>>::new();
@@ -1115,10 +1132,8 @@ fn tracked_einsum_rejects_mixed_tapes() {
 #[test]
 fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
     use chainrules::TrackedValue;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let a =
         TrackedValue::new(Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap());
     let b =
@@ -1129,6 +1144,77 @@ fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
     assert!(result.node_id().is_none());
     assert!(!result.requires_grad());
     assert_eq!(result.value().dims(), &[2, 2]);
+}
+
+#[test]
+fn tracked_einsum_rejects_invalid_subscripts() {
+    use chainrules::TrackedValue;
+
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let b = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+
+    let err = tracked_einsum::<S, CpuBackend>(ctx, "ij,jk", &[&a, &b])
+        .err()
+        .unwrap();
+    assert!(matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("->")));
+}
+
+#[test]
+fn tracked_einsum_rejects_poisoned_backend_context_on_entry() {
+    use chainrules::TrackedValue;
+
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let b = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    poison_mutex(&ctx);
+
+    let err = tracked_einsum::<S, CpuBackend>(ctx, "ij,jk->ik", &[&a, &b])
+        .err()
+        .unwrap();
+    assert!(
+        matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned"))
+    );
+}
+
+#[test]
+fn tracked_einsum_pullback_rejects_poisoned_backend_context() {
+    use chainrules::Tape;
+
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let tape = Tape::<Tensor<f64>>::new();
+    let a = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let b = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let out = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,ij->", &[&out, &out]).unwrap();
+
+    poison_mutex(&ctx);
+
+    let err = tape.pullback(&loss).err().unwrap();
+    assert!(
+        matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned"))
+    );
+}
+
+#[test]
+fn tracked_einsum_hvp_rejects_poisoned_backend_context() {
+    use chainrules::Tape;
+
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let tape = Tape::<Tensor<f64>>::new();
+    let mut a_data = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    a_data.set_fw_grad(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let a = tape.leaf(a_data);
+    let b = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let out = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,jk->ik", &[&a, &b]).unwrap();
+    let loss = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,ij->", &[&out, &out]).unwrap();
+
+    poison_mutex(&ctx);
+
+    let err = tape.hvp(&loss).err().unwrap();
+    assert!(
+        matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned"))
+    );
 }
 
 // ============================================================================
@@ -2293,10 +2379,9 @@ fn einsum_no_fw_grad_unchanged() {
 #[test]
 fn hvp_via_fw_grad_composition() {
     use chainrules::Tape;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
     // A = [[1, 3], [2, 4]] (col-major), B = [[5, 7], [6, 8]] (col-major)
     let mut a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
@@ -2320,18 +2405,22 @@ fn hvp_via_fw_grad_composition() {
 
     // grad_A should match 2*C @ B^T
     let c_val = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ij,jk->ik",
         &[&a_data, &b_data],
         None,
     )
     .unwrap();
     let two = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
-    let two_c =
-        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&c_val, &two], None).unwrap();
-    let expected_ga =
-        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ik,jk->ij", &[&two_c, &b_data], None)
-            .unwrap();
+    let two_c = einsum::<S, CpuBackend>(&mut ctx.lock().unwrap(), "ij,->ij", &[&c_val, &two], None)
+        .unwrap();
+    let expected_ga = einsum::<S, CpuBackend>(
+        &mut ctx.lock().unwrap(),
+        "ik,jk->ij",
+        &[&two_c, &b_data],
+        None,
+    )
+    .unwrap();
 
     // Verify grad_A primal
     let ga_data = ga.buffer().as_slice().unwrap();
@@ -2348,13 +2437,18 @@ fn hvp_via_fw_grad_composition() {
     // HVP: d(grad_A)/dt = 2*(dA@B)@B^T where dA = ones
     // dA@B = ones @ B = einsum("ij,jk->ik", ones, B)
     let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL);
-    let da_b = einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,jk->ik", &[&ones, &b_data], None)
-        .unwrap();
+    let da_b = einsum::<S, CpuBackend>(
+        &mut ctx.lock().unwrap(),
+        "ij,jk->ik",
+        &[&ones, &b_data],
+        None,
+    )
+    .unwrap();
     // 2*(dA@B)@B^T = einsum("ik,jk->ij", 2*dA_B, B)
     let two_da_b =
-        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,->ij", &[&da_b, &two], None).unwrap();
+        einsum::<S, CpuBackend>(&mut ctx.lock().unwrap(), "ij,->ij", &[&da_b, &two], None).unwrap();
     let expected_hvp = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ik,jk->ij",
         &[&two_da_b, &b_data],
         None,
@@ -2379,10 +2473,9 @@ fn hvp_via_fw_grad_composition() {
 #[test]
 fn hvp_via_leaf_with_tangent_tracks_einsum_direction() {
     use chainrules::Tape;
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
 
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
     let x = tape
         .leaf_with_tangent(

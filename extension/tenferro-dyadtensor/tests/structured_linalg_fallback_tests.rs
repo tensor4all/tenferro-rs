@@ -1,5 +1,5 @@
 use tenferro_dyadtensor::{
-    set_default_runtime, DynAdTensor, DynTape, Error, RuntimeContext, StructuredTensor,
+    set_default_runtime, DynAdTensor, Error, RuntimeContext, StructuredTensor,
 };
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -9,54 +9,53 @@ fn vector(values: &[f64]) -> Tensor<f64> {
 }
 
 #[test]
-fn structured_diag_input_can_flow_through_qr_via_internal_dense_fallback() {
+fn structured_diag_qr_primal_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let x = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
     );
 
-    let out = x.qr().unwrap();
-
-    assert!(out.q.is_dense());
-    assert!(out.r.is_dense());
-    assert_eq!(out.q.dims(), &[2, 2]);
-    assert_eq!(out.r.dims(), &[2, 2]);
+    let err = match x.qr() {
+        Ok(_) => panic!("structured qr should be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::UnsupportedStructuredLinalg { op } if op == "qr"));
 }
 
 #[test]
-fn structured_diag_input_can_flow_through_inv_via_internal_dense_fallback() {
+fn structured_diag_inv_primal_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let x = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 4.0]), 2).unwrap(),
     );
 
-    let out = x.inv().unwrap();
-
-    assert!(out.is_dense());
-    assert_eq!(out.dims(), &[2, 2]);
+    let err = match x.inv() {
+        Ok(_) => panic!("structured inv should be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::UnsupportedStructuredLinalg { op } if op == "inv"));
 }
 
 #[test]
-fn structured_diag_input_can_flow_through_solve_via_internal_dense_fallback() {
+fn structured_diag_solve_primal_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let a = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 4.0]), 2).unwrap(),
     );
     let b = DynAdTensor::new_primal(vector(&[6.0, 8.0]));
 
-    let out = a.solve(&b).unwrap();
-
-    assert!(out.is_dense());
-    assert_eq!(out.dims(), &[2]);
+    let err = match a.solve(&b) {
+        Ok(_) => panic!("structured solve should be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::UnsupportedStructuredLinalg { op } if op == "solve"));
 }
 
 #[test]
 fn structured_diag_qr_reverse_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
     let structured_x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 3.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
 
@@ -64,16 +63,14 @@ fn structured_diag_qr_reverse_rejects_non_dense_input() {
         Ok(_) => panic!("structured qr reverse should be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "qr_ad_structured"));
+    assert!(matches!(err, Error::UnsupportedStructuredLinalg { op } if op == "qr"));
 }
 
 #[test]
 fn structured_diag_inv_reverse_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
     let structured_x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 4.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
 
@@ -81,23 +78,23 @@ fn structured_diag_inv_reverse_rejects_non_dense_input() {
         Ok(_) => panic!("structured inv reverse should be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "inv_ad_structured"));
+    assert!(matches!(err, Error::UnsupportedStructuredLinalg { op } if op == "inv"));
 }
 
 #[test]
 fn structured_diag_solve_reverse_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
     let structured_a = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 4.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
-    let structured_b = DynAdTensor::new_reverse_leaf(vector(&[6.0, 8.0]), &tape).unwrap();
+    let structured_b = structured_a
+        .new_reverse_sibling(vector(&[6.0, 8.0]))
+        .unwrap();
 
     let err = match structured_a.solve(&structured_b) {
         Ok(_) => panic!("structured solve reverse should be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "solve_ad_structured"));
+    assert!(matches!(err, Error::UnsupportedStructuredLinalg { op } if op == "solve"));
 }

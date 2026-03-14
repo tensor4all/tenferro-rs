@@ -1,10 +1,12 @@
 use crate::{
     engine::effective_retain_graph, engine::VariableNodeKind, AdResult, AutodiffError,
-    AutogradContext, BackwardOptions, NodeId, ReverseRule, Variable,
+    BackwardOptions, NodeId, ReverseRule, Variable,
 };
 use std::marker::PhantomData;
 use std::ops::{Add, Mul};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use super::autograd_common::{merge_context_for_binary_op, merge_context_for_multi_op};
 
 struct AddRule<V: crate::Differentiable<Tangent = V> + Clone> {
     lhs: Option<NodeId>,
@@ -14,7 +16,7 @@ struct AddRule<V: crate::Differentiable<Tangent = V> + Clone> {
 
 impl<V> ReverseRule<V> for AddRule<V>
 where
-    V: crate::Differentiable<Tangent = V> + Clone,
+    V: crate::Differentiable<Tangent = V> + Clone + Send + Sync,
 {
     fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<(NodeId, V::Tangent)>> {
         let mut out = Vec::new();
@@ -63,7 +65,7 @@ struct SquareRule<V: crate::Differentiable<Tangent = V> + Clone + Add<Output = V
 
 impl<V> ReverseRule<V> for SquareRule<V>
 where
-    V: crate::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V>,
+    V: crate::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V> + Send + Sync,
 {
     fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<(NodeId, V::Tangent)>> {
         Ok(vec![(self.input, cotangent.clone() * self.two_x.clone())])
@@ -87,59 +89,6 @@ where
     }
 }
 
-fn context_id<V: crate::Differentiable>(ctx: &Arc<Mutex<AutogradContext<V>>>) -> AdResult<u64> {
-    ctx.lock().map(|guard| guard.id()).map_err(|_| {
-        AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
-    })
-}
-
-fn merge_context_for_multi_op<V: crate::Differentiable>(
-    inputs: &[&Variable<V>],
-) -> AdResult<Option<Arc<Mutex<AutogradContext<V>>>>> {
-    if inputs.iter().all(|input| !input.requires_grad()) {
-        return Ok(None);
-    }
-
-    let mut picked: Option<(u64, Arc<Mutex<AutogradContext<V>>>)> = None;
-    for ctx in inputs
-        .iter()
-        .filter(|input| input.requires_grad())
-        .filter_map(|input| input.context.as_ref())
-    {
-        let id = context_id(ctx)?;
-        match &picked {
-            None => picked = Some((id, Arc::clone(ctx))),
-            Some((picked_id, _)) if *picked_id == id => {}
-            Some(_) => {
-                return Err(AutodiffError::InvalidArgument(
-                    "mixed autograd contexts in one operation; use Variable::new_in(..., same_ctx)"
-                        .to_string(),
-                ))
-            }
-        }
-    }
-
-    let Some((picked_id, picked_ctx)) = picked else {
-        return Ok(None);
-    };
-
-    let any_tracked_on_picked = inputs.iter().any(|input| {
-        input.requires_grad() && input.context_id() == Some(picked_id) && input.node_id.is_some()
-    });
-    if any_tracked_on_picked {
-        Ok(Some(picked_ctx))
-    } else {
-        Ok(None)
-    }
-}
-
-fn merge_context_for_binary_op<V: crate::Differentiable>(
-    lhs: &Variable<V>,
-    rhs: &Variable<V>,
-) -> AdResult<Option<Arc<Mutex<AutogradContext<V>>>>> {
-    merge_context_for_multi_op(&[lhs, rhs])
-}
-
 /// Records a custom operation on the monomorphic `Variable` graph.
 ///
 /// This helper is intended for operation crates (for example einsum) that
@@ -148,7 +97,7 @@ fn merge_context_for_binary_op<V: crate::Differentiable>(
 /// # Errors
 ///
 /// Returns [`AutodiffError::InvalidArgument`] when inputs span different
-/// autograd contexts.
+/// autograd graphs.
 ///
 /// # Examples
 ///
@@ -163,7 +112,7 @@ pub fn record_op<V>(
     tangent: Option<V::Tangent>,
 ) -> AdResult<Variable<V>>
 where
-    V: crate::Differentiable + 'static,
+    V: crate::Differentiable + Send + Sync + 'static,
     V::Tangent: Clone,
 {
     let out_ctx = merge_context_for_multi_op(inputs)?;
@@ -171,7 +120,7 @@ where
 
     if let Some(ctx) = out_ctx.as_ref() {
         let mut guard = ctx.lock().map_err(|_| {
-            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            AutodiffError::InvalidArgument("autograd graph lock is poisoned".to_string())
         })?;
         out_node = Some(guard.record_op(rule, tangent.clone(), VariableNodeKind::Custom));
     }
@@ -196,10 +145,10 @@ where
 /// # Examples
 ///
 /// ```
-/// use chainrules::{autograd, AutogradContext, Variable};
+/// use chainrules::{autograd, AutogradGraph, Variable};
 /// use std::sync::Arc;
 ///
-/// let ctx = AutogradContext::<f64>::new();
+/// let ctx = AutogradGraph::<f64>::new();
 /// let a = Variable::new_in(1.0_f64, Arc::clone(&ctx)).requires_grad_(true).unwrap();
 /// let b = Variable::new_in(2.0_f64, Arc::clone(&ctx)).requires_grad_(true).unwrap();
 /// let c = autograd::add(&a, &b).unwrap();
@@ -207,7 +156,7 @@ where
 /// ```
 pub fn add<V>(lhs: &Variable<V>, rhs: &Variable<V>) -> AdResult<Variable<V>>
 where
-    V: crate::Differentiable<Tangent = V> + Clone + Add<Output = V> + 'static,
+    V: crate::Differentiable<Tangent = V> + Clone + Add<Output = V> + Send + Sync + 'static,
 {
     let out_ctx = merge_context_for_binary_op(lhs, rhs)?;
     let out_value = lhs.value.clone() + rhs.value.clone();
@@ -223,7 +172,7 @@ where
         let lhs_ctx = lhs.context_id();
         let rhs_ctx = rhs.context_id();
         let mut guard = ctx.lock().map_err(|_| {
-            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            AutodiffError::InvalidArgument("autograd graph lock is poisoned".to_string())
         })?;
         let ctx_id = guard.id();
         let lhs_dep = if lhs.requires_grad() && lhs_ctx == Some(ctx_id) {
@@ -268,7 +217,13 @@ where
 /// ```
 pub fn square<V>(input: &Variable<V>) -> AdResult<Variable<V>>
 where
-    V: crate::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V> + 'static,
+    V: crate::Differentiable<Tangent = V>
+        + Clone
+        + Add<Output = V>
+        + Mul<Output = V>
+        + Send
+        + Sync
+        + 'static,
 {
     let out_ctx = if input.requires_grad() {
         input.context.as_ref().map(Arc::clone)
@@ -285,7 +240,7 @@ where
     if let Some(ctx) = out_ctx.as_ref() {
         let input_ctx = input.context_id();
         let mut guard = ctx.lock().map_err(|_| {
-            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            AutodiffError::InvalidArgument("autograd graph lock is poisoned".to_string())
         })?;
         let ctx_id = guard.id();
         if input.requires_grad() && input_ctx == Some(ctx_id) {
@@ -343,7 +298,7 @@ where
     }
     let Some(ctx) = output.context.as_ref() else {
         return Err(AutodiffError::InvalidArgument(
-            "grad_tangent requires output connected to an autograd context".to_string(),
+            "grad_tangent requires output connected to an autograd graph".to_string(),
         ));
     };
     let Some(output_node) = output.node_id else {
@@ -358,14 +313,14 @@ where
     }
 
     let mut guard = ctx.lock().map_err(|_| {
-        AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        AutodiffError::InvalidArgument("autograd graph lock is poisoned".to_string())
     })?;
     guard.ensure_alive()?;
     for input in inputs {
         if let Some(input_ctx) = input.context.as_ref() {
             if !Arc::ptr_eq(input_ctx, ctx) {
                 return Err(AutodiffError::InvalidArgument(
-                    "mixed autograd contexts in grad query".to_string(),
+                    "mixed autograd graphs in grad query".to_string(),
                 ));
             }
         }
@@ -409,7 +364,13 @@ pub fn grad_variable<V>(
     options: BackwardOptions<V>,
 ) -> AdResult<Vec<Variable<V>>>
 where
-    V: crate::Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V> + 'static,
+    V: crate::Differentiable<Tangent = V>
+        + Clone
+        + Add<Output = V>
+        + Mul<Output = V>
+        + Send
+        + Sync
+        + 'static,
 {
     let retain = effective_retain_graph(options.retain_graph, options.create_graph);
     if !output.requires_grad() {
@@ -419,7 +380,7 @@ where
     }
     let Some(ctx) = output.context.as_ref() else {
         return Err(AutodiffError::InvalidArgument(
-            "grad_variable requires output connected to an autograd context".to_string(),
+            "grad_variable requires output connected to an autograd graph".to_string(),
         ));
     };
     let Some(output_node) = output.node_id else {
@@ -434,14 +395,14 @@ where
     }
 
     let guard = ctx.lock().map_err(|_| {
-        AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+        AutodiffError::InvalidArgument("autograd graph lock is poisoned".to_string())
     })?;
     guard.ensure_alive()?;
     for input in inputs {
         if let Some(input_ctx) = input.context.as_ref() {
             if !Arc::ptr_eq(input_ctx, ctx) {
                 return Err(AutodiffError::InvalidArgument(
-                    "mixed autograd contexts in grad query".to_string(),
+                    "mixed autograd graphs in grad query".to_string(),
                 ));
             }
         }
@@ -483,7 +444,7 @@ where
 
     if !retain {
         let mut guard = ctx.lock().map_err(|_| {
-            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
+            AutodiffError::InvalidArgument("autograd graph lock is poisoned".to_string())
         })?;
         guard.free_graph();
     }

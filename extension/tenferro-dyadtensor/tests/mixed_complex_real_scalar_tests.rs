@@ -1,10 +1,10 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape};
+use tenferro_dyadtensor::{AdMode, DynAdTensor};
 use tenferro_tensor::Tensor;
 
 mod support;
 
-use support::{forward_rank0_f64, reverse_rank0_f64, reverse_vector_c64, vector_c64};
+use support::{forward_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64, vector_c64};
 
 fn c64_vec(values: &[Complex64]) -> Tensor<Complex64> {
     vector_c64(values)
@@ -87,12 +87,8 @@ fn c64_tensor_axpby_accepts_real_coefficients() {
 
 #[test]
 fn c64_tensor_scale_reverse_casts_back_scalar_gradient_to_real_dtype() {
-    let tape = DynTape::new();
-    let x = reverse_vector_c64(
-        &[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)],
-        &tape,
-    );
-    let a = reverse_rank0_f64(2.0_f64, &tape);
+    let x = reverse_vector_c64(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]);
+    let a = reverse_rank0_f64_like(2.0_f64, &x);
 
     let out = x.scale(&a).unwrap();
     assert_eq!(out.mode(), AdMode::Reverse);
@@ -130,12 +126,8 @@ fn c64_tensor_scale_reverse_casts_back_scalar_gradient_to_real_dtype() {
 
 #[test]
 fn c64_tensor_div_scalar_reverse_casts_back_scalar_gradient_to_real_dtype() {
-    let tape = DynTape::new();
-    let x = reverse_vector_c64(
-        &[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)],
-        &tape,
-    );
-    let a = reverse_rank0_f64(2.0_f64, &tape);
+    let x = reverse_vector_c64(&[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)]);
+    let a = reverse_rank0_f64_like(2.0_f64, &x);
 
     let out = x.div_scalar(&a).unwrap();
     assert_eq!(out.mode(), AdMode::Reverse);

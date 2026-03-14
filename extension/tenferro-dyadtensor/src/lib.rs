@@ -16,8 +16,9 @@
 //! ```
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`].
-//! Reverse-mode graphs are created through [`DynTape`] and are exposed back to
-//! users through dynamic helpers on [`DynAdTensor`].
+//! Reverse-mode leaves are created through [`DynAdTensor::new_reverse_leaf`] and
+//! [`DynAdTensor::new_reverse_sibling`], while pullbacks are exposed back
+//! through dynamic helpers on [`DynAdTensor`].
 //!
 //! Module map:
 //!
@@ -40,7 +41,7 @@ mod traits;
 pub(crate) use core::DynTensorTyped;
 pub use core::{
     AdMode, DynAdEigResult, DynAdEigenResult, DynAdLstsqResult, DynAdLuResult, DynAdQrResult,
-    DynAdSlogdetResult, DynAdSvdResult, DynAdTensor, DynScalar, DynTape, NodeId, ScalarType,
+    DynAdSlogdetResult, DynAdSvdResult, DynAdTensor, DynScalar, NodeId, ScalarType,
 };
 pub(crate) use core::{AdScalar, AdTensor, AdValue, DynTensor};
 pub use error::{Error, Result};

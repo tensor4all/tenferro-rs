@@ -241,13 +241,14 @@ impl<T: Scalar> AdTensor<T> {
     pub(crate) fn reverse_handle(&self) -> Option<(ChainNodeId, Tape<DynTensor>)> {
         self.as_tracked().map(|value: &TrackedValue<DynTensor>| {
             (
-                value
-                    .node_id()
-                    .expect("reverse values always carry a node id"),
-                value
-                    .tape()
-                    .cloned()
-                    .expect("reverse values always carry a tape"),
+                match value.node_id() {
+                    Some(node) => node,
+                    None => unreachable!("reverse values always carry a node id"),
+                },
+                match value.tape().cloned() {
+                    Some(tape) => tape,
+                    None => unreachable!("reverse values always carry a tape"),
+                },
             )
         })
     }
@@ -261,13 +262,14 @@ impl<T: Scalar> AdTensor<T> {
             },
             TensorAdState::Reverse(value) => AdTensorSnapshot::Reverse {
                 primal: value.primal.clone(),
-                node: public_node_id(value.tracked.node_id())
-                    .expect("reverse values always carry a node id"),
-                tape: value
-                    .tracked
-                    .tape()
-                    .cloned()
-                    .expect("reverse values always carry a tape"),
+                node: match public_node_id(value.tracked.node_id()) {
+                    Some(node) => node,
+                    None => unreachable!("reverse values always carry a node id"),
+                },
+                tape: match value.tracked.tape().cloned() {
+                    Some(tape) => tape,
+                    None => unreachable!("reverse values always carry a tape"),
+                },
                 tangent: value.tangent.clone(),
             },
         }
@@ -392,29 +394,32 @@ impl<T: Scalar + DynTensorTyped> Clone for AdTensor<T> {
     fn clone(&self) -> Self {
         match &self.0 {
             TensorAdState::Primal(value) => Self::new_primal(value.clone()),
-            TensorAdState::Forward { primal, tangent } => {
-                Self::new_forward(primal.clone(), tangent.clone())
-                    .expect("forward clone should preserve valid structured layout")
-            }
+            TensorAdState::Forward { primal, tangent } => Self(TensorAdState::Forward {
+                primal: primal.clone(),
+                tangent: tangent.clone(),
+            }),
             TensorAdState::Reverse(value) => {
-                let tape = value
-                    .tracked
-                    .tape()
-                    .cloned()
-                    .expect("reverse values always carry a tape");
-                let node = value
-                    .tracked
-                    .node_id()
-                    .expect("reverse values always carry a node id");
-                let tracked = tape
-                    .tracked_existing(
-                        node,
-                        T::into_dyn(value.primal.clone()),
-                        value.tangent.clone().map(T::into_dyn),
-                    )
-                    .expect("reverse clone should preserve valid tracked value");
-                Self::from_reverse_state(tracked, value.primal.clone(), value.tangent.clone())
-                    .expect("reverse clone should preserve valid structured layout")
+                let tape = match value.tracked.tape().cloned() {
+                    Some(tape) => tape,
+                    None => unreachable!("reverse values always carry a tape"),
+                };
+                let node = match value.tracked.node_id() {
+                    Some(node) => node,
+                    None => unreachable!("reverse values always carry a node id"),
+                };
+                let tracked = match tape.tracked_existing(
+                    node,
+                    T::into_dyn(value.primal.clone()),
+                    value.tangent.clone().map(T::into_dyn),
+                ) {
+                    Ok(tracked) => tracked,
+                    Err(_) => unreachable!("reverse clone should preserve valid tracked value"),
+                };
+                Self(TensorAdState::Reverse(ReverseTensorState {
+                    tracked,
+                    primal: value.primal.clone(),
+                    tangent: value.tangent.clone(),
+                }))
             }
         }
     }

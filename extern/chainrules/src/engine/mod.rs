@@ -5,7 +5,7 @@ mod tape;
 mod tracked;
 mod variable;
 
-pub use context::AutogradContext;
+pub use context::AutogradGraph;
 pub(crate) use context::VariableNodeKind;
 pub use forward::DualValue;
 pub use results::{Gradients, HvpResult, PullbackPlan};

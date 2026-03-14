@@ -5,11 +5,19 @@ use crate::core::DynTensorTyped;
 use crate::structured::StructuredTensor;
 use crate::{DynTensor, NodeId, Result};
 
-pub(crate) type PullbackRule<T> =
-    Box<dyn Fn(&StructuredTensor<T>) -> Result<Vec<(NodeId, StructuredTensor<T>)>> + 'static>;
+pub(crate) type PullbackRule<T> = Box<
+    dyn Fn(&StructuredTensor<T>) -> Result<Vec<(NodeId, StructuredTensor<T>)>>
+        + Send
+        + Sync
+        + 'static,
+>;
 
-pub(crate) type MixedPullbackRule<TOut, TIn> =
-    Box<dyn Fn(&StructuredTensor<TOut>) -> Result<Vec<(NodeId, StructuredTensor<TIn>)>> + 'static>;
+pub(crate) type MixedPullbackRule<TOut, TIn> = Box<
+    dyn Fn(&StructuredTensor<TOut>) -> Result<Vec<(NodeId, StructuredTensor<TIn>)>>
+        + Send
+        + Sync
+        + 'static,
+>;
 
 struct TensorRuleAdapter<T: DynTensorTyped> {
     rule: PullbackRule<T>,

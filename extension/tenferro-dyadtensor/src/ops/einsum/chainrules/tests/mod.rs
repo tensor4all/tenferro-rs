@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::{Arc, Mutex};
 use tenferro_device::LogicalMemorySpace;
 use tenferro_prims::CpuBackend;
 use tenferro_prims::CpuContext;
@@ -17,7 +18,7 @@ fn get(t: &Tensor<f64>, idx: &[usize]) -> f64 {
 
 #[test]
 fn variable_einsum_backward_and_hvp_flow() {
-    let runtime_ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let runtime_ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let ad_ctx = context::<f64>();
 
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
@@ -61,7 +62,7 @@ fn variable_einsum_backward_and_hvp_flow() {
 
 #[test]
 fn grad_tangent_is_side_effect_free_and_zeros_non_grad_leaf() {
-    let runtime_ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let runtime_ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let ad_ctx = context::<f64>();
 
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)

@@ -34,7 +34,7 @@ macro_rules! run_unary_tensor_ad {
         rrule = |$rrule_ctx:ident, $rrule_tensor:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
     ) => {{
         let operands = [$input];
-        ensure_dense_linalg_ad_inputs(concat!($op_name, "_structured"), &operands)?;
+        ensure_dense_linalg_inputs($op_name, &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) =
             $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(
@@ -124,7 +124,7 @@ macro_rules! run_binary_tensor_ad {
         rrule = |$rrule_ctx:ident, $rrule_lhs:ident, $rrule_rhs:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
     ) => {{
         let operands = [$lhs, $rhs];
-        ensure_dense_linalg_ad_inputs(concat!($op_name, "_structured"), &operands)?;
+        ensure_dense_linalg_inputs($op_name, &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let ((lhs_primal, lhs_tangent), (rhs_primal, rhs_tangent)) =
             $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(

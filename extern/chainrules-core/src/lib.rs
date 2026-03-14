@@ -291,7 +291,7 @@ pub enum SavePolicy {
 /// assert_eq!(grads[0], (NodeId::new(0), 5.0)); // da = cotangent * b
 /// assert_eq!(grads[1], (NodeId::new(1), 3.0)); // db = cotangent * a
 /// ```
-pub trait ReverseRule<V: Differentiable> {
+pub trait ReverseRule<V: Differentiable>: Send + Sync {
     /// Computes input cotangents from an output cotangent (pullback).
     fn pullback(&self, cotangent: &V::Tangent) -> AdResult<Vec<PullbackEntry<V>>>;
 
@@ -362,7 +362,7 @@ pub trait ReverseRule<V: Differentiable> {
 /// let result = rule.pushforward(&[Some(&1.0), Some(&1.0)]).unwrap();
 /// assert_eq!(result, 8.0);
 /// ```
-pub trait ForwardRule<V: Differentiable> {
+pub trait ForwardRule<V: Differentiable>: Send + Sync {
     /// Computes output tangent from input tangents (pushforward).
     fn pushforward(&self, tangents: &[Option<&V::Tangent>]) -> AdResult<V::Tangent>;
 }

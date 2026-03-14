@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use num_complex::Complex64;
-use tenferro_dyadtensor::{DynAdTensor, DynTape, StructuredTensor};
+use tenferro_dyadtensor::{DynAdTensor, StructuredTensor};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 pub(crate) fn vector_f64(values: &[f64]) -> Tensor<f64> {
@@ -36,20 +36,36 @@ pub(crate) fn primal_rank0_c64(primal: Complex64) -> DynAdTensor {
     DynAdTensor::new_primal(scalar_c64(primal))
 }
 
-pub(crate) fn reverse_rank0_f64(primal: f64, tape: &DynTape) -> DynAdTensor {
-    DynAdTensor::new_reverse_leaf(scalar_f64(primal), tape).unwrap()
+pub(crate) fn reverse_rank0_f64(primal: f64) -> DynAdTensor {
+    DynAdTensor::new_reverse_leaf(scalar_f64(primal)).unwrap()
 }
 
-pub(crate) fn reverse_rank0_c64(primal: Complex64, tape: &DynTape) -> DynAdTensor {
-    DynAdTensor::new_reverse_leaf(scalar_c64(primal), tape).unwrap()
+pub(crate) fn reverse_rank0_f64_like(primal: f64, anchor: &DynAdTensor) -> DynAdTensor {
+    anchor.new_reverse_sibling(scalar_f64(primal)).unwrap()
 }
 
-pub(crate) fn reverse_vector_f64(values: &[f64], tape: &DynTape) -> DynAdTensor {
-    DynAdTensor::new_reverse_leaf(vector_f64(values), tape).unwrap()
+pub(crate) fn reverse_rank0_c64(primal: Complex64) -> DynAdTensor {
+    DynAdTensor::new_reverse_leaf(scalar_c64(primal)).unwrap()
 }
 
-pub(crate) fn reverse_vector_c64(values: &[Complex64], tape: &DynTape) -> DynAdTensor {
-    DynAdTensor::new_reverse_leaf(vector_c64(values), tape).unwrap()
+pub(crate) fn reverse_rank0_c64_like(primal: Complex64, anchor: &DynAdTensor) -> DynAdTensor {
+    anchor.new_reverse_sibling(scalar_c64(primal)).unwrap()
+}
+
+pub(crate) fn reverse_vector_f64(values: &[f64]) -> DynAdTensor {
+    DynAdTensor::new_reverse_leaf(vector_f64(values)).unwrap()
+}
+
+pub(crate) fn reverse_vector_f64_like(values: &[f64], anchor: &DynAdTensor) -> DynAdTensor {
+    anchor.new_reverse_sibling(vector_f64(values)).unwrap()
+}
+
+pub(crate) fn reverse_vector_c64(values: &[Complex64]) -> DynAdTensor {
+    DynAdTensor::new_reverse_leaf(vector_c64(values)).unwrap()
+}
+
+pub(crate) fn reverse_vector_c64_like(values: &[Complex64], anchor: &DynAdTensor) -> DynAdTensor {
+    anchor.new_reverse_sibling(vector_c64(values)).unwrap()
 }
 
 pub(crate) fn rank0_value_f64(tensor: &StructuredTensor<f64>) -> f64 {

@@ -1,5 +1,5 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_dyadtensor::{set_default_runtime, DynAdTensor, DynTape, RuntimeContext, ScalarType};
+use tenferro_dyadtensor::{set_default_runtime, DynAdTensor, RuntimeContext, ScalarType};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -91,18 +91,15 @@ fn make_c64_rhs() -> DynAdTensor {
 }
 
 #[test]
-fn dyntape_public_wrapper_exposes_ids_and_same_tape() {
-    let tape_a = DynTape::new();
-    let tape_b = DynTape::new();
-    let tape_default = DynTape::default();
-    let tape_default_clone = tape_default.clone();
+fn dynadtensor_reverse_graph_helpers_expose_same_and_distinct_graphs() {
+    let tape_a = DynAdTensor::new_reverse_leaf(scalar_f64(1.0)).unwrap();
+    let tape_a_peer = tape_a.new_reverse_sibling(scalar_f64(2.0)).unwrap();
+    let tape_b = DynAdTensor::new_reverse_leaf(scalar_f64(3.0)).unwrap();
 
-    assert!(tape_a.same_tape(&tape_a));
-    assert!(tape_b.same_tape(&tape_b));
-    assert!(!tape_a.same_tape(&tape_b));
-    assert_ne!(tape_a.id(), tape_b.id());
-    assert!(tape_default.same_tape(&tape_default_clone));
-    assert_eq!(tape_default.id(), tape_default_clone.id());
+    assert!(tape_a.shares_reverse_graph(&tape_a_peer));
+    assert!(!tape_a.shares_reverse_graph(&tape_b));
+    assert_eq!(tape_a.tape_id(), tape_a_peer.tape_id());
+    assert_ne!(tape_a.tape_id(), tape_b.tape_id());
 }
 
 #[test]
@@ -391,11 +388,8 @@ fn dynadtensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
 
 #[test]
 fn dynadtensor_dynamic_pullback_wrapper_covers_success_and_error_paths() {
-    let tape_a = DynTape::new();
-    let tape_b = DynTape::new();
-
-    let x = DynAdTensor::new_reverse_leaf(vector_f64(&[1.0, 2.0]), &tape_a).unwrap();
-    let alpha = DynAdTensor::new_reverse_leaf(scalar_f64(3.0), &tape_a).unwrap();
+    let x = DynAdTensor::new_reverse_leaf(vector_f64(&[1.0, 2.0])).unwrap();
+    let alpha = x.new_reverse_sibling(scalar_f64(3.0)).unwrap();
     let out = x.scale(&alpha).unwrap();
     let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, 1.25]));
 
@@ -416,7 +410,7 @@ fn dynadtensor_dynamic_pullback_wrapper_covers_success_and_error_paths() {
         matches!(err, tenferro_dyadtensor::Error::InvalidAdTensor { message } if message.contains("requires cotangent dtype"))
     );
 
-    let other = DynAdTensor::new_reverse_leaf(scalar_f64(2.0), &tape_b).unwrap();
+    let other = DynAdTensor::new_reverse_leaf(scalar_f64(2.0)).unwrap();
     let err = match out.pullback_wrt(&cotangent, &[&other]) {
         Ok(_) => panic!("pullback should reject tensors from a different tape"),
         Err(err) => err,
@@ -450,34 +444,33 @@ fn dynadtensor_dynamic_pullback_wrapper_covers_all_dtype_variants() {
         assert_eq!(grads[1].as_ref().unwrap().scalar_type(), expected_dtype);
     }
 
-    let tape_f32 = DynTape::new();
-    let x_f32 = DynAdTensor::new_reverse_leaf(vector_f32(&[1.0, 2.0]), &tape_f32).unwrap();
-    let alpha_f32 = DynAdTensor::new_reverse_leaf(scalar_f32(3.0), &tape_f32).unwrap();
+    let x_f32 = DynAdTensor::new_reverse_leaf(vector_f32(&[1.0, 2.0])).unwrap();
+    let alpha_f32 = x_f32.new_reverse_sibling(scalar_f32(3.0)).unwrap();
     let cotangent_f32 = DynAdTensor::new_primal(vector_f32(&[0.5, 1.25]));
     exercise_scale_pullback(x_f32, alpha_f32, cotangent_f32, ScalarType::F32);
 
-    let tape_c32 = DynTape::new();
-    let x_c32 = DynAdTensor::new_reverse_leaf(
-        vector_c32(&[Complex32::new(1.0, 0.5), Complex32::new(-2.0, 1.0)]),
-        &tape_c32,
-    )
+    let x_c32 = DynAdTensor::new_reverse_leaf(vector_c32(&[
+        Complex32::new(1.0, 0.5),
+        Complex32::new(-2.0, 1.0),
+    ]))
     .unwrap();
-    let alpha_c32 =
-        DynAdTensor::new_reverse_leaf(scalar_c32(Complex32::new(0.5, -1.0)), &tape_c32).unwrap();
+    let alpha_c32 = x_c32
+        .new_reverse_sibling(scalar_c32(Complex32::new(0.5, -1.0)))
+        .unwrap();
     let cotangent_c32 = DynAdTensor::new_primal(vector_c32(&[
         Complex32::new(0.25, -0.5),
         Complex32::new(1.0, 0.75),
     ]));
     exercise_scale_pullback(x_c32, alpha_c32, cotangent_c32, ScalarType::C32);
 
-    let tape_c64 = DynTape::new();
-    let x_c64 = DynAdTensor::new_reverse_leaf(
-        vector_c64(&[Complex64::new(1.0, -0.5), Complex64::new(2.0, 1.5)]),
-        &tape_c64,
-    )
+    let x_c64 = DynAdTensor::new_reverse_leaf(vector_c64(&[
+        Complex64::new(1.0, -0.5),
+        Complex64::new(2.0, 1.5),
+    ]))
     .unwrap();
-    let alpha_c64 =
-        DynAdTensor::new_reverse_leaf(scalar_c64(Complex64::new(-1.5, 0.25)), &tape_c64).unwrap();
+    let alpha_c64 = x_c64
+        .new_reverse_sibling(scalar_c64(Complex64::new(-1.5, 0.25)))
+        .unwrap();
     let cotangent_c64 = DynAdTensor::new_primal(vector_c64(&[
         Complex64::new(0.5, 0.0),
         Complex64::new(-0.75, 1.25),

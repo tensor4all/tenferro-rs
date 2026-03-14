@@ -8,7 +8,22 @@ use super::layout::{
     take_prefix_ad_tensor_typed,
 };
 use super::DynAdTensor;
-use crate::{AdMode, AdTensor, DynTape, DynTensor, NodeId, Result, StructuredTensor};
+use crate::{AdMode, AdTensor, DynTensor, Error, NodeId, Result, StructuredTensor};
+
+fn reverse_tape_from_anchor(
+    anchor: &DynAdTensor,
+    op_name: &'static str,
+) -> Result<Tape<DynTensor>> {
+    let tape = match anchor {
+        DynAdTensor::F32(value) => value.reverse_tape(),
+        DynAdTensor::F64(value) => value.reverse_tape(),
+        DynAdTensor::C32(value) => value.reverse_tape(),
+        DynAdTensor::C64(value) => value.reverse_tape(),
+    };
+    tape.cloned().ok_or_else(|| Error::InvalidAdTensor {
+        message: format!("{op_name} requires a reverse-mode DynAdTensor anchor"),
+    })
+}
 
 impl DynAdTensor {
     /// Creates a primal tensor value from a dense or structured tensor.
@@ -67,47 +82,41 @@ impl DynAdTensor {
         Ok(AdTensor::new_forward(primal, tangent)?.into())
     }
 
-    /// Creates a reverse-mode leaf on a public dynamic tape.
+    /// Creates a reverse-mode leaf on a fresh reverse graph.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape};
+    /// use tenferro_dyadtensor::{AdMode, DynAdTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let tape = DynTape::new();
     /// let x = DynAdTensor::new_reverse_leaf(
     ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    ///     &tape,
     /// )
     /// .unwrap();
     /// assert_eq!(x.mode(), AdMode::Reverse);
-    /// assert_eq!(x.tape_id(), Some(tape.id() as u64));
+    /// assert!(x.tape_id().is_some());
     /// ```
-    pub fn new_reverse_leaf<T>(
-        primal: impl Into<StructuredTensor<T>>,
-        tape: &DynTape,
-    ) -> Result<Self>
+    pub fn new_reverse_leaf<T>(primal: impl Into<StructuredTensor<T>>) -> Result<Self>
     where
         T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
         AdTensor<T>: Into<Self>,
     {
-        Ok(AdTensor::new_reverse_leaf(primal, tape.as_inner())?.into())
+        let tape = Tape::new();
+        Ok(AdTensor::new_reverse_leaf(primal, &tape)?.into())
     }
 
-    /// Creates a reverse-mode leaf with a tangent seed for HVP.
+    /// Creates a reverse-mode leaf with a tangent seed for HVP on a fresh graph.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape};
+    /// use tenferro_dyadtensor::{AdMode, DynAdTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let tape = DynTape::new();
     /// let x = DynAdTensor::new_reverse_leaf_with_tangent(
     ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    ///     &tape,
     /// )
     /// .unwrap();
     /// assert_eq!(x.mode(), AdMode::Reverse);
@@ -115,13 +124,56 @@ impl DynAdTensor {
     pub fn new_reverse_leaf_with_tangent<T>(
         primal: impl Into<StructuredTensor<T>>,
         tangent: impl Into<StructuredTensor<T>>,
-        tape: &DynTape,
     ) -> Result<Self>
     where
         T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
         AdTensor<T>: Into<Self>,
     {
-        Ok(AdTensor::new_reverse_leaf_with_tangent(primal, tangent, tape.as_inner())?.into())
+        let tape = Tape::new();
+        Ok(AdTensor::new_reverse_leaf_with_tangent(primal, tangent, &tape)?.into())
+    }
+
+    /// Creates another reverse-mode leaf on the same graph as `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdMode, DynAdTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x = DynAdTensor::new_reverse_leaf(
+    ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .unwrap();
+    /// let y = x
+    ///     .new_reverse_sibling(
+    ///         Tensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     )
+    ///     .unwrap();
+    /// assert!(x.shares_reverse_graph(&y));
+    /// assert_eq!(y.mode(), AdMode::Reverse);
+    /// ```
+    pub fn new_reverse_sibling<T>(&self, primal: impl Into<StructuredTensor<T>>) -> Result<Self>
+    where
+        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
+        AdTensor<T>: Into<Self>,
+    {
+        let tape = reverse_tape_from_anchor(self, "DynAdTensor::new_reverse_sibling")?;
+        Ok(AdTensor::new_reverse_leaf(primal, &tape)?.into())
+    }
+
+    /// Creates another reverse-mode leaf with a tangent seed on the same graph as `self`.
+    pub fn new_reverse_sibling_with_tangent<T>(
+        &self,
+        primal: impl Into<StructuredTensor<T>>,
+        tangent: impl Into<StructuredTensor<T>>,
+    ) -> Result<Self>
+    where
+        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
+        AdTensor<T>: Into<Self>,
+    {
+        let tape = reverse_tape_from_anchor(self, "DynAdTensor::new_reverse_sibling_with_tangent")?;
+        Ok(AdTensor::new_reverse_leaf_with_tangent(primal, tangent, &tape)?.into())
     }
 
     /// Returns runtime scalar type.
@@ -244,16 +296,14 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{DynAdTensor, DynTape};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let tape = DynTape::new();
     /// let x = DynAdTensor::new_reverse_leaf(
     ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    ///     &tape,
     /// )
     /// .unwrap();
-    /// assert_eq!(x.tape_id(), Some(tape.id() as u64));
+    /// assert!(x.tape_id().is_some());
     /// ```
     pub fn tape_id(&self) -> Option<u64> {
         match self {
@@ -269,13 +319,11 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{DynAdTensor, DynTape};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let tape = DynTape::new();
     /// let x = DynAdTensor::new_reverse_leaf(
     ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    ///     &tape,
     /// )
     /// .unwrap();
     /// assert!(x.node_id().is_some());
@@ -286,6 +334,17 @@ impl DynAdTensor {
             Self::F64(v) => v.node_id(),
             Self::C32(v) => v.node_id(),
             Self::C64(v) => v.node_id(),
+        }
+    }
+
+    /// Returns `true` when both tensors participate in the same reverse graph.
+    pub fn shares_reverse_graph(&self, other: &Self) -> bool {
+        match (
+            reverse_tape_from_anchor(self, "DynAdTensor::shares_reverse_graph"),
+            reverse_tape_from_anchor(other, "DynAdTensor::shares_reverse_graph"),
+        ) {
+            (Ok(lhs), Ok(rhs)) => lhs.same_tape(&rhs),
+            _ => false,
         }
     }
 
