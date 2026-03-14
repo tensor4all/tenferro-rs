@@ -62,7 +62,7 @@ where
 pub(super) fn map_ad_tensor_mixed_linear_typed<TIn, TOut, P, R>(
     input: &AdTensor<TIn>,
     primal_map: P,
-    _reverse_map: R,
+    reverse_map: R,
 ) -> Result<AdTensor<TOut>>
 where
     TIn: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
@@ -89,9 +89,49 @@ where
             )?,
         },
         AdTensorSnapshot::Reverse { .. } => {
-            return Err(Error::UnsupportedAdOp {
-                op: "mixed_dtype_tensor_reverse",
-            });
+            let AdTensorSnapshot::Reverse {
+                primal,
+                node: input_node,
+                tape,
+                tangent,
+            } = input.snapshot()
+            else {
+                unreachable!("snapshot matched reverse above");
+            };
+            let input_layout = primal.clone();
+            let output_primal = StructuredTensor::new(
+                primal.logical_dims().to_vec(),
+                primal.axis_classes().to_vec(),
+                tensor_map_unary_typed(primal.payload(), primal_map)?,
+            )?;
+            let output_tangent = tangent
+                .as_ref()
+                .map(|t| {
+                    StructuredTensor::new(
+                        t.logical_dims().to_vec(),
+                        t.axis_classes().to_vec(),
+                        tensor_map_unary_typed(t.payload(), primal_map)?,
+                    )
+                })
+                .transpose()?;
+            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "mixed-type linear output is missing a tape node".to_string(),
+                })?;
+            tape::register_mixed_rule::<TOut, TIn>(
+                &tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    let grad = input_layout.with_payload_like(tensor_map_unary_typed(
+                        cotangent.payload(),
+                        reverse_map,
+                    )?)?;
+                    Ok(vec![(input_node, grad)])
+                }),
+            );
+            return Ok(out);
         }
     };
     AdTensor::try_from(mapped)

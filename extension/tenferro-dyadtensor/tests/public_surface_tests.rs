@@ -67,3 +67,16 @@ fn dynadtensor_public_rank0_complex_scale_does_not_require_adtensor() {
         &[Complex64::new(0.0, 6.0)]
     );
 }
+
+#[test]
+fn dynadtensor_public_to_scalar_type_supports_cross_precision_cast() {
+    let x = DynAdTensor::new_primal(scalar_f64(2.0));
+    let y = x
+        .to_scalar_type(tenferro_dyadtensor::ScalarType::F32)
+        .unwrap();
+    assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::F32);
+    assert_eq!(
+        y.as_f32().unwrap().primal().buffer().as_slice().unwrap(),
+        &[2.0]
+    );
+}
