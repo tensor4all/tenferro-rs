@@ -57,11 +57,31 @@ fn dyn_tensor_and_dyn_ad_tensor_dims() {
     let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let d: DynTensor = t.clone().into();
     assert_eq!(d.dims(), &[2]);
+    assert_eq!(d.axis_classes(), &[0]);
+    assert!(d.is_dense());
 
     let ad = AdTensor::new_primal(t);
     let dad: DynAdTensor = ad.into();
     assert_eq!(dad.dims(), &[2]);
     assert_eq!(dad.mode(), AdMode::Primal);
+}
+
+#[test]
+fn dyn_tensor_preserves_diag_structure() {
+    let diag = StructuredTensor::from_diagonal_vector(
+        Tensor::<f64>::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+        2,
+    )
+    .unwrap();
+    let x: DynTensor = diag.clone().into();
+    assert!(x.is_diag());
+    assert!(!x.is_dense());
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(x.axis_classes(), &[0, 0]);
+    let structured = x.as_f64().unwrap();
+    assert_eq!(structured.logical_dims(), diag.logical_dims());
+    assert_eq!(structured.axis_classes(), diag.axis_classes());
+    assert_eq!(structured.payload().dims(), &[2]);
 }
 
 #[test]
@@ -281,7 +301,7 @@ fn dyn_tensor_abs_tensor_on_complex_returns_real_dtype() {
     let y = x.abs_tensor().unwrap();
     assert_eq!(y.scalar_type(), ScalarType::F64);
     let yr = y.as_f64().unwrap();
-    let data = yr.buffer().as_slice().unwrap();
+    let data = yr.payload().buffer().as_slice().unwrap();
     assert!((data[0] - 5.0).abs() < 1e-12);
     assert!((data[1] - 2.0).abs() < 1e-12);
 }
