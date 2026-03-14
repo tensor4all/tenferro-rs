@@ -2,6 +2,7 @@ mod organization;
 
 use chainrules::Tape;
 use chainrules_core::AutodiffError;
+use num_complex::Complex64;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;
@@ -17,7 +18,7 @@ fn f64_scalar(value: f64) -> Tensor<f64> {
 
 #[test]
 fn tensor_pullback_routes_through_registered_rule_chain() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = AdTensor::new_reverse_leaf(f64_vec(&[1.0, 2.0]), &tape).unwrap();
     let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
     let x_node = x.node_id().unwrap();
@@ -51,11 +52,11 @@ fn tensor_pullback_routes_through_registered_rule_chain() {
 
 #[test]
 fn tensor_pullback_rule_rejects_hvp_when_only_vjp_is_registered() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = tape
         .leaf_with_tangent(
-            StructuredTensor::from_dense(f64_vec(&[1.0, 2.0])),
-            StructuredTensor::from_dense(f64_vec(&[0.5, -0.5])),
+            crate::DynTensor::from(StructuredTensor::from_dense(f64_vec(&[1.0, 2.0]))),
+            crate::DynTensor::from(StructuredTensor::from_dense(f64_vec(&[0.5, -0.5]))),
         )
         .unwrap();
     let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
@@ -89,7 +90,7 @@ fn tensor_pullback_rule_rejects_hvp_when_only_vjp_is_registered() {
 
 #[test]
 fn tensor_pullback_rule_maps_rule_errors_to_invalid_argument() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
     let y_node = y.node_id().unwrap();
 
@@ -106,12 +107,56 @@ fn tensor_pullback_rule_maps_rule_errors_to_invalid_argument() {
     match tape.pullback_with_seed(
         y.as_tracked()
             .expect("reverse output should expose tracked value"),
-        StructuredTensor::from_dense(f64_scalar(1.0)),
+        crate::DynTensor::from(StructuredTensor::from_dense(f64_scalar(1.0))),
     ) {
         Err(AutodiffError::InvalidArgument(message)) => {
             assert!(message.contains("synthetic pullback failure"));
         }
         Err(err) => panic!("unexpected pullback error: {err}"),
         Ok(_) => panic!("expected registered rule failure to surface as InvalidArgument"),
+    }
+}
+
+#[test]
+fn tensor_pullback_rejects_primal_output_directly() {
+    let primal = AdTensor::new_primal(f64_scalar(3.0));
+    match pullback(&primal, &f64_scalar(1.0)) {
+        Err(crate::Error::InvalidAdTensor { message }) => {
+            assert!(message.contains("reverse-mode output tensor"));
+        }
+        Err(err) => panic!("unexpected primal pullback error: {err}"),
+        Ok(_) => panic!("primal outputs should not support reverse pullback"),
+    }
+}
+
+#[test]
+fn tensor_pullback_rejects_mismatched_registered_rule_dtype() {
+    let tape = Tape::<crate::DynTensor>::new();
+    let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
+    let y_node = y.node_id().unwrap();
+
+    register_rule::<Complex64>(&tape, y_node, Box::new(|_| Ok(Vec::new())));
+
+    match pullback(&y, &f64_scalar(1.0)) {
+        Err(crate::Error::Autodiff(AutodiffError::InvalidArgument(message))) => {
+            assert!(message.contains("cotangent dtype did not match"));
+        }
+        Err(err) => panic!("unexpected pullback error: {err}"),
+        Ok(_) => panic!("mismatched rule dtype should be rejected"),
+    }
+}
+
+#[test]
+fn tensor_pullback_rejects_cotangent_shape_mismatch() {
+    let tape = Tape::<crate::DynTensor>::new();
+    let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+    match pullback(&y, &cotangent) {
+        Err(crate::Error::InvalidAdTensor { message }) => {
+            assert!(message.contains("payload rank"));
+        }
+        Err(err) => panic!("unexpected cotangent mismatch error: {err}"),
+        Ok(_) => panic!("cotangent shape mismatch should be rejected"),
     }
 }

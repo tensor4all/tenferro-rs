@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use chainrules_core::Differentiable as _;
-use tenferro_algebra::{HasAlgebra, Scalar, Standard};
+use tenferro_algebra::{Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_linalg::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LinalgScalar, LstsqResult,

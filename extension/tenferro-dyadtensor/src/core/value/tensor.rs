@@ -2,8 +2,15 @@ use chainrules::{NodeId as ChainNodeId, Tape, TrackedValue};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
+use crate::core::{DynTensor, DynTensorTyped};
 use crate::structured::StructuredTensor;
 use crate::{AdMode, Error, NodeId, Result};
+
+struct ReverseTensorState<T: Scalar> {
+    tracked: TrackedValue<DynTensor>,
+    primal: StructuredTensor<T>,
+    tangent: Option<StructuredTensor<T>>,
+}
 
 enum TensorAdState<T: Scalar> {
     Primal(StructuredTensor<T>),
@@ -11,7 +18,7 @@ enum TensorAdState<T: Scalar> {
         primal: StructuredTensor<T>,
         tangent: StructuredTensor<T>,
     },
-    Reverse(TrackedValue<StructuredTensor<T>>),
+    Reverse(ReverseTensorState<T>),
 }
 
 pub(crate) enum AdTensorSnapshot<T: Scalar> {
@@ -23,15 +30,15 @@ pub(crate) enum AdTensorSnapshot<T: Scalar> {
     Reverse {
         primal: StructuredTensor<T>,
         node: ChainNodeId,
-        tape: Tape<StructuredTensor<T>>,
+        tape: Tape<DynTensor>,
         tangent: Option<StructuredTensor<T>>,
     },
 }
 
 /// Tensor newtype carrying AD mode information.
 ///
-/// Reverse-mode values participate in a homogeneous
-/// `chainrules::Tape<StructuredTensor<T>>`. Scalars in reverse-mode are
+/// Reverse-mode values participate in a homogeneous `chainrules::Tape<DynTensor>`.
+/// Scalars in reverse-mode are
 /// represented as rank-0 tensors rather than a separate scalar graph type.
 ///
 /// # Examples
@@ -72,12 +79,13 @@ fn ensure_same_structured_layout<T: Scalar>(
     Ok(())
 }
 
-fn validate_reverse_tracked<T: Scalar>(
+fn validate_reverse_state<T: Scalar>(
     op_name: &'static str,
-    value: &TrackedValue<StructuredTensor<T>>,
+    primal: &StructuredTensor<T>,
+    tangent: Option<&StructuredTensor<T>>,
 ) -> Result<()> {
-    if let Some(tangent) = value.tangent() {
-        ensure_same_structured_layout(op_name, value.value(), tangent)?;
+    if let Some(tangent) = tangent {
+        ensure_same_structured_layout(op_name, primal, tangent)?;
     }
     Ok(())
 }
@@ -109,25 +117,33 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```ignore
     /// use chainrules::Tape;
-    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{AdTensor, DynTensor, StructuredTensor};
     ///
-    /// let tape = Tape::<StructuredTensor<f64>>::new();
+    /// let tape = Tape::<DynTensor>::new();
     /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
     /// # Ok::<(), tenferro_dyadtensor::Error>(())
     /// ```
     pub fn new_reverse_leaf(
         primal: impl Into<StructuredTensor<T>>,
-        tape: &Tape<StructuredTensor<T>>,
-    ) -> Result<Self> {
-        Self::from_tracked(tape.leaf(primal.into()))
+        tape: &Tape<DynTensor>,
+    ) -> Result<Self>
+    where
+        T: DynTensorTyped,
+    {
+        let primal = primal.into();
+        let tracked = tape.leaf(T::into_dyn(primal.clone()));
+        Self::from_reverse_state(tracked, primal, None)
     }
 
     /// Creates a reverse-mode leaf with a tangent seed for HVP.
     pub fn new_reverse_leaf_with_tangent(
         primal: impl Into<StructuredTensor<T>>,
         tangent: impl Into<StructuredTensor<T>>,
-        tape: &Tape<StructuredTensor<T>>,
-    ) -> Result<Self> {
+        tape: &Tape<DynTensor>,
+    ) -> Result<Self>
+    where
+        T: DynTensorTyped,
+    {
         let primal = primal.into();
         let tangent = tangent.into();
         ensure_same_structured_layout(
@@ -136,31 +152,46 @@ impl<T: Scalar> AdTensor<T> {
             &tangent,
         )?;
         let tracked = tape
-            .leaf_with_tangent(primal, tangent)
+            .leaf_with_tangent(T::into_dyn(primal.clone()), T::into_dyn(tangent.clone()))
             .map_err(Error::Autodiff)?;
-        Self::from_tracked(tracked)
+        Self::from_reverse_state(tracked, primal, Some(tangent))
     }
 
-    pub(crate) fn from_tracked(value: TrackedValue<StructuredTensor<T>>) -> Result<Self> {
-        validate_reverse_tracked("AdTensor::from_tracked", &value)?;
-        Ok(Self(TensorAdState::Reverse(value)))
+    pub(crate) fn from_reverse_state(
+        tracked: TrackedValue<DynTensor>,
+        primal: StructuredTensor<T>,
+        tangent: Option<StructuredTensor<T>>,
+    ) -> Result<Self> {
+        validate_reverse_state("AdTensor::from_reverse_state", &primal, tangent.as_ref())?;
+        Ok(Self(TensorAdState::Reverse(ReverseTensorState {
+            tracked,
+            primal,
+            tangent,
+        })))
     }
 
     pub(crate) fn new_reverse_output(
         primal: impl Into<StructuredTensor<T>>,
-        tape: &Tape<StructuredTensor<T>>,
+        tape: &Tape<DynTensor>,
         tangent: Option<StructuredTensor<T>>,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        T: DynTensorTyped,
+    {
         let primal = primal.into();
         if let Some(tangent) = &tangent {
             ensure_same_structured_layout("AdTensor::new_reverse_output", &primal, tangent)?;
         }
-        Self::from_tracked(tape.placeholder(primal, tangent))
+        let tracked = tape.placeholder(
+            T::into_dyn(primal.clone()),
+            tangent.clone().map(T::into_dyn),
+        );
+        Self::from_reverse_state(tracked, primal, tangent)
     }
 
-    pub(crate) fn as_tracked(&self) -> Option<&TrackedValue<StructuredTensor<T>>> {
+    pub(crate) fn as_tracked(&self) -> Option<&TrackedValue<DynTensor>> {
         match &self.0 {
-            TensorAdState::Reverse(value) => Some(value),
+            TensorAdState::Reverse(value) => Some(&value.tracked),
             _ => None,
         }
     }
@@ -171,14 +202,14 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```ignore
     /// use chainrules::Tape;
-    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{AdTensor, DynTensor, StructuredTensor};
     ///
-    /// let tape = Tape::<StructuredTensor<f64>>::new();
+    /// let tape = Tape::<DynTensor>::new();
     /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
     /// assert!(x.tape().is_some());
     /// # Ok::<(), tenferro_dyadtensor::Error>(())
     /// ```
-    pub fn tape(&self) -> Option<&Tape<StructuredTensor<T>>> {
+    pub fn tape(&self) -> Option<&Tape<DynTensor>> {
         self.as_tracked().and_then(TrackedValue::tape)
     }
 
@@ -188,9 +219,9 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```ignore
     /// use chainrules::Tape;
-    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{AdTensor, DynTensor, StructuredTensor};
     ///
-    /// let tape = Tape::<StructuredTensor<f64>>::new();
+    /// let tape = Tape::<DynTensor>::new();
     /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
     /// assert!(x.node_id().is_some());
     /// # Ok::<(), tenferro_dyadtensor::Error>(())
@@ -199,7 +230,7 @@ impl<T: Scalar> AdTensor<T> {
         self.as_tracked().and_then(TrackedValue::node_id)
     }
 
-    pub(crate) fn reverse_tape(&self) -> Option<&Tape<StructuredTensor<T>>> {
+    pub(crate) fn reverse_tape(&self) -> Option<&Tape<DynTensor>> {
         self.tape()
     }
 
@@ -207,7 +238,7 @@ impl<T: Scalar> AdTensor<T> {
         self.node_id()
     }
 
-    pub(crate) fn reverse_handle(&self) -> Option<(ChainNodeId, Tape<StructuredTensor<T>>)> {
+    pub(crate) fn reverse_handle(&self) -> Option<(ChainNodeId, Tape<DynTensor>)> {
         self.as_tracked().map(|value| {
             (
                 value
@@ -229,14 +260,15 @@ impl<T: Scalar> AdTensor<T> {
                 tangent: tangent.clone(),
             },
             TensorAdState::Reverse(value) => AdTensorSnapshot::Reverse {
-                primal: value.value().clone(),
-                node: public_node_id(value.node_id())
+                primal: value.primal.clone(),
+                node: public_node_id(value.tracked.node_id())
                     .expect("reverse values always carry a node id"),
                 tape: value
+                    .tracked
                     .tape()
                     .cloned()
                     .expect("reverse values always carry a tape"),
-                tangent: value.tangent().cloned(),
+                tangent: value.tangent.clone(),
             },
         }
     }
@@ -255,7 +287,7 @@ impl<T: Scalar> AdTensor<T> {
         match &self.0 {
             TensorAdState::Primal(value) => value,
             TensorAdState::Forward { primal, .. } => primal,
-            TensorAdState::Reverse(value) => value.value(),
+            TensorAdState::Reverse(value) => &value.primal,
         }
     }
 
@@ -269,7 +301,7 @@ impl<T: Scalar> AdTensor<T> {
         match &self.0 {
             TensorAdState::Primal(_) => None,
             TensorAdState::Forward { tangent, .. } => Some(tangent),
-            TensorAdState::Reverse(value) => value.tangent(),
+            TensorAdState::Reverse(value) => value.tangent.as_ref(),
         }
     }
 
@@ -299,22 +331,64 @@ impl<T: Scalar> AdTensor<T> {
     }
 
     /// Returns axis classes of the structured primal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let diag = StructuredTensor::from_diagonal_vector(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    ///     2,
+    /// )
+    /// .unwrap();
+    /// let x = AdTensor::new_primal(diag);
+    /// assert_eq!(x.axis_classes(), &[0, 0]);
+    /// ```
     pub fn axis_classes(&self) -> &[usize] {
         self.structured_primal().axis_classes()
     }
 
     /// Returns `true` when the structured primal is dense.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::AdTensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// );
+    /// assert!(x.is_dense());
+    /// ```
     pub fn is_dense(&self) -> bool {
         self.structured_primal().is_dense()
     }
 
     /// Returns `true` when the structured primal is diagonal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let diag = StructuredTensor::from_diagonal_vector(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    ///     2,
+    /// )
+    /// .unwrap();
+    /// let x = AdTensor::new_primal(diag);
+    /// assert!(x.is_diag());
+    /// ```
     pub fn is_diag(&self) -> bool {
         self.structured_primal().is_diag()
     }
 }
 
-impl<T: Scalar> Clone for AdTensor<T> {
+impl<T: Scalar + DynTensorTyped> Clone for AdTensor<T> {
     fn clone(&self) -> Self {
         match &self.0 {
             TensorAdState::Primal(value) => Self::new_primal(value.clone()),
@@ -324,16 +398,22 @@ impl<T: Scalar> Clone for AdTensor<T> {
             }
             TensorAdState::Reverse(value) => {
                 let tape = value
+                    .tracked
                     .tape()
                     .cloned()
                     .expect("reverse values always carry a tape");
                 let node = value
+                    .tracked
                     .node_id()
                     .expect("reverse values always carry a node id");
                 let tracked = tape
-                    .tracked_existing(node, value.value().clone(), value.tangent().cloned())
+                    .tracked_existing(
+                        node,
+                        T::into_dyn(value.primal.clone()),
+                        value.tangent.clone().map(T::into_dyn),
+                    )
                     .expect("reverse clone should preserve valid tracked value");
-                Self::from_tracked(tracked)
+                Self::from_reverse_state(tracked, value.primal.clone(), value.tangent.clone())
                     .expect("reverse clone should preserve valid structured layout")
             }
         }
@@ -352,7 +432,7 @@ impl<T: Scalar> From<StructuredTensor<T>> for AdTensor<T> {
     }
 }
 
-impl<T: Scalar + 'static> TryFrom<AdTensorSnapshot<T>> for AdTensor<T> {
+impl<T: Scalar + DynTensorTyped + 'static> TryFrom<AdTensorSnapshot<T>> for AdTensor<T> {
     type Error = Error;
 
     fn try_from(value: AdTensorSnapshot<T>) -> Result<Self> {
@@ -366,9 +446,13 @@ impl<T: Scalar + 'static> TryFrom<AdTensorSnapshot<T>> for AdTensor<T> {
                 tangent,
             } => {
                 let tracked = tape
-                    .tracked_existing(node, primal, tangent)
+                    .tracked_existing(
+                        node,
+                        T::into_dyn(primal.clone()),
+                        tangent.clone().map(T::into_dyn),
+                    )
                     .map_err(Error::from)?;
-                Self::from_tracked(tracked)
+                Self::from_reverse_state(tracked, primal, tangent)
             }
         }
     }

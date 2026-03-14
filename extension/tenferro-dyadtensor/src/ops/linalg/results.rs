@@ -1,7 +1,7 @@
 use num_complex::Complex;
 use tenferro_algebra::Scalar;
 
-use crate::AdTensor;
+use crate::{AdTensor, DynTensorTyped};
 
 /// AD-aware SVD result.
 ///
@@ -19,7 +19,7 @@ use crate::AdTensor;
 /// assert_eq!(out.s.dims(), &[2]);
 /// ```
 #[derive(Clone)]
-pub struct AdSvdResult<T: Scalar> {
+pub struct AdSvdResult<T: Scalar + DynTensorTyped> {
     /// Left singular vectors.
     pub u: AdTensor<T>,
     /// Singular values.
@@ -38,7 +38,7 @@ pub struct AdSvdResult<T: Scalar> {
 /// let _r = &out.r;
 /// ```
 #[derive(Clone)]
-pub struct AdQrResult<T: Scalar> {
+pub struct AdQrResult<T: Scalar + DynTensorTyped> {
     /// Q factor.
     pub q: AdTensor<T>,
     /// R factor.
@@ -55,7 +55,7 @@ pub struct AdQrResult<T: Scalar> {
 /// let _u = &out.u;
 /// ```
 #[derive(Clone)]
-pub struct AdLuResult<T: Scalar> {
+pub struct AdLuResult<T: Scalar + DynTensorTyped> {
     /// Permutation indices.
     pub p: Option<Vec<usize>>,
     /// Lower factor.
@@ -74,7 +74,7 @@ pub struct AdLuResult<T: Scalar> {
 /// let _vectors = &out.vectors;
 /// ```
 #[derive(Clone)]
-pub struct AdEigenResult<T: Scalar> {
+pub struct AdEigenResult<T: Scalar + DynTensorTyped> {
     /// Eigenvalues.
     pub values: AdTensor<T>,
     /// Eigenvectors.
@@ -94,7 +94,7 @@ pub struct AdEigenResult<T: Scalar> {
 pub struct AdEigResult<T>
 where
     T: Scalar,
-    Complex<T>: Scalar,
+    Complex<T>: Scalar + DynTensorTyped,
 {
     /// Complex eigenvalues.
     pub values: AdTensor<Complex<T>>,
@@ -112,7 +112,7 @@ where
 /// let _logabsdet = &out.logabsdet;
 /// ```
 #[derive(Clone)]
-pub struct AdSlogdetResult<T: Scalar> {
+pub struct AdSlogdetResult<T: Scalar + DynTensorTyped> {
     /// Sign tensor.
     pub sign: AdTensor<T>,
     /// Log-absolute-determinant tensor.
@@ -129,7 +129,7 @@ pub struct AdSlogdetResult<T: Scalar> {
 /// let _residual = &out.residual;
 /// ```
 #[derive(Clone)]
-pub struct AdLstsqResult<T: Scalar> {
+pub struct AdLstsqResult<T: Scalar + DynTensorTyped> {
     /// Least squares solution.
     pub x: AdTensor<T>,
     /// Residual tensor.

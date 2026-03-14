@@ -1,6 +1,6 @@
 use chainrules::Tape;
 use num_complex::Complex64;
-use tenferro_dyadtensor::{AdMode, AdTensor, DynAdTensor, Error, StructuredTensor};
+use tenferro_dyadtensor::{AdMode, AdTensor, DynAdTensor, Error};
 use tenferro_tensor::Tensor;
 
 mod support;
@@ -94,9 +94,9 @@ fn c64_tensor_axpby_accepts_real_coefficients() {
 fn c64_tensor_scale_reverse_rejects_real_scalar_input() {
     let x = reverse_vector_c64(
         &[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)],
-        &Tape::<StructuredTensor<Complex64>>::new(),
+        &Tape::<tenferro_dyadtensor::DynTensor>::new(),
     );
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let a = reverse_rank0_f64(2.0_f64, &tape);
 
     let err = match x.scale(&a) {
@@ -110,9 +110,9 @@ fn c64_tensor_scale_reverse_rejects_real_scalar_input() {
 fn c64_tensor_div_scalar_reverse_rejects_real_scalar_input() {
     let x = reverse_vector_c64(
         &[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)],
-        &Tape::<StructuredTensor<Complex64>>::new(),
+        &Tape::<tenferro_dyadtensor::DynTensor>::new(),
     );
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let a = reverse_rank0_f64(2.0_f64, &tape);
 
     let err = match x.div_scalar(&a) {

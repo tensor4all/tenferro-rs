@@ -8,8 +8,6 @@ mod snapshot;
 
 use num_complex::{Complex32, Complex64};
 
-pub use snapshot::DynStructuredPrimal;
-
 /// Runtime AD tensor wrapper.
 ///
 /// `DynAdTensor` is the canonical dynamic tensor payload for eager tensor

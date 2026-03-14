@@ -129,9 +129,10 @@ The canonical conceptual path is still tensor-tensor elementwise execution.
 - `DynAdTensor` is the canonical dynamic execution payload
 - `DynAdTensor::promote_to(...)` handles the supported same-precision
   real-to-complex lifts
-- `DynAdTensor::primal_snapshot()` is the intended storage/FFI boundary
+- `DynAdTensor::primal_snapshot()` returns a primal-only `DynTensor` for
+  storage/FFI boundaries
 
-Because reverse-mode graphs are homogeneous `Tape<StructuredTensor<T>>`,
+Because reverse-mode graphs are homogeneous `Tape<DynTensor>`,
 mixed-dtype reverse promotion remains unsupported today. Primal and forward
 promotion stay available.
 
@@ -309,7 +310,7 @@ backend contracts in production code.
   traits and runtime slots
 - builder `.run()` now relies on an explicit default-runtime holder, while
   reverse-mode bookkeeping attaches pullback rules directly to
-  `chainrules::Tape<StructuredTensor<T>>`
+  `chainrules::Tape<DynTensor>`
 - many public examples still instantiate `CpuContext` directly because CPU is
   the most complete backend today, not because the API contract is CPU-only
 

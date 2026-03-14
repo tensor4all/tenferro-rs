@@ -30,6 +30,52 @@ pub enum DynTensor {
     C64(StructuredTensor<Complex64>),
 }
 
+#[doc(hidden)]
+pub trait DynTensorTyped: tenferro_algebra::Scalar + 'static {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>>;
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor;
+}
+
+impl DynTensorTyped for f32 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_f32()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::F32(value)
+    }
+}
+
+impl DynTensorTyped for f64 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_f64()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::F64(value)
+    }
+}
+
+impl DynTensorTyped for Complex32 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_c32()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::C32(value)
+    }
+}
+
+impl DynTensorTyped for Complex64 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_c64()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::C64(value)
+    }
+}
+
 impl DynTensor {
     /// Returns runtime scalar type.
     ///
@@ -74,6 +120,21 @@ impl DynTensor {
     }
 
     /// Returns axis equivalence classes of the structured layout.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{DynTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let diag = StructuredTensor::from_diagonal_vector(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    ///     2,
+    /// )
+    /// .unwrap();
+    /// let x: DynTensor = diag.into();
+    /// assert_eq!(x.axis_classes(), &[0, 0]);
+    /// ```
     pub fn axis_classes(&self) -> &[usize] {
         match self {
             Self::F32(t) => t.axis_classes(),
@@ -84,6 +145,17 @@ impl DynTensor {
     }
 
     /// Returns `true` when the structured payload is dense.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::DynTensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let dense: DynTensor =
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap().into();
+    /// assert!(dense.is_dense());
+    /// ```
     pub fn is_dense(&self) -> bool {
         match self {
             Self::F32(t) => t.is_dense(),
@@ -94,6 +166,21 @@ impl DynTensor {
     }
 
     /// Returns `true` when the structured payload is diagonal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{DynTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let diag = StructuredTensor::from_diagonal_vector(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    ///     2,
+    /// )
+    /// .unwrap();
+    /// let x: DynTensor = diag.into();
+    /// assert!(x.is_diag());
+    /// ```
     pub fn is_diag(&self) -> bool {
         match self {
             Self::F32(t) => t.is_diag(),
@@ -172,6 +259,13 @@ impl DynTensor {
     /// Returns typed payload ref when dtype is `Complex64`.
     pub fn payload_c64(&self) -> Option<&Tensor<Complex64>> {
         self.as_c64().map(StructuredTensor::payload)
+    }
+
+    pub(crate) fn typed_ref<T>(&self) -> Option<&StructuredTensor<T>>
+    where
+        T: DynTensorTyped,
+    {
+        T::structured_ref(self)
     }
 
     /// Element-wise subtraction with dtype/shape checks.

@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::DynTensorTyped;
 use crate::runtime::contracts::LinalgRuntimeValue;
 use crate::runtime::dispatch::{dispatch_einsum_runtime, with_linalg_runtime};
 
@@ -6,7 +7,7 @@ use crate::runtime::dispatch::{dispatch_einsum_runtime, with_linalg_runtime};
 ///
 /// The returned map is keyed by reverse `NodeId` and includes the seed
 /// cotangent for the output node itself.
-pub fn pullback<T: Scalar + 'static>(
+pub fn pullback<T: Scalar + DynTensorTyped + 'static>(
     output: &AdTensor<T>,
     cotangent: &AdTensor<T>,
 ) -> Result<HashMap<NodeId, Tensor<T>>> {
@@ -23,7 +24,7 @@ pub fn pullback<T: Scalar + 'static>(
 /// Reverse pullback projected to requested `wrt` tensors.
 ///
 /// Returns `None` for non-reverse tensors or disconnected reverse tensors.
-pub fn pullback_wrt<T: Scalar + 'static>(
+pub fn pullback_wrt<T: Scalar + DynTensorTyped + 'static>(
     output: &AdTensor<T>,
     cotangent: &AdTensor<T>,
     wrt: &[&AdTensor<T>],

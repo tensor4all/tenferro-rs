@@ -119,6 +119,92 @@ fn dyn_tensor_tangents_preserve_diag_layout() {
 }
 
 #[test]
+fn dyn_tensor_differentiable_contract_covers_all_runtime_variants() {
+    let cases: Vec<(DynTensor, DynTensor, usize)> = vec![
+        (
+            StructuredTensor::from_dense(
+                Tensor::<f32>::from_slice(&[1.0_f32, 2.0_f32], &[2], MemoryOrder::ColumnMajor)
+                    .unwrap(),
+            )
+            .into(),
+            StructuredTensor::from_dense(
+                Tensor::<f32>::from_slice(&[0.5_f32, -0.5_f32], &[2], MemoryOrder::ColumnMajor)
+                    .unwrap(),
+            )
+            .into(),
+            2,
+        ),
+        (
+            StructuredTensor::from_dense(
+                Tensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
+            )
+            .into(),
+            StructuredTensor::from_dense(
+                Tensor::<f64>::from_slice(&[1.25_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
+            )
+            .into(),
+            1,
+        ),
+        (
+            StructuredTensor::from_dense(
+                Tensor::<Complex32>::from_slice(
+                    &[Complex32::new(1.0, 2.0)],
+                    &[],
+                    MemoryOrder::ColumnMajor,
+                )
+                .unwrap(),
+            )
+            .into(),
+            StructuredTensor::from_dense(
+                Tensor::<Complex32>::from_slice(
+                    &[Complex32::new(-0.25, 0.5)],
+                    &[],
+                    MemoryOrder::ColumnMajor,
+                )
+                .unwrap(),
+            )
+            .into(),
+            1,
+        ),
+        (
+            StructuredTensor::from_dense(
+                Tensor::<Complex64>::from_slice(
+                    &[Complex64::new(2.0, -1.0), Complex64::new(0.0, 3.0)],
+                    &[2],
+                    MemoryOrder::ColumnMajor,
+                )
+                .unwrap(),
+            )
+            .into(),
+            StructuredTensor::from_dense(
+                Tensor::<Complex64>::from_slice(
+                    &[Complex64::new(0.5, 0.25), Complex64::new(-1.0, 1.0)],
+                    &[2],
+                    MemoryOrder::ColumnMajor,
+                )
+                .unwrap(),
+            )
+            .into(),
+            2,
+        ),
+    ];
+
+    for (primal, tangent, num_elements) in cases {
+        let zero = primal.zero_tangent();
+        let seed = primal.seed_cotangent();
+        let accumulated = DynTensor::accumulate_tangent(zero.clone(), &tangent);
+
+        assert_eq!(primal.num_elements(), num_elements);
+        assert_eq!(zero.scalar_type(), primal.scalar_type());
+        assert_eq!(seed.scalar_type(), primal.scalar_type());
+        assert_eq!(accumulated.scalar_type(), primal.scalar_type());
+        assert_eq!(zero.dims(), primal.dims());
+        assert_eq!(seed.dims(), primal.dims());
+        assert_eq!(accumulated.dims(), primal.dims());
+    }
+}
+
+#[test]
 fn rank0_dyn_ad_tensor_scale_mixed_real_complex_promotes_to_complex() {
     let lhs: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
     let rhs: DynAdTensor = AdTensor::new_primal(rank0_c64(Complex64::new(1.0, -3.0))).into();
@@ -230,7 +316,7 @@ fn dyn_ad_tensor_promote_to_preserves_forward_tangent() {
 
 #[test]
 fn dyn_ad_tensor_promote_to_rejects_mixed_dtype_reverse_promotion() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x: DynAdTensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tape)
         .unwrap()
         .into();
@@ -255,8 +341,8 @@ fn dyn_ad_tensor_div_with_scalar_lhs_is_supported() {
 
 #[test]
 fn dyn_ad_tensor_scale_checks_reverse_tape_compatibility() {
-    let tensor_tape = Tape::<StructuredTensor<f64>>::new();
-    let scalar_tape = Tape::<StructuredTensor<f64>>::new();
+    let tensor_tape = Tape::<crate::DynTensor>::new();
+    let scalar_tape = Tape::<crate::DynTensor>::new();
     let lhs: DynAdTensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tensor_tape)
         .unwrap()
         .into();
@@ -485,12 +571,12 @@ fn dyn_ad_tensor_compose_complex_rejects_non_real_inputs() {
 fn dyn_ad_tensor_compose_complex_checks_reverse_tape_compatibility() {
     let re = AdTensor::new_reverse_leaf(
         Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
-        &Tape::<StructuredTensor<f64>>::new(),
+        &Tape::<crate::DynTensor>::new(),
     )
     .unwrap();
     let im = AdTensor::new_reverse_leaf(
         Tensor::<f64>::from_slice(&[2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
-        &Tape::<StructuredTensor<f64>>::new(),
+        &Tape::<crate::DynTensor>::new(),
     )
     .unwrap();
     let err = match DynAdTensor::compose_complex(DynAdTensor::F64(re), DynAdTensor::F64(im)) {

@@ -14,8 +14,8 @@ fn runtime_helpers_cover_mode_and_shape_paths() {
 
     let ad_primal = AdTensor::new_primal(primal.clone());
     let ad_forward = AdTensor::new_forward(primal.clone(), tangent.clone()).unwrap();
-    let tape = Tape::<StructuredTensor<f64>>::new();
-    let other_tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
+    let other_tape = Tape::<crate::DynTensor>::new();
     let ad_reverse = reverse_leaf_f64(primal.clone(), &tape);
     let ad_reverse_other = reverse_leaf_f64(primal.clone(), &other_tape);
 
@@ -178,7 +178,7 @@ fn sum_ad_reverse_pullback_broadcasts_scalar_cotangent() {
 
     let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let ad_x = reverse_leaf_f64(x.clone(), &tape);
     let out = sum_ad(&ad_x).run().unwrap();
     assert_reverse_on_tape(&out, &tape);
@@ -200,7 +200,7 @@ fn einsum_ad_size_dict_forces_dense_path_and_registers_pullback() {
         .unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let ad_a = reverse_leaf_f64(a.clone(), &tape);
     let ad_b = reverse_leaf_f64(b.clone(), &tape);
     let size_dict = HashMap::new();

@@ -17,7 +17,7 @@
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`],
 //! while reverse-mode bookkeeping attaches pullback rules directly to
-//! `chainrules::Tape<StructuredTensor<T>>`.
+//! `chainrules::Tape<DynTensor>`.
 //!
 //! Module map:
 //!
@@ -37,9 +37,10 @@ mod structured;
 mod tape;
 pub mod traits;
 
+#[doc(hidden)]
+pub use core::DynTensorTyped;
 pub use core::{
-    AdMode, AdScalar, AdTensor, AdValue, DynAdTensor, DynScalar, DynStructuredPrimal, DynTensor,
-    NodeId, ScalarType,
+    AdMode, AdScalar, AdTensor, AdValue, DynAdTensor, DynScalar, DynTensor, NodeId, ScalarType,
 };
 pub use error::{Error, Result};
 pub use ops::ad;

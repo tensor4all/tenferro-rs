@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use chainrules_core::Differentiable as _;
-use tenferro_algebra::{HasAlgebra, Scalar, Standard};
+use tenferro_algebra::{Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_tensor::Tensor;
 
@@ -62,7 +62,7 @@ pub(crate) fn to_dense_in_ctx<B, C, T>(
     tensor: &StructuredTensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     if tensor.is_dense() {
@@ -94,7 +94,7 @@ pub(crate) fn compress_dense_to_layout_in_ctx<B, C, T>(
     layout: &StructuredTensor<T>,
 ) -> Result<StructuredTensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     if dense.dims() != layout.logical_dims() {
@@ -125,7 +125,7 @@ pub(crate) fn einsum_with_subscripts_in_ctx<B, C, T>(
     operands: &[&StructuredTensor<T>],
 ) -> Result<StructuredTensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     let operand_meta: Vec<OperandAxisClasses> = operands
@@ -257,7 +257,7 @@ fn normalize_payload_for_roots<B, C, T>(
     roots: &[usize],
 ) -> Result<(Tensor<T>, Vec<usize>)>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     if payload.dims().len() != roots.len() {

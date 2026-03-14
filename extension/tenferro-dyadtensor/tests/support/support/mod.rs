@@ -41,7 +41,7 @@ pub(crate) fn primal_rank0_c64(primal: Complex64) -> DynAdTensor {
     AdTensor::new_primal(scalar_c64(primal)).into()
 }
 
-pub(crate) fn reverse_rank0_f64(primal: f64, tape: &Tape<StructuredTensor<f64>>) -> DynAdTensor {
+pub(crate) fn reverse_rank0_f64(primal: f64, tape: &Tape<tenferro_dyadtensor::DynTensor>) -> DynAdTensor {
     AdTensor::new_reverse_leaf(scalar_f64(primal), tape)
         .unwrap()
         .into()
@@ -49,7 +49,7 @@ pub(crate) fn reverse_rank0_f64(primal: f64, tape: &Tape<StructuredTensor<f64>>)
 
 pub(crate) fn reverse_rank0_c64(
     primal: Complex64,
-    tape: &Tape<StructuredTensor<Complex64>>,
+    tape: &Tape<tenferro_dyadtensor::DynTensor>,
 ) -> DynAdTensor {
     AdTensor::new_reverse_leaf(scalar_c64(primal), tape)
         .unwrap()
@@ -58,7 +58,7 @@ pub(crate) fn reverse_rank0_c64(
 
 pub(crate) fn reverse_vector_f64(
     values: &[f64],
-    tape: &Tape<StructuredTensor<f64>>,
+    tape: &Tape<tenferro_dyadtensor::DynTensor>,
 ) -> DynAdTensor {
     AdTensor::new_reverse_leaf(vector_f64(values), tape)
         .unwrap()
@@ -67,7 +67,7 @@ pub(crate) fn reverse_vector_f64(
 
 pub(crate) fn reverse_vector_c64(
     values: &[Complex64],
-    tape: &Tape<StructuredTensor<Complex64>>,
+    tape: &Tape<tenferro_dyadtensor::DynTensor>,
 ) -> DynAdTensor {
     AdTensor::new_reverse_leaf(vector_c64(values), tape)
         .unwrap()

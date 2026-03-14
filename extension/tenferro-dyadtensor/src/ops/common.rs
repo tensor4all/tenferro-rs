@@ -2,6 +2,7 @@ use crate::AdMode;
 use ::chainrules::{NodeId as ChainNodeId, Tape};
 
 use super::*;
+use crate::{DynTensor, DynTensorTyped};
 use tenferro_device::LogicalMemorySpace;
 
 pub(crate) fn has_forward<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
@@ -34,8 +35,8 @@ pub(crate) fn ensure_dense_linalg_ad_inputs<S: Scalar>(
 
 pub(crate) fn derive_reverse_tape_handle<S: Scalar>(
     operands: &[&AdTensor<S>],
-) -> Result<Option<Tape<StructuredTensor<S>>>> {
-    let mut tape: Option<Tape<StructuredTensor<S>>> = None;
+) -> Result<Option<Tape<DynTensor>>> {
+    let mut tape: Option<Tape<DynTensor>> = None;
 
     for op in operands {
         if let Some(current) = op.reverse_tape() {
@@ -145,7 +146,7 @@ pub(crate) fn dense_input_snapshot_in_backend<B, C, T>(
     needs_tangent: bool,
 ) -> Result<(Tensor<T>, Option<Tensor<T>>)>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     let primal = to_dense_in_ctx::<B, _, T>(ctx, input.structured_primal())?
@@ -213,7 +214,7 @@ pub(crate) fn compress_pullback_like_in_backend<B, C, T>(
     layout: &StructuredTensor<T>,
 ) -> Result<Tensor<T>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     let dense = normalize_pullback_shape(grad, layout.logical_dims(), op_name)?;
@@ -318,7 +319,7 @@ pub(crate) fn wrap_structured_ad_output<TIn: Scalar, TOut: Scalar>(
     Ok(AdTensor::new_primal(primal))
 }
 
-pub(crate) fn wrap_same_type_structured_ad_output<T: Scalar>(
+pub(crate) fn wrap_same_type_structured_ad_output<T: Scalar + DynTensorTyped>(
     _op_name: &'static str,
     inputs: &[&AdTensor<T>],
     primal: StructuredTensor<T>,
@@ -341,7 +342,7 @@ pub(crate) fn wrap_same_type_structured_ad_output<T: Scalar>(
     Ok(AdTensor::new_primal(primal))
 }
 
-pub(crate) fn wrap_same_type_dense_ad_output<T: Scalar>(
+pub(crate) fn wrap_same_type_dense_ad_output<T: Scalar + DynTensorTyped>(
     op_name: &'static str,
     inputs: &[&AdTensor<T>],
     primal: Tensor<T>,
@@ -378,7 +379,7 @@ pub(crate) fn sum_einsum_tangent_terms<B, C, T>(
     size_dict: Option<&HashMap<u32, usize>>,
 ) -> Result<Option<Tensor<T>>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     let mut out_tangent: Option<Tensor<T>> = None;
@@ -409,7 +410,7 @@ pub(crate) fn sum_structured_einsum_tangent_terms<B, C, T>(
     tangents: &[Option<&StructuredTensor<T>>],
 ) -> Result<Option<StructuredTensor<T>>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     let mut out_tangent: Option<StructuredTensor<T>> = None;

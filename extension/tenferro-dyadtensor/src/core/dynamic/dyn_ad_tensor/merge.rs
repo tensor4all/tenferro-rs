@@ -5,7 +5,7 @@ use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
 use super::super::tensor_ops::{tensor_map_binary_typed, tensor_map_unary_typed};
-use crate::core::AdTensorSnapshot;
+use crate::core::{AdTensorSnapshot, DynTensor, DynTensorTyped};
 use crate::structured::StructuredTensor;
 use crate::{tape, AdTensor, Error, NodeId, Result};
 
@@ -14,7 +14,7 @@ pub(super) fn map_ad_tensor_same_type_linear_typed<T, F>(
     map: F,
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar + ScalarAd + Copy + 'static,
+    T: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
     F: Fn(T) -> T + Copy + 'static,
 {
     let mapped = match input.snapshot() {
@@ -65,8 +65,8 @@ pub(super) fn map_ad_tensor_mixed_linear_typed<TIn, TOut, P, R>(
     _reverse_map: R,
 ) -> Result<AdTensor<TOut>>
 where
-    TIn: Scalar + ScalarAd + Copy + 'static,
-    TOut: Scalar + ScalarAd + Copy + 'static,
+    TIn: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
+    TOut: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
     P: Fn(TIn) -> TOut + Copy,
     R: Fn(TOut) -> TIn + Copy + 'static,
 {
@@ -107,7 +107,7 @@ where
 struct AdTensorBinaryState<T: Scalar> {
     primal: StructuredTensor<T>,
     tangent: Option<StructuredTensor<T>>,
-    reverse: Option<(NodeId, ::chainrules::Tape<StructuredTensor<T>>)>,
+    reverse: Option<(NodeId, ::chainrules::Tape<DynTensor>)>,
 }
 
 fn split_ad_tensor_state<T: Scalar>(value: AdTensorSnapshot<T>) -> AdTensorBinaryState<T> {
@@ -166,7 +166,7 @@ pub(super) fn merge_add_ad_tensors<T>(
     rhs: AdTensorSnapshot<T>,
 ) -> Result<AdTensorSnapshot<T>>
 where
-    T: Scalar + Copy + Add<Output = T> + 'static,
+    T: Scalar + Copy + Add<Output = T> + DynTensorTyped + 'static,
 {
     let lhs_state = split_ad_tensor_state(lhs);
     let rhs_state = split_ad_tensor_state(rhs);

@@ -4,7 +4,7 @@ use super::*;
 fn structured_reverse_pullback_accepts_dense_cotangent() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(
         StructuredTensor::from_diagonal_vector(
             Tensor::<f64>::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
@@ -49,7 +49,7 @@ fn structured_reverse_pullback_accepts_dense_cotangent() {
 
 #[test]
 fn reshape_reverse_pullback_accepts_non_contiguous_cotangent_view() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([1.0, 2.0, 3.0, 4.0]), &tape);
     let reshaped = DynAdTensor::from(x.clone()).reshape(&[4]).unwrap();
     let reshaped = reshaped.as_f64().unwrap();
@@ -77,7 +77,7 @@ fn reshape_reverse_pullback_accepts_non_contiguous_cotangent_view() {
 fn dense_reverse_pullback_accepts_structured_cotangent() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([2.0, 5.0, 7.0, 3.0]), &tape);
     let alpha = reverse_leaf_f64(scalar_f64(2.0), &tape);
     let y = DynAdTensor::from(x.clone())
@@ -119,7 +119,7 @@ fn dense_reverse_pullback_accepts_structured_cotangent() {
 fn pullback_helpers_preserve_none_for_untracked_wrt_inputs() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([1.0, 2.0, 3.0, 4.0]), &tape);
     let alpha = reverse_leaf_f64(scalar_f64(3.0), &tape);
     let y = DynAdTensor::from(x.clone())
@@ -140,7 +140,7 @@ fn pullback_helpers_preserve_none_for_untracked_wrt_inputs() {
 fn pullback_wrt_returns_none_for_disconnected_reverse_tensor() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([1.0, 2.0, 3.0, 4.0]), &tape);
     let alpha = reverse_leaf_f64(scalar_f64(3.0), &tape);
     let disconnected = reverse_leaf_f64(f64_2x2([9.0, 8.0, 7.0, 6.0]), &tape);
@@ -176,8 +176,8 @@ fn pullback_helpers_reject_primal_outputs_and_mixed_tapes() {
             if message.contains("ad::pullback_wrt requires reverse-mode output tensor")
     ));
 
-    let tape_output = Tape::<StructuredTensor<f64>>::new();
-    let tape_wrt = Tape::<StructuredTensor<f64>>::new();
+    let tape_output = Tape::<crate::DynTensor>::new();
+    let tape_wrt = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([4.0, 3.0, 2.0, 1.0]), &tape_output);
     let alpha = reverse_leaf_f64(scalar_f64(2.0), &tape_output);
     let output = DynAdTensor::from(x)

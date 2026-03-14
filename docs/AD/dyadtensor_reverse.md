@@ -43,7 +43,7 @@ APIs:
   - `ad::pullback_wrt`
 
 These keep tape symbols internal to dyadtensor while preserving a homogeneous
-`Tape<StructuredTensor<T>>`.
+`Tape<DynTensor>`.
 
 ## Current limits
 

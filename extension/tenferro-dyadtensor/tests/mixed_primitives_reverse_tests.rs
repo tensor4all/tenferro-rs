@@ -1,8 +1,6 @@
 use chainrules::Tape;
 use num_complex::Complex64;
-use tenferro_dyadtensor::{
-    ad, set_default_runtime, AdMode, AdTensor, DynAdTensor, RuntimeContext, StructuredTensor,
-};
+use tenferro_dyadtensor::{ad, set_default_runtime, AdMode, AdTensor, DynAdTensor, RuntimeContext};
 use tenferro_prims::CpuContext;
 
 mod support;
@@ -14,7 +12,7 @@ use support::{
 
 #[test]
 fn scale_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x = reverse_vector_f64(&[1.0, 2.0], &tape);
     let a = reverse_rank0_f64(3.0_f64, &tape);
 
@@ -46,7 +44,7 @@ fn scale_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
 
 #[test]
 fn axpby_registers_reverse_gradients_for_all_inputs() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x = reverse_vector_f64(&[1.0, 4.0], &tape);
     let y = reverse_vector_f64(&[3.0, -1.0], &tape);
     let a = reverse_rank0_f64(2.0_f64, &tape);
@@ -96,7 +94,7 @@ fn axpby_registers_reverse_gradients_for_all_inputs() {
 
 #[test]
 fn div_scalar_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x = reverse_vector_f64(&[2.0, 4.0], &tape);
     let a = reverse_rank0_f64(2.0_f64, &tape);
 
@@ -129,7 +127,7 @@ fn div_scalar_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
 #[test]
 fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x = reverse_vector_f64(&[1.0, 2.0], &tape);
     let a = reverse_rank0_f64(4.0_f64, &tape);
     let coeff: DynAdTensor = ad::sqrt(a.as_f64().unwrap()).unwrap().into();
@@ -162,7 +160,7 @@ fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
 
 #[test]
 fn scale_propagates_reverse_gradients_through_negated_scalar_coefficients() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x: DynAdTensor = tenferro_dyadtensor::AdTensor::new_primal(vector_f64(&[2.0, -1.0])).into();
     let a = reverse_rank0_f64(3.0_f64, &tape);
     let coeff = a.scale(&primal_rank0_f64(-1.0)).unwrap();
@@ -184,7 +182,7 @@ fn scale_propagates_reverse_gradients_through_negative_real_sqrt_promotion() {
         Complex64::new(2.0, 0.0),
     ]))
     .into();
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let coeff = reverse_rank0_f64(-4.0_f64, &tape);
 
     let err = match x.scale(&coeff) {

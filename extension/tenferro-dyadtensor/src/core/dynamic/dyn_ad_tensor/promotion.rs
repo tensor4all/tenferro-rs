@@ -70,7 +70,7 @@ impl DynAdTensor {
     /// - same-precision real-to-complex (`F32 -> C32`, `F64 -> C64`)
     ///
     /// Mixed-dtype reverse promotion remains unsupported under the current
-    /// homogeneous `Tape<StructuredTensor<T>>` model and returns
+    /// homogeneous `Tape<DynTensor>` model and returns
     /// [`Error::UnsupportedAdOp`].
     ///
     /// # Examples

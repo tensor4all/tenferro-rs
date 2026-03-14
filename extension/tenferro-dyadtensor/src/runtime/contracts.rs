@@ -6,6 +6,8 @@ use num_traits::Float;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_linalg::{KernelLinalgScalar, LinalgScalar};
 
+use crate::core::DynTensorTyped;
+
 #[doc(hidden)]
 /// Hidden bound for values that participate in the standard dyadtensor runtime.
 ///
@@ -15,9 +17,15 @@ use tenferro_linalg::{KernelLinalgScalar, LinalgScalar};
 /// fn require_standard<T: tenferro_dyadtensor::runtime::contracts::StandardRuntimeValue>() {}
 /// require_standard::<f64>();
 /// ```
-pub trait StandardRuntimeValue: Scalar + HasAlgebra<Algebra = Standard<Self>> + 'static {}
+pub trait StandardRuntimeValue:
+    Scalar + DynTensorTyped + HasAlgebra<Algebra = Standard<Self>> + 'static
+{
+}
 
-impl<T> StandardRuntimeValue for T where T: Scalar + HasAlgebra<Algebra = Standard<T>> + 'static {}
+impl<T> StandardRuntimeValue for T where
+    T: Scalar + DynTensorTyped + HasAlgebra<Algebra = Standard<T>> + 'static
+{
+}
 
 #[doc(hidden)]
 /// Hidden bound for values that can run through the einsum runtime dispatch layer.
@@ -147,13 +155,13 @@ impl<T> RealLinalgRuntimeValue for T where
 pub trait ComplexLinalgRuntimeValue:
     RealLinalgRuntimeValue + LinalgScalar<Complex = Complex<Self>>
 where
-    Complex<Self>: Scalar,
+    Complex<Self>: Scalar + DynTensorTyped,
 {
 }
 
 impl<T> ComplexLinalgRuntimeValue for T
 where
     T: RealLinalgRuntimeValue + LinalgScalar<Complex = Complex<T>>,
-    Complex<T>: Scalar,
+    Complex<T>: Scalar + DynTensorTyped,
 {
 }
