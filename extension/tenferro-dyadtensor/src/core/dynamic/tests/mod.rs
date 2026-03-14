@@ -148,6 +148,19 @@ fn dyn_ad_tensor_promote_to_rejects_cross_precision_casts() {
 }
 
 #[test]
+fn rank0_dyn_ad_tensor_scale_rejects_cross_precision_join() {
+    let lhs: DynAdTensor = AdTensor::new_primal(rank0_f32(2.0_f32)).into();
+    let rhs: DynAdTensor = AdTensor::new_primal(rank0_f64(3.0_f64)).into();
+    let err = match lhs.scale(&rhs) {
+        Ok(_) => panic!("cross-precision scale should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, Error::InvalidAdTensor { message } if message.contains("unsupported promotion"))
+    );
+}
+
+#[test]
 fn dyn_ad_tensor_promote_to_preserves_forward_tangent() {
     let x: DynAdTensor = AdTensor::new_forward(rank0_f64(2.0_f64), rank0_f64(0.5_f64))
         .unwrap()
