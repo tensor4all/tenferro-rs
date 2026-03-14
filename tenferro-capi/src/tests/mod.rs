@@ -23,11 +23,20 @@ unsafe extern "C" fn import_fixture_deleter(managed: *mut DLManagedTensorVersion
     fixture.calls.fetch_add(1, Ordering::SeqCst);
 }
 
-unsafe extern "C" fn boxed_i64_slice_deleter(managed: *mut DLManagedTensorVersioned) {
+unsafe extern "C" fn boxed_i64_array_1_deleter(managed: *mut DLManagedTensorVersioned) {
     let managed = unsafe { Box::from_raw(managed) };
     if !managed.manager_ctx.is_null() {
         unsafe {
             drop(Box::from_raw(managed.manager_ctx as *mut [i64; 1]));
+        }
+    }
+}
+
+unsafe extern "C" fn boxed_i64_array_3_deleter(managed: *mut DLManagedTensorVersioned) {
+    let managed = unsafe { Box::from_raw(managed) };
+    if !managed.manager_ctx.is_null() {
+        unsafe {
+            drop(Box::from_raw(managed.manager_ctx as *mut [i64; 3]));
         }
     }
 }
@@ -259,7 +268,7 @@ fn dlpack_import_rejects_null_shape_and_null_data_for_non_empty_tensor() {
             strides: std::ptr::null_mut(),
             byte_offset: 0,
         },
-        Some(boxed_i64_slice_deleter),
+        Some(boxed_i64_array_1_deleter),
         Box::into_raw(shape) as *mut c_void,
     );
 
@@ -288,7 +297,7 @@ fn dlpack_import_reports_axis_for_stride_overflow() {
             strides: std::ptr::null_mut(),
             byte_offset: 0,
         },
-        Some(boxed_i64_slice_deleter),
+        Some(boxed_i64_array_3_deleter),
         Box::into_raw(shape) as *mut c_void,
     );
 
