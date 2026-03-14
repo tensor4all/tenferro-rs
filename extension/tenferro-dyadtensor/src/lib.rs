@@ -38,7 +38,8 @@ mod tape;
 pub mod traits;
 
 pub use core::{
-    AdMode, AdScalar, AdTensor, AdValue, DynAdTensor, DynScalar, DynTensor, NodeId, ScalarType,
+    AdMode, AdScalar, AdTensor, AdValue, DynAdTensor, DynScalar, DynStructuredPrimal, DynTensor,
+    NodeId, ScalarType,
 };
 pub use error::{Error, Result};
 pub use ops::ad;

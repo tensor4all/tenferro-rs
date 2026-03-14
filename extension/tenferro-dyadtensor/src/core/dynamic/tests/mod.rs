@@ -2,13 +2,21 @@ mod organization;
 
 use super::*;
 use chainrules::Tape;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{AdMode, AdTensor, Error, StructuredTensor};
 
 fn rank0_f64(value: f64) -> Tensor<f64> {
     Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn rank0_f32(value: f32) -> Tensor<f32> {
+    Tensor::<f32>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn rank0_c32(value: Complex32) -> Tensor<Complex32> {
+    Tensor::<Complex32>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
 fn rank0_c64(value: Complex64) -> Tensor<Complex64> {
@@ -66,6 +74,117 @@ fn rank0_dyn_ad_tensor_scale_mixed_real_complex_promotes_to_complex() {
         out.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
         &[Complex64::new(2.0, -6.0)]
     );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_c64_lifts_real_rank0_tensor() {
+    let x: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let promoted = x.promote_to(ScalarType::C64).unwrap();
+    assert_eq!(promoted.scalar_type(), ScalarType::C64);
+    assert_eq!(
+        promoted
+            .as_c64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[Complex64::new(2.0, 0.0)]
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_c32_lifts_real_rank0_tensor() {
+    let x: DynAdTensor = AdTensor::new_primal(rank0_f32(2.0_f32)).into();
+    let promoted = x.promote_to(ScalarType::C32).unwrap();
+    assert_eq!(promoted.scalar_type(), ScalarType::C32);
+    assert_eq!(
+        promoted
+            .as_c32()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[Complex32::new(2.0, 0.0)]
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_identity_keeps_all_supported_variants() {
+    let f32_value: DynAdTensor = AdTensor::new_primal(rank0_f32(1.0_f32)).into();
+    let f64_value: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let c32_value: DynAdTensor = AdTensor::new_primal(rank0_c32(Complex32::new(3.0, 1.0))).into();
+    let c64_value: DynAdTensor = AdTensor::new_primal(rank0_c64(Complex64::new(4.0, -2.0))).into();
+
+    assert!(matches!(
+        f32_value.promote_to(ScalarType::F32).unwrap(),
+        DynAdTensor::F32(_)
+    ));
+    assert!(matches!(
+        f64_value.promote_to(ScalarType::F64).unwrap(),
+        DynAdTensor::F64(_)
+    ));
+    assert!(matches!(
+        c32_value.promote_to(ScalarType::C32).unwrap(),
+        DynAdTensor::C32(_)
+    ));
+    assert!(matches!(
+        c64_value.promote_to(ScalarType::C64).unwrap(),
+        DynAdTensor::C64(_)
+    ));
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_rejects_cross_precision_casts() {
+    let x: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let err = match x.promote_to(ScalarType::F32) {
+        Ok(_) => panic!("cross-precision promote_to should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, Error::InvalidAdTensor { message } if message.contains("unsupported promotion"))
+    );
+}
+
+#[test]
+fn rank0_dyn_ad_tensor_scale_rejects_cross_precision_join() {
+    let lhs: DynAdTensor = AdTensor::new_primal(rank0_f32(2.0_f32)).into();
+    let rhs: DynAdTensor = AdTensor::new_primal(rank0_f64(3.0_f64)).into();
+    let err = match lhs.scale(&rhs) {
+        Ok(_) => panic!("cross-precision scale should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, Error::InvalidAdTensor { message } if message.contains("unsupported promotion"))
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_preserves_forward_tangent() {
+    let x: DynAdTensor = AdTensor::new_forward(rank0_f64(2.0_f64), rank0_f64(0.5_f64))
+        .unwrap()
+        .into();
+    let promoted = x.promote_to(ScalarType::C64).unwrap();
+    assert_eq!(promoted.mode(), AdMode::Forward);
+    let promoted = promoted.as_c64().unwrap();
+    assert_eq!(
+        promoted.tangent().unwrap().buffer().as_slice().unwrap(),
+        &[Complex64::new(0.5, 0.0)]
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_rejects_mixed_dtype_reverse_promotion() {
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x: DynAdTensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tape)
+        .unwrap()
+        .into();
+    let err = match x.promote_to(ScalarType::C64) {
+        Ok(_) => panic!("mixed reverse promotion should stay unsupported"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
 }
 
 #[test]

@@ -81,3 +81,19 @@ fn scalar_mul_and_tensor_div_scalar_delegate_to_named_primitives() {
         &[2.0, 4.0]
     );
 }
+
+#[test]
+fn scale_promotes_f64_tensor_with_c64_rank0_tensor() {
+    let x: DynAdTensor = AdTensor::new_primal(
+        Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    )
+    .into();
+    let a = primal_rank0_c64(Complex64::new(0.0, 2.0));
+
+    let out = x.scale(&a).unwrap();
+    assert_eq!(out.scalar_type(), ScalarType::C64);
+    assert_eq!(
+        out.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[Complex64::new(0.0, 2.0), Complex64::new(0.0, 4.0)]
+    );
+}
