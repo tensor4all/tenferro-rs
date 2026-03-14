@@ -4,6 +4,7 @@ mod eager_scalar;
 mod layout;
 mod merge;
 mod promotion;
+mod pullback;
 mod scalar_ops;
 mod snapshot;
 

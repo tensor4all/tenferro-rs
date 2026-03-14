@@ -26,6 +26,7 @@ fn dynamic_types_are_split_into_focused_modules() {
         "src/core/dynamic/dyn_ad_tensor/basics.rs",
         "src/core/dynamic/dyn_ad_tensor/complex.rs",
         "src/core/dynamic/dyn_ad_tensor/eager_scalar.rs",
+        "src/core/dynamic/dyn_ad_tensor/pullback.rs",
         "src/core/dynamic/dyn_ad_tensor/scalar_ops.rs",
     ] {
         assert!(
@@ -47,6 +48,7 @@ fn split_dynamic_type_modules_stay_under_size_guideline() {
         "src/core/dynamic/dyn_ad_tensor/basics.rs",
         "src/core/dynamic/dyn_ad_tensor/complex.rs",
         "src/core/dynamic/dyn_ad_tensor/eager_scalar.rs",
+        "src/core/dynamic/dyn_ad_tensor/pullback.rs",
         "src/core/dynamic/dyn_ad_tensor/scalar_ops.rs",
     ] {
         let contents = std::fs::read_to_string(repo_path(relative)).unwrap();

@@ -109,3 +109,38 @@ fn dynadtensor_public_scalar_eager_methods_do_not_require_typed_api() {
         &[0.5]
     );
 }
+
+#[test]
+fn dynadtensor_public_pullback_wrt_does_not_require_typed_api() {
+    let tape = DynTape::new();
+    let x = DynAdTensor::new_reverse_leaf(vector_f64(&[1.0, 2.0]), &tape).unwrap();
+    let a = DynAdTensor::new_reverse_leaf(scalar_f64(3.0), &tape).unwrap();
+    let out = x.scale(&a).unwrap();
+    let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, 1.25]));
+
+    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    assert_eq!(
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[1.5, 3.75]
+    );
+    assert_eq!(
+        grads[1]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[3.0]
+    );
+}
