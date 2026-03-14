@@ -163,7 +163,7 @@ impl<T: Scalar> Tensor<T> {
                 .iter()
                 .enumerate()
                 .try_fold(0isize, |acc, (axis, &idx)| {
-                    acc.checked_add(idx as isize * self.strides[axis + 2])
+                    (idx as isize).checked_mul(self.strides[axis + 2]).and_then(|v| acc.checked_add(v))
                 })
                 .unwrap_or_else(|| {
                     panic!(
@@ -175,7 +175,7 @@ impl<T: Scalar> Tensor<T> {
                 .iter()
                 .enumerate()
                 .try_fold(0isize, |acc, (axis, &idx)| {
-                    acc.checked_add(idx as isize * out_strides[axis + 2])
+                    (idx as isize).checked_mul(out_strides[axis + 2]).and_then(|v| acc.checked_add(v))
                 })
                 .unwrap_or_else(|| {
                     panic!(
@@ -197,8 +197,8 @@ impl<T: Scalar> Tensor<T> {
                     let src_pos = self
                         .offset
                         .checked_add(src_batch_off)
-                        .and_then(|off| off.checked_add(i as isize * self.strides[0]))
-                        .and_then(|off| off.checked_add(j as isize * self.strides[1]))
+                        .and_then(|off| (i as isize).checked_mul(self.strides[0]).and_then(|v| off.checked_add(v)))
+                        .and_then(|off| (j as isize).checked_mul(self.strides[1]).and_then(|v| off.checked_add(v)))
                         .and_then(|pos| usize::try_from(pos).ok())
                         .unwrap_or_else(|| {
                             panic!(
@@ -206,9 +206,10 @@ impl<T: Scalar> Tensor<T> {
                         i, j, self.offset, src_batch_off, self.strides
                     )
                         });
-                    let dst_pos = dst_batch_off
-                        .checked_add(i as isize * out_strides[0])
-                        .and_then(|off| off.checked_add(j as isize * out_strides[1]))
+                    let dst_pos = (i as isize)
+                        .checked_mul(out_strides[0])
+                        .and_then(|v| dst_batch_off.checked_add(v))
+                        .and_then(|off| (j as isize).checked_mul(out_strides[1]).and_then(|v| off.checked_add(v)))
                         .and_then(|pos| usize::try_from(pos).ok())
                         .unwrap_or_else(|| {
                             panic!(

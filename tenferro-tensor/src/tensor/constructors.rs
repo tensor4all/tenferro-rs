@@ -209,7 +209,11 @@ impl<T: Scalar> Tensor<T> {
         for i in 0..n {
             let pos = (i as isize)
                 .checked_mul(strides[0])
-                .and_then(|a| a.checked_add(i as isize * strides[1]))
+                .and_then(|a| {
+                    (i as isize)
+                        .checked_mul(strides[1])
+                        .and_then(|b| a.checked_add(b))
+                })
                 .and_then(|pos| usize::try_from(pos).ok())
                 .unwrap_or_else(|| {
                     panic!(
