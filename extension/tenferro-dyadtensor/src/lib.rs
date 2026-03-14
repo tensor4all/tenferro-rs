@@ -15,9 +15,9 @@
 //! assert!(x.is_diag());
 //! ```
 //!
-//! Builder `.run()` execution is configured through [`set_default_runtime`],
-//! while reverse-mode bookkeeping attaches pullback rules directly to
-//! `chainrules::Tape<DynTensor>`.
+//! Builder `.run()` execution is configured through [`set_default_runtime`].
+//! Reverse-mode graphs are created through [`DynTape`] and are exposed back to
+//! users through dynamic helpers on [`DynAdTensor`].
 //!
 //! Module map:
 //!

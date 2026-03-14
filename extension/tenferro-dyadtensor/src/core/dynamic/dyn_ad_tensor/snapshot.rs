@@ -8,13 +8,12 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let x: DynAdTensor = AdTensor::new_primal(
+    /// let x = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
+    /// );
     ///
     /// let snapshot = x.primal_snapshot().unwrap();
     /// assert_eq!(snapshot.scalar_type(), x.scalar_type());
