@@ -23,11 +23,20 @@ unsafe extern "C" fn import_fixture_deleter(managed: *mut DLManagedTensorVersion
     fixture.calls.fetch_add(1, Ordering::SeqCst);
 }
 
-unsafe extern "C" fn boxed_i64_slice_deleter(managed: *mut DLManagedTensorVersioned) {
+unsafe extern "C" fn boxed_i64_array_1_deleter(managed: *mut DLManagedTensorVersioned) {
     let managed = unsafe { Box::from_raw(managed) };
     if !managed.manager_ctx.is_null() {
         unsafe {
             drop(Box::from_raw(managed.manager_ctx as *mut [i64; 1]));
+        }
+    }
+}
+
+unsafe extern "C" fn boxed_i64_array_3_deleter(managed: *mut DLManagedTensorVersioned) {
+    let managed = unsafe { Box::from_raw(managed) };
+    if !managed.manager_ctx.is_null() {
+        unsafe {
+            drop(Box::from_raw(managed.manager_ctx as *mut [i64; 3]));
         }
     }
 }
@@ -86,6 +95,19 @@ fn import_fixture_with_tensor(
         flags: 0,
         dl_tensor,
     }))
+}
+
+fn read_last_error_message() -> String {
+    let mut len = 0usize;
+    let status = unsafe { tfe_last_error_message(std::ptr::null_mut(), 0, &mut len) };
+    assert_eq!(status, TFE_SUCCESS);
+    assert!(len > 0);
+
+    let mut buf = vec![0u8; len];
+    let status = unsafe { tfe_last_error_message(buf.as_mut_ptr(), buf.len(), &mut len) };
+    assert_eq!(status, TFE_SUCCESS);
+    let nul = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8(buf[..nul].to_vec()).unwrap()
 }
 
 #[test]
@@ -246,11 +268,47 @@ fn dlpack_import_rejects_null_shape_and_null_data_for_non_empty_tensor() {
             strides: std::ptr::null_mut(),
             byte_offset: 0,
         },
-        Some(boxed_i64_slice_deleter),
+        Some(boxed_i64_array_1_deleter),
         Box::into_raw(shape) as *mut c_void,
     );
 
     let handle = unsafe { tfe_tensor_f64_from_dlpack(managed_missing_data, &mut status) };
     assert!(handle.is_null());
     assert_eq!(status, TFE_INVALID_ARGUMENT);
+}
+
+#[test]
+fn dlpack_import_reports_axis_for_stride_overflow() {
+    let mut shape = Box::new([1_i64, i64::MAX, 2_i64]);
+    let managed = import_fixture_with_tensor(
+        DLTensor {
+            data: std::ptr::dangling_mut::<f64>() as *mut c_void,
+            device: DLDevice {
+                device_type: KDLCPU,
+                device_id: 0,
+            },
+            ndim: 3,
+            dtype: DLDataType {
+                code: KDLFLOAT,
+                bits: 64,
+                lanes: 1,
+            },
+            shape: shape.as_mut_ptr(),
+            strides: std::ptr::null_mut(),
+            byte_offset: 0,
+        },
+        Some(boxed_i64_array_3_deleter),
+        Box::into_raw(shape) as *mut c_void,
+    );
+
+    let mut status = TFE_INTERNAL_ERROR;
+    let handle = unsafe { tfe_tensor_f64_from_dlpack(managed, &mut status) };
+    assert!(handle.is_null());
+    assert_eq!(status, TFE_INVALID_ARGUMENT);
+
+    let last_error = read_last_error_message();
+    assert!(
+        last_error.contains("stride overflow in row-major inference at dimension 1 (size="),
+        "unexpected error: {last_error}"
+    );
 }
