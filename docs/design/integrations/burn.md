@@ -135,7 +135,7 @@ Burn computation graph:
   └── loss                  ← Burn AD manages
 ```
 
-Key point: tenferro's internal `Tape` / `TrackedTensor` are **not used**. Only the rrule pullback logic (the mathematical VJP formula) is called from within Burn's `Backward::backward()`.
+Key point: tenferro's internal `Tape` / `TrackedValue` are **not used**. Only the rrule pullback logic (the mathematical VJP formula) is called from within Burn's `Backward::backward()`.
 
 ### Crate Structure
 

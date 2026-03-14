@@ -8,15 +8,13 @@ mod scalar_generic;
 mod structured_pullbacks;
 mod support;
 
+use chainrules::Tape;
 use num_complex::Complex64;
 use tenferro_linalg::NormKind;
 
 use super::*;
 use crate::ops::tests::with_cpu_runtime;
-use crate::{
-    AdScalar, AdValue, DynAdScalar, DynAdTensor, Error, NodeId, RuntimeContext, StructuredTensor,
-    TapeId,
-};
+use crate::{DynAdTensor, Error, RuntimeContext, StructuredTensor};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 

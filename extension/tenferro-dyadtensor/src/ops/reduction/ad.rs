@@ -52,28 +52,26 @@ where
             None
         };
 
-        let out = wrap_structured_ad_output("sum_ad", &operands, primal, tangent, 0)?;
+        let out = wrap_same_type_structured_ad_output("sum_ad", &operands, primal, tangent)?;
 
-        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        if let Some((node, tape)) = out.reverse_handle() {
             let input_node = collect_reverse_input_nodes(&operands)
                 .into_iter()
                 .next()
                 .flatten();
             let input_layout = self.tensor.structured_primal().clone();
-            let output_node = *node;
-            let tape_id = *tape;
 
             tape::register_rule::<T>(
-                tape_id,
-                output_node,
+                &tape,
+                node,
                 Box::new(move |cotangent| {
                     let Some(input_node) = input_node else {
                         return Ok(Vec::new());
                     };
-                    let scalar = scalar_from_rank0_tensor(cotangent, "sum_ad")?;
+                    let scalar = scalar_from_rank0_tensor(cotangent.payload(), "sum_ad")?;
                     let payload = broadcast_scalar_like(scalar, input_layout.payload())?;
                     let grad = input_layout.with_payload_like(payload)?;
-                    Ok(vec![(input_node, grad.into_payload())])
+                    Ok(vec![(input_node, grad)])
                 }),
             );
         }

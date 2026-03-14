@@ -12,16 +12,30 @@ impl DynAdTensor {
         match self {
             Self::F32(v) => Ok(Self::F32(v.clone())),
             Self::F64(v) => Ok(Self::F64(v.clone())),
-            Self::C32(v) => Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
-                v,
-                |z| z.re,
-                |cotangent| Complex32::new(cotangent, 0.0),
-            )?)),
-            Self::C64(v) => Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
-                v,
-                |z| z.re,
-                |cotangent| Complex64::new(cotangent, 0.0),
-            )?)),
+            Self::C32(v) => {
+                if v.reverse_tape().is_some() {
+                    return Err(Error::UnsupportedAdOp {
+                        op: "real_part_reverse",
+                    });
+                }
+                Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
+                    v,
+                    |z| z.re,
+                    |cotangent| Complex32::new(cotangent, 0.0),
+                )?))
+            }
+            Self::C64(v) => {
+                if v.reverse_tape().is_some() {
+                    return Err(Error::UnsupportedAdOp {
+                        op: "real_part_reverse",
+                    });
+                }
+                Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
+                    v,
+                    |z| z.re,
+                    |cotangent| Complex64::new(cotangent, 0.0),
+                )?))
+            }
         }
     }
 
@@ -34,16 +48,30 @@ impl DynAdTensor {
             Self::F64(v) => Ok(Self::F64(map_ad_tensor_same_type_linear_typed(v, |_| {
                 0.0_f64
             })?)),
-            Self::C32(v) => Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
-                v,
-                |z| z.im,
-                |cotangent| Complex32::new(0.0, cotangent),
-            )?)),
-            Self::C64(v) => Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
-                v,
-                |z| z.im,
-                |cotangent| Complex64::new(0.0, cotangent),
-            )?)),
+            Self::C32(v) => {
+                if v.reverse_tape().is_some() {
+                    return Err(Error::UnsupportedAdOp {
+                        op: "imag_part_reverse",
+                    });
+                }
+                Ok(Self::F32(map_ad_tensor_mixed_linear_typed(
+                    v,
+                    |z| z.im,
+                    |cotangent| Complex32::new(0.0, cotangent),
+                )?))
+            }
+            Self::C64(v) => {
+                if v.reverse_tape().is_some() {
+                    return Err(Error::UnsupportedAdOp {
+                        op: "imag_part_reverse",
+                    });
+                }
+                Ok(Self::F64(map_ad_tensor_mixed_linear_typed(
+                    v,
+                    |z| z.im,
+                    |cotangent| Complex64::new(0.0, cotangent),
+                )?))
+            }
         }
     }
 
@@ -61,7 +89,7 @@ impl DynAdTensor {
                     |y| Complex32::new(0.0, y),
                     |cotangent| cotangent.im,
                 )?;
-                let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
+                let merged = merge_add_ad_tensors(re_c.snapshot(), im_c.snapshot())?;
                 Ok(Self::C32(AdTensor::try_from(merged)?))
             }
             (Self::F64(re), Self::F64(im)) => {
@@ -75,7 +103,7 @@ impl DynAdTensor {
                     |y| Complex64::new(0.0, y),
                     |cotangent| cotangent.im,
                 )?;
-                let merged = merge_add_ad_tensors(re_c.into_value(), im_c.into_value())?;
+                let merged = merge_add_ad_tensors(re_c.snapshot(), im_c.snapshot())?;
                 Ok(Self::C64(AdTensor::try_from(merged)?))
             }
             (lhs, rhs) => Err(Error::InvalidAdTensor {

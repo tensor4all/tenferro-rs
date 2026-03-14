@@ -448,8 +448,8 @@ The einsum AD API provides five functions for different AD modes:
 pub fn tracked_einsum<T, A, B>(
     ctx: &mut B::Context,
     subscripts: &str,
-    operands: &[&TrackedTensor<Tensor<T>>],
-) -> AdResult<TrackedTensor<Tensor<T>>>
+    operands: &[&TrackedValue<Tensor<T>>],
+) -> AdResult<TrackedValue<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
     B: EinsumBackend<A>,
@@ -466,8 +466,8 @@ in `tenferro-einsum/tests/einsum_tests.rs`).
 pub fn dual_einsum<T, A, B>(
     ctx: &mut B::Context,
     subscripts: &str,
-    operands: &[&DualTensor<Tensor<T>>],
-) -> AdResult<DualTensor<Tensor<T>>>
+    operands: &[&DualValue<Tensor<T>>],
+) -> AdResult<DualValue<Tensor<T>>>
 where
     T: Scalar + HasAlgebra<Algebra = A>,
     B: EinsumBackend<A>,

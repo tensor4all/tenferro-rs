@@ -31,7 +31,7 @@ tensor-local tape node:
 | `inv_ad(...).run()` | `tenferro_linalg::inv_rrule` |
 | `det_ad(...).run()` | `tenferro_linalg::det_rrule` |
 | `slogdet_ad(...).run()` | `logabsdet`: `tenferro_linalg::slogdet_rrule`; `sign`: zero pullback |
-| `eig_ad(...).run()` | `tenferro_linalg::eig_rrule` via mixed-type bridge (`Complex -> Real`) |
+| `eig_ad(...).run()` | reverse-mode currently unsupported for real inputs; forward/primal remain available |
 | `pinv_ad(...).run()` | `tenferro_linalg::pinv_rrule` |
 | `matrix_exp_ad(...).run()` | `tenferro_linalg::matrix_exp_rrule` |
 | `norm_ad(...).run()` | `tenferro_linalg::norm_rrule` |
@@ -41,18 +41,17 @@ APIs:
 - Same scalar domain (`output` and `wrt` share dtype):
   - `ad::pullback`
   - `ad::pullback_wrt`
-- Mixed scalar domain (e.g. `eig_ad` complex outputs, real inputs):
-  - `ad::pullback_wrt_mixed`
 
-All of these keep tape symbols internal to dyadtensor.
+These keep tape symbols internal to dyadtensor while preserving a homogeneous
+`Tape<StructuredTensor<T>>`.
 
 ## Current limits
 
-- Mixed-type pullback is currently bridge-based (`register_bridge_rule`) and is
-  implemented for operators that explicitly register a cross-domain reverse
-  bridge (`eig_ad` currently).
-- `ad::pullback` remains same-domain by design. Use `ad::pullback_wrt_mixed`
-  when `output` and `wrt` dtypes differ.
+- Reverse-mode graphs are homogeneous: scalar AD values are represented as
+  rank-0 tensors, and cross-dtype reverse bridges are not part of the tape.
+- `ad::pullback` and `ad::pullback_wrt` are same-domain by design.
+- `eig_ad` remains available for primal/forward paths, but reverse-mode for
+  real inputs is currently rejected rather than maintaining a mixed-type bridge.
 
 ## Related AD-rule status updates
 

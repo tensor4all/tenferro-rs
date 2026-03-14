@@ -1,4 +1,7 @@
 use super::*;
+use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
+use crate::AdMode;
+use ::chainrules::Tape;
 
 #[test]
 fn public_ad_builders_cover_helper_paths_and_builder_options() {
@@ -15,9 +18,10 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
 
     let ad_a_fwd = AdTensor::new_forward(a.clone(), da.clone()).unwrap();
     let out_unary_fwd = cholesky_ad(&ad_a_fwd).run().unwrap();
-    assert!(matches!(out_unary_fwd.as_value(), AdValue::Forward { .. }));
+    assert_forward_mode(&out_unary_fwd);
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(71), TapeId(171), None).unwrap();
+    let tape_rev = Tape::<StructuredTensor<f64>>::new();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape_rev);
     let out_unary_rev = cholesky_ad(&ad_a_rev).run().unwrap();
     let unary_cotangent = AdTensor::new_primal(
         Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
@@ -30,9 +34,9 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
 
     let ad_b_fwd = AdTensor::new_forward(b.clone(), db.clone()).unwrap();
     let out_binary_fwd = solve_ad(&ad_a_fwd, &ad_b_fwd).run().unwrap();
-    assert!(matches!(out_binary_fwd.as_value(), AdValue::Forward { .. }));
+    assert_forward_mode(&out_binary_fwd);
 
-    let ad_b_rev = AdTensor::new_reverse(b.clone(), NodeId(72), TapeId(171), None).unwrap();
+    let ad_b_rev = reverse_leaf_f64(b.clone(), &tape_rev);
     let out_binary_rev = solve_ad(&ad_a_rev, &ad_b_rev).run().unwrap();
     let binary_cotangent = AdTensor::new_primal(
         Tensor::<f64>::from_slice(&[4.0, 3.0, 2.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
@@ -58,34 +62,23 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
 
     let ad_multi_fwd = AdTensor::new_forward(a.clone(), da).unwrap();
     let out_qr_fwd = qr_ad(&ad_multi_fwd).run().unwrap();
-    assert!(matches!(out_qr_fwd.q.as_value(), AdValue::Forward { .. }));
-    assert!(matches!(out_qr_fwd.r.as_value(), AdValue::Forward { .. }));
+    assert_forward_mode(&out_qr_fwd.q);
+    assert_forward_mode(&out_qr_fwd.r);
 
     let out_lu_fwd = lu_ad(&ad_multi_fwd).pivot(LuPivot::NoPivot).run().unwrap();
-    assert!(matches!(out_lu_fwd.l.as_value(), AdValue::Forward { .. }));
-    assert!(matches!(out_lu_fwd.u.as_value(), AdValue::Forward { .. }));
+    assert_forward_mode(&out_lu_fwd.l);
+    assert_forward_mode(&out_lu_fwd.u);
 
     let out_eigen_fwd = eigen_ad(&ad_multi_fwd).run().unwrap();
-    assert!(matches!(
-        out_eigen_fwd.values.as_value(),
-        AdValue::Forward { .. }
-    ));
-    assert!(matches!(
-        out_eigen_fwd.vectors.as_value(),
-        AdValue::Forward { .. }
-    ));
+    assert_forward_mode(&out_eigen_fwd.values);
+    assert_forward_mode(&out_eigen_fwd.vectors);
 
     let out_slogdet_fwd = slogdet_ad(&ad_multi_fwd).run().unwrap();
-    assert!(matches!(
-        out_slogdet_fwd.sign.as_value(),
-        AdValue::Forward { .. }
-    ));
-    assert!(matches!(
-        out_slogdet_fwd.logabsdet.as_value(),
-        AdValue::Forward { .. }
-    ));
+    assert_forward_mode(&out_slogdet_fwd.sign);
+    assert_forward_mode(&out_slogdet_fwd.logabsdet);
 
-    let ad_multi_rev = AdTensor::new_reverse(a, NodeId(73), TapeId(173), None).unwrap();
+    let tape_multi = Tape::<StructuredTensor<f64>>::new();
+    let ad_multi_rev = reverse_leaf_f64(a, &tape_multi);
     let out_svd_rev = svd_ad(&ad_multi_rev).run().unwrap();
     let cot_matrix = AdTensor::new_primal(
         Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
@@ -344,8 +337,8 @@ fn ad_linalg_builders_cover_all_ops_in_primal_mode() {
     assert_primal_mode(&out_slogdet.logabsdet);
 
     let out_eig = eig_ad(&ad_general).run().unwrap();
-    assert!(matches!(out_eig.values.as_value(), AdValue::Primal(_)));
-    assert!(matches!(out_eig.vectors.as_value(), AdValue::Primal(_)));
+    assert_eq!(out_eig.values.mode(), AdMode::Primal);
+    assert_eq!(out_eig.vectors.mode(), AdMode::Primal);
 
     assert_primal_mode(&pinv_ad(&ad_rect).run().unwrap());
     assert_primal_mode(&matrix_exp_ad(&ad_a).run().unwrap());
@@ -366,18 +359,19 @@ fn ad_mode_propagation_forward_and_reverse() {
     let ad_a_fwd = AdTensor::new_forward(a.clone(), da).unwrap();
     let ad_b = AdTensor::new_primal(b);
     let out_fwd = solve_ad(&ad_a_fwd, &ad_b).run().unwrap();
-    assert!(matches!(out_fwd.as_value(), AdValue::Forward { .. }));
+    assert_forward_mode(&out_fwd);
 
     let out_tri_fwd = solve_triangular_ad(&ad_a_fwd, &ad_b).run().unwrap();
-    assert!(matches!(out_tri_fwd.as_value(), AdValue::Forward { .. }));
+    assert_forward_mode(&out_tri_fwd);
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None).unwrap();
-    let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None).unwrap();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
+    let ad_b_rev = reverse_leaf_f64(a, &tape);
     let out_rev = einsum_ad("ij,jk->ik", &[&ad_a_rev, &ad_b_rev])
         .run()
         .unwrap();
-    assert!(matches!(out_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11)));
+    assert_reverse_on_tape(&out_rev, &tape);
 
     let out_tri_rev = solve_triangular_ad(&ad_a_rev, &ad_b_rev).run().unwrap();
-    assert!(matches!(out_tri_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11)));
+    assert_reverse_on_tape(&out_tri_rev, &tape);
 }

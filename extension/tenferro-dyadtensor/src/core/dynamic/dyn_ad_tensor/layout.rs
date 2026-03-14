@@ -1,18 +1,12 @@
 use num_traits::Zero;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::super::tensor_ops::{tensor_element, unflatten_index_column_major};
+use crate::core::AdTensorSnapshot;
 use crate::structured::StructuredTensor;
-use crate::{tape, AdTensor, AdValue, Error, NodeId, Result};
-
-static NEXT_AD_TENSOR_NODE_ID: AtomicU64 = AtomicU64::new(1_u64 << 61);
-
-pub(super) fn fresh_ad_tensor_node_id() -> NodeId {
-    NodeId(NEXT_AD_TENSOR_NODE_ID.fetch_add(1, Ordering::Relaxed))
-}
+use crate::{tape, AdTensor, Error, Result};
 
 fn ensure_dense_ad_tensor_layout<T>(input: &AdTensor<T>, op_name: &'static str) -> Result<()>
 where
@@ -46,14 +40,14 @@ where
         });
     }
 
-    match input.as_value().clone() {
-        AdValue::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
+    match input.snapshot() {
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
             primal
                 .into_payload()
                 .reshape(new_dims)
                 .map_err(Error::from)?,
         ))),
-        AdValue::Forward { primal, tangent } => AdTensor::new_forward(
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
             StructuredTensor::from_dense(
                 primal
                     .into_payload()
@@ -67,7 +61,7 @@ where
                     .map_err(Error::from)?,
             ),
         ),
-        AdValue::Reverse {
+        AdTensorSnapshot::Reverse {
             primal,
             node: input_node,
             tape,
@@ -86,19 +80,24 @@ where
                     ))
                 })
                 .transpose()?;
-            let output_node = fresh_ad_tensor_node_id();
+            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "reshape reverse output is missing a tape node".to_string(),
+                })?;
             tape::register_rule::<T>(
-                tape,
+                &tape,
                 output_node,
                 Box::new(move |cotangent| {
-                    let contiguous = cotangent.contiguous(MemoryOrder::ColumnMajor);
-                    Ok(vec![(
-                        input_node,
+                    let contiguous = cotangent.payload().contiguous(MemoryOrder::ColumnMajor);
+                    let grad = StructuredTensor::from_dense(
                         contiguous.reshape(&old_dims).map_err(Error::from)?,
-                    )])
+                    );
+                    Ok(vec![(input_node, grad)])
                 }),
             );
-            AdTensor::new_reverse(output_primal, output_node, tape, output_tangent)
+            Ok(out)
         }
     }
 }
@@ -215,15 +214,15 @@ where
     ensure_dense_ad_tensor_layout(input, "take_prefix")?;
 
     let original_dims = input.primal().dims().to_vec();
-    match input.as_value().clone() {
-        AdValue::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
+    match input.snapshot() {
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
             take_prefix_payload_typed(primal.payload(), axis, len)?,
         ))),
-        AdValue::Forward { primal, tangent } => AdTensor::new_forward(
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
             StructuredTensor::from_dense(take_prefix_payload_typed(primal.payload(), axis, len)?),
             StructuredTensor::from_dense(take_prefix_payload_typed(tangent.payload(), axis, len)?),
         ),
-        AdValue::Reverse {
+        AdTensorSnapshot::Reverse {
             primal,
             node: input_node,
             tape,
@@ -244,18 +243,25 @@ where
                     )?))
                 })
                 .transpose()?;
-            let output_node = fresh_ad_tensor_node_id();
+            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "take_prefix reverse output is missing a tape node".to_string(),
+                })?;
             tape::register_rule::<T>(
-                tape,
+                &tape,
                 output_node,
                 Box::new(move |cotangent| {
-                    Ok(vec![(
-                        input_node,
-                        take_prefix_pullback_typed(cotangent, axis, &original_dims)?,
-                    )])
+                    let grad = StructuredTensor::from_dense(take_prefix_pullback_typed(
+                        cotangent.payload(),
+                        axis,
+                        &original_dims,
+                    )?);
+                    Ok(vec![(input_node, grad)])
                 }),
             );
-            AdTensor::new_reverse(output_primal, output_node, tape, output_tangent)
+            Ok(out)
         }
     }
 }
@@ -277,15 +283,15 @@ where
         });
     }
 
-    match input.as_value().clone() {
-        AdValue::Primal(primal) => Ok(AdTensor::new_primal(
+    match input.snapshot() {
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(
             StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?,
         )),
-        AdValue::Forward { primal, tangent } => AdTensor::new_forward(
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
             StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?,
             StructuredTensor::from_diagonal_vector(tangent.into_payload(), logical_rank)?,
         ),
-        AdValue::Reverse {
+        AdTensorSnapshot::Reverse {
             primal,
             node: input_node,
             tape,
@@ -296,13 +302,23 @@ where
             let output_tangent = tangent
                 .map(|t| StructuredTensor::from_diagonal_vector(t.into_payload(), logical_rank))
                 .transpose()?;
-            let output_node = fresh_ad_tensor_node_id();
+            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "diag_embed reverse output is missing a tape node".to_string(),
+                })?;
             tape::register_rule::<T>(
-                tape,
+                &tape,
                 output_node,
-                Box::new(move |cotangent| Ok(vec![(input_node, cotangent.clone())])),
+                Box::new(move |cotangent| {
+                    Ok(vec![(
+                        input_node,
+                        StructuredTensor::from_dense(cotangent.payload().clone()),
+                    )])
+                }),
             );
-            AdTensor::new_reverse(output_primal, output_node, tape, output_tangent)
+            Ok(out)
         }
     }
 }
@@ -314,20 +330,20 @@ pub(super) fn contiguous_ad_tensor_typed<T>(
 where
     T: Scalar,
 {
-    let mapped = match input.as_value().clone() {
-        AdValue::Primal(primal) => {
-            AdValue::Primal(primal.with_payload_like(primal.payload().contiguous(order))?)
+    let mapped = match input.snapshot() {
+        AdTensorSnapshot::Primal(primal) => {
+            AdTensorSnapshot::Primal(primal.with_payload_like(primal.payload().contiguous(order))?)
         }
-        AdValue::Forward { primal, tangent } => AdValue::Forward {
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensorSnapshot::Forward {
             primal: primal.with_payload_like(primal.payload().contiguous(order))?,
             tangent: tangent.with_payload_like(tangent.payload().contiguous(order))?,
         },
-        AdValue::Reverse {
+        AdTensorSnapshot::Reverse {
             primal,
             node,
             tape,
             tangent,
-        } => AdValue::Reverse {
+        } => AdTensorSnapshot::Reverse {
             primal: primal.with_payload_like(primal.payload().contiguous(order))?,
             node,
             tape,

@@ -1,6 +1,7 @@
 use crate::runtime::dispatch::{unsupported_runtime_capability, with_runtime};
 use crate::Result;
-use crate::{AdTensor, AdValue};
+use crate::{AdMode, AdTensor, StructuredTensor};
+use chainrules::Tape;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor;
 
@@ -22,5 +23,32 @@ pub(crate) fn as_slice<T: tenferro_algebra::Scalar>(t: &Tensor<T>) -> &[T] {
 }
 
 pub(crate) fn assert_primal_mode(t: &AdTensor<f64>) {
-    assert!(matches!(t.as_value(), AdValue::Primal(_)));
+    assert_eq!(t.mode(), AdMode::Primal);
+    assert!(t.tangent().is_none());
+    assert!(t.node_id().is_none());
+}
+
+pub(crate) fn assert_forward_mode<T: tenferro_algebra::Scalar>(t: &AdTensor<T>) {
+    assert_eq!(t.mode(), AdMode::Forward);
+    assert!(t.tangent().is_some());
+    assert!(t.node_id().is_none());
+}
+
+pub(crate) fn reverse_leaf_f64(
+    tensor: impl Into<StructuredTensor<f64>>,
+    tape: &Tape<StructuredTensor<f64>>,
+) -> AdTensor<f64> {
+    AdTensor::new_reverse_leaf(tensor, tape).unwrap()
+}
+
+pub(crate) fn assert_reverse_on_tape<T: tenferro_algebra::Scalar>(
+    tensor: &AdTensor<T>,
+    tape: &Tape<StructuredTensor<T>>,
+) {
+    assert_eq!(tensor.mode(), AdMode::Reverse);
+    assert!(tensor.node_id().is_some());
+    let actual_tape = tensor
+        .tape()
+        .expect("reverse tensor should expose its tape");
+    assert!(actual_tape.same_tape(tape));
 }

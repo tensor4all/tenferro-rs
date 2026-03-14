@@ -256,7 +256,7 @@ Layer 3: tenferro-prims        — Semiring/scalar/analytic execution families
 Layer 2: tenferro-tensor       — Tensor<T> = DataBuffer + shape + strides, zero-copy view ops,
                                  impl Differentiable for Tensor<T>
 Shared:  chainrules-core     — Core AD traits: Differentiable, ReverseRule<V>, ForwardRule<V> (no tensor deps)
-         chainrules           — AD engine: Tape<V>, TrackedTensor<V>, DualTensor<V> (← chainrules-core)
+         chainrules           — AD engine: Tape<V>, TrackedValue<V>, DualValue<V> (← chainrules-core)
          tenferro-algebra      — HasAlgebra trait (UX sugar for algebra inference), Semiring trait, Standard<T> typed algebra
          tenferro-device       — Device enum, Error/Result types
 Layer 1: CPU backends          — strided-kernel + GEMM (faer/cblas) [future]
@@ -266,7 +266,7 @@ Foundation: strided-rs    — Independent workspace (strided-traits → strided-
 ```
 
 `chainrules-core` defines core AD traits (like Julia's ChainRulesCore.jl), independent
-of any tensor type. `chainrules` provides the AD engine (Tape, TrackedTensor, DualTensor).
+of any tensor type. `chainrules` provides the AD engine (Tape, TrackedValue, DualValue).
 `Tensor<T>` implements `Differentiable` in `tenferro-tensor`.
 Operation-specific AD rules live with their operations: `tenferro-einsum` owns einsum
 AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`);
@@ -281,7 +281,7 @@ chainrules-core (← thiserror only, no tensor deps)
     │
     ↓
 chainrules (← chainrules-core)
-    │  Tape<V>, TrackedTensor<V>, DualTensor<V>
+    │  Tape<V>, TrackedValue<V>, DualValue<V>
     │
 tenferro-device (← strided-view for StridedError, ← thiserror)
     │

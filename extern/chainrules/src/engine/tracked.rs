@@ -18,7 +18,7 @@ use crate::{Differentiable, NodeId};
 /// ));
 /// assert!(a.requires_grad());
 /// ```
-pub struct TrackedTensor<V: Differentiable> {
+pub struct TrackedValue<V: Differentiable> {
     pub(crate) value: V,
     pub(crate) node_id: Option<NodeId>,
     pub(crate) tape: Option<Tape<V>>,
@@ -26,7 +26,7 @@ pub struct TrackedTensor<V: Differentiable> {
     pub(crate) tangent: Option<V::Tangent>,
 }
 
-impl<V: Differentiable> TrackedTensor<V> {
+impl<V: Differentiable> TrackedValue<V> {
     /// Creates a tracked value with `requires_grad = false` (no tape).
     pub fn new(value: V) -> Self {
         Self {

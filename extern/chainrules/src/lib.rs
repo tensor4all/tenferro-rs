@@ -4,8 +4,8 @@
 //! [`chainrules_core`] traits. It is analogous to Zygote.jl in the Julia
 //! ecosystem: a concrete AD engine that uses ChainRulesCore.jl interfaces.
 //!
-//! - Reverse-mode AD via [`Tape`], [`TrackedTensor`], and [`Tape::pullback`]
-//! - Forward-mode AD via [`DualTensor`]
+//! - Reverse-mode AD via [`Tape`], [`TrackedValue`], and [`Tape::pullback`]
+//! - Forward-mode AD via [`DualValue`]
 //! - Forward-over-reverse HVP via [`Tape::hvp`]
 //!
 //! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate
@@ -25,7 +25,7 @@
 //! Reverse-mode usage (with operation-specific AD functions from other crates):
 //!
 //! ```ignore
-//! use chainrules::{Tape, TrackedTensor};
+//! use chainrules::{Tape, TrackedValue};
 //! use std::cell::RefCell;
 //! use std::rc::Rc;
 //! use tenferro_algebra::Standard;
@@ -82,7 +82,7 @@
 //! Forward-mode usage:
 //!
 //! ```ignore
-//! use chainrules::DualTensor;
+//! use chainrules::DualValue;
 //! use tenferro_algebra::Standard;
 //! use tenferro_einsum::dual_einsum;
 //! use tenferro_prims::{CpuBackend, CpuContext};
@@ -93,8 +93,8 @@
 //! let da = Tensor::<f64>::ones(&[2, 2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 //! let b = Tensor::<f64>::ones(&[2, 2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
 //!
-//! let a_dual = DualTensor::with_tangent(a, da).unwrap();
-//! let b_dual = DualTensor::new(b);
+//! let a_dual = DualValue::with_tangent(a, da).unwrap();
+//! let b_dual = DualValue::new(b);
 //! let c_dual =
 //!     dual_einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual])
 //!         .unwrap();
@@ -133,8 +133,8 @@ mod engine;
 mod ops;
 
 pub use engine::{
-    AutogradContext, BackwardOptions, DualTensor, Gradients, HvpResult, PullbackPlan, Tape,
-    TrackedTensor, Variable,
+    AutogradContext, BackwardOptions, DualValue, Gradients, HvpResult, PullbackPlan, Tape,
+    TrackedValue, Variable,
 };
 
 /// Monomorphic AD operation helpers for [`Variable`].

@@ -4,24 +4,22 @@ use super::*;
 fn solve_triangular_builder_reverse_pullback_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(101);
-    let node_a = NodeId(11);
-    let node_b = NodeId(12);
+    let tape = Tape::<StructuredTensor<f64>>::new();
 
     let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let cotangent =
         Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-    let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
+    let ad_b_rev = reverse_leaf_f64(b.clone(), &tape);
     let out = solve_triangular(&ad_a_rev, &ad_b_rev).unwrap();
-    assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+    assert_reverse_on_tape(&out, &tape);
 
     let ad_cotangent = AdTensor::new_primal(cotangent);
     let grad_map = pullback(&out, &ad_cotangent).unwrap();
-    let grad_a = grad_map.get(&node_a).expect("missing dA");
-    let grad_b = grad_map.get(&node_b).expect("missing dB");
+    let grad_a = grad_map.get(&node_id(&ad_a_rev)).expect("missing dA");
+    let grad_b = grad_map.get(&node_id(&ad_b_rev)).expect("missing dB");
 
     let expected = solve_triangular_rrule(
         &AdTensor::new_primal(a),
@@ -43,19 +41,17 @@ fn solve_triangular_builder_reverse_pullback_matches_rrule() {
 fn solve_builder_reverse_pullback_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(111);
-    let node_a = NodeId(51);
-    let node_b = NodeId(52);
+    let tape = Tape::<StructuredTensor<f64>>::new();
 
     let a = f64_2x2([3.0, 1.0, 1.0, 2.0]);
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let cotangent =
         Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-    let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
+    let ad_b_rev = reverse_leaf_f64(b.clone(), &tape);
     let out = solve(&ad_a_rev, &ad_b_rev).unwrap();
-    assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+    assert_reverse_on_tape(&out, &tape);
 
     let ad_cotangent = AdTensor::new_primal(cotangent.clone());
     let grads = pullback_wrt(&out, &ad_cotangent, &[&ad_a_rev, &ad_b_rev]).unwrap();
@@ -81,16 +77,15 @@ fn solve_builder_reverse_pullback_matches_rrule() {
 fn norm_builder_reverse_pullback_l1_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(112);
-    let node_a = NodeId(61);
+    let tape = Tape::<StructuredTensor<f64>>::new();
 
     let a = Tensor::<f64>::from_slice(&[1.0, 3.0, -2.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
     let cotangent: Tensor<f64> = Tensor::from_vec(vec![1.5], &[], &[], 0).unwrap();
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let out = crate::norm_ad(&ad_a_rev).kind(NormKind::L1).run().unwrap();
-    assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+    assert_reverse_on_tape(&out, &tape);
 
     let ad_cotangent = AdTensor::new_primal(cotangent.clone());
     let grads = pullback_wrt(&out, &ad_cotangent, &[&ad_a_rev]).unwrap();
@@ -109,18 +104,16 @@ fn norm_builder_reverse_pullback_l1_matches_rrule() {
 fn einsum_builder_reverse_pullback_wrt_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(202);
-    let node_a = NodeId(31);
-    let node_b = NodeId(32);
+    let tape = Tape::<StructuredTensor<f64>>::new();
 
     let a = f64_2x2([1.0, 3.0, 2.0, 4.0]);
     let b = f64_2x2([2.0, -1.0, 0.5, 1.5]);
     let cotangent = f64_2x2([1.0, 0.0, 0.0, 1.0]);
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-    let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
+    let ad_b_rev = reverse_leaf_f64(b.clone(), &tape);
     let out = einsum("ij,jk->ik", &[&ad_a_rev, &ad_b_rev]).unwrap();
-    assert!(matches!(out.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+    assert_reverse_on_tape(&out, &tape);
 
     let ad_cotangent = AdTensor::new_primal(cotangent.clone());
     let grads = pullback_wrt(&out, &ad_cotangent, &[&ad_a_rev, &ad_b_rev]).unwrap();
@@ -142,9 +135,7 @@ fn einsum_builder_reverse_pullback_wrt_matches_rrule() {
 fn solve_triangular_reverse_pullback_complex_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(303);
-    let node_a = NodeId(41);
-    let node_b = NodeId(42);
+    let tape = Tape::<StructuredTensor<Complex64>>::new();
 
     let a = Tensor::<Complex64>::from_slice(
         &[
@@ -170,12 +161,12 @@ fn solve_triangular_reverse_pullback_complex_matches_rrule() {
     )
     .unwrap();
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-    let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_c64(a.clone(), &tape);
+    let ad_b_rev = reverse_leaf_c64(b.clone(), &tape);
     let out = solve_triangular(&ad_a_rev, &ad_b_rev).unwrap();
     let grads = pullback(&out, &AdTensor::new_primal(cotangent.clone())).unwrap();
-    let grad_a = grads.get(&node_a).expect("missing complex dA");
-    let grad_b = grads.get(&node_b).expect("missing complex dB");
+    let grad_a = grads.get(&node_id(&ad_a_rev)).expect("missing complex dA");
+    let grad_b = grads.get(&node_id(&ad_b_rev)).expect("missing complex dB");
 
     let expected = solve_triangular_rrule(
         &AdTensor::new_primal(a),
@@ -194,13 +185,12 @@ fn solve_triangular_reverse_pullback_complex_matches_rrule() {
 fn svd_builder_reverse_pullback_s_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(401);
-    let node_a = NodeId(71);
+    let tape = Tape::<StructuredTensor<f64>>::new();
     let a = f64_2x2([3.0, 1.0, 0.5, 2.0]);
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let out = svd(&ad_a_rev).unwrap();
-    assert!(matches!(out.s.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+    assert_reverse_on_tape(&out.s, &tape);
 
     let cotangent_s =
         Tensor::<f64>::from_slice(&[1.0, -0.5], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -230,9 +220,7 @@ fn svd_builder_reverse_pullback_s_matches_rrule() {
 fn lstsq_builder_reverse_pullback_x_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(402);
-    let node_a = NodeId(72);
-    let node_b = NodeId(73);
+    let tape = Tape::<StructuredTensor<f64>>::new();
     let a = Tensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
@@ -241,10 +229,10 @@ fn lstsq_builder_reverse_pullback_x_matches_rrule() {
     .unwrap();
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-    let ad_b_rev = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
+    let ad_b_rev = reverse_leaf_f64(b.clone(), &tape);
     let out = lstsq(&ad_a_rev, &ad_b_rev).unwrap();
-    assert!(matches!(out.x.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
+    assert_reverse_on_tape(&out.x, &tape);
 
     let cotangent_x =
         Tensor::<f64>::from_slice(&[0.3, -0.7], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -263,53 +251,28 @@ fn lstsq_builder_reverse_pullback_x_matches_rrule() {
 }
 
 #[test]
-fn eig_builder_reverse_pullback_values_matches_rrule_for_real_wrt() {
+fn eig_builder_rejects_reverse_mode_for_real_inputs() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(403);
-    let node_a = NodeId(74);
+    let tape = Tape::<StructuredTensor<f64>>::new();
     let a = Tensor::<f64>::from_slice(&[0.0, -1.0, 1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-    let out = eig(&ad_a_rev).unwrap();
-    assert!(matches!(out.values.as_value(), AdValue::Reverse { tape: t, .. } if *t == tape));
-
-    let cotangent_values = Tensor::<Complex64>::from_slice(
-        &[Complex64::new(1.0, 0.0), Complex64::new(-0.25, 0.5)],
-        &[2],
-        MemoryOrder::ColumnMajor,
-    )
-    .unwrap();
-    let ad_cotangent = AdTensor::new_primal(cotangent_values.clone());
-
-    let grads = pullback_wrt_mixed(&out.values, &ad_cotangent, &[&ad_a_rev]).unwrap();
-    let grad_a = grads[0].as_ref().expect("missing eig dA");
-
-    let expected = with_cpu_runtime("eig_rrule_expected", |ctx| {
-        tenferro_linalg::eig_rrule::<f64, _>(
-            ctx,
-            &a,
-            &tenferro_linalg::EigCotangent {
-                values: Some(cotangent_values.clone()),
-                vectors: None,
-            },
-        )
-        .map_err(Error::from)
-    })
-    .unwrap();
-
-    assert!(max_abs_diff(grad_a, &expected) < 1e-12);
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
+    let err = match eig(&ad_a_rev) {
+        Ok(_) => panic!("real-input eig_ad reverse mode should be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::UnsupportedAdOp { op: "eig_ad" }));
 }
 
 #[test]
 fn multi_output_builders_register_reverse_pullback_smoke() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = TapeId(404);
-    let node_a = NodeId(75);
+    let tape = Tape::<StructuredTensor<f64>>::new();
     let a = f64_2x2([4.0, 1.0, 1.0, 3.0]);
-    let ad_a_rev = AdTensor::new_reverse(a, node_a, tape, None).unwrap();
+    let ad_a_rev = reverse_leaf_f64(a, &tape);
 
     let qr_out = qr(&ad_a_rev).unwrap();
     let qr_cot_q = AdTensor::new_primal(Tensor::<f64>::ones(
@@ -377,8 +340,6 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
             .is_some()
     );
 
-    let node_ls_a = NodeId(76);
-    let node_ls_b = NodeId(77);
     let a_ls = Tensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
@@ -386,8 +347,8 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     )
     .unwrap();
     let b_ls = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-    let ad_ls_a = AdTensor::new_reverse(a_ls, node_ls_a, tape, None).unwrap();
-    let ad_ls_b = AdTensor::new_reverse(b_ls, node_ls_b, tape, None).unwrap();
+    let ad_ls_a = reverse_leaf_f64(a_ls, &tape);
+    let ad_ls_b = reverse_leaf_f64(b_ls, &tape);
     let lstsq_out = lstsq(&ad_ls_a, &ad_ls_b).unwrap();
     let lstsq_cot_x = AdTensor::new_primal(Tensor::<f64>::ones(
         lstsq_out.x.dims(),

@@ -5,9 +5,9 @@ use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
 use super::super::tensor_ops::{tensor_map_binary_typed, tensor_map_unary_typed};
-use super::layout::fresh_ad_tensor_node_id;
+use crate::core::AdTensorSnapshot;
 use crate::structured::StructuredTensor;
-use crate::{tape, AdTensor, AdValue, Error, NodeId, Result, TapeId};
+use crate::{tape, AdTensor, Error, NodeId, Result};
 
 pub(super) fn map_ad_tensor_same_type_linear_typed<T, F>(
     input: &AdTensor<T>,
@@ -17,40 +17,43 @@ where
     T: Scalar + ScalarAd + Copy + 'static,
     F: Fn(T) -> T + Copy + 'static,
 {
-    let mapped = match input.as_value().clone() {
-        AdValue::Primal(primal) => AdValue::Primal(
+    let mapped = match input.snapshot() {
+        AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(
             primal.with_payload_like(tensor_map_unary_typed(primal.payload(), map)?)?,
         ),
-        AdValue::Forward { primal, tangent } => AdValue::Forward {
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensorSnapshot::Forward {
             primal: primal.with_payload_like(tensor_map_unary_typed(primal.payload(), map)?)?,
             tangent: tangent.with_payload_like(tensor_map_unary_typed(tangent.payload(), map)?)?,
         },
-        AdValue::Reverse {
+        AdTensorSnapshot::Reverse {
             primal,
             node: input_node,
             tape,
             tangent,
         } => {
+            let input_layout = primal.clone();
             let output_primal =
                 primal.with_payload_like(tensor_map_unary_typed(primal.payload(), map)?)?;
             let output_tangent = tangent
                 .as_ref()
                 .map(|t| t.with_payload_like(tensor_map_unary_typed(t.payload(), map)?))
                 .transpose()?;
-            let output_node = fresh_ad_tensor_node_id();
+            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "same-type linear output is missing a tape node".to_string(),
+                })?;
             tape::register_rule::<T>(
-                tape,
+                &tape,
                 output_node,
                 Box::new(move |cotangent| {
-                    Ok(vec![(input_node, tensor_map_unary_typed(cotangent, map)?)])
+                    let grad = input_layout
+                        .with_payload_like(tensor_map_unary_typed(cotangent.payload(), map)?)?;
+                    Ok(vec![(input_node, grad)])
                 }),
             );
-            AdValue::Reverse {
-                primal: output_primal,
-                node: output_node,
-                tape,
-                tangent: output_tangent,
-            }
+            return Ok(out);
         }
     };
     AdTensor::try_from(mapped)
@@ -59,7 +62,7 @@ where
 pub(super) fn map_ad_tensor_mixed_linear_typed<TIn, TOut, P, R>(
     input: &AdTensor<TIn>,
     primal_map: P,
-    reverse_map: R,
+    _reverse_map: R,
 ) -> Result<AdTensor<TOut>>
 where
     TIn: Scalar + ScalarAd + Copy + 'static,
@@ -67,13 +70,13 @@ where
     P: Fn(TIn) -> TOut + Copy,
     R: Fn(TOut) -> TIn + Copy + 'static,
 {
-    let mapped = match input.as_value().clone() {
-        AdValue::Primal(primal) => AdValue::Primal(StructuredTensor::new(
+    let mapped = match input.snapshot() {
+        AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(StructuredTensor::new(
             primal.logical_dims().to_vec(),
             primal.axis_classes().to_vec(),
             tensor_map_unary_typed(primal.payload(), primal_map)?,
         )?),
-        AdValue::Forward { primal, tangent } => AdValue::Forward {
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensorSnapshot::Forward {
             primal: StructuredTensor::new(
                 primal.logical_dims().to_vec(),
                 primal.axis_classes().to_vec(),
@@ -85,44 +88,10 @@ where
                 tensor_map_unary_typed(tangent.payload(), primal_map)?,
             )?,
         },
-        AdValue::Reverse {
-            primal,
-            node: input_node,
-            tape,
-            tangent,
-        } => {
-            let output_primal = StructuredTensor::new(
-                primal.logical_dims().to_vec(),
-                primal.axis_classes().to_vec(),
-                tensor_map_unary_typed(primal.payload(), primal_map)?,
-            )?;
-            let output_tangent = tangent
-                .as_ref()
-                .map(|t| {
-                    StructuredTensor::new(
-                        t.logical_dims().to_vec(),
-                        t.axis_classes().to_vec(),
-                        tensor_map_unary_typed(t.payload(), primal_map)?,
-                    )
-                })
-                .transpose()?;
-            let output_node = fresh_ad_tensor_node_id();
-            tape::register_bridge_rule::<TOut, TIn>(
-                tape,
-                output_node,
-                Box::new(move |cotangent| {
-                    Ok(vec![(
-                        input_node,
-                        tensor_map_unary_typed(cotangent, reverse_map)?,
-                    )])
-                }),
-            );
-            AdValue::Reverse {
-                primal: output_primal,
-                node: output_node,
-                tape,
-                tangent: output_tangent,
-            }
+        AdTensorSnapshot::Reverse { .. } => {
+            return Err(Error::UnsupportedAdOp {
+                op: "mixed_dtype_tensor_reverse",
+            });
         }
     };
     AdTensor::try_from(mapped)
@@ -138,22 +107,22 @@ where
 struct AdTensorBinaryState<T: Scalar> {
     primal: StructuredTensor<T>,
     tangent: Option<StructuredTensor<T>>,
-    reverse: Option<(NodeId, TapeId)>,
+    reverse: Option<(NodeId, ::chainrules::Tape<StructuredTensor<T>>)>,
 }
 
-fn split_ad_tensor_state<T: Scalar>(value: AdValue<StructuredTensor<T>>) -> AdTensorBinaryState<T> {
+fn split_ad_tensor_state<T: Scalar>(value: AdTensorSnapshot<T>) -> AdTensorBinaryState<T> {
     match value {
-        AdValue::Primal(primal) => AdTensorBinaryState {
+        AdTensorSnapshot::Primal(primal) => AdTensorBinaryState {
             primal,
             tangent: None,
             reverse: None,
         },
-        AdValue::Forward { primal, tangent } => AdTensorBinaryState {
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensorBinaryState {
             primal,
             tangent: Some(tangent),
             reverse: None,
         },
-        AdValue::Reverse {
+        AdTensorSnapshot::Reverse {
             primal,
             node,
             tape,
@@ -193,9 +162,9 @@ fn ensure_same_structured_layout<T: Scalar>(
 }
 
 pub(super) fn merge_add_ad_tensors<T>(
-    lhs: AdValue<StructuredTensor<T>>,
-    rhs: AdValue<StructuredTensor<T>>,
-) -> Result<AdValue<StructuredTensor<T>>>
+    lhs: AdTensorSnapshot<T>,
+    rhs: AdTensorSnapshot<T>,
+) -> Result<AdTensorSnapshot<T>>
 where
     T: Scalar + Copy + Add<Output = T> + 'static,
 {
@@ -232,26 +201,32 @@ where
 
     match (lhs_state.reverse, rhs_state.reverse) {
         (None, None) => match tangent {
-            Some(tangent) => Ok(AdValue::Forward { primal, tangent }),
-            None => Ok(AdValue::Primal(primal)),
+            Some(tangent) => Ok(AdTensorSnapshot::Forward { primal, tangent }),
+            None => Ok(AdTensorSnapshot::Primal(primal)),
         },
         (Some((lhs_node, lhs_tape)), rhs_reverse) => {
-            if let Some((_, rhs_tape)) = rhs_reverse {
-                if lhs_tape != rhs_tape {
+            if let Some((_, ref rhs_tape)) = rhs_reverse {
+                if !lhs_tape.same_tape(&rhs_tape) {
                     return Err(Error::InvalidAdTensor {
                         message: format!(
                             "reverse-mode tape mismatch in tensor add (lhs={}, rhs={})",
-                            lhs_tape.0, rhs_tape.0
+                            lhs_tape.id(),
+                            rhs_tape.id()
                         ),
                     });
                 }
             }
             let rhs_node = rhs_reverse.map(|(node, _)| node);
-            let output_node = fresh_ad_tensor_node_id();
+            let out = AdTensor::new_reverse_output(primal, &lhs_tape, tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensor merge output is missing a tape node".to_string(),
+                })?;
             tape::register_rule::<T>(
-                lhs_tape,
+                &lhs_tape,
                 output_node,
-                Box::new(move |cotangent: &Tensor<T>| {
+                Box::new(move |cotangent| {
                     let mut input_grads = Vec::new();
                     input_grads.push((lhs_node, cotangent.clone()));
                     if let Some(node) = rhs_node {
@@ -260,26 +235,21 @@ where
                     Ok(input_grads)
                 }),
             );
-            Ok(AdValue::Reverse {
-                primal,
-                node: output_node,
-                tape: lhs_tape,
-                tangent,
-            })
+            Ok(out.snapshot())
         }
         (None, Some((rhs_node, rhs_tape))) => {
-            let output_node = fresh_ad_tensor_node_id();
+            let out = AdTensor::new_reverse_output(primal, &rhs_tape, tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "tensor merge output is missing a tape node".to_string(),
+                })?;
             tape::register_rule::<T>(
-                rhs_tape,
+                &rhs_tape,
                 output_node,
-                Box::new(move |cotangent: &Tensor<T>| Ok(vec![(rhs_node, cotangent.clone())])),
+                Box::new(move |cotangent| Ok(vec![(rhs_node, cotangent.clone())])),
             );
-            Ok(AdValue::Reverse {
-                primal,
-                node: output_node,
-                tape: rhs_tape,
-                tangent,
-            })
+            Ok(out.snapshot())
         }
     }
 }

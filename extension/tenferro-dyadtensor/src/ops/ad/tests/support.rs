@@ -1,8 +1,12 @@
+#![allow(dead_code)]
+
+use chainrules::Tape;
+use chainrules_core::NodeId;
 use num_complex::Complex64;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::StructuredTensor;
+use crate::{AdMode, AdTensor, StructuredTensor};
 
 pub(super) trait TensorLike<T: Scalar> {
     fn tensor_ref(&self) -> &Tensor<T>;
@@ -26,6 +30,52 @@ pub(super) fn f64_2x2(values: [f64; 4]) -> Tensor<f64> {
 
 pub(super) fn c64_2x2(values: [Complex64; 4]) -> Tensor<Complex64> {
     Tensor::<Complex64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
+}
+
+pub(super) fn scalar_f64(value: f64) -> Tensor<f64> {
+    Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
+
+pub(super) fn scalar_c64(value: Complex64) -> Tensor<Complex64> {
+    Tensor::<Complex64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
+
+pub(super) fn reverse_leaf_f64(
+    tensor: impl Into<StructuredTensor<f64>>,
+    tape: &Tape<StructuredTensor<f64>>,
+) -> AdTensor<f64> {
+    AdTensor::new_reverse_leaf(tensor, tape).unwrap()
+}
+
+pub(super) fn reverse_leaf_c64(
+    tensor: impl Into<StructuredTensor<Complex64>>,
+    tape: &Tape<StructuredTensor<Complex64>>,
+) -> AdTensor<Complex64> {
+    AdTensor::new_reverse_leaf(tensor, tape).unwrap()
+}
+
+pub(super) fn assert_forward_mode<T: Scalar>(tensor: &AdTensor<T>) {
+    assert_eq!(tensor.mode(), AdMode::Forward);
+    assert!(tensor.tangent().is_some());
+    assert!(tensor.node_id().is_none());
+}
+
+pub(super) fn assert_reverse_on_tape<T: Scalar>(
+    tensor: &AdTensor<T>,
+    tape: &Tape<StructuredTensor<T>>,
+) {
+    assert_eq!(tensor.mode(), AdMode::Reverse);
+    assert!(tensor.node_id().is_some());
+    let actual_tape = tensor
+        .tape()
+        .expect("reverse tensor should expose its tape");
+    assert!(actual_tape.same_tape(tape));
+}
+
+pub(super) fn node_id<T: Scalar>(tensor: &AdTensor<T>) -> NodeId {
+    tensor
+        .node_id()
+        .expect("reverse tensor should expose a node id")
 }
 
 pub(super) fn as_slice<T>(t: &T) -> &[f64]

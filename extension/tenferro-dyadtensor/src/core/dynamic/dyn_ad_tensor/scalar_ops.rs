@@ -1,16 +1,16 @@
 use chainrules_scalarops::{self, ScalarAd};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
-use super::super::dyn_ad_scalar::{promote_f32_to_c32, promote_f64_to_c64, DynAdScalar};
 use super::super::tensor_ops::{
     tensor_element, tensor_map_binary_typed, tensor_map_unary_typed, tensor_max_abs_diff_typed,
     unflatten_index_column_major,
 };
+use super::merge::map_ad_tensor_mixed_linear_typed;
 use super::merge::merge_add_ad_tensors;
 use super::DynAdTensor;
-use crate::{AdTensor, AdValue, Error, Result};
+use crate::{AdTensor, Error, Result};
 
 fn tensor_scalar_rrule_typed<T>(
     tensor_primal: &Tensor<T>,
@@ -88,9 +88,51 @@ where
     Ok((primal_out, tangent_out))
 }
 
+fn rank0_tensor<T>(value: T) -> Result<Tensor<T>>
+where
+    T: Scalar + Copy,
+{
+    Tensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).map_err(Error::from)
+}
+
+fn extract_rank0_scalar<T>(scalar: &AdTensor<T>, op_name: &'static str) -> Result<T>
+where
+    T: Scalar + Copy,
+{
+    if scalar.dims() != [] {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires a rank-0 scalar tensor, got dims={:?}",
+                scalar.dims()
+            ),
+        });
+    }
+    tensor_element(scalar.primal(), &[])
+}
+
+fn extract_rank0_scalar_tangent<T>(scalar: &AdTensor<T>, op_name: &'static str) -> Result<Option<T>>
+where
+    T: Scalar + Copy,
+{
+    scalar
+        .tangent()
+        .map(|tangent| {
+            if tangent.dims() != [] {
+                return Err(Error::InvalidAdTensor {
+                    message: format!(
+                        "{op_name} requires a rank-0 scalar tangent tensor, got dims={:?}",
+                        tangent.dims()
+                    ),
+                });
+            }
+            tensor_element(tangent, &[])
+        })
+        .transpose()
+}
+
 fn merge_tensor_scalar_output<T>(
     tensor: &AdTensor<T>,
-    scalar: &AdValue<T>,
+    scalar: &AdTensor<T>,
     primal: Tensor<T>,
     tangent: Option<Tensor<T>>,
     rrule: fn(T, T, T) -> (T, T),
@@ -98,20 +140,14 @@ fn merge_tensor_scalar_output<T>(
 where
     T: Scalar + ScalarAd + Copy + 'static,
 {
-    let tensor_reverse = match tensor.as_value() {
-        AdValue::Reverse { node, tape, .. } => Some((*node, *tape)),
-        _ => None,
-    };
-    let scalar_reverse = match scalar {
-        AdValue::Reverse { node, tape, .. } => Some((*node, *tape)),
-        _ => None,
-    };
+    let tensor_reverse = tensor.reverse_handle();
+    let scalar_reverse = scalar.reverse_handle();
 
-    let reverse = match (tensor_reverse, scalar_reverse) {
-        (Some((_lhs_node, lhs_tape)), Some((_, rhs_tape))) if lhs_tape != rhs_tape => {
+    let reverse = match (tensor_reverse.clone(), scalar_reverse.clone()) {
+        (Some((_lhs_node, lhs_tape)), Some((_, rhs_tape))) if !lhs_tape.same_tape(&rhs_tape) => {
             return Err(Error::MixedReverseTape {
-                expected: lhs_tape.0,
-                found: rhs_tape.0,
+                expected: lhs_tape.id() as u64,
+                found: rhs_tape.id() as u64,
             });
         }
         (Some((node, tape)), Some(_)) => Some((node, tape)),
@@ -126,44 +162,50 @@ where
         .transpose()?;
 
     if let Some((_, tape)) = reverse {
-        let output_node = super::layout::fresh_ad_tensor_node_id();
         let tensor_node = tensor_reverse.map(|(node, _)| node);
         let scalar_node = scalar_reverse.map(|(node, _)| node);
+        let tensor_layout = tensor.structured_primal().clone();
+        let scalar_layout = scalar.structured_primal().clone();
         let tensor_primal = tensor.primal().clone();
-        let tensor_primal_for_scalar = tensor_primal.clone();
-        let scalar_primal = *scalar.primal_ref();
+        let scalar_primal = extract_rank0_scalar(scalar, "tensor_scalar_reverse")?;
+        let out = AdTensor::new_reverse_output(structured_primal, &tape, structured_tangent)?;
+        let output_node = out
+            .reverse_node_id()
+            .ok_or_else(|| Error::InvalidAdTensor {
+                message: "tensor-scalar reverse output is missing a tape node".to_string(),
+            })?;
 
         crate::tape::register_rule::<T>(
-            tape,
+            &tape,
             output_node,
             Box::new(move |cotangent| {
                 let mut input_grads = Vec::new();
                 if let Some(node) = tensor_node {
-                    let (tensor_grad, _) =
-                        tensor_scalar_rrule_typed(&tensor_primal, scalar_primal, cotangent, rrule)?;
-                    input_grads.push((node, tensor_grad));
+                    let (tensor_grad, _) = tensor_scalar_rrule_typed(
+                        &tensor_primal,
+                        scalar_primal,
+                        cotangent.payload(),
+                        rrule,
+                    )?;
+                    input_grads.push((node, tensor_layout.with_payload_like(tensor_grad)?));
+                }
+                if let Some(node) = scalar_node {
+                    let (_, scalar_grad) = tensor_scalar_rrule_typed(
+                        &tensor_primal,
+                        scalar_primal,
+                        cotangent.payload(),
+                        rrule,
+                    )?;
+                    input_grads.push((
+                        node,
+                        scalar_layout.with_payload_like(rank0_tensor(scalar_grad)?)?,
+                    ));
                 }
                 Ok(input_grads)
             }),
         );
 
-        if let Some(node) = scalar_node {
-            crate::tape::register_scalar_bridge_rule::<T, T>(
-                tape,
-                output_node,
-                Box::new(move |cotangent| {
-                    let (_, scalar_grad) = tensor_scalar_rrule_typed(
-                        &tensor_primal_for_scalar,
-                        scalar_primal,
-                        cotangent,
-                        rrule,
-                    )?;
-                    Ok(vec![(node, scalar_grad)])
-                }),
-            );
-        }
-
-        return AdTensor::new_reverse(structured_primal, output_node, tape, structured_tangent);
+        return Ok(out);
     }
     if let Some(tangent) = structured_tangent {
         return AdTensor::new_forward(structured_primal, tangent);
@@ -171,15 +213,15 @@ where
     Ok(AdTensor::new_primal(structured_primal))
 }
 
-fn scale_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdValue<T>) -> Result<AdTensor<T>>
+fn scale_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdTensor<T>) -> Result<AdTensor<T>>
 where
     T: Scalar + ScalarAd + Copy + 'static,
 {
     let (primal, tangent) = tensor_binary_scalar_ad_typed(
         tensor.primal(),
         tensor.tangent(),
-        *scalar.primal_ref(),
-        scalar.tangent_ref().copied(),
+        extract_rank0_scalar(scalar, "scale")?,
+        extract_rank0_scalar_tangent(scalar, "scale")?,
         chainrules_scalarops::mul,
         chainrules_scalarops::mul_frule,
     )?;
@@ -192,15 +234,15 @@ where
     )
 }
 
-fn div_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdValue<T>) -> Result<AdTensor<T>>
+fn div_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdTensor<T>) -> Result<AdTensor<T>>
 where
     T: Scalar + ScalarAd + Copy + 'static,
 {
     let (primal, tangent) = tensor_binary_scalar_ad_typed(
         tensor.primal(),
         tensor.tangent(),
-        *scalar.primal_ref(),
-        scalar.tangent_ref().copied(),
+        extract_rank0_scalar(scalar, "div_scalar")?,
+        extract_rank0_scalar_tangent(scalar, "div_scalar")?,
         chainrules_scalarops::div,
         chainrules_scalarops::div_frule,
     )?;
@@ -213,28 +255,92 @@ where
     )
 }
 
+fn promote_f32_rank0_to_c32(
+    scalar: &AdTensor<f32>,
+    op_name: &'static str,
+) -> Result<AdTensor<Complex32>> {
+    map_ad_tensor_mixed_linear_typed(
+        scalar,
+        |x| Complex32::new(x, 0.0),
+        move |z| {
+            let _ = op_name;
+            z.re
+        },
+    )
+}
+
+fn promote_f64_rank0_to_c64(
+    scalar: &AdTensor<f64>,
+    op_name: &'static str,
+) -> Result<AdTensor<Complex64>> {
+    map_ad_tensor_mixed_linear_typed(
+        scalar,
+        |x| Complex64::new(x, 0.0),
+        move |z| {
+            let _ = op_name;
+            z.re
+        },
+    )
+}
+
+fn promote_f32_ad_tensor_to_c32(
+    tensor: &AdTensor<f32>,
+    op_name: &'static str,
+) -> Result<AdTensor<Complex32>> {
+    map_ad_tensor_mixed_linear_typed(
+        tensor,
+        |x| Complex32::new(x, 0.0),
+        move |z| {
+            let _ = op_name;
+            z.re
+        },
+    )
+}
+
+fn promote_f64_ad_tensor_to_c64(
+    tensor: &AdTensor<f64>,
+    op_name: &'static str,
+) -> Result<AdTensor<Complex64>> {
+    map_ad_tensor_mixed_linear_typed(
+        tensor,
+        |x| Complex64::new(x, 0.0),
+        move |z| {
+            let _ = op_name;
+            z.re
+        },
+    )
+}
+
 impl DynAdTensor {
     /// Scalar multiply with AD preservation for scalar and tensor inputs.
-    pub fn scale(&self, scalar: &DynAdScalar) -> Result<Self> {
+    pub fn scale(&self, scalar: &DynAdTensor) -> Result<Self> {
         match (self, scalar) {
-            (Self::F32(tensor), DynAdScalar::F32(alpha)) => {
+            (Self::F32(tensor), Self::F32(alpha)) => {
                 Ok(Self::F32(scale_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::F64(tensor), DynAdScalar::F64(alpha)) => {
+            (Self::F32(tensor), Self::C32(alpha)) => {
+                let promoted = promote_f32_ad_tensor_to_c32(tensor, "scale")?;
+                Ok(Self::C32(scale_ad_tensor_typed(&promoted, alpha)?))
+            }
+            (Self::F64(tensor), Self::F64(alpha)) => {
                 Ok(Self::F64(scale_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C32(tensor), DynAdScalar::C32(alpha)) => {
+            (Self::F64(tensor), Self::C64(alpha)) => {
+                let promoted = promote_f64_ad_tensor_to_c64(tensor, "scale")?;
+                Ok(Self::C64(scale_ad_tensor_typed(&promoted, alpha)?))
+            }
+            (Self::C32(tensor), Self::C32(alpha)) => {
                 Ok(Self::C32(scale_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C32(tensor), DynAdScalar::F32(alpha)) => {
-                let promoted = promote_f32_to_c32(alpha.clone(), "scale");
+            (Self::C32(tensor), Self::F32(alpha)) => {
+                let promoted = promote_f32_rank0_to_c32(alpha, "scale")?;
                 Ok(Self::C32(scale_ad_tensor_typed(tensor, &promoted)?))
             }
-            (Self::C64(tensor), DynAdScalar::C64(alpha)) => {
+            (Self::C64(tensor), Self::C64(alpha)) => {
                 Ok(Self::C64(scale_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C64(tensor), DynAdScalar::F64(alpha)) => {
-                let promoted = promote_f64_to_c64(alpha.clone(), "scale");
+            (Self::C64(tensor), Self::F64(alpha)) => {
+                let promoted = promote_f64_rank0_to_c64(alpha, "scale")?;
                 Ok(Self::C64(scale_ad_tensor_typed(tensor, &promoted)?))
             }
             _ => Err(Error::InvalidAdTensor {
@@ -248,19 +354,19 @@ impl DynAdTensor {
     }
 
     /// Affine combination `a * self + b * other`.
-    pub fn axpby(&self, a: &DynAdScalar, other: &Self, b: &DynAdScalar) -> Result<Self> {
+    pub fn axpby(&self, a: &DynAdTensor, other: &Self, b: &DynAdTensor) -> Result<Self> {
         match (self.scale(a)?, other.scale(b)?) {
             (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
             )?)),
             (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
             )?)),
             (Self::C32(lhs), Self::C32(rhs)) => Ok(Self::C32(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
             )?)),
             (Self::C64(lhs), Self::C64(rhs)) => Ok(Self::C64(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.into_value(), rhs.into_value())?,
+                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
             )?)),
             (lhs, rhs) => Err(Error::InvalidAdTensor {
                 message: format!(
@@ -273,26 +379,34 @@ impl DynAdTensor {
     }
 
     /// Division by an AD-aware scalar.
-    pub fn div_scalar(&self, scalar: &DynAdScalar) -> Result<Self> {
+    pub fn div_scalar(&self, scalar: &DynAdTensor) -> Result<Self> {
         match (self, scalar) {
-            (Self::F32(tensor), DynAdScalar::F32(alpha)) => {
+            (Self::F32(tensor), Self::F32(alpha)) => {
                 Ok(Self::F32(div_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::F64(tensor), DynAdScalar::F64(alpha)) => {
+            (Self::F32(tensor), Self::C32(alpha)) => {
+                let promoted = promote_f32_ad_tensor_to_c32(tensor, "div_scalar")?;
+                Ok(Self::C32(div_ad_tensor_typed(&promoted, alpha)?))
+            }
+            (Self::F64(tensor), Self::F64(alpha)) => {
                 Ok(Self::F64(div_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C32(tensor), DynAdScalar::C32(alpha)) => {
+            (Self::F64(tensor), Self::C64(alpha)) => {
+                let promoted = promote_f64_ad_tensor_to_c64(tensor, "div_scalar")?;
+                Ok(Self::C64(div_ad_tensor_typed(&promoted, alpha)?))
+            }
+            (Self::C32(tensor), Self::C32(alpha)) => {
                 Ok(Self::C32(div_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C32(tensor), DynAdScalar::F32(alpha)) => {
-                let promoted = promote_f32_to_c32(alpha.clone(), "div_scalar");
+            (Self::C32(tensor), Self::F32(alpha)) => {
+                let promoted = promote_f32_rank0_to_c32(alpha, "div_scalar")?;
                 Ok(Self::C32(div_ad_tensor_typed(tensor, &promoted)?))
             }
-            (Self::C64(tensor), DynAdScalar::C64(alpha)) => {
+            (Self::C64(tensor), Self::C64(alpha)) => {
                 Ok(Self::C64(div_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C64(tensor), DynAdScalar::F64(alpha)) => {
-                let promoted = promote_f64_to_c64(alpha.clone(), "div_scalar");
+            (Self::C64(tensor), Self::F64(alpha)) => {
+                let promoted = promote_f64_rank0_to_c64(alpha, "div_scalar")?;
                 Ok(Self::C64(div_ad_tensor_typed(tensor, &promoted)?))
             }
             _ => Err(Error::InvalidAdTensor {

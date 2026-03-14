@@ -1,36 +1,53 @@
+use crate::AdMode;
+use ::chainrules::{NodeId as ChainNodeId, Tape};
+
 use super::*;
 use tenferro_device::LogicalMemorySpace;
 
 pub(crate) fn has_forward<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
-    operands
-        .iter()
-        .any(|op| matches!(op.as_value(), AdValue::Forward { .. }))
+    operands.iter().any(|op| op.mode() == AdMode::Forward)
 }
 
 pub(crate) fn has_reverse<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
-    operands
-        .iter()
-        .any(|op| matches!(op.as_value(), AdValue::Reverse { .. }))
+    operands.iter().any(|op| op.reverse_tape().is_some())
 }
 
 pub(crate) fn has_any_tangent<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
     operands.iter().any(|op| op.tangent().is_some())
 }
 
-pub(crate) fn derive_reverse_tape<S: Scalar>(operands: &[&AdTensor<S>]) -> Result<Option<TapeId>> {
-    let mut tape: Option<TapeId> = None;
+pub(crate) fn ensure_dense_linalg_ad_inputs<S: Scalar>(
+    structured_op: &'static str,
+    operands: &[&AdTensor<S>],
+) -> Result<()> {
+    let ad_active = has_forward(operands) || has_reverse(operands) || has_any_tangent(operands);
+    if !ad_active {
+        return Ok(());
+    }
+
+    if operands.iter().any(|op| !op.is_dense()) {
+        return Err(Error::UnsupportedAdOp { op: structured_op });
+    }
+
+    Ok(())
+}
+
+pub(crate) fn derive_reverse_tape_handle<S: Scalar>(
+    operands: &[&AdTensor<S>],
+) -> Result<Option<Tape<StructuredTensor<S>>>> {
+    let mut tape: Option<Tape<StructuredTensor<S>>> = None;
 
     for op in operands {
-        if let AdValue::Reverse { tape: current, .. } = op.as_value() {
-            if let Some(expected) = tape {
-                if expected != *current {
+        if let Some(current) = op.reverse_tape() {
+            if let Some(expected) = &tape {
+                if !expected.same_tape(current) {
                     return Err(Error::MixedReverseTape {
-                        expected: expected.0,
-                        found: current.0,
+                        expected: expected.id() as u64,
+                        found: current.id() as u64,
                     });
                 }
             } else {
-                tape = Some(*current);
+                tape = Some(current.clone());
             }
         }
     }
@@ -38,42 +55,9 @@ pub(crate) fn derive_reverse_tape<S: Scalar>(operands: &[&AdTensor<S>]) -> Resul
     Ok(tape)
 }
 
-pub(crate) fn derive_reverse_node<S: Scalar>(
-    op_name: &str,
-    operands: &[&AdTensor<S>],
-    output_dims: &[usize],
-    output_tag: u64,
-    tape: TapeId,
-) -> NodeId {
-    let mut hasher = DefaultHasher::new();
-    op_name.hash(&mut hasher);
-    output_dims.hash(&mut hasher);
-    output_tag.hash(&mut hasher);
-    tape.0.hash(&mut hasher);
-
-    for (idx, op) in operands.iter().enumerate() {
-        idx.hash(&mut hasher);
-        match op.as_value() {
-            AdValue::Primal(_) => {
-                0_u8.hash(&mut hasher);
-            }
-            AdValue::Forward { .. } => {
-                1_u8.hash(&mut hasher);
-            }
-            AdValue::Reverse { node, .. } => {
-                2_u8.hash(&mut hasher);
-                node.0.hash(&mut hasher);
-            }
-        }
-        op.dims().hash(&mut hasher);
-    }
-
-    NodeId(hasher.finish())
-}
-
 #[derive(Clone)]
 pub(crate) struct ReverseInputSpec<T: Scalar> {
-    pub(crate) node: NodeId,
+    pub(crate) node: ChainNodeId,
     pub(crate) layout: StructuredTensor<T>,
 }
 
@@ -82,12 +66,12 @@ pub(crate) fn collect_reverse_input_specs<S: Scalar>(
 ) -> Vec<Option<ReverseInputSpec<S>>> {
     operands
         .iter()
-        .map(|op| match op.as_value() {
-            AdValue::Reverse { node, .. } => Some(ReverseInputSpec {
-                node: *node,
+        .map(|op| match op.reverse_node_id() {
+            Some(node) => Some(ReverseInputSpec {
+                node,
                 layout: op.structured_primal().clone(),
             }),
-            _ => None,
+            None => None,
         })
         .collect()
 }
@@ -210,6 +194,18 @@ where
     })
 }
 
+pub(crate) fn compress_structured_pullback_like<T>(
+    op_name: &'static str,
+    grad: Tensor<T>,
+    layout: &StructuredTensor<T>,
+) -> Result<StructuredTensor<T>>
+where
+    T: EinsumRuntimeValue,
+{
+    let payload = compress_pullback_like(op_name, grad, layout)?;
+    layout.with_payload_like(payload)
+}
+
 pub(crate) fn compress_pullback_like_in_backend<B, C, T>(
     ctx: &mut C,
     op_name: &'static str,
@@ -290,7 +286,6 @@ pub(crate) fn wrap_dense_ad_output<TIn: Scalar, TOut: Scalar>(
     inputs: &[&AdTensor<TIn>],
     primal: Tensor<TOut>,
     tangent: Option<Tensor<TOut>>,
-    output_tag: u64,
 ) -> Result<AdTensor<TOut>> {
     let tangent = tangent
         .map(|tangent| normalize_output_tangent_shape(tangent, primal.dims(), op_name))
@@ -300,7 +295,6 @@ pub(crate) fn wrap_dense_ad_output<TIn: Scalar, TOut: Scalar>(
         inputs,
         StructuredTensor::from_dense(primal),
         tangent.map(StructuredTensor::from_dense),
-        output_tag,
     )
 }
 
@@ -309,14 +303,9 @@ pub(crate) fn wrap_structured_ad_output<TIn: Scalar, TOut: Scalar>(
     inputs: &[&AdTensor<TIn>],
     primal: StructuredTensor<TOut>,
     tangent: Option<StructuredTensor<TOut>>,
-    output_tag: u64,
 ) -> Result<AdTensor<TOut>> {
     if has_reverse(inputs) {
-        let tape = derive_reverse_tape(inputs)?.ok_or_else(|| Error::InvalidAdTensor {
-            message: "reverse-mode output requested but no reverse tape found".to_string(),
-        })?;
-        let node = derive_reverse_node(op_name, inputs, primal.logical_dims(), output_tag, tape);
-        return AdTensor::new_reverse(primal, node, tape, tangent);
+        return Err(Error::UnsupportedAdOp { op: op_name });
     }
 
     if has_forward(inputs) {
@@ -329,29 +318,56 @@ pub(crate) fn wrap_structured_ad_output<TIn: Scalar, TOut: Scalar>(
     Ok(AdTensor::new_primal(primal))
 }
 
+pub(crate) fn wrap_same_type_structured_ad_output<T: Scalar>(
+    _op_name: &'static str,
+    inputs: &[&AdTensor<T>],
+    primal: StructuredTensor<T>,
+    tangent: Option<StructuredTensor<T>>,
+) -> Result<AdTensor<T>> {
+    if has_reverse(inputs) {
+        let tape = derive_reverse_tape_handle(inputs)?.ok_or_else(|| Error::InvalidAdTensor {
+            message: "reverse-mode output requested but no reverse tape found".to_string(),
+        })?;
+        return AdTensor::new_reverse_output(primal, &tape, tangent);
+    }
+
+    if has_forward(inputs) {
+        let tangent = tangent.ok_or_else(|| Error::InvalidAdTensor {
+            message: "forward-mode inputs must provide tangent output".to_string(),
+        })?;
+        return AdTensor::new_forward(primal, tangent);
+    }
+
+    Ok(AdTensor::new_primal(primal))
+}
+
+pub(crate) fn wrap_same_type_dense_ad_output<T: Scalar>(
+    op_name: &'static str,
+    inputs: &[&AdTensor<T>],
+    primal: Tensor<T>,
+    tangent: Option<Tensor<T>>,
+) -> Result<AdTensor<T>> {
+    let tangent = tangent
+        .map(|tangent| normalize_output_tangent_shape(tangent, primal.dims(), op_name))
+        .transpose()?;
+    wrap_same_type_structured_ad_output(
+        op_name,
+        inputs,
+        StructuredTensor::from_dense(primal),
+        tangent.map(StructuredTensor::from_dense),
+    )
+}
+
 pub(crate) fn collect_structured_ad_tangents<'a, S: Scalar>(
     operands: &[&'a AdTensor<S>],
 ) -> Vec<Option<&'a StructuredTensor<S>>> {
-    operands
-        .iter()
-        .map(|op| match op.as_value() {
-            AdValue::Primal(_) => None,
-            AdValue::Forward { tangent, .. } => Some(tangent),
-            AdValue::Reverse { tangent, .. } => tangent.as_ref(),
-        })
-        .collect()
+    operands.iter().map(|op| op.structured_tangent()).collect()
 }
 
 pub(crate) fn collect_reverse_input_nodes<S: Scalar>(
     operands: &[&AdTensor<S>],
-) -> Vec<Option<NodeId>> {
-    operands
-        .iter()
-        .map(|op| match op.as_value() {
-            AdValue::Reverse { node, .. } => Some(*node),
-            _ => None,
-        })
-        .collect()
+) -> Vec<Option<ChainNodeId>> {
+    operands.iter().map(|op| op.reverse_node_id()).collect()
 }
 
 pub(crate) fn sum_einsum_tangent_terms<B, C, T>(

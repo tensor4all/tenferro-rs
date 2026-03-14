@@ -23,6 +23,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdEigenResult<T>> {
         let operands = [self.tensor];
+        ensure_dense_linalg_ad_inputs("eigen_ad_structured", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -67,22 +68,22 @@ where
             (None, None)
         };
 
-        let out_values = wrap_dense_ad_output("eigen_ad", &operands, primal.values, dvalues, 1)?;
-        let out_vectors = wrap_dense_ad_output("eigen_ad", &operands, primal.vectors, dvectors, 2)?;
+        let out_values =
+            wrap_same_type_dense_ad_output("eigen_ad", &operands, primal.values, dvalues)?;
+        let out_vectors =
+            wrap_same_type_dense_ad_output("eigen_ad", &operands, primal.vectors, dvectors)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
             .next()
             .flatten();
         if let Some(spec) = input_spec {
-            if let AdValue::Reverse { node, tape, .. } = out_values.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_values.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -93,27 +94,29 @@ where
                                     ctx,
                                     &a_primal,
                                     &tenferro_linalg::EigenCotangent {
-                                        values: Some(cotangent.clone()),
+                                        values: Some(cotangent.payload().clone()),
                                         vectors: None,
                                     },
                                 )
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "eigen_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
             }
 
-            if let AdValue::Reverse { node, tape, .. } = out_vectors.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_vectors.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -125,13 +128,17 @@ where
                                     &a_primal,
                                     &tenferro_linalg::EigenCotangent {
                                         values: None,
-                                        vectors: Some(cotangent.clone()),
+                                        vectors: Some(cotangent.payload().clone()),
                                     },
                                 )
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("eigen_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "eigen_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
@@ -177,6 +184,10 @@ where
     /// ```
     pub fn run(self) -> Result<AdEigResult<T>> {
         let operands = [self.tensor];
+        ensure_dense_linalg_ad_inputs("eig_ad_structured", &operands)?;
+        if has_reverse(&operands) {
+            return Err(Error::UnsupportedAdOp { op: "eig_ad" });
+        }
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -218,76 +229,8 @@ where
             (None, None)
         };
 
-        let out_values = wrap_dense_ad_output("eig_ad", &operands, primal.values, dvalues, 1)?;
-        let out_vectors = wrap_dense_ad_output("eig_ad", &operands, primal.vectors, dvectors, 2)?;
-
-        let input_spec = collect_reverse_input_specs(&operands)
-            .into_iter()
-            .next()
-            .flatten();
-        if let Some(spec) = input_spec {
-            if let AdValue::Reverse { node, tape, .. } = out_values.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
-                let spec = spec.clone();
-                let a_primal = input_primal.clone();
-                tape::register_bridge_rule::<Complex<T>, T>(
-                    tape_id,
-                    output_node,
-                    Box::new(move |cotangent| {
-                        let grad = dispatch_linalg_ad_runtime!(
-                            T,
-                            tenferro_linalg::backend::LinalgCapabilityOp::Eig,
-                            "eig_ad_pullback_values",
-                            |ctx| {
-                                tenferro_linalg::eig_rrule::<T, _>(
-                                    ctx,
-                                    &a_primal,
-                                    &tenferro_linalg::EigCotangent {
-                                        values: Some(cotangent.clone()),
-                                        vectors: None,
-                                    },
-                                )
-                                .map_err(Error::from)
-                            }
-                        )?;
-                        let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
-                        Ok(vec![(spec.node, grad)])
-                    }),
-                );
-            }
-
-            if let AdValue::Reverse { node, tape, .. } = out_vectors.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
-                let spec = spec.clone();
-                let a_primal = input_primal.clone();
-                tape::register_bridge_rule::<Complex<T>, T>(
-                    tape_id,
-                    output_node,
-                    Box::new(move |cotangent| {
-                        let grad = dispatch_linalg_ad_runtime!(
-                            T,
-                            tenferro_linalg::backend::LinalgCapabilityOp::Eig,
-                            "eig_ad_pullback_vectors",
-                            |ctx| {
-                                tenferro_linalg::eig_rrule::<T, _>(
-                                    ctx,
-                                    &a_primal,
-                                    &tenferro_linalg::EigCotangent {
-                                        values: None,
-                                        vectors: Some(cotangent.clone()),
-                                    },
-                                )
-                                .map_err(Error::from)
-                            }
-                        )?;
-                        let grad = compress_pullback_like("eig_ad", grad, &spec.layout)?;
-                        Ok(vec![(spec.node, grad)])
-                    }),
-                );
-            }
-        }
+        let out_values = wrap_dense_ad_output("eig_ad", &operands, primal.values, dvalues)?;
+        let out_vectors = wrap_dense_ad_output("eig_ad", &operands, primal.vectors, dvectors)?;
 
         Ok(AdEigResult {
             values: out_values,

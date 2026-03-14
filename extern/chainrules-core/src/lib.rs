@@ -9,7 +9,7 @@
 //! - Error types ([`AutodiffError`], [`AdResult`])
 //! - [`NodeId`], [`SavePolicy`] — graph node identifier and save strategy
 //!
-//! The AD engine (`TrackedTensor`, `DualTensor`, `pullback`, `hvp`) lives in
+//! The AD engine (`TrackedValue`, `DualValue`, `pullback`, `hvp`) lives in
 //! the [`chainrules`](https://docs.rs/chainrules) crate.
 //!
 //! Operation-specific AD rules (e.g., einsum rrule/frule) live in the crate

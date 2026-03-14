@@ -37,8 +37,8 @@ It does not provide an execution engine.
 `chainrules` provides the execution engine:
 
 - `Tape<V>`: reverse-mode tape for homogeneous graphs
-- `TrackedTensor<V>`: reverse-mode tracked value
-- `DualTensor<V>`: forward-mode value+tangent wrapper
+- `TrackedValue<V>`: reverse-mode tracked value
+- `DualValue<V>`: forward-mode value+tangent wrapper
 - `Variable<V>`: torch-like reverse-mode wrapper with `.grad()` / `.hvp()`
 - `BackwardOptions<V>`
 - `AutogradContext<V>`
@@ -73,8 +73,8 @@ pub struct BackwardOptions<V: Differentiable> {
 }
 
 pub struct Tape<V: Differentiable> { /* internal */ }
-pub struct TrackedTensor<V: Differentiable> { /* internal */ }
-pub struct DualTensor<V: Differentiable> { /* internal */ }
+pub struct TrackedValue<V: Differentiable> { /* internal */ }
+pub struct DualValue<V: Differentiable> { /* internal */ }
 pub struct Variable<V: Differentiable> { /* internal */ }
 
 pub mod autograd {
@@ -262,7 +262,7 @@ let _gx = grads.get(x.node_id().unwrap()).unwrap();
 ### Forward mode on tensors
 
 ```rust,ignore
-use chainrules::DualTensor;
+use chainrules::DualValue;
 use tenferro_algebra::Standard;
 use tenferro_einsum::dual_einsum;
 use tenferro_prims::{CpuBackend, CpuContext};
@@ -270,7 +270,7 @@ use tenferro_prims::{CpuBackend, CpuContext};
 let mut ctx = CpuContext::new(1);
 let x = /* Tensor<f64> */;
 let dx = /* Tensor<f64> tangent */;
-let x_dual = DualTensor::with_tangent(x, dx).unwrap();
+let x_dual = DualValue::with_tangent(x, dx).unwrap();
 let y_dual = dual_einsum::<Standard<f64>, CpuBackend>(&mut ctx, "i,i->", &[&x_dual, &x_dual])
     .unwrap();
 let _dy = y_dual.tangent();
@@ -297,8 +297,8 @@ backend contracts in production code.
 - linalg and einsum AD entrypoints now dispatch through the relevant family
   traits and runtime slots
 - builder `.run()` now relies on an explicit default-runtime holder, while
-  reverse-mode bookkeeping uses one tape-local rule store per tape instead of
-  a generic global context map
+  reverse-mode bookkeeping attaches pullback rules directly to
+  `chainrules::Tape<StructuredTensor<T>>`
 - many public examples still instantiate `CpuContext` directly because CPU is
   the most complete backend today, not because the API contract is CPU-only
 

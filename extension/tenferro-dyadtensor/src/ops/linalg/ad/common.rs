@@ -34,6 +34,7 @@ macro_rules! run_unary_tensor_ad {
         rrule = |$rrule_ctx:ident, $rrule_tensor:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
     ) => {{
         let operands = [$input];
+        ensure_dense_linalg_ad_inputs(concat!($op_name, "_structured"), &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) =
             $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(
@@ -70,19 +71,17 @@ macro_rules! run_unary_tensor_ad {
             (primal, None)
         };
 
-        let out = wrap_dense_ad_output($op_name, &operands, primal, tangent, 0)?;
+        let out = wrap_same_type_dense_ad_output($op_name, &operands, primal, tangent)?;
 
-        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        if let Some((node, tape)) = out.reverse_handle() {
             let input_spec = collect_reverse_input_specs(&operands)
                 .into_iter()
                 .next()
                 .flatten();
-            let output_node = *node;
-            let tape_id = *tape;
 
             tape::register_rule::<$ty>(
-                tape_id,
-                output_node,
+                &tape,
+                node,
                 Box::new(move |cotangent| {
                     let grad = $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(
                         $ty,
@@ -90,7 +89,7 @@ macro_rules! run_unary_tensor_ad {
                         $pullback_op_name,
                         |$rrule_ctx| {
                             let $rrule_tensor = &input_primal;
-                            let $rrule_cotangent = cotangent;
+                            let $rrule_cotangent = cotangent.payload();
                             $rrule_body
                         }
                     )?;
@@ -98,7 +97,11 @@ macro_rules! run_unary_tensor_ad {
                     let Some(spec) = &input_spec else {
                         return Ok(Vec::new());
                     };
-                    let grad = compress_pullback_like($op_name, grad, &spec.layout)?;
+                    let grad = spec.layout.with_payload_like(compress_pullback_like(
+                        $op_name,
+                        grad,
+                        &spec.layout,
+                    )?)?;
                     Ok(vec![(spec.node, grad)])
                 }),
             );
@@ -121,6 +124,7 @@ macro_rules! run_binary_tensor_ad {
         rrule = |$rrule_ctx:ident, $rrule_lhs:ident, $rrule_rhs:ident, $rrule_cotangent:ident| $rrule_body:expr $(,)?
     ) => {{
         let operands = [$lhs, $rhs];
+        ensure_dense_linalg_ad_inputs(concat!($op_name, "_structured"), &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let ((lhs_primal, lhs_tangent), (rhs_primal, rhs_tangent)) =
             $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(
@@ -166,16 +170,14 @@ macro_rules! run_binary_tensor_ad {
             (primal, None)
         };
 
-        let out = wrap_dense_ad_output($op_name, &operands, primal, tangent, 0)?;
+        let out = wrap_same_type_dense_ad_output($op_name, &operands, primal, tangent)?;
 
-        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        if let Some((node, tape)) = out.reverse_handle() {
             let reverse_specs = collect_reverse_input_specs(&operands);
-            let output_node = *node;
-            let tape_id = *tape;
 
             tape::register_rule::<$ty>(
-                tape_id,
-                output_node,
+                &tape,
+                node,
                 Box::new(move |cotangent| {
                     let (grad_lhs, grad_rhs) =
                         $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(
@@ -185,18 +187,26 @@ macro_rules! run_binary_tensor_ad {
                         |$rrule_ctx| {
                             let $rrule_lhs = &lhs_primal;
                             let $rrule_rhs = &rhs_primal;
-                            let $rrule_cotangent = cotangent;
+                            let $rrule_cotangent = cotangent.payload();
                             $rrule_body
                         }
                     )?;
 
                     let mut input_grads = Vec::new();
                     if let Some(spec) = &reverse_specs[0] {
-                        let grad_lhs = compress_pullback_like($op_name, grad_lhs, &spec.layout)?;
+                        let grad_lhs = spec.layout.with_payload_like(compress_pullback_like(
+                            $op_name,
+                            grad_lhs,
+                            &spec.layout,
+                        )?)?;
                         input_grads.push((spec.node, grad_lhs));
                     }
                     if let Some(spec) = &reverse_specs[1] {
-                        let grad_rhs = compress_pullback_like($op_name, grad_rhs, &spec.layout)?;
+                        let grad_rhs = spec.layout.with_payload_like(compress_pullback_like(
+                            $op_name,
+                            grad_rhs,
+                            &spec.layout,
+                        )?)?;
                         input_grads.push((spec.node, grad_rhs));
                     }
                     Ok(input_grads)

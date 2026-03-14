@@ -10,17 +10,16 @@ fn dynamic_types_are_split_into_focused_modules() {
         !repo_path("src/dyn_types.rs").exists(),
         "dyn_types.rs should stay removed after the core/dynamic split"
     );
+    assert!(
+        !repo_path("src/core/dynamic/dyn_ad_scalar").exists(),
+        "DynAdScalar should stay removed after the homogeneous-tape redesign"
+    );
 
     for relative in [
         "src/core/dynamic/mod.rs",
         "src/core/dynamic/dyn_scalar.rs",
         "src/core/dynamic/tensor_ops.rs",
         "src/core/dynamic/dyn_tensor.rs",
-        "src/core/dynamic/dyn_ad_scalar/mod.rs",
-        "src/core/dynamic/dyn_ad_scalar/binary.rs",
-        "src/core/dynamic/dyn_ad_scalar/basics.rs",
-        "src/core/dynamic/dyn_ad_scalar/math.rs",
-        "src/core/dynamic/dyn_ad_scalar/traits.rs",
         "src/core/dynamic/dyn_ad_tensor/mod.rs",
         "src/core/dynamic/dyn_ad_tensor/layout.rs",
         "src/core/dynamic/dyn_ad_tensor/merge.rs",
@@ -41,11 +40,6 @@ fn split_dynamic_type_modules_stay_under_size_guideline() {
         "src/core/dynamic/dyn_scalar.rs",
         "src/core/dynamic/tensor_ops.rs",
         "src/core/dynamic/dyn_tensor.rs",
-        "src/core/dynamic/dyn_ad_scalar/mod.rs",
-        "src/core/dynamic/dyn_ad_scalar/binary.rs",
-        "src/core/dynamic/dyn_ad_scalar/basics.rs",
-        "src/core/dynamic/dyn_ad_scalar/math.rs",
-        "src/core/dynamic/dyn_ad_scalar/traits.rs",
         "src/core/dynamic/dyn_ad_tensor/mod.rs",
         "src/core/dynamic/dyn_ad_tensor/layout.rs",
         "src/core/dynamic/dyn_ad_tensor/merge.rs",

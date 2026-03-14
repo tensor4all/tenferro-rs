@@ -1,4 +1,4 @@
-use chainrules::{AdResult, Differentiable, DualTensor};
+use chainrules::{AdResult, Differentiable, DualValue};
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -14,22 +14,22 @@ use crate::syntax::subscripts::Subscripts;
 /// # Examples
 ///
 /// ```ignore
-/// use chainrules::DualTensor;
+/// use chainrules::DualValue;
 /// use tenferro_algebra::Standard;
 /// use tenferro_einsum::dual_einsum;
 /// use tenferro_prims::{CpuBackend, CpuContext};
 ///
 /// let mut ctx = CpuContext::new(1);
-/// let a = DualTensor::with_tangent(a_primal, a_tangent).unwrap();
-/// let b = DualTensor::new(b_primal);
+/// let a = DualValue::with_tangent(a_primal, a_tangent).unwrap();
+/// let b = DualValue::new(b_primal);
 /// let out = dual_einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b]).unwrap();
 /// let _ = out.tangent();
 /// ```
 pub fn dual_einsum<Alg, Backend>(
     ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
-    operands: &[&DualTensor<Tensor<Alg::Scalar>>],
-) -> AdResult<DualTensor<Tensor<Alg::Scalar>>>
+    operands: &[&DualValue<Tensor<Alg::Scalar>>],
+) -> AdResult<DualValue<Tensor<Alg::Scalar>>>
 where
     Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
@@ -43,12 +43,12 @@ where
     let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
         operands.iter().map(|op| op.tangent()).collect();
     if tangents.iter().all(|t| t.is_none()) {
-        return Ok(DualTensor::new(output));
+        return Ok(DualValue::new(output));
     }
 
     let tangent = einsum_frule::<Alg, Backend>(ctx, subscripts, &primals, &tangents)
         .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
-    DualTensor::with_tangent(output, tangent)
+    DualValue::with_tangent(output, tangent)
 }
 
 /// Reverse-mode rule (rrule) for einsum without building a global tape.

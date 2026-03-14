@@ -21,14 +21,13 @@
 
 use std::collections::HashMap;
 
-use chainrules_scalarops::ScalarAd;
 use tenferro_algebra::{Scalar, Standard};
 pub(crate) use tenferro_einsum as tf_einsum;
 use tenferro_linalg::SolveGrad;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::tape;
-use crate::{AdScalar, AdTensor, AdValue, Error, NodeId, Result, StructuredTensor};
+use crate::{AdTensor, Error, NodeId, Result, StructuredTensor};
 
 use super::{einsum_ad, sum_ad, EinsumRuntimeValue, ScalarRuntimeValue};
 
@@ -42,8 +41,7 @@ pub use super::linalg::ad::eager::{
 };
 pub(crate) use layout::normalize_cotangent_payload;
 pub use pullback::{
-    einsum_frule, einsum_hvp, einsum_rrule, pullback, pullback_wrt, pullback_wrt_mixed,
-    pullback_wrt_scalars, solve_triangular_rrule,
+    einsum_frule, einsum_hvp, einsum_rrule, pullback, pullback_wrt, solve_triangular_rrule,
 };
 pub use scalar_eager::{
     acos, acosh, add, asin, asinh, atan, atan2, atanh, cos, cosh, exp, expm1, hypot, log, log1p,

@@ -1,3 +1,4 @@
+use chainrules::Tape;
 use tenferro_dyadtensor::{ad, AdMode, AdTensor, DynAdTensor, StructuredTensor};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -39,14 +40,10 @@ fn dyn_ad_tensor_reshape_preserves_forward_mode() {
 
 #[test]
 fn dyn_ad_tensor_reshape_pullback_restores_original_shape() {
-    let x: DynAdTensor = AdTensor::new_reverse(
-        matrix2(&[1.0, 2.0, 3.0, 4.0]),
-        tenferro_dyadtensor::NodeId(11),
-        tenferro_dyadtensor::TapeId(71),
-        None,
-    )
-    .unwrap()
-    .into();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x: DynAdTensor = AdTensor::new_reverse_leaf(matrix2(&[1.0, 2.0, 3.0, 4.0]), &tape)
+        .unwrap()
+        .into();
 
     let reshaped = x.reshape(&[4]).unwrap();
     let cotangent = AdTensor::new_primal(vector(&[1.0, -2.0, 0.5, 3.0]));
@@ -83,14 +80,10 @@ fn dyn_ad_tensor_take_prefix_preserves_forward_mode() {
 
 #[test]
 fn dyn_ad_tensor_take_prefix_pullback_zero_fills_dropped_entries() {
-    let x: DynAdTensor = AdTensor::new_reverse(
-        matrix2(&[1.0, 2.0, 3.0, 4.0]),
-        tenferro_dyadtensor::NodeId(21),
-        tenferro_dyadtensor::TapeId(72),
-        None,
-    )
-    .unwrap()
-    .into();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x: DynAdTensor = AdTensor::new_reverse_leaf(matrix2(&[1.0, 2.0, 3.0, 4.0]), &tape)
+        .unwrap()
+        .into();
 
     let sliced = x.take_prefix(1, 1).unwrap();
     let cotangent = AdTensor::new_primal(
@@ -107,14 +100,10 @@ fn dyn_ad_tensor_take_prefix_pullback_zero_fills_dropped_entries() {
 
 #[test]
 fn dyn_ad_tensor_diag_embed_preserves_reverse_pullback() {
-    let x: DynAdTensor = AdTensor::new_reverse(
-        vector(&[2.0, 3.0]),
-        tenferro_dyadtensor::NodeId(31),
-        tenferro_dyadtensor::TapeId(73),
-        None,
-    )
-    .unwrap()
-    .into();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x: DynAdTensor = AdTensor::new_reverse_leaf(vector(&[2.0, 3.0]), &tape)
+        .unwrap()
+        .into();
 
     let diag = x.diag_embed(2).unwrap();
     assert!(diag.is_diag());

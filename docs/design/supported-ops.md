@@ -164,13 +164,14 @@ Builder APIs are implemented for:
   `sinh_ad`, `cosh_ad`, `asinh_ad`, `acosh_ad`, `atanh_ad`,
   `sum_ad`, `mean_ad`, `var_ad`, `std_ad`
 - Linalg: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
+  - `eig_ad` reverse mode is same-domain only in `tenferro-dyadtensor`; real-input reverse mode is intentionally rejected to keep the tape homogeneous
 
 ### Runtime status
 
 - API contract: runtime-generic across CPU, CUDA, and ROCm
 - `chainrules_api::einsum` is backend-parametric over `tenferro-einsum::EinsumBackend`; callers choose the backend via the runtime context type
 - Structured tensor materialization and compressed einsum reuse the same einsum runtime-dispatch layer rather than maintaining separate CPU/CUDA/ROCm builder paths
-- Builder execution uses an explicit default-runtime holder, and reverse-mode bookkeeping keeps one tape-local rule store per tape instead of a generic global context map
+- Builder execution uses an explicit default-runtime holder, and reverse-mode bookkeeping attaches pullback rules directly to `chainrules::Tape<StructuredTensor<T>>`
 - Actual execution today:
   - CPU paths are implemented for the operations listed above
   - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution

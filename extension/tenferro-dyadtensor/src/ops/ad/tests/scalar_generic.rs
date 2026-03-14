@@ -1,12 +1,12 @@
-use super::{max_abs_diff, tensor_from_vec_f64 as tensor_from_slice};
-use crate::{NodeId, TapeId};
+use super::{max_abs_diff, reverse_leaf_f64, tensor_from_vec_f64 as tensor_from_slice};
+use chainrules::Tape;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
     acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cos_ad, cosh_ad,
     exp_ad, expm1_ad, hypot_ad, log1p_ad, log_ad, mean_ad, pow_ad, set_default_runtime, sin_ad,
-    sinh_ad, sqrt_ad, std_ad, tanh_ad, var_ad, AdTensor, RuntimeContext,
+    sinh_ad, sqrt_ad, std_ad, tanh_ad, var_ad, AdTensor, RuntimeContext, StructuredTensor,
 };
 
 #[test]
@@ -131,20 +131,9 @@ fn exp_ad_forward_matches_elementwise_derivative() {
 fn mean_add_reverse_pullback_matches_expected_dense_gradients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let x = AdTensor::new_reverse(
-        tensor_from_slice(&[1.0, 2.0], &[2]),
-        NodeId(10),
-        TapeId(20),
-        None,
-    )
-    .unwrap();
-    let y = AdTensor::new_reverse(
-        tensor_from_slice(&[3.0, 4.0], &[2]),
-        NodeId(11),
-        TapeId(20),
-        None,
-    )
-    .unwrap();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x = reverse_leaf_f64(tensor_from_slice(&[1.0, 2.0], &[2]), &tape);
+    let y = reverse_leaf_f64(tensor_from_slice(&[3.0, 4.0], &[2]), &tape);
 
     let added = add_ad(&x, &y).run().unwrap();
     let out = mean_ad(&added).run().unwrap();
@@ -195,13 +184,8 @@ fn sqrt_and_log1p_forward_match_expected_rules() {
 fn expm1_reverse_pullback_matches_exp_rule() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let x = AdTensor::new_reverse(
-        tensor_from_slice(&[0.0, 1.0], &[2]),
-        NodeId(70),
-        TapeId(80),
-        None,
-    )
-    .unwrap();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x = reverse_leaf_f64(tensor_from_slice(&[0.0, 1.0], &[2]), &tape);
 
     let out = expm1_ad(&x).run().unwrap();
     let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -2.0], &[2]));
@@ -230,20 +214,9 @@ fn sin_ad_forward_matches_cos_rule() {
 fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let y = AdTensor::new_reverse(
-        tensor_from_slice(&[3.0, 4.0], &[2]),
-        NodeId(30),
-        TapeId(40),
-        None,
-    )
-    .unwrap();
-    let x = AdTensor::new_reverse(
-        tensor_from_slice(&[4.0, 3.0], &[2]),
-        NodeId(31),
-        TapeId(40),
-        None,
-    )
-    .unwrap();
+    let tape_xy = Tape::<StructuredTensor<f64>>::new();
+    let y = reverse_leaf_f64(tensor_from_slice(&[3.0, 4.0], &[2]), &tape_xy);
+    let x = reverse_leaf_f64(tensor_from_slice(&[4.0, 3.0], &[2]), &tape_xy);
 
     let atan2_out = atan2_ad(&y, &x).run().unwrap();
     let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
@@ -253,13 +226,8 @@ fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients()
     assert!(max_abs_diff(atan2_grads[0].as_ref().unwrap().payload(), &expected_dy) < 1e-12);
     assert!(max_abs_diff(atan2_grads[1].as_ref().unwrap().payload(), &expected_dx) < 1e-12);
 
-    let z = AdTensor::new_reverse(
-        tensor_from_slice(&[1.0, 3.0, 5.0, 7.0], &[2, 2]),
-        NodeId(32),
-        TapeId(41),
-        None,
-    )
-    .unwrap();
+    let tape_z = Tape::<StructuredTensor<f64>>::new();
+    let z = reverse_leaf_f64(tensor_from_slice(&[1.0, 3.0, 5.0, 7.0], &[2, 2]), &tape_z);
     let var_out = var_ad(&z).run().unwrap();
     let std_out = std_ad(&z).run().unwrap();
     let scalar_cot = AdTensor::new_primal(tensor_from_slice(&[1.0], &[]));
@@ -331,20 +299,9 @@ fn remaining_analytic_unary_forward_rules_match_reference_derivatives() {
 fn pow_and_hypot_reverse_pullbacks_match_reference_gradients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let base = AdTensor::new_reverse(
-        tensor_from_slice(&[2.0, 3.0], &[2]),
-        NodeId(90),
-        TapeId(91),
-        None,
-    )
-    .unwrap();
-    let exponent = AdTensor::new_reverse(
-        tensor_from_slice(&[3.0, 2.0], &[2]),
-        NodeId(92),
-        TapeId(91),
-        None,
-    )
-    .unwrap();
+    let tape_pow = Tape::<StructuredTensor<f64>>::new();
+    let base = reverse_leaf_f64(tensor_from_slice(&[2.0, 3.0], &[2]), &tape_pow);
+    let exponent = reverse_leaf_f64(tensor_from_slice(&[3.0, 2.0], &[2]), &tape_pow);
     let pow_out = pow_ad(&base, &exponent).run().unwrap();
     let pow_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -0.5], &[2]));
     let pow_grads = crate::ad::pullback_wrt(&pow_out, &pow_cotangent, &[&base, &exponent]).unwrap();
@@ -354,20 +311,9 @@ fn pow_and_hypot_reverse_pullbacks_match_reference_gradients() {
     assert!(max_abs_diff(pow_grads[0].as_ref().unwrap().payload(), &expected_base) < 1e-12);
     assert!(max_abs_diff(pow_grads[1].as_ref().unwrap().payload(), &expected_exponent) < 1e-12);
 
-    let lhs = AdTensor::new_reverse(
-        tensor_from_slice(&[3.0, 5.0], &[2]),
-        NodeId(93),
-        TapeId(94),
-        None,
-    )
-    .unwrap();
-    let rhs = AdTensor::new_reverse(
-        tensor_from_slice(&[4.0, 12.0], &[2]),
-        NodeId(95),
-        TapeId(94),
-        None,
-    )
-    .unwrap();
+    let tape_hypot = Tape::<StructuredTensor<f64>>::new();
+    let lhs = reverse_leaf_f64(tensor_from_slice(&[3.0, 5.0], &[2]), &tape_hypot);
+    let rhs = reverse_leaf_f64(tensor_from_slice(&[4.0, 12.0], &[2]), &tape_hypot);
     let hypot_out = hypot_ad(&lhs, &rhs).run().unwrap();
     let hypot_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -2.0], &[2]));
     let hypot_grads = crate::ad::pullback_wrt(&hypot_out, &hypot_cotangent, &[&lhs, &rhs]).unwrap();
@@ -381,13 +327,11 @@ fn pow_and_hypot_reverse_pullbacks_match_reference_gradients() {
 fn cos_and_tanh_reverse_pullback_match_expected_dense_gradients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let x = AdTensor::new_reverse(
+    let tape_cos = Tape::<StructuredTensor<f64>>::new();
+    let x = reverse_leaf_f64(
         tensor_from_slice(&[0.0, std::f64::consts::FRAC_PI_6], &[2]),
-        NodeId(50),
-        TapeId(60),
-        None,
-    )
-    .unwrap();
+        &tape_cos,
+    );
 
     let cos_out = cos_ad(&x).run().unwrap();
     let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
@@ -395,13 +339,8 @@ fn cos_and_tanh_reverse_pullback_match_expected_dense_gradients() {
     let expected_cos = tensor_from_slice(&[-0.0, -0.5], &[2]);
     assert!(max_abs_diff(cos_grads[0].as_ref().unwrap().payload(), &expected_cos) < 1e-12);
 
-    let y = AdTensor::new_reverse(
-        tensor_from_slice(&[-1.0, 0.5], &[2]),
-        NodeId(51),
-        TapeId(61),
-        None,
-    )
-    .unwrap();
+    let tape_tanh = Tape::<StructuredTensor<f64>>::new();
+    let y = reverse_leaf_f64(tensor_from_slice(&[-1.0, 0.5], &[2]), &tape_tanh);
     let tanh_out = tanh_ad(&y).run().unwrap();
     let scalar_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
     let tanh_grads = crate::ad::pullback_wrt(&tanh_out, &scalar_cotangent, &[&y]).unwrap();

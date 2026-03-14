@@ -1,9 +1,9 @@
-//! Tests for chainrules: Tape, TrackedTensor, DualTensor, Gradients,
+//! Tests for chainrules: Tape, TrackedValue, DualValue, Gradients,
 //! PullbackPlan, and pullback with dummy operations.
 
 use chainrules::{
-    AdResult, AutodiffError, Differentiable, DualTensor, Gradients, NodeId, PullbackPlan,
-    ReverseRule, Tape, TrackedTensor,
+    AdResult, AutodiffError, Differentiable, DualValue, Gradients, NodeId, PullbackPlan,
+    ReverseRule, Tape, TrackedValue,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -118,12 +118,12 @@ fn leaf_with_tangent_has_node_id() {
 }
 
 // ============================================================================
-// TrackedTensor::new
+// TrackedValue::new
 // ============================================================================
 
 #[test]
 fn tracked_new_no_grad() {
-    let x = TrackedTensor::new(42.0_f64);
+    let x = TrackedValue::new(42.0_f64);
     assert!(!x.requires_grad());
     assert!(x.node_id().is_none());
     assert!(!x.has_tangent());
@@ -131,18 +131,18 @@ fn tracked_new_no_grad() {
 
 #[test]
 fn tracked_value() {
-    let x = TrackedTensor::new(42.0_f64);
+    let x = TrackedValue::new(42.0_f64);
     assert_eq!(*x.value(), 42.0);
 }
 
 #[test]
 fn tracked_into_value() {
-    let x = TrackedTensor::new(42.0_f64);
+    let x = TrackedValue::new(42.0_f64);
     assert_eq!(x.into_value(), 42.0);
 }
 
 // ============================================================================
-// TrackedTensor::detach
+// TrackedValue::detach
 // ============================================================================
 
 #[test]
@@ -167,19 +167,19 @@ fn detach_removes_tangent() {
 }
 
 // ============================================================================
-// DualTensor
+// DualValue
 // ============================================================================
 
 #[test]
 fn dual_new_no_tangent() {
-    let x = DualTensor::new(3.14_f64);
+    let x = DualValue::new(3.14_f64);
     assert!(!x.has_tangent());
     assert_eq!(*x.primal(), 3.14);
 }
 
 #[test]
 fn dual_with_tangent() {
-    let x = DualTensor::with_tangent(3.14_f64, 1.0).unwrap();
+    let x = DualValue::with_tangent(3.14_f64, 1.0).unwrap();
     assert!(x.has_tangent());
     assert_eq!(*x.tangent().unwrap(), 1.0);
     assert_eq!(*x.primal(), 3.14);
@@ -187,7 +187,7 @@ fn dual_with_tangent() {
 
 #[test]
 fn dual_into_parts() {
-    let x = DualTensor::with_tangent(3.14_f64, 1.0).unwrap();
+    let x = DualValue::with_tangent(3.14_f64, 1.0).unwrap();
     let (p, t) = x.into_parts();
     assert_eq!(p, 3.14);
     assert_eq!(t, Some(1.0));
@@ -195,7 +195,7 @@ fn dual_into_parts() {
 
 #[test]
 fn dual_into_parts_no_tangent() {
-    let x = DualTensor::new(3.14_f64);
+    let x = DualValue::new(3.14_f64);
     let (p, t) = x.into_parts();
     assert_eq!(p, 3.14);
     assert_eq!(t, None);
@@ -203,7 +203,7 @@ fn dual_into_parts_no_tangent() {
 
 #[test]
 fn dual_detach_tangent() {
-    let x = DualTensor::with_tangent(3.14_f64, 1.0).unwrap();
+    let x = DualValue::with_tangent(3.14_f64, 1.0).unwrap();
     let c = x.detach_tangent();
     assert!(!c.has_tangent());
     assert_eq!(*c.primal(), 3.14);
@@ -310,7 +310,7 @@ fn pullback_leaf_identity_custom_type() {
 #[test]
 fn pullback_missing_node_error() {
     let tape = Tape::<f64>::new();
-    let x = TrackedTensor::new(2.0);
+    let x = TrackedValue::new(2.0);
     let result = tape.pullback(&x);
     assert!(result.is_err());
     match result {
@@ -510,7 +510,7 @@ fn pullback_plan_build() {
 
 #[test]
 fn pullback_plan_build_missing_node() {
-    let x = TrackedTensor::new(2.0_f64);
+    let x = TrackedValue::new(2.0_f64);
     let result = PullbackPlan::build(&x);
     match result {
         Err(AutodiffError::MissingNode) => {}
@@ -689,7 +689,7 @@ fn hvp_dag_merge_point() {
 #[test]
 fn hvp_missing_node_error() {
     let tape = Tape::<f64>::new();
-    let x = TrackedTensor::new(2.0_f64);
+    let x = TrackedValue::new(2.0_f64);
     let result = tape.hvp(&x);
     assert!(result.is_err());
     match result {

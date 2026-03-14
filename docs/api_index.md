@@ -31,8 +31,8 @@ Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
 
 Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
-         chainrules          AD engine: Tape<V>, TrackedTensor<V>,
-                             DualTensor<V> (← chainrules-core)
+         chainrules          AD engine: Tape<V>, TrackedValue<V>,
+                             DualValue<V> (← chainrules-core)
          chainrules-scalarops Scalar AD rules for primitive real/complex operations
 
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
@@ -157,7 +157,7 @@ tensor type. `Differentiable` trait defines the tangent space; concrete types
 
 AD engine (like Zygote.jl in Julia's ecosystem). Provides homogeneous
 `Tape<V>` graphs (explicit tape, TensorFlow GradientTape style),
-`TrackedTensor<V>` (reverse-mode wrapper), `DualTensor<V>` (forward-mode
+`TrackedValue<V>` (reverse-mode wrapper), `DualValue<V>` (forward-mode
 wrapper), and `Variable<V>` for torch-like gradient queries and accumulation.
 Gradient computation uses `tape.pullback()` / `tape.hvp()` or the
 `Variable<V>` / `autograd::grad_*` surface. Tensor scalar semantics follow
@@ -224,8 +224,8 @@ structured tensor layouts, and AD-aware operation builders on top of the core
 tenferro crates. It provides the higher-level builder surface used by eager
 einsum and linalg flows, plus dynamic wrappers for forward- and reverse-mode
 execution. Builder `.run()` entrypoints execute through an explicit default
-runtime holder, while reverse-mode bookkeeping uses a tape-local rule store
-instead of a generic global context map. The implementation tree is now
+runtime holder, while reverse-mode bookkeeping attaches pullback rules
+directly to `chainrules::Tape<StructuredTensor<T>>`. The implementation tree is now
 operation-first: `ops/einsum`, `ops/scalar`, `ops/reduction`, and
 `ops/linalg/*` group primal and AD wiring by family rather than by internal
 bucket.

@@ -1,10 +1,11 @@
+use chainrules::Tape;
 mod organization;
 
 use super::*;
 use num_complex::Complex64;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{Error, StructuredTensor};
+use crate::{core::AdTensorSnapshot, Error, StructuredTensor};
 
 fn dense_matrix(values: &[f64; 4]) -> Tensor<f64> {
     Tensor::<f64>::from_slice(values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
@@ -39,30 +40,37 @@ fn ad_tensor_metadata() {
 
 #[test]
 fn ad_tensor_new_forward_rejects_tangent_layout_mismatch() {
-    let err =
-        AdTensor::new_forward(dense_matrix(&[1.0, 2.0, 3.0, 4.0]), diag2(&[5.0, 6.0])).unwrap_err();
+    let err = match AdTensor::new_forward(dense_matrix(&[1.0, 2.0, 3.0, 4.0]), diag2(&[5.0, 6.0])) {
+        Ok(_) => panic!("expected tangent layout mismatch"),
+        Err(err) => err,
+    };
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 }
 
 #[test]
 fn ad_tensor_new_reverse_rejects_tangent_layout_mismatch() {
-    let err = AdTensor::new_reverse(
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let err = match AdTensor::new_reverse_leaf_with_tangent(
         dense_matrix(&[1.0, 2.0, 3.0, 4.0]),
-        NodeId(1),
-        TapeId(7),
-        Some(diag2(&[5.0, 6.0])),
-    )
-    .unwrap_err();
+        diag2(&[5.0, 6.0]),
+        &tape,
+    ) {
+        Ok(_) => panic!("expected reverse tangent layout mismatch"),
+        Err(err) => err,
+    };
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 }
 
 #[test]
 fn ad_tensor_try_from_structured_value_rejects_tangent_layout_mismatch() {
-    let value = AdValue::Forward {
+    let value = AdTensorSnapshot::Forward {
         primal: StructuredTensor::from_dense(dense_matrix(&[1.0, 2.0, 3.0, 4.0])),
         tangent: diag2(&[5.0, 6.0]),
     };
-    let err = AdTensor::try_from(value).unwrap_err();
+    let err = match AdTensor::try_from(value) {
+        Ok(_) => panic!("expected structured tangent layout mismatch"),
+        Err(err) => err,
+    };
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 }
 
@@ -107,55 +115,108 @@ fn ad_scalar_div_forward_propagates_tangent() {
 }
 
 #[test]
-fn ad_scalar_conj_reverse_allocates_fresh_output_node() {
-    let x = AdScalar::new_reverse(
-        Complex64::new(1.0, 2.0),
-        NodeId(11),
-        TapeId(7),
-        Some(Complex64::new(-1.0, 0.5)),
-    );
-    let y = x.conj();
+fn rank0_reverse_tensor_scale_allocates_fresh_output_node() {
+    let tape = Tape::<StructuredTensor<Complex64>>::new();
+    let x = AdTensor::new_reverse_leaf_with_tangent(
+        Tensor::<Complex64>::from_slice(&[Complex64::new(1.0, 2.0)], &[], MemoryOrder::ColumnMajor)
+            .unwrap(),
+        Tensor::<Complex64>::from_slice(
+            &[Complex64::new(-1.0, 0.5)],
+            &[],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+        &tape,
+    )
+    .unwrap();
+    let alpha: crate::DynAdTensor = AdTensor::new_reverse_leaf(
+        Tensor::<Complex64>::from_slice(&[Complex64::new(0.0, 1.0)], &[], MemoryOrder::ColumnMajor)
+            .unwrap(),
+        &tape,
+    )
+    .unwrap()
+    .into();
+    let y = crate::DynAdTensor::from(x.clone()).scale(&alpha).unwrap();
+    let y = y.as_c64().unwrap();
     assert_eq!(y.mode(), AdMode::Reverse);
-    assert_eq!(y.as_value().tape_id(), Some(TapeId(7)));
-    assert_ne!(y.as_value().node_id(), Some(NodeId(11)));
-    assert_eq!(*y.primal(), Complex64::new(1.0, -2.0));
-    assert_eq!(*y.tangent().unwrap(), Complex64::new(-1.0, -0.5));
+    assert!(y
+        .tape()
+        .expect("reverse output should expose a tape")
+        .same_tape(&tape));
+    assert_ne!(y.node_id(), x.node_id());
+    assert_eq!(
+        y.primal().buffer().as_slice().unwrap()[0],
+        Complex64::new(-2.0, 1.0)
+    );
 }
 
 #[test]
-fn ad_scalar_sqrt_reverse_registers_pullback_chain() {
-    let x = AdScalar::new_reverse(4.0_f64, NodeId(21), TapeId(17), None);
-    let y = x.sqrt();
-    let grads =
-        crate::tape::pullback_scalar::<f64>(TapeId(17), y.as_value().node_id().unwrap(), &3.0_f64)
-            .unwrap();
-    assert_eq!(grads.get(&NodeId(21)).copied(), Some(0.75));
-}
-
-#[test]
-fn ad_scalar_binary_op_returns_error_on_mixed_reverse_tapes() {
-    let x = AdScalar::new_reverse(2.0_f64, NodeId(1), TapeId(7), None);
-    let y = AdScalar::new_reverse(3.0_f64, NodeId(2), TapeId(8), None);
-    let err = (x * y).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::MixedReverseTape {
-            expected: 7,
-            found: 8
-        }
+fn rank0_reverse_tensor_sqrt_registers_pullback_chain() {
+    let _guard = crate::set_default_runtime(crate::RuntimeContext::Cpu(
+        tenferro_prims::CpuContext::new(1),
     ));
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x = AdTensor::new_reverse_leaf(
+        Tensor::<f64>::from_slice(&[4.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
+        &tape,
+    )
+    .unwrap();
+    let y = crate::ad::sqrt(&x).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap();
+    let grads = crate::tape::pullback(&y, &cotangent).unwrap();
+    assert_eq!(
+        grads
+            .get(&x.node_id().unwrap())
+            .unwrap()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[0.75]
+    );
 }
 
 #[test]
-fn ad_scalar_try_binary_op_returns_error_on_mixed_reverse_tapes() {
-    let x = AdScalar::new_reverse(2.0_f64, NodeId(1), TapeId(7), None);
-    let y = AdScalar::new_reverse(3.0_f64, NodeId(2), TapeId(8), None);
-    let err = x.try_mul(y).unwrap_err();
-    assert!(matches!(
-        err,
-        Error::MixedReverseTape {
-            expected: 7,
-            found: 8
-        }
-    ));
+fn rank0_reverse_tensor_scale_returns_error_on_mixed_reverse_tapes() {
+    let tape_a = Tape::<StructuredTensor<f64>>::new();
+    let tape_b = Tape::<StructuredTensor<f64>>::new();
+    let x: crate::DynAdTensor = AdTensor::new_reverse_leaf(
+        Tensor::<f64>::from_slice(&[2.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
+        &tape_a,
+    )
+    .unwrap()
+    .into();
+    let y: crate::DynAdTensor = AdTensor::new_reverse_leaf(
+        Tensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
+        &tape_b,
+    )
+    .unwrap()
+    .into();
+    let err = match x.scale(&y) {
+        Ok(_) => panic!("mixed reverse tapes should be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::MixedReverseTape { .. }));
+}
+
+#[test]
+fn rank0_reverse_tensor_div_scalar_returns_error_on_mixed_reverse_tapes() {
+    let tape_a = Tape::<StructuredTensor<f64>>::new();
+    let tape_b = Tape::<StructuredTensor<f64>>::new();
+    let x: crate::DynAdTensor = AdTensor::new_reverse_leaf(
+        Tensor::<f64>::from_slice(&[2.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
+        &tape_a,
+    )
+    .unwrap()
+    .into();
+    let y: crate::DynAdTensor = AdTensor::new_reverse_leaf(
+        Tensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
+        &tape_b,
+    )
+    .unwrap()
+    .into();
+    let err = match x.div_scalar(&y) {
+        Ok(_) => panic!("mixed reverse tapes should be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::MixedReverseTape { .. }));
 }

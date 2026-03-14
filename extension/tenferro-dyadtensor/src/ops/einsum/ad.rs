@@ -23,7 +23,7 @@ fn structured_einsum_pullback_in_backend<B, C, T>(
     reverse_nodes: &[Option<NodeId>],
     primals: &[StructuredTensor<T>],
     cotangent: &StructuredTensor<T>,
-) -> Result<Vec<(NodeId, Tensor<T>)>>
+) -> Result<Vec<(NodeId, StructuredTensor<T>)>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     B: DenseEinsumBackend<T, C>,
@@ -43,7 +43,7 @@ where
             }
         }
         let grad = einsum_with_subscripts_in_ctx::<B, _, T>(ctx, &rev_subs, &rev_operands)?;
-        input_grads.push((*node, grad.into_payload()));
+        input_grads.push((*node, grad));
     }
 
     Ok(input_grads)
@@ -55,7 +55,7 @@ fn dense_einsum_pullback_in_backend<B, C, T>(
     reverse_specs: &[Option<ReverseInputSpec<T>>],
     primals: &[Tensor<T>],
     cotangent: &Tensor<T>,
-) -> Result<Vec<(NodeId, Tensor<T>)>>
+) -> Result<Vec<(NodeId, StructuredTensor<T>)>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
     B: DenseEinsumBackend<T, C>,
@@ -79,8 +79,14 @@ where
         let Some(spec) = &reverse_specs[k] else {
             continue;
         };
-        let grad =
-            compress_pullback_like_in_backend::<B, _, T>(ctx, "einsum_ad", grad, &spec.layout)?;
+        let grad = spec
+            .layout
+            .with_payload_like(compress_pullback_like_in_backend::<B, _, T>(
+                ctx,
+                "einsum_ad",
+                grad,
+                &spec.layout,
+            )?)?;
         input_grads.push((spec.node, grad));
     }
     Ok(input_grads)
@@ -109,29 +115,26 @@ where
             None
         };
 
-        let out = wrap_structured_ad_output("einsum_ad", operands, primal_out, tangent_out, 0)?;
+        let out =
+            wrap_same_type_structured_ad_output("einsum_ad", operands, primal_out, tangent_out)?;
 
-        if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+        if let Some((node, tape)) = out.reverse_handle() {
             let subscripts = subs.clone();
             let reverse_nodes = collect_reverse_input_nodes(operands);
             let primal_owned: Vec<StructuredTensor<T>> =
                 primals.iter().map(|tensor| (*tensor).clone()).collect();
-            let output_layout = out.structured_primal().clone();
-            let output_node = *node;
-            let tape_id = *tape;
 
             tape::register_rule::<T>(
-                tape_id,
-                output_node,
+                &tape,
+                node,
                 Box::new(move |cotangent| {
-                    let cotangent = output_layout.with_payload_like(cotangent.clone())?;
                     dispatch_einsum_runtime!(T, "einsum_ad_pullback_structured", |ctx, Backend| {
                         structured_einsum_pullback_in_backend::<Backend, _, T>(
                             ctx,
                             &subscripts,
                             &reverse_nodes,
                             &primal_owned,
-                            &cotangent,
+                            cotangent,
                         )
                     })
                 }),
@@ -168,17 +171,15 @@ where
         None
     };
 
-    let out = wrap_dense_ad_output("einsum_ad", operands, primal_out, tangent_out, 0)?;
+    let out = wrap_same_type_dense_ad_output("einsum_ad", operands, primal_out, tangent_out)?;
 
-    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+    if let Some((node, tape)) = out.reverse_handle() {
         let subscripts = subscripts.to_string();
         let reverse_specs = collect_reverse_input_specs(operands);
-        let output_node = *node;
-        let tape_id = *tape;
 
         tape::register_rule::<T>(
-            tape_id,
-            output_node,
+            &tape,
+            node,
             Box::new(move |cotangent| {
                 dispatch_einsum_runtime!(T, "einsum_ad_pullback", |ctx, Backend| {
                     dense_einsum_pullback_in_backend::<Backend, _, T>(
@@ -186,7 +187,7 @@ where
                         &subscripts,
                         &reverse_specs,
                         &primal_owned,
-                        cotangent,
+                        cotangent.payload(),
                     )
                 })
             }),
