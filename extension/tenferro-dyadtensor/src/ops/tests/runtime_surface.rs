@@ -1,4 +1,5 @@
 use super::*;
+use crate::AdMode;
 
 #[test]
 fn run_requires_runtime() {
@@ -73,6 +74,6 @@ fn solve_triangular_ad_supports_forward_mode() {
     let ad_a = AdTensor::new_forward(a, da).unwrap();
     let ad_b = AdTensor::new_forward(b, db).unwrap();
     let out = solve_triangular_ad(&ad_a, &ad_b).run().unwrap();
-    assert!(matches!(out.as_value(), AdValue::Forward { .. }));
+    assert_eq!(out.mode(), AdMode::Forward);
     assert_eq!(out.dims(), &[2]);
 }

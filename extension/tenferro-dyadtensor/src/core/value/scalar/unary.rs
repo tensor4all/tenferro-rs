@@ -2,10 +2,7 @@ use core::ops::Neg;
 
 use chainrules_scalarops as scalarops;
 
-use crate::tape;
-
 use super::super::core::AdValue;
-use super::shared::fresh_ad_scalar_node_id;
 use super::AdScalar;
 
 fn unary_ad_scalar_op<T, P, F, R>(
@@ -20,37 +17,12 @@ where
     F: Fn(T, T) -> (T, T),
     R: Fn(T, T, T) -> T + 'static,
 {
+    let _ = rrule;
     match value.into_value() {
         AdValue::Primal(primal) => AdScalar::new_primal(primal_rule(primal)),
         AdValue::Forward { primal, tangent } => {
             let (primal, tangent) = frule(primal, tangent);
             AdScalar::new_forward(primal, tangent)
-        }
-        AdValue::Reverse {
-            primal: input_primal,
-            node: input_node,
-            tape,
-            tangent,
-        } => {
-            let (output_primal, tangent) = match tangent {
-                Some(tangent) => {
-                    let (primal, tangent) = frule(input_primal, tangent);
-                    (primal, Some(tangent))
-                }
-                None => (primal_rule(input_primal), None),
-            };
-            let output_node = fresh_ad_scalar_node_id();
-            tape::register_scalar_rule(
-                tape,
-                output_node,
-                Box::new(move |cotangent| {
-                    Ok(vec![(
-                        input_node,
-                        rrule(input_primal, output_primal, *cotangent),
-                    )])
-                }),
-            );
-            AdScalar::new_reverse(output_primal, output_node, tape, tangent)
         }
     }
 }

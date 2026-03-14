@@ -1114,15 +1114,15 @@ fn tracked_einsum_rejects_mixed_tapes() {
 
 #[test]
 fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
-    use chainrules::TrackedTensor;
+    use chainrules::TrackedValue;
     use std::cell::RefCell;
     use std::rc::Rc;
 
     let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
     let a =
-        TrackedTensor::new(Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap());
+        TrackedValue::new(Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap());
     let b =
-        TrackedTensor::new(Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap());
+        TrackedValue::new(Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap());
 
     let result = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
 
@@ -2913,7 +2913,7 @@ fn einsum_into_parenthesized() {
 
 #[test]
 fn dual_einsum_parenthesized() {
-    use chainrules::DualTensor;
+    use chainrules::DualValue;
     // dual_einsum with parenthesized subscripts must produce same tangent as flat
     let mut ctx = CpuContext::new(1);
 
@@ -2922,17 +2922,17 @@ fn dual_einsum_parenthesized() {
     let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
     let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
 
-    let a_dual = DualTensor::with_tangent(a.clone(), da.clone()).unwrap();
-    let b_dual = DualTensor::new(b.clone());
-    let c_dual = DualTensor::new(c.clone());
+    let a_dual = DualValue::with_tangent(a.clone(), da.clone()).unwrap();
+    let b_dual = DualValue::new(b.clone());
+    let c_dual = DualValue::new(c.clone());
 
     let nested_result =
         dual_einsum::<S, CpuBackend>(&mut ctx, "(ij,jk),kl->il", &[&a_dual, &b_dual, &c_dual])
             .unwrap();
 
-    let a_dual2 = DualTensor::with_tangent(a, da).unwrap();
-    let b_dual2 = DualTensor::new(b);
-    let c_dual2 = DualTensor::new(c);
+    let a_dual2 = DualValue::with_tangent(a, da).unwrap();
+    let b_dual2 = DualValue::new(b);
+    let c_dual2 = DualValue::new(c);
 
     let flat_result =
         dual_einsum::<S, CpuBackend>(&mut ctx, "ij,jk,kl->il", &[&a_dual2, &b_dual2, &c_dual2])
@@ -2951,13 +2951,13 @@ fn dual_einsum_parenthesized() {
 
 #[test]
 fn dual_einsum_without_tangents_returns_primal_only() {
-    use chainrules::DualTensor;
+    use chainrules::DualValue;
 
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let a_dual = DualTensor::new(a.clone());
-    let b_dual = DualTensor::new(b.clone());
+    let a_dual = DualValue::new(a.clone());
+    let b_dual = DualValue::new(b.clone());
 
     let result = dual_einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a_dual, &b_dual]).unwrap();
     let expected = einsum::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None).unwrap();

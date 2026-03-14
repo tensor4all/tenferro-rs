@@ -10,7 +10,7 @@ derivations, see [AD Formula Notes](../AD/index.md).
 
 This document covers:
 
-- how einsum uses `Tape<V>`, `TrackedTensor<V>`, `DualTensor<V>`, and
+- how einsum uses `Tape<V>`, `TrackedValue<V>`, `DualValue<V>`, and
   `Variable<V>`
 - tensor scalar semantics for loss construction
 - `retain_graph` / `create_graph` expectations at the integration boundary
@@ -23,15 +23,15 @@ model is homogeneous only.
 Einsum and dyadtensor layers integrate with a single AD execution model:
 
 - reverse mode: homogeneous `Tape<V>` graphs
-- forward mode: `DualTensor<V>`
+- forward mode: `DualValue<V>`
 - torch-like wrapper APIs: `Variable<V>`
 
 There is no mixed runtime-erased tape path for custom values.
 
 Examples:
 
-- `tracked_einsum` works with `TrackedTensor<Tensor<T>>`
-- `dual_einsum` works with `DualTensor<Tensor<T>>`
+- `tracked_einsum` works with `TrackedValue<Tensor<T>>`
+- `dual_einsum` works with `DualValue<Tensor<T>>`
 - dyadtensor wrappers may expose torch-like convenience APIs, but they still
   lower to homogeneous `Variable<V>` / `Tape<V>` execution
 
@@ -98,10 +98,10 @@ let hv = tape.hvp(&loss).unwrap();
 
 `dual_einsum` remains the forward-mode entry point.
 
-- primal values live in `DualTensor<V>::primal()`
-- tangents live in `DualTensor<V>::tangent()`
+- primal values live in `DualValue<V>::primal()`
+- tangents live in `DualValue<V>::tangent()`
 - tangent shape validation is the responsibility of the tensor-facing layer
-  around `DualTensor`
+  around `DualValue`
 
 ## `retain_graph` / `create_graph`
 

@@ -754,7 +754,7 @@ implemented.
 | **Einsum with contraction tree** | `tenferro-einsum` | `Subscripts`, `ContractionTree`, opt_einsum-style optimization |
 | **Linalg decompositions + AD** | `tenferro-linalg` | SVD/QR/LU/eigen with `(m, n, *)` col-major convention |
 | **AD core traits** | `chainrules-core` | `Differentiable`, `ReverseRule`, `ForwardRule` |
-| **AD tape engine** | `chainrules` | `Tape`, `TrackedTensor`, `DualTensor`, `pullback` |
+| **AD tape engine** | `chainrules` | `Tape`, `TrackedValue`, `DualValue`, `pullback` |
 | **C FFI** | `tenferro-capi` | Opaque handles, DLPack interop |
 | **Tropical algebras** | `tenferro-tropical` | MaxPlus, MinPlus, MaxMul |
 

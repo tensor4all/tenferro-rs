@@ -7,12 +7,12 @@ pub(super) use tenferro_prims::{
 };
 pub(super) use tenferro_tensor::Tensor;
 
-pub(super) use crate::{tape, AdTensor, AdValue, Error, Result};
+pub(super) use crate::{tape, AdTensor, Error, Result};
 
 pub(super) use crate::ops::common::{
-    broadcast_scalar_like, collect_reverse_input_specs, compress_pullback_like,
+    broadcast_scalar_like, collect_reverse_input_specs, compress_structured_pullback_like,
     dense_input_snapshot_in_runtime, has_any_tangent, has_forward, scalar_from_rank0_tensor,
-    wrap_dense_ad_output,
+    wrap_same_type_dense_ad_output,
 };
 pub(super) use crate::ops::scalar::primal::{
     analytic_binary_primal, analytic_full_reduction_primal, analytic_unary_primal,
@@ -289,25 +289,23 @@ where
         None
     };
 
-    let out = wrap_dense_ad_output(op_name, &operands, primal.clone(), tangent, 0)?;
+    let out = wrap_same_type_dense_ad_output(op_name, &operands, primal.clone(), tangent)?;
 
-    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+    if let Some((node, tape)) = out.reverse_handle() {
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
             .next()
             .flatten();
-        let output_node = *node;
-        let tape_id = *tape;
 
         tape::register_rule::<T>(
-            tape_id,
-            output_node,
+            &tape,
+            node,
             Box::new(move |cotangent| {
-                let grad = pullback_fn(&input_primal, &primal, cotangent)?;
+                let grad = pullback_fn(&input_primal, &primal, cotangent.payload())?;
                 let Some(spec) = &input_spec else {
                     return Ok(Vec::new());
                 };
-                let grad = compress_pullback_like(op_name, grad, &spec.layout)?;
+                let grad = compress_structured_pullback_like(op_name, grad, &spec.layout)?;
                 Ok(vec![(spec.node, grad)])
             }),
         );
@@ -359,26 +357,24 @@ where
         None
     };
 
-    let out = wrap_dense_ad_output(op_name, &operands, primal.clone(), tangent, 0)?;
+    let out = wrap_same_type_dense_ad_output(op_name, &operands, primal.clone(), tangent)?;
 
-    if let AdValue::Reverse { node, tape, .. } = out.as_value() {
+    if let Some((node, tape)) = out.reverse_handle() {
         let reverse_specs = collect_reverse_input_specs(&operands);
-        let output_node = *node;
-        let tape_id = *tape;
 
         tape::register_rule::<T>(
-            tape_id,
-            output_node,
+            &tape,
+            node,
             Box::new(move |cotangent| {
                 let (grad_lhs, grad_rhs) =
-                    pullback_fn(&lhs_primal, &rhs_primal, &primal, cotangent)?;
+                    pullback_fn(&lhs_primal, &rhs_primal, &primal, cotangent.payload())?;
                 let mut input_grads = Vec::new();
                 if let Some(spec) = &reverse_specs[0] {
-                    let grad = compress_pullback_like(op_name, grad_lhs, &spec.layout)?;
+                    let grad = compress_structured_pullback_like(op_name, grad_lhs, &spec.layout)?;
                     input_grads.push((spec.node, grad));
                 }
                 if let Some(spec) = &reverse_specs[1] {
-                    let grad = compress_pullback_like(op_name, grad_rhs, &spec.layout)?;
+                    let grad = compress_structured_pullback_like(op_name, grad_rhs, &spec.layout)?;
                     input_grads.push((spec.node, grad));
                 }
                 Ok(input_grads)

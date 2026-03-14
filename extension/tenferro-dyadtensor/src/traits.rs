@@ -3,7 +3,7 @@ use std::hash::Hash;
 use tenferro_algebra::Scalar;
 
 use crate::structured::StructuredTensor;
-use crate::{AdScalar, AdTensor, AdValue, DiffPolicy, DynScalar, Result};
+use crate::{AdMode, AdScalar, AdTensor, AdValue, DiffPolicy, DynScalar, Result};
 
 /// AD rule method result type alias.
 ///
@@ -35,7 +35,7 @@ pub trait IndexLike: Clone + Eq + Hash {}
 
 impl<T> IndexLike for T where T: Clone + Eq + Hash {}
 
-/// A value that can be observed as an [`AdValue`].
+/// A value that exposes AD mode plus primal/tangent views.
 ///
 /// # Examples
 ///
@@ -43,7 +43,7 @@ impl<T> IndexLike for T where T: Clone + Eq + Hash {}
 /// use tenferro_dyadtensor::{AdMode, AdValue, Differentiable};
 ///
 /// fn mode_of<V: Differentiable>(value: &V) -> AdMode {
-///     value.ad_value().mode()
+///     value.mode()
 /// }
 ///
 /// let x = AdValue::primal(2.0_f64);
@@ -53,31 +53,61 @@ pub trait Differentiable: Clone {
     /// Underlying primal payload type.
     type Primal: Clone;
 
-    /// Borrow as an [`AdValue`].
-    fn ad_value(&self) -> &AdValue<Self::Primal>;
+    /// Returns the AD mode.
+    fn mode(&self) -> AdMode;
+
+    /// Returns a reference to the primal payload.
+    fn primal_ref(&self) -> &Self::Primal;
+
+    /// Returns a reference to the tangent payload when available.
+    fn tangent_ref(&self) -> Option<&Self::Primal>;
 }
 
 impl<T: Clone> Differentiable for AdValue<T> {
     type Primal = T;
 
-    fn ad_value(&self) -> &AdValue<T> {
-        self
+    fn mode(&self) -> AdMode {
+        self.mode()
+    }
+
+    fn primal_ref(&self) -> &T {
+        self.primal_ref()
+    }
+
+    fn tangent_ref(&self) -> Option<&T> {
+        self.tangent_ref()
     }
 }
 
 impl<T: Clone> Differentiable for AdScalar<T> {
     type Primal = T;
 
-    fn ad_value(&self) -> &AdValue<T> {
-        self.as_value()
+    fn mode(&self) -> AdMode {
+        self.mode()
+    }
+
+    fn primal_ref(&self) -> &T {
+        self.primal()
+    }
+
+    fn tangent_ref(&self) -> Option<&T> {
+        self.tangent()
     }
 }
 
 impl<T: Clone + Scalar> Differentiable for AdTensor<T> {
     type Primal = StructuredTensor<T>;
 
-    fn ad_value(&self) -> &AdValue<StructuredTensor<T>> {
-        self.as_value()
+    fn mode(&self) -> AdMode {
+        self.mode()
+    }
+
+    fn primal_ref(&self) -> &StructuredTensor<T> {
+        self.structured_primal()
+    }
+
+    fn tangent_ref(&self) -> Option<&StructuredTensor<T>> {
+        self.structured_tangent()
     }
 }
 

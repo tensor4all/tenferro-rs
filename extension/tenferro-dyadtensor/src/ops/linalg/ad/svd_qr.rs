@@ -35,6 +35,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdSvdResult<T>> {
         let operands = [self.tensor];
+        ensure_dense_linalg_ad_inputs("svd_ad_structured", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -80,9 +81,9 @@ where
             (None, None, None)
         };
 
-        let out_u = wrap_dense_ad_output("svd_ad", &operands, primal.u, du, 1)?;
-        let out_s = wrap_dense_ad_output("svd_ad", &operands, primal.s, ds, 2)?;
-        let out_vt = wrap_dense_ad_output("svd_ad", &operands, primal.vt, dvt, 3)?;
+        let out_u = wrap_same_type_dense_ad_output("svd_ad", &operands, primal.u, du)?;
+        let out_s = wrap_same_type_dense_ad_output("svd_ad", &operands, primal.s, ds)?;
+        let out_vt = wrap_same_type_dense_ad_output("svd_ad", &operands, primal.vt, dvt)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
@@ -92,14 +93,12 @@ where
             let a_primal = input_primal.clone();
             let options = self.options.cloned();
 
-            if let AdValue::Reverse { node, tape, .. } = out_u.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_u.reverse_handle() {
                 let spec = spec.clone();
                 let options = options.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -110,7 +109,7 @@ where
                                     ctx,
                                     &a_primal,
                                     &tenferro_linalg::SvdCotangent {
-                                        u: Some(cotangent.clone()),
+                                        u: Some(cotangent.payload().clone()),
                                         s: None,
                                         vt: None,
                                     },
@@ -119,21 +118,23 @@ where
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "svd_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
             }
 
-            if let AdValue::Reverse { node, tape, .. } = out_s.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_s.reverse_handle() {
                 let spec = spec.clone();
                 let options = options.clone();
                 let a_primal = input_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -145,7 +146,7 @@ where
                                     &a_primal,
                                     &tenferro_linalg::SvdCotangent {
                                         u: None,
-                                        s: Some(cotangent.clone()),
+                                        s: Some(cotangent.payload().clone()),
                                         vt: None,
                                     },
                                     options.as_ref(),
@@ -153,21 +154,23 @@ where
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "svd_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
             }
 
-            if let AdValue::Reverse { node, tape, .. } = out_vt.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_vt.reverse_handle() {
                 let spec = spec.clone();
                 let options = options.clone();
                 let a_primal = input_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -180,14 +183,18 @@ where
                                     &tenferro_linalg::SvdCotangent {
                                         u: None,
                                         s: None,
-                                        vt: Some(cotangent.clone()),
+                                        vt: Some(cotangent.payload().clone()),
                                     },
                                     options.as_ref(),
                                 )
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("svd_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "svd_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
@@ -237,6 +244,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdQrResult<T>> {
         let operands = [self.tensor];
+        ensure_dense_linalg_ad_inputs("qr_ad_structured", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -278,22 +286,20 @@ where
             (None, None)
         };
 
-        let out_q = wrap_dense_ad_output("qr_ad", &operands, primal.q, dq, 1)?;
-        let out_r = wrap_dense_ad_output("qr_ad", &operands, primal.r, dr, 2)?;
+        let out_q = wrap_same_type_dense_ad_output("qr_ad", &operands, primal.q, dq)?;
+        let out_r = wrap_same_type_dense_ad_output("qr_ad", &operands, primal.r, dr)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
             .next()
             .flatten();
         if let Some(spec) = input_spec {
-            if let AdValue::Reverse { node, tape, .. } = out_q.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_q.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -304,27 +310,29 @@ where
                                     ctx,
                                     &a_primal,
                                     &tenferro_linalg::QrCotangent {
-                                        q: Some(cotangent.clone()),
+                                        q: Some(cotangent.payload().clone()),
                                         r: None,
                                     },
                                 )
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "qr_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
             }
 
-            if let AdValue::Reverse { node, tape, .. } = out_r.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_r.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -336,13 +344,17 @@ where
                                     &a_primal,
                                     &tenferro_linalg::QrCotangent {
                                         q: None,
-                                        r: Some(cotangent.clone()),
+                                        r: Some(cotangent.payload().clone()),
                                     },
                                 )
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("qr_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "qr_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );

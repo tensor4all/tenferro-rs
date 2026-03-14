@@ -99,20 +99,19 @@ See `eigen.md` for the symmetric case.
 
 ## Dyadtensor integration
 
-`tenferro-dyadtensor::eig_ad(...).run()` emits complex outputs
-(`values`, `vectors`) and registers reverse bridge rules to real input nodes:
+`tenferro-dyadtensor` keeps reverse-mode graphs homogeneous:
+`Tape<StructuredTensor<T>>` carries a single value type, and scalar AD values
+are rank-0 tensors rather than a separate scalar graph type.
 
-- output cotangent domain: `Tensor<Complex<T>>`
-- input gradient domain: `Tensor<T>`
+That means `eig_ad(...).run()` is split as follows:
 
-This follows the PyTorch `handle_r_to_c` convention for real inputs: the final
-input cotangent is projected to the real domain (`Re(...)`).
+- primal / forward mode: supported
+- reverse mode with complex inputs and complex outputs: same-domain reverse path
+- reverse mode with real inputs and complex outputs: currently unsupported
 
-For reverse extraction:
-
-- use `ad::pullback_wrt_mixed` for `eig` outputs differentiated w.r.t. real
-  inputs,
-- use same-domain `ad::pullback` / `ad::pullback_wrt` for non-mixed cases.
+The old mixed-type reverse bridge (`Complex -> Real`) was removed to keep the
+dyadtensor tape homogeneous. Dense `eig_rrule` still exists in
+`tenferro-linalg`; the restriction is in the dyadtensor wrapper layer.
 
 ## References
 

@@ -1,3 +1,4 @@
+mod autodiff;
 mod einsum;
 mod layout;
 pub mod meta;

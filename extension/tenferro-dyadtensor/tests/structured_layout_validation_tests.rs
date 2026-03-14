@@ -1,6 +1,10 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{AdTensor, DynAdScalar, DynAdTensor, Error, StructuredTensor};
+use tenferro_dyadtensor::{AdTensor, DynAdTensor, Error, StructuredTensor};
 use tenferro_tensor::{MemoryOrder, Tensor};
+
+mod support;
+
+use support::primal_rank0_f64;
 
 fn vector(values: &[f64]) -> Tensor<f64> {
     Tensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
@@ -23,9 +27,9 @@ fn axpby_rejects_diag_and_dense_vector_layout_mismatch() {
     let dense_vec: DynAdTensor = AdTensor::new_primal(vector(&[3.0, 4.0])).into();
 
     let err = match diag.axpby(
-        &DynAdScalar::from(1.0_f64),
+        &primal_rank0_f64(1.0_f64),
         &dense_vec,
-        &DynAdScalar::from(1.0_f64),
+        &primal_rank0_f64(1.0_f64),
     ) {
         Ok(_) => panic!("axpby should reject incompatible structured layouts"),
         Err(err) => err,
@@ -63,11 +67,7 @@ fn axpby_rejects_same_dims_but_different_axis_classes() {
     )
     .into();
 
-    let err = match lhs.axpby(
-        &DynAdScalar::from(1.0_f64),
-        &rhs,
-        &DynAdScalar::from(1.0_f64),
-    ) {
+    let err = match lhs.axpby(&primal_rank0_f64(1.0_f64), &rhs, &primal_rank0_f64(1.0_f64)) {
         Ok(_) => panic!("axpby should reject axis_class mismatches"),
         Err(err) => err,
     };
@@ -88,9 +88,9 @@ fn axpby_accepts_matching_structured_layouts() {
 
     let out = lhs
         .axpby(
-            &DynAdScalar::from(2.0_f64),
+            &primal_rank0_f64(2.0_f64),
             &rhs,
-            &DynAdScalar::from(-1.0_f64),
+            &primal_rank0_f64(-1.0_f64),
         )
         .unwrap();
 

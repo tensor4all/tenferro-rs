@@ -14,4 +14,4 @@ mod runtime_helpers;
 mod runtime_surface;
 mod support;
 
-pub(crate) use support::{as_slice, assert_primal_mode, with_cpu_runtime};
+pub(crate) use support::{as_slice, assert_primal_mode, reverse_leaf_f64, with_cpu_runtime};

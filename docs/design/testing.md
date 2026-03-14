@@ -368,8 +368,8 @@ Notes:
 ### chainrules-core / chainrules
 
 - Tape: leaf registration, pullback execution
-- TrackedTensor: tracking propagation
-- DualTensor: tangent propagation
+- TrackedValue: tracking propagation
+- DualValue: tangent propagation
 - Gradients: accumulate / get
 
 ## Benchmark Tests (`tensor4all/benchmark_einsum`)

@@ -67,12 +67,13 @@ fn eager_ad_preserves_mode_propagation() {
     let ad_a_fwd = AdTensor::new_forward(a.clone(), da).unwrap();
     let ad_b = AdTensor::new_primal(b);
     let out_fwd = solve(&ad_a_fwd, &ad_b).unwrap();
-    assert!(matches!(out_fwd.as_value(), AdValue::Forward { .. }));
+    assert_forward_mode(&out_fwd);
 
-    let ad_a_rev = AdTensor::new_reverse(a.clone(), NodeId(1), TapeId(11), None).unwrap();
-    let ad_b_rev = AdTensor::new_reverse(a, NodeId(2), TapeId(11), None).unwrap();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
+    let ad_b_rev = reverse_leaf_f64(a, &tape);
     let out_rev = einsum("ij,jk->ik", &[&ad_a_rev, &ad_b_rev]).unwrap();
-    assert!(matches!(out_rev.as_value(), AdValue::Reverse { tape, .. } if *tape == TapeId(11)));
+    assert_reverse_on_tape(&out_rev, &tape);
 }
 
 #[test]
@@ -110,4 +111,34 @@ fn eager_local_einsum_rules_cover_rrule_frule_hvp() {
     assert_eq!(hvp.len(), 2);
     assert_eq!(hvp[0].0.dims(), &[2, 2]);
     assert_eq!(hvp[0].1.dims(), &[2, 2]);
+}
+
+#[test]
+fn eager_local_einsum_rules_reject_mismatched_tangent_arity() {
+    let ad_a = AdTensor::new_primal(f64_2x2([1.0, 3.0, 2.0, 4.0]));
+    let ad_b = AdTensor::new_primal(f64_2x2([2.0, -1.0, 0.5, 1.5]));
+    let ad_da = AdTensor::new_primal(f64_2x2([0.1, 0.0, -0.2, 0.3]));
+    let ad_grad_c = AdTensor::new_primal(f64_2x2([1.0, 0.0, 0.0, 1.0]));
+    let ad_dgrad_c = AdTensor::new_primal(f64_2x2([0.5, 0.0, 0.0, 0.5]));
+
+    let frule_err = einsum_frule("ij,jk->ik", &[&ad_a, &ad_b], &[Some(&ad_da)]).unwrap_err();
+    assert!(matches!(
+        frule_err,
+        Error::InvalidAdTensor { message }
+            if message.contains("einsum_frule requires tangents.len() == primals.len()")
+    ));
+
+    let hvp_err = einsum_hvp(
+        "ij,jk->ik",
+        &[&ad_a, &ad_b],
+        &[Some(&ad_da)],
+        &ad_grad_c,
+        &ad_dgrad_c,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        hvp_err,
+        Error::InvalidAdTensor { message }
+            if message.contains("einsum_hvp requires tangents.len() == primals.len()")
+    ));
 }

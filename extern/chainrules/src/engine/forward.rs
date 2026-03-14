@@ -5,23 +5,23 @@ use crate::{AdResult, Differentiable};
 /// # Examples
 ///
 /// ```
-/// use chainrules::DualTensor;
-/// let dual = DualTensor::new(3.14_f64);
+/// use chainrules::DualValue;
+/// let dual = DualValue::new(3.14_f64);
 /// assert!(!dual.has_tangent());
 /// ```
-pub struct DualTensor<V: Differentiable> {
+pub struct DualValue<V: Differentiable> {
     primal: V,
     tangent: Option<V::Tangent>,
 }
 
-impl<V: Differentiable> DualTensor<V> {
+impl<V: Differentiable> DualValue<V> {
     /// Creates a dual value with zero tangent.
     ///
     /// # Examples
     ///
     /// ```
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::new(3.14_f64);
+    /// use chainrules::DualValue;
+    /// let x = DualValue::new(3.14_f64);
     /// assert!(!x.has_tangent());
     /// ```
     pub fn new(primal: V) -> Self {
@@ -41,8 +41,8 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::with_tangent(3.14_f64, 1.0_f64).unwrap();
+    /// use chainrules::DualValue;
+    /// let x = DualValue::with_tangent(3.14_f64, 1.0_f64).unwrap();
     /// assert!(x.has_tangent());
     /// assert_eq!(*x.tangent().unwrap(), 1.0);
     /// ```
@@ -58,8 +58,8 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::new(3.14_f64);
+    /// use chainrules::DualValue;
+    /// let x = DualValue::new(3.14_f64);
     /// assert_eq!(*x.primal(), 3.14);
     /// ```
     pub fn primal(&self) -> &V {
@@ -71,8 +71,8 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::new(3.14_f64);
+    /// use chainrules::DualValue;
+    /// let x = DualValue::new(3.14_f64);
     /// assert!(x.tangent().is_none());
     /// ```
     pub fn tangent(&self) -> Option<&V::Tangent> {
@@ -84,8 +84,8 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::new(3.14_f64);
+    /// use chainrules::DualValue;
+    /// let x = DualValue::new(3.14_f64);
     /// assert!(!x.has_tangent());
     /// ```
     pub fn has_tangent(&self) -> bool {
@@ -97,8 +97,8 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::with_tangent(3.14_f64, 1.0).unwrap();
+    /// use chainrules::DualValue;
+    /// let x = DualValue::with_tangent(3.14_f64, 1.0).unwrap();
     /// let (p, t) = x.into_parts();
     /// assert_eq!(p, 3.14);
     /// assert_eq!(t, Some(1.0));
@@ -112,8 +112,8 @@ impl<V: Differentiable> DualTensor<V> {
     /// # Examples
     ///
     /// ```
-    /// use chainrules::DualTensor;
-    /// let x = DualTensor::with_tangent(3.14_f64, 1.0).unwrap();
+    /// use chainrules::DualValue;
+    /// let x = DualValue::with_tangent(3.14_f64, 1.0).unwrap();
     /// let c = x.detach_tangent();
     /// assert!(!c.has_tangent());
     /// assert_eq!(*c.primal(), 3.14);

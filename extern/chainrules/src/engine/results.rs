@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::{AdResult, AutodiffError, Differentiable, NodeId, TrackedTensor};
+use crate::{AdResult, AutodiffError, Differentiable, NodeId, TrackedValue};
 
 /// Accumulated gradients indexed by [`NodeId`].
 ///
@@ -124,7 +124,7 @@ impl<V: Differentiable> PullbackPlan<V> {
     /// let plan = PullbackPlan::build(&x).unwrap();
     /// assert_eq!(plan.loss_node().index(), 0);
     /// ```
-    pub fn build(loss: &TrackedTensor<V>) -> AdResult<Self> {
+    pub fn build(loss: &TrackedValue<V>) -> AdResult<Self> {
         let node_id = loss.node_id.ok_or(AutodiffError::MissingNode)?;
         Ok(Self {
             loss: node_id,
@@ -145,7 +145,7 @@ impl<V: Differentiable> PullbackPlan<V> {
     /// let grads = plan.execute(&x).unwrap();
     /// assert_eq!(*grads.get(x.node_id().unwrap()).unwrap(), 1.0);
     /// ```
-    pub fn execute(&self, loss: &TrackedTensor<V>) -> AdResult<Gradients<V>> {
+    pub fn execute(&self, loss: &TrackedValue<V>) -> AdResult<Gradients<V>> {
         let tape = loss.tape.as_ref().ok_or(AutodiffError::MissingNode)?;
         tape.pullback(loss)
     }

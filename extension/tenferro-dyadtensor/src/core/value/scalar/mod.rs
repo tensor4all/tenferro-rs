@@ -1,10 +1,7 @@
 mod binary;
-mod shared;
 mod unary;
 
-use super::core::{AdMode, AdValue, NodeId, TapeId};
-
-pub(crate) use shared::{map_ad_value_mixed_linear, map_ad_value_same_type_linear};
+use super::core::{AdMode, AdValue};
 
 /// Scalar newtype carrying AD mode information.
 ///
@@ -50,20 +47,6 @@ impl<T> AdScalar<T> {
     /// ```
     pub fn new_forward(primal: T, tangent: T) -> Self {
         Self(AdValue::forward(primal, tangent))
-    }
-
-    /// Creates a reverse-mode scalar.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, AdScalar, NodeId, TapeId};
-    ///
-    /// let x = AdScalar::new_reverse(2.0_f64, NodeId(1), TapeId(2), Some(0.4));
-    /// assert_eq!(x.mode(), AdMode::Reverse);
-    /// ```
-    pub fn new_reverse(primal: T, node: NodeId, tape: TapeId, tangent: Option<T>) -> Self {
-        Self(AdValue::reverse(primal, node, tape, tangent))
     }
 
     /// Returns AD mode.
@@ -124,7 +107,6 @@ impl<T> AdScalar<T> {
         match self.0 {
             AdValue::Primal(primal) => primal,
             AdValue::Forward { primal, .. } => primal,
-            AdValue::Reverse { primal, .. } => primal,
         }
     }
 
@@ -163,9 +145,14 @@ impl<T> From<T> for AdScalar<T> {
     }
 }
 
-impl<T> From<AdValue<T>> for AdScalar<T> {
-    fn from(value: AdValue<T>) -> Self {
-        Self(value)
+impl<T> TryFrom<AdValue<T>> for AdScalar<T> {
+    type Error = crate::Error;
+
+    fn try_from(value: AdValue<T>) -> crate::Result<Self> {
+        match value {
+            AdValue::Primal(primal) => Ok(Self::new_primal(primal)),
+            AdValue::Forward { primal, tangent } => Ok(Self::new_forward(primal, tangent)),
+        }
     }
 }
 

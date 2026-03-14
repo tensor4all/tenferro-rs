@@ -1,4 +1,4 @@
-use chainrules::{AdResult, AutodiffError, Differentiable, NodeId, ReverseRule, TrackedTensor};
+use chainrules::{AdResult, AutodiffError, Differentiable, NodeId, ReverseRule, TrackedValue};
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
 use tenferro_einsum::Subscripts;
@@ -93,8 +93,8 @@ where
 /// ```
 pub fn tracked_tropical_einsum<T, Alg, Backend>(
     subscripts: &str,
-    operands: &[&TrackedTensor<Tensor<T::Inner>>],
-) -> AdResult<TrackedTensor<Tensor<T::Inner>>>
+    operands: &[&TrackedValue<Tensor<T::Inner>>],
+) -> AdResult<TrackedValue<Tensor<T::Inner>>>
 where
     Alg: Semiring<Scalar = T>,
     T: TropicalScalar + HasAlgebra<Algebra = Alg> + 'static,
@@ -123,7 +123,7 @@ where
         .map_err(|e| AutodiffError::InvalidArgument(format!("{e}")))?;
 
     if !operands.iter().any(|op| op.requires_grad()) {
-        return Ok(TrackedTensor::new(output_inner));
+        return Ok(TrackedValue::new(output_inner));
     }
 
     let tape = operands

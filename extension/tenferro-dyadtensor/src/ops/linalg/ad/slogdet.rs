@@ -23,6 +23,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdSlogdetResult<T>> {
         let operands = [self.tensor];
+        ensure_dense_linalg_ad_inputs("slogdet_ad_structured", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -67,35 +68,36 @@ where
             (None, None)
         };
 
-        let out_sign = wrap_dense_ad_output("slogdet_ad", &operands, primal.sign, dsign, 1)?;
+        let out_sign = wrap_same_type_dense_ad_output("slogdet_ad", &operands, primal.sign, dsign)?;
         let out_logabsdet =
-            wrap_dense_ad_output("slogdet_ad", &operands, primal.logabsdet, dlogabsdet, 2)?;
+            wrap_same_type_dense_ad_output("slogdet_ad", &operands, primal.logabsdet, dlogabsdet)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
             .next()
             .flatten();
         if let Some(spec) = input_spec {
-            if let AdValue::Reverse { node, tape, .. } = out_sign.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_sign.reverse_handle() {
                 let spec = spec.clone();
                 let zero = zero_like(spec.layout.payload());
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
-                    Box::new(move |_cotangent| Ok(vec![(spec.node, zero.clone())])),
+                    &tape,
+                    node,
+                    Box::new(move |_cotangent| {
+                        Ok(vec![(
+                            spec.node,
+                            spec.layout.with_payload_like(zero.clone())?,
+                        )])
+                    }),
                 );
             }
 
-            if let AdValue::Reverse { node, tape, .. } = out_logabsdet.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_logabsdet.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -106,13 +108,17 @@ where
                                     ctx,
                                     &a_primal,
                                     &tenferro_linalg::SlogdetCotangent {
-                                        logabsdet: Some(cotangent.clone()),
+                                        logabsdet: Some(cotangent.payload().clone()),
                                     },
                                 )
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("slogdet_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "slogdet_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );

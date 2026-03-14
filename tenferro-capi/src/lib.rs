@@ -11,7 +11,7 @@
 //!   last argument. Rust panics are caught with `catch_unwind` and
 //!   converted to `TFE_INTERNAL_ERROR`.
 //! - **Stateless AD rules**: Only `rrule` (VJP) and `frule` (JVP) are
-//!   exposed. The AD tape / `TrackedTensor` / `DualTensor` are Rust-internal
+//!   exposed. The AD tape / `TrackedValue` / `DualValue` are Rust-internal
 //!   and **not** exposed via FFI.
 //! - **f64 only** in this POC phase. All functions carry the `_f64` suffix.
 //! - **DLPack interop**: Zero-copy tensor exchange via [`DLManagedTensorVersioned`].

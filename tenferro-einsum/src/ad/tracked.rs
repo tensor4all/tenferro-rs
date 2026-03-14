@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
-use chainrules::{autograd, AdResult, Differentiable, TrackedTensor, Variable};
+use chainrules::{autograd, AdResult, Differentiable, TrackedValue, Variable};
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_tensor::Tensor;
 
@@ -35,8 +35,8 @@ use super::rules::einsum_frule_impl;
 pub fn tracked_einsum<Alg: 'static, Backend>(
     ctx: Rc<RefCell<BackendContext<Alg, Backend>>>,
     subscripts: &str,
-    operands: &[&TrackedTensor<Tensor<Alg::Scalar>>],
-) -> AdResult<TrackedTensor<Tensor<Alg::Scalar>>>
+    operands: &[&TrackedValue<Tensor<Alg::Scalar>>],
+) -> AdResult<TrackedValue<Tensor<Alg::Scalar>>>
 where
     Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
@@ -69,7 +69,7 @@ where
 
     let any_requires_grad = operands.iter().any(|op| op.requires_grad());
     if !any_requires_grad {
-        return Ok(TrackedTensor::new(output));
+        return Ok(TrackedValue::new(output));
     }
 
     let tape = operands

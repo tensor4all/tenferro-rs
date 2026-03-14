@@ -49,14 +49,11 @@ fn einsum_backward_two_stage_matches_finite_difference_f64() {
     let cotangent = f64_2x2([0.4, -0.7, 0.2, 0.9]);
     let eps = 1e-6;
 
-    let tape = TapeId(990);
-    let node_a = NodeId(901);
-    let node_b = NodeId(902);
-    let node_c = NodeId(903);
+    let tape = Tape::<StructuredTensor<f64>>::new();
     let (grad_a, grad_b) = {
-        let ad_a = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-        let ad_b = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
-        let ad_c = AdTensor::new_reverse(c.clone(), node_c, tape, None).unwrap();
+        let ad_a = reverse_leaf_f64(a.clone(), &tape);
+        let ad_b = reverse_leaf_f64(b.clone(), &tape);
+        let ad_c = reverse_leaf_f64(c.clone(), &tape);
         let y1 = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
         let y2 = einsum("ij,jk->ik", &[&y1, &ad_c]).unwrap();
         let grads = pullback_wrt(
@@ -223,14 +220,11 @@ fn einsum_backward_two_stage_matches_finite_difference_c64_directional() {
     ]);
     let eps = 1e-6;
 
-    let tape = TapeId(991);
-    let node_a = NodeId(911);
-    let node_b = NodeId(912);
-    let node_c = NodeId(913);
+    let tape = Tape::<StructuredTensor<Complex64>>::new();
     let grad_a = {
-        let ad_a = AdTensor::new_reverse(a.clone(), node_a, tape, None).unwrap();
-        let ad_b = AdTensor::new_reverse(b.clone(), node_b, tape, None).unwrap();
-        let ad_c = AdTensor::new_reverse(c.clone(), node_c, tape, None).unwrap();
+        let ad_a = reverse_leaf_c64(a.clone(), &tape);
+        let ad_b = reverse_leaf_c64(b.clone(), &tape);
+        let ad_c = reverse_leaf_c64(c.clone(), &tape);
         let y1 = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
         let y2 = einsum("ij,jk->ik", &[&y1, &ad_c]).unwrap();
         let grads = pullback_wrt(&y2, &AdTensor::new_primal(cotangent.clone()), &[&ad_a]).unwrap();

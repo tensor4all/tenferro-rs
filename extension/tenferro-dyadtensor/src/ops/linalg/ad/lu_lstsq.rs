@@ -35,6 +35,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdLuResult<T>> {
         let operands = [self.tensor];
+        ensure_dense_linalg_ad_inputs("lu_ad_structured", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -80,23 +81,21 @@ where
             (None, None)
         };
 
-        let out_l = wrap_dense_ad_output("lu_ad", &operands, primal.l, dl, 1)?;
-        let out_u = wrap_dense_ad_output("lu_ad", &operands, primal.u, du, 2)?;
+        let out_l = wrap_same_type_dense_ad_output("lu_ad", &operands, primal.l, dl)?;
+        let out_u = wrap_same_type_dense_ad_output("lu_ad", &operands, primal.u, du)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
             .into_iter()
             .next()
             .flatten();
         if let Some(spec) = input_spec {
-            if let AdValue::Reverse { node, tape, .. } = out_l.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_l.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 let pivot = self.pivot;
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -107,7 +106,7 @@ where
                                     ctx,
                                     &a_primal,
                                     &tenferro_linalg::LuCotangent {
-                                        l: Some(cotangent.clone()),
+                                        l: Some(cotangent.payload().clone()),
                                         u: None,
                                     },
                                     pivot,
@@ -115,21 +114,23 @@ where
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "lu_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
             }
 
-            if let AdValue::Reverse { node, tape, .. } = out_u.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_u.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 let pivot = self.pivot;
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -141,14 +142,18 @@ where
                                     &a_primal,
                                     &tenferro_linalg::LuCotangent {
                                         l: None,
-                                        u: Some(cotangent.clone()),
+                                        u: Some(cotangent.payload().clone()),
                                     },
                                     pivot,
                                 )
                                 .map_err(Error::from)
                             }
                         )?;
-                        let grad = compress_pullback_like("lu_ad", grad, &spec.layout)?;
+                        let grad = spec.layout.with_payload_like(compress_pullback_like(
+                            "lu_ad",
+                            grad,
+                            &spec.layout,
+                        )?)?;
                         Ok(vec![(spec.node, grad)])
                     }),
                 );
@@ -199,6 +204,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdLstsqResult<T>> {
         let operands = [self.a, self.b];
+        ensure_dense_linalg_ad_inputs("lstsq_ad_structured", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let ((a_primal, a_tangent), (b_primal, b_tangent)) = dispatch_linalg_ad_runtime!(
             T,
@@ -250,21 +256,19 @@ where
             (None, None)
         };
 
-        let out_x = wrap_dense_ad_output("lstsq_ad", &operands, primal.x, dx, 1)?;
+        let out_x = wrap_same_type_dense_ad_output("lstsq_ad", &operands, primal.x, dx)?;
         let out_residual =
-            wrap_dense_ad_output("lstsq_ad", &operands, primal.residual, dresidual, 2)?;
+            wrap_same_type_dense_ad_output("lstsq_ad", &operands, primal.residual, dresidual)?;
 
         let reverse_specs = collect_reverse_input_specs(&operands);
         if has_reverse(&operands) {
-            if let AdValue::Reverse { node, tape, .. } = out_x.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_x.reverse_handle() {
                 let reverse_specs = reverse_specs.clone();
                 let a_primal = a_primal.clone();
                 let b_primal = b_primal.clone();
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -272,7 +276,10 @@ where
                             "lstsq_ad_pullback_x",
                             |ctx| {
                                 tenferro_linalg::lstsq_rrule::<T, _>(
-                                    ctx, &a_primal, &b_primal, cotangent,
+                                    ctx,
+                                    &a_primal,
+                                    &b_primal,
+                                    cotangent.payload(),
                                 )
                                 .map_err(Error::from)
                             }
@@ -280,11 +287,19 @@ where
 
                         let mut input_grads = Vec::new();
                         if let Some(spec) = &reverse_specs[0] {
-                            let grad_a = compress_pullback_like("lstsq_ad", grad.a, &spec.layout)?;
+                            let grad_a = spec.layout.with_payload_like(compress_pullback_like(
+                                "lstsq_ad",
+                                grad.a,
+                                &spec.layout,
+                            )?)?;
                             input_grads.push((spec.node, grad_a));
                         }
                         if let Some(spec) = &reverse_specs[1] {
-                            let grad_b = compress_pullback_like("lstsq_ad", grad.b, &spec.layout)?;
+                            let grad_b = spec.layout.with_payload_like(compress_pullback_like(
+                                "lstsq_ad",
+                                grad.b,
+                                &spec.layout,
+                            )?)?;
                             input_grads.push((spec.node, grad_b));
                         }
                         Ok(input_grads)
@@ -292,22 +307,22 @@ where
                 );
             }
 
-            if let AdValue::Reverse { node, tape, .. } = out_residual.as_value() {
-                let output_node = *node;
-                let tape_id = *tape;
+            if let Some((node, tape)) = out_residual.reverse_handle() {
                 let reverse_specs = reverse_specs.clone();
                 let zero_a = zero_like(self.a.structured_primal().payload());
                 let zero_b = zero_like(self.b.structured_primal().payload());
                 tape::register_rule::<T>(
-                    tape_id,
-                    output_node,
+                    &tape,
+                    node,
                     Box::new(move |_cotangent| {
                         let mut input_grads = Vec::new();
                         if let Some(spec) = &reverse_specs[0] {
-                            input_grads.push((spec.node, zero_a.clone()));
+                            input_grads
+                                .push((spec.node, spec.layout.with_payload_like(zero_a.clone())?));
                         }
                         if let Some(spec) = &reverse_specs[1] {
-                            input_grads.push((spec.node, zero_b.clone()));
+                            input_grads
+                                .push((spec.node, spec.layout.with_payload_like(zero_b.clone())?));
                         }
                         Ok(input_grads)
                     }),

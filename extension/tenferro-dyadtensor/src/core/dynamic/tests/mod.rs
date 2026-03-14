@@ -1,10 +1,19 @@
 mod organization;
 
 use super::*;
+use chainrules::Tape;
 use num_complex::Complex64;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{AdMode, AdTensor, AdValue, Error, TapeId};
+use crate::{AdMode, AdTensor, Error, StructuredTensor};
+
+fn rank0_f64(value: f64) -> Tensor<f64> {
+    Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn rank0_c64(value: Complex64) -> Tensor<Complex64> {
+    Tensor::<Complex64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
 
 #[test]
 fn dyn_scalar_metadata() {
@@ -14,11 +23,25 @@ fn dyn_scalar_metadata() {
 }
 
 #[test]
-fn dyn_ad_value_mode_and_tangent() {
-    let x: DynAdScalar = AdValue::forward(2.0_f32, 0.5_f32).into();
+fn rank0_dyn_ad_tensor_mode_and_tangent() {
+    let x: DynAdTensor = AdTensor::new_forward(
+        Tensor::<f32>::from_slice(&[2.0_f32], &[], MemoryOrder::ColumnMajor).unwrap(),
+        Tensor::<f32>::from_slice(&[0.5_f32], &[], MemoryOrder::ColumnMajor).unwrap(),
+    )
+    .unwrap()
+    .into();
     assert_eq!(x.scalar_type(), ScalarType::F32);
     assert_eq!(x.mode(), AdMode::Forward);
-    assert_eq!(x.tangent(), Some(DynScalar::F32(0.5)));
+    assert_eq!(
+        x.as_f32()
+            .unwrap()
+            .tangent()
+            .unwrap()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[0.5_f32]
+    );
 }
 
 #[test]
@@ -34,48 +57,50 @@ fn dyn_tensor_and_dyn_ad_tensor_dims() {
 }
 
 #[test]
-fn dyn_ad_value_mul_mixed_real_complex_promotes_to_complex() {
-    let lhs = DynAdScalar::from(2.0_f64);
-    let rhs = DynAdScalar::from(Complex64::new(1.0, -3.0));
-    let out = (lhs * rhs).unwrap();
+fn rank0_dyn_ad_tensor_scale_mixed_real_complex_promotes_to_complex() {
+    let lhs: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let rhs: DynAdTensor = AdTensor::new_primal(rank0_c64(Complex64::new(1.0, -3.0))).into();
+    let out = lhs.scale(&rhs).unwrap();
     assert_eq!(out.scalar_type(), ScalarType::C64);
-    assert_eq!(out.primal(), DynScalar::C64(Complex64::new(2.0, -6.0)));
-}
-
-#[test]
-fn dyn_ad_value_div_with_scalar_lhs_is_supported() {
-    let rhs = DynAdScalar::from(2.0_f64);
-    let out = (Complex64::new(4.0, -2.0) / rhs).unwrap();
-    assert_eq!(out.scalar_type(), ScalarType::C64);
-    assert_eq!(out.primal(), DynScalar::C64(Complex64::new(2.0, -1.0)));
-}
-
-#[test]
-fn dyn_ad_value_try_add_rejects_cross_precision_pairs() {
-    let lhs = DynAdScalar::from(1.0_f32);
-    let rhs = DynAdScalar::from(2.0_f64);
-    let err = lhs.try_add(rhs).unwrap_err();
-    assert!(matches!(err, Error::InvalidAdScalar { .. }));
-}
-
-#[test]
-fn dyn_ad_value_try_mul_checks_reverse_tape_compatibility() {
-    let lhs: DynAdScalar = AdValue::reverse(2.0_f64, crate::NodeId(1), TapeId(7), None).into();
-    let rhs: DynAdScalar = AdValue::reverse(3.0_f64, crate::NodeId(2), TapeId(8), None).into();
-    let err = lhs.try_mul(rhs).unwrap_err();
-    assert!(
-        matches!(err, Error::InvalidAdScalar { message } if message.contains("reverse-mode tape mismatch"))
+    assert_eq!(
+        out.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[Complex64::new(2.0, -6.0)]
     );
 }
 
 #[test]
-fn dyn_ad_value_operator_mul_checks_reverse_tape_compatibility() {
-    let lhs: DynAdScalar = AdValue::reverse(2.0_f64, crate::NodeId(1), TapeId(7), None).into();
-    let rhs: DynAdScalar = AdValue::reverse(3.0_f64, crate::NodeId(2), TapeId(8), None).into();
-    let err = (lhs * rhs).unwrap_err();
-    assert!(
-        matches!(err, Error::InvalidAdScalar { message } if message.contains("reverse-mode tape mismatch"))
+fn dyn_ad_tensor_div_with_scalar_lhs_is_supported() {
+    let rhs: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let lhs: DynAdTensor = AdTensor::new_primal(rank0_c64(Complex64::new(4.0, -2.0))).into();
+    let out = lhs.div_scalar(&rhs).unwrap();
+    assert_eq!(out.scalar_type(), ScalarType::C64);
+    assert_eq!(
+        out.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[Complex64::new(2.0, -1.0)]
     );
+}
+
+#[test]
+fn dyn_ad_tensor_scale_checks_reverse_tape_compatibility() {
+    let tensor_tape = Tape::<StructuredTensor<f64>>::new();
+    let scalar_tape = Tape::<StructuredTensor<f64>>::new();
+    let lhs: DynAdTensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tensor_tape)
+        .unwrap()
+        .into();
+    let rhs: DynAdTensor = AdTensor::new_reverse_leaf(rank0_f64(3.0_f64), &scalar_tape)
+        .unwrap()
+        .into();
+    let err = match lhs.scale(&rhs) {
+        Ok(_) => panic!("mixed reverse tapes should be rejected"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        Error::MixedReverseTape {
+            expected: e,
+            found: f
+        } if e == tensor_tape.id() as u64 && f == scalar_tape.id() as u64
+    ));
 }
 
 #[test]
@@ -285,25 +310,19 @@ fn dyn_ad_tensor_compose_complex_rejects_non_real_inputs() {
 
 #[test]
 fn dyn_ad_tensor_compose_complex_checks_reverse_tape_compatibility() {
-    let re = AdTensor::new_reverse(
+    let re = AdTensor::new_reverse_leaf(
         Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
-        crate::NodeId(1),
-        TapeId(7),
-        None,
+        &Tape::<StructuredTensor<f64>>::new(),
     )
     .unwrap();
-    let im = AdTensor::new_reverse(
+    let im = AdTensor::new_reverse_leaf(
         Tensor::<f64>::from_slice(&[2.0], &[1], MemoryOrder::ColumnMajor).unwrap(),
-        crate::NodeId(2),
-        TapeId(8),
-        None,
+        &Tape::<StructuredTensor<f64>>::new(),
     )
     .unwrap();
     let err = match DynAdTensor::compose_complex(DynAdTensor::F64(re), DynAdTensor::F64(im)) {
         Ok(_) => panic!("compose_complex should reject mixed reverse tapes"),
         Err(err) => err,
     };
-    assert!(
-        matches!(err, Error::InvalidAdTensor { message } if message.contains("reverse-mode tape mismatch"))
-    );
+    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
 }

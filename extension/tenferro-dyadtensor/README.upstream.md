@@ -12,7 +12,7 @@ This repository currently provides:
   - `AdTensor<T>`
 - Runtime dtype wrappers:
   - `DynScalar`, `DynTensor`
-  - `DynAdScalar`, `DynAdTensor`
+  - `DynAdTensor`
   - `ScalarType` (`F32`, `F64`, `C32`, `C64`)
 - AD boundary traits:
   - `Differentiable`, `TensorKernel`, `OpRule`
@@ -27,8 +27,8 @@ This repository currently provides:
 
 All operation entry points are builder-based and execute via `.run()` using
 the default runtime context. Runtime selection uses an explicit runtime holder,
-and reverse-mode bookkeeping keeps one tape-local rule store per tape rather
-than a generic global context map.
+and reverse-mode bookkeeping attaches pullback rules directly to
+`chainrules::Tape<StructuredTensor<T>>`.
 
 ```rust
 use tenferro_dyadtensor::{qr, set_default_runtime, RuntimeContext};

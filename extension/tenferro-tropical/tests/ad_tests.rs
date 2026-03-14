@@ -419,7 +419,7 @@ fn tracked_maxplus_matmul_pullback() {
     use tenferro_einsum::tracked_einsum;
 
     let ones = Tensor::<f64>::ones(&[2, 2], LogicalMemorySpace::MainMemory, COL);
-    let ones_tracked = chainrules::TrackedTensor::new(ones);
+    let ones_tracked = chainrules::TrackedValue::new(ones);
 
     let ctx = Rc::new(RefCell::new(ctx()));
     let loss = tracked_einsum::<tenferro_algebra::Standard<f64>, tenferro_prims::CpuBackend>(
@@ -832,13 +832,13 @@ fn tracked_accepts_single_operand() {
 #[test]
 fn tracked_no_grad_returns_plain_tensor() {
     // When operands don't require grad, tracked_tropical_einsum should
-    // return a TrackedTensor without node_id (not on tape).
+    // return a TrackedValue without node_id (not on tape).
     let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
 
     // Non-tracked (no tape, no gradient)
-    let a = chainrules::TrackedTensor::new(a_data);
-    let b = chainrules::TrackedTensor::new(b_data);
+    let a = chainrules::TrackedValue::new(a_data);
+    let b = chainrules::TrackedValue::new(b_data);
 
     let c =
         tracked_tropical_einsum::<MaxPlus<f64>, MaxPlusAlgebra<f64>, tenferro_prims::CpuBackend>(

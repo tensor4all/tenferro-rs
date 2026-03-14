@@ -1,4 +1,7 @@
 use super::*;
+use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
+use crate::AdMode;
+use ::chainrules::Tape;
 
 #[test]
 fn runtime_helpers_cover_mode_and_shape_paths() {
@@ -11,32 +14,32 @@ fn runtime_helpers_cover_mode_and_shape_paths() {
 
     let ad_primal = AdTensor::new_primal(primal.clone());
     let ad_forward = AdTensor::new_forward(primal.clone(), tangent.clone()).unwrap();
-    let ad_reverse = AdTensor::new_reverse(primal.clone(), NodeId(41), TapeId(91), None).unwrap();
-    let ad_reverse_other =
-        AdTensor::new_reverse(primal.clone(), NodeId(42), TapeId(92), None).unwrap();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let other_tape = Tape::<StructuredTensor<f64>>::new();
+    let ad_reverse = reverse_leaf_f64(primal.clone(), &tape);
+    let ad_reverse_other = reverse_leaf_f64(primal.clone(), &other_tape);
 
     assert!(has_forward(&[&ad_primal, &ad_forward]));
     assert!(has_reverse(&[&ad_primal, &ad_reverse]));
     assert!(has_any_tangent(&[&ad_primal, &ad_forward]));
-    assert_eq!(
-        derive_reverse_tape(&[&ad_primal, &ad_reverse]).unwrap(),
-        Some(TapeId(91))
-    );
+    let derived_tape = derive_reverse_tape_handle(&[&ad_primal, &ad_reverse])
+        .unwrap()
+        .expect("expected reverse tape handle");
+    assert!(derived_tape.same_tape(&tape));
     assert!(matches!(
-        derive_reverse_tape(&[&ad_reverse, &ad_reverse_other]),
+        derive_reverse_tape_handle(&[&ad_reverse, &ad_reverse_other]),
         Err(Error::MixedReverseTape {
-            expected: 91,
-            found: 92
-        })
+            expected: e,
+            found: f
+        }) if e == tape.id() as u64 && f == other_tape.id() as u64
     ));
-
-    let node_a = derive_reverse_node("helper", &[&ad_primal, &ad_reverse], &[2, 2], 7, TapeId(91));
-    let node_b = derive_reverse_node("helper", &[&ad_primal, &ad_reverse], &[2, 2], 8, TapeId(91));
-    assert_ne!(node_a, node_b);
 
     let specs = collect_reverse_input_specs(&[&ad_reverse, &ad_primal]);
     assert_eq!(specs.len(), 2);
-    assert_eq!(specs[0].as_ref().unwrap().node, NodeId(41));
+    assert_eq!(
+        specs[0].as_ref().unwrap().node,
+        ad_reverse.node_id().unwrap()
+    );
     assert!(specs[1].is_none());
 
     let reshaped = normalize_pullback_shape(
@@ -59,33 +62,28 @@ fn runtime_helpers_cover_mode_and_shape_paths() {
     ));
 
     let wrapped_primal =
-        wrap_dense_ad_output("runtime_helper", &[&ad_primal], primal.clone(), None, 0).unwrap();
-    assert!(matches!(wrapped_primal.as_value(), AdValue::Primal(_)));
+        wrap_dense_ad_output("runtime_helper", &[&ad_primal], primal.clone(), None).unwrap();
+    assert_eq!(wrapped_primal.mode(), AdMode::Primal);
 
     let wrapped_forward = wrap_dense_ad_output(
         "runtime_helper",
         &[&ad_forward],
         primal.clone(),
         Some(tangent.clone()),
-        0,
     )
     .unwrap();
-    assert!(matches!(
-        wrapped_forward.as_value(),
-        AdValue::Forward { .. }
-    ));
+    assert_forward_mode(&wrapped_forward);
 
     let wrapped_reverse =
-        wrap_dense_ad_output("runtime_helper", &[&ad_reverse], primal.clone(), None, 0).unwrap();
-    assert!(matches!(
-        wrapped_reverse.as_value(),
-        AdValue::Reverse { node, tape, .. } if *node == derive_reverse_node("runtime_helper", &[&ad_reverse], &[2, 2], 0, TapeId(91))
-            && *tape == TapeId(91)
-    ));
+        wrap_same_type_dense_ad_output("runtime_helper", &[&ad_reverse], primal.clone(), None)
+            .unwrap();
+    assert_reverse_on_tape(&wrapped_reverse, &tape);
 
     let forward_err =
-        wrap_dense_ad_output("runtime_helper", &[&ad_forward], primal.clone(), None, 0)
-            .unwrap_err();
+        match wrap_dense_ad_output("runtime_helper", &[&ad_forward], primal.clone(), None) {
+            Ok(_) => panic!("forward output without tangent should be rejected"),
+            Err(err) => err,
+        };
     assert!(matches!(
         forward_err,
         Error::InvalidAdTensor { message } if message.contains("forward-mode inputs must provide tangent output")
@@ -180,9 +178,10 @@ fn sum_ad_reverse_pullback_broadcasts_scalar_cotangent() {
 
     let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
-    let ad_x = AdTensor::new_reverse(x.clone(), NodeId(51), TapeId(151), None).unwrap();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let ad_x = reverse_leaf_f64(x.clone(), &tape);
     let out = sum_ad(&ad_x).run().unwrap();
-    assert!(matches!(out.as_value(), AdValue::Reverse { .. }));
+    assert_reverse_on_tape(&out, &tape);
 
     let cotangent = AdTensor::new_primal(
         Tensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),
@@ -201,15 +200,16 @@ fn einsum_ad_size_dict_forces_dense_path_and_registers_pullback() {
         .unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
-    let ad_a = AdTensor::new_reverse(a.clone(), NodeId(61), TapeId(161), None).unwrap();
-    let ad_b = AdTensor::new_reverse(b.clone(), NodeId(62), TapeId(161), None).unwrap();
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let ad_a = reverse_leaf_f64(a.clone(), &tape);
+    let ad_b = reverse_leaf_f64(b.clone(), &tape);
     let size_dict = HashMap::new();
 
     let out = einsum_ad("ij,jk->ik", &[&ad_a, &ad_b])
         .size_dict(&size_dict)
         .run()
         .unwrap();
-    assert!(matches!(out.as_value(), AdValue::Reverse { .. }));
+    assert_reverse_on_tape(&out, &tape);
 
     let cotangent =
         Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)

@@ -70,6 +70,7 @@ one layer up in `tenferro-dyadtensor` by composing runtime-generic tensor prims.
   `ad::asin`, `ad::acos`, `ad::atan`,
   `ad::sinh`, `ad::cosh`, `ad::asinh`, `ad::acosh`, `ad::atanh`
 - Builder-based linalg wrappers: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
+  - `eig_ad` reverse mode is same-domain only; real-input reverse mode is currently unsupported in dyadtensor
 
 For a broader crate-by-crate support view, including primal coverage and
 runtime status, see [Supported Operations by Crate](../design/supported-ops.md).

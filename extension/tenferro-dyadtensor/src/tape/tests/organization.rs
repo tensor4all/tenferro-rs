@@ -15,22 +15,21 @@ fn tape_modules_are_split_into_focused_modules() {
         "src/tape/mod.rs",
         "src/tape/registry.rs",
         "src/tape/tensor_pullback.rs",
-        "src/tape/scalar_pullback.rs",
     ] {
         assert!(
             repo_path(relative).exists(),
             "expected split reverse_tape module to exist: {relative}"
         );
     }
+    assert!(
+        !repo_path("src/tape/scalar_pullback.rs").exists(),
+        "scalar_pullback.rs should stay removed after the homogeneous-tape redesign"
+    );
 }
 
 #[test]
 fn split_tape_modules_stay_under_size_guideline() {
-    for relative in [
-        "src/tape/registry.rs",
-        "src/tape/tensor_pullback.rs",
-        "src/tape/scalar_pullback.rs",
-    ] {
+    for relative in ["src/tape/registry.rs", "src/tape/tensor_pullback.rs"] {
         let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
         let line_count = contents.lines().count();
         assert!(
@@ -41,19 +40,23 @@ fn split_tape_modules_stay_under_size_guideline() {
 }
 
 // IMPORTANT: Do not delete or weaken these tests.
-// They guard the registry redesign that keeps reverse-tape state in one
-// tape-local store instead of drifting back to parallel ad hoc registries.
+// They guard the homogeneous-tape redesign: dyadtensor should register reverse
+// rules directly on chainrules::Tape<StructuredTensor<T>> instead of drifting
+// back to a dyadtensor-local registry/store layer.
 
 #[test]
-fn tape_registry_uses_one_tape_store() {
+fn tape_registry_uses_chainrules_tape_directly() {
     let registry = std::fs::read_to_string(repo_path("src/tape/registry.rs")).unwrap();
     assert!(
-        registry.contains("struct TapeRuleStore"),
-        "reverse_tape registry should keep a dedicated TapeRuleStore abstraction"
+        registry.contains("Tape<StructuredTensor<T>>"),
+        "tape registry should register rules against chainrules::Tape<StructuredTensor<T>>"
     );
-    assert_eq!(
-        registry.matches("thread_local!").count(),
-        1,
-        "reverse_tape registry should use one thread-local tape store entrypoint"
+    assert!(
+        registry.contains("tape.attach_rule"),
+        "tape registry should attach reverse rules directly to the chainrules tape"
+    );
+    assert!(
+        !registry.contains("thread_local!"),
+        "tape registry should not reintroduce a dyadtensor-local thread-local store"
     );
 }

@@ -214,3 +214,41 @@ fn analytic_prims_execute_sqrt_and_reject_unsupported_plan_requests() {
             .unwrap_err();
     assert!(matches!(err, tenferro_device::Error::InvalidArgument(_)));
 }
+
+#[test]
+fn plan_cache_roundtrips_across_family_descriptors() {
+    let mut cache = crate::infra::plan_cache::PlanCache::new();
+
+    let semiring_desc = SemiringCoreDescriptor::MakeContiguous;
+    let fast_path_desc = SemiringFastPathDescriptor::ElementwiseBinary {
+        op: SemiringBinaryOp::Mul,
+    };
+    let scalar_desc = ScalarPrimsDescriptor::PointwiseUnary {
+        op: ScalarUnaryOp::Neg,
+    };
+    let analytic_desc = AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Exp,
+    };
+
+    cache.insert::<usize, _>(&semiring_desc, &[&[2, 2]], 11);
+    cache.insert::<usize, _>(&fast_path_desc, &[&[2, 2], &[2, 2], &[2, 2]], 13);
+    cache.insert::<usize, _>(&scalar_desc, &[&[4], &[4]], 17);
+    cache.insert::<usize, _>(&analytic_desc, &[&[4], &[4]], 19);
+
+    assert_eq!(cache.get::<usize, _>(&semiring_desc, &[&[2, 2]]), Some(11));
+    assert_eq!(
+        cache.get::<usize, _>(&fast_path_desc, &[&[2, 2], &[2, 2], &[2, 2]]),
+        Some(13)
+    );
+    assert_eq!(cache.get::<usize, _>(&scalar_desc, &[&[4], &[4]]), Some(17));
+    assert_eq!(
+        cache.get::<usize, _>(&analytic_desc, &[&[4], &[4]]),
+        Some(19)
+    );
+
+    assert_eq!(cache.get::<usize, _>(&semiring_desc, &[&[3, 3]]), None);
+    assert_eq!(cache.get::<String, _>(&semiring_desc, &[&[2, 2]]), None);
+
+    cache.clear();
+    assert!(cache.is_empty());
+}

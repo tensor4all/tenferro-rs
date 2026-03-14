@@ -97,7 +97,7 @@ Mooncake (AD)                      chainrules / chainrules-core [exists]
 
 `chainrules-core` is generic over `V: Differentiable`. Any tensor type
 (Dense, BlockSparse, Diagonal, Graded) can implement `Differentiable`
-and use the same `Tape<V>` / `TrackedTensor<V>` AD engine. Dense and
+and use the same `Tape<V>` / `TrackedValue<V>` AD engine. Dense and
 Block sparse share the AD engine without modification.
 
 ### Device abstraction (tenferro-device)
@@ -134,7 +134,7 @@ Architecture:
 block-sparse-einsum (separate crate)
     |
     +-- uses: chainrules-core (Differentiable, ReverseRule for AD)
-    +-- uses: chainrules (Tape, TrackedTensor for AD engine)
+    +-- uses: chainrules (Tape, TrackedValue for AD engine)
     +-- uses: tenferro-prims (batched_gemm for individual dense blocks)
     +-- uses: tenferro-device (device abstraction)
     |

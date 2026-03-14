@@ -1,9 +1,6 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 
 use chainrules_core::Differentiable as _;
-use num_complex::Complex;
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_linalg::{
@@ -13,7 +10,7 @@ use tenferro_linalg::{
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::core::value::{AdValue, NodeId};
+use crate::core::value::NodeId;
 use crate::runtime::contracts::*;
 use crate::runtime::dispatch::*;
 use crate::structured::{
@@ -21,7 +18,7 @@ use crate::structured::{
     reverse_subscripts, to_dense_in_ctx, StructuredTensor,
 };
 use crate::tape;
-use crate::{AdTensor, Error, Result, TapeId};
+use crate::{AdTensor, Error, Result};
 
 pub mod ad;
 pub mod einsum;

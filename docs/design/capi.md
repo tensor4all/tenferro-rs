@@ -41,7 +41,7 @@ if a caller were to invoke such a path internally, it would surface as
    converted to `TFE_INTERNAL_ERROR`.
 
 3. **Stateless AD only.** Only `rrule` (VJP) and `frule` (JVP) are
-   exposed. `TrackedTensor` / `DualTensor` / `Tape` are Rust-internal.
+   exposed. `TrackedValue` / `DualValue` / `Tape` are Rust-internal.
    Host languages manage their own AD tapes (ChainRules.jl, PyTorch
    autograd, JAX custom_vjp).
 

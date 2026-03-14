@@ -16,9 +16,8 @@
 //! ```
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`],
-//! while reverse-mode
-//! bookkeeping keeps one tape-local rule store per tape rather than a generic
-//! global context map.
+//! while reverse-mode bookkeeping attaches pullback rules directly to
+//! `chainrules::Tape<StructuredTensor<T>>`.
 //!
 //! Module map:
 //!
@@ -39,8 +38,7 @@ mod tape;
 pub mod traits;
 
 pub use core::{
-    AdMode, AdScalar, AdTensor, AdValue, DynAdScalar, DynAdTensor, DynScalar, DynTensor, NodeId,
-    ScalarType, TapeId,
+    AdMode, AdScalar, AdTensor, AdValue, DynAdTensor, DynScalar, DynTensor, NodeId, ScalarType,
 };
 pub use error::{Error, Result};
 pub use ops::ad;
