@@ -207,7 +207,20 @@ impl<T: Scalar> Tensor<T> {
         let strides = compute_contiguous_strides(&dims, order);
         let mut data = vec![T::zero(); n * n];
         for i in 0..n {
-            let pos = (i as isize * strides[0] + i as isize * strides[1]) as usize;
+            let pos = (i as isize)
+                .checked_mul(strides[0])
+                .and_then(|a| {
+                    (i as isize)
+                        .checked_mul(strides[1])
+                        .and_then(|b| a.checked_add(b))
+                })
+                .and_then(|pos| usize::try_from(pos).ok())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "eye: position overflow for index {} with strides {:?}",
+                        i, strides
+                    )
+                });
             data[pos] = T::one();
         }
         Self::finish_allocation(

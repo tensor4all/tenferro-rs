@@ -162,13 +162,27 @@ impl<T: Scalar> Tensor<T> {
             let src_batch_off: isize = batch_index
                 .iter()
                 .enumerate()
-                .map(|(axis, &idx)| idx as isize * self.strides[axis + 2])
-                .sum();
+                .try_fold(0isize, |acc, (axis, &idx)| {
+                    (idx as isize).checked_mul(self.strides[axis + 2]).and_then(|v| acc.checked_add(v))
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "triangular_part: source batch offset overflow with batch_index {:?}, strides {:?}",
+                        batch_index, self.strides
+                    )
+                });
             let dst_batch_off: isize = batch_index
                 .iter()
                 .enumerate()
-                .map(|(axis, &idx)| idx as isize * out_strides[axis + 2])
-                .sum();
+                .try_fold(0isize, |acc, (axis, &idx)| {
+                    (idx as isize).checked_mul(out_strides[axis + 2]).and_then(|v| acc.checked_add(v))
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "triangular_part: destination batch offset overflow with batch_index {:?}, strides {:?}",
+                        batch_index, out_strides
+                    )
+                });
 
             for j in 0..n {
                 for i in 0..m {
@@ -180,13 +194,29 @@ impl<T: Scalar> Tensor<T> {
                         continue;
                     }
 
-                    let src_pos = (self.offset
-                        + src_batch_off
-                        + i as isize * self.strides[0]
-                        + j as isize * self.strides[1]) as usize;
-                    let dst_pos = (dst_batch_off
-                        + i as isize * out_strides[0]
-                        + j as isize * out_strides[1]) as usize;
+                    let src_pos = self
+                        .offset
+                        .checked_add(src_batch_off)
+                        .and_then(|off| (i as isize).checked_mul(self.strides[0]).and_then(|v| off.checked_add(v)))
+                        .and_then(|off| (j as isize).checked_mul(self.strides[1]).and_then(|v| off.checked_add(v)))
+                        .and_then(|pos| usize::try_from(pos).ok())
+                        .unwrap_or_else(|| {
+                            panic!(
+                        "triangular_part: source position overflow at ({}, {}) with offset {}, batch_off {}, strides {:?}",
+                        i, j, self.offset, src_batch_off, self.strides
+                    )
+                        });
+                    let dst_pos = (i as isize)
+                        .checked_mul(out_strides[0])
+                        .and_then(|v| dst_batch_off.checked_add(v))
+                        .and_then(|off| (j as isize).checked_mul(out_strides[1]).and_then(|v| off.checked_add(v)))
+                        .and_then(|pos| usize::try_from(pos).ok())
+                        .unwrap_or_else(|| {
+                            panic!(
+                        "triangular_part: destination position overflow at ({}, {}) with batch_off {}, strides {:?}",
+                        i, j, dst_batch_off, out_strides
+                    )
+                        });
                     data[dst_pos] = src[src_pos];
                 }
             }

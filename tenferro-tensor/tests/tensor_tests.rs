@@ -1006,3 +1006,55 @@ fn accumulate_tangent_no_fw_grad() {
     let result = Tensor::<f64>::accumulate_tangent(a, &b);
     assert!(!result.has_fw_grad());
 }
+
+// ============================================================================
+// Overflow protection tests
+//
+// Note: These tests verify that overflow protection is in place. The stride
+// validation in from_vec/validate_layout_against_len catches most overflow
+// scenarios before they reach the operation code. The checked arithmetic in
+// eye(), tril(), and triu() provides defense-in-depth for edge cases.
+// ============================================================================
+
+#[test]
+fn eye_small_sizes_work() {
+    let t = Tensor::<f64>::eye(1, MEM, COL);
+    assert_eq!(t.dims(), &[1, 1]);
+
+    let t = Tensor::<f64>::eye(2, MEM, ROW);
+    assert_eq!(t.dims(), &[2, 2]);
+
+    let t = Tensor::<f64>::eye(10, MEM, COL);
+    assert_eq!(t.dims(), &[10, 10]);
+}
+
+#[test]
+fn tril_triu_normal_sizes_work() {
+    let t = Tensor::<f64>::ones(&[5, 5], MEM, COL);
+    let lower = t.tril(0);
+    assert_eq!(lower.dims(), &[5, 5]);
+
+    let upper = t.triu(0);
+    assert_eq!(upper.dims(), &[5, 5]);
+}
+
+#[test]
+fn tril_triu_batched_works() {
+    let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL);
+    let lower = t.tril(0);
+    assert_eq!(lower.dims(), &[3, 3, 2]);
+
+    let upper = t.triu(0);
+    assert_eq!(upper.dims(), &[3, 3, 2]);
+}
+
+#[test]
+fn huge_strides_rejected_by_layout_validation() {
+    let data = vec![0.0f64; 4];
+    let huge_stride = isize::MAX / 2;
+    let result = Tensor::<f64>::from_vec(data, &[2, 2], &[huge_stride, 1], 0);
+    assert!(
+        matches!(result, Err(tenferro_device::Error::StrideError(_))),
+        "expected StrideError for huge strides that would cause overflow"
+    );
+}
