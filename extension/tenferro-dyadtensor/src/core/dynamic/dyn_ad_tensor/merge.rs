@@ -1,5 +1,6 @@
 use core::ops::Add;
 
+use chainrules::Tape;
 use chainrules_scalarops::{self, ScalarAd};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
@@ -246,7 +247,7 @@ where
         },
         (Some((lhs_node, lhs_tape)), rhs_reverse) => {
             if let Some((_, ref rhs_tape)) = rhs_reverse {
-                if !lhs_tape.same_tape(&rhs_tape) {
+                if !lhs_tape.same_tape(&rhs_tape as &Tape<DynTensor>) {
                     return Err(Error::InvalidAdTensor {
                         message: format!(
                             "reverse-mode tape mismatch in tensor add (lhs={}, rhs={})",

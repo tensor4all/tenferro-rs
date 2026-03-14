@@ -1,5 +1,6 @@
 mod basics;
 mod complex;
+mod eager_linalg;
 mod eager_scalar;
 mod eager_tensor;
 mod layout;
@@ -11,15 +12,22 @@ mod snapshot;
 
 use num_complex::{Complex32, Complex64};
 
+pub use eager_linalg::{
+    DynAdEigResult, DynAdEigenResult, DynAdLstsqResult, DynAdLuResult, DynAdQrResult,
+    DynAdSlogdetResult, DynAdSvdResult,
+};
+
 /// Runtime AD tensor wrapper.
 ///
 /// `DynAdTensor` is the canonical dynamic tensor payload for eager tensor
 /// algebra in `tenferro-dyadtensor`.
 ///
 /// - rank-0 `DynAdTensor` values act as scalar coefficients
-/// - [`DynAdTensor::promote_to`] performs the supported AD-aware dtype lifts
-/// - [`DynAdTensor::primal_snapshot`] exposes a primal-only structured payload
-///   for storage or FFI boundaries
+/// - mixed-dtype tensor ops apply the supported algebraic promotion matrix
+///   internally before execution
+/// - [`DynAdTensor::to_scalar_type`] is the explicit numeric cast boundary
+/// - [`DynAdTensor::detach`] drops tape metadata while keeping the same dynamic
+///   tensor object for storage or FFI boundaries
 ///
 /// # Examples
 ///

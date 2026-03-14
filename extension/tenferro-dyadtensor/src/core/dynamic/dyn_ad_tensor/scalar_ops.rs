@@ -1,3 +1,4 @@
+use chainrules::Tape;
 use chainrules_scalarops::{self, ScalarAd};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
@@ -11,7 +12,7 @@ use super::merge::merge_add_ad_tensors;
 use super::promotion::join_scalar_types;
 use super::DynAdTensor;
 use crate::core::DynTensorTyped;
-use crate::{AdTensor, Error, Result};
+use crate::{AdTensor, DynTensor, Error, Result};
 
 fn tensor_scalar_rrule_typed<T>(
     tensor_primal: &Tensor<T>,
@@ -145,7 +146,9 @@ where
     let scalar_reverse = scalar.reverse_handle();
 
     let reverse = match (tensor_reverse.clone(), scalar_reverse.clone()) {
-        (Some((_lhs_node, lhs_tape)), Some((_, rhs_tape))) if !lhs_tape.same_tape(&rhs_tape) => {
+        (Some((_lhs_node, lhs_tape)), Some((_, rhs_tape)))
+            if !lhs_tape.same_tape(&rhs_tape as &Tape<DynTensor>) =>
+        {
             return Err(Error::MixedReverseTape {
                 expected: lhs_tape.id() as u64,
                 found: rhs_tape.id() as u64,

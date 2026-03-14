@@ -127,14 +127,17 @@ The canonical conceptual path is still tensor-tensor elementwise execution.
 `tenferro-dyadtensor` keeps this boundary explicit in the dynamic API:
 
 - `DynAdTensor` is the canonical dynamic execution payload
-- `DynAdTensor::promote_to(...)` handles the supported same-precision
-  real-to-complex lifts
-- `DynAdTensor::primal_snapshot()` returns a primal-only `DynTensor` for
-  storage/FFI boundaries
+- tensor operations apply implicit algebraic promotion internally when they
+  need a common dtype
+- `DynAdTensor::to_scalar_type(...)` is the explicit cast boundary, analogous
+  to PyTorch `tensor.to(dtype)`
+- `DynAdTensor::detach()` drops tape metadata while preserving the same dynamic
+  tensor object for storage/FFI-style boundaries
 
-Because reverse-mode graphs are homogeneous `Tape<DynTensor>`,
-mixed-dtype reverse promotion remains unsupported today. Primal and forward
-promotion stay available.
+Reverse-mode graphs are homogeneous `Tape<DynTensor>`, but the dynamic payload
+itself carries dtype at runtime. That means mixed-dtype reverse propagation is
+supported as long as operands share the same public dynamic tape; gradients are
+cast back to each input dtype during pullback.
 
 ## Seed Semantics
 

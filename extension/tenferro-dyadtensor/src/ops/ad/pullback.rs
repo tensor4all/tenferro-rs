@@ -2,6 +2,8 @@ use super::*;
 use crate::core::DynTensorTyped;
 use crate::runtime::contracts::LinalgRuntimeValue;
 use crate::runtime::dispatch::{dispatch_einsum_runtime, with_linalg_runtime};
+use crate::DynTensor;
+use chainrules::Tape;
 
 /// Reverse pullback from a reverse-mode output tensor.
 ///
@@ -42,7 +44,7 @@ pub fn pullback_wrt<T: Scalar + DynTensorTyped + 'static>(
     for wrt_tensor in wrt {
         match (wrt_tensor.reverse_node_id(), wrt_tensor.reverse_tape()) {
             (Some(node), Some(t)) => {
-                if !t.same_tape(&tape) {
+                if !t.same_tape(&tape as &Tape<DynTensor>) {
                     return Err(Error::MixedReverseTape {
                         expected: tape.id() as u64,
                         found: t.id() as u64,

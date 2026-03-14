@@ -1,4 +1,4 @@
-use tenferro_dyadtensor::{ad, set_default_runtime, DynAdTensor, RuntimeContext};
+use tenferro_dyadtensor::{set_default_runtime, DynAdTensor, RuntimeContext};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -48,8 +48,11 @@ fn eager_qr_accepts_row_major_dense_input() {
     )
     .unwrap();
     let input_expected = input.contiguous(MemoryOrder::RowMajor);
-    let out = ad::qr(DynAdTensor::new_primal(input).as_f64().unwrap()).unwrap();
-    let reconstructed = matmul(out.q.primal(), out.r.primal());
+    let out = DynAdTensor::new_primal(input).qr().unwrap();
+    let reconstructed = matmul(
+        out.q.as_f64().unwrap().primal(),
+        out.r.as_f64().unwrap().primal(),
+    );
 
     assert!(
         max_abs_diff(&reconstructed, &input_expected) < 1e-10,
@@ -77,11 +80,14 @@ fn eager_svd_accepts_row_major_dense_input() {
     )
     .unwrap();
 
-    let row_out = ad::svd(DynAdTensor::new_primal(row_major).as_f64().unwrap()).unwrap();
-    let col_out = ad::svd(DynAdTensor::new_primal(column_major).as_f64().unwrap()).unwrap();
+    let row_out = DynAdTensor::new_primal(row_major).svd().unwrap();
+    let col_out = DynAdTensor::new_primal(column_major).svd().unwrap();
 
     assert!(
-        max_abs_diff(row_out.s.primal(), col_out.s.primal()) < 1e-10,
+        max_abs_diff(
+            row_out.s.as_f64().unwrap().primal(),
+            col_out.s.as_f64().unwrap().primal(),
+        ) < 1e-10,
         "row-major SVD should match column-major singular values"
     );
 }

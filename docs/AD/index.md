@@ -62,15 +62,12 @@ one layer up in `tenferro-dyadtensor` by composing runtime-generic tensor prims.
 
 ### `tenferro-dyadtensor`
 
-- Eager tensor AD entrypoints: `ad::einsum`, `ad::sum`, `ad::mean`, `ad::var`, `ad::std`
-- Eager scalar wrappers:
-  `ad::add`, `ad::atan2`, `ad::pow`, `ad::hypot`,
-  `ad::sqrt`, `ad::exp`, `ad::expm1`, `ad::log`, `ad::log1p`,
-  `ad::sin`, `ad::cos`, `ad::tanh`,
-  `ad::asin`, `ad::acos`, `ad::atan`,
-  `ad::sinh`, `ad::cosh`, `ad::asinh`, `ad::acosh`, `ad::atanh`
-- Builder-based linalg wrappers: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
-  - `eig_ad` reverse mode is same-domain only; real-input reverse mode is currently unsupported in dyadtensor
+- Dynamic eager tensor methods on `DynAdTensor`:
+  - tensor/reduction: `einsum`, `sum`, `mean`, `var`, `std`
+  - scalar/analytic: `add`, `atan2`, `pow`, `hypot`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`
+  - linalg: `svd`, `qr`, `lu`, `eigen`, `eig`, `lstsq`, `cholesky`, `solve`, `inv`, `det`, `slogdet`, `pinv`, `matrix_exp`, `solve_triangular`, `norm`
+- Internal builder plumbing still lives in `*_ad(...).run()` builders, but the preferred public surface is now the `DynAdTensor` method API
+  - `eig` reverse mode is same-domain only; real-input reverse mode is currently unsupported in dyadtensor
 
 For a broader crate-by-crate support view, including primal coverage and
 runtime status, see [Supported Operations by Crate](../design/supported-ops.md).

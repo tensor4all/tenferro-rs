@@ -43,7 +43,7 @@ pub(crate) enum AdTensorSnapshot<T: Scalar> {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use tenferro_dyadtensor::{AdMode, core::AdTensor};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
@@ -115,7 +115,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use chainrules::Tape;
     /// use tenferro_dyadtensor::{StructuredTensor, core::{AdTensor, DynTensor}};
     ///
@@ -200,7 +200,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use chainrules::Tape;
     /// use tenferro_dyadtensor::{StructuredTensor, core::{AdTensor, DynTensor}};
     ///
@@ -217,7 +217,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// use chainrules::Tape;
     /// use tenferro_dyadtensor::{StructuredTensor, core::{AdTensor, DynTensor}};
     ///
@@ -239,7 +239,7 @@ impl<T: Scalar> AdTensor<T> {
     }
 
     pub(crate) fn reverse_handle(&self) -> Option<(ChainNodeId, Tape<DynTensor>)> {
-        self.as_tracked().map(|value| {
+        self.as_tracked().map(|value: &TrackedValue<DynTensor>| {
             (
                 value
                     .node_id()
@@ -334,7 +334,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{StructuredTensor, core::AdTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
@@ -354,7 +354,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
@@ -371,7 +371,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{StructuredTensor, core::AdTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///

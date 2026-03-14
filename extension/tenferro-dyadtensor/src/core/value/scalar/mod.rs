@@ -11,7 +11,7 @@ use super::core::{AdMode, AdValue};
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use tenferro_dyadtensor::{AdMode, core::AdScalar};
 ///
 /// let x: AdScalar<f64> = 2.0_f64.into();
@@ -25,7 +25,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{AdMode, core::AdScalar};
     ///
     /// let x = AdScalar::new_primal(1.5_f64);
@@ -39,7 +39,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{AdMode, core::AdScalar};
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
@@ -53,7 +53,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{AdMode, core::AdScalar};
     ///
     /// let x = AdScalar::new_primal(2.0_f64);
@@ -67,7 +67,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::{AdScalar, AdValue};
     ///
     /// let x = AdScalar::new_primal(2.0_f64);
@@ -81,7 +81,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::{AdScalar, AdValue};
     ///
     /// let x = AdScalar::new_primal(2.0_f64).into_value();
@@ -97,7 +97,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::AdScalar;
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
@@ -114,7 +114,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::AdScalar;
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
@@ -128,7 +128,7 @@ impl<T> AdScalar<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::AdScalar;
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);

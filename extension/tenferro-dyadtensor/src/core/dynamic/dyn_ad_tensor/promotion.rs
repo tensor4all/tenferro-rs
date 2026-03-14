@@ -133,37 +133,7 @@ impl DynAdTensor {
         }
     }
 
-    /// Promotes the tensor to a target runtime scalar type while preserving AD
-    /// metadata when the promotion stays within the supported algebraic
-    /// promotion matrix.
-    ///
-    /// Supported promotions are:
-    /// - identity (`T -> T`)
-    /// - same-precision real-to-complex (`F32 -> C32`, `F64 -> C64`)
-    ///
-    /// Reverse-mode promotion is supported for these same-precision
-    /// real-to-complex lifts. Pullbacks cast the accumulated cotangent back to
-    /// the original real dtype.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use num_complex::Complex64;
-    /// use tenferro_dyadtensor::{DynAdTensor, ScalarType};
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
-    ///
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// );
-    ///
-    /// let y = x.promote_to(ScalarType::C64).unwrap();
-    /// assert_eq!(y.scalar_type(), ScalarType::C64);
-    /// assert_eq!(
-    ///     y.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
-    ///     &[Complex64::new(1.0, 0.0), Complex64::new(2.0, 0.0)]
-    /// );
-    /// ```
-    pub fn promote_to(&self, target: ScalarType) -> Result<Self> {
+    pub(crate) fn promote_to(&self, target: ScalarType) -> Result<Self> {
         match (self, target) {
             (Self::F32(value), ScalarType::F32) => Ok(Self::F32(value.clone())),
             (Self::F64(value), ScalarType::F64) => Ok(Self::F64(value.clone())),

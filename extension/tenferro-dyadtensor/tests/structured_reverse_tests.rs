@@ -1,6 +1,6 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{ad, DynAdTensor, DynTape, Error, StructuredTensor};
 use tenferro_dyadtensor::{set_default_runtime, RuntimeContext};
+use tenferro_dyadtensor::{DynAdTensor, DynTape, Error, StructuredTensor};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -147,11 +147,11 @@ fn root_einsum_keeps_diag_output_in_structured_carrier() {
         StructuredTensor::from_diagonal_vector(vector_f64(&[3.0, 4.0]), 2).unwrap(),
     );
 
-    let out = ad::einsum("ij,jk->ik", &[a.as_f64().unwrap(), b.as_f64().unwrap()]).unwrap();
+    let out = DynAdTensor::einsum("ij,jk->ik", &[&a, &b]).unwrap();
 
     assert!(out.is_diag());
-    assert_eq!(out.primal().dims(), &[2]);
     assert_eq!(out.dims(), &[2, 2]);
+    assert_eq!(out.as_f64().unwrap().primal().dims(), &[2]);
 }
 
 #[test]
@@ -169,9 +169,7 @@ fn root_einsum_reverse_keeps_diag_cotangent_space() {
     )
     .unwrap();
 
-    let out: DynAdTensor = ad::einsum("ij,jk->ik", &[a.as_f64().unwrap(), b.as_f64().unwrap()])
-        .unwrap()
-        .into();
+    let out = DynAdTensor::einsum("ij,jk->ik", &[&a, &b]).unwrap();
     let cotangent = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[0.5, -1.0]), 2).unwrap(),
     );
@@ -200,7 +198,7 @@ fn root_sum_reverse_keeps_diag_cotangent_space() {
     )
     .unwrap();
 
-    let out: DynAdTensor = ad::sum(x.as_f64().unwrap()).unwrap().into();
+    let out = x.sum().unwrap();
     let cotangent = DynAdTensor::new_primal(scalar(1.5));
     let grads = out.pullback_wrt(&cotangent, &[&x]).unwrap();
 

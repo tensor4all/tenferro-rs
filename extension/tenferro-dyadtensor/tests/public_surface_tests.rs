@@ -82,6 +82,10 @@ fn dynadtensor_public_to_scalar_type_supports_cross_precision_cast() {
         y.as_f32().unwrap().primal().buffer().as_slice().unwrap(),
         &[2.0]
     );
+
+    let detached = y.detach();
+    assert_eq!(detached.mode(), AdMode::Primal);
+    assert_eq!(detached.scalar_type(), tenferro_dyadtensor::ScalarType::F32);
 }
 
 #[test]
@@ -115,6 +119,15 @@ fn dynadtensor_public_scalar_eager_methods_do_not_require_typed_api() {
         s.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
         &[1.0]
     );
+
+    let t = x.sin().unwrap().cos().unwrap().tanh().unwrap();
+    assert_eq!(t.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
+
+    let v = x.var().unwrap();
+    assert_eq!(v.dims(), &[]);
+
+    let std = x.std().unwrap();
+    assert_eq!(std.dims(), &[]);
 }
 
 #[test]
@@ -138,6 +151,48 @@ fn dynadtensor_public_einsum_uses_dynamic_operands_only() {
         out.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
         &[Complex64::new(5.0, -1.0)]
     );
+}
+
+#[test]
+fn dynadtensor_public_linalg_single_result_methods_do_not_require_typed_api() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let a = DynAdTensor::new_primal(
+        Tensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap(),
+    );
+    let b = DynAdTensor::new_primal(
+        Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    );
+
+    let det = a.det().unwrap();
+    assert_eq!(det.dims(), &[]);
+    assert_eq!(
+        det.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[11.0]
+    );
+
+    let x = a.solve(&b).unwrap();
+    let x_vals = x.as_f64().unwrap().primal().buffer().as_slice().unwrap();
+    assert!((x_vals[0] - (1.0 / 11.0)).abs() < 1e-12);
+    assert!((x_vals[1] - (7.0 / 11.0)).abs() < 1e-12);
+}
+
+#[test]
+fn dynadtensor_public_linalg_multi_result_methods_return_dynamic_results() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let a = DynAdTensor::new_primal(
+        Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 2.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap(),
+    );
+
+    let svd = a.svd().unwrap();
+    assert_eq!(svd.u.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
+    assert_eq!(svd.s.dims(), &[2]);
+    assert_eq!(svd.vt.dims(), &[2, 2]);
+
+    let qr = a.qr().unwrap();
+    assert_eq!(qr.q.dims(), &[2, 2]);
+    assert_eq!(qr.r.dims(), &[2, 2]);
 }
 
 #[test]

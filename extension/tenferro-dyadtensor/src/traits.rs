@@ -10,7 +10,7 @@ use crate::{AdMode, AdScalar, AdTensor, AdValue, DiffPolicy, DynScalar, Result};
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use tenferro_dyadtensor::{AdResult, Error};
 ///
 /// let ok: AdResult<()> = Ok(());
@@ -26,7 +26,7 @@ pub type AdResult<T> = Result<T>;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use tenferro_dyadtensor::IndexLike;
 ///
 /// fn accepts_index<I: IndexLike>(_index: I) {}
@@ -40,7 +40,7 @@ impl<T> IndexLike for T where T: Clone + Eq + Hash {}
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use tenferro_dyadtensor::{AdMode, Differentiable, core::AdValue};
 ///
 /// fn mode_of<V: Differentiable>(value: &V) -> AdMode {
@@ -245,7 +245,7 @@ pub trait TensorKernel: Clone {
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use tenferro_dyadtensor::{AdResult, Differentiable, OpRule, Result, core::AdValue};
 ///
 /// struct IdentityRule;

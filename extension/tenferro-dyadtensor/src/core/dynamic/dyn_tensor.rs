@@ -14,7 +14,7 @@ use crate::{Error, Result, StructuredTensor};
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```text
 /// use tenferro_dyadtensor::{ScalarType, core::DynTensor};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
@@ -81,7 +81,7 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{ScalarType, core::DynTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
@@ -102,7 +102,7 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
@@ -123,7 +123,7 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{StructuredTensor, core::DynTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
@@ -148,7 +148,7 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::core::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
@@ -169,7 +169,7 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```text
     /// use tenferro_dyadtensor::{StructuredTensor, core::DynTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///

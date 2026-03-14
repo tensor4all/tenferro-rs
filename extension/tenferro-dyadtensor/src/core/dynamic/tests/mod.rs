@@ -24,6 +24,18 @@ fn rank0_c64(value: Complex64) -> Tensor<Complex64> {
     Tensor::<Complex64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn vector_f32(values: &[f32]) -> Tensor<f32> {
+    Tensor::<f32>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn vector_c32(values: &[Complex32]) -> Tensor<Complex32> {
+    Tensor::<Complex32>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn vector_c64(values: &[Complex64]) -> Tensor<Complex64> {
+    Tensor::<Complex64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+}
+
 #[test]
 fn dyn_scalar_metadata() {
     let x: DynScalar = 1.0_f64.into();
@@ -100,6 +112,17 @@ fn dyn_tensor_is_valid_homogeneous_tape_payload() {
     assert!(leaf.tape().unwrap().same_tape(&tape));
     assert!(leaf.value().is_diag());
     assert_eq!(leaf.value().dims(), &[2, 2]);
+}
+
+#[test]
+fn dyn_tape_public_wrapper_covers_default_id_and_same_tape() {
+    let tape = crate::DynTape::default();
+    let clone = tape.clone();
+    let other = crate::DynTape::new();
+
+    assert_eq!(tape.id(), clone.id());
+    assert!(tape.same_tape(&clone));
+    assert!(!tape.same_tape(&other));
 }
 
 #[test]
@@ -412,6 +435,55 @@ fn dyn_ad_tensor_to_scalar_type_casts_reverse_grad_back_to_input_dtype() {
         grad.payload_f32().unwrap().buffer().as_slice().unwrap(),
         &[1.5_f32]
     );
+}
+
+#[test]
+fn dyn_ad_tensor_pullback_wrt_covers_remaining_dtype_variants() {
+    fn exercise_pullback(
+        x: DynAdTensor,
+        alpha: DynAdTensor,
+        cotangent: DynAdTensor,
+        expected: ScalarType,
+    ) {
+        let out = x.scale(&alpha).unwrap();
+        let grads = out.pullback_wrt(&cotangent, &[&x, &alpha]).unwrap();
+        assert_eq!(grads[0].as_ref().unwrap().scalar_type(), expected);
+        assert_eq!(grads[1].as_ref().unwrap().scalar_type(), expected);
+    }
+
+    let tape_f32 = crate::DynTape::new();
+    let x_f32 = DynAdTensor::new_reverse_leaf(vector_f32(&[1.0, 2.0]), &tape_f32).unwrap();
+    let alpha_f32 = DynAdTensor::new_reverse_leaf(rank0_f32(3.0), &tape_f32).unwrap();
+    let cotangent_f32 = DynAdTensor::new_primal(vector_f32(&[0.5, 1.25]));
+    exercise_pullback(x_f32, alpha_f32, cotangent_f32, ScalarType::F32);
+
+    let tape_c32 = crate::DynTape::new();
+    let x_c32 = DynAdTensor::new_reverse_leaf(
+        vector_c32(&[Complex32::new(1.0, 0.5), Complex32::new(-2.0, 1.0)]),
+        &tape_c32,
+    )
+    .unwrap();
+    let alpha_c32 =
+        DynAdTensor::new_reverse_leaf(rank0_c32(Complex32::new(0.5, -1.0)), &tape_c32).unwrap();
+    let cotangent_c32 = DynAdTensor::new_primal(vector_c32(&[
+        Complex32::new(0.25, -0.5),
+        Complex32::new(1.0, 0.75),
+    ]));
+    exercise_pullback(x_c32, alpha_c32, cotangent_c32, ScalarType::C32);
+
+    let tape_c64 = crate::DynTape::new();
+    let x_c64 = DynAdTensor::new_reverse_leaf(
+        vector_c64(&[Complex64::new(1.0, -0.5), Complex64::new(2.0, 1.5)]),
+        &tape_c64,
+    )
+    .unwrap();
+    let alpha_c64 =
+        DynAdTensor::new_reverse_leaf(rank0_c64(Complex64::new(-1.5, 0.25)), &tape_c64).unwrap();
+    let cotangent_c64 = DynAdTensor::new_primal(vector_c64(&[
+        Complex64::new(0.5, 0.0),
+        Complex64::new(-0.75, 1.25),
+    ]));
+    exercise_pullback(x_c64, alpha_c64, cotangent_c64, ScalarType::C64);
 }
 
 #[test]

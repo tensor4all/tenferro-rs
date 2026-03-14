@@ -1,6 +1,7 @@
 use super::promotion::join_scalar_types;
 use super::DynAdTensor;
-use crate::{ad, AdTensor, Error, Result};
+use crate::ops::ad;
+use crate::{AdTensor, Error, Result};
 
 impl DynAdTensor {
     /// Runs eager AD full `sum` reduction on a dynamic tensor.

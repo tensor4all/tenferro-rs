@@ -193,7 +193,7 @@ impl DynAdTensor {
         for wrt_tensor in wrt {
             match reverse_handle(wrt_tensor) {
                 Some((node, wrt_tape)) => {
-                    if !wrt_tape.same_tape(&tape) {
+                    if !wrt_tape.same_tape(&tape as &Tape<DynTensor>) {
                         return Err(Error::MixedReverseTape {
                             expected: tape.id() as u64,
                             found: wrt_tape.id() as u64,

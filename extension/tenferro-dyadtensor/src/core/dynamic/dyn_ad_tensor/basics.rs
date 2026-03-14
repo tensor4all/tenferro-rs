@@ -1,3 +1,4 @@
+use chainrules::Tape;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::MemoryOrder;
 
@@ -7,7 +8,7 @@ use super::layout::{
     take_prefix_ad_tensor_typed,
 };
 use super::DynAdTensor;
-use crate::{AdMode, AdTensor, DynTape, NodeId, Result, StructuredTensor};
+use crate::{AdMode, AdTensor, DynTape, DynTensor, NodeId, Result, StructuredTensor};
 
 impl DynAdTensor {
     /// Creates a primal tensor value from a dense or structured tensor.
@@ -256,10 +257,10 @@ impl DynAdTensor {
     /// ```
     pub fn tape_id(&self) -> Option<u64> {
         match self {
-            Self::F32(v) => v.tape().map(|tape| tape.id() as u64),
-            Self::F64(v) => v.tape().map(|tape| tape.id() as u64),
-            Self::C32(v) => v.tape().map(|tape| tape.id() as u64),
-            Self::C64(v) => v.tape().map(|tape| tape.id() as u64),
+            Self::F32(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
+            Self::F64(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
+            Self::C32(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
+            Self::C64(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
         }
     }
 

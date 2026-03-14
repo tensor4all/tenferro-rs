@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tenferro_dyadtensor::{
-    ad, set_default_runtime, DynAdTensor, DynTape, Error, RuntimeContext, StructuredTensor,
+    set_default_runtime, DynAdTensor, DynTape, Error, RuntimeContext, StructuredTensor,
 };
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -43,7 +43,7 @@ fn structured_qr_reverse_rejects_non_dense_input() {
     )
     .unwrap();
 
-    let err = match ad::qr(x.as_f64().unwrap()) {
+    let err = match x.qr() {
         Ok(_) => panic!("structured reverse qr should be rejected"),
         Err(err) => err,
     };
