@@ -69,6 +69,62 @@ fn rank0_dyn_ad_tensor_scale_mixed_real_complex_promotes_to_complex() {
 }
 
 #[test]
+fn dyn_ad_tensor_promote_to_c64_lifts_real_rank0_tensor() {
+    let x: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let promoted = x.promote_to(ScalarType::C64).unwrap();
+    assert_eq!(promoted.scalar_type(), ScalarType::C64);
+    assert_eq!(
+        promoted
+            .as_c64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[Complex64::new(2.0, 0.0)]
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_rejects_cross_precision_casts() {
+    let x: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let err = match x.promote_to(ScalarType::F32) {
+        Ok(_) => panic!("cross-precision promote_to should be rejected"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, Error::InvalidAdTensor { message } if message.contains("unsupported promotion"))
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_preserves_forward_tangent() {
+    let x: DynAdTensor = AdTensor::new_forward(rank0_f64(2.0_f64), rank0_f64(0.5_f64))
+        .unwrap()
+        .into();
+    let promoted = x.promote_to(ScalarType::C64).unwrap();
+    assert_eq!(promoted.mode(), AdMode::Forward);
+    let promoted = promoted.as_c64().unwrap();
+    assert_eq!(
+        promoted.tangent().unwrap().buffer().as_slice().unwrap(),
+        &[Complex64::new(0.5, 0.0)]
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_rejects_mixed_dtype_reverse_promotion() {
+    let tape = Tape::<StructuredTensor<f64>>::new();
+    let x: DynAdTensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tape)
+        .unwrap()
+        .into();
+    let err = match x.promote_to(ScalarType::C64) {
+        Ok(_) => panic!("mixed reverse promotion should stay unsupported"),
+        Err(err) => err,
+    };
+    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
+}
+
+#[test]
 fn dyn_ad_tensor_div_with_scalar_lhs_is_supported() {
     let rhs: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
     let lhs: DynAdTensor = AdTensor::new_primal(rank0_c64(Complex64::new(4.0, -2.0))).into();

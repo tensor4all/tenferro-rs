@@ -7,8 +7,8 @@ use super::super::tensor_ops::{
     tensor_element, tensor_map_binary_typed, tensor_map_unary_typed, tensor_max_abs_diff_typed,
     unflatten_index_column_major,
 };
-use super::merge::map_ad_tensor_mixed_linear_typed;
 use super::merge::merge_add_ad_tensors;
+use super::promotion::join_scalar_types;
 use super::DynAdTensor;
 use crate::{AdTensor, Error, Result};
 
@@ -255,106 +255,91 @@ where
     )
 }
 
-fn promote_f32_rank0_to_c32(
-    scalar: &AdTensor<f32>,
-    op_name: &'static str,
-) -> Result<AdTensor<Complex32>> {
-    map_ad_tensor_mixed_linear_typed(
-        scalar,
-        |x| Complex32::new(x, 0.0),
-        move |z| {
-            let _ = op_name;
-            z.re
-        },
-    )
-}
-
-fn promote_f64_rank0_to_c64(
-    scalar: &AdTensor<f64>,
-    op_name: &'static str,
-) -> Result<AdTensor<Complex64>> {
-    map_ad_tensor_mixed_linear_typed(
-        scalar,
-        |x| Complex64::new(x, 0.0),
-        move |z| {
-            let _ = op_name;
-            z.re
-        },
-    )
-}
-
-fn promote_f32_ad_tensor_to_c32(
-    tensor: &AdTensor<f32>,
-    op_name: &'static str,
-) -> Result<AdTensor<Complex32>> {
-    map_ad_tensor_mixed_linear_typed(
-        tensor,
-        |x| Complex32::new(x, 0.0),
-        move |z| {
-            let _ = op_name;
-            z.re
-        },
-    )
-}
-
-fn promote_f64_ad_tensor_to_c64(
-    tensor: &AdTensor<f64>,
-    op_name: &'static str,
-) -> Result<AdTensor<Complex64>> {
-    map_ad_tensor_mixed_linear_typed(
-        tensor,
-        |x| Complex64::new(x, 0.0),
-        move |z| {
-            let _ = op_name;
-            z.re
-        },
-    )
-}
-
 impl DynAdTensor {
     /// Scalar multiply with AD preservation for scalar and tensor inputs.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let alpha: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<Complex64>::from_slice(&[Complex64::new(0.0, 2.0)], &[], MemoryOrder::ColumnMajor)
+    ///         .unwrap(),
+    /// )
+    /// .into();
+    ///
+    /// let y = x.scale(&alpha).unwrap();
+    /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::C64);
+    /// ```
     pub fn scale(&self, scalar: &DynAdTensor) -> Result<Self> {
-        match (self, scalar) {
+        let target = join_scalar_types(&[self.scalar_type(), scalar.scalar_type()])?;
+        let tensor = self.promote_to(target)?;
+        let alpha = scalar.promote_to(target)?;
+        match (&tensor, &alpha) {
             (Self::F32(tensor), Self::F32(alpha)) => {
                 Ok(Self::F32(scale_ad_tensor_typed(tensor, alpha)?))
-            }
-            (Self::F32(tensor), Self::C32(alpha)) => {
-                let promoted = promote_f32_ad_tensor_to_c32(tensor, "scale")?;
-                Ok(Self::C32(scale_ad_tensor_typed(&promoted, alpha)?))
             }
             (Self::F64(tensor), Self::F64(alpha)) => {
                 Ok(Self::F64(scale_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::F64(tensor), Self::C64(alpha)) => {
-                let promoted = promote_f64_ad_tensor_to_c64(tensor, "scale")?;
-                Ok(Self::C64(scale_ad_tensor_typed(&promoted, alpha)?))
-            }
             (Self::C32(tensor), Self::C32(alpha)) => {
                 Ok(Self::C32(scale_ad_tensor_typed(tensor, alpha)?))
-            }
-            (Self::C32(tensor), Self::F32(alpha)) => {
-                let promoted = promote_f32_rank0_to_c32(alpha, "scale")?;
-                Ok(Self::C32(scale_ad_tensor_typed(tensor, &promoted)?))
             }
             (Self::C64(tensor), Self::C64(alpha)) => {
                 Ok(Self::C64(scale_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C64(tensor), Self::F64(alpha)) => {
-                let promoted = promote_f64_rank0_to_c64(alpha, "scale")?;
-                Ok(Self::C64(scale_ad_tensor_typed(tensor, &promoted)?))
-            }
             _ => Err(Error::InvalidAdTensor {
                 message: format!(
-                    "dtype mismatch in scale: tensor={:?}, scalar={:?}",
-                    self.scalar_type(),
-                    scalar.scalar_type()
+                    "dtype mismatch in scale after promotion: tensor={:?}, scalar={:?}",
+                    tensor.scalar_type(),
+                    alpha.scalar_type()
                 ),
             }),
         }
     }
 
     /// Affine combination `a * self + b * other`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let y: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let a: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let b: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[-1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    ///
+    /// let out = x.axpby(&a, &y, &b).unwrap();
+    /// assert_eq!(out.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
+    /// ```
     pub fn axpby(&self, a: &DynAdTensor, other: &Self, b: &DynAdTensor) -> Result<Self> {
+        let _ = join_scalar_types(&[
+            self.scalar_type(),
+            other.scalar_type(),
+            a.scalar_type(),
+            b.scalar_type(),
+        ])?;
         match (self.scale(a)?, other.scale(b)?) {
             (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(AdTensor::try_from(
                 merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
@@ -379,47 +364,71 @@ impl DynAdTensor {
     }
 
     /// Division by an AD-aware scalar.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[2.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let alpha: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    ///
+    /// let y = x.div_scalar(&alpha).unwrap();
+    /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
+    /// ```
     pub fn div_scalar(&self, scalar: &DynAdTensor) -> Result<Self> {
-        match (self, scalar) {
+        let target = join_scalar_types(&[self.scalar_type(), scalar.scalar_type()])?;
+        let tensor = self.promote_to(target)?;
+        let alpha = scalar.promote_to(target)?;
+        match (&tensor, &alpha) {
             (Self::F32(tensor), Self::F32(alpha)) => {
                 Ok(Self::F32(div_ad_tensor_typed(tensor, alpha)?))
-            }
-            (Self::F32(tensor), Self::C32(alpha)) => {
-                let promoted = promote_f32_ad_tensor_to_c32(tensor, "div_scalar")?;
-                Ok(Self::C32(div_ad_tensor_typed(&promoted, alpha)?))
             }
             (Self::F64(tensor), Self::F64(alpha)) => {
                 Ok(Self::F64(div_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::F64(tensor), Self::C64(alpha)) => {
-                let promoted = promote_f64_ad_tensor_to_c64(tensor, "div_scalar")?;
-                Ok(Self::C64(div_ad_tensor_typed(&promoted, alpha)?))
-            }
             (Self::C32(tensor), Self::C32(alpha)) => {
                 Ok(Self::C32(div_ad_tensor_typed(tensor, alpha)?))
-            }
-            (Self::C32(tensor), Self::F32(alpha)) => {
-                let promoted = promote_f32_rank0_to_c32(alpha, "div_scalar")?;
-                Ok(Self::C32(div_ad_tensor_typed(tensor, &promoted)?))
             }
             (Self::C64(tensor), Self::C64(alpha)) => {
                 Ok(Self::C64(div_ad_tensor_typed(tensor, alpha)?))
             }
-            (Self::C64(tensor), Self::F64(alpha)) => {
-                let promoted = promote_f64_rank0_to_c64(alpha, "div_scalar")?;
-                Ok(Self::C64(div_ad_tensor_typed(tensor, &promoted)?))
-            }
             _ => Err(Error::InvalidAdTensor {
                 message: format!(
-                    "dtype mismatch in div_scalar: tensor={:?}, scalar={:?}",
-                    self.scalar_type(),
-                    scalar.scalar_type()
+                    "dtype mismatch in div_scalar after promotion: tensor={:?}, scalar={:?}",
+                    tensor.scalar_type(),
+                    alpha.scalar_type()
                 ),
             }),
         }
     }
 
     /// Computes `max(abs(primal(self) - primal(rhs)))`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    /// let y: DynAdTensor = AdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[2.5, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .into();
+    ///
+    /// assert_eq!(x.max_abs_diff_primal(&y).unwrap(), 2.0);
+    /// ```
     pub fn max_abs_diff_primal(&self, rhs: &Self) -> Result<f64> {
         match (self, rhs) {
             (Self::F32(a), Self::F32(b)) => tensor_max_abs_diff_typed(a.primal(), b.primal()),

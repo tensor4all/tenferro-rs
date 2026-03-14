@@ -219,6 +219,13 @@ bidirectional data exchange between `Array<T, DynRank>` and `Tensor<T>`.
 <a id="tenferro-dyadtensor"></a>
 ### [tenferro-dyadtensor](tenferro_dyadtensor/index.html) <small>(Extension)</small>
 
+Dynamic AD tensor interface on top of `StructuredTensor<T>` and homogeneous
+`chainrules::Tape<StructuredTensor<T>>` graphs. `DynAdTensor` is the canonical
+runtime tensor payload; rank-0 tensors act as scalar coefficients. Public
+dynamic boundaries now include AD-aware same-precision real-to-complex
+promotion (`promote_to`) and primal-only structured snapshots
+(`primal_snapshot`) for storage/FFI/export layers.
+
 Dynamic dyadic tensor API that layers runtime-selected scalar/tensor types,
 structured tensor layouts, and AD-aware operation builders on top of the core
 tenferro crates. It provides the higher-level builder surface used by eager

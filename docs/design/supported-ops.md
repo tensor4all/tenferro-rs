@@ -172,9 +172,11 @@ Builder APIs are implemented for:
 - `chainrules_api::einsum` is backend-parametric over `tenferro-einsum::EinsumBackend`; callers choose the backend via the runtime context type
 - Structured tensor materialization and compressed einsum reuse the same einsum runtime-dispatch layer rather than maintaining separate CPU/CUDA/ROCm builder paths
 - Builder execution uses an explicit default-runtime holder, and reverse-mode bookkeeping attaches pullback rules directly to `chainrules::Tape<StructuredTensor<T>>`
+- `DynAdTensor` is the canonical dynamic payload for downstream tensor algebra; same-precision real-to-complex promotion is exposed through `promote_to(...)`, and primal-only storage/FFI boundaries use `primal_snapshot()`
 - Actual execution today:
   - CPU paths are implemented for the operations listed above
   - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution
+  - mixed-dtype reverse promotion remains unsupported under the homogeneous tape model
 
 ## `tenferro-capi`
 

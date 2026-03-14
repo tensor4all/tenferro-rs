@@ -124,6 +124,17 @@ convenience APIs only. Their semantic model is:
 
 The canonical conceptual path is still tensor-tensor elementwise execution.
 
+`tenferro-dyadtensor` keeps this boundary explicit in the dynamic API:
+
+- `DynAdTensor` is the canonical dynamic execution payload
+- `DynAdTensor::promote_to(...)` handles the supported same-precision
+  real-to-complex lifts
+- `DynAdTensor::primal_snapshot()` is the intended storage/FFI boundary
+
+Because reverse-mode graphs are homogeneous `Tape<StructuredTensor<T>>`,
+mixed-dtype reverse promotion remains unsupported today. Primal and forward
+promotion stay available.
+
 ## Seed Semantics
 
 Reverse-mode implicit seed creation is based on `Differentiable::num_elements()`
