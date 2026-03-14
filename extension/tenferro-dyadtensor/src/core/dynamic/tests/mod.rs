@@ -2,13 +2,21 @@ mod organization;
 
 use super::*;
 use chainrules::Tape;
-use num_complex::Complex64;
+use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{AdMode, AdTensor, Error, StructuredTensor};
 
 fn rank0_f64(value: f64) -> Tensor<f64> {
     Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn rank0_f32(value: f32) -> Tensor<f32> {
+    Tensor::<f32>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn rank0_c32(value: Complex32) -> Tensor<Complex32> {
+    Tensor::<Complex32>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
 fn rank0_c64(value: Complex64) -> Tensor<Complex64> {
@@ -83,6 +91,48 @@ fn dyn_ad_tensor_promote_to_c64_lifts_real_rank0_tensor() {
             .unwrap(),
         &[Complex64::new(2.0, 0.0)]
     );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_c32_lifts_real_rank0_tensor() {
+    let x: DynAdTensor = AdTensor::new_primal(rank0_f32(2.0_f32)).into();
+    let promoted = x.promote_to(ScalarType::C32).unwrap();
+    assert_eq!(promoted.scalar_type(), ScalarType::C32);
+    assert_eq!(
+        promoted
+            .as_c32()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[Complex32::new(2.0, 0.0)]
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_promote_to_identity_keeps_all_supported_variants() {
+    let f32_value: DynAdTensor = AdTensor::new_primal(rank0_f32(1.0_f32)).into();
+    let f64_value: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
+    let c32_value: DynAdTensor = AdTensor::new_primal(rank0_c32(Complex32::new(3.0, 1.0))).into();
+    let c64_value: DynAdTensor = AdTensor::new_primal(rank0_c64(Complex64::new(4.0, -2.0))).into();
+
+    assert!(matches!(
+        f32_value.promote_to(ScalarType::F32).unwrap(),
+        DynAdTensor::F32(_)
+    ));
+    assert!(matches!(
+        f64_value.promote_to(ScalarType::F64).unwrap(),
+        DynAdTensor::F64(_)
+    ));
+    assert!(matches!(
+        c32_value.promote_to(ScalarType::C32).unwrap(),
+        DynAdTensor::C32(_)
+    ));
+    assert!(matches!(
+        c64_value.promote_to(ScalarType::C64).unwrap(),
+        DynAdTensor::C64(_)
+    ));
 }
 
 #[test]

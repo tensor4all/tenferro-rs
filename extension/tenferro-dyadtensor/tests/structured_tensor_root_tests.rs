@@ -1,3 +1,4 @@
+use num_complex::{Complex32, Complex64};
 use tenferro_dyadtensor::{
     plan_axis_classes_for_subscripts, AdTensor, DynAdTensor, DynStructuredPrimal,
     OperandAxisClasses, StructuredTensor,
@@ -95,6 +96,57 @@ fn primal_snapshot_preserves_general_axis_classes() {
             other.scalar_type()
         ),
     }
+}
+
+#[test]
+fn primal_snapshot_covers_all_runtime_variants() {
+    let f32_value: DynAdTensor = AdTensor::new_primal(
+        Tensor::<f32>::from_slice(&[1.0_f32], &[1], MemoryOrder::ColumnMajor).unwrap(),
+    )
+    .into();
+    let c32_value: DynAdTensor = AdTensor::new_primal(
+        Tensor::<Complex32>::from_slice(
+            &[Complex32::new(1.0, -2.0)],
+            &[1],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    )
+    .into();
+    let c64_value: DynAdTensor = AdTensor::new_primal(
+        Tensor::<Complex64>::from_slice(
+            &[Complex64::new(2.0, 3.0)],
+            &[1],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    )
+    .into();
+
+    assert!(matches!(
+        f32_value.primal_snapshot().unwrap(),
+        DynStructuredPrimal::F32(_)
+    ));
+    assert!(matches!(
+        c32_value.primal_snapshot().unwrap(),
+        DynStructuredPrimal::C32(_)
+    ));
+    assert!(matches!(
+        c64_value.primal_snapshot().unwrap(),
+        DynStructuredPrimal::C64(_)
+    ));
+    assert_eq!(
+        f32_value.primal_snapshot().unwrap().scalar_type(),
+        tenferro_dyadtensor::ScalarType::F32
+    );
+    assert_eq!(
+        c32_value.primal_snapshot().unwrap().scalar_type(),
+        tenferro_dyadtensor::ScalarType::C32
+    );
+    assert_eq!(
+        c64_value.primal_snapshot().unwrap().scalar_type(),
+        tenferro_dyadtensor::ScalarType::C64
+    );
 }
 
 #[test]
