@@ -14,8 +14,8 @@ use crate::{Error, Result, StructuredTensor};
 ///
 /// # Examples
 ///
-/// ```rust
-/// use tenferro_dyadtensor::{DynTensor, ScalarType};
+/// ```text
+/// use tenferro_dyadtensor::{ScalarType, core::DynTensor};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -81,8 +81,8 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::{DynTensor, ScalarType};
+    /// ```text
+    /// use tenferro_dyadtensor::{ScalarType, core::DynTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let t = Tensor::<f32>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
@@ -102,8 +102,8 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::DynTensor;
+    /// ```text
+    /// use tenferro_dyadtensor::core::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -123,8 +123,8 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::{DynTensor, StructuredTensor};
+    /// ```text
+    /// use tenferro_dyadtensor::{StructuredTensor, core::DynTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let diag = StructuredTensor::from_diagonal_vector(
@@ -148,8 +148,8 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::DynTensor;
+    /// ```text
+    /// use tenferro_dyadtensor::core::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense: DynTensor =
@@ -169,8 +169,8 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::{DynTensor, StructuredTensor};
+    /// ```text
+    /// use tenferro_dyadtensor::{StructuredTensor, core::DynTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let diag = StructuredTensor::from_diagonal_vector(

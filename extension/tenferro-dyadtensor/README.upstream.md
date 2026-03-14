@@ -6,38 +6,40 @@ AD-aware tensor interface layer on top of `tenferro-rs`.
 
 This repository currently provides:
 
-- Generic AD value model:
-  - `AdValue<T>`
-  - `AdScalar<T>`
-  - `AdTensor<T>`
-- Runtime dtype wrappers:
-  - `DynScalar`, `DynTensor`
+- Dynamic public tensor objects:
   - `DynAdTensor`
+  - `DynTape`
+  - `DynScalar`
   - `ScalarType` (`F32`, `F64`, `C32`, `C64`)
-- AD boundary traits:
-  - `Differentiable`, `TensorKernel`, `OpRule`
+- Public helper traits:
+  - `TensorKernel`
+  - `IndexLike`
+  - `AllowedPairs`
 - Runtime context:
   - `RuntimeContext`
   - `set_default_runtime`
   - `with_default_runtime`
-- Builder-style operation API (`run()` terminal):
-  - Einsum: `einsum(...)`, `einsum_ad(...)`
-  - Linalg primal: `svd/qr/lu/eigen/lstsq/cholesky/solve/inv/det/slogdet/eig/pinv/matrix_exp/solve_triangular/norm`
-  - Linalg AD: corresponding `*_ad(...)` operations
+- PyTorch-like eager methods on `DynAdTensor`:
+  - scalar/analytic: `exp`, `sqrt`, `sin`, `cos`, `tanh`, `add`, `pow`, `mean`, `sum`, `var`, `std`, ...
+  - tensor: `einsum`
+  - linalg: `svd`, `qr`, `lu`, `eigen`, `eig`, `lstsq`, `solve`, `det`, `slogdet`, ...
 
-All operation entry points are builder-based and execute via `.run()` using
-the default runtime context. Runtime selection uses an explicit runtime holder,
-and reverse-mode bookkeeping attaches pullback rules directly to
-`chainrules::Tape<DynTensor>`, where rank-0 tensors carry scalar AD values.
+The preferred public surface is `DynAdTensor` plus its eager methods. Runtime
+selection uses an explicit runtime holder, and reverse-mode bookkeeping
+attaches pullback rules directly to `chainrules::Tape<DynTensor>`, where
+rank-0 tensors carry scalar AD values. Mixed-dtype tensor ops apply implicit
+algebraic promotion internally, and reverse-mode pullbacks cast gradients back
+to each input dtype. Explicit numeric casts use `DynAdTensor::to_scalar_type`.
 
 ```rust
-use tenferro_dyadtensor::{qr, set_default_runtime, RuntimeContext};
+use tenferro_dyadtensor::{DynAdTensor, set_default_runtime, RuntimeContext};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)?;
-let qr_result = qr(&a).run()?;
+let qr_result = DynAdTensor::new_primal(a).qr()?;
+assert_eq!(qr_result.q.dims(), &[2, 2]);
 # Ok::<(), tenferro_dyadtensor::Error>(())
 ```
 

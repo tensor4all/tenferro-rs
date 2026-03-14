@@ -1,8 +1,12 @@
-pub mod dynamic;
-pub mod value;
+pub(crate) mod dynamic;
+pub(crate) mod value;
 
+pub(crate) use dynamic::DynTensor;
 #[doc(hidden)]
 pub use dynamic::DynTensorTyped;
-pub use dynamic::{DynAdTensor, DynScalar, DynTensor, ScalarType};
+pub use dynamic::{
+    DynAdEigResult, DynAdEigenResult, DynAdLstsqResult, DynAdLuResult, DynAdQrResult,
+    DynAdSlogdetResult, DynAdSvdResult, DynAdTensor, DynScalar, DynTape, ScalarType,
+};
 pub(crate) use value::AdTensorSnapshot;
 pub use value::{AdMode, AdScalar, AdTensor, AdValue, NodeId};

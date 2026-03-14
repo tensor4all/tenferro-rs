@@ -1,3 +1,4 @@
+use chainrules::Tape;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::MemoryOrder;
 
@@ -7,9 +8,122 @@ use super::layout::{
     take_prefix_ad_tensor_typed,
 };
 use super::DynAdTensor;
-use crate::{AdMode, AdTensor, Result};
+use crate::{AdMode, AdTensor, DynTape, DynTensor, NodeId, Result, StructuredTensor};
 
 impl DynAdTensor {
+    /// Creates a primal tensor value from a dense or structured tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{DynAdTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let dense = DynAdTensor::new_primal(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// );
+    /// assert!(dense.is_dense());
+    ///
+    /// let diag = DynAdTensor::new_primal(
+    ///     StructuredTensor::from_diagonal_vector(
+    ///         Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    ///         2,
+    ///     )
+    ///     .unwrap(),
+    /// );
+    /// assert!(diag.is_diag());
+    /// ```
+    pub fn new_primal<T>(tensor: impl Into<StructuredTensor<T>>) -> Self
+    where
+        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
+        AdTensor<T>: Into<Self>,
+    {
+        AdTensor::new_primal(tensor).into()
+    }
+
+    /// Creates a forward-mode tensor value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdMode, DynAdTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let x = DynAdTensor::new_forward(
+    ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     Tensor::<f64>::from_slice(&[0.5], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// )
+    /// .unwrap();
+    /// assert_eq!(x.mode(), AdMode::Forward);
+    /// ```
+    pub fn new_forward<T>(
+        primal: impl Into<StructuredTensor<T>>,
+        tangent: impl Into<StructuredTensor<T>>,
+    ) -> Result<Self>
+    where
+        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
+        AdTensor<T>: Into<Self>,
+    {
+        Ok(AdTensor::new_forward(primal, tangent)?.into())
+    }
+
+    /// Creates a reverse-mode leaf on a public dynamic tape.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let tape = DynTape::new();
+    /// let x = DynAdTensor::new_reverse_leaf(
+    ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     &tape,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(x.mode(), AdMode::Reverse);
+    /// assert_eq!(x.tape_id(), Some(tape.id() as u64));
+    /// ```
+    pub fn new_reverse_leaf<T>(
+        primal: impl Into<StructuredTensor<T>>,
+        tape: &DynTape,
+    ) -> Result<Self>
+    where
+        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
+        AdTensor<T>: Into<Self>,
+    {
+        Ok(AdTensor::new_reverse_leaf(primal, tape.as_inner())?.into())
+    }
+
+    /// Creates a reverse-mode leaf with a tangent seed for HVP.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let tape = DynTape::new();
+    /// let x = DynAdTensor::new_reverse_leaf_with_tangent(
+    ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     &tape,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(x.mode(), AdMode::Reverse);
+    /// ```
+    pub fn new_reverse_leaf_with_tangent<T>(
+        primal: impl Into<StructuredTensor<T>>,
+        tangent: impl Into<StructuredTensor<T>>,
+        tape: &DynTape,
+    ) -> Result<Self>
+    where
+        T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
+        AdTensor<T>: Into<Self>,
+    {
+        Ok(AdTensor::new_reverse_leaf_with_tangent(primal, tangent, tape.as_inner())?.into())
+    }
+
     /// Returns runtime scalar type.
     pub fn scalar_type(&self) -> ScalarType {
         match self {
@@ -123,6 +237,56 @@ impl DynAdTensor {
     /// Returns true when primal tensor has zero elements.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// Returns the reverse-mode tape identifier when attached to a graph.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{DynAdTensor, DynTape};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let tape = DynTape::new();
+    /// let x = DynAdTensor::new_reverse_leaf(
+    ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     &tape,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(x.tape_id(), Some(tape.id() as u64));
+    /// ```
+    pub fn tape_id(&self) -> Option<u64> {
+        match self {
+            Self::F32(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
+            Self::F64(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
+            Self::C32(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
+            Self::C64(v) => v.tape().map(|tape: &Tape<DynTensor>| tape.id() as u64),
+        }
+    }
+
+    /// Returns the reverse-mode node identifier when attached to a graph.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{DynAdTensor, DynTape};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let tape = DynTape::new();
+    /// let x = DynAdTensor::new_reverse_leaf(
+    ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     &tape,
+    /// )
+    /// .unwrap();
+    /// assert!(x.node_id().is_some());
+    /// ```
+    pub fn node_id(&self) -> Option<NodeId> {
+        match self {
+            Self::F32(v) => v.node_id(),
+            Self::F64(v) => v.node_id(),
+            Self::C32(v) => v.node_id(),
+            Self::C64(v) => v.node_id(),
+        }
     }
 
     /// Returns typed AD tensor ref when dtype is `f32`.

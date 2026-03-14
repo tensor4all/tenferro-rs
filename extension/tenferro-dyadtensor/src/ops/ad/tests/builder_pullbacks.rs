@@ -84,7 +84,10 @@ fn norm_builder_reverse_pullback_l1_matches_rrule() {
     let cotangent: Tensor<f64> = Tensor::from_vec(vec![1.5], &[], &[], 0).unwrap();
 
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
-    let out = crate::norm_ad(&ad_a_rev).kind(NormKind::L1).run().unwrap();
+    let out = crate::ops::norm_ad(&ad_a_rev)
+        .kind(NormKind::L1)
+        .run()
+        .unwrap();
     assert_reverse_on_tape(&out, &tape);
 
     let ad_cotangent = AdTensor::new_primal(cotangent.clone());

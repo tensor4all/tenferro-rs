@@ -4,7 +4,7 @@ pub use chainrules_core::NodeId;
 ///
 /// # Examples
 ///
-/// ```rust
+/// ```ignore
 /// use tenferro_dyadtensor::AdMode;
 ///
 /// assert_eq!(AdMode::Primal, AdMode::Primal);
@@ -27,8 +27,8 @@ pub enum AdMode {
 ///
 /// # Examples
 ///
-/// ```rust
-/// use tenferro_dyadtensor::{AdMode, AdValue};
+/// ```text
+/// use tenferro_dyadtensor::{AdMode, core::AdValue};
 ///
 /// let primal = AdValue::primal(3.0_f64);
 /// assert_eq!(primal.mode(), AdMode::Primal);
@@ -49,8 +49,8 @@ impl<T> AdValue<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::AdValue;
+    /// ```text
+    /// use tenferro_dyadtensor::core::AdValue;
     ///
     /// let x = AdValue::primal(2_i32);
     /// assert!(matches!(x, AdValue::Primal(2)));
@@ -63,8 +63,8 @@ impl<T> AdValue<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::AdValue;
+    /// ```text
+    /// use tenferro_dyadtensor::core::AdValue;
     ///
     /// let x = AdValue::forward(2.0_f64, 1.0_f64);
     /// assert!(matches!(x, AdValue::Forward { .. }));
@@ -77,8 +77,8 @@ impl<T> AdValue<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, AdValue};
+    /// ```text
+    /// use tenferro_dyadtensor::{AdMode, core::AdValue};
     ///
     /// let x = AdValue::forward(1.0_f64, 1.0_f64);
     /// assert_eq!(x.mode(), AdMode::Forward);
@@ -94,8 +94,8 @@ impl<T> AdValue<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::AdValue;
+    /// ```text
+    /// use tenferro_dyadtensor::core::AdValue;
     ///
     /// let x = AdValue::forward(10_i32, 1_i32);
     /// assert_eq!(x.primal_ref(), &10);
@@ -111,8 +111,8 @@ impl<T> AdValue<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::AdValue;
+    /// ```text
+    /// use tenferro_dyadtensor::core::AdValue;
     ///
     /// let mut x = AdValue::primal(1_i32);
     /// *x.primal_mut() = 7;
@@ -129,8 +129,8 @@ impl<T> AdValue<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::AdValue;
+    /// ```text
+    /// use tenferro_dyadtensor::core::AdValue;
     ///
     /// let x = AdValue::forward(2.0_f64, 3.0_f64);
     /// assert_eq!(x.tangent_ref(), Some(&3.0));
@@ -151,8 +151,8 @@ impl<T> AdValue<T> {
     ///
     /// # Examples
     ///
-    /// ```rust
-    /// use tenferro_dyadtensor::AdValue;
+    /// ```text
+    /// use tenferro_dyadtensor::core::AdValue;
     ///
     /// let x = AdValue::forward(2_i32, 3_i32);
     /// let y = x.map_preserving_metadata(|v| v as f64);

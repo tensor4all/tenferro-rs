@@ -161,7 +161,7 @@ fn rank0_reverse_tensor_sqrt_registers_pullback_chain() {
         &tape,
     )
     .unwrap();
-    let y = crate::ad::sqrt(&x).unwrap();
+    let y = crate::ops::ad::sqrt(&x).unwrap();
     let cotangent = Tensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap();
     let grads = crate::tape::pullback(&y, &cotangent).unwrap();
     assert_eq!(

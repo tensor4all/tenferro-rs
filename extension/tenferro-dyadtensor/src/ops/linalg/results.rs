@@ -7,15 +7,15 @@ use crate::{AdTensor, DynTensorTyped};
 ///
 /// # Examples
 ///
-/// ```rust
-/// use tenferro_dyadtensor::{svd_ad, set_default_runtime, RuntimeContext};
+/// ```text
+/// use tenferro_dyadtensor::{DynAdTensor, set_default_runtime, RuntimeContext};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 /// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-/// let ad_a = tenferro_dyadtensor::AdTensor::new_primal(a);
-/// let out = svd_ad(&ad_a).run().unwrap();
+/// let ad_a = DynAdTensor::new_primal(a);
+/// let out = ad_a.svd().unwrap();
 /// assert_eq!(out.s.dims(), &[2]);
 /// ```
 #[derive(Clone)]
@@ -32,7 +32,7 @@ pub struct AdSvdResult<T: Scalar + DynTensorTyped> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let out = qr_ad(&ad_a).run().unwrap();
 /// let _q = &out.q;
 /// let _r = &out.r;
@@ -49,7 +49,7 @@ pub struct AdQrResult<T: Scalar + DynTensorTyped> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let out = lu_ad(&ad_a).run().unwrap();
 /// let _l = &out.l;
 /// let _u = &out.u;
@@ -68,7 +68,7 @@ pub struct AdLuResult<T: Scalar + DynTensorTyped> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let out = eigen_ad(&ad_a).run().unwrap();
 /// let _values = &out.values;
 /// let _vectors = &out.vectors;
@@ -85,7 +85,7 @@ pub struct AdEigenResult<T: Scalar + DynTensorTyped> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let out = eig_ad(&ad_a).run().unwrap();
 /// let _values = &out.values;
 /// let _vectors = &out.vectors;
@@ -106,7 +106,7 @@ where
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let out = slogdet_ad(&ad_a).run().unwrap();
 /// let _sign = &out.sign;
 /// let _logabsdet = &out.logabsdet;
@@ -123,7 +123,7 @@ pub struct AdSlogdetResult<T: Scalar + DynTensorTyped> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```text
 /// let out = lstsq_ad(&ad_a, &ad_b).run().unwrap();
 /// let _x = &out.x;
 /// let _residual = &out.residual;

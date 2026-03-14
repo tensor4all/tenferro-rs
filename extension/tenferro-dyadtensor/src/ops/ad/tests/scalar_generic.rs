@@ -3,11 +3,12 @@ use chainrules::Tape;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::{
+use crate::ops::{
     acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cos_ad, cosh_ad,
-    exp_ad, expm1_ad, hypot_ad, log1p_ad, log_ad, mean_ad, pow_ad, set_default_runtime, sin_ad,
-    sinh_ad, sqrt_ad, std_ad, tanh_ad, var_ad, AdTensor, RuntimeContext,
+    exp_ad, expm1_ad, hypot_ad, log1p_ad, log_ad, mean_ad, pow_ad, sin_ad, sinh_ad, sqrt_ad,
+    std_ad, tanh_ad, var_ad,
 };
+use crate::{set_default_runtime, AdTensor, RuntimeContext};
 
 #[test]
 fn ad_unary_binary_reduction_generic_surface_exists() {
@@ -75,23 +76,23 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     assert_eq!(out_var.dims(), &[]);
     assert_eq!(out_std.dims(), &[]);
 
-    let eager_unary = crate::ad::exp(&ad_x).unwrap();
-    let eager_sqrt = crate::ad::sqrt(&ad_x).unwrap();
-    let eager_expm1 = crate::ad::expm1(&ad_x).unwrap();
-    let eager_log1p = crate::ad::log1p(&ad_x).unwrap();
-    let eager_sin = crate::ad::sin(&ad_x).unwrap();
-    let eager_cos = crate::ad::cos(&ad_x).unwrap();
-    let eager_tanh = crate::ad::tanh(&ad_x).unwrap();
-    let eager_asin = crate::ad::asin(&ad_x).unwrap();
-    let eager_acos = crate::ad::acos(&ad_x).unwrap();
-    let eager_atan = crate::ad::atan(&ad_x).unwrap();
-    let eager_sinh = crate::ad::sinh(&ad_x).unwrap();
-    let eager_cosh = crate::ad::cosh(&ad_x).unwrap();
-    let eager_asinh = crate::ad::asinh(&ad_x).unwrap();
-    let eager_pow = crate::ad::pow(&ad_y, &ad_x).unwrap();
-    let eager_hypot = crate::ad::hypot(&ad_y, &ad_x).unwrap();
-    let eager_binary = crate::ad::add(&ad_x, &ad_y).unwrap();
-    let eager_mean = crate::ad::mean(&eager_binary).unwrap();
+    let eager_unary = crate::ops::ad::exp(&ad_x).unwrap();
+    let eager_sqrt = crate::ops::ad::sqrt(&ad_x).unwrap();
+    let eager_expm1 = crate::ops::ad::expm1(&ad_x).unwrap();
+    let eager_log1p = crate::ops::ad::log1p(&ad_x).unwrap();
+    let eager_sin = crate::ops::ad::sin(&ad_x).unwrap();
+    let eager_cos = crate::ops::ad::cos(&ad_x).unwrap();
+    let eager_tanh = crate::ops::ad::tanh(&ad_x).unwrap();
+    let eager_asin = crate::ops::ad::asin(&ad_x).unwrap();
+    let eager_acos = crate::ops::ad::acos(&ad_x).unwrap();
+    let eager_atan = crate::ops::ad::atan(&ad_x).unwrap();
+    let eager_sinh = crate::ops::ad::sinh(&ad_x).unwrap();
+    let eager_cosh = crate::ops::ad::cosh(&ad_x).unwrap();
+    let eager_asinh = crate::ops::ad::asinh(&ad_x).unwrap();
+    let eager_pow = crate::ops::ad::pow(&ad_y, &ad_x).unwrap();
+    let eager_hypot = crate::ops::ad::hypot(&ad_y, &ad_x).unwrap();
+    let eager_binary = crate::ops::ad::add(&ad_x, &ad_y).unwrap();
+    let eager_mean = crate::ops::ad::mean(&eager_binary).unwrap();
 
     assert_eq!(eager_unary.dims(), &[2]);
     assert_eq!(eager_sqrt.dims(), &[2]);
@@ -139,7 +140,7 @@ fn mean_add_reverse_pullback_matches_expected_dense_gradients() {
     let out = mean_ad(&added).run().unwrap();
     let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0], &[]));
 
-    let grads = crate::ad::pullback_wrt(&out, &cotangent, &[&x, &y]).unwrap();
+    let grads = crate::ops::ad::pullback_wrt(&out, &cotangent, &[&x, &y]).unwrap();
     let expected = tensor_from_slice(&[0.5, 0.5], &[2]);
 
     assert!(max_abs_diff(grads[0].as_ref().unwrap().payload(), &expected) < 1e-12);
@@ -189,7 +190,7 @@ fn expm1_reverse_pullback_matches_exp_rule() {
 
     let out = expm1_ad(&x).run().unwrap();
     let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -2.0], &[2]));
-    let grads = crate::ad::pullback_wrt(&out, &cotangent, &[&x]).unwrap();
+    let grads = crate::ops::ad::pullback_wrt(&out, &cotangent, &[&x]).unwrap();
     let expected = tensor_from_slice(&[1.0, -2.0 * std::f64::consts::E], &[2]);
 
     assert!(max_abs_diff(grads[0].as_ref().unwrap().payload(), &expected) < 1e-12);
@@ -220,7 +221,7 @@ fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients()
 
     let atan2_out = atan2_ad(&y, &x).run().unwrap();
     let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
-    let atan2_grads = crate::ad::pullback_wrt(&atan2_out, &cotangent, &[&y, &x]).unwrap();
+    let atan2_grads = crate::ops::ad::pullback_wrt(&atan2_out, &cotangent, &[&y, &x]).unwrap();
     let expected_dy = tensor_from_slice(&[0.16, 0.12], &[2]);
     let expected_dx = tensor_from_slice(&[-0.12, -0.16], &[2]);
     assert!(max_abs_diff(atan2_grads[0].as_ref().unwrap().payload(), &expected_dy) < 1e-12);
@@ -231,8 +232,8 @@ fn atan2_and_moment_reductions_reverse_pullback_match_expected_dense_gradients()
     let var_out = var_ad(&z).run().unwrap();
     let std_out = std_ad(&z).run().unwrap();
     let scalar_cot = AdTensor::new_primal(tensor_from_slice(&[1.0], &[]));
-    let var_grads = crate::ad::pullback_wrt(&var_out, &scalar_cot, &[&z]).unwrap();
-    let std_grads = crate::ad::pullback_wrt(&std_out, &scalar_cot, &[&z]).unwrap();
+    let var_grads = crate::ops::ad::pullback_wrt(&var_out, &scalar_cot, &[&z]).unwrap();
+    let std_grads = crate::ops::ad::pullback_wrt(&std_out, &scalar_cot, &[&z]).unwrap();
     let expected_var = tensor_from_slice(&[-1.5, -0.5, 0.5, 1.5], &[2, 2]);
     let inv_two_std = 1.0 / (2.0 * 5.0_f64.sqrt());
     let expected_std = tensor_from_slice(
@@ -304,7 +305,8 @@ fn pow_and_hypot_reverse_pullbacks_match_reference_gradients() {
     let exponent = reverse_leaf_f64(tensor_from_slice(&[3.0, 2.0], &[2]), &tape_pow);
     let pow_out = pow_ad(&base, &exponent).run().unwrap();
     let pow_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -0.5], &[2]));
-    let pow_grads = crate::ad::pullback_wrt(&pow_out, &pow_cotangent, &[&base, &exponent]).unwrap();
+    let pow_grads =
+        crate::ops::ad::pullback_wrt(&pow_out, &pow_cotangent, &[&base, &exponent]).unwrap();
     let expected_base = tensor_from_slice(&[12.0, -3.0], &[2]);
     let expected_exponent =
         tensor_from_slice(&[8.0 * 2.0_f64.ln(), -0.5 * 9.0 * 3.0_f64.ln()], &[2]);
@@ -316,7 +318,8 @@ fn pow_and_hypot_reverse_pullbacks_match_reference_gradients() {
     let rhs = reverse_leaf_f64(tensor_from_slice(&[4.0, 12.0], &[2]), &tape_hypot);
     let hypot_out = hypot_ad(&lhs, &rhs).run().unwrap();
     let hypot_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, -2.0], &[2]));
-    let hypot_grads = crate::ad::pullback_wrt(&hypot_out, &hypot_cotangent, &[&lhs, &rhs]).unwrap();
+    let hypot_grads =
+        crate::ops::ad::pullback_wrt(&hypot_out, &hypot_cotangent, &[&lhs, &rhs]).unwrap();
     let expected_lhs = tensor_from_slice(&[3.0 / 5.0, -10.0 / 13.0], &[2]);
     let expected_rhs = tensor_from_slice(&[4.0 / 5.0, -24.0 / 13.0], &[2]);
     assert!(max_abs_diff(hypot_grads[0].as_ref().unwrap().payload(), &expected_lhs) < 1e-12);
@@ -335,7 +338,7 @@ fn cos_and_tanh_reverse_pullback_match_expected_dense_gradients() {
 
     let cos_out = cos_ad(&x).run().unwrap();
     let cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
-    let cos_grads = crate::ad::pullback_wrt(&cos_out, &cotangent, &[&x]).unwrap();
+    let cos_grads = crate::ops::ad::pullback_wrt(&cos_out, &cotangent, &[&x]).unwrap();
     let expected_cos = tensor_from_slice(&[-0.0, -0.5], &[2]);
     assert!(max_abs_diff(cos_grads[0].as_ref().unwrap().payload(), &expected_cos) < 1e-12);
 
@@ -343,7 +346,7 @@ fn cos_and_tanh_reverse_pullback_match_expected_dense_gradients() {
     let y = reverse_leaf_f64(tensor_from_slice(&[-1.0, 0.5], &[2]), &tape_tanh);
     let tanh_out = tanh_ad(&y).run().unwrap();
     let scalar_cotangent = AdTensor::new_primal(tensor_from_slice(&[1.0, 1.0], &[2]));
-    let tanh_grads = crate::ad::pullback_wrt(&tanh_out, &scalar_cotangent, &[&y]).unwrap();
+    let tanh_grads = crate::ops::ad::pullback_wrt(&tanh_out, &scalar_cotangent, &[&y]).unwrap();
     let expected_tanh = tensor_from_slice(
         &[
             1.0 - (-1.0f64).tanh().powi(2),

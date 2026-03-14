@@ -1,6 +1,5 @@
-use chainrules::Tape;
 use num_complex::Complex64;
-use tenferro_dyadtensor::{AdMode, DynAdTensor};
+use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape};
 
 mod support;
 
@@ -30,17 +29,14 @@ fn rank0_forward_tensor_exposes_primal_tangent_and_metadata() {
 
 #[test]
 fn rank0_reverse_tensor_roundtrips_complex_primal_and_node_metadata() {
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
+    let tape = DynTape::new();
     let x = reverse_rank0_c64(Complex64::new(1.0, -2.0), &tape);
     let value = x.as_c64().unwrap();
 
     assert_eq!(x.mode(), AdMode::Reverse);
     assert_eq!(x.dims(), &[]);
     assert!(value.node_id().is_some());
-    assert!(value
-        .tape()
-        .expect("reverse tensor should expose tape")
-        .same_tape(&tape));
+    assert_eq!(x.tape_id(), Some(tape.id() as u64));
     assert_eq!(
         rank0_value_c64(x.as_c64().unwrap().structured_primal()),
         Complex64::new(1.0, -2.0)

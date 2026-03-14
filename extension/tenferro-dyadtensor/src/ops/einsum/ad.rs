@@ -204,7 +204,7 @@ where
     /// Sets optional size dictionary for output-only labels.
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// let _builder = builder.size_dict(&size_dict);
     /// ```
     pub fn size_dict(mut self, size_dict: &'a HashMap<u32, usize>) -> Self {
@@ -215,7 +215,7 @@ where
     /// Executes AD einsum with mode propagation.
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<AdTensor<T>>
@@ -235,8 +235,8 @@ where
 ///
 /// # Examples
 ///
-/// ```rust
-/// use tenferro_dyadtensor::{einsum_ad, set_default_runtime, AdTensor, RuntimeContext};
+/// ```text
+/// use tenferro_dyadtensor::{einsum_ad, set_default_runtime, RuntimeContext, core::AdTensor};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///

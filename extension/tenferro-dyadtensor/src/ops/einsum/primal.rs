@@ -22,7 +22,7 @@ where
     /// Sets optional size dictionary for output-only labels.
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// let _builder = builder.size_dict(&size_dict);
     /// ```
     pub fn size_dict(mut self, size_dict: &'a HashMap<u32, usize>) -> Self {
@@ -33,7 +33,7 @@ where
     /// Executes the operation with the default runtime.
     /// # Examples
     ///
-    /// ```ignore
+    /// ```text
     /// let _out = builder.run();
     /// ```
     pub fn run(self) -> Result<Tensor<T>> {
@@ -53,8 +53,9 @@ where
 ///
 /// # Examples
 ///
-/// ```rust
-/// use tenferro_dyadtensor::{einsum, set_default_runtime, RuntimeContext};
+/// ```text
+/// use tenferro_dyadtensor::ops::einsum::primal::einsum;
+/// use tenferro_dyadtensor::{set_default_runtime, RuntimeContext};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///

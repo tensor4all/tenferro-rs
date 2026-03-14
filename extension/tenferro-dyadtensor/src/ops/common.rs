@@ -41,7 +41,7 @@ pub(crate) fn derive_reverse_tape_handle<S: Scalar>(
     for op in operands {
         if let Some(current) = op.reverse_tape() {
             if let Some(expected) = &tape {
-                if !expected.same_tape(current) {
+                if !expected.same_tape(current as &Tape<DynTensor>) {
                     return Err(Error::MixedReverseTape {
                         expected: expected.id() as u64,
                         found: current.id() as u64,

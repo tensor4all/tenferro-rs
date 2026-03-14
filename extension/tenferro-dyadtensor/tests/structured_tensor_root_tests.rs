@@ -1,7 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_dyadtensor::{
-    plan_axis_classes_for_subscripts, AdTensor, DynAdTensor, DynTensor, OperandAxisClasses,
-    StructuredTensor,
+    plan_axis_classes_for_subscripts, AdMode, DynAdTensor, OperandAxisClasses, StructuredTensor,
 };
 use tenferro_einsum::Subscripts;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -28,18 +27,18 @@ fn root_structured_tensor_supports_dense_and_diag_layouts() {
 }
 
 #[test]
-fn ad_tensor_wraps_structured_payload_and_reports_logical_dims() {
+fn dynadtensor_wraps_structured_payload_and_reports_logical_dims() {
     let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
-    let x = AdTensor::new_primal(diag);
+    let x = DynAdTensor::new_primal(diag);
     assert_eq!(x.dims(), &[2, 2]);
-    assert!(x.structured_primal().is_diag());
-    assert_eq!(x.primal().dims(), &[2]);
+    assert!(x.is_diag());
+    assert_eq!(x.as_f64().unwrap().primal().dims(), &[2]);
 }
 
 #[test]
 fn dyn_ad_tensor_carries_diag_payload_without_dense_materialization() {
     let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
-    let x: DynAdTensor = AdTensor::new_primal(diag).into();
+    let x = DynAdTensor::new_primal(diag);
     assert_eq!(x.dims(), &[2, 2]);
     assert_eq!(x.axis_classes(), &[0, 0]);
     assert!(x.is_diag());
@@ -47,104 +46,80 @@ fn dyn_ad_tensor_carries_diag_payload_without_dense_materialization() {
 }
 
 #[test]
-fn primal_snapshot_preserves_dense_and_structured_payloads() {
-    let dense: DynAdTensor = AdTensor::new_primal(tensor2(&[1.0, 2.0, 3.0, 4.0], 2, 2)).into();
-    let diag: DynAdTensor = AdTensor::new_primal(
+fn detach_preserves_dense_and_structured_payloads() {
+    let dense = DynAdTensor::new_primal(tensor2(&[1.0, 2.0, 3.0, 4.0], 2, 2));
+    let diag = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
-    )
-    .into();
+    );
 
-    match dense.primal_snapshot().unwrap() {
-        DynTensor::F64(snapshot) => {
-            assert!(snapshot.is_dense());
-            assert_eq!(snapshot.logical_dims(), &[2, 2]);
-        }
-        other => panic!("expected F64 dense snapshot, got {:?}", other.scalar_type()),
-    }
+    let dense_detached = dense.detach();
+    assert_eq!(dense_detached.mode(), AdMode::Primal);
+    assert!(dense_detached.is_dense());
+    assert_eq!(dense_detached.dims(), &[2, 2]);
 
-    match diag.primal_snapshot().unwrap() {
-        DynTensor::F64(snapshot) => {
-            assert!(snapshot.is_diag());
-            assert_eq!(snapshot.axis_classes(), &[0, 0]);
-            assert_eq!(snapshot.payload().dims(), &[2]);
-        }
-        other => panic!(
-            "expected F64 structured snapshot, got {:?}",
-            other.scalar_type()
-        ),
-    }
+    let diag_detached = diag.detach();
+    assert_eq!(diag_detached.mode(), AdMode::Primal);
+    assert!(diag_detached.is_diag());
+    assert_eq!(diag_detached.axis_classes(), &[0, 0]);
+    assert_eq!(diag_detached.as_f64().unwrap().primal().dims(), &[2]);
 }
 
 #[test]
-fn primal_snapshot_preserves_general_axis_classes() {
+fn detach_preserves_general_axis_classes() {
     let structured = StructuredTensor::new(
         vec![2, 2, 2],
         vec![0, 1, 1],
         tensor2(&[1.0, 2.0, 3.0, 4.0], 2, 2),
     )
     .unwrap();
-    let x: DynAdTensor = AdTensor::new_primal(structured).into();
+    let x = DynAdTensor::new_primal(structured);
 
-    match x.primal_snapshot().unwrap() {
-        DynTensor::F64(snapshot) => {
-            assert_eq!(snapshot.logical_dims(), &[2, 2, 2]);
-            assert_eq!(snapshot.axis_classes(), &[0, 1, 1]);
-            assert_eq!(snapshot.payload().dims(), &[2, 2]);
-        }
-        other => panic!(
-            "expected F64 structured snapshot, got {:?}",
-            other.scalar_type()
-        ),
-    }
+    let detached = x.detach();
+    assert_eq!(detached.mode(), AdMode::Primal);
+    assert_eq!(detached.dims(), &[2, 2, 2]);
+    assert_eq!(detached.axis_classes(), &[0, 1, 1]);
+    assert_eq!(detached.as_f64().unwrap().primal().dims(), &[2, 2]);
 }
 
 #[test]
-fn primal_snapshot_covers_all_runtime_variants() {
-    let f32_value: DynAdTensor = AdTensor::new_primal(
+fn detach_covers_all_runtime_variants() {
+    let f32_value = DynAdTensor::new_primal(
         Tensor::<f32>::from_slice(&[1.0_f32], &[1], MemoryOrder::ColumnMajor).unwrap(),
-    )
-    .into();
-    let c32_value: DynAdTensor = AdTensor::new_primal(
+    );
+    let c32_value = DynAdTensor::new_primal(
         Tensor::<Complex32>::from_slice(
             &[Complex32::new(1.0, -2.0)],
             &[1],
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
-    )
-    .into();
-    let c64_value: DynAdTensor = AdTensor::new_primal(
+    );
+    let c64_value = DynAdTensor::new_primal(
         Tensor::<Complex64>::from_slice(
             &[Complex64::new(2.0, 3.0)],
             &[1],
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
-    )
-    .into();
+    );
 
-    assert!(matches!(
-        f32_value.primal_snapshot().unwrap(),
-        DynTensor::F32(_)
-    ));
-    assert!(matches!(
-        c32_value.primal_snapshot().unwrap(),
-        DynTensor::C32(_)
-    ));
-    assert!(matches!(
-        c64_value.primal_snapshot().unwrap(),
-        DynTensor::C64(_)
-    ));
+    let f32_detached = f32_value.detach();
+    let c32_detached = c32_value.detach();
+    let c64_detached = c64_value.detach();
+
+    assert_eq!(f32_detached.mode(), AdMode::Primal);
+    assert_eq!(c32_detached.mode(), AdMode::Primal);
+    assert_eq!(c64_detached.mode(), AdMode::Primal);
     assert_eq!(
-        f32_value.primal_snapshot().unwrap().scalar_type(),
+        f32_detached.scalar_type(),
         tenferro_dyadtensor::ScalarType::F32
     );
     assert_eq!(
-        c32_value.primal_snapshot().unwrap().scalar_type(),
+        c32_detached.scalar_type(),
         tenferro_dyadtensor::ScalarType::C32
     );
     assert_eq!(
-        c64_value.primal_snapshot().unwrap().scalar_type(),
+        c64_detached.scalar_type(),
         tenferro_dyadtensor::ScalarType::C64
     );
 }

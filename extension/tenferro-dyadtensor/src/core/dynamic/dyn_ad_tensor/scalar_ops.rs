@@ -1,3 +1,4 @@
+use chainrules::Tape;
 use chainrules_scalarops::{self, ScalarAd};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
@@ -11,7 +12,7 @@ use super::merge::merge_add_ad_tensors;
 use super::promotion::join_scalar_types;
 use super::DynAdTensor;
 use crate::core::DynTensorTyped;
-use crate::{AdTensor, Error, Result};
+use crate::{AdTensor, DynTensor, Error, Result};
 
 fn tensor_scalar_rrule_typed<T>(
     tensor_primal: &Tensor<T>,
@@ -145,7 +146,9 @@ where
     let scalar_reverse = scalar.reverse_handle();
 
     let reverse = match (tensor_reverse.clone(), scalar_reverse.clone()) {
-        (Some((_lhs_node, lhs_tape)), Some((_, rhs_tape))) if !lhs_tape.same_tape(&rhs_tape) => {
+        (Some((_lhs_node, lhs_tape)), Some((_, rhs_tape)))
+            if !lhs_tape.same_tape(&rhs_tape as &Tape<DynTensor>) =>
+        {
             return Err(Error::MixedReverseTape {
                 expected: lhs_tape.id() as u64,
                 found: rhs_tape.id() as u64,
@@ -263,18 +266,16 @@ impl DynAdTensor {
     ///
     /// ```rust
     /// use num_complex::Complex64;
-    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let x: DynAdTensor = AdTensor::new_primal(
+    /// let x = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
-    /// let alpha: DynAdTensor = AdTensor::new_primal(
+    /// );
+    /// let alpha = DynAdTensor::new_primal(
     ///     Tensor::<Complex64>::from_slice(&[Complex64::new(0.0, 2.0)], &[], MemoryOrder::ColumnMajor)
     ///         .unwrap(),
-    /// )
-    /// .into();
+    /// );
     ///
     /// let y = x.scale(&alpha).unwrap();
     /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::C64);
@@ -311,25 +312,21 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let x: DynAdTensor = AdTensor::new_primal(
+    /// let x = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
-    /// let y: DynAdTensor = AdTensor::new_primal(
+    /// );
+    /// let y = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
-    /// let a: DynAdTensor = AdTensor::new_primal(
+    /// );
+    /// let a = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
-    /// let b: DynAdTensor = AdTensor::new_primal(
+    /// );
+    /// let b = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[-1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
+    /// );
     ///
     /// let out = x.axpby(&a, &y, &b).unwrap();
     /// assert_eq!(out.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
@@ -369,17 +366,15 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let x: DynAdTensor = AdTensor::new_primal(
+    /// let x = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[2.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
-    /// let alpha: DynAdTensor = AdTensor::new_primal(
+    /// );
+    /// let alpha = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
+    /// );
     ///
     /// let y = x.div_scalar(&alpha).unwrap();
     /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
@@ -416,17 +411,15 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdTensor, DynAdTensor};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let x: DynAdTensor = AdTensor::new_primal(
+    /// let x = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
-    /// let y: DynAdTensor = AdTensor::new_primal(
+    /// );
+    /// let y = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[2.5, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    /// )
-    /// .into();
+    /// );
     ///
     /// assert_eq!(x.max_abs_diff_primal(&y).unwrap(), 2.0);
     /// ```
