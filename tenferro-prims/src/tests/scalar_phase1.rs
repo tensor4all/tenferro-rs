@@ -156,3 +156,43 @@ fn cuda_scalar_phase1_does_not_advertise_unimplemented_ops() {
         )
     );
 }
+
+#[test]
+fn cpu_scalar_mean_reduction_rejects_empty_reduction_domain() {
+    let mut ctx = CpuContext::new(1);
+
+    let mean_desc = ScalarPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1],
+        op: ScalarReductionOp::Mean,
+    };
+    let mean_plan = <CpuBackend as TensorScalarPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &mean_desc,
+        &[&[0, 2], &[2]],
+    )
+    .unwrap();
+
+    let input = Tensor::<f64>::zeros(
+        &[0, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    let mut mean_out = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    let result = <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &mean_plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut mean_out,
+    );
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(matches!(err, tenferro_device::Error::InvalidArgument(_)));
+    assert!(err.to_string().contains("non-empty reduction domain"));
+}

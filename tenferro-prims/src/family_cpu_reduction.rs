@@ -165,12 +165,16 @@ pub(crate) fn execute_mean_reduction<S: CpuScalarValue>(
         return execute_unary_map(alpha, input, beta, output, |x| x);
     }
 
-    let scale = scalar_from_usize::<S>(
-        reduced_axes
-            .iter()
-            .map(|&axis| input.dims()[axis])
-            .product(),
-    )?;
+    let reduced_total: usize = reduced_axes
+        .iter()
+        .map(|&axis| input.dims()[axis])
+        .product();
+    if reduced_total == 0 {
+        return Err(Error::InvalidArgument(
+            "mean reduction requires a non-empty reduction domain".into(),
+        ));
+    }
+    let scale = scalar_from_usize::<S>(reduced_total)?;
     let mean_scale = S::one() / scale;
 
     if reduced_axes.len() == input.ndim() {

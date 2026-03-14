@@ -180,13 +180,31 @@ impl<T: Scalar> Tensor<T> {
                         continue;
                     }
 
-                    let src_pos = (self.offset
-                        + src_batch_off
-                        + i as isize * self.strides[0]
-                        + j as isize * self.strides[1]) as usize;
-                    let dst_pos = (dst_batch_off
-                        + i as isize * out_strides[0]
-                        + j as isize * out_strides[1]) as usize;
+                    let i_stride0 = (i as isize)
+                        .checked_mul(self.strides[0])
+                        .expect("stride multiplication overflow in triangular extraction");
+                    let j_stride1 = (j as isize)
+                        .checked_mul(self.strides[1])
+                        .expect("stride multiplication overflow in triangular extraction");
+                    let src_pos = self
+                        .offset
+                        .checked_add(src_batch_off)
+                        .and_then(|off| off.checked_add(i_stride0))
+                        .and_then(|off| off.checked_add(j_stride1))
+                        .and_then(|pos| usize::try_from(pos).ok())
+                        .expect("src position overflow in triangular extraction");
+
+                    let i_out_stride0 = (i as isize)
+                        .checked_mul(out_strides[0])
+                        .expect("out stride multiplication overflow in triangular extraction");
+                    let j_out_stride1 = (j as isize)
+                        .checked_mul(out_strides[1])
+                        .expect("out stride multiplication overflow in triangular extraction");
+                    let dst_pos = dst_batch_off
+                        .checked_add(i_out_stride0)
+                        .and_then(|off| off.checked_add(j_out_stride1))
+                        .and_then(|pos| usize::try_from(pos).ok())
+                        .expect("dst position overflow in triangular extraction");
                     data[dst_pos] = src[src_pos];
                 }
             }
