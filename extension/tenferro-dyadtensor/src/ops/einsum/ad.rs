@@ -25,7 +25,7 @@ fn structured_einsum_pullback_in_backend<B, C, T>(
     cotangent: &StructuredTensor<T>,
 ) -> Result<Vec<(NodeId, StructuredTensor<T>)>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     let mut input_grads = Vec::new();
@@ -57,7 +57,7 @@ fn dense_einsum_pullback_in_backend<B, C, T>(
     cotangent: &Tensor<T>,
 ) -> Result<Vec<(NodeId, StructuredTensor<T>)>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>>,
+    T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
     let primal_refs: Vec<&Tensor<T>> = primals.iter().collect();

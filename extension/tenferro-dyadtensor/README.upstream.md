@@ -28,7 +28,7 @@ This repository currently provides:
 All operation entry points are builder-based and execute via `.run()` using
 the default runtime context. Runtime selection uses an explicit runtime holder,
 and reverse-mode bookkeeping attaches pullback rules directly to
-`chainrules::Tape<StructuredTensor<T>>`.
+`chainrules::Tape<DynTensor>`, where rank-0 tensors carry scalar AD values.
 
 ```rust
 use tenferro_dyadtensor::{qr, set_default_runtime, RuntimeContext};

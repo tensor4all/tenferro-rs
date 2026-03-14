@@ -1,4 +1,7 @@
 use super::*;
+use num_complex::Complex;
+
+use crate::DynTensorTyped;
 
 macro_rules! eager_unary {
     ($(#[$meta:meta])* fn $name:ident -> $ret:ty => $builder:ident ; where { $($bounds:tt)* }) => {
@@ -197,6 +200,7 @@ eager_unary!(
     fn eig -> AdEigResult<T> => eig_ad;
     where {
         T: ComplexLinalgRuntimeValue,
+        Complex<T>: DynTensorTyped,
     }
 );
 

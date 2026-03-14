@@ -4,7 +4,7 @@ use super::*;
 fn solve_triangular_builder_reverse_pullback_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
 
     let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -41,7 +41,7 @@ fn solve_triangular_builder_reverse_pullback_matches_rrule() {
 fn solve_builder_reverse_pullback_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
 
     let a = f64_2x2([3.0, 1.0, 1.0, 2.0]);
     let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -77,7 +77,7 @@ fn solve_builder_reverse_pullback_matches_rrule() {
 fn norm_builder_reverse_pullback_l1_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
 
     let a = Tensor::<f64>::from_slice(&[1.0, 3.0, -2.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
@@ -104,7 +104,7 @@ fn norm_builder_reverse_pullback_l1_matches_rrule() {
 fn einsum_builder_reverse_pullback_wrt_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
 
     let a = f64_2x2([1.0, 3.0, 2.0, 4.0]);
     let b = f64_2x2([2.0, -1.0, 0.5, 1.5]);
@@ -135,7 +135,7 @@ fn einsum_builder_reverse_pullback_wrt_matches_rrule() {
 fn solve_triangular_reverse_pullback_complex_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<Complex64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
 
     let a = Tensor::<Complex64>::from_slice(
         &[
@@ -185,7 +185,7 @@ fn solve_triangular_reverse_pullback_complex_matches_rrule() {
 fn svd_builder_reverse_pullback_s_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let a = f64_2x2([3.0, 1.0, 0.5, 2.0]);
 
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
@@ -220,7 +220,7 @@ fn svd_builder_reverse_pullback_s_matches_rrule() {
 fn lstsq_builder_reverse_pullback_x_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let a = Tensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
@@ -254,7 +254,7 @@ fn lstsq_builder_reverse_pullback_x_matches_rrule() {
 fn eig_builder_rejects_reverse_mode_for_real_inputs() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let a = Tensor::<f64>::from_slice(&[0.0, -1.0, 1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
 
@@ -270,7 +270,7 @@ fn eig_builder_rejects_reverse_mode_for_real_inputs() {
 fn multi_output_builders_register_reverse_pullback_smoke() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let a = f64_2x2([4.0, 1.0, 1.0, 3.0]);
     let ad_a_rev = reverse_leaf_f64(a, &tape);
 

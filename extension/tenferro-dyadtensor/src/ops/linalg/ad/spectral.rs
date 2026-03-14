@@ -1,5 +1,8 @@
 use super::super::super::*;
 use super::common::dispatch_linalg_ad_runtime;
+use num_complex::Complex;
+
+use crate::DynTensorTyped;
 
 /// Builder for AD eigen decomposition.
 /// # Examples
@@ -175,6 +178,7 @@ pub struct EigAdBuilder<'a, T: Scalar> {
 impl<'a, T> EigAdBuilder<'a, T>
 where
     T: ComplexLinalgRuntimeValue,
+    Complex<T>: DynTensorTyped,
 {
     /// Executes AD eig.
     /// # Examples

@@ -41,15 +41,15 @@ fn split_tape_modules_stay_under_size_guideline() {
 
 // IMPORTANT: Do not delete or weaken these tests.
 // They guard the homogeneous-tape redesign: dyadtensor should register reverse
-// rules directly on chainrules::Tape<StructuredTensor<T>> instead of drifting
-// back to a dyadtensor-local registry/store layer.
+// rules directly on chainrules::Tape<DynTensor> instead of drifting back to a
+// dyadtensor-local registry/store layer.
 
 #[test]
 fn tape_registry_uses_chainrules_tape_directly() {
     let registry = std::fs::read_to_string(repo_path("src/tape/registry.rs")).unwrap();
     assert!(
-        registry.contains("Tape<StructuredTensor<T>>"),
-        "tape registry should register rules against chainrules::Tape<StructuredTensor<T>>"
+        registry.contains("Tape<DynTensor>"),
+        "tape registry should register rules against chainrules::Tape<DynTensor>"
     );
     assert!(
         registry.contains("tape.attach_rule"),

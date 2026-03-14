@@ -10,6 +10,7 @@ use super::super::tensor_ops::{
 use super::merge::merge_add_ad_tensors;
 use super::promotion::join_scalar_types;
 use super::DynAdTensor;
+use crate::core::DynTensorTyped;
 use crate::{AdTensor, Error, Result};
 
 fn tensor_scalar_rrule_typed<T>(
@@ -138,7 +139,7 @@ fn merge_tensor_scalar_output<T>(
     rrule: fn(T, T, T) -> (T, T),
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar + ScalarAd + Copy + 'static,
+    T: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
 {
     let tensor_reverse = tensor.reverse_handle();
     let scalar_reverse = scalar.reverse_handle();
@@ -215,7 +216,7 @@ where
 
 fn scale_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: Scalar + ScalarAd + Copy + 'static,
+    T: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
 {
     let (primal, tangent) = tensor_binary_scalar_ad_typed(
         tensor.primal(),
@@ -236,7 +237,7 @@ where
 
 fn div_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: Scalar + ScalarAd + Copy + 'static,
+    T: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
 {
     let (primal, tangent) = tensor_binary_scalar_ad_typed(
         tensor.primal(),

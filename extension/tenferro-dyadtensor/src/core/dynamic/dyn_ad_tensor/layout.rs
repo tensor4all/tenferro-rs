@@ -4,7 +4,7 @@ use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::super::tensor_ops::{tensor_element, unflatten_index_column_major};
-use crate::core::AdTensorSnapshot;
+use crate::core::{AdTensorSnapshot, DynTensorTyped};
 use crate::structured::StructuredTensor;
 use crate::{tape, AdTensor, Error, Result};
 
@@ -25,7 +25,7 @@ pub(super) fn reshape_ad_tensor_typed<T>(
     new_dims: &[usize],
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar + Copy + 'static,
+    T: Scalar + Copy + DynTensorTyped + 'static,
 {
     ensure_dense_ad_tensor_layout(input, "reshape")?;
 
@@ -209,7 +209,7 @@ pub(super) fn take_prefix_ad_tensor_typed<T>(
     len: usize,
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar + Copy + Zero + 'static,
+    T: Scalar + Copy + Zero + DynTensorTyped + 'static,
 {
     ensure_dense_ad_tensor_layout(input, "take_prefix")?;
 
@@ -271,7 +271,7 @@ pub(super) fn diag_embed_ad_tensor_typed<T>(
     logical_rank: usize,
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar + Copy + 'static,
+    T: Scalar + Copy + DynTensorTyped + 'static,
 {
     ensure_dense_ad_tensor_layout(input, "diag_embed")?;
     if input.ndim() != 1 {
@@ -328,7 +328,7 @@ pub(super) fn contiguous_ad_tensor_typed<T>(
     order: MemoryOrder,
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar,
+    T: Scalar + DynTensorTyped,
 {
     let mapped = match input.snapshot() {
         AdTensorSnapshot::Primal(primal) => {

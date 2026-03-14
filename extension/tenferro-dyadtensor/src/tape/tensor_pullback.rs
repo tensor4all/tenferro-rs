@@ -3,9 +3,10 @@ use std::collections::HashMap;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
+use crate::core::DynTensorTyped;
 use crate::{AdTensor, Error, NodeId, Result};
 
-pub(crate) fn pullback<T: Scalar + 'static>(
+pub(crate) fn pullback<T: Scalar + DynTensorTyped + 'static>(
     output: &AdTensor<T>,
     cotangent: &Tensor<T>,
 ) -> Result<HashMap<NodeId, Tensor<T>>> {
@@ -23,19 +24,24 @@ pub(crate) fn pullback<T: Scalar + 'static>(
     let tracked = tape
         .tracked_existing(
             node,
-            output.structured_primal().clone(),
-            output.structured_tangent().cloned(),
+            T::into_dyn(output.structured_primal().clone()),
+            output.structured_tangent().cloned().map(T::into_dyn),
         )
         .map_err(Error::from)?;
     let cotangent = output
         .structured_primal()
         .with_payload_like(cotangent.clone())?;
     let grads = tape
-        .pullback_with_seed(&tracked, cotangent)
+        .pullback_with_seed(&tracked, T::into_dyn(cotangent))
         .map_err(Error::from)?;
 
     let mut out = HashMap::new();
     for (input_node, grad) in grads.entries() {
+        let grad = grad
+            .typed_ref::<T>()
+            .ok_or_else(|| Error::InvalidAdTensor {
+                message: "pullback gradient dtype did not match requested tensor type".to_string(),
+            })?;
         out.insert(*input_node, grad.payload().clone());
     }
     Ok(out)

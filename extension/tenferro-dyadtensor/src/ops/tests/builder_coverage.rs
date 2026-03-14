@@ -20,7 +20,7 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
     let out_unary_fwd = cholesky_ad(&ad_a_fwd).run().unwrap();
     assert_forward_mode(&out_unary_fwd);
 
-    let tape_rev = Tape::<StructuredTensor<f64>>::new();
+    let tape_rev = Tape::<crate::DynTensor>::new();
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape_rev);
     let out_unary_rev = cholesky_ad(&ad_a_rev).run().unwrap();
     let unary_cotangent = AdTensor::new_primal(
@@ -77,7 +77,7 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
     assert_forward_mode(&out_slogdet_fwd.sign);
     assert_forward_mode(&out_slogdet_fwd.logabsdet);
 
-    let tape_multi = Tape::<StructuredTensor<f64>>::new();
+    let tape_multi = Tape::<crate::DynTensor>::new();
     let ad_multi_rev = reverse_leaf_f64(a, &tape_multi);
     let out_svd_rev = svd_ad(&ad_multi_rev).run().unwrap();
     let cot_matrix = AdTensor::new_primal(
@@ -364,7 +364,7 @@ fn ad_mode_propagation_forward_and_reverse() {
     let out_tri_fwd = solve_triangular_ad(&ad_a_fwd, &ad_b).run().unwrap();
     assert_forward_mode(&out_tri_fwd);
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let ad_b_rev = reverse_leaf_f64(a, &tape);
     let out_rev = einsum_ad("ij,jk->ik", &[&ad_a_rev, &ad_b_rev])

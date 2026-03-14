@@ -2,6 +2,7 @@ use std::hash::Hash;
 
 use tenferro_algebra::Scalar;
 
+use crate::core::DynTensorTyped;
 use crate::structured::StructuredTensor;
 use crate::{AdMode, AdScalar, AdTensor, AdValue, DiffPolicy, DynScalar, Result};
 
@@ -95,7 +96,7 @@ impl<T: Clone> Differentiable for AdScalar<T> {
     }
 }
 
-impl<T: Clone + Scalar> Differentiable for AdTensor<T> {
+impl<T: Clone + Scalar + DynTensorTyped> Differentiable for AdTensor<T> {
     type Primal = StructuredTensor<T>;
 
     fn mode(&self) -> AdMode {

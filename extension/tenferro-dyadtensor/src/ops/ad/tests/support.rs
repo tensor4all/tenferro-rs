@@ -42,14 +42,14 @@ pub(super) fn scalar_c64(value: Complex64) -> Tensor<Complex64> {
 
 pub(super) fn reverse_leaf_f64(
     tensor: impl Into<StructuredTensor<f64>>,
-    tape: &Tape<StructuredTensor<f64>>,
+    tape: &Tape<crate::DynTensor>,
 ) -> AdTensor<f64> {
     AdTensor::new_reverse_leaf(tensor, tape).unwrap()
 }
 
 pub(super) fn reverse_leaf_c64(
     tensor: impl Into<StructuredTensor<Complex64>>,
-    tape: &Tape<StructuredTensor<Complex64>>,
+    tape: &Tape<crate::DynTensor>,
 ) -> AdTensor<Complex64> {
     AdTensor::new_reverse_leaf(tensor, tape).unwrap()
 }
@@ -62,7 +62,7 @@ pub(super) fn assert_forward_mode<T: Scalar>(tensor: &AdTensor<T>) {
 
 pub(super) fn assert_reverse_on_tape<T: Scalar>(
     tensor: &AdTensor<T>,
-    tape: &Tape<StructuredTensor<T>>,
+    tape: &Tape<crate::DynTensor>,
 ) {
     assert_eq!(tensor.mode(), AdMode::Reverse);
     assert!(tensor.node_id().is_some());

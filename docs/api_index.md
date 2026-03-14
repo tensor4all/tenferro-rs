@@ -220,7 +220,7 @@ bidirectional data exchange between `Array<T, DynRank>` and `Tensor<T>`.
 ### [tenferro-dyadtensor](tenferro_dyadtensor/index.html) <small>(Extension)</small>
 
 Dynamic AD tensor interface on top of `StructuredTensor<T>` and homogeneous
-`chainrules::Tape<StructuredTensor<T>>` graphs. `DynAdTensor` is the canonical
+`chainrules::Tape<DynTensor>` graphs. `DynAdTensor` is the canonical
 runtime tensor payload; rank-0 tensors act as scalar coefficients. Public
 dynamic boundaries now include AD-aware same-precision real-to-complex
 promotion (`promote_to`) and primal-only structured snapshots
@@ -232,7 +232,7 @@ tenferro crates. It provides the higher-level builder surface used by eager
 einsum and linalg flows, plus dynamic wrappers for forward- and reverse-mode
 execution. Builder `.run()` entrypoints execute through an explicit default
 runtime holder, while reverse-mode bookkeeping attaches pullback rules
-directly to `chainrules::Tape<StructuredTensor<T>>`. The implementation tree is now
+directly to `chainrules::Tape<DynTensor>`. The implementation tree is now
 operation-first: `ops/einsum`, `ops/scalar`, `ops/reduction`, and
 `ops/linalg/*` group primal and AD wiring by family rather than by internal
 bucket.

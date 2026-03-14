@@ -40,7 +40,7 @@ fn dyn_ad_tensor_reshape_preserves_forward_mode() {
 
 #[test]
 fn dyn_ad_tensor_reshape_pullback_restores_original_shape() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x: DynAdTensor = AdTensor::new_reverse_leaf(matrix2(&[1.0, 2.0, 3.0, 4.0]), &tape)
         .unwrap()
         .into();
@@ -80,7 +80,7 @@ fn dyn_ad_tensor_take_prefix_preserves_forward_mode() {
 
 #[test]
 fn dyn_ad_tensor_take_prefix_pullback_zero_fills_dropped_entries() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x: DynAdTensor = AdTensor::new_reverse_leaf(matrix2(&[1.0, 2.0, 3.0, 4.0]), &tape)
         .unwrap()
         .into();
@@ -100,7 +100,7 @@ fn dyn_ad_tensor_take_prefix_pullback_zero_fills_dropped_entries() {
 
 #[test]
 fn dyn_ad_tensor_diag_embed_preserves_reverse_pullback() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let x: DynAdTensor = AdTensor::new_reverse_leaf(vector(&[2.0, 3.0]), &tape)
         .unwrap()
         .into();

@@ -69,7 +69,7 @@ fn eager_ad_preserves_mode_propagation() {
     let out_fwd = solve(&ad_a_fwd, &ad_b).unwrap();
     assert_forward_mode(&out_fwd);
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let ad_b_rev = reverse_leaf_f64(a, &tape);
     let out_rev = einsum("ij,jk->ik", &[&ad_a_rev, &ad_b_rev]).unwrap();

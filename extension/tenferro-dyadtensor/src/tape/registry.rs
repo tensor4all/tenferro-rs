@@ -1,30 +1,40 @@
 use ::chainrules::{ReverseRule, Tape};
 use chainrules_core::AutodiffError;
-use tenferro_algebra::Scalar;
 
+use crate::core::DynTensorTyped;
 use crate::structured::StructuredTensor;
-use crate::{NodeId, Result};
+use crate::{DynTensor, NodeId, Result};
 
 pub(crate) type PullbackRule<T> =
     Box<dyn Fn(&StructuredTensor<T>) -> Result<Vec<(NodeId, StructuredTensor<T>)>> + 'static>;
 
-struct TensorRuleAdapter<T: Scalar + 'static> {
+struct TensorRuleAdapter<T: DynTensorTyped> {
     rule: PullbackRule<T>,
 }
 
-impl<T: Scalar + 'static> ReverseRule<StructuredTensor<T>> for TensorRuleAdapter<T> {
+impl<T: DynTensorTyped> ReverseRule<DynTensor> for TensorRuleAdapter<T> {
     fn pullback(
         &self,
-        cotangent: &StructuredTensor<T>,
-    ) -> chainrules_core::AdResult<Vec<(NodeId, StructuredTensor<T>)>> {
-        (self.rule)(cotangent).map_err(|err| AutodiffError::InvalidArgument(err.to_string()))
+        cotangent: &DynTensor,
+    ) -> chainrules_core::AdResult<Vec<(NodeId, DynTensor)>> {
+        let cotangent = T::structured_ref(cotangent).ok_or_else(|| {
+            AutodiffError::InvalidArgument("cotangent dtype did not match registered rule".into())
+        })?;
+        (self.rule)(cotangent)
+            .map(|entries| {
+                entries
+                    .into_iter()
+                    .map(|(node, grad)| (node, T::into_dyn(grad)))
+                    .collect()
+            })
+            .map_err(|err| AutodiffError::InvalidArgument(err.to_string()))
     }
 
     fn pullback_with_tangents(
         &self,
-        _cotangent: &StructuredTensor<T>,
-        _cotangent_tangent: &StructuredTensor<T>,
-    ) -> chainrules_core::AdResult<Vec<(NodeId, StructuredTensor<T>, StructuredTensor<T>)>> {
+        _cotangent: &DynTensor,
+        _cotangent_tangent: &DynTensor,
+    ) -> chainrules_core::AdResult<Vec<(NodeId, DynTensor, DynTensor)>> {
         Err(AutodiffError::HvpNotSupported)
     }
 
@@ -33,8 +43,8 @@ impl<T: Scalar + 'static> ReverseRule<StructuredTensor<T>> for TensorRuleAdapter
     }
 }
 
-pub(crate) fn register_rule<T: Scalar + 'static>(
-    tape: &Tape<StructuredTensor<T>>,
+pub(crate) fn register_rule<T: DynTensorTyped>(
+    tape: &Tape<DynTensor>,
     node: NodeId,
     rule: PullbackRule<T>,
 ) {
@@ -43,3 +53,6 @@ pub(crate) fn register_rule<T: Scalar + 'static>(
             unreachable!("reverse output node should exist before rule registration: {err}")
         });
 }
+
+#[cfg(test)]
+mod tests;

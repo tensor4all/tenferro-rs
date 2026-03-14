@@ -49,7 +49,7 @@ fn einsum_backward_two_stage_matches_finite_difference_f64() {
     let cotangent = f64_2x2([0.4, -0.7, 0.2, 0.9]);
     let eps = 1e-6;
 
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let (grad_a, grad_b) = {
         let ad_a = reverse_leaf_f64(a.clone(), &tape);
         let ad_b = reverse_leaf_f64(b.clone(), &tape);
@@ -220,7 +220,7 @@ fn einsum_backward_two_stage_matches_finite_difference_c64_directional() {
     ]);
     let eps = 1e-6;
 
-    let tape = Tape::<StructuredTensor<Complex64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let grad_a = {
         let ad_a = reverse_leaf_c64(a.clone(), &tape);
         let ad_b = reverse_leaf_c64(b.clone(), &tape);

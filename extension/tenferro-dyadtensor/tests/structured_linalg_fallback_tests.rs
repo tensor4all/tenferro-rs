@@ -54,7 +54,7 @@ fn structured_diag_input_can_flow_through_solve_via_internal_dense_fallback() {
 #[test]
 fn structured_diag_qr_reverse_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let structured_x = AdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 3.0]), 2).unwrap(),
         &tape,
@@ -71,7 +71,7 @@ fn structured_diag_qr_reverse_rejects_non_dense_input() {
 #[test]
 fn structured_diag_inv_reverse_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let structured_x = AdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 4.0]), 2).unwrap(),
         &tape,
@@ -88,7 +88,7 @@ fn structured_diag_inv_reverse_rejects_non_dense_input() {
 #[test]
 fn structured_diag_solve_reverse_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let structured_a = AdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector(&[2.0, 4.0]), 2).unwrap(),
         &tape,

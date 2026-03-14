@@ -2,6 +2,9 @@ use super::common::{
     dispatch_cpu_composite_runtime, dispatch_linalg_runtime, unary_linalg_builder,
 };
 use super::*;
+use num_complex::Complex;
+
+use crate::DynTensorTyped;
 
 unary_linalg_builder!(
     DetBuilder,
@@ -29,7 +32,7 @@ unary_linalg_builder!(
     returns = EigResult<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::Eig,
     op = "eig",
-    bounds = (T: ComplexLinalgRuntimeValue),
+    bounds = (T: ComplexLinalgRuntimeValue, Complex<T>: DynTensorTyped),
     call = |ctx, builder| tenferro_linalg::eig::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 

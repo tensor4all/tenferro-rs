@@ -49,7 +49,7 @@ fn ad_tensor_new_forward_rejects_tangent_layout_mismatch() {
 
 #[test]
 fn ad_tensor_new_reverse_rejects_tangent_layout_mismatch() {
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let err = match AdTensor::new_reverse_leaf_with_tangent(
         dense_matrix(&[1.0, 2.0, 3.0, 4.0]),
         diag2(&[5.0, 6.0]),
@@ -116,7 +116,7 @@ fn ad_scalar_div_forward_propagates_tangent() {
 
 #[test]
 fn rank0_reverse_tensor_scale_allocates_fresh_output_node() {
-    let tape = Tape::<StructuredTensor<Complex64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = AdTensor::new_reverse_leaf_with_tangent(
         Tensor::<Complex64>::from_slice(&[Complex64::new(1.0, 2.0)], &[], MemoryOrder::ColumnMajor)
             .unwrap(),
@@ -155,7 +155,7 @@ fn rank0_reverse_tensor_sqrt_registers_pullback_chain() {
     let _guard = crate::set_default_runtime(crate::RuntimeContext::Cpu(
         tenferro_prims::CpuContext::new(1),
     ));
-    let tape = Tape::<StructuredTensor<f64>>::new();
+    let tape = Tape::<crate::DynTensor>::new();
     let x = AdTensor::new_reverse_leaf(
         Tensor::<f64>::from_slice(&[4.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape,
@@ -177,8 +177,8 @@ fn rank0_reverse_tensor_sqrt_registers_pullback_chain() {
 
 #[test]
 fn rank0_reverse_tensor_scale_returns_error_on_mixed_reverse_tapes() {
-    let tape_a = Tape::<StructuredTensor<f64>>::new();
-    let tape_b = Tape::<StructuredTensor<f64>>::new();
+    let tape_a = Tape::<crate::DynTensor>::new();
+    let tape_b = Tape::<crate::DynTensor>::new();
     let x: crate::DynAdTensor = AdTensor::new_reverse_leaf(
         Tensor::<f64>::from_slice(&[2.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape_a,
@@ -200,8 +200,8 @@ fn rank0_reverse_tensor_scale_returns_error_on_mixed_reverse_tapes() {
 
 #[test]
 fn rank0_reverse_tensor_div_scalar_returns_error_on_mixed_reverse_tapes() {
-    let tape_a = Tape::<StructuredTensor<f64>>::new();
-    let tape_b = Tape::<StructuredTensor<f64>>::new();
+    let tape_a = Tape::<crate::DynTensor>::new();
+    let tape_b = Tape::<crate::DynTensor>::new();
     let x: crate::DynAdTensor = AdTensor::new_reverse_leaf(
         Tensor::<f64>::from_slice(&[2.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
         &tape_a,

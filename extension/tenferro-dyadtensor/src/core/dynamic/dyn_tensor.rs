@@ -3,9 +3,14 @@ use tenferro_tensor::Tensor;
 
 use super::dyn_scalar::{DynScalar, ScalarType};
 use super::tensor_ops::{tensor_map_binary_typed, tensor_map_unary_typed, tensor_max_typed};
-use crate::{Error, Result};
+use crate::{Error, Result, StructuredTensor};
 
 /// Runtime tensor wrapper for a fixed supported dtype set.
+///
+/// `DynTensor` is the canonical dynamic primal tensor type in
+/// `tenferro-dyadtensor`. Each variant carries a `StructuredTensor<T>`, so dense
+/// tensors and structured special cases such as `Diag` share the same public
+/// container.
 ///
 /// # Examples
 ///
@@ -19,10 +24,56 @@ use crate::{Error, Result};
 /// ```
 #[derive(Clone)]
 pub enum DynTensor {
-    F32(Tensor<f32>),
-    F64(Tensor<f64>),
-    C32(Tensor<Complex32>),
-    C64(Tensor<Complex64>),
+    F32(StructuredTensor<f32>),
+    F64(StructuredTensor<f64>),
+    C32(StructuredTensor<Complex32>),
+    C64(StructuredTensor<Complex64>),
+}
+
+#[doc(hidden)]
+pub trait DynTensorTyped: tenferro_algebra::Scalar + 'static {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>>;
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor;
+}
+
+impl DynTensorTyped for f32 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_f32()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::F32(value)
+    }
+}
+
+impl DynTensorTyped for f64 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_f64()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::F64(value)
+    }
+}
+
+impl DynTensorTyped for Complex32 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_c32()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::C32(value)
+    }
+}
+
+impl DynTensorTyped for Complex64 {
+    fn structured_ref(value: &DynTensor) -> Option<&StructuredTensor<Self>> {
+        value.as_c64()
+    }
+
+    fn into_dyn(value: StructuredTensor<Self>) -> DynTensor {
+        DynTensor::C64(value)
+    }
 }
 
 impl DynTensor {
@@ -47,7 +98,7 @@ impl DynTensor {
         }
     }
 
-    /// Returns dimensions of the underlying tensor.
+    /// Returns logical dimensions of the underlying tensor.
     ///
     /// # Examples
     ///
@@ -61,10 +112,81 @@ impl DynTensor {
     /// ```
     pub fn dims(&self) -> &[usize] {
         match self {
-            Self::F32(t) => t.dims(),
-            Self::F64(t) => t.dims(),
-            Self::C32(t) => t.dims(),
-            Self::C64(t) => t.dims(),
+            Self::F32(t) => t.logical_dims(),
+            Self::F64(t) => t.logical_dims(),
+            Self::C32(t) => t.logical_dims(),
+            Self::C64(t) => t.logical_dims(),
+        }
+    }
+
+    /// Returns axis equivalence classes of the structured layout.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{DynTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let diag = StructuredTensor::from_diagonal_vector(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    ///     2,
+    /// )
+    /// .unwrap();
+    /// let x: DynTensor = diag.into();
+    /// assert_eq!(x.axis_classes(), &[0, 0]);
+    /// ```
+    pub fn axis_classes(&self) -> &[usize] {
+        match self {
+            Self::F32(t) => t.axis_classes(),
+            Self::F64(t) => t.axis_classes(),
+            Self::C32(t) => t.axis_classes(),
+            Self::C64(t) => t.axis_classes(),
+        }
+    }
+
+    /// Returns `true` when the structured payload is dense.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::DynTensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let dense: DynTensor =
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap().into();
+    /// assert!(dense.is_dense());
+    /// ```
+    pub fn is_dense(&self) -> bool {
+        match self {
+            Self::F32(t) => t.is_dense(),
+            Self::F64(t) => t.is_dense(),
+            Self::C32(t) => t.is_dense(),
+            Self::C64(t) => t.is_dense(),
+        }
+    }
+
+    /// Returns `true` when the structured payload is diagonal.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_dyadtensor::{DynTensor, StructuredTensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let diag = StructuredTensor::from_diagonal_vector(
+    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    ///     2,
+    /// )
+    /// .unwrap();
+    /// let x: DynTensor = diag.into();
+    /// assert!(x.is_diag());
+    /// ```
+    pub fn is_diag(&self) -> bool {
+        match self {
+            Self::F32(t) => t.is_diag(),
+            Self::F64(t) => t.is_diag(),
+            Self::C32(t) => t.is_diag(),
+            Self::C64(t) => t.is_diag(),
         }
     }
 
@@ -83,8 +205,8 @@ impl DynTensor {
         self.len() == 0
     }
 
-    /// Returns typed tensor ref when dtype is `f32`.
-    pub fn as_f32(&self) -> Option<&Tensor<f32>> {
+    /// Returns typed structured tensor ref when dtype is `f32`.
+    pub fn as_f32(&self) -> Option<&StructuredTensor<f32>> {
         if let Self::F32(t) = self {
             Some(t)
         } else {
@@ -92,8 +214,8 @@ impl DynTensor {
         }
     }
 
-    /// Returns typed tensor ref when dtype is `f64`.
-    pub fn as_f64(&self) -> Option<&Tensor<f64>> {
+    /// Returns typed structured tensor ref when dtype is `f64`.
+    pub fn as_f64(&self) -> Option<&StructuredTensor<f64>> {
         if let Self::F64(t) = self {
             Some(t)
         } else {
@@ -101,8 +223,8 @@ impl DynTensor {
         }
     }
 
-    /// Returns typed tensor ref when dtype is `Complex32`.
-    pub fn as_c32(&self) -> Option<&Tensor<Complex32>> {
+    /// Returns typed structured tensor ref when dtype is `Complex32`.
+    pub fn as_c32(&self) -> Option<&StructuredTensor<Complex32>> {
         if let Self::C32(t) = self {
             Some(t)
         } else {
@@ -110,8 +232,8 @@ impl DynTensor {
         }
     }
 
-    /// Returns typed tensor ref when dtype is `Complex64`.
-    pub fn as_c64(&self) -> Option<&Tensor<Complex64>> {
+    /// Returns typed structured tensor ref when dtype is `Complex64`.
+    pub fn as_c64(&self) -> Option<&StructuredTensor<Complex64>> {
         if let Self::C64(t) = self {
             Some(t)
         } else {
@@ -119,20 +241,67 @@ impl DynTensor {
         }
     }
 
+    /// Returns typed payload ref when dtype is `f32`.
+    pub fn payload_f32(&self) -> Option<&Tensor<f32>> {
+        self.as_f32().map(StructuredTensor::payload)
+    }
+
+    /// Returns typed payload ref when dtype is `f64`.
+    pub fn payload_f64(&self) -> Option<&Tensor<f64>> {
+        self.as_f64().map(StructuredTensor::payload)
+    }
+
+    /// Returns typed payload ref when dtype is `Complex32`.
+    pub fn payload_c32(&self) -> Option<&Tensor<Complex32>> {
+        self.as_c32().map(StructuredTensor::payload)
+    }
+
+    /// Returns typed payload ref when dtype is `Complex64`.
+    pub fn payload_c64(&self) -> Option<&Tensor<Complex64>> {
+        self.as_c64().map(StructuredTensor::payload)
+    }
+
+    pub(crate) fn typed_ref<T>(&self) -> Option<&StructuredTensor<T>>
+    where
+        T: DynTensorTyped,
+    {
+        T::structured_ref(self)
+    }
+
     /// Element-wise subtraction with dtype/shape checks.
     pub fn try_sub(&self, rhs: &Self) -> Result<Self> {
         match (self, rhs) {
             (Self::F32(a), Self::F32(b)) => {
-                Ok(Self::F32(tensor_map_binary_typed(a, b, |x, y| x - y)?))
+                ensure_same_layout("try_sub", a, b)?;
+                Ok(Self::F32(a.with_payload_like(tensor_map_binary_typed(
+                    a.payload(),
+                    b.payload(),
+                    |x, y| x - y,
+                )?)?))
             }
             (Self::F64(a), Self::F64(b)) => {
-                Ok(Self::F64(tensor_map_binary_typed(a, b, |x, y| x - y)?))
+                ensure_same_layout("try_sub", a, b)?;
+                Ok(Self::F64(a.with_payload_like(tensor_map_binary_typed(
+                    a.payload(),
+                    b.payload(),
+                    |x, y| x - y,
+                )?)?))
             }
             (Self::C32(a), Self::C32(b)) => {
-                Ok(Self::C32(tensor_map_binary_typed(a, b, |x, y| x - y)?))
+                ensure_same_layout("try_sub", a, b)?;
+                Ok(Self::C32(a.with_payload_like(tensor_map_binary_typed(
+                    a.payload(),
+                    b.payload(),
+                    |x, y| x - y,
+                )?)?))
             }
             (Self::C64(a), Self::C64(b)) => {
-                Ok(Self::C64(tensor_map_binary_typed(a, b, |x, y| x - y)?))
+                ensure_same_layout("try_sub", a, b)?;
+                Ok(Self::C64(a.with_payload_like(tensor_map_binary_typed(
+                    a.payload(),
+                    b.payload(),
+                    |x, y| x - y,
+                )?)?))
             }
             _ => Err(Error::InvalidAdTensor {
                 message: format!(
@@ -147,18 +316,30 @@ impl DynTensor {
     /// Element-wise absolute value.
     pub fn abs_tensor(&self) -> Result<Self> {
         match self {
-            Self::F32(a) => Ok(Self::F32(tensor_map_unary_typed(a, |x| x.abs())?)),
-            Self::F64(a) => Ok(Self::F64(tensor_map_unary_typed(a, |x| x.abs())?)),
-            Self::C32(a) => Ok(Self::F32(tensor_map_unary_typed(a, |z| z.norm())?)),
-            Self::C64(a) => Ok(Self::F64(tensor_map_unary_typed(a, |z| z.norm())?)),
+            Self::F32(a) => Ok(Self::F32(
+                a.with_payload_like(tensor_map_unary_typed(a.payload(), |x| x.abs())?)?,
+            )),
+            Self::F64(a) => Ok(Self::F64(
+                a.with_payload_like(tensor_map_unary_typed(a.payload(), |x| x.abs())?)?,
+            )),
+            Self::C32(a) => Ok(Self::F32(StructuredTensor::new(
+                a.logical_dims().to_vec(),
+                a.axis_classes().to_vec(),
+                tensor_map_unary_typed(a.payload(), |z| z.norm())?,
+            )?)),
+            Self::C64(a) => Ok(Self::F64(StructuredTensor::new(
+                a.logical_dims().to_vec(),
+                a.axis_classes().to_vec(),
+                tensor_map_unary_typed(a.payload(), |z| z.norm())?,
+            )?)),
         }
     }
 
     /// Maximum element value.
     pub fn max(&self) -> Result<DynScalar> {
         match self {
-            Self::F32(t) => Ok(DynScalar::F32(tensor_max_typed(t)?)),
-            Self::F64(t) => Ok(DynScalar::F64(tensor_max_typed(t)?)),
+            Self::F32(t) => Ok(DynScalar::F32(tensor_max_typed(t.payload())?)),
+            Self::F64(t) => Ok(DynScalar::F64(tensor_max_typed(t.payload())?)),
             Self::C32(_) | Self::C64(_) => Err(Error::InvalidAdTensor {
                 message: "max is undefined for complex tensors; call abs_tensor() first"
                     .to_string(),
@@ -183,10 +364,45 @@ impl DynTensor {
     }
 }
 
+fn ensure_same_layout<T>(
+    op_name: &'static str,
+    lhs: &StructuredTensor<T>,
+    rhs: &StructuredTensor<T>,
+) -> Result<()>
+where
+    T: tenferro_algebra::Scalar,
+{
+    if lhs.logical_dims() != rhs.logical_dims() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires matching logical_dims, got lhs={:?}, rhs={:?}",
+                lhs.logical_dims(),
+                rhs.logical_dims()
+            ),
+        });
+    }
+    if lhs.axis_classes() != rhs.axis_classes() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires matching axis_classes, got lhs={:?}, rhs={:?}",
+                lhs.axis_classes(),
+                rhs.axis_classes()
+            ),
+        });
+    }
+    Ok(())
+}
+
 macro_rules! impl_dyn_tensor_from {
     ($variant:ident, $ty:ty) => {
         impl From<Tensor<$ty>> for DynTensor {
             fn from(value: Tensor<$ty>) -> Self {
+                Self::$variant(StructuredTensor::from_dense(value))
+            }
+        }
+
+        impl From<StructuredTensor<$ty>> for DynTensor {
+            fn from(value: StructuredTensor<$ty>) -> Self {
                 Self::$variant(value)
             }
         }
