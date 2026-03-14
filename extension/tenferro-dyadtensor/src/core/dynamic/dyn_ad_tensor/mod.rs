@@ -1,6 +1,7 @@
 mod basics;
 mod complex;
 mod eager_scalar;
+mod eager_tensor;
 mod layout;
 mod merge;
 mod promotion;

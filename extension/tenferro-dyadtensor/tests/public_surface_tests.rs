@@ -108,6 +108,36 @@ fn dynadtensor_public_scalar_eager_methods_do_not_require_typed_api() {
         m.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
         &[0.5]
     );
+
+    let s = x.sum().unwrap();
+    assert_eq!(s.dims(), &[]);
+    assert_eq!(
+        s.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[1.0]
+    );
+}
+
+#[test]
+fn dynadtensor_public_einsum_uses_dynamic_operands_only() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let a = DynAdTensor::new_primal(
+        Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    );
+    let b = DynAdTensor::new_primal(
+        Tensor::<Complex64>::from_slice(
+            &[Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
+
+    let out = DynAdTensor::einsum("i,i->", &[&a, &b]).unwrap();
+    assert_eq!(out.scalar_type(), tenferro_dyadtensor::ScalarType::C64);
+    assert_eq!(
+        out.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[Complex64::new(5.0, -1.0)]
+    );
 }
 
 #[test]
