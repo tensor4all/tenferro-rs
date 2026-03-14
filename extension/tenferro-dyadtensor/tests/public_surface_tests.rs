@@ -1,5 +1,8 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape, StructuredTensor};
+use tenferro_dyadtensor::{
+    set_default_runtime, AdMode, DynAdTensor, DynTape, RuntimeContext, StructuredTensor,
+};
+use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn scalar_f64(value: f64) -> Tensor<f64> {
@@ -78,5 +81,31 @@ fn dynadtensor_public_to_scalar_type_supports_cross_precision_cast() {
     assert_eq!(
         y.as_f32().unwrap().primal().buffer().as_slice().unwrap(),
         &[2.0]
+    );
+}
+
+#[test]
+fn dynadtensor_public_scalar_eager_methods_do_not_require_typed_api() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = DynAdTensor::new_primal(vector_f64(&[0.0, 1.0]));
+    let y = x.exp().unwrap();
+    assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
+    let y_vals = y.as_f64().unwrap().primal().buffer().as_slice().unwrap();
+    assert!((y_vals[0] - 1.0).abs() < 1e-12);
+    assert!((y_vals[1] - std::f64::consts::E).abs() < 1e-12);
+
+    let a = DynAdTensor::new_primal(scalar_f64(2.0));
+    let b = DynAdTensor::new_primal(scalar_f64(3.0));
+    let c = a.add(&b).unwrap();
+    assert_eq!(
+        c.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[5.0]
+    );
+
+    let m = x.mean().unwrap();
+    assert_eq!(m.dims(), &[]);
+    assert_eq!(
+        m.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[0.5]
     );
 }

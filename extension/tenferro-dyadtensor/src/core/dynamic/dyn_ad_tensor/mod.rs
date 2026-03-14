@@ -1,5 +1,6 @@
 mod basics;
 mod complex;
+mod eager_scalar;
 mod layout;
 mod merge;
 mod promotion;
