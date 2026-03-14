@@ -1,3 +1,4 @@
+mod autodiff;
 mod dyn_ad_tensor;
 mod dyn_scalar;
 mod dyn_tensor;

@@ -2,6 +2,7 @@ mod organization;
 
 use super::*;
 use chainrules::Tape;
+use chainrules_core::Differentiable;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -82,6 +83,39 @@ fn dyn_tensor_preserves_diag_structure() {
     assert_eq!(structured.logical_dims(), diag.logical_dims());
     assert_eq!(structured.axis_classes(), diag.axis_classes());
     assert_eq!(structured.payload().dims(), &[2]);
+}
+
+#[test]
+fn dyn_tensor_is_valid_homogeneous_tape_payload() {
+    let tape = Tape::<DynTensor>::new();
+    let leaf = tape.leaf(
+        StructuredTensor::from_diagonal_vector(
+            Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+            2,
+        )
+        .unwrap()
+        .into(),
+    );
+    assert!(leaf.requires_grad());
+    assert!(leaf.tape().unwrap().same_tape(&tape));
+    assert!(leaf.value().is_diag());
+    assert_eq!(leaf.value().dims(), &[2, 2]);
+}
+
+#[test]
+fn dyn_tensor_tangents_preserve_diag_layout() {
+    let diag: DynTensor = StructuredTensor::from_diagonal_vector(
+        Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+        2,
+    )
+    .unwrap()
+    .into();
+    let zero = diag.zero_tangent();
+    let seed = diag.seed_cotangent();
+    assert!(zero.is_diag());
+    assert!(seed.is_diag());
+    assert_eq!(zero.dims(), diag.dims());
+    assert_eq!(seed.axis_classes(), diag.axis_classes());
 }
 
 #[test]
