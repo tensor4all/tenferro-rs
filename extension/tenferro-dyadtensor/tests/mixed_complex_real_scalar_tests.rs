@@ -1,6 +1,5 @@
-use chainrules::Tape;
 use num_complex::Complex64;
-use tenferro_dyadtensor::{AdMode, AdTensor, DynAdTensor, Error};
+use tenferro_dyadtensor::{AdMode, DynAdTensor, DynTape};
 use tenferro_tensor::Tensor;
 
 mod support;
@@ -13,12 +12,11 @@ fn c64_vec(values: &[Complex64]) -> Tensor<Complex64> {
 
 #[test]
 fn c64_tensor_scale_accepts_f64_scalar_in_forward_mode() {
-    let x: DynAdTensor = AdTensor::new_forward(
+    let x = DynAdTensor::new_forward(
         c64_vec(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
     )
-    .unwrap()
-    .into();
+    .unwrap();
     let a = forward_rank0_f64(2.0_f64, 0.25_f64);
 
     let out = x.scale(&a).unwrap();
@@ -37,12 +35,11 @@ fn c64_tensor_scale_accepts_f64_scalar_in_forward_mode() {
 
 #[test]
 fn c64_tensor_div_scalar_accepts_f64_scalar_in_forward_mode() {
-    let x: DynAdTensor = AdTensor::new_forward(
+    let x = DynAdTensor::new_forward(
         c64_vec(&[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
     )
-    .unwrap()
-    .into();
+    .unwrap();
     let a = forward_rank0_f64(2.0_f64, 0.5_f64);
 
     let out = x.div_scalar(&a).unwrap();
@@ -61,18 +58,16 @@ fn c64_tensor_div_scalar_accepts_f64_scalar_in_forward_mode() {
 
 #[test]
 fn c64_tensor_axpby_accepts_real_coefficients() {
-    let x: DynAdTensor = AdTensor::new_forward(
+    let x = DynAdTensor::new_forward(
         c64_vec(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
     )
-    .unwrap()
-    .into();
-    let y: DynAdTensor = AdTensor::new_forward(
+    .unwrap();
+    let y = DynAdTensor::new_forward(
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(2.0, 0.0)]),
         c64_vec(&[Complex64::new(-0.5, 0.0), Complex64::new(0.25, 0.0)]),
     )
-    .unwrap()
-    .into();
+    .unwrap();
     let a = forward_rank0_f64(2.0_f64, 0.25_f64);
     let b = forward_rank0_f64(-0.5_f64, 1.0_f64);
 
@@ -91,33 +86,87 @@ fn c64_tensor_axpby_accepts_real_coefficients() {
 }
 
 #[test]
-fn c64_tensor_scale_reverse_rejects_real_scalar_input() {
+fn c64_tensor_scale_reverse_casts_back_scalar_gradient_to_real_dtype() {
+    let tape = DynTape::new();
     let x = reverse_vector_c64(
         &[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)],
-        &Tape::<tenferro_dyadtensor::DynTensor>::new(),
+        &tape,
     );
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let a = reverse_rank0_f64(2.0_f64, &tape);
 
-    let err = match x.scale(&a) {
-        Ok(_) => panic!("mixed-dtype reverse scale should be unsupported"),
-        Err(err) => err,
-    };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
+    let out = x.scale(&a).unwrap();
+    assert_eq!(out.mode(), AdMode::Reverse);
+
+    let cotangent = DynAdTensor::new_primal(c64_vec(&[
+        Complex64::new(0.5, 0.0),
+        Complex64::new(-1.0, 0.0),
+    ]));
+    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    assert_eq!(
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .as_c64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[Complex64::new(1.0, 0.0), Complex64::new(-2.0, 0.0)]
+    );
+    assert_eq!(
+        grads[1]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[3.5]
+    );
 }
 
 #[test]
-fn c64_tensor_div_scalar_reverse_rejects_real_scalar_input() {
+fn c64_tensor_div_scalar_reverse_casts_back_scalar_gradient_to_real_dtype() {
+    let tape = DynTape::new();
     let x = reverse_vector_c64(
         &[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)],
-        &Tape::<tenferro_dyadtensor::DynTensor>::new(),
+        &tape,
     );
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
     let a = reverse_rank0_f64(2.0_f64, &tape);
 
-    let err = match x.div_scalar(&a) {
-        Ok(_) => panic!("mixed-dtype reverse div_scalar should be unsupported"),
-        Err(err) => err,
-    };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
+    let out = x.div_scalar(&a).unwrap();
+    assert_eq!(out.mode(), AdMode::Reverse);
+
+    let cotangent = DynAdTensor::new_primal(c64_vec(&[
+        Complex64::new(0.5, 0.0),
+        Complex64::new(-1.0, 0.0),
+    ]));
+    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    assert_eq!(
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .as_c64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[Complex64::new(0.25, 0.0), Complex64::new(-0.5, 0.0)]
+    );
+    assert_eq!(
+        grads[1]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[-2.0]
+    );
 }

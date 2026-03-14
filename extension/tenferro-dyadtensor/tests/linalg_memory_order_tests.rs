@@ -1,4 +1,4 @@
-use tenferro_dyadtensor::{ad, set_default_runtime, AdTensor, RuntimeContext};
+use tenferro_dyadtensor::{ad, set_default_runtime, DynAdTensor, RuntimeContext};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -48,7 +48,7 @@ fn eager_qr_accepts_row_major_dense_input() {
     )
     .unwrap();
     let input_expected = input.contiguous(MemoryOrder::RowMajor);
-    let out = ad::qr(&AdTensor::new_primal(input)).unwrap();
+    let out = ad::qr(DynAdTensor::new_primal(input).as_f64().unwrap()).unwrap();
     let reconstructed = matmul(out.q.primal(), out.r.primal());
 
     assert!(
@@ -77,8 +77,8 @@ fn eager_svd_accepts_row_major_dense_input() {
     )
     .unwrap();
 
-    let row_out = ad::svd(&AdTensor::new_primal(row_major)).unwrap();
-    let col_out = ad::svd(&AdTensor::new_primal(column_major)).unwrap();
+    let row_out = ad::svd(DynAdTensor::new_primal(row_major).as_f64().unwrap()).unwrap();
+    let col_out = ad::svd(DynAdTensor::new_primal(column_major).as_f64().unwrap()).unwrap();
 
     assert!(
         max_abs_diff(row_out.s.primal(), col_out.s.primal()) < 1e-10,

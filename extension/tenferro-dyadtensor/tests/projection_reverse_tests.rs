@@ -1,14 +1,13 @@
-use chainrules::Tape;
 use num_complex::Complex64;
-use tenferro_dyadtensor::{AdTensor, DynAdTensor, Error};
+use tenferro_dyadtensor::{DynAdTensor, DynTape, Error};
 
 mod support;
 
-use support::{reverse_rank0_c64, reverse_rank0_f64, reverse_vector_c64, vector_f64};
+use support::{reverse_rank0_c64, reverse_rank0_f64, reverse_vector_c64, scalar_c64, vector_f64};
 
 #[test]
 fn scalar_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
+    let tape = DynTape::new();
     let z = reverse_rank0_c64(Complex64::new(3.0, -4.0), &tape);
 
     let err = match z.real_part() {
@@ -20,7 +19,7 @@ fn scalar_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
 
 #[test]
 fn scalar_complex_imag_part_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
+    let tape = DynTape::new();
     let z = reverse_rank0_c64(Complex64::new(3.0, -4.0), &tape);
 
     let err = match z.imag_part() {
@@ -31,22 +30,43 @@ fn scalar_complex_imag_part_reverse_is_unsupported_on_homogeneous_tape() {
 }
 
 #[test]
-fn scalar_compose_complex_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape_a = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let tape_b = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let re = reverse_rank0_f64(2.0, &tape_a);
-    let im = reverse_rank0_f64(-3.0, &tape_b);
+fn scalar_compose_complex_reverse_splits_cotangent_back_into_real_components() {
+    let tape = DynTape::new();
+    let re = reverse_rank0_f64(2.0, &tape);
+    let im = reverse_rank0_f64(-3.0, &tape);
 
-    let err = match DynAdTensor::compose_complex(re, im) {
-        Ok(_) => panic!("compose_complex reverse should be unsupported"),
-        Err(err) => err,
-    };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
+    let z = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();
+    let cotangent = DynAdTensor::new_primal(scalar_c64(Complex64::new(0.5, -1.25)));
+    let grads = z.pullback_wrt(&cotangent, &[&re, &im]).unwrap();
+    assert_eq!(
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[0.5]
+    );
+    assert_eq!(
+        grads[1]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[-1.25]
+    );
 }
 
 #[test]
 fn tensor_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
+    let tape = DynTape::new();
     let x = reverse_vector_c64(
         &[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
         &tape,
@@ -61,8 +81,8 @@ fn tensor_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
 
 #[test]
 fn tensor_compose_complex_primal_still_works_for_real_inputs() {
-    let re: DynAdTensor = AdTensor::new_primal(vector_f64(&[1.0, -3.0])).into();
-    let im: DynAdTensor = AdTensor::new_primal(vector_f64(&[2.0, 4.0])).into();
+    let re = DynAdTensor::new_primal(vector_f64(&[1.0, -3.0]));
+    let im = DynAdTensor::new_primal(vector_f64(&[2.0, 4.0]));
 
     let out = DynAdTensor::compose_complex(re, im).unwrap();
     let values = out.as_c64().unwrap().primal().buffer().as_slice().unwrap();

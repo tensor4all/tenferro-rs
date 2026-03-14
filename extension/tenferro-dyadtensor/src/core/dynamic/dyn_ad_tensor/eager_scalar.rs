@@ -62,6 +62,7 @@ macro_rules! define_dyn_reduction_method {
 
 impl DynAdTensor {
     define_dyn_unary_method!(exp, ad::exp, "exp");
+    define_dyn_unary_method!(sqrt, ad::sqrt, "sqrt");
     define_dyn_reduction_method!(mean, ad::mean, "mean");
 
     /// Runs eager AD `add` on two dynamic tensors after applying the standard

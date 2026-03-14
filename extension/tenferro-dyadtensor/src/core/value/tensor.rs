@@ -44,7 +44,7 @@ pub(crate) enum AdTensorSnapshot<T: Scalar> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::{AdMode, AdTensor};
+/// use tenferro_dyadtensor::{AdMode, core::AdTensor};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -117,7 +117,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```ignore
     /// use chainrules::Tape;
-    /// use tenferro_dyadtensor::{AdTensor, DynTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{StructuredTensor, core::{AdTensor, DynTensor}};
     ///
     /// let tape = Tape::<DynTensor>::new();
     /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
@@ -202,7 +202,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```ignore
     /// use chainrules::Tape;
-    /// use tenferro_dyadtensor::{AdTensor, DynTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{StructuredTensor, core::{AdTensor, DynTensor}};
     ///
     /// let tape = Tape::<DynTensor>::new();
     /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
@@ -219,7 +219,7 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```ignore
     /// use chainrules::Tape;
-    /// use tenferro_dyadtensor::{AdTensor, DynTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{StructuredTensor, core::{AdTensor, DynTensor}};
     ///
     /// let tape = Tape::<DynTensor>::new();
     /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
@@ -335,7 +335,7 @@ impl<T: Scalar> AdTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{StructuredTensor, core::AdTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let diag = StructuredTensor::from_diagonal_vector(
@@ -355,7 +355,7 @@ impl<T: Scalar> AdTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::AdTensor;
+    /// use tenferro_dyadtensor::core::AdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let x = AdTensor::new_primal(
@@ -372,7 +372,7 @@ impl<T: Scalar> AdTensor<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+    /// use tenferro_dyadtensor::{StructuredTensor, core::AdTensor};
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let diag = StructuredTensor::from_diagonal_vector(

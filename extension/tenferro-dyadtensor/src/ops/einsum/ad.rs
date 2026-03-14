@@ -236,7 +236,7 @@ where
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::{einsum_ad, set_default_runtime, AdTensor, RuntimeContext};
+/// use tenferro_dyadtensor::{einsum_ad, set_default_runtime, RuntimeContext, core::AdTensor};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///

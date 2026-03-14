@@ -141,9 +141,9 @@ impl DynAdTensor {
     /// - identity (`T -> T`)
     /// - same-precision real-to-complex (`F32 -> C32`, `F64 -> C64`)
     ///
-    /// Mixed-dtype reverse promotion remains unsupported under the current
-    /// homogeneous `Tape<DynTensor>` model and returns
-    /// [`Error::UnsupportedAdOp`].
+    /// Reverse-mode promotion is supported for these same-precision
+    /// real-to-complex lifts. Pullbacks cast the accumulated cotangent back to
+    /// the original real dtype.
     ///
     /// # Examples
     ///

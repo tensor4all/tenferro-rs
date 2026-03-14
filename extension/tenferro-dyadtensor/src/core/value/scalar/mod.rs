@@ -12,7 +12,7 @@ use super::core::{AdMode, AdValue};
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::{AdMode, AdScalar};
+/// use tenferro_dyadtensor::{AdMode, core::AdScalar};
 ///
 /// let x: AdScalar<f64> = 2.0_f64.into();
 /// assert_eq!(x.mode(), AdMode::Primal);
@@ -26,7 +26,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, AdScalar};
+    /// use tenferro_dyadtensor::{AdMode, core::AdScalar};
     ///
     /// let x = AdScalar::new_primal(1.5_f64);
     /// assert_eq!(x.mode(), AdMode::Primal);
@@ -40,7 +40,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, AdScalar};
+    /// use tenferro_dyadtensor::{AdMode, core::AdScalar};
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
     /// assert_eq!(x.mode(), AdMode::Forward);
@@ -54,7 +54,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, AdScalar};
+    /// use tenferro_dyadtensor::{AdMode, core::AdScalar};
     ///
     /// let x = AdScalar::new_primal(2.0_f64);
     /// assert_eq!(x.mode(), AdMode::Primal);
@@ -68,7 +68,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdScalar, AdValue};
+    /// use tenferro_dyadtensor::core::{AdScalar, AdValue};
     ///
     /// let x = AdScalar::new_primal(2.0_f64);
     /// assert!(matches!(x.as_value(), AdValue::Primal(_)));
@@ -82,7 +82,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdScalar, AdValue};
+    /// use tenferro_dyadtensor::core::{AdScalar, AdValue};
     ///
     /// let x = AdScalar::new_primal(2.0_f64).into_value();
     /// assert!(matches!(x, AdValue::Primal(_)));
@@ -98,7 +98,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::AdScalar;
+    /// use tenferro_dyadtensor::core::AdScalar;
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
     /// assert_eq!(x.into_primal(), 2.0);
@@ -115,7 +115,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::AdScalar;
+    /// use tenferro_dyadtensor::core::AdScalar;
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
     /// assert_eq!(x.primal(), &2.0);
@@ -129,7 +129,7 @@ impl<T> AdScalar<T> {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::AdScalar;
+    /// use tenferro_dyadtensor::core::AdScalar;
     ///
     /// let x = AdScalar::new_forward(2.0_f64, 1.0_f64);
     /// assert_eq!(x.tangent(), Some(&1.0));

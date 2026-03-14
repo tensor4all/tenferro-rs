@@ -40,8 +40,7 @@ pub mod traits;
 #[doc(hidden)]
 pub use core::DynTensorTyped;
 pub use core::{AdMode, DynAdTensor, DynScalar, DynTape, NodeId, ScalarType};
-#[doc(hidden)]
-pub use core::{AdScalar, AdTensor, AdValue, DynTensor};
+pub(crate) use core::{AdScalar, AdTensor, AdValue, DynTensor};
 pub use error::{Error, Result};
 pub use ops::ad;
 pub use ops::chainrules_api;

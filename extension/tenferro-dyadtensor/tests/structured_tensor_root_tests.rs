@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_dyadtensor::{
-    plan_axis_classes_for_subscripts, AdTensor, DynAdTensor, DynTensor, OperandAxisClasses,
+    core::DynTensor, plan_axis_classes_for_subscripts, DynAdTensor, OperandAxisClasses,
     StructuredTensor,
 };
 use tenferro_einsum::Subscripts;
@@ -28,18 +28,18 @@ fn root_structured_tensor_supports_dense_and_diag_layouts() {
 }
 
 #[test]
-fn ad_tensor_wraps_structured_payload_and_reports_logical_dims() {
+fn dynadtensor_wraps_structured_payload_and_reports_logical_dims() {
     let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
-    let x = AdTensor::new_primal(diag);
+    let x = DynAdTensor::new_primal(diag);
     assert_eq!(x.dims(), &[2, 2]);
-    assert!(x.structured_primal().is_diag());
-    assert_eq!(x.primal().dims(), &[2]);
+    assert!(x.is_diag());
+    assert_eq!(x.as_f64().unwrap().primal().dims(), &[2]);
 }
 
 #[test]
 fn dyn_ad_tensor_carries_diag_payload_without_dense_materialization() {
     let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
-    let x: DynAdTensor = AdTensor::new_primal(diag).into();
+    let x = DynAdTensor::new_primal(diag);
     assert_eq!(x.dims(), &[2, 2]);
     assert_eq!(x.axis_classes(), &[0, 0]);
     assert!(x.is_diag());
@@ -48,11 +48,10 @@ fn dyn_ad_tensor_carries_diag_payload_without_dense_materialization() {
 
 #[test]
 fn primal_snapshot_preserves_dense_and_structured_payloads() {
-    let dense: DynAdTensor = AdTensor::new_primal(tensor2(&[1.0, 2.0, 3.0, 4.0], 2, 2)).into();
-    let diag: DynAdTensor = AdTensor::new_primal(
+    let dense = DynAdTensor::new_primal(tensor2(&[1.0, 2.0, 3.0, 4.0], 2, 2));
+    let diag = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
-    )
-    .into();
+    );
 
     match dense.primal_snapshot().unwrap() {
         DynTensor::F64(snapshot) => {
@@ -83,7 +82,7 @@ fn primal_snapshot_preserves_general_axis_classes() {
         tensor2(&[1.0, 2.0, 3.0, 4.0], 2, 2),
     )
     .unwrap();
-    let x: DynAdTensor = AdTensor::new_primal(structured).into();
+    let x = DynAdTensor::new_primal(structured);
 
     match x.primal_snapshot().unwrap() {
         DynTensor::F64(snapshot) => {
@@ -100,28 +99,25 @@ fn primal_snapshot_preserves_general_axis_classes() {
 
 #[test]
 fn primal_snapshot_covers_all_runtime_variants() {
-    let f32_value: DynAdTensor = AdTensor::new_primal(
+    let f32_value = DynAdTensor::new_primal(
         Tensor::<f32>::from_slice(&[1.0_f32], &[1], MemoryOrder::ColumnMajor).unwrap(),
-    )
-    .into();
-    let c32_value: DynAdTensor = AdTensor::new_primal(
+    );
+    let c32_value = DynAdTensor::new_primal(
         Tensor::<Complex32>::from_slice(
             &[Complex32::new(1.0, -2.0)],
             &[1],
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
-    )
-    .into();
-    let c64_value: DynAdTensor = AdTensor::new_primal(
+    );
+    let c64_value = DynAdTensor::new_primal(
         Tensor::<Complex64>::from_slice(
             &[Complex64::new(2.0, 3.0)],
             &[1],
             MemoryOrder::ColumnMajor,
         )
         .unwrap(),
-    )
-    .into();
+    );
 
     assert!(matches!(
         f32_value.primal_snapshot().unwrap(),

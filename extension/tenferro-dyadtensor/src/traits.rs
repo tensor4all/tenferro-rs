@@ -41,7 +41,7 @@ impl<T> IndexLike for T where T: Clone + Eq + Hash {}
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::{AdMode, AdValue, Differentiable};
+/// use tenferro_dyadtensor::{AdMode, Differentiable, core::AdValue};
 ///
 /// fn mode_of<V: Differentiable>(value: &V) -> AdMode {
 ///     value.mode()
@@ -246,7 +246,7 @@ pub trait TensorKernel: Clone {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::{AdResult, AdValue, Differentiable, OpRule, Result};
+/// use tenferro_dyadtensor::{AdResult, Differentiable, OpRule, Result, core::AdValue};
 ///
 /// struct IdentityRule;
 ///

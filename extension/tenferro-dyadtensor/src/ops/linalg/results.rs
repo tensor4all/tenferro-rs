@@ -14,7 +14,7 @@ use crate::{AdTensor, DynTensorTyped};
 ///
 /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 /// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-/// let ad_a = tenferro_dyadtensor::AdTensor::new_primal(a);
+/// let ad_a = tenferro_dyadtensor::core::AdTensor::new_primal(a);
 /// let out = svd_ad(&ad_a).run().unwrap();
 /// assert_eq!(out.s.dims(), &[2]);
 /// ```

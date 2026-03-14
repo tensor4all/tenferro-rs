@@ -315,16 +315,40 @@ fn dyn_ad_tensor_promote_to_preserves_forward_tangent() {
 }
 
 #[test]
-fn dyn_ad_tensor_promote_to_rejects_mixed_dtype_reverse_promotion() {
+fn dyn_ad_tensor_promote_to_casts_reverse_grad_back_to_input_dtype() {
     let tape = Tape::<crate::DynTensor>::new();
     let x: DynAdTensor = AdTensor::new_reverse_leaf(rank0_f64(2.0_f64), &tape)
         .unwrap()
         .into();
-    let err = match x.promote_to(ScalarType::C64) {
-        Ok(_) => panic!("mixed reverse promotion should stay unsupported"),
-        Err(err) => err,
-    };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
+    let y = x.promote_to(ScalarType::C64).unwrap();
+    let y = y.as_c64().unwrap();
+    let tracked = tape
+        .tracked_existing(
+            y.node_id().unwrap(),
+            crate::DynTensor::from(y.structured_primal().clone()),
+            y.structured_tangent().cloned().map(crate::DynTensor::from),
+        )
+        .unwrap();
+    let grads = tape
+        .pullback_with_seed(
+            &tracked,
+            crate::DynTensor::from(
+                y.structured_primal()
+                    .with_payload_like(rank0_c64(Complex64::new(1.0, -0.5)))
+                    .unwrap(),
+            ),
+        )
+        .unwrap();
+    let grad = grads.get(x.node_id().unwrap()).unwrap();
+    match grad {
+        crate::DynTensor::F64(grad) => {
+            assert_eq!(grad.payload().buffer().as_slice().unwrap(), &[1.0_f64]);
+        }
+        other => panic!(
+            "expected f64 gradient after cast-back, got {:?}",
+            other.scalar_type()
+        ),
+    }
 }
 
 #[test]
@@ -646,5 +670,5 @@ fn dyn_ad_tensor_compose_complex_checks_reverse_tape_compatibility() {
         Ok(_) => panic!("compose_complex should reject mixed reverse tapes"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
+    assert!(matches!(err, Error::InvalidAdTensor { .. }));
 }

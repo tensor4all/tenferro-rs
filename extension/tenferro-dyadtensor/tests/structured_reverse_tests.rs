@@ -1,6 +1,5 @@
-use chainrules::Tape;
 use num_complex::Complex64;
-use tenferro_dyadtensor::{ad, AdTensor, DynAdTensor, Error, StructuredTensor};
+use tenferro_dyadtensor::{ad, DynAdTensor, DynTape, Error, StructuredTensor};
 use tenferro_dyadtensor::{set_default_runtime, RuntimeContext};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -15,64 +14,62 @@ fn scalar(value: f64) -> Tensor<f64> {
 
 #[test]
 fn diag_scale_reverse_keeps_diag_cotangent_space() {
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let x: DynAdTensor = AdTensor::new_reverse_leaf(
+    let tape = DynTape::new();
+    let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 3.0]), 2).unwrap(),
         &tape,
     )
-    .unwrap()
-    .into();
+    .unwrap();
     let a = reverse_rank0_f64(2.0_f64, &tape);
     let y = x.scale(&a).unwrap();
-    let cotangent = AdTensor::new_primal(
+    let cotangent = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, 1.0]), 2).unwrap(),
     );
 
-    let grads = ad::pullback_wrt(y.as_f64().unwrap(), &cotangent, &[x.as_f64().unwrap()]).unwrap();
+    let grads = y.pullback_wrt(&cotangent, &[&x]).unwrap();
     let grad = grads[0].as_ref().unwrap();
     assert!(grad.is_diag());
-    assert_eq!(grad.payload().dims(), &[2]);
+    assert_eq!(grad.as_f64().unwrap().primal().dims(), &[2]);
 }
 
 #[test]
 fn diag_axpby_reverse_keeps_diag_cotangent_space() {
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let x: DynAdTensor = AdTensor::new_reverse_leaf(
+    let tape = DynTape::new();
+    let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 3.0]), 2).unwrap(),
         &tape,
     )
-    .unwrap()
-    .into();
-    let y: DynAdTensor = AdTensor::new_reverse_leaf(
+    .unwrap();
+    let y = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[5.0, 7.0]), 2).unwrap(),
         &tape,
     )
-    .unwrap()
-    .into();
+    .unwrap();
     let a = reverse_rank0_f64(2.0_f64, &tape);
     let b = reverse_rank0_f64(-1.0_f64, &tape);
     let out = x.axpby(&a, &y, &b).unwrap();
-    let cotangent = AdTensor::new_primal(
+    let cotangent = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, -0.5]), 2).unwrap(),
     );
 
-    let grads = ad::pullback_wrt(
-        out.as_f64().unwrap(),
-        &cotangent,
-        &[x.as_f64().unwrap(), y.as_f64().unwrap()],
-    )
-    .unwrap();
+    let grads = out.pullback_wrt(&cotangent, &[&x, &y]).unwrap();
 
     assert!(grads[0].as_ref().unwrap().is_diag());
     assert!(grads[1].as_ref().unwrap().is_diag());
-    assert_eq!(grads[0].as_ref().unwrap().payload().dims(), &[2]);
-    assert_eq!(grads[1].as_ref().unwrap().payload().dims(), &[2]);
+    assert_eq!(
+        grads[0].as_ref().unwrap().as_f64().unwrap().primal().dims(),
+        &[2]
+    );
+    assert_eq!(
+        grads[1].as_ref().unwrap().as_f64().unwrap().primal().dims(),
+        &[2]
+    );
 }
 
 #[test]
 fn diag_complex_real_part_reverse_keeps_diag_cotangent_space() {
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let x: DynAdTensor = AdTensor::new_reverse_leaf(
+    let tape = DynTape::new();
+    let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(
             vector_c64(&[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)]),
             2,
@@ -80,8 +77,7 @@ fn diag_complex_real_part_reverse_keeps_diag_cotangent_space() {
         .unwrap(),
         &tape,
     )
-    .unwrap()
-    .into();
+    .unwrap();
 
     let err = match x.real_part() {
         Ok(_) => panic!("real_part reverse should be unsupported for homogeneous mixed-dtype tape"),
@@ -91,40 +87,67 @@ fn diag_complex_real_part_reverse_keeps_diag_cotangent_space() {
 }
 
 #[test]
-fn diag_complex_compose_complex_reverse_is_unsupported_on_homogeneous_tape() {
-    let tape_a = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let tape_b = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let re: DynAdTensor = AdTensor::new_reverse_leaf(
+fn diag_complex_compose_complex_reverse_splits_diag_cotangent_back_into_real_components() {
+    let tape = DynTape::new();
+    let re = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, -3.0]), 2).unwrap(),
-        &tape_a,
+        &tape,
     )
-    .unwrap()
-    .into();
-    let im: DynAdTensor = AdTensor::new_reverse_leaf(
+    .unwrap();
+    let im = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 4.0]), 2).unwrap(),
-        &tape_b,
+        &tape,
     )
-    .unwrap()
-    .into();
+    .unwrap();
 
-    let err = match DynAdTensor::compose_complex(re.clone(), im.clone()) {
-        Ok(_) => panic!("compose_complex reverse should be unsupported"),
-        Err(err) => err,
-    };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "mixed_dtype_tensor_reverse"));
+    let z = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();
+    let cotangent = DynAdTensor::new_primal(
+        StructuredTensor::from_diagonal_vector(
+            vector_c64(&[Complex64::new(0.5, -1.25), Complex64::new(1.0, 2.0)]),
+            2,
+        )
+        .unwrap(),
+    );
+    let grads = z.pullback_wrt(&cotangent, &[&re, &im]).unwrap();
+    assert!(grads[0].as_ref().unwrap().is_diag());
+    assert!(grads[1].as_ref().unwrap().is_diag());
+    assert_eq!(
+        grads[0]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[0.5, 1.0]
+    );
+    assert_eq!(
+        grads[1]
+            .as_ref()
+            .unwrap()
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[-1.25, 2.0]
+    );
 }
 
 #[test]
 fn root_einsum_keeps_diag_output_in_structured_carrier() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let a = AdTensor::new_primal(
+    let a = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, 2.0]), 2).unwrap(),
     );
-    let b = AdTensor::new_primal(
+    let b = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[3.0, 4.0]), 2).unwrap(),
     );
 
-    let out = ad::einsum("ij,jk->ik", &[&a, &b]).unwrap();
+    let out = ad::einsum("ij,jk->ik", &[a.as_f64().unwrap(), b.as_f64().unwrap()]).unwrap();
 
     assert!(out.is_diag());
     assert_eq!(out.primal().dims(), &[2]);
@@ -134,46 +157,57 @@ fn root_einsum_keeps_diag_output_in_structured_carrier() {
 #[test]
 fn root_einsum_reverse_keeps_diag_cotangent_space() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let a = AdTensor::new_reverse_leaf(
+    let tape = DynTape::new();
+    let a = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, 2.0]), 2).unwrap(),
         &tape,
     )
     .unwrap();
-    let b = AdTensor::new_reverse_leaf(
+    let b = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[3.0, 4.0]), 2).unwrap(),
         &tape,
     )
     .unwrap();
 
-    let out = ad::einsum("ij,jk->ik", &[&a, &b]).unwrap();
-    let cotangent = AdTensor::new_primal(
+    let out: DynAdTensor = ad::einsum("ij,jk->ik", &[a.as_f64().unwrap(), b.as_f64().unwrap()])
+        .unwrap()
+        .into();
+    let cotangent = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[0.5, -1.0]), 2).unwrap(),
     );
-    let grads = ad::pullback_wrt(&out, &cotangent, &[&a, &b]).unwrap();
+    let grads = out.pullback_wrt(&cotangent, &[&a, &b]).unwrap();
 
     assert!(out.is_diag());
     assert!(grads[0].as_ref().unwrap().is_diag());
     assert!(grads[1].as_ref().unwrap().is_diag());
-    assert_eq!(grads[0].as_ref().unwrap().payload().dims(), &[2]);
-    assert_eq!(grads[1].as_ref().unwrap().payload().dims(), &[2]);
+    assert_eq!(
+        grads[0].as_ref().unwrap().as_f64().unwrap().primal().dims(),
+        &[2]
+    );
+    assert_eq!(
+        grads[1].as_ref().unwrap().as_f64().unwrap().primal().dims(),
+        &[2]
+    );
 }
 
 #[test]
 fn root_sum_reverse_keeps_diag_cotangent_space() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = Tape::<tenferro_dyadtensor::DynTensor>::new();
-    let x = AdTensor::new_reverse_leaf(
+    let tape = DynTape::new();
+    let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 3.0]), 2).unwrap(),
         &tape,
     )
     .unwrap();
 
-    let out = ad::sum(&x).unwrap();
-    let cotangent = AdTensor::new_primal(scalar(1.5));
-    let grads = ad::pullback_wrt(&out, &cotangent, &[&x]).unwrap();
+    let out: DynAdTensor = ad::sum(x.as_f64().unwrap()).unwrap().into();
+    let cotangent = DynAdTensor::new_primal(scalar(1.5));
+    let grads = out.pullback_wrt(&cotangent, &[&x]).unwrap();
 
     assert_eq!(out.dims(), &[]);
     assert!(grads[0].as_ref().unwrap().is_diag());
-    assert_eq!(grads[0].as_ref().unwrap().payload().dims(), &[2]);
+    assert_eq!(
+        grads[0].as_ref().unwrap().as_f64().unwrap().primal().dims(),
+        &[2]
+    );
 }
