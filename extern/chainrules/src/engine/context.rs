@@ -1,9 +1,9 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{AdResult, AutodiffError, Differentiable, NodeId, ReverseRule};
+use crate::{AdResult, AutodiffError, Differentiable, Gradients, HvpResult, NodeId, ReverseRule};
 
-static NEXT_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_GRAPH_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Copy, Clone)]
 pub(crate) enum VariableNodeKind {
@@ -13,37 +13,37 @@ pub(crate) enum VariableNodeKind {
     Custom,
 }
 
-struct VariableNode<V: Differentiable> {
+struct GraphNode<V: Differentiable> {
     rule: Option<Box<dyn ReverseRule<V>>>,
     tangent: Option<V::Tangent>,
     kind: VariableNodeKind,
     is_leaf: bool,
 }
 
-/// Shared monomorphic autograd context.
+/// Shared monomorphic autograd graph.
 ///
 /// # Examples
 ///
 /// ```
-/// use chainrules::AutogradContext;
+/// use chainrules::AutogradGraph;
 ///
-/// let ctx = AutogradContext::<f64>::new();
-/// let id = ctx.lock().unwrap().id();
+/// let graph = AutogradGraph::<f64>::new();
+/// let id = graph.lock().unwrap().id();
 /// assert!(id > 0);
 /// ```
-pub struct AutogradContext<V: Differentiable> {
+pub struct AutogradGraph<V: Differentiable> {
     id: u64,
     graph_alive: bool,
-    nodes: Vec<VariableNode<V>>,
+    nodes: Vec<GraphNode<V>>,
     leaf_grads: Vec<Option<V::Tangent>>,
     leaf_hvps: Vec<Option<V::Tangent>>,
 }
 
-impl<V: Differentiable> AutogradContext<V> {
-    /// Creates a new context.
+impl<V: Differentiable> AutogradGraph<V> {
+    /// Creates a new graph.
     pub fn new() -> Arc<Mutex<Self>> {
         Arc::new(Mutex::new(Self {
-            id: NEXT_CONTEXT_ID.fetch_add(1, Ordering::Relaxed),
+            id: NEXT_GRAPH_ID.fetch_add(1, Ordering::Relaxed),
             graph_alive: true,
             nodes: Vec::new(),
             leaf_grads: Vec::new(),
@@ -51,9 +51,13 @@ impl<V: Differentiable> AutogradContext<V> {
         }))
     }
 
-    /// Returns context identifier.
+    /// Returns graph identifier.
     pub fn id(&self) -> u64 {
         self.id
+    }
+
+    pub(crate) fn node_count(&self) -> usize {
+        self.nodes.len()
     }
 
     pub(crate) fn ensure_alive(&self) -> AdResult<()> {
@@ -70,7 +74,7 @@ impl<V: Differentiable> AutogradContext<V> {
 
     pub(crate) fn record_leaf(&mut self, tangent: Option<V::Tangent>) -> NodeId {
         let id = NodeId::new(self.nodes.len());
-        self.nodes.push(VariableNode {
+        self.nodes.push(GraphNode {
             rule: None,
             tangent,
             kind: VariableNodeKind::Leaf,
@@ -89,7 +93,7 @@ impl<V: Differentiable> AutogradContext<V> {
         kind: VariableNodeKind,
     ) -> NodeId {
         let id = NodeId::new(self.nodes.len());
-        self.nodes.push(VariableNode {
+        self.nodes.push(GraphNode {
             rule: Some(rule),
             tangent,
             kind,
@@ -99,6 +103,37 @@ impl<V: Differentiable> AutogradContext<V> {
         self.leaf_hvps.push(None);
         self.graph_alive = true;
         id
+    }
+
+    pub(crate) fn record_placeholder(&mut self, tangent: Option<V::Tangent>) -> NodeId {
+        let id = NodeId::new(self.nodes.len());
+        self.nodes.push(GraphNode {
+            rule: None,
+            tangent,
+            kind: VariableNodeKind::Custom,
+            is_leaf: false,
+        });
+        self.leaf_grads.push(None);
+        self.leaf_hvps.push(None);
+        self.graph_alive = true;
+        id
+    }
+
+    pub(crate) fn has_node(&self, node: NodeId) -> bool {
+        node.index() < self.nodes.len()
+    }
+
+    pub(crate) fn attach_rule(
+        &mut self,
+        node: NodeId,
+        rule: Box<dyn ReverseRule<V>>,
+    ) -> AdResult<()> {
+        let Some(entry) = self.nodes.get_mut(node.index()) else {
+            return Err(AutodiffError::MissingNode);
+        };
+        entry.rule = Some(rule);
+        entry.is_leaf = false;
+        Ok(())
     }
 
     pub(crate) fn set_node_tangent(&mut self, node: NodeId, tangent: V::Tangent) -> AdResult<()> {
@@ -155,6 +190,24 @@ impl<V: Differentiable> AutogradContext<V> {
         Ok(cotangents)
     }
 
+    pub(crate) fn pullback_from(
+        &self,
+        output_node: NodeId,
+        seed: V::Tangent,
+    ) -> AdResult<Gradients<V>> {
+        let mut cotangents = self.compute_cotangents(output_node, seed)?;
+        let mut gradients = Gradients::new();
+        for (i, cot) in cotangents.iter_mut().enumerate() {
+            if !self.nodes[i].is_leaf {
+                continue;
+            }
+            if let Some(value) = cot.take() {
+                gradients.push_entry(NodeId::new(i), value);
+            }
+        }
+        Ok(gradients)
+    }
+
     pub(crate) fn compute_cotangents_with_tangents(
         &self,
         output_node: NodeId,
@@ -201,6 +254,33 @@ impl<V: Differentiable> AutogradContext<V> {
         }
 
         Ok((cotangents, cot_tangents))
+    }
+
+    pub(crate) fn hvp_from(
+        &self,
+        output_node: NodeId,
+        seed: V::Tangent,
+        seed_tangent: V::Tangent,
+    ) -> AdResult<HvpResult<V>>
+    where
+        V::Tangent: Clone + Differentiable<Tangent = V::Tangent>,
+    {
+        let (mut cotangents, mut cot_tangents) =
+            self.compute_cotangents_with_tangents(output_node, seed, seed_tangent)?;
+        let mut gradients = Gradients::new();
+        let mut hvp = Gradients::new();
+        for i in 0..self.nodes.len() {
+            if !self.nodes[i].is_leaf {
+                continue;
+            }
+            if let Some(value) = cotangents[i].take() {
+                gradients.push_entry(NodeId::new(i), value);
+            }
+            if let Some(value) = cot_tangents[i].take() {
+                hvp.push_entry(NodeId::new(i), value);
+            }
+        }
+        Ok(HvpResult { gradients, hvp })
     }
 
     pub(crate) fn accumulate_leaf_grads(&mut self, cotangents: &mut [Option<V::Tangent>]) {

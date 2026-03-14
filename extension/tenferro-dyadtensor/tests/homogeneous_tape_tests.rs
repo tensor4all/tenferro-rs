@@ -1,6 +1,6 @@
 use num_complex::Complex64;
 use tenferro_dyadtensor::{
-    set_default_runtime, DynAdTensor, DynTape, Error, RuntimeContext, StructuredTensor,
+    set_default_runtime, DynAdTensor, Error, RuntimeContext, StructuredTensor,
 };
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -20,9 +20,8 @@ fn c64_vector(values: &[Complex64]) -> Tensor<Complex64> {
 #[test]
 fn reverse_scale_accepts_rank0_tensor_scalar_on_same_tape() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
-    let x = DynAdTensor::new_reverse_leaf(vector(&[2.0, 3.0]), &tape).unwrap();
-    let alpha = DynAdTensor::new_reverse_leaf(scalar(2.0), &tape).unwrap();
+    let x = DynAdTensor::new_reverse_leaf(vector(&[2.0, 3.0])).unwrap();
+    let alpha = x.new_reverse_sibling(scalar(2.0)).unwrap();
 
     let out = x.scale(&alpha).unwrap();
     let cotangent = DynAdTensor::new_primal(vector(&[0.5, -1.0]));
@@ -36,10 +35,8 @@ fn reverse_scale_accepts_rank0_tensor_scalar_on_same_tape() {
 #[test]
 fn structured_qr_reverse_rejects_non_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
     let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
 
@@ -47,16 +44,15 @@ fn structured_qr_reverse_rejects_non_dense_input() {
         Ok(_) => panic!("structured reverse qr should be rejected"),
         Err(err) => err,
     };
-    assert!(matches!(err, Error::UnsupportedAdOp { op } if op == "qr_ad_structured"));
+    assert!(matches!(err, Error::UnsupportedStructuredLinalg { op } if op == "qr"));
 }
 
 #[test]
 fn real_part_reverse_rejects_mixed_dtype_graphs() {
-    let tape = DynTape::new();
-    let x = DynAdTensor::new_reverse_leaf(
-        c64_vector(&[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)]),
-        &tape,
-    )
+    let x = DynAdTensor::new_reverse_leaf(c64_vector(&[
+        Complex64::new(1.0, 2.0),
+        Complex64::new(-3.0, 4.0),
+    ]))
     .unwrap();
 
     let err = match x.real_part() {

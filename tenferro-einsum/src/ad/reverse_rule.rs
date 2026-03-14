@@ -1,6 +1,5 @@
-use std::cell::RefCell;
 use std::marker::PhantomData;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use chainrules::{AdResult, Differentiable, NodeId, ReverseRule};
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
@@ -16,12 +15,13 @@ use super::rules::einsum_frule_impl;
 /// backend context for backend-optimized pullback.
 pub(super) struct EinsumReverseRule<Alg, Backend>
 where
-    Alg: Semiring,
+    Alg: Semiring + Send + Sync,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: EinsumBackend<Alg>,
+    Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
+    BackendContext<Alg, Backend>: Send,
 {
-    pub(super) ctx: Rc<RefCell<BackendContext<Alg, Backend>>>,
+    pub(super) ctx: Arc<Mutex<BackendContext<Alg, Backend>>>,
     pub(super) subscripts: Subscripts,
     pub(super) primals: Vec<Tensor<Alg::Scalar>>,
     pub(super) input_tangents: Vec<Option<Tensor<Alg::Scalar>>>,
@@ -31,10 +31,11 @@ where
 
 impl<Alg, Backend> ReverseRule<Tensor<Alg::Scalar>> for EinsumReverseRule<Alg, Backend>
 where
-    Alg: Semiring,
+    Alg: Semiring + Send + Sync,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
-    Backend: EinsumBackend<Alg>,
+    Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
+    BackendContext<Alg, Backend>: Send,
 {
     fn pullback(
         &self,
@@ -42,7 +43,11 @@ where
     ) -> AdResult<Vec<(NodeId, Tensor<Alg::Scalar>)>> {
         let n = self.primals.len();
         let mut results = Vec::new();
-        let mut ctx = self.ctx.borrow_mut();
+        let mut ctx = self.ctx.lock().map_err(|_| {
+            chainrules::AutodiffError::InvalidArgument(
+                "einsum reverse-rule backend context lock is poisoned".to_string(),
+            )
+        })?;
 
         for k in 0..n {
             let node_id = match self.input_node_ids[k] {
@@ -100,7 +105,11 @@ where
     ) -> AdResult<Vec<(NodeId, Tensor<Alg::Scalar>, Tensor<Alg::Scalar>)>> {
         let n = self.primals.len();
         let mut results = Vec::new();
-        let mut ctx = self.ctx.borrow_mut();
+        let mut ctx = self.ctx.lock().map_err(|_| {
+            chainrules::AutodiffError::InvalidArgument(
+                "einsum reverse-rule backend context lock is poisoned".to_string(),
+            )
+        })?;
 
         for k in 0..n {
             let node_id = match self.input_node_ids[k] {

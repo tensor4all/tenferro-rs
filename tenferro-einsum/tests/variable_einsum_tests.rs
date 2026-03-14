@@ -1,8 +1,7 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
 
-use chainrules::{AutogradContext, BackwardOptions, Variable};
+use chainrules::{AutogradGraph, BackwardOptions, Variable};
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_einsum::{einsum, variable_einsum};
@@ -12,6 +11,14 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 const MEM: LogicalMemorySpace = LogicalMemorySpace::MainMemory;
 type S = Standard<f64>;
+
+fn poison_mutex<T>(mutex: &Arc<Mutex<T>>) {
+    let mutex = Arc::clone(mutex);
+    let _ = catch_unwind(AssertUnwindSafe(move || {
+        let _guard = mutex.lock().unwrap();
+        panic!("poison backend mutex");
+    }));
+}
 
 fn get(t: &Tensor<f64>, idx: &[usize]) -> f64 {
     let data = t.buffer().as_slice().unwrap();
@@ -26,8 +33,8 @@ fn get(t: &Tensor<f64>, idx: &[usize]) -> f64 {
 
 #[test]
 fn variable_einsum_backward_matmul_loss() {
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
-    let ad_ctx = AutogradContext::<Tensor<f64>>::new();
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let ad_ctx = AutogradGraph::<Tensor<f64>>::new();
 
     let a_primal =
         Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3], COL).unwrap();
@@ -57,14 +64,14 @@ fn variable_einsum_backward_matmul_loss() {
     assert_eq!(gb.dims(), &[3, 4]);
 
     let c_val = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ij,jk->ik",
         &[&a_primal, &b_primal],
         None,
     )
     .unwrap();
     let two_c = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ij,->ij",
         &[
             &c_val,
@@ -74,14 +81,14 @@ fn variable_einsum_backward_matmul_loss() {
     )
     .unwrap();
     let expected_ga = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ik,jk->ij",
         &[&two_c, &b_primal],
         None,
     )
     .unwrap();
     let expected_gb = einsum::<S, CpuBackend>(
-        &mut ctx.borrow_mut(),
+        &mut ctx.lock().unwrap(),
         "ij,ik->jk",
         &[&a_primal, &two_c],
         None,
@@ -102,7 +109,7 @@ fn variable_einsum_backward_matmul_loss() {
 
 #[test]
 fn variable_einsum_forward_tangent_propagates() {
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
@@ -116,7 +123,7 @@ fn variable_einsum_forward_tangent_propagates() {
     let tangent = out.tangent().expect("expected tangent");
 
     let expected =
-        einsum::<S, CpuBackend>(&mut ctx.borrow_mut(), "ij,jk->ik", &[&da, &b], None).unwrap();
+        einsum::<S, CpuBackend>(&mut ctx.lock().unwrap(), "ij,jk->ik", &[&da, &b], None).unwrap();
 
     for i in 0..2 {
         for j in 0..2 {
@@ -127,8 +134,8 @@ fn variable_einsum_forward_tangent_propagates() {
 
 #[test]
 fn variable_einsum_hvp_runs_with_tangent_seeded_leaf() {
-    let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
-    let ad_ctx = AutogradContext::<Tensor<f64>>::new();
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let ad_ctx = AutogradGraph::<Tensor<f64>>::new();
 
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
@@ -150,4 +157,32 @@ fn variable_einsum_hvp_runs_with_tangent_seeded_leaf() {
     loss.backward_hvp(BackwardOptions::default()).unwrap();
     assert!(a_var.grad().is_some());
     assert!(a_var.hvp().is_some());
+}
+
+#[test]
+fn variable_einsum_rejects_invalid_subscripts() {
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let a = Variable::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let b = Variable::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+
+    let err = variable_einsum::<S, CpuBackend>(ctx, "ij,jk", &[&a, &b])
+        .err()
+        .unwrap();
+    assert!(matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("->")));
+}
+
+#[test]
+fn variable_einsum_rejects_poisoned_backend_context() {
+    let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
+    let a = Variable::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let b = Variable::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+
+    poison_mutex(&ctx);
+
+    let err = variable_einsum::<S, CpuBackend>(ctx, "ij,jk->ik", &[&a, &b])
+        .err()
+        .unwrap();
+    assert!(
+        matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned"))
+    );
 }

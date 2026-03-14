@@ -16,7 +16,7 @@ pub(super) fn map_ad_tensor_same_type_linear_typed<T, F>(
 ) -> Result<AdTensor<T>>
 where
     T: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
-    F: Fn(T) -> T + Copy + 'static,
+    F: Fn(T) -> T + Copy + Send + Sync + 'static,
 {
     let mapped = match input.snapshot() {
         AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(
@@ -69,7 +69,7 @@ where
     TIn: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
     TOut: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
     P: Fn(TIn) -> TOut + Copy,
-    R: Fn(TOut) -> TIn + Copy + 'static,
+    R: Fn(TOut) -> TIn + Copy + Send + Sync + 'static,
 {
     let mapped = match input.snapshot() {
         AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(StructuredTensor::new(

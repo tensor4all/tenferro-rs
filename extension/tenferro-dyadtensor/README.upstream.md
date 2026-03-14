@@ -8,7 +8,6 @@ This repository currently provides:
 
 - Dynamic public tensor objects:
   - `DynAdTensor`
-  - `DynTape`
   - `DynScalar`
   - `ScalarType` (`F32`, `F64`, `C32`, `C64`)
 - Public helper traits:

@@ -1,19 +1,18 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{set_default_runtime, AdMode, DynAdTensor, DynTape, RuntimeContext};
+use tenferro_dyadtensor::{set_default_runtime, AdMode, DynAdTensor, RuntimeContext};
 use tenferro_prims::CpuContext;
 
 mod support;
 
 use support::{
-    dyn_rank0_value_f64, dyn_values_f64, primal_rank0_f64, reverse_rank0_f64, reverse_vector_f64,
-    vector_c64, vector_f64,
+    dyn_rank0_value_f64, dyn_values_f64, primal_rank0_f64, reverse_rank0_f64,
+    reverse_rank0_f64_like, reverse_vector_f64, reverse_vector_f64_like, vector_c64, vector_f64,
 };
 
 #[test]
 fn scale_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
-    let tape = DynTape::new();
-    let x = reverse_vector_f64(&[1.0, 2.0], &tape);
-    let a = reverse_rank0_f64(3.0_f64, &tape);
+    let x = reverse_vector_f64(&[1.0, 2.0]);
+    let a = reverse_rank0_f64_like(3.0_f64, &x);
 
     let out = x.scale(&a).unwrap();
     assert_eq!(out.mode(), AdMode::Reverse);
@@ -27,11 +26,10 @@ fn scale_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
 
 #[test]
 fn axpby_registers_reverse_gradients_for_all_inputs() {
-    let tape = DynTape::new();
-    let x = reverse_vector_f64(&[1.0, 4.0], &tape);
-    let y = reverse_vector_f64(&[3.0, -1.0], &tape);
-    let a = reverse_rank0_f64(2.0_f64, &tape);
-    let b = reverse_rank0_f64(-1.0_f64, &tape);
+    let x = reverse_vector_f64(&[1.0, 4.0]);
+    let y = reverse_vector_f64_like(&[3.0, -1.0], &x);
+    let a = reverse_rank0_f64_like(2.0_f64, &x);
+    let b = reverse_rank0_f64_like(-1.0_f64, &x);
 
     let out = x.axpby(&a, &y, &b).unwrap();
     assert_eq!(out.mode(), AdMode::Reverse);
@@ -47,9 +45,8 @@ fn axpby_registers_reverse_gradients_for_all_inputs() {
 
 #[test]
 fn div_scalar_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
-    let tape = DynTape::new();
-    let x = reverse_vector_f64(&[2.0, 4.0], &tape);
-    let a = reverse_rank0_f64(2.0_f64, &tape);
+    let x = reverse_vector_f64(&[2.0, 4.0]);
+    let a = reverse_rank0_f64_like(2.0_f64, &x);
 
     let out = x.div_scalar(&a).unwrap();
     assert_eq!(out.mode(), AdMode::Reverse);
@@ -64,9 +61,8 @@ fn div_scalar_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
 #[test]
 fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
-    let x = reverse_vector_f64(&[1.0, 2.0], &tape);
-    let a = reverse_rank0_f64(4.0_f64, &tape);
+    let x = reverse_vector_f64(&[1.0, 2.0]);
+    let a = reverse_rank0_f64_like(4.0_f64, &x);
     let coeff = a.sqrt().unwrap();
 
     let out = x.scale(&coeff).unwrap();
@@ -81,9 +77,8 @@ fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
 
 #[test]
 fn scale_propagates_reverse_gradients_through_negated_scalar_coefficients() {
-    let tape = DynTape::new();
     let x = DynAdTensor::new_primal(vector_f64(&[2.0, -1.0]));
-    let a = reverse_rank0_f64(3.0_f64, &tape);
+    let a = reverse_rank0_f64(3.0_f64);
     let coeff = a.scale(&primal_rank0_f64(-1.0)).unwrap();
 
     let out = x.scale(&coeff).unwrap();
@@ -101,8 +96,7 @@ fn scale_propagates_reverse_gradients_through_negative_real_promotion() {
         Complex64::new(1.0, 0.0),
         Complex64::new(2.0, 0.0),
     ]));
-    let tape = DynTape::new();
-    let coeff = reverse_rank0_f64(-4.0_f64, &tape);
+    let coeff = reverse_rank0_f64(-4.0_f64);
 
     let out = x.scale(&coeff).unwrap();
     assert_eq!(out.mode(), AdMode::Reverse);

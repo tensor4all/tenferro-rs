@@ -35,7 +35,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdSvdResult<T>> {
         let operands = [self.tensor];
-        ensure_dense_linalg_ad_inputs("svd_ad_structured", &operands)?;
+        ensure_dense_linalg_inputs("svd", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -244,7 +244,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdQrResult<T>> {
         let operands = [self.tensor];
-        ensure_dense_linalg_ad_inputs("qr_ad_structured", &operands)?;
+        ensure_dense_linalg_inputs("qr", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,

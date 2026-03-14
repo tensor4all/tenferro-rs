@@ -1,8 +1,6 @@
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use chainrules::{autograd, AdResult, AutogradContext, BackwardOptions, Variable};
+use chainrules::{autograd, AdResult, AutogradGraph, BackwardOptions, Variable};
 use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{variable_einsum, BackendContext, EinsumBackend};
 use tenferro_tensor::Tensor;
@@ -16,11 +14,11 @@ use tenferro_tensor::Tensor;
 ///
 /// let _ctx = chainrules_api::context::<f64>();
 /// ```
-pub fn context<T>() -> Arc<Mutex<AutogradContext<Tensor<T>>>>
+pub fn context<T>() -> Arc<Mutex<AutogradGraph<Tensor<T>>>>
 where
     T: Scalar + HasAlgebra<Algebra = Standard<T>>,
 {
-    AutogradContext::new()
+    AutogradGraph::new()
 }
 
 /// Creates a `Variable<Tensor<T>>` leaf attached to `ctx`.
@@ -33,7 +31,7 @@ where
 /// ```
 pub fn leaf_in<T>(
     value: Tensor<T>,
-    ctx: Arc<Mutex<AutogradContext<Tensor<T>>>>,
+    ctx: Arc<Mutex<AutogradGraph<Tensor<T>>>>,
     requires_grad: bool,
 ) -> AdResult<Variable<Tensor<T>>>
 where
@@ -55,13 +53,14 @@ where
 /// let out = tenferro_dyadtensor::chainrules_api::einsum(ctx, "ij,jk->ik", &[&a, &b]).unwrap();
 /// ```
 pub fn einsum<T, Backend>(
-    runtime_ctx: Rc<RefCell<BackendContext<Standard<T>, Backend>>>,
+    runtime_ctx: Arc<Mutex<BackendContext<Standard<T>, Backend>>>,
     subscripts: &str,
     operands: &[&Variable<Tensor<T>>],
 ) -> AdResult<Variable<Tensor<T>>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>> + 'static,
-    Backend: EinsumBackend<Standard<T>> + 'static,
+    T: Scalar + HasAlgebra<Algebra = Standard<T>> + Send + Sync + 'static,
+    Backend: EinsumBackend<Standard<T>> + Send + Sync + 'static,
+    BackendContext<Standard<T>, Backend>: Send,
 {
     variable_einsum::<Standard<T>, Backend>(runtime_ctx, subscripts, operands)
 }

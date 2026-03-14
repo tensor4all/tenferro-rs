@@ -35,7 +35,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdLuResult<T>> {
         let operands = [self.tensor];
-        ensure_dense_linalg_ad_inputs("lu_ad_structured", &operands)?;
+        ensure_dense_linalg_inputs("lu", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,
@@ -204,7 +204,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdLstsqResult<T>> {
         let operands = [self.a, self.b];
-        ensure_dense_linalg_ad_inputs("lstsq_ad_structured", &operands)?;
+        ensure_dense_linalg_inputs("lstsq", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let ((a_primal, a_tangent), (b_primal, b_tangent)) = dispatch_linalg_ad_runtime!(
             T,

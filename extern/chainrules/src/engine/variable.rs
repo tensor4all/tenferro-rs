@@ -1,6 +1,6 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::engine::AutogradContext;
+use crate::engine::AutogradGraph;
 use crate::{AdResult, AutodiffError, Differentiable, NodeId};
 
 pub(crate) fn effective_retain_graph(retain_graph: Option<bool>, create_graph: bool) -> bool {
@@ -48,13 +48,20 @@ impl<V: Differentiable> Default for BackwardOptions<V> {
 pub struct Variable<V: Differentiable> {
     pub(crate) value: V,
     pub(crate) node_id: Option<NodeId>,
-    pub(crate) context: Option<Arc<Mutex<AutogradContext<V>>>>,
+    pub(crate) context: Option<Arc<Mutex<AutogradGraph<V>>>>,
     pub(crate) requires_grad: bool,
     pub(crate) tangent: Option<V::Tangent>,
     pub(crate) is_leaf: bool,
 }
 
 impl<V: Differentiable> Variable<V> {
+    fn lock_graph(ctx: &Arc<Mutex<AutogradGraph<V>>>) -> MutexGuard<'_, AutogradGraph<V>> {
+        match ctx.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     pub fn new(value: V) -> Self {
         Self {
             value,
@@ -66,7 +73,7 @@ impl<V: Differentiable> Variable<V> {
         }
     }
 
-    pub fn new_in(value: V, ctx: Arc<Mutex<AutogradContext<V>>>) -> Self {
+    pub fn new_in(value: V, ctx: Arc<Mutex<AutogradGraph<V>>>) -> Self {
         Self {
             value,
             node_id: None,
@@ -94,12 +101,10 @@ impl<V: Differentiable> Variable<V> {
     }
 
     pub fn context_id(&self) -> Option<u64> {
-        self.context
-            .as_ref()
-            .and_then(|ctx| ctx.lock().ok().map(|g| g.id()))
+        self.context.as_ref().map(|ctx| Self::lock_graph(ctx).id())
     }
 
-    pub fn context(&self) -> Option<Arc<Mutex<AutogradContext<V>>>> {
+    pub fn context(&self) -> Option<Arc<Mutex<AutogradGraph<V>>>> {
         self.context.as_ref().map(Arc::clone)
     }
 
@@ -113,13 +118,11 @@ impl<V: Differentiable> Variable<V> {
 
     pub fn requires_grad_(mut self, enabled: bool) -> AdResult<Self> {
         if enabled && self.context.is_none() {
-            self.context = Some(AutogradContext::new());
+            self.context = Some(AutogradGraph::new());
         }
         if enabled && self.node_id.is_none() {
             if let Some(ctx) = self.context.as_ref() {
-                let mut guard = ctx.lock().map_err(|_| {
-                    AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
-                })?;
+                let mut guard = Self::lock_graph(ctx);
                 self.node_id = Some(guard.record_leaf(None));
             }
         }
@@ -132,9 +135,7 @@ impl<V: Differentiable> Variable<V> {
         V::Tangent: Clone,
     {
         if let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) {
-            let mut guard = ctx.lock().map_err(|_| {
-                AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
-            })?;
+            let mut guard = Self::lock_graph(ctx);
             guard.set_node_tangent(node, tangent.clone())?;
         }
         self.tangent = Some(tangent);
@@ -168,7 +169,7 @@ impl<V: Differentiable> Variable<V> {
         }
         let Some(ctx) = self.context.as_ref() else {
             return Err(AutodiffError::InvalidArgument(
-                "backward requires output connected to an autograd context".to_string(),
+                "backward requires output connected to an autograd graph".to_string(),
             ));
         };
         let Some(output_node) = self.node_id else {
@@ -182,9 +183,7 @@ impl<V: Differentiable> Variable<V> {
             ));
         }
 
-        let mut guard = ctx.lock().map_err(|_| {
-            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
-        })?;
+        let mut guard = Self::lock_graph(ctx);
         guard.ensure_alive()?;
         let seed = options.seed_grad.unwrap_or_else(|| self.ones_like());
         let mut cotangents = guard.compute_cotangents(output_node, seed)?;
@@ -214,7 +213,7 @@ impl<V: Differentiable> Variable<V> {
         }
         let Some(ctx) = self.context.as_ref() else {
             return Err(AutodiffError::InvalidArgument(
-                "backward_hvp requires output connected to an autograd context".to_string(),
+                "backward_hvp requires output connected to an autograd graph".to_string(),
             ));
         };
         let Some(output_node) = self.node_id else {
@@ -228,9 +227,7 @@ impl<V: Differentiable> Variable<V> {
             ));
         }
 
-        let mut guard = ctx.lock().map_err(|_| {
-            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
-        })?;
+        let mut guard = Self::lock_graph(ctx);
         guard.ensure_alive()?;
         if !guard.has_any_leaf_tangent() {
             return Err(AutodiffError::InvalidArgument(
@@ -264,7 +261,7 @@ impl<V: Differentiable> Variable<V> {
         let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) else {
             return None;
         };
-        ctx.lock().ok().and_then(|guard| guard.grad_at(node))
+        Self::lock_graph(ctx).grad_at(node)
     }
 
     pub fn hvp(&self) -> Option<V::Tangent>
@@ -274,7 +271,7 @@ impl<V: Differentiable> Variable<V> {
         let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) else {
             return None;
         };
-        ctx.lock().ok().and_then(|guard| guard.hvp_at(node))
+        Self::lock_graph(ctx).hvp_at(node)
     }
 
     pub fn zero_grad(&self) -> AdResult<()> {
@@ -286,9 +283,7 @@ impl<V: Differentiable> Variable<V> {
         let (Some(ctx), Some(node)) = (self.context.as_ref(), self.node_id) else {
             return Ok(());
         };
-        let mut guard = ctx.lock().map_err(|_| {
-            AutodiffError::InvalidArgument("autograd context lock is poisoned".to_string())
-        })?;
+        let mut guard = Self::lock_graph(ctx);
         guard.clear_leaf_buffers(node)
     }
 }

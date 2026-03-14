@@ -157,18 +157,19 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{DynAdTensor, DynTape};
+    /// use tenferro_dyadtensor::DynAdTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let tape = DynTape::new();
     /// let x = DynAdTensor::new_reverse_leaf(
     ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    ///     &tape,
     /// )
     /// .unwrap();
-    /// let out = x.scale(&DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),
-    /// ));
+    /// let alpha = x
+    ///     .new_reverse_sibling(
+    ///         Tensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    ///     )
+    ///     .unwrap();
+    /// let out = x.scale(&alpha);
     /// let cotangent = DynAdTensor::new_primal(
     ///     Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     /// );

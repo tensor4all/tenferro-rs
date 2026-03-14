@@ -1,12 +1,12 @@
 use num_complex::Complex64;
 use tenferro_dyadtensor::{set_default_runtime, RuntimeContext};
-use tenferro_dyadtensor::{DynAdTensor, DynTape, Error, StructuredTensor};
+use tenferro_dyadtensor::{DynAdTensor, Error, StructuredTensor};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 mod support;
 
-use support::{reverse_rank0_f64, vector_c64, vector_f64};
+use support::{reverse_rank0_f64_like, vector_c64, vector_f64};
 
 fn scalar(value: f64) -> Tensor<f64> {
     Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
@@ -14,13 +14,11 @@ fn scalar(value: f64) -> Tensor<f64> {
 
 #[test]
 fn diag_scale_reverse_keeps_diag_cotangent_space() {
-    let tape = DynTape::new();
     let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 3.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
-    let a = reverse_rank0_f64(2.0_f64, &tape);
+    let a = reverse_rank0_f64_like(2.0_f64, &x);
     let y = x.scale(&a).unwrap();
     let cotangent = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, 1.0]), 2).unwrap(),
@@ -34,19 +32,17 @@ fn diag_scale_reverse_keeps_diag_cotangent_space() {
 
 #[test]
 fn diag_axpby_reverse_keeps_diag_cotangent_space() {
-    let tape = DynTape::new();
     let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 3.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
-    let y = DynAdTensor::new_reverse_leaf(
-        StructuredTensor::from_diagonal_vector(vector_f64(&[5.0, 7.0]), 2).unwrap(),
-        &tape,
-    )
-    .unwrap();
-    let a = reverse_rank0_f64(2.0_f64, &tape);
-    let b = reverse_rank0_f64(-1.0_f64, &tape);
+    let y = x
+        .new_reverse_sibling(
+            StructuredTensor::from_diagonal_vector(vector_f64(&[5.0, 7.0]), 2).unwrap(),
+        )
+        .unwrap();
+    let a = reverse_rank0_f64_like(2.0_f64, &x);
+    let b = reverse_rank0_f64_like(-1.0_f64, &x);
     let out = x.axpby(&a, &y, &b).unwrap();
     let cotangent = DynAdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, -0.5]), 2).unwrap(),
@@ -68,14 +64,12 @@ fn diag_axpby_reverse_keeps_diag_cotangent_space() {
 
 #[test]
 fn diag_complex_real_part_reverse_keeps_diag_cotangent_space() {
-    let tape = DynTape::new();
     let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(
             vector_c64(&[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)]),
             2,
         )
         .unwrap(),
-        &tape,
     )
     .unwrap();
 
@@ -88,17 +82,15 @@ fn diag_complex_real_part_reverse_keeps_diag_cotangent_space() {
 
 #[test]
 fn diag_complex_compose_complex_reverse_splits_diag_cotangent_back_into_real_components() {
-    let tape = DynTape::new();
     let re = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, -3.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
-    let im = DynAdTensor::new_reverse_leaf(
-        StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 4.0]), 2).unwrap(),
-        &tape,
-    )
-    .unwrap();
+    let im = re
+        .new_reverse_sibling(
+            StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 4.0]), 2).unwrap(),
+        )
+        .unwrap();
 
     let z = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();
     let cotangent = DynAdTensor::new_primal(
@@ -157,17 +149,15 @@ fn root_einsum_keeps_diag_output_in_structured_carrier() {
 #[test]
 fn root_einsum_reverse_keeps_diag_cotangent_space() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
     let a = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[1.0, 2.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
-    let b = DynAdTensor::new_reverse_leaf(
-        StructuredTensor::from_diagonal_vector(vector_f64(&[3.0, 4.0]), 2).unwrap(),
-        &tape,
-    )
-    .unwrap();
+    let b = a
+        .new_reverse_sibling(
+            StructuredTensor::from_diagonal_vector(vector_f64(&[3.0, 4.0]), 2).unwrap(),
+        )
+        .unwrap();
 
     let out = DynAdTensor::einsum("ij,jk->ik", &[&a, &b]).unwrap();
     let cotangent = DynAdTensor::new_primal(
@@ -191,10 +181,8 @@ fn root_einsum_reverse_keeps_diag_cotangent_space() {
 #[test]
 fn root_sum_reverse_keeps_diag_cotangent_space() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let tape = DynTape::new();
     let x = DynAdTensor::new_reverse_leaf(
         StructuredTensor::from_diagonal_vector(vector_f64(&[2.0, 3.0]), 2).unwrap(),
-        &tape,
     )
     .unwrap();
 

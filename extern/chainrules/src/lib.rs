@@ -26,8 +26,7 @@
 //!
 //! ```ignore
 //! use chainrules::{Tape, TrackedValue};
-//! use std::cell::RefCell;
-//! use std::rc::Rc;
+//! use std::sync::{Arc, Mutex};
 //! use tenferro_algebra::Standard;
 //! use tenferro_einsum::tracked_einsum;
 //! use tenferro_prims::{CpuBackend, CpuContext};
@@ -35,7 +34,7 @@
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let tape = Tape::<Tensor<f64>>::new();
-//! let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+//! let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 //! let a = tape.leaf(Tensor::ones(
 //!     &[2, 3],
 //!     LogicalMemorySpace::MainMemory,
@@ -105,8 +104,7 @@
 //!
 //! ```ignore
 //! use chainrules::Tape;
-//! use std::cell::RefCell;
-//! use std::rc::Rc;
+//! use std::sync::{Arc, Mutex};
 //! use tenferro_algebra::Standard;
 //! use tenferro_einsum::tracked_einsum;
 //! use tenferro_prims::{CpuBackend, CpuContext};
@@ -114,7 +112,7 @@
 //! use tenferro_device::LogicalMemorySpace;
 //!
 //! let tape = Tape::<Tensor<f64>>::new();
-//! let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+//! let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 //! let x = tape.leaf_with_tangent(
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 //!     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),  // direction v
@@ -133,7 +131,7 @@ mod engine;
 mod ops;
 
 pub use engine::{
-    AutogradContext, BackwardOptions, DualValue, Gradients, HvpResult, PullbackPlan, Tape,
+    AutogradGraph, BackwardOptions, DualValue, Gradients, HvpResult, PullbackPlan, Tape,
     TrackedValue, Variable,
 };
 

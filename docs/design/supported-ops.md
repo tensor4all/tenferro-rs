@@ -176,7 +176,8 @@ Internal builder APIs are implemented for:
 - Actual execution today:
   - CPU paths are implemented for the operations listed above
   - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution
-  - mixed-dtype reverse propagation is supported on a shared `DynTape`; pullbacks cast gradients back to each input dtype
+  - mixed-dtype reverse propagation is supported when operands share one reverse graph; pullbacks cast gradients back to each input dtype
+  - linalg entry points are dense-only at the `dyadtensor` layer; non-dense structured inputs return a runtime error instead of silently materializing dense fallbacks
 
 ## `tenferro-capi`
 

@@ -413,15 +413,14 @@ fn tracked_maxplus_matmul_pullback() {
 
     // Compute loss = sum(C) using standard einsum with ones vector:
     // loss = C . ones = einsum("ik,ik->", C, ones_2x2)
-    use std::cell::RefCell;
-    use std::rc::Rc;
+    use std::sync::{Arc, Mutex};
     use tenferro_device::LogicalMemorySpace;
     use tenferro_einsum::tracked_einsum;
 
     let ones = Tensor::<f64>::ones(&[2, 2], LogicalMemorySpace::MainMemory, COL);
     let ones_tracked = chainrules::TrackedValue::new(ones);
 
-    let ctx = Rc::new(RefCell::new(ctx()));
+    let ctx = Arc::new(Mutex::new(ctx()));
     let loss = tracked_einsum::<tenferro_algebra::Standard<f64>, tenferro_prims::CpuBackend>(
         ctx.clone(),
         "ik,ik->",

@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use chainrules::{autograd, AutodiffError, AutogradContext, BackwardOptions, Tape, Variable};
+use chainrules::{autograd, AutodiffError, AutogradGraph, BackwardOptions, Tape, Variable};
 
 #[test]
 fn new_in_shared_context_allows_binary_ops() {
-    let ctx = AutogradContext::<f64>::new();
+    let ctx = AutogradGraph::<f64>::new();
     let ctx_id = ctx.lock().unwrap().id();
     let a = Variable::new_in(1.0_f64, Arc::clone(&ctx))
         .requires_grad_(true)
@@ -27,7 +27,7 @@ fn mixed_contexts_fail() {
 
 #[test]
 fn all_requires_grad_false_drops_output_context() {
-    let ctx = AutogradContext::<f64>::new();
+    let ctx = AutogradGraph::<f64>::new();
     let a = Variable::new_in(1.0_f64, Arc::clone(&ctx))
         .requires_grad_(false)
         .unwrap();
@@ -38,8 +38,8 @@ fn all_requires_grad_false_drops_output_context() {
 
 #[test]
 fn foreign_context_constant_is_ignored_for_binary_ops() {
-    let tracked_ctx = AutogradContext::<f64>::new();
-    let foreign_ctx = AutogradContext::<f64>::new();
+    let tracked_ctx = AutogradGraph::<f64>::new();
+    let foreign_ctx = AutogradGraph::<f64>::new();
     let tracked = Variable::new_in(1.0_f64, Arc::clone(&tracked_ctx))
         .requires_grad_(true)
         .unwrap();

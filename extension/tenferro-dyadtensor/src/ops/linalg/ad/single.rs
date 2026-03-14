@@ -25,8 +25,8 @@ where
         run_unary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::Cholesky,
-            op = "cholesky_ad",
-            pullback = "cholesky_ad_pullback",
+            op = "cholesky",
+            pullback = "cholesky_pullback",
             input = self.tensor,
             primal = |ctx, tensor| {
                 tenferro_linalg::cholesky::<T, _>(ctx, tensor).map_err(Error::from)
@@ -76,8 +76,8 @@ where
         run_binary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::Solve,
-            op = "solve_ad",
-            pullback = "solve_ad_pullback",
+            op = "solve",
+            pullback = "solve_pullback",
             lhs = self.a,
             rhs = self.b,
             primal = |ctx, a, b| tenferro_linalg::solve::<T, _>(ctx, a, b).map_err(Error::from),
@@ -127,8 +127,8 @@ where
         run_unary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::Inv,
-            op = "inv_ad",
-            pullback = "inv_ad_pullback",
+            op = "inv",
+            pullback = "inv_pullback",
             input = self.tensor,
             primal = |ctx, tensor| tenferro_linalg::inv::<T, _>(ctx, tensor).map_err(Error::from),
             frule = |ctx, tensor, dt| {
@@ -175,8 +175,8 @@ where
         run_unary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::Det,
-            op = "det_ad",
-            pullback = "det_ad_pullback",
+            op = "det",
+            pullback = "det_pullback",
             input = self.tensor,
             primal = |ctx, tensor| tenferro_linalg::det::<T, _>(ctx, tensor).map_err(Error::from),
             frule = |ctx, tensor, dt| {
@@ -235,8 +235,8 @@ where
         run_unary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::Pinv,
-            op = "pinv_ad",
-            pullback = "pinv_ad_pullback",
+            op = "pinv",
+            pullback = "pinv_pullback",
             input = self.tensor,
             primal = |ctx, tensor| {
                 tenferro_linalg::pinv::<T, _>(ctx, tensor, self.rcond).map_err(Error::from)
@@ -290,8 +290,8 @@ where
         run_unary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::MatrixExp,
-            op = "matrix_exp_ad",
-            pullback = "matrix_exp_ad_pullback",
+            op = "matrix_exp",
+            pullback = "matrix_exp_pullback",
             input = self.tensor,
             primal = |ctx, tensor| {
                 tenferro_linalg::matrix_exp::<T, _>(ctx, tensor).map_err(Error::from)
@@ -357,8 +357,8 @@ where
         run_binary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::SolveTriangular,
-            op = "solve_triangular_ad",
-            pullback = "solve_triangular_ad_pullback",
+            op = "solve_triangular",
+            pullback = "solve_triangular_pullback",
             lhs = self.a,
             rhs = self.b,
             primal = |ctx, a, b| {
@@ -429,8 +429,8 @@ where
         run_unary_tensor_ad!(
             ty = T,
             capability = tenferro_linalg::backend::LinalgCapabilityOp::Norm,
-            op = "norm_ad",
-            pullback = "norm_ad_pullback",
+            op = "norm",
+            pullback = "norm_pullback",
             input = self.tensor,
             primal = |ctx, tensor| {
                 tenferro_linalg::norm::<T, _>(ctx, tensor, self.kind).map_err(Error::from)

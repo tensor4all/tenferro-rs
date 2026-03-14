@@ -23,7 +23,7 @@ where
     /// ```
     pub fn run(self) -> Result<AdSlogdetResult<T>> {
         let operands = [self.tensor];
-        ensure_dense_linalg_ad_inputs("slogdet_ad_structured", &operands)?;
+        ensure_dense_linalg_inputs("slogdet", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
         let (input_primal, input_tangent) = dispatch_linalg_ad_runtime!(
             T,

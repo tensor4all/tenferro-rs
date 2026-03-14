@@ -78,7 +78,7 @@ impl PlanCacheKey {
 /// assert!(cache.is_empty());
 /// ```
 pub struct PlanCache {
-    entries: HashMap<PlanCacheKey, Box<dyn Any>>,
+    entries: HashMap<PlanCacheKey, Box<dyn Any + Send + Sync>>,
 }
 
 impl PlanCache {
@@ -98,7 +98,7 @@ impl PlanCache {
 
     pub(crate) fn get<P, D>(&self, desc: &D, shapes: &[&[usize]]) -> Option<P>
     where
-        P: Clone + 'static,
+        P: Clone + Send + Sync + 'static,
         D: CacheDescriptor,
     {
         let key = PlanCacheKey::new::<P, D>(desc, shapes);
@@ -110,7 +110,7 @@ impl PlanCache {
 
     pub(crate) fn insert<P, D>(&mut self, desc: &D, shapes: &[&[usize]], plan: P)
     where
-        P: Clone + 'static,
+        P: Clone + Send + Sync + 'static,
         D: CacheDescriptor,
     {
         let key = PlanCacheKey::new::<P, D>(desc, shapes);

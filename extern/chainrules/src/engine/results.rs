@@ -173,8 +173,7 @@ impl<V: Differentiable> PullbackPlan<V> {
 ///
 /// ```ignore
 /// use chainrules::{HvpResult, Tape};
-/// use std::cell::RefCell;
-/// use std::rc::Rc;
+/// use std::sync::{Arc, Mutex};
 /// use tenferro_algebra::Standard;
 /// use tenferro_device::LogicalMemorySpace;
 /// use tenferro_einsum::tracked_einsum;
@@ -182,7 +181,7 @@ impl<V: Differentiable> PullbackPlan<V> {
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let tape = Tape::<Tensor<f64>>::new();
-/// let ctx = Rc::new(RefCell::new(CpuContext::new(1)));
+/// let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 /// let x = tape.leaf_with_tangent(
 ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
 ///     Tensor::ones(&[3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),

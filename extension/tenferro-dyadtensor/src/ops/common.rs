@@ -17,17 +17,12 @@ pub(crate) fn has_any_tangent<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
     operands.iter().any(|op| op.tangent().is_some())
 }
 
-pub(crate) fn ensure_dense_linalg_ad_inputs<S: Scalar>(
-    structured_op: &'static str,
+pub(crate) fn ensure_dense_linalg_inputs<S: Scalar>(
+    op: &'static str,
     operands: &[&AdTensor<S>],
 ) -> Result<()> {
-    let ad_active = has_forward(operands) || has_reverse(operands) || has_any_tangent(operands);
-    if !ad_active {
-        return Ok(());
-    }
-
     if operands.iter().any(|op| !op.is_dense()) {
-        return Err(Error::UnsupportedAdOp { op: structured_op });
+        return Err(Error::UnsupportedStructuredLinalg { op });
     }
 
     Ok(())
