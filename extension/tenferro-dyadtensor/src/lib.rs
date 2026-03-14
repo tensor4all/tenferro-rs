@@ -5,12 +5,12 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_dyadtensor::{AdTensor, StructuredTensor};
+//! use tenferro_dyadtensor::{DynAdTensor, StructuredTensor};
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
 //! let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 //! let diag = StructuredTensor::from_diagonal_vector(payload, 2).unwrap();
-//! let x = AdTensor::new_primal(diag);
+//! let x = DynAdTensor::new_primal(diag);
 //! assert_eq!(x.dims(), &[2, 2]);
 //! assert!(x.is_diag());
 //! ```
@@ -39,9 +39,9 @@ pub mod traits;
 
 #[doc(hidden)]
 pub use core::DynTensorTyped;
-pub use core::{
-    AdMode, AdScalar, AdTensor, AdValue, DynAdTensor, DynScalar, DynTensor, NodeId, ScalarType,
-};
+pub use core::{AdMode, DynAdTensor, DynScalar, DynTape, NodeId, ScalarType};
+#[doc(hidden)]
+pub use core::{AdScalar, AdTensor, AdValue, DynTensor};
 pub use error::{Error, Result};
 pub use ops::ad;
 pub use ops::chainrules_api;
