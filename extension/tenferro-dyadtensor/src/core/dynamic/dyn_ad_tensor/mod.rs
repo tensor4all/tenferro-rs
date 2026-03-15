@@ -23,8 +23,9 @@ pub use eager_linalg::{
 /// algebra in `tenferro-dyadtensor`.
 ///
 /// - rank-0 `DynAdTensor` values act as scalar coefficients
-/// - mixed-dtype tensor ops apply the supported algebraic promotion matrix
+/// - mixed-dtype tensor ops apply the dynamic result-type promotion rule
 ///   internally before execution
+///   (`complex` beats `real`, and 64-bit beats 32-bit)
 /// - [`DynAdTensor::to_scalar_type`] is the explicit numeric cast boundary
 /// - [`DynAdTensor::detach`] drops tape metadata while keeping the same dynamic
 ///   tensor object for storage or FFI boundaries
