@@ -4,7 +4,17 @@ use super::Tensor;
 use crate::AdTensor;
 
 impl Tensor {
-    pub(crate) fn mode(&self) -> crate::core::AdMode {
+    /// Returns the current AD mode of the tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro::{AdMode, Tensor};
+    ///
+    /// let x = Tensor::from_slice(&[1.0_f64], &[1]).unwrap();
+    /// assert_eq!(x.mode(), AdMode::Primal);
+    /// ```
+    pub fn mode(&self) -> crate::core::AdMode {
         match self {
             Self::F32(v) => v.mode(),
             Self::F64(v) => v.mode(),

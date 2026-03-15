@@ -7,7 +7,7 @@ mod tensor_ops;
 pub use dyn_ad_tensor::{
     EigResult, EigenResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult, Tensor,
 };
-pub(crate) use dyn_tensor::DynTensor;
+pub use dyn_tensor::DynTensor;
 #[doc(hidden)]
 pub use dyn_tensor::DynTensorTyped;
 pub use scalar_type::ScalarType;

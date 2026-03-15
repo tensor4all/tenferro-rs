@@ -34,15 +34,18 @@ pub mod error;
 pub mod forward_ad;
 mod ops;
 pub mod runtime;
+mod scalar_value;
+pub mod snapshot;
 mod structured;
 mod tape;
 
 pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
 pub(crate) use core::DynTensorTyped;
-pub(crate) use core::{AdTensor, AdValue, DynTensor};
 pub use core::{
-    EigResult, EigenResult, LstsqResult, LuResult, QrResult, ScalarType, SlogdetResult, SvdResult,
-    Tensor,
+    AdMode, EigResult, EigenResult, LstsqResult, LuResult, QrResult, ScalarType, SlogdetResult,
+    SvdResult, Tensor,
 };
+pub(crate) use core::{AdTensor, AdValue, DynTensor};
 pub use error::{Error, Result};
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
+pub use scalar_value::ScalarValue;

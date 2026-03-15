@@ -1,7 +1,7 @@
 pub(crate) mod dynamic;
 pub(crate) mod value;
 
-pub(crate) use dynamic::DynTensor;
+pub use dynamic::DynTensor;
 #[doc(hidden)]
 pub use dynamic::DynTensorTyped;
 pub use dynamic::{

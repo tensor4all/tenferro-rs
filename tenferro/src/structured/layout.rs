@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tenferro_algebra::Scalar;
+use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_tensor::Tensor;
 
 use crate::{Error, Result};
@@ -261,6 +261,70 @@ impl<T: Scalar> StructuredTensor<T> {
             payload,
         )
     }
+
+    /// Returns the same logical tensor with permuted logical axes.
+    ///
+    /// This permutes both the logical axes and the compressed payload class
+    /// order, then rebuilds the canonical axis-class representation.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let y = x.permute_logical(&[1, 0])?;
+    /// assert_eq!(y.logical_dims(), &[3, 2]);
+    /// # Ok::<(), tenferro::Error>(())
+    /// ```
+    pub fn permute_logical(&self, perm: &[usize]) -> Result<Self> {
+        validate_permutation(
+            perm,
+            self.logical_dims.len(),
+            "StructuredTensor::permute_logical",
+        )?;
+
+        let permuted_dims: Vec<usize> = perm.iter().map(|&axis| self.logical_dims[axis]).collect();
+        let permuted_raw_classes: Vec<usize> =
+            perm.iter().map(|&axis| self.axis_classes[axis]).collect();
+
+        let mut seen_classes = vec![false; self.class_count()];
+        let mut class_order = Vec::with_capacity(self.class_count());
+        for &class_id in &permuted_raw_classes {
+            if !seen_classes[class_id] {
+                seen_classes[class_id] = true;
+                class_order.push(class_id);
+            }
+        }
+
+        let mut remap = vec![usize::MAX; self.class_count()];
+        for (new_class, &old_class) in class_order.iter().enumerate() {
+            remap[old_class] = new_class;
+        }
+        let canonical_classes: Vec<usize> = permuted_raw_classes
+            .iter()
+            .map(|&old_class| remap[old_class])
+            .collect();
+
+        let payload = self.payload.permute(&class_order).map_err(Error::from)?;
+        Self::new(permuted_dims, canonical_classes, payload)
+    }
+
+    /// Returns the same structured tensor with payload conjugation toggled.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let y = x.conj();
+    /// assert_eq!(y.logical_dims(), x.logical_dims());
+    /// ```
+    pub fn conj(&self) -> Self
+    where
+        T: Conjugate,
+    {
+        Self {
+            payload: self.payload.conj(),
+            logical_dims: self.logical_dims.clone(),
+            axis_classes: self.axis_classes.clone(),
+        }
+    }
 }
 
 impl<T: Scalar> From<Tensor<T>> for StructuredTensor<T> {
@@ -352,6 +416,34 @@ pub(crate) fn validate_layout<T: Scalar>(
                 ),
             });
         }
+    }
+
+    Ok(())
+}
+
+fn validate_permutation(perm: &[usize], rank: usize, op_name: &'static str) -> Result<()> {
+    if perm.len() != rank {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} requires permutation length {rank}, got {}",
+                perm.len()
+            ),
+        });
+    }
+
+    let mut seen = vec![false; rank];
+    for &axis in perm {
+        if axis >= rank {
+            return Err(Error::InvalidAdTensor {
+                message: format!("{op_name} permutation index {axis} out of range for rank {rank}",),
+            });
+        }
+        if seen[axis] {
+            return Err(Error::InvalidAdTensor {
+                message: format!("{op_name} permutation contains duplicate axis {axis}"),
+            });
+        }
+        seen[axis] = true;
     }
 
     Ok(())
