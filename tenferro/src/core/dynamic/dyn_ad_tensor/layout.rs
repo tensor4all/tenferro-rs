@@ -1,3 +1,5 @@
+mod structured;
+
 use num_traits::Zero;
 
 use chainrules::Tape;
@@ -6,7 +8,7 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::super::tensor_ops::{tensor_element, unflatten_index_column_major};
 use crate::core::{AdTensorSnapshot, DynTensorTyped};
-use crate::structured::{canonicalize_axis_classes, StructuredTensor};
+use crate::structured::StructuredTensor;
 use crate::{tape, AdTensor, Error, Result};
 
 fn ensure_dense_ad_tensor_layout<T>(input: &AdTensor<T>, op_name: &'static str) -> Result<()>
@@ -32,51 +34,32 @@ where
     Ok(())
 }
 
-fn build_axis_class_layout_from_dense<T>(
-    payload: StructuredTensor<T>,
-    axis_classes: &[usize],
-    op_name: &'static str,
-) -> Result<StructuredTensor<T>>
+fn inverse_permutation(perm: &[usize]) -> Vec<usize> {
+    let mut inverse = vec![0usize; perm.len()];
+    for (new_axis, &old_axis) in perm.iter().enumerate() {
+        inverse[old_axis] = new_axis;
+    }
+    inverse
+}
+
+pub(super) fn diag_embed_ad_tensor_typed<T>(
+    input: &AdTensor<T>,
+    logical_rank: usize,
+) -> Result<AdTensor<T>>
 where
-    T: Scalar,
+    T: Scalar + Copy + DynTensorTyped + 'static,
 {
-    if !payload.is_dense() {
-        return Err(Error::InvalidAdTensor {
-            message: format!("{op_name} requires a dense payload tensor"),
-        });
-    }
+    structured::diag_embed_ad_tensor_typed(input, logical_rank)
+}
 
-    let canonical = canonicalize_axis_classes(axis_classes);
-    if canonical != axis_classes {
-        return Err(Error::InvalidAdTensor {
-            message: format!(
-                "{op_name} requires canonical axis classes, got {:?}; expected {:?}",
-                axis_classes, canonical
-            ),
-        });
-    }
-
-    let payload = payload.into_payload();
-    let class_count = axis_classes
-        .last()
-        .copied()
-        .map(|class_id| class_id + 1)
-        .unwrap_or(0);
-    if payload.dims().len() != class_count {
-        return Err(Error::InvalidAdTensor {
-            message: format!(
-                "{op_name} requires payload rank {} to match the number of axis classes {}",
-                payload.dims().len(),
-                class_count
-            ),
-        });
-    }
-
-    let logical_dims = axis_classes
-        .iter()
-        .map(|&class_id| payload.dims()[class_id])
-        .collect();
-    StructuredTensor::new(logical_dims, axis_classes.to_vec(), payload)
+pub(super) fn with_axis_classes_ad_tensor_typed<T>(
+    input: &AdTensor<T>,
+    axis_classes: &[usize],
+) -> Result<AdTensor<T>>
+where
+    T: Scalar + Copy + DynTensorTyped + 'static,
+{
+    structured::with_axis_classes_ad_tensor_typed(input, axis_classes)
 }
 
 pub(super) fn reshape_ad_tensor_typed<T>(
@@ -155,6 +138,48 @@ where
                         contiguous.reshape(&old_dims).map_err(Error::from)?,
                     );
                     Ok(vec![(input_node, grad)])
+                }),
+            );
+            Ok(out)
+        }
+    }
+}
+
+pub(super) fn permute_ad_tensor_typed<T>(input: &AdTensor<T>, perm: &[usize]) -> Result<AdTensor<T>>
+where
+    T: Scalar + DynTensorTyped + 'static,
+{
+    ensure_reverse_leaf_attached(input)?;
+    let inverse = inverse_permutation(perm);
+
+    match input.snapshot()? {
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(primal.permute_logical(perm)?)),
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
+            primal.permute_logical(perm)?,
+            tangent.permute_logical(perm)?,
+        ),
+        AdTensorSnapshot::Reverse {
+            primal,
+            node: input_node,
+            tape,
+            tangent,
+        } => {
+            let output_primal = primal.permute_logical(perm)?;
+            let output_tangent = tangent
+                .as_ref()
+                .map(|value| value.permute_logical(perm))
+                .transpose()?;
+            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "permute reverse output is missing a tape node".to_string(),
+                })?;
+            tape::register_rule::<T>(
+                &tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    Ok(vec![(input_node, cotangent.permute_logical(&inverse)?)])
                 }),
             );
             Ok(out)
@@ -320,123 +345,6 @@ where
                         &original_dims,
                     )?);
                     Ok(vec![(input_node, grad)])
-                }),
-            );
-            Ok(out)
-        }
-    }
-}
-
-pub(super) fn diag_embed_ad_tensor_typed<T>(
-    input: &AdTensor<T>,
-    logical_rank: usize,
-) -> Result<AdTensor<T>>
-where
-    T: Scalar + Copy + DynTensorTyped + 'static,
-{
-    ensure_dense_ad_tensor_layout(input, "diag_embed")?;
-    ensure_reverse_leaf_attached(input)?;
-    if input.ndim() != 1 {
-        return Err(Error::InvalidAdTensor {
-            message: format!(
-                "diag_embed requires a rank-1 dense tensor, got dims {:?}",
-                input.dims()
-            ),
-        });
-    }
-
-    match input.snapshot()? {
-        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(
-            StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?,
-        )),
-        AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
-            StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?,
-            StructuredTensor::from_diagonal_vector(tangent.into_payload(), logical_rank)?,
-        ),
-        AdTensorSnapshot::Reverse {
-            primal,
-            node: input_node,
-            tape,
-            tangent,
-        } => {
-            let output_primal =
-                StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?;
-            let output_tangent = tangent
-                .map(|t| StructuredTensor::from_diagonal_vector(t.into_payload(), logical_rank))
-                .transpose()?;
-            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
-            let output_node = out
-                .reverse_node_id()
-                .ok_or_else(|| Error::InvalidAdTensor {
-                    message: "diag_embed reverse output is missing a tape node".to_string(),
-                })?;
-            tape::register_rule::<T>(
-                &tape,
-                output_node,
-                Box::new(move |cotangent| {
-                    Ok(vec![(
-                        input_node,
-                        StructuredTensor::from_dense(cotangent.payload().clone()),
-                    )])
-                }),
-            );
-            Ok(out)
-        }
-    }
-}
-
-pub(super) fn with_axis_classes_ad_tensor_typed<T>(
-    input: &AdTensor<T>,
-    axis_classes: &[usize],
-) -> Result<AdTensor<T>>
-where
-    T: Scalar + Copy + DynTensorTyped + 'static,
-{
-    ensure_dense_ad_tensor_layout(input, "with_axis_classes")?;
-    ensure_reverse_leaf_attached(input)?;
-
-    match input.snapshot()? {
-        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(
-            build_axis_class_layout_from_dense(primal, axis_classes, "Tensor::with_axis_classes")?,
-        )),
-        AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
-            build_axis_class_layout_from_dense(primal, axis_classes, "Tensor::with_axis_classes")?,
-            build_axis_class_layout_from_dense(tangent, axis_classes, "Tensor::with_axis_classes")?,
-        ),
-        AdTensorSnapshot::Reverse {
-            primal,
-            node: input_node,
-            tape,
-            tangent,
-        } => {
-            let output_primal = build_axis_class_layout_from_dense(
-                primal,
-                axis_classes,
-                "Tensor::with_axis_classes",
-            )?;
-            let output_tangent = tangent
-                .map(|value| {
-                    build_axis_class_layout_from_dense(
-                        value,
-                        axis_classes,
-                        "Tensor::with_axis_classes",
-                    )
-                })
-                .transpose()?;
-            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
-            let output_node = out
-                .reverse_node_id()
-                .ok_or_else(|| Error::InvalidAdTensor {
-                    message: "with_axis_classes reverse output is missing a tape node".to_string(),
-                })?;
-            tape::register_rule::<T>(
-                &tape,
-                output_node,
-                Box::new(move |cotangent| {
-                    Ok(vec![(
-                        input_node,
-                        StructuredTensor::from_dense(cotangent.payload().clone()),
-                    )])
                 }),
             );
             Ok(out)

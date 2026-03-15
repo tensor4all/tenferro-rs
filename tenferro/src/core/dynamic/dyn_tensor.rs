@@ -15,8 +15,8 @@ use crate::{Error, Result};
 ///
 /// # Examples
 ///
-/// ```text
-/// use tenferro::{ScalarType, core::DynTensor};
+/// ```ignore
+/// use tenferro::{snapshot::DynTensor, ScalarType};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -103,8 +103,8 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```text
-    /// use tenferro::core::DynTensor;
+    /// ```ignore
+    /// use tenferro::snapshot::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
@@ -124,16 +124,11 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```text
-    /// use tenferro::{core::DynTensor};
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// ```ignore
+    /// use tenferro::{snapshot::DynTensor, Tensor};
     ///
-    /// let diag = StructuredTensor::from_diagonal_vector(
-    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    ///     2,
-    /// )
-    /// .unwrap();
-    /// let x: DynTensor = diag.into();
+    /// let payload = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
+    /// let x: DynTensor = Tensor::diag(&payload).unwrap().primal_snapshot();
     /// assert_eq!(x.axis_classes(), &[0, 0]);
     /// ```
     pub fn axis_classes(&self) -> &[usize] {
@@ -149,8 +144,8 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```text
-    /// use tenferro::core::DynTensor;
+    /// ```ignore
+    /// use tenferro::snapshot::DynTensor;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
     /// let dense: DynTensor =
@@ -170,16 +165,11 @@ impl DynTensor {
     ///
     /// # Examples
     ///
-    /// ```text
-    /// use tenferro::{core::DynTensor};
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// ```ignore
+    /// use tenferro::{snapshot::DynTensor, Tensor};
     ///
-    /// let diag = StructuredTensor::from_diagonal_vector(
-    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    ///     2,
-    /// )
-    /// .unwrap();
-    /// let x: DynTensor = diag.into();
+    /// let payload = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
+    /// let x: DynTensor = Tensor::diag(&payload).unwrap().primal_snapshot();
     /// assert!(x.is_diag());
     /// ```
     pub fn is_diag(&self) -> bool {
@@ -188,6 +178,24 @@ impl DynTensor {
             Self::F64(t) => t.is_diag(),
             Self::C32(t) => t.is_diag(),
             Self::C64(t) => t.is_diag(),
+        }
+    }
+
+    /// Materializes a dense snapshot with the same logical tensor values.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Requires default runtime to be configured for structured inputs.
+    /// let dense = snapshot.to_dense()?;
+    /// assert!(dense.is_dense());
+    /// ```
+    pub fn to_dense(&self) -> Result<Self> {
+        match self {
+            Self::F32(t) => Ok(Self::F32(StructuredTensor::from_dense(t.to_dense()?))),
+            Self::F64(t) => Ok(Self::F64(StructuredTensor::from_dense(t.to_dense()?))),
+            Self::C32(t) => Ok(Self::C32(StructuredTensor::from_dense(t.to_dense()?))),
+            Self::C64(t) => Ok(Self::C64(StructuredTensor::from_dense(t.to_dense()?))),
         }
     }
 

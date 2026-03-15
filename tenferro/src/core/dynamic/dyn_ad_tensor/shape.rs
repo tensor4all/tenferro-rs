@@ -1,8 +1,8 @@
 use tenferro_tensor::MemoryOrder;
 
 use super::layout::{
-    contiguous_ad_tensor_typed, diag_embed_ad_tensor_typed, reshape_ad_tensor_typed,
-    take_prefix_ad_tensor_typed,
+    contiguous_ad_tensor_typed, diag_embed_ad_tensor_typed, permute_ad_tensor_typed,
+    reshape_ad_tensor_typed, take_prefix_ad_tensor_typed,
 };
 use super::Tensor;
 use crate::Result;
@@ -55,6 +55,26 @@ impl Tensor {
             Self::F64(v) => Ok(Self::F64(reshape_ad_tensor_typed(v, new_dims)?)),
             Self::C32(v) => Ok(Self::C32(reshape_ad_tensor_typed(v, new_dims)?)),
             Self::C64(v) => Ok(Self::C64(reshape_ad_tensor_typed(v, new_dims)?)),
+        }
+    }
+
+    /// Permutes logical tensor axes while preserving AD mode.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro::Tensor;
+    ///
+    /// let x = Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+    /// let y = x.permute(&[1, 0]).unwrap();
+    /// assert_eq!(y.dims(), &[2, 2]);
+    /// ```
+    pub fn permute(&self, perm: &[usize]) -> Result<Self> {
+        match self {
+            Self::F32(v) => Ok(Self::F32(permute_ad_tensor_typed(v, perm)?)),
+            Self::F64(v) => Ok(Self::F64(permute_ad_tensor_typed(v, perm)?)),
+            Self::C32(v) => Ok(Self::C32(permute_ad_tensor_typed(v, perm)?)),
+            Self::C64(v) => Ok(Self::C64(permute_ad_tensor_typed(v, perm)?)),
         }
     }
 
