@@ -1059,6 +1059,46 @@ fn huge_strides_rejected_by_layout_validation() {
     );
 }
 
+#[test]
+fn narrow_with_large_offset_works() {
+    let data: Vec<f64> = (0..100).map(|i| i as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[10, 10], COL).unwrap();
+    let n = t.narrow(0, 5, 3).unwrap();
+    assert_eq!(n.dims(), &[3, 10]);
+    assert_eq!(n.offset(), 5);
+}
+
+#[test]
+fn select_with_valid_index_works() {
+    let data: Vec<f64> = (0..12).map(|i| i as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[3, 4], COL).unwrap();
+    let s = t.select(0, 1).unwrap();
+    assert_eq!(s.dims(), &[4]);
+    assert_eq!(s.offset(), 1);
+}
+
+#[test]
+fn narrow_offset_overflow_returns_error() {
+    let data = vec![0.0f64; 10];
+    let huge_stride = (isize::MAX / 2) as isize;
+    let result = Tensor::<f64>::from_vec(data, &[2, 2], &[1, huge_stride], 0);
+    assert!(
+        matches!(result, Err(tenferro_device::Error::StrideError(_))),
+        "expected StrideError for strides causing overflow"
+    );
+}
+
+#[test]
+fn select_offset_overflow_returns_error() {
+    let data = vec![0.0f64; 10];
+    let huge_stride = (isize::MAX / 2) as isize;
+    let result = Tensor::<f64>::from_vec(data, &[2, 2], &[1, huge_stride], 0);
+    assert!(
+        matches!(result, Err(tenferro_device::Error::StrideError(_))),
+        "expected StrideError for strides causing overflow"
+    );
+}
+
 // ============================================================================
 // Strided copy bounds checking tests (issue #461)
 // ============================================================================

@@ -138,6 +138,47 @@ fn cpu_scalar_phase1_mean_reduction_handles_non_contiguous_input() {
 }
 
 #[test]
+fn cpu_scalar_phase1_mean_reduction_empty_dimension_returns_error() {
+    let mut ctx = CpuContext::new(1);
+
+    let mean_desc = ScalarPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1],
+        op: ScalarReductionOp::Mean,
+    };
+    let mean_plan = <CpuBackend as TensorScalarPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &mean_desc,
+        &[&[0, 2], &[2]],
+    )
+    .unwrap();
+
+    let input = Tensor::<f64>::zeros(
+        &[0, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    let mut mean_out = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    let result = <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &mean_plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut mean_out,
+    );
+    assert!(
+        matches!(result, Err(tenferro_device::Error::InvalidArgument(_))),
+        "expected InvalidArgument for mean reduction over empty dimension, got: {:?}",
+        result.err()
+    );
+}
+
+#[test]
 fn cuda_scalar_phase1_does_not_advertise_unimplemented_ops() {
     assert!(
         !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
