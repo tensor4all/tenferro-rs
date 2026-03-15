@@ -2,6 +2,7 @@ mod autodiff;
 mod einsum;
 mod layout;
 pub mod meta;
+mod placement;
 
 pub(crate) use einsum::{
     accumulate_tangent as accumulate_structured_tangent, compress_dense_to_layout_in_ctx,

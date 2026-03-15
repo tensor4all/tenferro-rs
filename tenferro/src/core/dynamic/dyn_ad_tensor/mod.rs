@@ -6,6 +6,7 @@ mod eager_scalar;
 mod eager_tensor;
 mod layout;
 mod merge;
+mod placement;
 mod promotion;
 mod pullback;
 mod scalar_ops;
