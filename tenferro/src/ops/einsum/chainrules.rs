@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use chainrules::{autograd, AdResult, AutogradGraph, BackwardOptions, Variable};
-use tenferro_algebra::{HasAlgebra, Scalar, Standard};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Standard};
 use tenferro_einsum::{variable_einsum, BackendContext, EinsumBackend};
 use tenferro_tensor::Tensor;
 
@@ -56,7 +56,7 @@ pub(crate) fn einsum<T, Backend>(
     operands: &[&Variable<Tensor<T>>],
 ) -> AdResult<Variable<Tensor<T>>>
 where
-    T: Scalar + HasAlgebra<Algebra = Standard<T>> + Send + Sync + 'static,
+    T: Scalar + Conjugate + HasAlgebra<Algebra = Standard<T>> + Send + Sync + 'static,
     Backend: EinsumBackend<Standard<T>> + Send + Sync + 'static,
     BackendContext<Standard<T>, Backend>: Send,
 {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -37,7 +37,7 @@ pub fn einsum_into<Alg, Backend>(
 ) -> Result<()>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
@@ -90,7 +90,7 @@ pub fn einsum_with_subscripts_into<Alg, Backend>(
 ) -> Result<()>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
@@ -127,7 +127,7 @@ pub fn einsum_with_path_into<Alg, Backend>(
 ) -> Result<()>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
@@ -163,7 +163,7 @@ pub fn einsum_with_plan_into<Alg, Backend>(
 ) -> Result<()>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let _ = size_dict;

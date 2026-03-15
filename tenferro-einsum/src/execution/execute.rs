@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
 use tenferro_prims::{
     SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
@@ -37,7 +37,7 @@ pub(crate) fn execute_tree<Alg, Backend>(
 ) -> Result<()>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let n_inputs = tree.subscripts.inputs.len();
@@ -265,7 +265,7 @@ pub(crate) fn execute_nested<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     // Validate operand count at the top level
@@ -288,7 +288,7 @@ fn execute_nested_inner<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     match nested {

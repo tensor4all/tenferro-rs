@@ -1,5 +1,5 @@
 use chainrules::{AdResult, Differentiable, DualValue};
-use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -32,7 +32,7 @@ pub fn dual_einsum<Alg, Backend>(
 ) -> AdResult<DualValue<Tensor<Alg::Scalar>>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
 {
@@ -73,7 +73,7 @@ pub fn einsum_rrule<Alg, Backend>(
 ) -> Result<Vec<Tensor<Alg::Scalar>>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
@@ -125,7 +125,7 @@ pub fn einsum_frule<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
@@ -147,7 +147,7 @@ pub(crate) fn einsum_frule_impl<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let n = primals.len();
@@ -218,7 +218,7 @@ pub fn einsum_hvp<Alg, Backend>(
 ) -> Result<Vec<(Tensor<Alg::Scalar>, Tensor<Alg::Scalar>)>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;

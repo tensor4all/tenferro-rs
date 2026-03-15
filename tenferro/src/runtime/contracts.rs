@@ -3,7 +3,7 @@
 use chainrules_scalarops::ScalarAd;
 use num_complex::Complex;
 use num_traits::Float;
-use tenferro_algebra::{HasAlgebra, Scalar, Standard};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Standard};
 use tenferro_linalg::{KernelLinalgScalar, LinalgScalar};
 
 use crate::core::DynTensorTyped;
@@ -36,9 +36,9 @@ impl<T> StandardRuntimeValue for T where
 /// fn require_einsum<T: tenferro::runtime::contracts::EinsumRuntimeValue>() {}
 /// require_einsum::<f64>();
 /// ```
-pub trait EinsumRuntimeValue: StandardRuntimeValue {}
+pub trait EinsumRuntimeValue: StandardRuntimeValue + Conjugate {}
 
-impl<T> EinsumRuntimeValue for T where T: StandardRuntimeValue {}
+impl<T> EinsumRuntimeValue for T where T: StandardRuntimeValue + Conjugate {}
 
 #[doc(hidden)]
 /// Hidden bound for values that support scalar pointwise and reduction primitives.

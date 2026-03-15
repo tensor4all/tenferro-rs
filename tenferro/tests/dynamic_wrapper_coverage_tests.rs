@@ -43,6 +43,10 @@ fn matrix_f64(values: &[f64], dims: &[usize]) -> DenseTensor<f64> {
     DenseTensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn matrix_c32(values: &[Complex32], dims: &[usize]) -> DenseTensor<Complex32> {
+    DenseTensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
+}
+
 fn matrix_c64(values: &[Complex64], dims: &[usize]) -> DenseTensor<Complex64> {
     DenseTensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
 }
@@ -427,7 +431,41 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     let solved = tri_c64.solve_triangular(&rhs_c64).unwrap();
     assert_eq!(solved.scalar_type(), ScalarType::C64);
 
-    let complex_err = match primal!(matrix_c64(
+    let complex = primal!(matrix_c64(
+        &[
+            Complex64::new(4.0, 0.5),
+            Complex64::new(1.0, -0.25),
+            Complex64::new(1.0, 0.25),
+            Complex64::new(3.0, 1.0),
+        ],
+        &[2, 2],
+    ));
+    let complex_svd = complex.svd().unwrap();
+    assert_eq!(complex_svd.u.scalar_type(), ScalarType::C64);
+    assert_eq!(complex_svd.s.scalar_type(), ScalarType::F64);
+    assert_eq!(complex_svd.vt.scalar_type(), ScalarType::C64);
+    let complex_qr = complex.qr().unwrap();
+    assert_eq!(complex_qr.q.scalar_type(), ScalarType::C64);
+    assert_eq!(complex_qr.r.scalar_type(), ScalarType::C64);
+
+    let complex32 = primal!(matrix_c32(
+        &[
+            Complex32::new(4.0, 0.5),
+            Complex32::new(1.0, -0.25),
+            Complex32::new(1.0, 0.25),
+            Complex32::new(3.0, 1.0),
+        ],
+        &[2, 2],
+    ));
+    let complex32_svd = complex32.svd().unwrap();
+    assert_eq!(complex32_svd.u.scalar_type(), ScalarType::C32);
+    assert_eq!(complex32_svd.s.scalar_type(), ScalarType::F32);
+    assert_eq!(complex32_svd.vt.scalar_type(), ScalarType::C32);
+    let complex32_qr = complex32.qr().unwrap();
+    assert_eq!(complex32_qr.q.scalar_type(), ScalarType::C32);
+    assert_eq!(complex32_qr.r.scalar_type(), ScalarType::C32);
+
+    let complex_err = match reverse!(matrix_c64(
         &[
             Complex64::new(4.0, 0.5),
             Complex64::new(1.0, -0.25),
@@ -438,11 +476,29 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     ))
     .svd()
     {
-        Ok(_) => panic!("complex svd should stay rejected by the dynamic wrapper"),
+        Ok(_) => panic!("complex reverse-mode svd should stay rejected by the dynamic wrapper"),
         Err(err) => err,
     };
     assert!(
-        matches!(complex_err, tenferro::Error::InvalidAdTensor { message } if message.contains("requires a real Tensor input"))
+        matches!(complex_err, tenferro::Error::InvalidAdTensor { message } if message.contains("supports complex tensors only in primal mode"))
+    );
+
+    let complex32_err = match reverse!(matrix_c32(
+        &[
+            Complex32::new(4.0, 0.5),
+            Complex32::new(1.0, -0.25),
+            Complex32::new(1.0, 0.25),
+            Complex32::new(3.0, 1.0),
+        ],
+        &[2, 2],
+    ))
+    .qr()
+    {
+        Ok(_) => panic!("complex reverse-mode qr should stay rejected by the dynamic wrapper"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(complex32_err, tenferro::Error::InvalidAdTensor { message } if message.contains("supports complex tensors only in primal mode"))
     );
 
     let mismatch_err = match matrix32.solve(&rhs64) {

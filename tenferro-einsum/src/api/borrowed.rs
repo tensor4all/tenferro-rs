@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -13,18 +13,38 @@ use crate::planning::tree::ContractionTree;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
 
-pub(super) fn canonicalize_col_major_operands<T: Scalar>(
+fn materialize_logical_col_major<T: Scalar + Conjugate>(tensor: &Tensor<T>) -> Tensor<T> {
+    if tensor.is_col_major_contiguous() && tensor.offset() == 0 && !tensor.is_conjugated() {
+        return tensor.clone();
+    }
+
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let offset = usize::try_from(contiguous.offset()).unwrap_or(0);
+    let len = contiguous.len();
+    let data = contiguous
+        .buffer()
+        .as_slice()
+        .and_then(|values| values.get(offset..offset + len))
+        .map(|values| {
+            if contiguous.is_conjugated() {
+                values.iter().copied().map(Conjugate::conj).collect()
+            } else {
+                values.to_vec()
+            }
+        });
+
+    data.and_then(|values| {
+        Tensor::from_slice(&values, tensor.dims(), MemoryOrder::ColumnMajor).ok()
+    })
+    .unwrap_or_else(|| tensor.clone().into_contiguous(MemoryOrder::ColumnMajor))
+}
+
+pub(super) fn canonicalize_col_major_operands<T: Scalar + Conjugate>(
     operands: &[&Tensor<T>],
 ) -> Vec<Tensor<T>> {
     operands
         .iter()
-        .map(|t| {
-            if t.is_col_major_contiguous() && t.offset() == 0 {
-                (*t).clone()
-            } else {
-                (*t).clone().into_contiguous(MemoryOrder::ColumnMajor)
-            }
-        })
+        .map(|tensor| materialize_logical_col_major(tensor))
         .collect()
 }
 
@@ -79,7 +99,7 @@ pub fn einsum<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let subs = Subscripts::parse(subscripts)?;
@@ -132,7 +152,7 @@ pub fn einsum_with_subscripts<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
@@ -165,7 +185,7 @@ pub fn einsum_with_path<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
@@ -196,7 +216,7 @@ pub fn einsum_with_plan<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let mut sd = tree.size_dict.clone();
