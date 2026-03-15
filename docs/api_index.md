@@ -216,6 +216,16 @@ arrays and tenferro tensors. Provides checked
 (`mdarray_to_tensor`, `tensor_to_mdarray`) conversion functions for
 bidirectional data exchange between `Array<T, DynRank>` and `Tensor<T>`.
 
+<a id="tenferro-ndarray"></a>
+### [tenferro-ndarray](tenferro_ndarray/index.html) <small>(Extension)</small>
+
+Bridge between [ndarray](https://docs.rs/ndarray) arrays and tenferro tensors.
+Provides checked (`try_ndarray_to_tensor`, `try_tensor_to_ndarray`) and
+convenience (`ndarray_to_tensor`, `tensor_to_ndarray`) conversion functions for
+bidirectional data exchange between dense `ndarray` values and
+`tenferro_tensor::Tensor<T>`. The optional `frontend` feature adds
+`try_ndarray_to_frontend(...)` for direct conversion into `tenferro::Tensor`.
+
 <a id="tenferro"></a>
 ### [tenferro](tenferro/index.html) <small>(Extension)</small>
 
