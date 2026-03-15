@@ -123,6 +123,20 @@ fn root_einsum_keeps_diag_output_in_structured_carrier() {
 }
 
 #[test]
+fn root_einsum_owned_keeps_diag_output_in_structured_carrier() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let out = Tensor::einsum_owned(
+        "ij,jk->ik",
+        vec![diag_f64(&[1.0, 2.0]), diag_f64(&[3.0, 4.0])],
+    )
+    .unwrap();
+
+    assert!(out.is_diag());
+    assert_eq!(out.dims(), &[2, 2]);
+    assert_eq!(out.as_f64().unwrap().primal().dims(), &[2]);
+}
+
+#[test]
 fn root_einsum_reverse_keeps_diag_cotangent_space() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let mut a = diag_f64(&[1.0, 2.0]);
@@ -131,6 +145,31 @@ fn root_einsum_reverse_keeps_diag_cotangent_space() {
     b.set_requires_grad(true).unwrap();
 
     let out = Tensor::einsum("ij,jk->ik", &[&a, &b]).unwrap();
+    let cotangent = diag_f64(&[0.5, -1.0]);
+    let grads = grad_wrt(&out, &cotangent, &[&a, &b]);
+
+    assert!(out.is_diag());
+    assert!(grads[0].as_ref().unwrap().is_diag());
+    assert!(grads[1].as_ref().unwrap().is_diag());
+    assert_eq!(
+        grads[0].as_ref().unwrap().as_f64().unwrap().primal().dims(),
+        &[2]
+    );
+    assert_eq!(
+        grads[1].as_ref().unwrap().as_f64().unwrap().primal().dims(),
+        &[2]
+    );
+}
+
+#[test]
+fn root_einsum_owned_reverse_keeps_diag_cotangent_space() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let mut a = diag_f64(&[1.0, 2.0]);
+    a.set_requires_grad(true).unwrap();
+    let mut b = diag_f64(&[3.0, 4.0]);
+    b.set_requires_grad(true).unwrap();
+
+    let out = Tensor::einsum_owned("ij,jk->ik", vec![a.clone(), b.clone()]).unwrap();
     let cotangent = diag_f64(&[0.5, -1.0]);
     let grads = grad_wrt(&out, &cotangent, &[&a, &b]);
 

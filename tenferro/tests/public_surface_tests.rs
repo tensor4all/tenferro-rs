@@ -316,6 +316,31 @@ fn tensor_public_einsum_uses_dynamic_operands_only() {
 }
 
 #[test]
+fn tensor_public_einsum_owned_accepts_owned_dynamic_operands() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let operands = vec![
+        Tensor::from_tensor(
+            DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+        ),
+        Tensor::from_tensor(
+            DenseTensor::<Complex64>::from_slice(
+                &[Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
+                &[2],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap(),
+        ),
+    ];
+
+    let out = Tensor::einsum_owned("i,i->", operands).unwrap();
+    assert_eq!(out.scalar_type(), tenferro::ScalarType::C64);
+    assert_eq!(
+        out.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[Complex64::new(5.0, -1.0)]
+    );
+}
+
+#[test]
 fn tensor_public_linalg_single_result_methods_do_not_require_typed_api() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let a = Tensor::from_tensor(

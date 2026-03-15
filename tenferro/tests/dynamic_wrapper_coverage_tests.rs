@@ -345,8 +345,29 @@ fn tensor_dynamic_tensor_wrappers_cover_all_variants_and_errors() {
     .unwrap();
     assert_eq!(dot_c64.scalar_type(), ScalarType::C64);
 
+    let owned_dot = Tensor::einsum_owned(
+        "i,i->",
+        vec![
+            primal!(vector_f64(&[1.0, 2.0])),
+            primal!(vector_c64(&[
+                Complex64::new(1.0, 0.5),
+                Complex64::new(-2.0, 1.0),
+            ])),
+        ],
+    )
+    .unwrap();
+    assert_eq!(owned_dot.scalar_type(), ScalarType::C64);
+
     let err = match Tensor::einsum("->", &[]) {
         Ok(_) => panic!("einsum should reject an empty operand list"),
+        Err(err) => err,
+    };
+    assert!(
+        matches!(err, tenferro::Error::InvalidAdTensor { message } if message.contains("at least one operand"))
+    );
+
+    let err = match Tensor::einsum_owned("->", Vec::new()) {
+        Ok(_) => panic!("einsum_owned should reject an empty operand list"),
         Err(err) => err,
     };
     assert!(

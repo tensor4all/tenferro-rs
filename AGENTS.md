@@ -126,7 +126,6 @@ If `cargo fmt --all --check` fails, run `cargo fmt --all` to fix formatting auto
 ### PR Creation Rules
 
 - PRs to `main` must be created using `gh pr create`
-- AI-generated PRs must include `Generated with [Claude Code](https://claude.com/claude-code)` in the body
 - Do not include AI-generated analysis reports as standalone files in PRs
 - Enable auto-merge after creating a PR: `gh pr merge --auto --squash --delete-branch`
 - `createpr` must confirm auto-merge remains enabled and the required branch protection checks are still configured
