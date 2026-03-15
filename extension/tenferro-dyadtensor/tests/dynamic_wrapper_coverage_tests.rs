@@ -103,7 +103,7 @@ fn dynadtensor_reverse_graph_helpers_expose_same_and_distinct_graphs() {
 }
 
 #[test]
-fn dynadtensor_to_scalar_type_covers_cross_precision_and_real_complex_casts() {
+fn dynadtensor_to_scalar_type_covers_all_explicit_cast_pairs() {
     let real32 = DynAdTensor::new_primal(scalar_f32(1.5));
     let real64 = DynAdTensor::new_primal(scalar_f64(2.5));
     let complex32 = DynAdTensor::new_primal(scalar_c32(Complex32::new(3.0, -4.0)));
@@ -152,11 +152,32 @@ fn dynadtensor_to_scalar_type_covers_cross_precision_and_real_complex_casts() {
         ScalarType::C64
     );
     assert_eq!(
+        real32
+            .to_scalar_type(ScalarType::C64)
+            .unwrap()
+            .scalar_type(),
+        ScalarType::C64
+    );
+    assert_eq!(
+        real64
+            .to_scalar_type(ScalarType::C32)
+            .unwrap()
+            .scalar_type(),
+        ScalarType::C32
+    );
+    assert_eq!(
         complex32
             .to_scalar_type(ScalarType::F32)
             .unwrap()
             .scalar_type(),
         ScalarType::F32
+    );
+    assert_eq!(
+        complex32
+            .to_scalar_type(ScalarType::F64)
+            .unwrap()
+            .scalar_type(),
+        ScalarType::F64
     );
     assert_eq!(
         complex64
@@ -165,13 +186,12 @@ fn dynadtensor_to_scalar_type_covers_cross_precision_and_real_complex_casts() {
             .scalar_type(),
         ScalarType::F64
     );
-
-    let err = match real32.to_scalar_type(ScalarType::C64) {
-        Ok(_) => panic!("f32 -> c64 cast should stay unsupported"),
-        Err(err) => err,
-    };
-    assert!(
-        matches!(err, tenferro_dyadtensor::Error::InvalidAdTensor { message } if message.contains("unsupported promotion"))
+    assert_eq!(
+        complex64
+            .to_scalar_type(ScalarType::F32)
+            .unwrap()
+            .scalar_type(),
+        ScalarType::F32
     );
 }
 
