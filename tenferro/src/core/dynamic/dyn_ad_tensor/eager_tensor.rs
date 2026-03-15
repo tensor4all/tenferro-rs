@@ -4,6 +4,58 @@ use crate::ops::ad;
 use crate::{AdTensor, Error, Result};
 
 impl Tensor {
+    fn einsum_with_refs(subscripts: &str, operands: &[&Self]) -> Result<Self> {
+        if operands.is_empty() {
+            return Err(Error::InvalidAdTensor {
+                message: "einsum requires at least one operand".to_string(),
+            });
+        }
+        let (target, promoted) = promote_many_to_common(operands)?;
+
+        match target {
+            crate::ScalarType::F32 => {
+                let refs: Vec<&AdTensor<f32>> = promoted
+                    .iter()
+                    .map(|operand| match operand {
+                        Self::F32(value) => value,
+                        _ => unreachable!("promotion join should normalize all operands to f32"),
+                    })
+                    .collect();
+                Ok(Self::F32(ad::einsum(subscripts, &refs)?))
+            }
+            crate::ScalarType::F64 => {
+                let refs: Vec<&AdTensor<f64>> = promoted
+                    .iter()
+                    .map(|operand| match operand {
+                        Self::F64(value) => value,
+                        _ => unreachable!("promotion join should normalize all operands to f64"),
+                    })
+                    .collect();
+                Ok(Self::F64(ad::einsum(subscripts, &refs)?))
+            }
+            crate::ScalarType::C32 => {
+                let refs: Vec<&AdTensor<num_complex::Complex32>> = promoted
+                    .iter()
+                    .map(|operand| match operand {
+                        Self::C32(value) => value,
+                        _ => unreachable!("promotion join should normalize all operands to c32"),
+                    })
+                    .collect();
+                Ok(Self::C32(ad::einsum(subscripts, &refs)?))
+            }
+            crate::ScalarType::C64 => {
+                let refs: Vec<&AdTensor<num_complex::Complex64>> = promoted
+                    .iter()
+                    .map(|operand| match operand {
+                        Self::C64(value) => value,
+                        _ => unreachable!("promotion join should normalize all operands to c64"),
+                    })
+                    .collect();
+                Ok(Self::C64(ad::einsum(subscripts, &refs)?))
+            }
+        }
+    }
+
     /// Runs eager AD full `sum` reduction on a dynamic tensor.
     ///
     /// # Examples
@@ -56,54 +108,43 @@ impl Tensor {
     /// assert_eq!(out.dims(), &[]);
     /// ```
     pub fn einsum(subscripts: &str, operands: &[&Self]) -> Result<Self> {
-        if operands.is_empty() {
-            return Err(Error::InvalidAdTensor {
-                message: "einsum requires at least one operand".to_string(),
-            });
-        }
-        let (target, promoted) = promote_many_to_common(operands)?;
+        Self::einsum_with_refs(subscripts, operands)
+    }
 
-        match target {
-            crate::ScalarType::F32 => {
-                let refs: Vec<&AdTensor<f32>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::F32(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to f32"),
-                    })
-                    .collect();
-                Ok(Self::F32(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::F64 => {
-                let refs: Vec<&AdTensor<f64>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::F64(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to f64"),
-                    })
-                    .collect();
-                Ok(Self::F64(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::C32 => {
-                let refs: Vec<&AdTensor<num_complex::Complex32>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::C32(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to c32"),
-                    })
-                    .collect();
-                Ok(Self::C32(ad::einsum(subscripts, &refs)?))
-            }
-            crate::ScalarType::C64 => {
-                let refs: Vec<&AdTensor<num_complex::Complex64>> = promoted
-                    .iter()
-                    .map(|operand| match operand {
-                        Self::C64(value) => value,
-                        _ => unreachable!("promotion join should normalize all operands to c64"),
-                    })
-                    .collect();
-                Ok(Self::C64(ad::einsum(subscripts, &refs)?))
-            }
-        }
+    /// Runs direct AD einsum on owned dynamic tensors.
+    ///
+    /// This is a convenience, ownership-oriented variant of
+    /// [`Tensor::einsum`]. It currently forwards through the same borrow-based
+    /// machinery after temporarily borrowing the owned operands.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use num_complex::Complex64;
+    /// use tenferro::{set_default_runtime, Tensor, RuntimeContext};
+    /// use tenferro_prims::CpuContext;
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+    ///
+    /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    /// let operands = vec![
+    ///     Tensor::from_tensor(
+    ///         DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor)
+    ///             .unwrap(),
+    ///     ),
+    ///     Tensor::from_tensor(
+    ///         DenseTensor::<Complex64>::from_slice(
+    ///             &[Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.0)],
+    ///             &[2],
+    ///             MemoryOrder::ColumnMajor,
+    ///         )
+    ///         .unwrap(),
+    ///     ),
+    /// ];
+    /// let out = Tensor::einsum_owned("i,i->", operands).unwrap();
+    /// assert_eq!(out.dims(), &[]);
+    /// ```
+    pub fn einsum_owned(subscripts: &str, operands: Vec<Self>) -> Result<Self> {
+        let refs: Vec<&Self> = operands.iter().collect();
+        Self::einsum_with_refs(subscripts, &refs)
     }
 }
