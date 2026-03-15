@@ -140,6 +140,18 @@ pub(crate) fn copy_strided<T: Copy>(
             .zip(dst_strides)
             .map(|(&i, &s)| i as isize * s)
             .sum::<isize>();
+        debug_assert!(
+            src_pos >= 0 && (src_pos as usize) < src.len(),
+            "copy_strided: source position {} out of bounds for buffer length {}",
+            src_pos,
+            src.len()
+        );
+        debug_assert!(
+            dst_pos >= 0 && (dst_pos as usize) < dst.len(),
+            "copy_strided: destination position {} out of bounds for buffer length {}",
+            dst_pos,
+            dst.len()
+        );
         dst[dst_pos as usize] = src[src_pos as usize];
 
         for axis in 0..dims.len() {
@@ -193,6 +205,24 @@ pub(crate) fn add_strided<T: Copy + Add<Output = T>>(
             .zip(dst_strides.iter())
             .map(|(&i, &s)| i as isize * s)
             .sum::<isize>();
+        debug_assert!(
+            a_pos >= 0 && (a_pos as usize) < a.data.len(),
+            "add_strided: input a position {} out of bounds for buffer length {}",
+            a_pos,
+            a.data.len()
+        );
+        debug_assert!(
+            b_pos >= 0 && (b_pos as usize) < b.data.len(),
+            "add_strided: input b position {} out of bounds for buffer length {}",
+            b_pos,
+            b.data.len()
+        );
+        debug_assert!(
+            dst_pos >= 0 && (dst_pos as usize) < dst.len(),
+            "add_strided: destination position {} out of bounds for buffer length {}",
+            dst_pos,
+            dst.len()
+        );
         dst[dst_pos as usize] = a.data[a_pos as usize] + b.data[b_pos as usize];
 
         for axis in 0..dims.len() {

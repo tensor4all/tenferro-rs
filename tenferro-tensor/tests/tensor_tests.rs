@@ -1058,3 +1058,83 @@ fn huge_strides_rejected_by_layout_validation() {
         "expected StrideError for huge strides that would cause overflow"
     );
 }
+
+// ============================================================================
+// Strided copy bounds checking tests (issue #461)
+// ============================================================================
+
+#[test]
+fn contiguous_copy_valid_layout() {
+    let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let t = Tensor::<f64>::from_slice(&data, &[2, 3], COL).unwrap();
+    let c = t.contiguous(COL);
+    assert_eq!(c.buffer().as_slice().unwrap(), &data);
+}
+
+#[test]
+fn contiguous_copy_permuted_layout() {
+    let data = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let t = Tensor::<f64>::from_slice(&data, &[2, 3], COL).unwrap();
+    let tp = t.permute(&[1, 0]).unwrap();
+    let c = tp.contiguous(COL);
+    assert_eq!(c.dims(), &[3, 2]);
+    assert!(c.is_contiguous());
+}
+
+#[test]
+fn contiguous_copy_with_offset() {
+    let data = vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let t = Tensor::<f64>::from_vec(data, &[2, 3], &[1, 2], 1).unwrap();
+    let c = t.contiguous(COL);
+    assert_eq!(c.dims(), &[2, 3]);
+    assert_eq!(c.offset(), 0);
+    assert!(c.is_contiguous());
+    assert_eq!(
+        c.buffer().as_slice().unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+}
+
+#[test]
+fn contiguous_copy_3d_tensor() {
+    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let tp = t.permute(&[2, 0, 1]).unwrap();
+    let c = tp.contiguous(COL);
+    assert!(c.is_contiguous());
+    assert_eq!(c.dims(), &[4, 2, 3]);
+}
+
+#[test]
+fn contiguous_copy_batched_tril() {
+    let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL);
+    let lower = t.tril(0);
+    let c = lower.contiguous(COL);
+    assert_eq!(c.dims(), &[3, 3, 2]);
+    assert!(c.is_contiguous());
+}
+
+#[test]
+fn contiguous_copy_empty_tensor() {
+    let t = Tensor::<f64>::zeros(&[0, 4], MEM, COL);
+    let c = t.contiguous(COL);
+    assert_eq!(c.dims(), &[0, 4]);
+    assert!(c.buffer().as_slice().unwrap().is_empty());
+}
+
+#[test]
+fn contiguous_copy_scalar_tensor() {
+    let t = Tensor::<f64>::zeros(&[], MEM, COL);
+    let c = t.contiguous(COL);
+    assert_eq!(c.dims(), &[] as &[usize]);
+    assert_eq!(c.buffer().as_slice().unwrap().len(), 1);
+}
+
+#[test]
+fn strided_copy_preserves_data() {
+    let data: Vec<f64> = (0..24).map(|i| i as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 3, 4], COL).unwrap();
+    let tp = t.permute(&[1, 0, 2]).unwrap();
+    let c = tp.contiguous(COL);
+    let result = c.buffer().as_slice().unwrap();
+    assert_eq!(result.len(), 24);
+}
