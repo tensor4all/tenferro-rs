@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use chainrules::{AdResult, Differentiable, NodeId, ReverseRule};
-use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_tensor::Tensor;
 
 use crate::api::einsum_with_subscripts;
@@ -16,7 +16,7 @@ use super::rules::einsum_frule_impl;
 pub(super) struct EinsumReverseRule<Alg, Backend>
 where
     Alg: Semiring + Send + Sync,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,
@@ -32,7 +32,7 @@ where
 impl<Alg, Backend> ReverseRule<Tensor<Alg::Scalar>> for EinsumReverseRule<Alg, Backend>
 where
     Alg: Semiring + Send + Sync,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,

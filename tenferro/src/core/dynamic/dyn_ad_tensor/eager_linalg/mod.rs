@@ -1,10 +1,23 @@
 use super::Tensor;
 use crate::ops::ad;
-use crate::{Error, Result, ScalarType};
+use crate::{AdMode, Error, Result, ScalarType};
+use num_complex::{Complex32, Complex64};
+
+mod results;
+
+pub use results::{
+    EigResult, EigenResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult,
+};
 
 fn real_only_error(op: &'static str, dtype: ScalarType) -> Error {
     Error::InvalidAdTensor {
         message: format!("{op} currently requires a real Tensor input, got {dtype:?}"),
+    }
+}
+
+fn primal_complex_only_error(op: &'static str) -> Error {
+    Error::InvalidAdTensor {
+        message: format!("{op} currently supports complex tensors only in primal mode"),
     }
 }
 
@@ -14,131 +27,37 @@ fn same_dtype_error(op: &'static str, lhs: ScalarType, rhs: ScalarType) -> Error
     }
 }
 
-/// Dynamic AD-aware SVD result.
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = x.svd()?;
-/// let _u = &out.u;
-/// let _s = &out.s;
-/// let _vt = &out.vt;
-/// ```
-#[derive(Clone)]
-pub struct SvdResult {
-    /// Left singular vectors.
-    pub u: Tensor,
-    /// Singular values.
-    pub s: Tensor,
-    /// Right singular vectors transposed.
-    pub vt: Tensor,
-}
-
-/// Dynamic AD-aware QR result.
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = x.qr()?;
-/// let _q = &out.q;
-/// let _r = &out.r;
-/// ```
-#[derive(Clone)]
-pub struct QrResult {
-    /// Q factor.
-    pub q: Tensor,
-    /// R factor.
-    pub r: Tensor,
-}
-
-/// Dynamic AD-aware LU result.
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = x.lu()?;
-/// let _l = &out.l;
-/// let _u = &out.u;
-/// ```
-#[derive(Clone)]
-pub struct LuResult {
-    /// Permutation indices.
-    pub p: Option<Vec<usize>>,
-    /// Lower factor.
-    pub l: Tensor,
-    /// Upper factor.
-    pub u: Tensor,
-}
-
-/// Dynamic AD-aware symmetric/Hermitian eigen result.
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = x.eigen()?;
-/// let _values = &out.values;
-/// let _vectors = &out.vectors;
-/// ```
-#[derive(Clone)]
-pub struct EigenResult {
-    /// Eigenvalues.
-    pub values: Tensor,
-    /// Eigenvectors.
-    pub vectors: Tensor,
-}
-
-/// Dynamic AD-aware general eigendecomposition result.
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = x.eig()?;
-/// let _values = &out.values;
-/// let _vectors = &out.vectors;
-/// ```
-#[derive(Clone)]
-pub struct EigResult {
-    /// Complex eigenvalues.
-    pub values: Tensor,
-    /// Complex eigenvectors.
-    pub vectors: Tensor,
-}
-
-/// Dynamic AD-aware sign/logabsdet result.
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = x.slogdet()?;
-/// let _sign = &out.sign;
-/// let _logabsdet = &out.logabsdet;
-/// ```
-#[derive(Clone)]
-pub struct SlogdetResult {
-    /// Sign tensor.
-    pub sign: Tensor,
-    /// Log-absolute-determinant tensor.
-    pub logabsdet: Tensor,
-}
-
-/// Dynamic AD-aware least squares result.
-///
-/// # Examples
-///
-/// ```ignore
-/// let out = a.lstsq(&b)?;
-/// let _x = &out.x;
-/// let _residual = &out.residual;
-/// ```
-#[derive(Clone)]
-pub struct LstsqResult {
-    /// Least squares solution.
-    pub x: Tensor,
-    /// Residual tensor.
-    pub residual: Tensor,
-}
-
 impl Tensor {
+    fn dense_primal_c32(
+        value: &crate::AdTensor<Complex32>,
+        op: &'static str,
+    ) -> Result<tenferro_tensor::Tensor<Complex32>> {
+        if value.mode() != AdMode::Primal {
+            return Err(primal_complex_only_error(op));
+        }
+        value
+            .structured_primal()
+            .to_dense()
+            .map_err(|e| Error::InvalidAdTensor {
+                message: format!("{op} failed to densify structured complex input: {e}"),
+            })
+    }
+
+    fn dense_primal_c64(
+        value: &crate::AdTensor<Complex64>,
+        op: &'static str,
+    ) -> Result<tenferro_tensor::Tensor<Complex64>> {
+        if value.mode() != AdMode::Primal {
+            return Err(primal_complex_only_error(op));
+        }
+        value
+            .structured_primal()
+            .to_dense()
+            .map_err(|e| Error::InvalidAdTensor {
+                message: format!("{op} failed to densify structured complex input: {e}"),
+            })
+    }
+
     /// Runs eager AD SVD on a dynamic tensor.
     ///
     /// # Examples
@@ -165,7 +84,24 @@ impl Tensor {
                     vt: out.vt.into(),
                 })
             }
-            _ => Err(real_only_error("svd", self.scalar_type())),
+            Self::C32(value) => {
+                let dense = Self::dense_primal_c32(value, "svd")?;
+                let out = crate::ops::svd(&dense).run()?;
+                Ok(SvdResult {
+                    u: Tensor::from_tensor(out.u),
+                    s: Tensor::from_tensor(out.s),
+                    vt: Tensor::from_tensor(out.vt),
+                })
+            }
+            Self::C64(value) => {
+                let dense = Self::dense_primal_c64(value, "svd")?;
+                let out = crate::ops::svd(&dense).run()?;
+                Ok(SvdResult {
+                    u: Tensor::from_tensor(out.u),
+                    s: Tensor::from_tensor(out.s),
+                    vt: Tensor::from_tensor(out.vt),
+                })
+            }
         }
     }
 
@@ -193,7 +129,22 @@ impl Tensor {
                     r: out.r.into(),
                 })
             }
-            _ => Err(real_only_error("qr", self.scalar_type())),
+            Self::C32(value) => {
+                let dense = Self::dense_primal_c32(value, "qr")?;
+                let out = crate::ops::qr(&dense).run()?;
+                Ok(QrResult {
+                    q: Tensor::from_tensor(out.q),
+                    r: Tensor::from_tensor(out.r),
+                })
+            }
+            Self::C64(value) => {
+                let dense = Self::dense_primal_c64(value, "qr")?;
+                let out = crate::ops::qr(&dense).run()?;
+                Ok(QrResult {
+                    q: Tensor::from_tensor(out.q),
+                    r: Tensor::from_tensor(out.r),
+                })
+            }
         }
     }
 

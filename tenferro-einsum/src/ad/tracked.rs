@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use chainrules::{autograd, AdResult, Differentiable, TrackedValue, Variable};
-use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_tensor::Tensor;
 
 use crate::api::einsum;
@@ -37,7 +37,7 @@ pub fn tracked_einsum<Alg: 'static, Backend>(
 ) -> AdResult<TrackedValue<Tensor<Alg::Scalar>>>
 where
     Alg: Semiring + Send + Sync,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg> + Send + Sync + 'static,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,
@@ -135,7 +135,7 @@ pub fn variable_einsum<Alg: 'static, Backend>(
 ) -> AdResult<Variable<Tensor<Alg::Scalar>>>
 where
     Alg: Semiring + Send + Sync,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg> + Send + Sync + 'static,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>> + 'static,
     BackendContext<Alg, Backend>: Send,

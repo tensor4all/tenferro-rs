@@ -14,6 +14,8 @@
 use std::fmt;
 use std::ops;
 
+use tenferro_algebra::Conjugate;
+
 /// Max-plus tropical scalar: ⊕ = max, ⊗ = +.
 ///
 /// The most common tropical semiring, used for shortest-path and
@@ -87,6 +89,12 @@ pub struct MinPlus<T>(pub T);
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 #[repr(transparent)]
 pub struct MaxMul<T>(pub T);
+
+impl<T: Copy> Conjugate for MaxPlus<T> {}
+
+impl<T: Copy> Conjugate for MinPlus<T> {}
+
+impl<T: Copy> Conjugate for MaxMul<T> {}
 
 // ---------------------------------------------------------------------------
 // Display

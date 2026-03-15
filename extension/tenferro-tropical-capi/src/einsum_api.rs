@@ -1,6 +1,7 @@
 use std::os::raw::c_char;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
+use tenferro_algebra::Conjugate;
 use tenferro_capi::{tfe_status_t, TfeTensorF64};
 use tenferro_einsum::{einsum, EinsumBackend};
 use tenferro_prims::{CpuBackend, CpuContext, TensorSemiringCore, TensorSemiringFastPath};
@@ -23,7 +24,7 @@ unsafe fn tropical_einsum_impl<T, Alg>(
     num_operands: usize,
 ) -> std::result::Result<*mut TfeTensorF64, tfe_status_t>
 where
-    T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
+    T: TropicalScalar<Inner = f64> + Conjugate + tenferro_algebra::HasAlgebra<Algebra = Alg>,
     Alg: tenferro_algebra::Semiring<Scalar = T>,
     CpuBackend: EinsumBackend<Alg>
         + TensorSemiringCore<Alg, Context = CpuContext>
@@ -55,7 +56,7 @@ unsafe fn tropical_einsum_rrule_impl<T, Alg>(
     grads_out: *mut *mut TfeTensorF64,
 ) -> std::result::Result<(), tfe_status_t>
 where
-    T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
+    T: TropicalScalar<Inner = f64> + Conjugate + tenferro_algebra::HasAlgebra<Algebra = Alg>,
     Alg: tenferro_algebra::Semiring<Scalar = T>,
     CpuBackend: EinsumBackend<Alg>
         + TensorSemiringCore<Alg, Context = CpuContext>
@@ -104,7 +105,7 @@ unsafe fn tropical_einsum_frule_impl<T, Alg>(
     tangents: *const *const TfeTensorF64,
 ) -> std::result::Result<*mut TfeTensorF64, tfe_status_t>
 where
-    T: TropicalScalar<Inner = f64> + tenferro_algebra::HasAlgebra<Algebra = Alg>,
+    T: TropicalScalar<Inner = f64> + Conjugate + tenferro_algebra::HasAlgebra<Algebra = Alg>,
     Alg: tenferro_algebra::Semiring<Scalar = T>,
     CpuBackend: EinsumBackend<Alg>
         + TensorSemiringCore<Alg, Context = CpuContext>

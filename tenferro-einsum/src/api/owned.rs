@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
+use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
@@ -31,7 +31,7 @@ pub fn einsum_owned<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let refs: Vec<&Tensor<Alg::Scalar>> = operands.iter().collect();
@@ -61,7 +61,7 @@ pub fn einsum_with_subscripts_owned<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let refs: Vec<&Tensor<Alg::Scalar>> = operands.iter().collect();
@@ -93,7 +93,7 @@ pub fn einsum_with_plan_owned<Alg, Backend>(
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
-    Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
     let refs: Vec<&Tensor<Alg::Scalar>> = operands.iter().collect();
