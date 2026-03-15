@@ -1,7 +1,7 @@
-# Dyadtensor Reverse Gradient Coverage
+# Frontend Reverse Gradient Coverage
 
 This note summarizes how reverse-mode gradients are wired in the
-`tenferro-dyadtensor` eager API.
+`tenferro` eager API.
 
 ## Goal
 
@@ -45,7 +45,7 @@ Public reverse entrypoints:
 - free `grad(...)`
 - free `backward(...)`
 
-These keep graph symbols internal to dyadtensor while preserving a homogeneous
+These keep graph symbols internal to `tenferro` while preserving a homogeneous
 reverse graph over runtime-typed tensor payloads.
 
 ## Current limits

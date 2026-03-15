@@ -14,7 +14,7 @@ members = [
     "extension/tenferro-tropical-capi",
     "extension/tenferro-burn",
     "extension/tenferro-mdarray",
-    "extension/tenferro-dyadtensor",
+    "tenferro",
     # extern (general-purpose, non-tenferro)
     "extern/chainrules-core",
     "extern/chainrules",

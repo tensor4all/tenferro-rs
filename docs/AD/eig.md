@@ -99,7 +99,7 @@ See `eigen.md` for the symmetric case.
 
 ## Dyadtensor integration
 
-`tenferro-dyadtensor` keeps reverse-mode graphs homogeneous: the graph carries
+`tenferro` keeps reverse-mode graphs homogeneous: the graph carries
 one runtime-typed tensor payload, and scalar AD values are rank-0 tensors
 rather than a separate scalar graph type.
 
@@ -110,8 +110,8 @@ That means `eig_ad(...).run()` is split as follows:
 - reverse mode with real inputs and complex outputs: currently unsupported
 
 The old mixed-type reverse bridge (`Complex -> Real`) was removed to keep the
-dyadtensor tape homogeneous. Dense `eig_rrule` still exists in
-`tenferro-linalg`; the restriction is in the dyadtensor wrapper layer.
+the `tenferro` frontend tape homogeneous. Dense `eig_rrule` still exists in
+`tenferro-linalg`; the restriction is in the frontend wrapper layer.
 
 ## References
 

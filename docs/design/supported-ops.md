@@ -130,7 +130,7 @@ The following public primal ops do not yet have stateless linalg AD rules:
 - `tensorinv`
 - `tensorsolve`
 
-## `tenferro-dyadtensor`
+## `tenferro`
 
 ### Structured tensor helpers
 
@@ -139,7 +139,7 @@ The following public primal ops do not yet have stateless linalg AD rules:
 
 ### Eager AD tensor entrypoints
 
-`tenferro_dyadtensor::Tensor` currently exposes these eager methods:
+`tenferro::Tensor` currently exposes these eager methods:
 
 - Einsum: `einsum`
 - Reductions: `sum`, `mean`, `var`, `std`
@@ -164,12 +164,12 @@ Internal builder APIs are implemented for:
   `sinh_ad`, `cosh_ad`, `asinh_ad`, `acosh_ad`, `atanh_ad`,
   `sum_ad`, `mean_ad`, `var_ad`, `std_ad`
 - Linalg: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
-  - `eig_ad` reverse mode is same-domain only in `tenferro-dyadtensor`; real-input reverse mode is intentionally rejected to keep the tape homogeneous
+  - `eig_ad` reverse mode is same-domain only in `tenferro`; real-input reverse mode is intentionally rejected to keep the tape homogeneous
 
 ### Runtime status
 
 - API contract: runtime-generic across CPU, CUDA, and ROCm
-- `chainrules_api::einsum` is backend-parametric over `tenferro-einsum::EinsumBackend`; callers choose the backend via the runtime context type
+- internal chainrules-backed einsum helpers remain backend-parametric over `tenferro-einsum::EinsumBackend`; runtime selection still happens through the frontend runtime context type
 - Structured tensor materialization and compressed einsum reuse the same einsum runtime-dispatch layer rather than maintaining separate CPU/CUDA/ROCm builder paths
 - Builder execution uses an explicit default-runtime holder, and reverse-mode bookkeeping stays on one homogeneous runtime-typed graph
 - `Tensor` is the canonical public payload for downstream tensor algebra; implicit result-type promotion happens inside mixed-dtype tensor ops (`complex` beats `real`, 64-bit beats 32-bit), explicit numeric casts use `to_scalar_type(...)`, and `detach()` drops AD metadata without switching to a second public tensor type
@@ -177,7 +177,7 @@ Internal builder APIs are implemented for:
   - CPU paths are implemented for the operations listed above
   - CUDA and ROCm dispatch report unsupported capability for scalar/analytic and most linalg families rather than assuming CPU-only execution
   - mixed-dtype reverse propagation is supported when operands share one reverse graph; pullbacks cast gradients back to each input dtype
-  - linalg entry points are dense-only at the `dyadtensor` layer; non-dense structured inputs return a runtime error instead of silently materializing dense fallbacks
+  - linalg entry points are dense-only at the `tenferro` frontend layer; non-dense structured inputs return a runtime error instead of silently materializing dense fallbacks
 
 ## `tenferro-capi`
 
@@ -219,14 +219,14 @@ The exported C surface currently focuses on a narrow, stable subset:
 ## `chainrules-scalarops`
 
 This external crate provides the scalar formula basis reused by
-`tenferro-dyadtensor` tensor-level wrappers.
+`tenferro` tensor-level wrappers.
 
 - Arithmetic: `add`, `sub`, `mul`, `div` with matching `*_rrule` / `*_frule`
 - Unary analytic/scalar: `conj`, `sqrt`, `exp`, `log`
 - Binary analytic: `atan2`
 - Power helpers: `powf`, `powi`
 
-The broader tensor-level analytic families in `tenferro-dyadtensor` are built
+The broader tensor-level analytic families in `tenferro` are built
 from these scalar formulas plus runtime-generic tensor primitives. They are not
 all exported directly from `chainrules-scalarops`.
 

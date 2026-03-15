@@ -133,7 +133,7 @@ prims, and the smaller linalg kernel basis.
 
 ### Dyadtensor / AD surface
 
-Owned by `extension/tenferro-dyadtensor` and `chainrules`:
+Owned by `extension/tenferro` and `chainrules`:
 
 - reverse / forward / HVP entry points over `einsum`
 - eager builder APIs for linalg results
@@ -174,13 +174,13 @@ The backend contract now distinguishes:
 - `KernelLinalgScalar` for dtypes supported by backend kernel implementations
 - `LapackEigScalar` for the narrower CPU eig helper path
 
-That keeps public/high-level linalg and dyadtensor bounds free of CPU-specific
+That keeps public/high-level linalg and tenferro frontend bounds free of CPU-specific
 names while still allowing the CPU backend to own its concrete eig buffer
 conversion details.
 
 ### 5. Dyadtensor runtime is generic at the API boundary, but backend coverage is still mixed
 
-`extension/tenferro-dyadtensor` now routes high-level primal and AD entrypoints
+`extension/tenferro` now routes high-level primal and AD entrypoints
 through runtime-dispatch helpers rather than CPU-specific production shortcuts.
 The remaining gap is that several families are only implemented deeply enough
 for CPU today, so unsupported backends still fail truthfully on capability.
@@ -210,14 +210,14 @@ still unsupported, including `det`, `eig`, `eigvals`, `eigvalsh`,
 ### Layer gaps
 
 - Continue broadening backend capability coverage behind the now-generic
-  dyadtensor runtime surface
+  tenferro runtime surface
 - Keep composite linalg paths lowering through capability-driven contracts as
   more backends land
 - Keep `KernelLinalgScalar` and `LapackEigScalar` separate as backend breadth grows
 
 ### Public API and family gaps
 
-- Add dense pointwise builder and AD families so dyadtensor is not linalg-only
+- Add dense pointwise builder and AD families so tenferro is not linalg-only
 - Audit PyTorch dense CPU public families that still have no tenferro family
   owner
 - Continue replay support for currently unsupported scalar-output oracle rows

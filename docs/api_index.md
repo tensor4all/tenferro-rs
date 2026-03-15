@@ -42,7 +42,7 @@ Extension:  tenferro-tropical       Tropical semiring operations (MaxPlus, MinPl
             tenferro-tropical-capi  C-API for tropical einsum
             tenferro-burn           Burn deep learning framework bridge
             tenferro-mdarray        mdarray multidimensional array bridge
-            tenferro-dyadtensor     Dynamic dyadic tensor API and AD runtime bridge
+            tenferro     Dynamic dyadic tensor API and AD runtime bridge
 ```
 
 ### Dependency Graph
@@ -216,21 +216,16 @@ arrays and tenferro tensors. Provides checked
 (`mdarray_to_tensor`, `tensor_to_mdarray`) conversion functions for
 bidirectional data exchange between `Array<T, DynRank>` and `Tensor<T>`.
 
-<a id="tenferro-dyadtensor"></a>
-### [tenferro-dyadtensor](tenferro_dyadtensor/index.html) <small>(Extension)</small>
+<a id="tenferro"></a>
+### [tenferro](tenferro/index.html) <small>(Extension)</small>
 
-Dynamic AD tensor interface on top of `StructuredTensor<T>` and homogeneous
-runtime-typed reverse graphs. `Tensor` is the canonical runtime tensor
-payload; rank-0 tensors act as scalar coefficients. Public dynamic boundaries
-include explicit numeric casts (`to_scalar_type`) and primal-only snapshots
-(`detach`, `primal_snapshot`) for storage, FFI, and export layers.
+User-facing dynamic tensor frontend. `Tensor` is the canonical public tensor
+object; rank-0 tensors act as scalar coefficients, and diagonal or
+multi-equivalence-class layouts are created through frontend methods such as
+`Tensor::diag`, `Tensor::diag_embed`, and `Tensor::with_axis_classes`.
 
-Dynamic dyadic tensor API that layers runtime-selected scalar/tensor types,
-structured tensor layouts, and AD-aware operation builders on top of the core
-tenferro crates. It provides the higher-level builder surface used by eager
-einsum and linalg flows, plus dynamic wrappers for forward- and reverse-mode
-execution. Reverse entrypoints use `set_requires_grad`, `grad`, and
+The crate exposes PyTorch-like eager tensor methods on top of the core typed
+tenferro crates. Reverse entrypoints use `set_requires_grad`, `grad`, and
 `backward`, while forward-mode uses scoped `forward_ad::dual_level(...)`.
-The implementation tree is operation-first: `ops/einsum`, `ops/scalar`,
-`ops/reduction`, and `ops/linalg/*` group primal and AD wiring by family
-rather than by internal bucket.
+Explicit numeric casts use `Tensor::to_scalar_type(...)`, while mixed-dtype
+ops apply implicit result-type promotion internally.

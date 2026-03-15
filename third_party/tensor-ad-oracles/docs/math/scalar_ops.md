@@ -4,7 +4,7 @@
 
 This note records the shared scalar AD formulas implemented in
 `chainrules-scalarops` together with the tensor-level wrappers used by
-`tenferro-dyadtensor`.
+`tenferro`.
 
 ## PyTorch Baseline
 

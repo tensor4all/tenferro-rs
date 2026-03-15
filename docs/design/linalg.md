@@ -28,7 +28,7 @@ tenferro-tensor
 - shape and option validation
 - public result structs and ergonomic APIs
 - composite lowering
-- oracle and dyadtensor surface integration
+- oracle and tenferro frontend integration
 - stateless AD rules for supported operations
 
 `tenferro-linalg` does not own:
