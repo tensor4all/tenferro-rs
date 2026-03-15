@@ -13,18 +13,27 @@ This repository currently provides:
   - `RuntimeContext`
   - `set_default_runtime`
   - `with_default_runtime`
-- PyTorch-like eager methods on `Tensor`:
+- PyTorch-like direct methods on `Tensor`:
   - scalar/analytic: `exp`, `sqrt`, `sin`, `cos`, `tanh`, `add`, `pow`, `mean`, `sum`, `var`, `std`, ...
   - tensor: `einsum`
   - linalg: `svd`, `qr`, `lu`, `eigen`, `eig`, `lstsq`, `solve`, `det`, `slogdet`, ...
 
-The preferred public surface is `Tensor` plus its eager methods. Runtime
+The preferred public surface is `Tensor` plus its direct methods. Runtime
 selection uses an explicit runtime holder, reverse-mode graphs stay
 homogeneous over one runtime-typed tensor payload, and rank-0 tensors carry
 scalar AD values. Mixed-dtype tensor ops apply implicit result-type promotion
 internally (`complex` beats `real`, `64-bit` beats `32-bit`), and reverse-mode
 pullbacks cast gradients back to each input dtype. Explicit numeric casts use
 `Tensor::to_scalar_type`.
+
+Placement and transfer stay on the tensor object:
+
+- `Tensor::memory_space()`
+- `Tensor::preferred_compute_device()`
+- `Tensor::to_memory_space(...)`
+- `Tensor::to_cpu()` / `Tensor::to_gpu()`
+
+Explicit runtime choice remains separate via `tenferro::runtime::with_runtime(...)`.
 
 ```rust
 use tenferro::{set_default_runtime, RuntimeContext, Tensor};

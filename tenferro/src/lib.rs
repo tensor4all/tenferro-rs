@@ -15,7 +15,7 @@
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`].
 //! The primary public frontend is [`Tensor`], with rank-0 tensor scalar
-//! semantics and eager tensor methods.
+//! semantics and direct tensor methods.
 //!
 //! Module map:
 //!
@@ -49,3 +49,4 @@ pub(crate) use core::{AdTensor, AdValue, DynTensor};
 pub use error::{Error, Result};
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use scalar_value::ScalarValue;
+pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};

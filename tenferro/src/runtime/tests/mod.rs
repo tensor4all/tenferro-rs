@@ -1,4 +1,5 @@
 mod organization;
+mod scope;
 
 use super::*;
 

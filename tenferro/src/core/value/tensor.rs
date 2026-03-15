@@ -9,6 +9,7 @@ use crate::structured::StructuredTensor;
 use crate::{Error, Result};
 
 mod accessors;
+mod placement;
 mod reverse_api;
 
 #[derive(Clone)]

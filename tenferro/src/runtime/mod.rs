@@ -85,6 +85,29 @@ pub fn set_default_runtime(ctx: RuntimeContext) -> DefaultRuntimeGuard {
     context::set_runtime_context(ctx)
 }
 
+/// Runs `f` with an explicitly supplied runtime installed for the duration of
+/// the closure.
+///
+/// Any previously configured default runtime is restored afterwards, even when
+/// `f` returns an error.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro::{runtime, RuntimeContext, Tensor};
+/// use tenferro_prims::CpuContext;
+///
+/// let out = runtime::with_runtime(RuntimeContext::Cpu(CpuContext::new(1)), || {
+///     let x = Tensor::from_slice(&[1.0_f64, 2.0], &[2])?;
+///     x.sum()
+/// });
+/// assert!(out.is_ok());
+/// ```
+pub fn with_runtime<R>(ctx: RuntimeContext, f: impl FnOnce() -> Result<R>) -> Result<R> {
+    let _guard = context::set_runtime_context(ctx);
+    f()
+}
+
 /// Runs `f` with the default runtime context.
 ///
 /// Returns [`crate::Error::RuntimeNotConfigured`] when runtime is not

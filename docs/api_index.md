@@ -224,8 +224,11 @@ object; rank-0 tensors act as scalar coefficients, and diagonal or
 multi-equivalence-class layouts are created through frontend methods such as
 `Tensor::diag`, `Tensor::diag_embed`, and `Tensor::with_axis_classes`.
 
-The crate exposes PyTorch-like eager tensor methods on top of the core typed
+The crate exposes PyTorch-like direct tensor methods on top of the core typed
 tenferro crates. Reverse entrypoints use `set_requires_grad`, `grad`, and
 `backward`, while forward-mode uses scoped `forward_ad::dual_level(...)`.
 Explicit numeric casts use `Tensor::to_scalar_type(...)`, while mixed-dtype
-ops apply implicit result-type promotion internally.
+ops apply implicit result-type promotion internally. Placement and transfer
+stay on `Tensor` through `memory_space`, `preferred_compute_device`,
+`to_memory_space`, `to_cpu`, and `to_gpu`, while explicit runtime choice stays
+under `tenferro::runtime`.
