@@ -1,15 +1,15 @@
 use super::*;
+use crate::core::AdMode;
 use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
-use crate::AdMode;
 use ::chainrules::Tape;
 
 #[test]
 fn runtime_helpers_cover_mode_and_shape_paths() {
     let primal =
-        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
     let tangent =
-        Tensor::<f64>::from_slice(&[0.1, 0.2, 0.3, 0.4], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[0.1, 0.2, 0.3, 0.4], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
 
     let ad_primal = AdTensor::new_primal(primal.clone());
@@ -43,7 +43,8 @@ fn runtime_helpers_cover_mode_and_shape_paths() {
     assert!(specs[1].is_none());
 
     let reshaped = normalize_pullback_shape(
-        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4], MemoryOrder::ColumnMajor).unwrap(),
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4], MemoryOrder::ColumnMajor)
+            .unwrap(),
         &[2, 2],
         "runtime_helper",
     )
@@ -51,7 +52,7 @@ fn runtime_helpers_cover_mode_and_shape_paths() {
     assert_eq!(reshaped.dims(), &[2, 2]);
 
     let tangent_err = normalize_output_tangent_shape(
-        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap(),
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap(),
         &[2, 2],
         "runtime_helper",
     )
@@ -94,19 +95,22 @@ fn runtime_helpers_cover_mode_and_shape_paths() {
 fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let da = Tensor::<f64>::from_slice(&[0.5, 0.0, -0.5, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let b =
+        DenseTensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let da =
+        DenseTensor::<f64>::from_slice(&[0.5, 0.0, -0.5, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
     let diag_layout = StructuredTensor::from_diagonal_vector(
-        Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+        DenseTensor::<f64>::from_slice(&[1.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
         2,
     )
     .unwrap();
     let diag_grad =
-        Tensor::<f64>::from_slice(&[9.0, 0.0, 0.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[9.0, 0.0, 0.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
     let structured_a = StructuredTensor::from_dense(a.clone());
     let structured_b = StructuredTensor::from_dense(b.clone());
@@ -176,15 +180,16 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
 fn sum_ad_reverse_pullback_broadcasts_scalar_cotangent() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
+    let x =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
     let tape = Tape::<crate::DynTensor>::new();
     let ad_x = reverse_leaf_f64(x.clone(), &tape);
     let out = sum_ad(&ad_x).run().unwrap();
     assert_reverse_on_tape(&out, &tape);
 
     let cotangent = AdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+        DenseTensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     );
     let grads = crate::ops::ad::pullback_wrt(&out, &cotangent, &[&ad_x]).unwrap();
     let grad = grads[0].as_ref().unwrap();
@@ -196,10 +201,12 @@ fn sum_ad_reverse_pullback_broadcasts_scalar_cotangent() {
 fn einsum_ad_size_dict_forces_dense_path_and_registers_pullback() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let b =
+        DenseTensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
     let tape = Tape::<crate::DynTensor>::new();
     let ad_a = reverse_leaf_f64(a.clone(), &tape);
     let ad_b = reverse_leaf_f64(b.clone(), &tape);
@@ -212,7 +219,7 @@ fn einsum_ad_size_dict_forces_dense_path_and_registers_pullback() {
     assert_reverse_on_tape(&out, &tape);
 
     let cotangent =
-        Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
     let grads = crate::ops::ad::pullback_wrt(
         &out,

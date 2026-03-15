@@ -17,7 +17,8 @@ fn dynamic_types_are_split_into_focused_modules() {
 
     for relative in [
         "src/core/dynamic/mod.rs",
-        "src/core/dynamic/dyn_scalar.rs",
+        "src/core/dynamic/autodiff.rs",
+        "src/core/dynamic/scalar_type.rs",
         "src/core/dynamic/tensor_ops.rs",
         "src/core/dynamic/dyn_tensor.rs",
         "src/core/dynamic/dyn_ad_tensor/mod.rs",
@@ -25,9 +26,13 @@ fn dynamic_types_are_split_into_focused_modules() {
         "src/core/dynamic/dyn_ad_tensor/merge.rs",
         "src/core/dynamic/dyn_ad_tensor/basics.rs",
         "src/core/dynamic/dyn_ad_tensor/complex.rs",
+        "src/core/dynamic/dyn_ad_tensor/eager_linalg.rs",
         "src/core/dynamic/dyn_ad_tensor/eager_scalar.rs",
+        "src/core/dynamic/dyn_ad_tensor/eager_tensor.rs",
+        "src/core/dynamic/dyn_ad_tensor/promotion.rs",
         "src/core/dynamic/dyn_ad_tensor/pullback.rs",
         "src/core/dynamic/dyn_ad_tensor/scalar_ops.rs",
+        "src/core/dynamic/dyn_ad_tensor/snapshot.rs",
     ] {
         assert!(
             repo_path(relative).exists(),
@@ -39,7 +44,8 @@ fn dynamic_types_are_split_into_focused_modules() {
 #[test]
 fn split_dynamic_type_modules_stay_under_size_guideline() {
     for relative in [
-        "src/core/dynamic/dyn_scalar.rs",
+        "src/core/dynamic/autodiff.rs",
+        "src/core/dynamic/scalar_type.rs",
         "src/core/dynamic/tensor_ops.rs",
         "src/core/dynamic/dyn_tensor.rs",
         "src/core/dynamic/dyn_ad_tensor/mod.rs",
@@ -47,9 +53,13 @@ fn split_dynamic_type_modules_stay_under_size_guideline() {
         "src/core/dynamic/dyn_ad_tensor/merge.rs",
         "src/core/dynamic/dyn_ad_tensor/basics.rs",
         "src/core/dynamic/dyn_ad_tensor/complex.rs",
+        "src/core/dynamic/dyn_ad_tensor/eager_linalg.rs",
         "src/core/dynamic/dyn_ad_tensor/eager_scalar.rs",
+        "src/core/dynamic/dyn_ad_tensor/eager_tensor.rs",
+        "src/core/dynamic/dyn_ad_tensor/promotion.rs",
         "src/core/dynamic/dyn_ad_tensor/pullback.rs",
         "src/core/dynamic/dyn_ad_tensor/scalar_ops.rs",
+        "src/core/dynamic/dyn_ad_tensor/snapshot.rs",
     ] {
         let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
         let line_count = contents.lines().count();

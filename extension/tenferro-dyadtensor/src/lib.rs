@@ -5,20 +5,20 @@
 //! # Examples
 //!
 //! ```rust
-//! use tenferro_dyadtensor::{DynAdTensor, StructuredTensor};
-//! use tenferro_tensor::{MemoryOrder, Tensor};
+//! use tenferro_dyadtensor::{StructuredTensor, Tensor};
+//! use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 //!
-//! let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+//! let payload =
+//!     DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 //! let diag = StructuredTensor::from_diagonal_vector(payload, 2).unwrap();
-//! let x = DynAdTensor::new_primal(diag);
+//! let x = Tensor::from_structured(diag);
 //! assert_eq!(x.dims(), &[2, 2]);
 //! assert!(x.is_diag());
 //! ```
 //!
 //! Builder `.run()` execution is configured through [`set_default_runtime`].
-//! Reverse-mode leaves are created through [`DynAdTensor::new_reverse_leaf`] and
-//! [`DynAdTensor::new_reverse_sibling`], while pullbacks are exposed back
-//! through dynamic helpers on [`DynAdTensor`].
+//! The primary public frontend is [`Tensor`], with rank-0 tensor scalar
+//! semantics and eager tensor methods.
 //!
 //! Module map:
 //!
@@ -29,8 +29,10 @@
 //!   `linalg/*` each keep primal and AD wiring together.
 //! - [`StructuredTensor`] and `structured` handle structured layouts.
 
+mod autograd_api;
 mod core;
 pub mod error;
+pub mod forward_ad;
 mod ops;
 pub mod policy;
 pub mod runtime;
@@ -38,12 +40,13 @@ mod structured;
 mod tape;
 mod traits;
 
+pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
 pub(crate) use core::DynTensorTyped;
+pub(crate) use core::{AdTensor, AdValue, DynTensor};
 pub use core::{
-    AdMode, DynAdEigResult, DynAdEigenResult, DynAdLstsqResult, DynAdLuResult, DynAdQrResult,
-    DynAdSlogdetResult, DynAdSvdResult, DynAdTensor, DynScalar, NodeId, ScalarType,
+    EigResult, EigenResult, LstsqResult, LuResult, QrResult, ScalarType, SlogdetResult, SvdResult,
+    Tensor,
 };
-pub(crate) use core::{AdScalar, AdTensor, AdValue, DynTensor};
 pub use error::{Error, Result};
 pub use ops::chainrules_api;
 pub use policy::DiffPolicy;

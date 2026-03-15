@@ -33,7 +33,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdSvdResult<T>> {
+    pub fn run(self) -> Result<TypedSvdResult<T>> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("svd", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -201,7 +201,7 @@ where
             }
         }
 
-        Ok(AdSvdResult {
+        Ok(TypedSvdResult {
             u: out_u,
             s: out_s,
             vt: out_vt,
@@ -242,7 +242,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdQrResult<T>> {
+    pub fn run(self) -> Result<TypedQrResult<T>> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("qr", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -361,7 +361,7 @@ where
             }
         }
 
-        Ok(AdQrResult { q: out_q, r: out_r })
+        Ok(TypedQrResult { q: out_q, r: out_r })
     }
 }
 

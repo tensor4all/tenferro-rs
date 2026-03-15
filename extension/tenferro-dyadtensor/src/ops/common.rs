@@ -1,4 +1,4 @@
-use crate::AdMode;
+use crate::core::AdMode;
 use ::chainrules::{NodeId as ChainNodeId, Tape};
 
 use super::*;
@@ -10,7 +10,7 @@ pub(crate) fn has_forward<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
 }
 
 pub(crate) fn has_reverse<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
-    operands.iter().any(|op| op.reverse_tape().is_some())
+    operands.iter().any(|op| op.requires_grad())
 }
 
 pub(crate) fn has_any_tangent<S: Scalar>(operands: &[&AdTensor<S>]) -> bool {
@@ -28,7 +28,7 @@ pub(crate) fn ensure_dense_linalg_inputs<S: Scalar>(
     Ok(())
 }
 
-pub(crate) fn derive_reverse_tape_handle<S: Scalar>(
+pub(crate) fn derive_reverse_tape_handle<S: Scalar + DynTensorTyped>(
     operands: &[&AdTensor<S>],
 ) -> Result<Option<Tape<DynTensor>>> {
     let mut tape: Option<Tape<DynTensor>> = None;
@@ -36,19 +36,27 @@ pub(crate) fn derive_reverse_tape_handle<S: Scalar>(
     for op in operands {
         if let Some(current) = op.reverse_tape() {
             if let Some(expected) = &tape {
-                if !expected.same_tape(current as &Tape<DynTensor>) {
+                if !expected.same_tape(&current as &Tape<DynTensor>) {
                     return Err(Error::MixedReverseTape {
                         expected: expected.id() as u64,
                         found: current.id() as u64,
                     });
                 }
             } else {
-                tape = Some(current.clone());
+                tape = Some(current);
             }
         }
     }
 
-    Ok(tape)
+    if operands.iter().any(|op| op.requires_grad()) {
+        let tape = tape.unwrap_or_else(Tape::new);
+        for op in operands {
+            op.ensure_reverse_leaf_on(&tape)?;
+        }
+        return Ok(Some(tape));
+    }
+
+    Ok(None)
 }
 
 #[derive(Clone)]

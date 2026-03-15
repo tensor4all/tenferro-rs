@@ -1,34 +1,49 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{DynAdTensor, ScalarType};
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_dyadtensor::{forward_ad, ScalarType, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 mod support;
 
-use support::{forward_rank0_f64, primal_rank0_c64, primal_rank0_f64};
+use support::{primal_rank0_c64, primal_rank0_f64};
 
 #[test]
 fn scale_preserves_forward_tensor_and_scalar_ad() {
-    let x = DynAdTensor::new_forward(
-        Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
-        Tensor::<f64>::from_slice(&[0.5, 0.25], &[2], MemoryOrder::ColumnMajor).unwrap(),
-    )
+    let (primal, tangent) = forward_ad::dual_level(|fw| {
+        let x = fw.make_dual(
+            &Tensor::from_tensor(
+                DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor)
+                    .unwrap(),
+            ),
+            &Tensor::from_tensor(
+                DenseTensor::<f64>::from_slice(&[0.5, 0.25], &[2], MemoryOrder::ColumnMajor)
+                    .unwrap(),
+            ),
+        )?;
+        let a = fw.make_dual(
+            &Tensor::from_tensor(
+                DenseTensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+            ),
+            &Tensor::from_tensor(
+                DenseTensor::<f64>::from_slice(&[0.1], &[], MemoryOrder::ColumnMajor).unwrap(),
+            ),
+        )?;
+        let y = x.scale(&a)?;
+        fw.unpack_dual(&y)
+    })
     .unwrap();
-    let a = forward_rank0_f64(3.0_f64, 0.1_f64);
 
-    let y = x.scale(&a).unwrap();
-    let yt = y.as_f64().unwrap();
+    let primal = primal.as_f64().unwrap();
+    let tangent = tangent.unwrap();
+    let tangent = tangent.as_f64().unwrap();
 
-    assert_eq!(yt.primal().buffer().as_slice().unwrap(), &[3.0, 6.0]);
-    assert_eq!(
-        yt.tangent().unwrap().buffer().as_slice().unwrap(),
-        &[1.6, 0.95]
-    );
+    assert_eq!(primal.primal().buffer().as_slice().unwrap(), &[3.0, 6.0]);
+    assert_eq!(tangent.primal().buffer().as_slice().unwrap(), &[1.6, 0.95]);
 }
 
 #[test]
 fn axpby_works_for_complex64_primal_values() {
-    let x = DynAdTensor::new_primal(
-        Tensor::<Complex64>::from_slice(
+    let x = Tensor::from_tensor(
+        DenseTensor::<Complex64>::from_slice(
             &[Complex64::new(1.0, 1.0), Complex64::new(2.0, -1.0)],
             &[2],
             MemoryOrder::ColumnMajor,
@@ -49,8 +64,8 @@ fn axpby_works_for_complex64_primal_values() {
 
 #[test]
 fn scalar_mul_and_tensor_div_scalar_delegate_to_named_primitives() {
-    let x = DynAdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[2.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    let x = Tensor::from_tensor(
+        DenseTensor::<f64>::from_slice(&[2.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     );
     let a = primal_rank0_f64(3.0_f64);
 
@@ -81,8 +96,8 @@ fn scalar_mul_and_tensor_div_scalar_delegate_to_named_primitives() {
 
 #[test]
 fn scale_promotes_f64_tensor_with_c64_rank0_tensor() {
-    let x = DynAdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    let x = Tensor::from_tensor(
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     );
     let a = primal_rank0_c64(Complex64::new(0.0, 2.0));
 

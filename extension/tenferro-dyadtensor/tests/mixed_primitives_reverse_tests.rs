@@ -1,11 +1,11 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{set_default_runtime, AdMode, DynAdTensor, RuntimeContext};
+use tenferro_dyadtensor::{set_default_runtime, RuntimeContext, Tensor};
 use tenferro_prims::CpuContext;
 
 mod support;
 
 use support::{
-    dyn_rank0_value_f64, dyn_values_f64, primal_rank0_f64, reverse_rank0_f64,
+    dyn_rank0_value_f64, dyn_values_f64, grad_wrt, primal_rank0_f64, reverse_rank0_f64,
     reverse_rank0_f64_like, reverse_vector_f64, reverse_vector_f64_like, vector_c64, vector_f64,
 };
 
@@ -15,10 +15,10 @@ fn scale_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
     let a = reverse_rank0_f64_like(3.0_f64, &x);
 
     let out = x.scale(&a).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
+    assert!(out.requires_grad());
 
-    let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, 1.25]));
-    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    let cotangent = Tensor::from_tensor(vector_f64(&[0.5, 1.25]));
+    let grads = grad_wrt(&out, &cotangent, &[&x, &a]);
 
     assert_eq!(dyn_values_f64(grads[0].as_ref().unwrap()), &[1.5, 3.75]);
     assert_eq!(dyn_rank0_value_f64(grads[1].as_ref().unwrap()), 3.0);
@@ -32,10 +32,10 @@ fn axpby_registers_reverse_gradients_for_all_inputs() {
     let b = reverse_rank0_f64_like(-1.0_f64, &x);
 
     let out = x.axpby(&a, &y, &b).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
+    assert!(out.requires_grad());
 
-    let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, -0.25]));
-    let grads = out.pullback_wrt(&cotangent, &[&x, &y, &a, &b]).unwrap();
+    let cotangent = Tensor::from_tensor(vector_f64(&[0.5, -0.25]));
+    let grads = grad_wrt(&out, &cotangent, &[&x, &y, &a, &b]);
 
     assert_eq!(dyn_values_f64(grads[0].as_ref().unwrap()), &[1.0, -0.5]);
     assert_eq!(dyn_values_f64(grads[1].as_ref().unwrap()), &[-0.5, 0.25]);
@@ -49,10 +49,10 @@ fn div_scalar_registers_reverse_gradients_for_tensor_and_scalar_inputs() {
     let a = reverse_rank0_f64_like(2.0_f64, &x);
 
     let out = x.div_scalar(&a).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
+    assert!(out.requires_grad());
 
-    let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, -1.0]));
-    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    let cotangent = Tensor::from_tensor(vector_f64(&[0.5, -1.0]));
+    let grads = grad_wrt(&out, &cotangent, &[&x, &a]);
 
     assert_eq!(dyn_values_f64(grads[0].as_ref().unwrap()), &[0.25, -0.5]);
     assert_eq!(dyn_rank0_value_f64(grads[1].as_ref().unwrap()), 0.75);
@@ -66,10 +66,10 @@ fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
     let coeff = a.sqrt().unwrap();
 
     let out = x.scale(&coeff).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
+    assert!(out.requires_grad());
 
-    let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, 1.25]));
-    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    let cotangent = Tensor::from_tensor(vector_f64(&[0.5, 1.25]));
+    let grads = grad_wrt(&out, &cotangent, &[&x, &a]);
 
     assert_eq!(dyn_values_f64(grads[0].as_ref().unwrap()), &[1.0, 2.5]);
     assert_eq!(dyn_rank0_value_f64(grads[1].as_ref().unwrap()), 0.75);
@@ -77,34 +77,34 @@ fn scale_propagates_reverse_gradients_through_unary_scalar_coefficients() {
 
 #[test]
 fn scale_propagates_reverse_gradients_through_negated_scalar_coefficients() {
-    let x = DynAdTensor::new_primal(vector_f64(&[2.0, -1.0]));
+    let x = Tensor::from_tensor(vector_f64(&[2.0, -1.0]));
     let a = reverse_rank0_f64(3.0_f64);
     let coeff = a.scale(&primal_rank0_f64(-1.0)).unwrap();
 
     let out = x.scale(&coeff).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
+    assert!(out.requires_grad());
 
-    let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, -1.25]));
-    let grads = out.pullback_wrt(&cotangent, &[&a]).unwrap();
+    let cotangent = Tensor::from_tensor(vector_f64(&[0.5, -1.25]));
+    let grads = grad_wrt(&out, &cotangent, &[&a]);
 
     assert_eq!(dyn_rank0_value_f64(grads[0].as_ref().unwrap()), -2.25);
 }
 
 #[test]
 fn scale_propagates_reverse_gradients_through_negative_real_promotion() {
-    let x = DynAdTensor::new_primal(c64_vec(&[
+    let x = Tensor::from_tensor(c64_vec(&[
         Complex64::new(1.0, 0.0),
         Complex64::new(2.0, 0.0),
     ]));
     let coeff = reverse_rank0_f64(-4.0_f64);
 
     let out = x.scale(&coeff).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
-    let cotangent = DynAdTensor::new_primal(c64_vec(&[
+    assert!(out.requires_grad());
+    let cotangent = Tensor::from_tensor(c64_vec(&[
         Complex64::new(0.5, 0.0),
         Complex64::new(1.25, 0.0),
     ]));
-    let grads = out.pullback_wrt(&cotangent, &[&coeff]).unwrap();
+    let grads = grad_wrt(&out, &cotangent, &[&coeff]);
     assert_eq!(
         grads[0]
             .as_ref()

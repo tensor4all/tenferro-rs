@@ -21,7 +21,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdSlogdetResult<T>> {
+    pub fn run(self) -> Result<TypedSlogdetResult<T>> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("slogdet", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -125,7 +125,7 @@ where
             }
         }
 
-        Ok(AdSlogdetResult {
+        Ok(TypedSlogdetResult {
             sign: out_sign,
             logabsdet: out_logabsdet,
         })

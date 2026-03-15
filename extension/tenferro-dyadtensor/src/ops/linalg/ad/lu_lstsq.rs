@@ -33,7 +33,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdLuResult<T>> {
+    pub fn run(self) -> Result<TypedLuResult<T>> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("lu", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -160,7 +160,7 @@ where
             }
         }
 
-        Ok(AdLuResult {
+        Ok(TypedLuResult {
             p: primal.p,
             l: out_l,
             u: out_u,
@@ -202,7 +202,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdLstsqResult<T>> {
+    pub fn run(self) -> Result<TypedLstsqResult<T>> {
         let operands = [self.a, self.b];
         ensure_dense_linalg_inputs("lstsq", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -330,7 +330,7 @@ where
             }
         }
 
-        Ok(AdLstsqResult {
+        Ok(TypedLstsqResult {
             x: out_x,
             residual: out_residual,
         })

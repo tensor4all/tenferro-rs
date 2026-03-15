@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
-use crate::core::DynTensorTyped;
-use crate::{AdTensor, Error, NodeId, Result};
+use crate::core::{DynTensorTyped, NodeId};
+use crate::{AdTensor, Error, Result};
 
 pub(crate) fn pullback<T: Scalar + DynTensorTyped + 'static>(
     output: &AdTensor<T>,
@@ -12,7 +12,6 @@ pub(crate) fn pullback<T: Scalar + DynTensorTyped + 'static>(
 ) -> Result<HashMap<NodeId, Tensor<T>>> {
     let tape = output
         .reverse_tape()
-        .cloned()
         .ok_or_else(|| Error::InvalidAdTensor {
             message: "pullback requires reverse-mode output tensor".to_string(),
         })?;

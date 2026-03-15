@@ -3,17 +3,17 @@ mod organization;
 use chainrules::Tape;
 use chainrules_core::AutodiffError;
 use num_complex::Complex64;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 use super::*;
 use crate::{AdTensor, StructuredTensor};
 
-fn f64_vec(values: &[f64]) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn f64_vec(values: &[f64]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn f64_scalar(value: f64) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+fn f64_scalar(value: f64) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
 #[test]
@@ -32,8 +32,12 @@ fn tensor_pullback_routes_through_registered_rule_chain() {
             Ok(vec![(
                 x_node,
                 StructuredTensor::from_dense(
-                    Tensor::<f64>::from_slice(&[seed, seed * 2.0], &[2], MemoryOrder::ColumnMajor)
-                        .unwrap(),
+                    DenseTensor::<f64>::from_slice(
+                        &[seed, seed * 2.0],
+                        &[2],
+                        MemoryOrder::ColumnMajor,
+                    )
+                    .unwrap(),
                 ),
             )])
         }),
@@ -71,7 +75,7 @@ fn tensor_pullback_rule_rejects_hvp_when_only_vjp_is_registered() {
             Ok(vec![(
                 x_node,
                 StructuredTensor::from_dense(
-                    Tensor::<f64>::from_slice(&[seed, seed], &[2], MemoryOrder::ColumnMajor)
+                    DenseTensor::<f64>::from_slice(&[seed, seed], &[2], MemoryOrder::ColumnMajor)
                         .unwrap(),
                 ),
             )])
@@ -79,7 +83,7 @@ fn tensor_pullback_rule_rejects_hvp_when_only_vjp_is_registered() {
     );
 
     match tape.hvp(
-        y.as_tracked()
+        &y.as_tracked()
             .expect("reverse output should expose tracked value"),
     ) {
         Err(AutodiffError::HvpNotSupported) => {}
@@ -105,7 +109,7 @@ fn tensor_pullback_rule_maps_rule_errors_to_invalid_argument() {
     );
 
     match tape.pullback_with_seed(
-        y.as_tracked()
+        &y.as_tracked()
             .expect("reverse output should expose tracked value"),
         crate::DynTensor::from(StructuredTensor::from_dense(f64_scalar(1.0))),
     ) {
@@ -150,7 +154,8 @@ fn tensor_pullback_rejects_mismatched_registered_rule_dtype() {
 fn tensor_pullback_rejects_cotangent_shape_mismatch() {
     let tape = Tape::<crate::DynTensor>::new();
     let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
-    let cotangent = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let cotangent =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     match pullback(&y, &cotangent) {
         Err(crate::Error::InvalidAdTensor { message }) => {

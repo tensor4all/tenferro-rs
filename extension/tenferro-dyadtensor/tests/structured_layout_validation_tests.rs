@@ -1,29 +1,29 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{DynAdTensor, Error, StructuredTensor};
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_dyadtensor::{Error, StructuredTensor, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 mod support;
 
 use support::primal_rank0_f64;
 
-fn vector(values: &[f64]) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn vector(values: &[f64]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn matrix2(values: &[f64; 4]) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
+fn matrix2(values: &[f64; 4]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn c64_vector(values: &[Complex64]) -> Tensor<Complex64> {
-    Tensor::<Complex64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn c64_vector(values: &[Complex64]) -> DenseTensor<Complex64> {
+    DenseTensor::<Complex64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
 #[test]
 fn axpby_rejects_diag_and_dense_vector_layout_mismatch() {
-    let diag = DynAdTensor::new_primal(
+    let diag = Tensor::from_structured(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
     );
-    let dense_vec = DynAdTensor::new_primal(vector(&[3.0, 4.0]));
+    let dense_vec = Tensor::from_tensor(vector(&[3.0, 4.0]));
 
     let err = match diag.axpby(
         &primal_rank0_f64(1.0_f64),
@@ -39,12 +39,12 @@ fn axpby_rejects_diag_and_dense_vector_layout_mismatch() {
 
 #[test]
 fn compose_complex_rejects_diag_and_dense_vector_layout_mismatch() {
-    let re = DynAdTensor::new_primal(
+    let re = Tensor::from_structured(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
     );
-    let im = DynAdTensor::new_primal(vector(&[5.0, 6.0]));
+    let im = Tensor::from_tensor(vector(&[5.0, 6.0]));
 
-    let err = match DynAdTensor::compose_complex(re, im) {
+    let err = match Tensor::compose_complex(re, im) {
         Ok(_) => panic!("compose_complex should reject incompatible structured layouts"),
         Err(err) => err,
     };
@@ -54,11 +54,11 @@ fn compose_complex_rejects_diag_and_dense_vector_layout_mismatch() {
 
 #[test]
 fn axpby_rejects_same_dims_but_different_axis_classes() {
-    let lhs = DynAdTensor::new_primal(
+    let lhs = Tensor::from_structured(
         StructuredTensor::new(vec![2, 2, 2], vec![0, 1, 1], matrix2(&[1.0, 2.0, 3.0, 4.0]))
             .unwrap(),
     );
-    let rhs = DynAdTensor::new_primal(
+    let rhs = Tensor::from_structured(
         StructuredTensor::new(vec![2, 2, 2], vec![0, 0, 1], matrix2(&[5.0, 6.0, 7.0, 8.0]))
             .unwrap(),
     );
@@ -73,10 +73,10 @@ fn axpby_rejects_same_dims_but_different_axis_classes() {
 
 #[test]
 fn axpby_accepts_matching_structured_layouts() {
-    let lhs = DynAdTensor::new_primal(
+    let lhs = Tensor::from_structured(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
     );
-    let rhs = DynAdTensor::new_primal(
+    let rhs = Tensor::from_structured(
         StructuredTensor::from_diagonal_vector(vector(&[3.0, 4.0]), 2).unwrap(),
     );
 
@@ -101,14 +101,14 @@ fn axpby_accepts_matching_structured_layouts() {
 
 #[test]
 fn compose_complex_accepts_matching_structured_layouts() {
-    let re = DynAdTensor::new_primal(
+    let re = Tensor::from_structured(
         StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap(),
     );
-    let im = DynAdTensor::new_primal(
+    let im = Tensor::from_structured(
         StructuredTensor::from_diagonal_vector(vector(&[3.0, 4.0]), 2).unwrap(),
     );
 
-    let out = DynAdTensor::compose_complex(re, im).unwrap();
+    let out = Tensor::compose_complex(re, im).unwrap();
 
     assert!(out.is_diag());
     let values = out

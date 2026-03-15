@@ -37,7 +37,7 @@ eager_unary!(
     /// ```ignore
     /// let out = tenferro_dyadtensor::ad::svd(&a)?;
     /// ```
-    fn svd -> AdSvdResult<T> => svd_ad;
+    fn svd -> TypedSvdResult<T> => svd_ad;
     where {
         T: RealLinalgRuntimeValue,
     }
@@ -53,7 +53,7 @@ eager_unary!(
     /// ```ignore
     /// let out = tenferro_dyadtensor::ad::qr(&a)?;
     /// ```
-    fn qr -> AdQrResult<T> => qr_ad;
+    fn qr -> TypedQrResult<T> => qr_ad;
     where {
         T: RealLinalgRuntimeValue,
     }
@@ -69,7 +69,7 @@ eager_unary!(
     /// ```ignore
     /// let out = tenferro_dyadtensor::ad::lu(&a)?;
     /// ```
-    fn lu -> AdLuResult<T> => lu_ad;
+    fn lu -> TypedLuResult<T> => lu_ad;
     where {
         T: RealLinalgRuntimeValue,
     }
@@ -85,7 +85,7 @@ eager_unary!(
     /// ```ignore
     /// let out = tenferro_dyadtensor::ad::eigen(&a)?;
     /// ```
-    fn eigen -> AdEigenResult<T> => eigen_ad;
+    fn eigen -> TypedEigenResult<T> => eigen_ad;
     where {
         T: RealLinalgRuntimeValue,
     }
@@ -101,7 +101,7 @@ eager_binary!(
     /// ```ignore
     /// let out = tenferro_dyadtensor::ad::lstsq(&a, &b)?;
     /// ```
-    fn lstsq -> AdLstsqResult<T> => lstsq_ad;
+    fn lstsq -> TypedLstsqResult<T> => lstsq_ad;
     where {
         T: RealLinalgRuntimeValue,
     }
@@ -181,7 +181,7 @@ eager_unary!(
     /// ```ignore
     /// let out = tenferro_dyadtensor::ad::slogdet(&a)?;
     /// ```
-    fn slogdet -> AdSlogdetResult<T> => slogdet_ad;
+    fn slogdet -> TypedSlogdetResult<T> => slogdet_ad;
     where {
         T: RealLinalgRuntimeValue,
     }
@@ -197,7 +197,7 @@ eager_unary!(
     /// ```ignore
     /// let out = tenferro_dyadtensor::ad::eig(&a)?;
     /// ```
-    fn eig -> AdEigResult<T> => eig_ad;
+    fn eig -> TypedEigResult<T> => eig_ad;
     where {
         T: ComplexLinalgRuntimeValue,
         Complex<T>: DynTensorTyped,

@@ -5,22 +5,23 @@ fn eager_ad_linalg_and_einsum_cover_all_ops() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let a = f64_2x2([4.0, 1.0, 1.0, 3.0]);
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let tri = f64_2x2([2.0, 0.0, 1.0, 3.0]);
     let general = f64_2x2([0.0, 1.0, -1.0, 0.0]);
-    let rect = Tensor::<f64>::from_slice(
+    let rect = DenseTensor::<f64>::from_slice(
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         &[2, 3],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let a_ls = Tensor::<f64>::from_slice(
+    let a_ls = DenseTensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let b_ls = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let b_ls =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a = AdTensor::new_primal(a.clone());
     let ad_b = AdTensor::new_primal(b);
@@ -62,7 +63,7 @@ fn eager_ad_preserves_mode_propagation() {
 
     let a = f64_2x2([4.0, 1.0, 1.0, 3.0]);
     let da = f64_2x2([0.1, 0.0, 0.0, 0.1]);
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a_fwd = AdTensor::new_forward(a.clone(), da).unwrap();
     let ad_b = AdTensor::new_primal(b);

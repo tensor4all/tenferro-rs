@@ -62,11 +62,11 @@ one layer up in `tenferro-dyadtensor` by composing runtime-generic tensor prims.
 
 ### `tenferro-dyadtensor`
 
-- Dynamic eager tensor methods on `DynAdTensor`:
+- Dynamic eager tensor methods on `Tensor`:
   - tensor/reduction: `einsum`, `sum`, `mean`, `var`, `std`
   - scalar/analytic: `add`, `atan2`, `pow`, `hypot`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`
   - linalg: `svd`, `qr`, `lu`, `eigen`, `eig`, `lstsq`, `cholesky`, `solve`, `inv`, `det`, `slogdet`, `pinv`, `matrix_exp`, `solve_triangular`, `norm`
-- Internal builder plumbing still lives in `*_ad(...).run()` builders, but the preferred public surface is now the `DynAdTensor` method API
+- Internal builder plumbing still lives in `*_ad(...).run()` builders, but the preferred public surface is now the `Tensor` method API
   - `eig` reverse mode is same-domain only; real-input reverse mode is currently unsupported in dyadtensor
 
 For a broader crate-by-crate support view, including primal coverage and

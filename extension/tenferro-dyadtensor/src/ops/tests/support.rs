@@ -1,9 +1,10 @@
+use crate::core::AdMode;
 use crate::runtime::dispatch::{unsupported_runtime_capability, with_runtime};
 use crate::Result;
-use crate::{AdMode, AdTensor, StructuredTensor};
+use crate::{AdTensor, StructuredTensor};
 use chainrules::Tape;
 use tenferro_prims::CpuContext;
-use tenferro_tensor::Tensor;
+use tenferro_tensor::Tensor as DenseTensor;
 
 pub(crate) fn with_cpu_runtime<R>(
     op: &'static str,
@@ -16,7 +17,7 @@ pub(crate) fn with_cpu_runtime<R>(
     )
 }
 
-pub(crate) fn as_slice<T: tenferro_algebra::Scalar>(t: &Tensor<T>) -> &[T] {
+pub(crate) fn as_slice<T: tenferro_algebra::Scalar>(t: &DenseTensor<T>) -> &[T] {
     t.buffer()
         .as_slice()
         .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"))

@@ -92,7 +92,7 @@ fn einsum_rrule_matches_finite_difference_c64_one_stage_directional() {
         (grads[0].clone(), grads[1].clone())
     };
 
-    let objective = |a_now: &Tensor<Complex64>| -> Complex64 {
+    let objective = |a_now: &DenseTensor<Complex64>| -> Complex64 {
         let ad_a = AdTensor::new_primal(a_now.clone());
         let ad_b = AdTensor::new_primal(b.clone());
         let out = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
@@ -114,7 +114,7 @@ fn einsum_rrule_matches_finite_difference_c64_one_stage_directional() {
         Complex64::new(0.13, 0.09),
         Complex64::new(-0.05, -0.08),
     ]);
-    let objective_b = |b_now: &Tensor<Complex64>| -> Complex64 {
+    let objective_b = |b_now: &DenseTensor<Complex64>| -> Complex64 {
         let ad_a = AdTensor::new_primal(a.clone());
         let ad_b = AdTensor::new_primal(b_now.clone());
         let out = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
@@ -193,7 +193,7 @@ fn einsum_hvp_matches_finite_difference_c64_two_stage() {
         .1
     };
 
-    let grad_from_two_stage = |a_now: &Tensor<Complex64>| -> Tensor<Complex64> {
+    let grad_from_two_stage = |a_now: &DenseTensor<Complex64>| -> DenseTensor<Complex64> {
         let c_now = {
             let ad_a = AdTensor::new_primal(a_now.clone());
             let ad_b = AdTensor::new_primal(b.clone());

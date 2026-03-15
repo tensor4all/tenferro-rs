@@ -1,7 +1,7 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
-use super::dyn_scalar::{DynScalar, ScalarType};
+use super::scalar_type::ScalarType;
 use super::tensor_ops::{tensor_map_binary_typed, tensor_map_unary_typed, tensor_max_typed};
 use crate::{Error, Result, StructuredTensor};
 
@@ -22,7 +22,7 @@ use crate::{Error, Result, StructuredTensor};
 /// let x: DynTensor = t.into();
 /// assert_eq!(x.scalar_type(), ScalarType::F64);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum DynTensor {
     F32(StructuredTensor<f32>),
     F64(StructuredTensor<f64>),
@@ -335,11 +335,19 @@ impl DynTensor {
         }
     }
 
-    /// Maximum element value.
-    pub fn max(&self) -> Result<DynScalar> {
+    /// Maximum element value as a rank-0 tensor.
+    pub fn max(&self) -> Result<Self> {
         match self {
-            Self::F32(t) => Ok(DynScalar::F32(tensor_max_typed(t.payload())?)),
-            Self::F64(t) => Ok(DynScalar::F64(tensor_max_typed(t.payload())?)),
+            Self::F32(t) => Ok(Self::F32(StructuredTensor::from_dense(Tensor::from_slice(
+                &[tensor_max_typed(t.payload())?],
+                &[],
+                MemoryOrder::ColumnMajor,
+            )?))),
+            Self::F64(t) => Ok(Self::F64(StructuredTensor::from_dense(Tensor::from_slice(
+                &[tensor_max_typed(t.payload())?],
+                &[],
+                MemoryOrder::ColumnMajor,
+            )?))),
             Self::C32(_) | Self::C64(_) => Err(Error::InvalidAdTensor {
                 message: "max is undefined for complex tensors; call abs_tensor() first"
                     .to_string(),
@@ -350,9 +358,9 @@ impl DynTensor {
     /// Maximum element value as `f64` (real tensors only).
     pub fn max_as_f64(&self) -> Result<f64> {
         match self.max()? {
-            DynScalar::F32(v) => Ok(v as f64),
-            DynScalar::F64(v) => Ok(v),
-            DynScalar::C32(_) | DynScalar::C64(_) => Err(Error::InvalidAdTensor {
+            Self::F32(t) => Ok(t.payload().buffer().as_slice().unwrap()[0] as f64),
+            Self::F64(t) => Ok(t.payload().buffer().as_slice().unwrap()[0]),
+            Self::C32(_) | Self::C64(_) => Err(Error::InvalidAdTensor {
                 message: "max_as_f64 expects a real tensor".to_string(),
             }),
         }

@@ -3,9 +3,9 @@ use std::sync::{Arc, Mutex};
 use tenferro_device::LogicalMemorySpace;
 use tenferro_prims::CpuBackend;
 use tenferro_prims::CpuContext;
-use tenferro_tensor::MemoryOrder;
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-fn get(t: &Tensor<f64>, idx: &[usize]) -> f64 {
+fn get(t: &DenseTensor<f64>, idx: &[usize]) -> f64 {
     let data = t.buffer().as_slice().unwrap();
     let pos = t.offset()
         + idx
@@ -21,12 +21,14 @@ fn variable_einsum_backward_and_hvp_flow() {
     let runtime_ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let ad_ctx = context::<f64>();
 
-    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let b =
+        DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
 
-    let da = Tensor::<f64>::ones(
+    let da = DenseTensor::<f64>::ones(
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
@@ -65,10 +67,12 @@ fn grad_tangent_is_side_effect_free_and_zeros_non_grad_leaf() {
     let runtime_ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let ad_ctx = context::<f64>();
 
-    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let b =
+        DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
 
     let a = leaf_in(a, Arc::clone(&ad_ctx), true).unwrap();
     let b = leaf_in(b, Arc::clone(&ad_ctx), false).unwrap();

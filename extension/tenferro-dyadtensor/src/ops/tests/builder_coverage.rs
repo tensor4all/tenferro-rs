@@ -1,20 +1,24 @@
 use super::*;
+use crate::core::AdMode;
 use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
-use crate::AdMode;
 use ::chainrules::Tape;
 
 #[test]
 fn public_ad_builders_cover_helper_paths_and_builder_options() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = Tensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let da = Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 2.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let db = Tensor::<f64>::from_slice(&[0.0, 0.2, 0.3, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let da =
+        DenseTensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let b =
+        DenseTensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 2.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let db =
+        DenseTensor::<f64>::from_slice(&[0.0, 0.2, 0.3, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
 
     let ad_a_fwd = AdTensor::new_forward(a.clone(), da.clone()).unwrap();
     let out_unary_fwd = cholesky_ad(&ad_a_fwd).run().unwrap();
@@ -24,7 +28,7 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape_rev);
     let out_unary_rev = cholesky_ad(&ad_a_rev).run().unwrap();
     let unary_cotangent = AdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap(),
     );
     let unary_grads =
@@ -39,7 +43,7 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
     let ad_b_rev = reverse_leaf_f64(b.clone(), &tape_rev);
     let out_binary_rev = solve_ad(&ad_a_rev, &ad_b_rev).run().unwrap();
     let binary_cotangent = AdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[4.0, 3.0, 2.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[4.0, 3.0, 2.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap(),
     );
     let binary_grads =
@@ -81,7 +85,7 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
     let ad_multi_rev = reverse_leaf_f64(a, &tape_multi);
     let out_svd_rev = svd_ad(&ad_multi_rev).run().unwrap();
     let cot_matrix = AdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap(),
     );
     assert!(
@@ -115,7 +119,7 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
 
     let out_eigen_rev = eigen_ad(&ad_multi_rev).run().unwrap();
     let cot_values = AdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[1.0, -1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+        DenseTensor::<f64>::from_slice(&[1.0, -1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     );
     assert!(
         crate::ops::ad::pullback_wrt(&out_eigen_rev.values, &cot_values, &[&ad_multi_rev],)
@@ -130,7 +134,7 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
 
     let out_slogdet_rev = slogdet_ad(&ad_multi_rev).run().unwrap();
     let cot_scalar = AdTensor::new_primal(
-        Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+        DenseTensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     );
     assert!(
         crate::ops::ad::pullback_wrt(&out_slogdet_rev.sign, &cot_scalar, &[&ad_multi_rev],)
@@ -150,27 +154,30 @@ fn public_ad_builders_cover_helper_paths_and_builder_options() {
 fn primal_linalg_builders_cover_all_ops() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = Tensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    let tri = Tensor::<f64>::from_slice(&[2.0, 0.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let a_general =
-        Tensor::<f64>::from_slice(&[0.0, 1.0, -1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
+    let a =
+        DenseTensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
-    let a_rect = Tensor::<f64>::from_slice(
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let tri =
+        DenseTensor::<f64>::from_slice(&[2.0, 0.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let a_general =
+        DenseTensor::<f64>::from_slice(&[0.0, 1.0, -1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let a_rect = DenseTensor::<f64>::from_slice(
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         &[2, 3],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let a_ls = Tensor::<f64>::from_slice(
+    let a_ls = DenseTensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let b_ls = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let b_ls =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
 
     let out_svd = svd(&a).run().unwrap();
     assert_eq!(out_svd.s.dims(), &[2]);
@@ -228,12 +235,12 @@ fn primal_linalg_builders_cover_all_ops() {
     let out_cond = cond(&a).kind(NormKind::Spectral).run().unwrap();
     assert_eq!(out_cond.dims(), &[]);
     let cross_a =
-        Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let cross_b =
-        Tensor::<f64>::from_slice(&[0.0, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[0.0, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let out_cross = cross(&cross_a, &cross_b).run().unwrap();
     assert_eq!(out_cross.dims(), &[3]);
-    let reflectors = Tensor::<f64>::from_slice(
+    let reflectors = DenseTensor::<f64>::from_slice(
         &[
             1.0, 0.0, 0.0, 0.0, //
             2.0, 1.0, 0.0, 0.0, //
@@ -243,12 +250,13 @@ fn primal_linalg_builders_cover_all_ops() {
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let tau = Tensor::<f64>::from_slice(&[0.0, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let tau =
+        DenseTensor::<f64>::from_slice(&[0.0, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let out_householder = householder_product(&reflectors, &tau).run().unwrap();
     assert_eq!(out_householder.dims(), &[4, 3]);
     let out_vander = vander(&cross_a).columns(4).increasing(true).run().unwrap();
     assert_eq!(out_vander.dims(), &[3, 4]);
-    let eye4 = Tensor::<f64>::from_slice(
+    let eye4 = DenseTensor::<f64>::from_slice(
         &[
             1.0, 0.0, 0.0, 0.0, //
             0.0, 1.0, 0.0, 0.0, //
@@ -263,7 +271,7 @@ fn primal_linalg_builders_cover_all_ops() {
     let out_tensorinv = tensorinv(&tensorized).ind(2).run().unwrap();
     assert_eq!(out_tensorinv.dims(), &[2, 2, 2, 2]);
     let rhs_tensor =
-        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
     let out_tensorsolve = tensorsolve(&tensorized, &rhs_tensor)
         .dims(&[3, 2])
@@ -276,27 +284,30 @@ fn primal_linalg_builders_cover_all_ops() {
 fn ad_linalg_builders_cover_all_ops_in_primal_mode() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = Tensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    let tri = Tensor::<f64>::from_slice(&[2.0, 0.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let a_general =
-        Tensor::<f64>::from_slice(&[0.0, 1.0, -1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
+    let a =
+        DenseTensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
-    let a_rect = Tensor::<f64>::from_slice(
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let tri =
+        DenseTensor::<f64>::from_slice(&[2.0, 0.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let a_general =
+        DenseTensor::<f64>::from_slice(&[0.0, 1.0, -1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let a_rect = DenseTensor::<f64>::from_slice(
         &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
         &[2, 3],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let a_ls = Tensor::<f64>::from_slice(
+    let a_ls = DenseTensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let b_ls = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let b_ls =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a = AdTensor::new_primal(a);
     let ad_b = AdTensor::new_primal(b);
@@ -350,11 +361,13 @@ fn ad_linalg_builders_cover_all_ops_in_primal_mode() {
 fn ad_mode_propagation_forward_and_reverse() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let a = Tensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let da = Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let da =
+        DenseTensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a_fwd = AdTensor::new_forward(a.clone(), da).unwrap();
     let ad_b = AdTensor::new_primal(b);

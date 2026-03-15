@@ -5,7 +5,7 @@ use crate::RuntimeContext;
 use tenferro_algebra::Standard;
 use tenferro_linalg::SvdOptions;
 use tenferro_prims::{CpuBackend, CpuContext, CudaContext, RocmContext};
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 mod builder_coverage;
 mod organization;

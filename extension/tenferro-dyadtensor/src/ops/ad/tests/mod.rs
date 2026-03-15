@@ -14,8 +14,8 @@ use tenferro_linalg::NormKind;
 
 use super::*;
 use crate::ops::tests::with_cpu_runtime;
-use crate::{DynAdTensor, Error, RuntimeContext, StructuredTensor};
+use crate::{Error, RuntimeContext, StructuredTensor};
 use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 use support::*;

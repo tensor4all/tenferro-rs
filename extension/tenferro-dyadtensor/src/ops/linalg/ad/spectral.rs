@@ -24,7 +24,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdEigenResult<T>> {
+    pub fn run(self) -> Result<TypedEigenResult<T>> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("eigen", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -148,7 +148,7 @@ where
             }
         }
 
-        Ok(AdEigenResult {
+        Ok(TypedEigenResult {
             values: out_values,
             vectors: out_vectors,
         })
@@ -186,7 +186,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<AdEigResult<T>> {
+    pub fn run(self) -> Result<TypedEigResult<T>> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("eig", &operands)?;
         if has_reverse(&operands) {
@@ -236,7 +236,7 @@ where
         let out_values = wrap_dense_ad_output("eig_ad", &operands, primal.values, dvalues)?;
         let out_vectors = wrap_dense_ad_output("eig_ad", &operands, primal.vectors, dvectors)?;
 
-        Ok(AdEigResult {
+        Ok(TypedEigResult {
             values: out_values,
             vectors: out_vectors,
         })

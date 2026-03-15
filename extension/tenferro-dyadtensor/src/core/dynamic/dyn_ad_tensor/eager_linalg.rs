@@ -1,10 +1,10 @@
-use super::DynAdTensor;
+use super::Tensor;
 use crate::ops::ad;
 use crate::{Error, Result, ScalarType};
 
 fn real_only_error(op: &'static str, dtype: ScalarType) -> Error {
     Error::InvalidAdTensor {
-        message: format!("{op} currently requires a real DynAdTensor input, got {dtype:?}"),
+        message: format!("{op} currently requires a real Tensor input, got {dtype:?}"),
     }
 }
 
@@ -25,13 +25,13 @@ fn same_dtype_error(op: &'static str, lhs: ScalarType, rhs: ScalarType) -> Error
 /// let _vt = &out.vt;
 /// ```
 #[derive(Clone)]
-pub struct DynAdSvdResult {
+pub struct SvdResult {
     /// Left singular vectors.
-    pub u: DynAdTensor,
+    pub u: Tensor,
     /// Singular values.
-    pub s: DynAdTensor,
+    pub s: Tensor,
     /// Right singular vectors transposed.
-    pub vt: DynAdTensor,
+    pub vt: Tensor,
 }
 
 /// Dynamic AD-aware QR result.
@@ -44,11 +44,11 @@ pub struct DynAdSvdResult {
 /// let _r = &out.r;
 /// ```
 #[derive(Clone)]
-pub struct DynAdQrResult {
+pub struct QrResult {
     /// Q factor.
-    pub q: DynAdTensor,
+    pub q: Tensor,
     /// R factor.
-    pub r: DynAdTensor,
+    pub r: Tensor,
 }
 
 /// Dynamic AD-aware LU result.
@@ -61,13 +61,13 @@ pub struct DynAdQrResult {
 /// let _u = &out.u;
 /// ```
 #[derive(Clone)]
-pub struct DynAdLuResult {
+pub struct LuResult {
     /// Permutation indices.
     pub p: Option<Vec<usize>>,
     /// Lower factor.
-    pub l: DynAdTensor,
+    pub l: Tensor,
     /// Upper factor.
-    pub u: DynAdTensor,
+    pub u: Tensor,
 }
 
 /// Dynamic AD-aware symmetric/Hermitian eigen result.
@@ -80,11 +80,11 @@ pub struct DynAdLuResult {
 /// let _vectors = &out.vectors;
 /// ```
 #[derive(Clone)]
-pub struct DynAdEigenResult {
+pub struct EigenResult {
     /// Eigenvalues.
-    pub values: DynAdTensor,
+    pub values: Tensor,
     /// Eigenvectors.
-    pub vectors: DynAdTensor,
+    pub vectors: Tensor,
 }
 
 /// Dynamic AD-aware general eigendecomposition result.
@@ -97,11 +97,11 @@ pub struct DynAdEigenResult {
 /// let _vectors = &out.vectors;
 /// ```
 #[derive(Clone)]
-pub struct DynAdEigResult {
+pub struct EigResult {
     /// Complex eigenvalues.
-    pub values: DynAdTensor,
+    pub values: Tensor,
     /// Complex eigenvectors.
-    pub vectors: DynAdTensor,
+    pub vectors: Tensor,
 }
 
 /// Dynamic AD-aware sign/logabsdet result.
@@ -114,11 +114,11 @@ pub struct DynAdEigResult {
 /// let _logabsdet = &out.logabsdet;
 /// ```
 #[derive(Clone)]
-pub struct DynAdSlogdetResult {
+pub struct SlogdetResult {
     /// Sign tensor.
-    pub sign: DynAdTensor,
+    pub sign: Tensor,
     /// Log-absolute-determinant tensor.
-    pub logabsdet: DynAdTensor,
+    pub logabsdet: Tensor,
 }
 
 /// Dynamic AD-aware least squares result.
@@ -131,14 +131,14 @@ pub struct DynAdSlogdetResult {
 /// let _residual = &out.residual;
 /// ```
 #[derive(Clone)]
-pub struct DynAdLstsqResult {
+pub struct LstsqResult {
     /// Least squares solution.
-    pub x: DynAdTensor,
+    pub x: Tensor,
     /// Residual tensor.
-    pub residual: DynAdTensor,
+    pub residual: Tensor,
 }
 
-impl DynAdTensor {
+impl Tensor {
     /// Runs eager AD SVD on a dynamic tensor.
     ///
     /// # Examples
@@ -147,11 +147,11 @@ impl DynAdTensor {
     /// let out = x.svd()?;
     /// let _s = &out.s;
     /// ```
-    pub fn svd(&self) -> Result<DynAdSvdResult> {
+    pub fn svd(&self) -> Result<SvdResult> {
         match self {
             Self::F32(value) => {
                 let out = ad::svd(value)?;
-                Ok(DynAdSvdResult {
+                Ok(SvdResult {
                     u: out.u.into(),
                     s: out.s.into(),
                     vt: out.vt.into(),
@@ -159,7 +159,7 @@ impl DynAdTensor {
             }
             Self::F64(value) => {
                 let out = ad::svd(value)?;
-                Ok(DynAdSvdResult {
+                Ok(SvdResult {
                     u: out.u.into(),
                     s: out.s.into(),
                     vt: out.vt.into(),
@@ -177,18 +177,18 @@ impl DynAdTensor {
     /// let out = x.qr()?;
     /// let _q = &out.q;
     /// ```
-    pub fn qr(&self) -> Result<DynAdQrResult> {
+    pub fn qr(&self) -> Result<QrResult> {
         match self {
             Self::F32(value) => {
                 let out = ad::qr(value)?;
-                Ok(DynAdQrResult {
+                Ok(QrResult {
                     q: out.q.into(),
                     r: out.r.into(),
                 })
             }
             Self::F64(value) => {
                 let out = ad::qr(value)?;
-                Ok(DynAdQrResult {
+                Ok(QrResult {
                     q: out.q.into(),
                     r: out.r.into(),
                 })
@@ -205,11 +205,11 @@ impl DynAdTensor {
     /// let out = x.lu()?;
     /// let _u = &out.u;
     /// ```
-    pub fn lu(&self) -> Result<DynAdLuResult> {
+    pub fn lu(&self) -> Result<LuResult> {
         match self {
             Self::F32(value) => {
                 let out = ad::lu(value)?;
-                Ok(DynAdLuResult {
+                Ok(LuResult {
                     p: out.p,
                     l: out.l.into(),
                     u: out.u.into(),
@@ -217,7 +217,7 @@ impl DynAdTensor {
             }
             Self::F64(value) => {
                 let out = ad::lu(value)?;
-                Ok(DynAdLuResult {
+                Ok(LuResult {
                     p: out.p,
                     l: out.l.into(),
                     u: out.u.into(),
@@ -235,18 +235,18 @@ impl DynAdTensor {
     /// let out = x.eigen()?;
     /// let _values = &out.values;
     /// ```
-    pub fn eigen(&self) -> Result<DynAdEigenResult> {
+    pub fn eigen(&self) -> Result<EigenResult> {
         match self {
             Self::F32(value) => {
                 let out = ad::eigen(value)?;
-                Ok(DynAdEigenResult {
+                Ok(EigenResult {
                     values: out.values.into(),
                     vectors: out.vectors.into(),
                 })
             }
             Self::F64(value) => {
                 let out = ad::eigen(value)?;
-                Ok(DynAdEigenResult {
+                Ok(EigenResult {
                     values: out.values.into(),
                     vectors: out.vectors.into(),
                 })
@@ -263,18 +263,18 @@ impl DynAdTensor {
     /// let out = x.eig()?;
     /// let _vectors = &out.vectors;
     /// ```
-    pub fn eig(&self) -> Result<DynAdEigResult> {
+    pub fn eig(&self) -> Result<EigResult> {
         match self {
             Self::F32(value) => {
                 let out = ad::eig(value)?;
-                Ok(DynAdEigResult {
+                Ok(EigResult {
                     values: out.values.into(),
                     vectors: out.vectors.into(),
                 })
             }
             Self::F64(value) => {
                 let out = ad::eig(value)?;
-                Ok(DynAdEigResult {
+                Ok(EigResult {
                     values: out.values.into(),
                     vectors: out.vectors.into(),
                 })
@@ -291,18 +291,18 @@ impl DynAdTensor {
     /// let out = a.lstsq(&b)?;
     /// let _x = &out.x;
     /// ```
-    pub fn lstsq(&self, rhs: &Self) -> Result<DynAdLstsqResult> {
+    pub fn lstsq(&self, rhs: &Self) -> Result<LstsqResult> {
         match (self, rhs) {
             (Self::F32(lhs), Self::F32(rhs)) => {
                 let out = ad::lstsq(lhs, rhs)?;
-                Ok(DynAdLstsqResult {
+                Ok(LstsqResult {
                     x: out.x.into(),
                     residual: out.residual.into(),
                 })
             }
             (Self::F64(lhs), Self::F64(rhs)) => {
                 let out = ad::lstsq(lhs, rhs)?;
-                Ok(DynAdLstsqResult {
+                Ok(LstsqResult {
                     x: out.x.into(),
                     residual: out.residual.into(),
                 })
@@ -408,18 +408,18 @@ impl DynAdTensor {
     /// let out = x.slogdet()?;
     /// let _sign = &out.sign;
     /// ```
-    pub fn slogdet(&self) -> Result<DynAdSlogdetResult> {
+    pub fn slogdet(&self) -> Result<SlogdetResult> {
         match self {
             Self::F32(value) => {
                 let out = ad::slogdet(value)?;
-                Ok(DynAdSlogdetResult {
+                Ok(SlogdetResult {
                     sign: out.sign.into(),
                     logabsdet: out.logabsdet.into(),
                 })
             }
             Self::F64(value) => {
                 let out = ad::slogdet(value)?;
-                Ok(DynAdSlogdetResult {
+                Ok(SlogdetResult {
                     sign: out.sign.into(),
                     logabsdet: out.logabsdet.into(),
                 })
