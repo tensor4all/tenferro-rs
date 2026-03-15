@@ -1,4 +1,6 @@
 use super::*;
+use crate::Tensor;
+use tenferro_tensor::Tensor as DenseTensor;
 
 #[test]
 fn structured_reverse_pullback_accepts_dense_cotangent() {
@@ -7,15 +9,15 @@ fn structured_reverse_pullback_accepts_dense_cotangent() {
     let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(
         StructuredTensor::from_diagonal_vector(
-            Tensor::<f64>::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+            DenseTensor::<f64>::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
             2,
         )
         .unwrap(),
         &tape,
     );
     let alpha = reverse_leaf_f64(scalar_f64(2.0), &tape);
-    let y = DynAdTensor::from(x.clone())
-        .scale(&DynAdTensor::from(alpha.clone()))
+    let y = Tensor::from(x.clone())
+        .scale(&Tensor::from(alpha.clone()))
         .unwrap();
     let y = y.as_f64().unwrap();
     let dense_cotangent = AdTensor::new_primal(f64_2x2([1.0, 0.0, 0.0, 1.0]));
@@ -51,10 +53,10 @@ fn structured_reverse_pullback_accepts_dense_cotangent() {
 fn reshape_reverse_pullback_accepts_non_contiguous_cotangent_view() {
     let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([1.0, 2.0, 3.0, 4.0]), &tape);
-    let reshaped = DynAdTensor::from(x.clone()).reshape(&[4]).unwrap();
+    let reshaped = Tensor::from(x.clone()).reshape(&[4]).unwrap();
     let reshaped = reshaped.as_f64().unwrap();
 
-    let base = Tensor::<f64>::from_slice(
+    let base = DenseTensor::<f64>::from_slice(
         &[
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0,
         ],
@@ -80,15 +82,15 @@ fn dense_reverse_pullback_accepts_structured_cotangent() {
     let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([2.0, 5.0, 7.0, 3.0]), &tape);
     let alpha = reverse_leaf_f64(scalar_f64(2.0), &tape);
-    let y = DynAdTensor::from(x.clone())
-        .scale(&DynAdTensor::from(alpha.clone()))
+    let y = Tensor::from(x.clone())
+        .scale(&Tensor::from(alpha.clone()))
         .unwrap();
     let y = y.as_f64().unwrap();
     assert!(y.is_dense());
 
     let structured_cotangent = AdTensor::new_primal(
         StructuredTensor::from_diagonal_vector(
-            Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+            DenseTensor::<f64>::from_slice(&[1.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
             2,
         )
         .unwrap(),
@@ -122,9 +124,7 @@ fn pullback_helpers_preserve_none_for_untracked_wrt_inputs() {
     let tape = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([1.0, 2.0, 3.0, 4.0]), &tape);
     let alpha = reverse_leaf_f64(scalar_f64(3.0), &tape);
-    let y = DynAdTensor::from(x.clone())
-        .scale(&DynAdTensor::from(alpha))
-        .unwrap();
+    let y = Tensor::from(x.clone()).scale(&Tensor::from(alpha)).unwrap();
     let y = y.as_f64().unwrap();
     let cotangent = AdTensor::new_primal(f64_2x2([1.0, 0.0, 0.0, 1.0]));
 
@@ -144,9 +144,7 @@ fn pullback_wrt_returns_none_for_disconnected_reverse_tensor() {
     let x = reverse_leaf_f64(f64_2x2([1.0, 2.0, 3.0, 4.0]), &tape);
     let alpha = reverse_leaf_f64(scalar_f64(3.0), &tape);
     let disconnected = reverse_leaf_f64(f64_2x2([9.0, 8.0, 7.0, 6.0]), &tape);
-    let y = DynAdTensor::from(x)
-        .scale(&DynAdTensor::from(alpha))
-        .unwrap();
+    let y = Tensor::from(x).scale(&Tensor::from(alpha)).unwrap();
     let y = y.as_f64().unwrap();
     let cotangent = AdTensor::new_primal(f64_2x2([1.0, 0.0, 0.0, 1.0]));
 
@@ -180,9 +178,7 @@ fn pullback_helpers_reject_primal_outputs_and_mixed_tapes() {
     let tape_wrt = Tape::<crate::DynTensor>::new();
     let x = reverse_leaf_f64(f64_2x2([4.0, 3.0, 2.0, 1.0]), &tape_output);
     let alpha = reverse_leaf_f64(scalar_f64(2.0), &tape_output);
-    let output = DynAdTensor::from(x)
-        .scale(&DynAdTensor::from(alpha))
-        .unwrap();
+    let output = Tensor::from(x).scale(&Tensor::from(alpha)).unwrap();
     let output = output.as_f64().unwrap();
     let wrt_tensor = reverse_leaf_f64(f64_2x2([1.0, 0.0, 0.0, 1.0]), &tape_wrt);
 

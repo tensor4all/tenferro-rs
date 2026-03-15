@@ -99,9 +99,9 @@ See `eigen.md` for the symmetric case.
 
 ## Dyadtensor integration
 
-`tenferro-dyadtensor` keeps reverse-mode graphs homogeneous:
-`Tape<DynTensor>` carries a single value type, and scalar AD values
-are rank-0 tensors rather than a separate scalar graph type.
+`tenferro-dyadtensor` keeps reverse-mode graphs homogeneous: the graph carries
+one runtime-typed tensor payload, and scalar AD values are rank-0 tensors
+rather than a separate scalar graph type.
 
 That means `eig_ad(...).run()` is split as follows:
 

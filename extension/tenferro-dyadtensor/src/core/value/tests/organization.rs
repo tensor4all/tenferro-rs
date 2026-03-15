@@ -15,30 +15,17 @@ fn ad_values_are_split_into_focused_modules() {
         "src/core/value/mod.rs",
         "src/core/value/core.rs",
         "src/core/value/tensor.rs",
-        "src/core/value/scalar/mod.rs",
-        "src/core/value/scalar/unary.rs",
-        "src/core/value/scalar/binary.rs",
     ] {
         assert!(
             repo_path(relative).exists(),
             "expected split ad_value module to exist: {relative}"
         );
     }
-    assert!(
-        !repo_path("src/core/value/scalar/shared.rs").exists(),
-        "scalar/shared.rs should stay removed after the homogeneous-tape redesign"
-    );
 }
 
 #[test]
 fn split_ad_value_modules_stay_under_size_guideline() {
-    for relative in [
-        "src/core/value/core.rs",
-        "src/core/value/tensor.rs",
-        "src/core/value/scalar/mod.rs",
-        "src/core/value/scalar/unary.rs",
-        "src/core/value/scalar/binary.rs",
-    ] {
+    for relative in ["src/core/value/core.rs", "src/core/value/tensor.rs"] {
         let contents = std::fs::read_to_string(repo_path(relative)).unwrap();
         let line_count = contents.lines().count();
         assert!(

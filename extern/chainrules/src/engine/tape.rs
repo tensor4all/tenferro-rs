@@ -199,6 +199,11 @@ impl<V: Differentiable> Tape<V> {
             loss.value.zero_tangent(),
         )
     }
+
+    /// Marks the current graph as freed.
+    pub fn free_graph(&self) {
+        self.lock_graph().free_graph();
+    }
 }
 
 impl<V: Differentiable> Clone for Tape<V> {

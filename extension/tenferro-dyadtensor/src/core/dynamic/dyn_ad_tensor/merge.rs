@@ -6,9 +6,20 @@ use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
 
 use super::super::tensor_ops::{tensor_map_binary_typed, tensor_map_unary_typed};
-use crate::core::{AdTensorSnapshot, DynTensor, DynTensorTyped};
+use crate::core::{AdTensorSnapshot, DynTensor, DynTensorTyped, NodeId};
 use crate::structured::StructuredTensor;
-use crate::{tape, AdTensor, Error, NodeId, Result};
+use crate::{tape, AdTensor, Error, Result};
+
+fn ensure_reverse_leaf_attached<T>(input: &AdTensor<T>) -> Result<()>
+where
+    T: Scalar + DynTensorTyped + 'static,
+{
+    if input.requires_grad() && input.reverse_tape().is_none() {
+        let tape = Tape::new();
+        input.ensure_reverse_leaf_on(&tape)?;
+    }
+    Ok(())
+}
 
 pub(super) fn map_ad_tensor_same_type_linear_typed<T, F>(
     input: &AdTensor<T>,
@@ -18,7 +29,8 @@ where
     T: Scalar + ScalarAd + Copy + DynTensorTyped + 'static,
     F: Fn(T) -> T + Copy + Send + Sync + 'static,
 {
-    let mapped = match input.snapshot() {
+    ensure_reverse_leaf_attached(input)?;
+    let mapped = match input.snapshot()? {
         AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(
             primal.with_payload_like(tensor_map_unary_typed(primal.payload(), map)?)?,
         ),
@@ -71,7 +83,8 @@ where
     P: Fn(TIn) -> TOut + Copy,
     R: Fn(TOut) -> TIn + Copy + Send + Sync + 'static,
 {
-    let mapped = match input.snapshot() {
+    ensure_reverse_leaf_attached(input)?;
+    let mapped = match input.snapshot()? {
         AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(StructuredTensor::new(
             primal.logical_dims().to_vec(),
             primal.axis_classes().to_vec(),
@@ -89,16 +102,12 @@ where
                 tensor_map_unary_typed(tangent.payload(), primal_map)?,
             )?,
         },
-        AdTensorSnapshot::Reverse { .. } => {
-            let AdTensorSnapshot::Reverse {
-                primal,
-                node: input_node,
-                tape,
-                tangent,
-            } = input.snapshot()
-            else {
-                unreachable!("snapshot matched reverse above");
-            };
+        AdTensorSnapshot::Reverse {
+            primal,
+            node: input_node,
+            tape,
+            tangent,
+        } => {
             let input_layout = primal.clone();
             let output_primal = StructuredTensor::new(
                 primal.logical_dims().to_vec(),
@@ -276,7 +285,7 @@ where
                     Ok(input_grads)
                 }),
             );
-            Ok(out.snapshot())
+            Ok(out.snapshot()?)
         }
         (None, Some((rhs_node, rhs_tape))) => {
             let out = AdTensor::new_reverse_output(primal, &rhs_tape, tangent)?;
@@ -290,7 +299,7 @@ where
                 output_node,
                 Box::new(move |cotangent| Ok(vec![(rhs_node, cotangent.clone())])),
             );
-            Ok(out.snapshot())
+            Ok(out.snapshot()?)
         }
     }
 }

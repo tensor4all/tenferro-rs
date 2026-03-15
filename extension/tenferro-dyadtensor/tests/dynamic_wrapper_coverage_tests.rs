@@ -1,70 +1,100 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_dyadtensor::{set_default_runtime, DynAdTensor, RuntimeContext, ScalarType};
+use tenferro_dyadtensor::{
+    grad, set_default_runtime, GradOptions, RuntimeContext, ScalarType, Tensor,
+};
 use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-fn scalar_f32(value: f32) -> Tensor<f32> {
-    Tensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+fn scalar_f32(value: f32) -> DenseTensor<f32> {
+    DenseTensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn scalar_f64(value: f64) -> Tensor<f64> {
-    Tensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+fn scalar_f64(value: f64) -> DenseTensor<f64> {
+    DenseTensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn scalar_c32(value: Complex32) -> Tensor<Complex32> {
-    Tensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+fn scalar_c32(value: Complex32) -> DenseTensor<Complex32> {
+    DenseTensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn scalar_c64(value: Complex64) -> Tensor<Complex64> {
-    Tensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+fn scalar_c64(value: Complex64) -> DenseTensor<Complex64> {
+    DenseTensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn vector_f32(values: &[f32]) -> Tensor<f32> {
-    Tensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn vector_f32(values: &[f32]) -> DenseTensor<f32> {
+    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn vector_f64(values: &[f64]) -> Tensor<f64> {
-    Tensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn vector_f64(values: &[f64]) -> DenseTensor<f64> {
+    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn vector_c32(values: &[Complex32]) -> Tensor<Complex32> {
-    Tensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn vector_c32(values: &[Complex32]) -> DenseTensor<Complex32> {
+    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn vector_c64(values: &[Complex64]) -> Tensor<Complex64> {
-    Tensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn vector_c64(values: &[Complex64]) -> DenseTensor<Complex64> {
+    DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn matrix_f32(values: &[f32], dims: &[usize]) -> Tensor<f32> {
-    Tensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
+fn matrix_f32(values: &[f32], dims: &[usize]) -> DenseTensor<f32> {
+    DenseTensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn matrix_f64(values: &[f64], dims: &[usize]) -> Tensor<f64> {
-    Tensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
+fn matrix_f64(values: &[f64], dims: &[usize]) -> DenseTensor<f64> {
+    DenseTensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn matrix_c64(values: &[Complex64], dims: &[usize]) -> Tensor<Complex64> {
-    Tensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
+fn matrix_c64(values: &[Complex64], dims: &[usize]) -> DenseTensor<Complex64> {
+    DenseTensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn make_f32_matrix() -> DynAdTensor {
-    DynAdTensor::new_primal(matrix_f32(&[4.0, 1.0, 1.0, 3.0], &[2, 2]))
+fn grad_wrt(output: &Tensor, cotangent: &Tensor, wrt: &[&Tensor]) -> Vec<Option<Tensor>> {
+    let grad_outputs = [cotangent.clone()];
+    grad(
+        &[output],
+        wrt,
+        Some(&grad_outputs),
+        GradOptions {
+            retain_graph: true,
+            ..GradOptions::default()
+        },
+    )
+    .unwrap()
 }
 
-fn make_f64_matrix() -> DynAdTensor {
-    DynAdTensor::new_primal(matrix_f64(&[4.0, 1.0, 1.0, 3.0], &[2, 2]))
+macro_rules! primal {
+    ($tensor:expr) => {
+        Tensor::from_tensor($tensor)
+    };
 }
 
-fn make_f32_triangular() -> DynAdTensor {
-    DynAdTensor::new_primal(matrix_f32(&[2.0, 0.0, 1.0, 3.0], &[2, 2]))
+macro_rules! reverse {
+    ($tensor:expr) => {{
+        let mut tensor = Tensor::from_tensor($tensor);
+        tensor.set_requires_grad(true).unwrap();
+        tensor
+    }};
 }
 
-fn make_f64_triangular() -> DynAdTensor {
-    DynAdTensor::new_primal(matrix_f64(&[2.0, 0.0, 1.0, 3.0], &[2, 2]))
+fn make_f32_matrix() -> Tensor {
+    primal!(matrix_f32(&[4.0, 1.0, 1.0, 3.0], &[2, 2]))
 }
 
-fn make_c64_triangular() -> DynAdTensor {
-    DynAdTensor::new_primal(matrix_c64(
+fn make_f64_matrix() -> Tensor {
+    primal!(matrix_f64(&[4.0, 1.0, 1.0, 3.0], &[2, 2]))
+}
+
+fn make_f32_triangular() -> Tensor {
+    primal!(matrix_f32(&[2.0, 0.0, 1.0, 3.0], &[2, 2]))
+}
+
+fn make_f64_triangular() -> Tensor {
+    primal!(matrix_f64(&[2.0, 0.0, 1.0, 3.0], &[2, 2]))
+}
+
+fn make_c64_triangular() -> Tensor {
+    primal!(matrix_c64(
         &[
             Complex64::new(2.0, 0.5),
             Complex64::new(0.0, 0.0),
@@ -75,39 +105,59 @@ fn make_c64_triangular() -> DynAdTensor {
     ))
 }
 
-fn make_f32_rhs() -> DynAdTensor {
-    DynAdTensor::new_primal(vector_f32(&[1.0, 2.0]))
+fn make_f32_rhs() -> Tensor {
+    primal!(vector_f32(&[1.0, 2.0]))
 }
 
-fn make_f64_rhs() -> DynAdTensor {
-    DynAdTensor::new_primal(vector_f64(&[1.0, 2.0]))
+fn make_f64_rhs() -> Tensor {
+    primal!(vector_f64(&[1.0, 2.0]))
 }
 
-fn make_c64_rhs() -> DynAdTensor {
-    DynAdTensor::new_primal(vector_c64(&[
+fn make_c64_rhs() -> Tensor {
+    primal!(vector_c64(&[
         Complex64::new(1.0, 0.5),
         Complex64::new(-2.0, 1.0),
     ]))
 }
 
 #[test]
-fn dynadtensor_reverse_graph_helpers_expose_same_and_distinct_graphs() {
-    let tape_a = DynAdTensor::new_reverse_leaf(scalar_f64(1.0)).unwrap();
-    let tape_a_peer = tape_a.new_reverse_sibling(scalar_f64(2.0)).unwrap();
-    let tape_b = DynAdTensor::new_reverse_leaf(scalar_f64(3.0)).unwrap();
+fn dynadtensor_lazy_reverse_graph_merges_operands_and_rejects_distinct_outputs() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let x = reverse!(scalar_f64(1.0));
+    let y = reverse!(scalar_f64(2.0));
+    let z = reverse!(scalar_f64(3.0));
 
-    assert!(tape_a.shares_reverse_graph(&tape_a_peer));
-    assert!(!tape_a.shares_reverse_graph(&tape_b));
-    assert_eq!(tape_a.tape_id(), tape_a_peer.tape_id());
-    assert_ne!(tape_a.tape_id(), tape_b.tape_id());
+    let out_xy = x.add(&y).unwrap();
+    let shared = grad(
+        &[&out_xy],
+        &[&x, &y],
+        None,
+        GradOptions {
+            retain_graph: true,
+            ..GradOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(shared[0].is_some());
+    assert!(shared[1].is_some());
+
+    let out_z = z.exp().unwrap();
+    let err = match grad(&[&out_xy, &out_z], &[&x], None, GradOptions::default()) {
+        Ok(_) => panic!("grad should reject outputs from distinct reverse graphs"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        tenferro_dyadtensor::Error::MixedReverseTape { .. }
+    ));
 }
 
 #[test]
 fn dynadtensor_to_scalar_type_covers_all_explicit_cast_pairs() {
-    let real32 = DynAdTensor::new_primal(scalar_f32(1.5));
-    let real64 = DynAdTensor::new_primal(scalar_f64(2.5));
-    let complex32 = DynAdTensor::new_primal(scalar_c32(Complex32::new(3.0, -4.0)));
-    let complex64 = DynAdTensor::new_primal(scalar_c64(Complex64::new(-2.0, 5.0)));
+    let real32 = primal!(scalar_f32(1.5));
+    let real64 = primal!(scalar_f64(2.5));
+    let complex32 = primal!(scalar_c32(Complex32::new(3.0, -4.0)));
+    let complex64 = primal!(scalar_c64(Complex64::new(-2.0, 5.0)));
 
     assert_eq!(
         real32
@@ -199,11 +249,11 @@ fn dynadtensor_to_scalar_type_covers_all_explicit_cast_pairs() {
 fn dynadtensor_dynamic_scalar_wrappers_cover_success_and_error_paths() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let unit_f32 = DynAdTensor::new_primal(scalar_f32(0.25));
-    let unit_f64 = DynAdTensor::new_primal(scalar_f64(0.25));
-    let acosh_f64 = DynAdTensor::new_primal(scalar_f64(1.25));
-    let complex32 = DynAdTensor::new_primal(scalar_c32(Complex32::new(0.5, -0.25)));
-    let complex64 = DynAdTensor::new_primal(scalar_c64(Complex64::new(0.5, 0.25)));
+    let unit_f32 = primal!(scalar_f32(0.25));
+    let unit_f64 = primal!(scalar_f64(0.25));
+    let acosh_f64 = primal!(scalar_f64(1.25));
+    let complex32 = primal!(scalar_c32(Complex32::new(0.5, -0.25)));
+    let complex64 = primal!(scalar_c64(Complex64::new(0.5, 0.25)));
 
     let _ = unit_f32.sqrt().unwrap();
     let _ = unit_f64.exp().unwrap();
@@ -224,15 +274,9 @@ fn dynadtensor_dynamic_scalar_wrappers_cover_success_and_error_paths() {
     let _ = complex32.exp().unwrap();
     let _ = complex64.sqrt().unwrap();
 
-    let _ = DynAdTensor::new_primal(vector_f32(&[1.0, 3.0]))
-        .mean()
-        .unwrap();
-    let _ = DynAdTensor::new_primal(vector_f32(&[1.0, 3.0]))
-        .var()
-        .unwrap();
-    let _ = DynAdTensor::new_primal(vector_f64(&[1.0, 3.0]))
-        .std()
-        .unwrap();
+    let _ = primal!(vector_f32(&[1.0, 3.0])).mean().unwrap();
+    let _ = primal!(vector_f32(&[1.0, 3.0])).var().unwrap();
+    let _ = primal!(vector_f64(&[1.0, 3.0])).std().unwrap();
 
     let _ = unit_f32.add(&unit_f32).unwrap();
     let _ = unit_f64.pow(&unit_f64).unwrap();
@@ -261,34 +305,30 @@ fn dynadtensor_dynamic_scalar_wrappers_cover_success_and_error_paths() {
 fn dynadtensor_dynamic_tensor_wrappers_cover_all_variants_and_errors() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let _ = DynAdTensor::new_primal(vector_f32(&[1.0, 2.0]))
+    let _ = primal!(vector_f32(&[1.0, 2.0])).sum().unwrap();
+    let _ = primal!(vector_f64(&[1.0, 2.0])).sum().unwrap();
+    let _ = primal!(vector_c32(&[Complex32::new(1.0, 0.5)]))
         .sum()
         .unwrap();
-    let _ = DynAdTensor::new_primal(vector_f64(&[1.0, 2.0]))
-        .sum()
-        .unwrap();
-    let _ = DynAdTensor::new_primal(vector_c32(&[Complex32::new(1.0, 0.5)]))
-        .sum()
-        .unwrap();
-    let _ = DynAdTensor::new_primal(vector_c64(&[Complex64::new(1.0, -0.5)]))
+    let _ = primal!(vector_c64(&[Complex64::new(1.0, -0.5)]))
         .sum()
         .unwrap();
 
-    let dot_f32 = DynAdTensor::einsum(
+    let dot_f32 = Tensor::einsum(
         "i,i->",
         &[
-            &DynAdTensor::new_primal(vector_f32(&[1.0, 2.0])),
-            &DynAdTensor::new_primal(vector_f32(&[3.0, 4.0])),
+            &primal!(vector_f32(&[1.0, 2.0])),
+            &primal!(vector_f32(&[3.0, 4.0])),
         ],
     )
     .unwrap();
     assert_eq!(dot_f32.scalar_type(), ScalarType::F32);
 
-    let dot_c32 = DynAdTensor::einsum(
+    let dot_c32 = Tensor::einsum(
         "i,i->",
         &[
-            &DynAdTensor::new_primal(vector_f32(&[1.0, 2.0])),
-            &DynAdTensor::new_primal(vector_c32(&[
+            &primal!(vector_f32(&[1.0, 2.0])),
+            &primal!(vector_c32(&[
                 Complex32::new(1.0, 0.5),
                 Complex32::new(-2.0, 1.0),
             ])),
@@ -297,11 +337,11 @@ fn dynadtensor_dynamic_tensor_wrappers_cover_all_variants_and_errors() {
     .unwrap();
     assert_eq!(dot_c32.scalar_type(), ScalarType::C32);
 
-    let dot_c64 = DynAdTensor::einsum(
+    let dot_c64 = Tensor::einsum(
         "i,i->",
         &[
-            &DynAdTensor::new_primal(vector_f64(&[1.0, 2.0])),
-            &DynAdTensor::new_primal(vector_c64(&[
+            &primal!(vector_f64(&[1.0, 2.0])),
+            &primal!(vector_c64(&[
                 Complex64::new(1.0, 0.5),
                 Complex64::new(-2.0, 1.0),
             ])),
@@ -310,7 +350,7 @@ fn dynadtensor_dynamic_tensor_wrappers_cover_all_variants_and_errors() {
     .unwrap();
     assert_eq!(dot_c64.scalar_type(), ScalarType::C64);
 
-    let err = match DynAdTensor::einsum("->", &[]) {
+    let err = match Tensor::einsum("->", &[]) {
         Ok(_) => panic!("einsum should reject an empty operand list"),
         Err(err) => err,
     };
@@ -319,7 +359,7 @@ fn dynadtensor_dynamic_tensor_wrappers_cover_all_variants_and_errors() {
     );
 }
 
-fn exercise_real_linalg_suite(matrix: &DynAdTensor, triangular: &DynAdTensor, rhs: &DynAdTensor) {
+fn exercise_real_linalg_suite(matrix: &Tensor, triangular: &Tensor, rhs: &Tensor) {
     let svd = matrix.svd().unwrap();
     assert_eq!(svd.s.dims(), &[2]);
     let qr = matrix.qr().unwrap();
@@ -371,7 +411,7 @@ fn dynadtensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     let solved = tri_c64.solve_triangular(&rhs_c64).unwrap();
     assert_eq!(solved.scalar_type(), ScalarType::C64);
 
-    let complex_err = match DynAdTensor::new_primal(matrix_c64(
+    let complex_err = match primal!(matrix_c64(
         &[
             Complex64::new(4.0, 0.5),
             Complex64::new(1.0, -0.25),
@@ -386,7 +426,7 @@ fn dynadtensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
         Err(err) => err,
     };
     assert!(
-        matches!(complex_err, tenferro_dyadtensor::Error::InvalidAdTensor { message } if message.contains("requires a real DynAdTensor input"))
+        matches!(complex_err, tenferro_dyadtensor::Error::InvalidAdTensor { message } if message.contains("requires a real Tensor input"))
     );
 
     let mismatch_err = match matrix32.solve(&rhs64) {
@@ -408,21 +448,26 @@ fn dynadtensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
 
 #[test]
 fn dynadtensor_dynamic_pullback_wrapper_covers_success_and_error_paths() {
-    let x = DynAdTensor::new_reverse_leaf(vector_f64(&[1.0, 2.0])).unwrap();
-    let alpha = x.new_reverse_sibling(scalar_f64(3.0)).unwrap();
+    let x = reverse!(vector_f64(&[1.0, 2.0]));
+    let alpha = reverse!(scalar_f64(3.0));
     let out = x.scale(&alpha).unwrap();
-    let cotangent = DynAdTensor::new_primal(vector_f64(&[0.5, 1.25]));
+    let cotangent = primal!(vector_f64(&[0.5, 1.25]));
 
-    let disconnected = DynAdTensor::new_primal(scalar_f64(7.0));
-    let grads = out.pullback_wrt(&cotangent, &[&x, &disconnected]).unwrap();
+    let disconnected = primal!(scalar_f64(7.0));
+    let grads = grad_wrt(&out, &cotangent, &[&x, &disconnected]);
     assert!(grads[0].is_some());
     assert!(grads[1].is_none());
 
-    let cotangent_mismatch = DynAdTensor::new_primal(vector_c64(&[
+    let cotangent_mismatch = primal!(vector_c64(&[
         Complex64::new(1.0, 0.0),
         Complex64::new(0.0, 1.0),
     ]));
-    let err = match out.pullback_wrt(&cotangent_mismatch, &[&x]) {
+    let err = match grad(
+        &[&out],
+        &[&x],
+        Some(&[cotangent_mismatch.clone()]),
+        GradOptions::default(),
+    ) {
         Ok(_) => panic!("pullback should reject mismatched cotangent dtypes"),
         Err(err) => err,
     };
@@ -430,18 +475,17 @@ fn dynadtensor_dynamic_pullback_wrapper_covers_success_and_error_paths() {
         matches!(err, tenferro_dyadtensor::Error::InvalidAdTensor { message } if message.contains("requires cotangent dtype"))
     );
 
-    let other = DynAdTensor::new_reverse_leaf(scalar_f64(2.0)).unwrap();
-    let err = match out.pullback_wrt(&cotangent, &[&other]) {
-        Ok(_) => panic!("pullback should reject tensors from a different tape"),
-        Err(err) => err,
-    };
-    assert!(matches!(
-        err,
-        tenferro_dyadtensor::Error::MixedReverseTape { .. }
-    ));
+    let other = reverse!(scalar_f64(2.0));
+    let grads = grad_wrt(&out, &cotangent, &[&other]);
+    assert!(grads[0].is_none());
 
-    let primal = DynAdTensor::new_primal(vector_f64(&[1.0, 2.0]));
-    let err = match primal.pullback_wrt(&cotangent, &[&primal]) {
+    let primal = primal!(vector_f64(&[1.0, 2.0]));
+    let err = match grad(
+        &[&primal],
+        &[&primal],
+        Some(&[cotangent.clone()]),
+        GradOptions::default(),
+    ) {
         Ok(_) => panic!("primal outputs should not expose reverse pullback"),
         Err(err) => err,
     };
@@ -453,45 +497,39 @@ fn dynadtensor_dynamic_pullback_wrapper_covers_success_and_error_paths() {
 #[test]
 fn dynadtensor_dynamic_pullback_wrapper_covers_all_dtype_variants() {
     fn exercise_scale_pullback(
-        x: DynAdTensor,
-        alpha: DynAdTensor,
-        cotangent: DynAdTensor,
+        x: Tensor,
+        alpha: Tensor,
+        cotangent: Tensor,
         expected_dtype: ScalarType,
     ) {
         let out = x.scale(&alpha).unwrap();
-        let grads = out.pullback_wrt(&cotangent, &[&x, &alpha]).unwrap();
+        let grads = grad_wrt(&out, &cotangent, &[&x, &alpha]);
         assert_eq!(grads[0].as_ref().unwrap().scalar_type(), expected_dtype);
         assert_eq!(grads[1].as_ref().unwrap().scalar_type(), expected_dtype);
     }
 
-    let x_f32 = DynAdTensor::new_reverse_leaf(vector_f32(&[1.0, 2.0])).unwrap();
-    let alpha_f32 = x_f32.new_reverse_sibling(scalar_f32(3.0)).unwrap();
-    let cotangent_f32 = DynAdTensor::new_primal(vector_f32(&[0.5, 1.25]));
+    let x_f32 = reverse!(vector_f32(&[1.0, 2.0]));
+    let alpha_f32 = reverse!(scalar_f32(3.0));
+    let cotangent_f32 = primal!(vector_f32(&[0.5, 1.25]));
     exercise_scale_pullback(x_f32, alpha_f32, cotangent_f32, ScalarType::F32);
 
-    let x_c32 = DynAdTensor::new_reverse_leaf(vector_c32(&[
+    let x_c32 = reverse!(vector_c32(&[
         Complex32::new(1.0, 0.5),
         Complex32::new(-2.0, 1.0),
-    ]))
-    .unwrap();
-    let alpha_c32 = x_c32
-        .new_reverse_sibling(scalar_c32(Complex32::new(0.5, -1.0)))
-        .unwrap();
-    let cotangent_c32 = DynAdTensor::new_primal(vector_c32(&[
+    ]));
+    let alpha_c32 = reverse!(scalar_c32(Complex32::new(0.5, -1.0)));
+    let cotangent_c32 = primal!(vector_c32(&[
         Complex32::new(0.25, -0.5),
         Complex32::new(1.0, 0.75),
     ]));
     exercise_scale_pullback(x_c32, alpha_c32, cotangent_c32, ScalarType::C32);
 
-    let x_c64 = DynAdTensor::new_reverse_leaf(vector_c64(&[
+    let x_c64 = reverse!(vector_c64(&[
         Complex64::new(1.0, -0.5),
         Complex64::new(2.0, 1.5),
-    ]))
-    .unwrap();
-    let alpha_c64 = x_c64
-        .new_reverse_sibling(scalar_c64(Complex64::new(-1.5, 0.25)))
-        .unwrap();
-    let cotangent_c64 = DynAdTensor::new_primal(vector_c64(&[
+    ]));
+    let alpha_c64 = reverse!(scalar_c64(Complex64::new(-1.5, 0.25)));
+    let cotangent_c64 = primal!(vector_c64(&[
         Complex64::new(0.5, 0.0),
         Complex64::new(-0.75, 1.25),
     ]));

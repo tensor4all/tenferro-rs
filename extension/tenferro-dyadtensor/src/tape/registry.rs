@@ -1,9 +1,9 @@
 use ::chainrules::{ReverseRule, Tape};
 use chainrules_core::AutodiffError;
 
-use crate::core::DynTensorTyped;
+use crate::core::{DynTensorTyped, NodeId};
 use crate::structured::StructuredTensor;
-use crate::{DynTensor, NodeId, Result};
+use crate::{DynTensor, Result};
 
 pub(crate) type PullbackRule<T> = Box<
     dyn Fn(&StructuredTensor<T>) -> Result<Vec<(NodeId, StructuredTensor<T>)>>

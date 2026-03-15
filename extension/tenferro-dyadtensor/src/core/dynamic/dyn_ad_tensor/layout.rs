@@ -1,5 +1,6 @@
 use num_traits::Zero;
 
+use chainrules::Tape;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -20,6 +21,17 @@ where
     })
 }
 
+fn ensure_reverse_leaf_attached<T>(input: &AdTensor<T>) -> Result<()>
+where
+    T: Scalar + DynTensorTyped + 'static,
+{
+    if input.requires_grad() && input.reverse_tape().is_none() {
+        let tape = Tape::new();
+        input.ensure_reverse_leaf_on(&tape)?;
+    }
+    Ok(())
+}
+
 pub(super) fn reshape_ad_tensor_typed<T>(
     input: &AdTensor<T>,
     new_dims: &[usize],
@@ -28,6 +40,7 @@ where
     T: Scalar + Copy + DynTensorTyped + 'static,
 {
     ensure_dense_ad_tensor_layout(input, "reshape")?;
+    ensure_reverse_leaf_attached(input)?;
 
     let old_dims = input.primal().dims().to_vec();
     let old_len: usize = old_dims.iter().product();
@@ -40,7 +53,7 @@ where
         });
     }
 
-    match input.snapshot() {
+    match input.snapshot()? {
         AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
             primal
                 .into_payload()
@@ -212,9 +225,10 @@ where
     T: Scalar + Copy + Zero + DynTensorTyped + 'static,
 {
     ensure_dense_ad_tensor_layout(input, "take_prefix")?;
+    ensure_reverse_leaf_attached(input)?;
 
     let original_dims = input.primal().dims().to_vec();
-    match input.snapshot() {
+    match input.snapshot()? {
         AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
             take_prefix_payload_typed(primal.payload(), axis, len)?,
         ))),
@@ -274,6 +288,7 @@ where
     T: Scalar + Copy + DynTensorTyped + 'static,
 {
     ensure_dense_ad_tensor_layout(input, "diag_embed")?;
+    ensure_reverse_leaf_attached(input)?;
     if input.ndim() != 1 {
         return Err(Error::InvalidAdTensor {
             message: format!(
@@ -283,7 +298,7 @@ where
         });
     }
 
-    match input.snapshot() {
+    match input.snapshot()? {
         AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(
             StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?,
         )),
@@ -328,9 +343,10 @@ pub(super) fn contiguous_ad_tensor_typed<T>(
     order: MemoryOrder,
 ) -> Result<AdTensor<T>>
 where
-    T: Scalar + DynTensorTyped,
+    T: Scalar + DynTensorTyped + 'static,
 {
-    let mapped = match input.snapshot() {
+    ensure_reverse_leaf_attached(input)?;
+    let mapped = match input.snapshot()? {
         AdTensorSnapshot::Primal(primal) => {
             AdTensorSnapshot::Primal(primal.with_payload_like(primal.payload().contiguous(order))?)
         }

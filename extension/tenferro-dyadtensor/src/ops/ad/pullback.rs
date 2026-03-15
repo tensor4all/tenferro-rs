@@ -33,7 +33,6 @@ pub fn pullback_wrt<T: Scalar + DynTensorTyped + 'static>(
 ) -> Result<Vec<Option<StructuredTensor<T>>>> {
     let tape = output
         .reverse_tape()
-        .cloned()
         .ok_or_else(|| Error::InvalidAdTensor {
             message: "ad::pullback_wrt requires reverse-mode output tensor".to_string(),
         })?;

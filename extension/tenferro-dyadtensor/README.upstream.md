@@ -7,8 +7,7 @@ AD-aware tensor interface layer on top of `tenferro-rs`.
 This repository currently provides:
 
 - Dynamic public tensor objects:
-  - `DynAdTensor`
-  - `DynScalar`
+  - `Tensor`
   - `ScalarType` (`F32`, `F64`, `C32`, `C64`)
 - Public helper traits:
   - `TensorKernel`
@@ -18,27 +17,27 @@ This repository currently provides:
   - `RuntimeContext`
   - `set_default_runtime`
   - `with_default_runtime`
-- PyTorch-like eager methods on `DynAdTensor`:
+- PyTorch-like eager methods on `Tensor`:
   - scalar/analytic: `exp`, `sqrt`, `sin`, `cos`, `tanh`, `add`, `pow`, `mean`, `sum`, `var`, `std`, ...
   - tensor: `einsum`
   - linalg: `svd`, `qr`, `lu`, `eigen`, `eig`, `lstsq`, `solve`, `det`, `slogdet`, ...
 
-The preferred public surface is `DynAdTensor` plus its eager methods. Runtime
-selection uses an explicit runtime holder, and reverse-mode bookkeeping
-attaches pullback rules directly to `chainrules::Tape<DynTensor>`, where
-rank-0 tensors carry scalar AD values. Mixed-dtype tensor ops apply implicit
-result-type promotion internally (`complex` beats `real`, 64-bit beats
-32-bit), and reverse-mode pullbacks cast gradients back to each input dtype.
-Explicit numeric casts use `DynAdTensor::to_scalar_type`.
+The preferred public surface is `Tensor` plus its eager methods. Runtime
+selection uses an explicit runtime holder, reverse-mode graphs stay
+homogeneous over one runtime-typed tensor payload, and rank-0 tensors carry
+scalar AD values. Mixed-dtype tensor ops apply implicit result-type promotion
+internally (`complex` beats `real`, `64-bit` beats `32-bit`), and reverse-mode
+pullbacks cast gradients back to each input dtype. Explicit numeric casts use
+`Tensor::to_scalar_type`.
 
 ```rust
-use tenferro_dyadtensor::{DynAdTensor, set_default_runtime, RuntimeContext};
+use tenferro_dyadtensor::{set_default_runtime, RuntimeContext, Tensor};
 use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)?;
-let qr_result = DynAdTensor::new_primal(a).qr()?;
+let a = DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)?;
+let qr_result = Tensor::from_tensor(a).qr()?;
 assert_eq!(qr_result.q.dims(), &[2, 2]);
 # Ok::<(), tenferro_dyadtensor::Error>(())
 ```

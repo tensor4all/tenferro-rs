@@ -68,7 +68,7 @@ fn einsum_backward_two_stage_matches_finite_difference_f64() {
         )
     };
 
-    let objective = |a_now: &Tensor<f64>| -> f64 {
+    let objective = |a_now: &DenseTensor<f64>| -> f64 {
         let ad_a = AdTensor::new_primal(a_now.clone());
         let ad_b = AdTensor::new_primal(b.clone());
         let ad_c = AdTensor::new_primal(c.clone());
@@ -94,7 +94,7 @@ fn einsum_backward_two_stage_matches_finite_difference_f64() {
     let err = max_abs_diff(&grad_a, &fd);
     assert!(err < 1e-8, "einsum 2-stage backward dA fd mismatch: {err}");
 
-    let objective_b = |b_now: &Tensor<f64>| -> f64 {
+    let objective_b = |b_now: &DenseTensor<f64>| -> f64 {
         let ad_a = AdTensor::new_primal(a.clone());
         let ad_b = AdTensor::new_primal(b_now.clone());
         let ad_c = AdTensor::new_primal(c.clone());
@@ -231,7 +231,7 @@ fn einsum_backward_two_stage_matches_finite_difference_c64_directional() {
         grads[0].as_ref().expect("missing dA").clone()
     };
 
-    let objective = |a_now: &Tensor<Complex64>| -> Complex64 {
+    let objective = |a_now: &DenseTensor<Complex64>| -> Complex64 {
         let ad_a = AdTensor::new_primal(a_now.clone());
         let ad_b = AdTensor::new_primal(b.clone());
         let ad_c = AdTensor::new_primal(c.clone());

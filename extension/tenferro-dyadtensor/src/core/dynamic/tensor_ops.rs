@@ -3,7 +3,7 @@ use core::ops::Sub;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use super::dyn_scalar::AbsAsF64;
+use super::scalar_type::AbsAsF64;
 use crate::{Error, Result};
 
 pub(super) fn unflatten_index_column_major(mut flat: usize, dims: &[usize], out: &mut [usize]) {

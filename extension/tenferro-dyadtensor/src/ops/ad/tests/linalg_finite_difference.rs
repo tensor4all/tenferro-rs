@@ -5,7 +5,7 @@ fn linalg_solve_triangular_forward_matches_finite_difference_f64() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let da = f64_2x2([0.2, -0.05, 0.1, 0.15]);
     let eps = 1e-6;
 
@@ -38,9 +38,9 @@ fn linalg_solve_triangular_backward_matches_finite_difference_f64() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let cotangent =
-        Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
     let eps = 1e-6;
 
     let grad_a = solve_triangular_rrule(
@@ -52,7 +52,7 @@ fn linalg_solve_triangular_backward_matches_finite_difference_f64() {
     .unwrap()
     .a;
 
-    let objective = |a_now: &Tensor<f64>| -> f64 {
+    let objective = |a_now: &DenseTensor<f64>| -> f64 {
         let ad_a = AdTensor::new_primal(a_now.clone());
         let ad_b = AdTensor::new_primal(b.clone());
         let out = solve_triangular(&ad_a, &ad_b).unwrap();
@@ -87,7 +87,7 @@ fn linalg_solve_triangular_forward_matches_finite_difference_c64() {
         Complex64::new(1.0, -0.5),
         Complex64::new(3.0, 0.2),
     ]);
-    let b = Tensor::<Complex64>::from_slice(
+    let b = DenseTensor::<Complex64>::from_slice(
         &[Complex64::new(1.0, 0.4), Complex64::new(2.0, -0.3)],
         &[2],
         MemoryOrder::ColumnMajor,
@@ -138,13 +138,13 @@ fn linalg_solve_triangular_backward_matches_finite_difference_c64_directional() 
         Complex64::new(1.0, -0.5),
         Complex64::new(3.0, 0.2),
     ]);
-    let b = Tensor::<Complex64>::from_slice(
+    let b = DenseTensor::<Complex64>::from_slice(
         &[Complex64::new(1.0, 0.4), Complex64::new(2.0, -0.3)],
         &[2],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let cotangent = Tensor::<Complex64>::from_slice(
+    let cotangent = DenseTensor::<Complex64>::from_slice(
         &[Complex64::new(0.5, 0.2), Complex64::new(-0.25, 0.1)],
         &[2],
         MemoryOrder::ColumnMajor,
@@ -167,7 +167,7 @@ fn linalg_solve_triangular_backward_matches_finite_difference_c64_directional() 
     .unwrap()
     .a;
 
-    let objective = |a_now: &Tensor<Complex64>| -> f64 {
+    let objective = |a_now: &DenseTensor<Complex64>| -> f64 {
         let ad_a = AdTensor::new_primal(a_now.clone());
         let ad_b = AdTensor::new_primal(b.clone());
         let out = solve_triangular(&ad_a, &ad_b).unwrap();
@@ -189,9 +189,9 @@ fn eager_local_solve_triangular_rrule_runs() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let cotangent =
-        Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a = AdTensor::new_primal(a);
     let ad_b = AdTensor::new_primal(b);

@@ -1,19 +1,20 @@
 use num_complex::{Complex32, Complex64};
 
+use super::basics::ensure_common_reverse_tape;
 use super::merge::{
     map_ad_tensor_mixed_linear_typed, map_ad_tensor_same_type_linear_typed, merge_add_ad_tensors,
 };
-use super::DynAdTensor;
+use super::Tensor;
 use crate::{AdTensor, Error, Result};
 
-impl DynAdTensor {
+impl Tensor {
     /// AD-preserving extraction of the real component.
     pub fn real_part(&self) -> Result<Self> {
         match self {
             Self::F32(v) => Ok(Self::F32(v.clone())),
             Self::F64(v) => Ok(Self::F64(v.clone())),
             Self::C32(v) => {
-                if v.reverse_tape().is_some() {
+                if v.requires_grad() {
                     return Err(Error::UnsupportedAdOp {
                         op: "real_part_reverse",
                     });
@@ -25,7 +26,7 @@ impl DynAdTensor {
                 )?))
             }
             Self::C64(v) => {
-                if v.reverse_tape().is_some() {
+                if v.requires_grad() {
                     return Err(Error::UnsupportedAdOp {
                         op: "real_part_reverse",
                     });
@@ -49,7 +50,7 @@ impl DynAdTensor {
                 0.0_f64
             })?)),
             Self::C32(v) => {
-                if v.reverse_tape().is_some() {
+                if v.requires_grad() {
                     return Err(Error::UnsupportedAdOp {
                         op: "imag_part_reverse",
                     });
@@ -61,7 +62,7 @@ impl DynAdTensor {
                 )?))
             }
             Self::C64(v) => {
-                if v.reverse_tape().is_some() {
+                if v.requires_grad() {
                     return Err(Error::UnsupportedAdOp {
                         op: "imag_part_reverse",
                     });
@@ -77,6 +78,7 @@ impl DynAdTensor {
 
     /// Compose a complex AD tensor from real/imaginary AD tensors.
     pub fn compose_complex(real: Self, imag: Self) -> Result<Self> {
+        ensure_common_reverse_tape(&[&real, &imag])?;
         match (real, imag) {
             (Self::F32(re), Self::F32(im)) => {
                 let re_c = map_ad_tensor_mixed_linear_typed(
@@ -89,7 +91,7 @@ impl DynAdTensor {
                     |y| Complex32::new(0.0, y),
                     |cotangent| cotangent.im,
                 )?;
-                let merged = merge_add_ad_tensors(re_c.snapshot(), im_c.snapshot())?;
+                let merged = merge_add_ad_tensors(re_c.snapshot()?, im_c.snapshot()?)?;
                 Ok(Self::C32(AdTensor::try_from(merged)?))
             }
             (Self::F64(re), Self::F64(im)) => {
@@ -103,7 +105,7 @@ impl DynAdTensor {
                     |y| Complex64::new(0.0, y),
                     |cotangent| cotangent.im,
                 )?;
-                let merged = merge_add_ad_tensors(re_c.snapshot(), im_c.snapshot())?;
+                let merged = merge_add_ad_tensors(re_c.snapshot()?, im_c.snapshot()?)?;
                 Ok(Self::C64(AdTensor::try_from(merged)?))
             }
             (lhs, rhs) => Err(Error::InvalidAdTensor {

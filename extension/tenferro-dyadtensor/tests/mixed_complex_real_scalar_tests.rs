@@ -1,30 +1,30 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_dyadtensor::{set_default_runtime, AdMode, DynAdTensor, RuntimeContext, ScalarType};
+use tenferro_dyadtensor::{set_default_runtime, RuntimeContext, ScalarType, Tensor};
 use tenferro_prims::CpuContext;
-use tenferro_tensor::Tensor;
+use tenferro_tensor::Tensor as DenseTensor;
 
 mod support;
 
 use support::{
-    forward_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64, scalar_c32, scalar_c64,
-    scalar_f32, scalar_f64, vector_c64, vector_f32,
+    forward_rank0_f64, forward_tensor_c64, grad_wrt, reverse_rank0_f64_like, reverse_vector_c64,
+    scalar_c32, scalar_c64, scalar_f32, scalar_f64, vector_c64, vector_f32,
 };
 
-fn c64_vec(values: &[Complex64]) -> Tensor<Complex64> {
+fn c64_vec(values: &[Complex64]) -> DenseTensor<Complex64> {
     vector_c64(values)
 }
 
 #[test]
 fn c64_tensor_scale_accepts_f64_scalar_in_forward_mode() {
-    let x = DynAdTensor::new_forward(
+    let x = forward_tensor_c64(
         c64_vec(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
-    )
-    .unwrap();
+    );
     let a = forward_rank0_f64(2.0_f64, 0.25_f64);
 
     let out = x.scale(&a).unwrap();
-    assert_eq!(out.mode(), AdMode::Forward);
+    assert!(!out.requires_grad());
+    assert!(out.grad().is_none());
 
     let out_t = out.as_c64().unwrap();
     assert_eq!(
@@ -39,15 +39,15 @@ fn c64_tensor_scale_accepts_f64_scalar_in_forward_mode() {
 
 #[test]
 fn c64_tensor_div_scalar_accepts_f64_scalar_in_forward_mode() {
-    let x = DynAdTensor::new_forward(
+    let x = forward_tensor_c64(
         c64_vec(&[Complex64::new(4.0, 0.0), Complex64::new(-6.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
-    )
-    .unwrap();
+    );
     let a = forward_rank0_f64(2.0_f64, 0.5_f64);
 
     let out = x.div_scalar(&a).unwrap();
-    assert_eq!(out.mode(), AdMode::Forward);
+    assert!(!out.requires_grad());
+    assert!(out.grad().is_none());
 
     let out_t = out.as_c64().unwrap();
     assert_eq!(
@@ -62,21 +62,20 @@ fn c64_tensor_div_scalar_accepts_f64_scalar_in_forward_mode() {
 
 #[test]
 fn c64_tensor_axpby_accepts_real_coefficients() {
-    let x = DynAdTensor::new_forward(
+    let x = forward_tensor_c64(
         c64_vec(&[Complex64::new(1.0, 0.0), Complex64::new(-3.0, 0.0)]),
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(1.5, 0.0)]),
-    )
-    .unwrap();
-    let y = DynAdTensor::new_forward(
+    );
+    let y = forward_tensor_c64(
         c64_vec(&[Complex64::new(0.5, 0.0), Complex64::new(2.0, 0.0)]),
         c64_vec(&[Complex64::new(-0.5, 0.0), Complex64::new(0.25, 0.0)]),
-    )
-    .unwrap();
+    );
     let a = forward_rank0_f64(2.0_f64, 0.25_f64);
     let b = forward_rank0_f64(-0.5_f64, 1.0_f64);
 
     let out = x.axpby(&a, &y, &b).unwrap();
-    assert_eq!(out.mode(), AdMode::Forward);
+    assert!(!out.requires_grad());
+    assert!(out.grad().is_none());
 
     let out_t = out.as_c64().unwrap();
     assert_eq!(
@@ -95,13 +94,13 @@ fn c64_tensor_scale_reverse_casts_back_scalar_gradient_to_real_dtype() {
     let a = reverse_rank0_f64_like(2.0_f64, &x);
 
     let out = x.scale(&a).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
+    assert!(out.requires_grad());
 
-    let cotangent = DynAdTensor::new_primal(c64_vec(&[
+    let cotangent = Tensor::from_tensor(c64_vec(&[
         Complex64::new(0.5, 0.0),
         Complex64::new(-1.0, 0.0),
     ]));
-    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    let grads = grad_wrt(&out, &cotangent, &[&x, &a]);
     assert_eq!(
         grads[0]
             .as_ref()
@@ -134,13 +133,13 @@ fn c64_tensor_div_scalar_reverse_casts_back_scalar_gradient_to_real_dtype() {
     let a = reverse_rank0_f64_like(2.0_f64, &x);
 
     let out = x.div_scalar(&a).unwrap();
-    assert_eq!(out.mode(), AdMode::Reverse);
+    assert!(out.requires_grad());
 
-    let cotangent = DynAdTensor::new_primal(c64_vec(&[
+    let cotangent = Tensor::from_tensor(c64_vec(&[
         Complex64::new(0.5, 0.0),
         Complex64::new(-1.0, 0.0),
     ]));
-    let grads = out.pullback_wrt(&cotangent, &[&x, &a]).unwrap();
+    let grads = grad_wrt(&out, &cotangent, &[&x, &a]);
     assert_eq!(
         grads[0]
             .as_ref()
@@ -170,23 +169,23 @@ fn c64_tensor_div_scalar_reverse_casts_back_scalar_gradient_to_real_dtype() {
 #[test]
 fn mixed_precision_ops_follow_result_type_lattice() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let coeff_f32 = DynAdTensor::new_primal(scalar_f32(1.0));
-    let coeff_f64 = DynAdTensor::new_primal(scalar_f64(2.0));
-    let coeff_c32 = DynAdTensor::new_primal(scalar_c32(Complex32::new(3.0, -0.5)));
-    let real_vec_f32 = DynAdTensor::new_primal(vector_f32(&[4.0, -2.0]));
-    let complex_vec_c32 = DynAdTensor::new_primal(
-        Tensor::<Complex32>::from_slice(
+    let coeff_f32 = Tensor::from_tensor(scalar_f32(1.0));
+    let coeff_f64 = Tensor::from_tensor(scalar_f64(2.0));
+    let coeff_c32 = Tensor::from_tensor(scalar_c32(Complex32::new(3.0, -0.5)));
+    let real_vec_f32 = Tensor::from_tensor(vector_f32(&[4.0, -2.0]));
+    let complex_vec_c32 = Tensor::from_tensor(
+        DenseTensor::<Complex32>::from_slice(
             &[Complex32::new(1.0, 0.25), Complex32::new(-2.0, 1.5)],
             &[2],
             tenferro_tensor::MemoryOrder::ColumnMajor,
         )
         .unwrap(),
     );
-    let complex_vec_c64 = DynAdTensor::new_primal(c64_vec(&[
+    let complex_vec_c64 = Tensor::from_tensor(c64_vec(&[
         Complex64::new(1.0, -0.5),
         Complex64::new(2.0, 1.25),
     ]));
-    let coeff_c64 = DynAdTensor::new_primal(scalar_c64(Complex64::new(1.0, -0.5)));
+    let coeff_c64 = Tensor::from_tensor(scalar_c64(Complex64::new(1.0, -0.5)));
 
     assert_eq!(
         coeff_f32.add(&coeff_f64).unwrap().scalar_type(),
@@ -215,7 +214,7 @@ fn mixed_precision_ops_follow_result_type_lattice() {
         real_vec_f32
             .axpby(
                 &coeff_f64,
-                &DynAdTensor::new_primal(vector_f32(&[0.5, 1.0])),
+                &Tensor::from_tensor(vector_f32(&[0.5, 1.0])),
                 &coeff_f32
             )
             .unwrap()

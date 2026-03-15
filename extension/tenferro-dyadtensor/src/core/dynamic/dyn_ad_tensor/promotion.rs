@@ -1,7 +1,8 @@
 use num_complex::{Complex32, Complex64};
 
+use super::basics::ensure_common_reverse_tape;
 use super::merge::map_ad_tensor_mixed_linear_typed;
-use super::DynAdTensor;
+use super::Tensor;
 use crate::{AdTensor, Error, Result, ScalarType};
 
 pub(super) fn join_scalar_types(types: &[ScalarType]) -> Result<ScalarType> {
@@ -89,42 +90,43 @@ fn cast_c64_to_f32(tensor: &AdTensor<Complex64>) -> Result<AdTensor<f32>> {
     map_ad_tensor_mixed_linear_typed(tensor, |z| z.re as f32, |x| Complex64::new(x as f64, 0.0))
 }
 
-fn cast_dynadtensor(value: &DynAdTensor, target: ScalarType) -> Result<DynAdTensor> {
+fn cast_dynadtensor(value: &Tensor, target: ScalarType) -> Result<Tensor> {
+    ensure_common_reverse_tape(&[value])?;
     match (value, target) {
-        (DynAdTensor::F32(value), ScalarType::F32) => Ok(DynAdTensor::F32(value.clone())),
-        (DynAdTensor::F32(value), ScalarType::F64) => Ok(DynAdTensor::F64(cast_f32_to_f64(value)?)),
-        (DynAdTensor::F32(value), ScalarType::C32) => {
-            Ok(DynAdTensor::C32(promote_f32_ad_tensor_to_c32(value)?))
+        (Tensor::F32(value), ScalarType::F32) => Ok(Tensor::F32(value.clone())),
+        (Tensor::F32(value), ScalarType::F64) => Ok(Tensor::F64(cast_f32_to_f64(value)?)),
+        (Tensor::F32(value), ScalarType::C32) => {
+            Ok(Tensor::C32(promote_f32_ad_tensor_to_c32(value)?))
         }
-        (DynAdTensor::F32(value), ScalarType::C64) => Ok(DynAdTensor::C64(cast_f32_to_c64(value)?)),
-        (DynAdTensor::F64(value), ScalarType::F32) => Ok(DynAdTensor::F32(cast_f64_to_f32(value)?)),
-        (DynAdTensor::F64(value), ScalarType::F64) => Ok(DynAdTensor::F64(value.clone())),
-        (DynAdTensor::F64(value), ScalarType::C32) => Ok(DynAdTensor::C32(cast_f64_to_c32(value)?)),
-        (DynAdTensor::F64(value), ScalarType::C64) => {
-            Ok(DynAdTensor::C64(promote_f64_ad_tensor_to_c64(value)?))
+        (Tensor::F32(value), ScalarType::C64) => Ok(Tensor::C64(cast_f32_to_c64(value)?)),
+        (Tensor::F64(value), ScalarType::F32) => Ok(Tensor::F32(cast_f64_to_f32(value)?)),
+        (Tensor::F64(value), ScalarType::F64) => Ok(Tensor::F64(value.clone())),
+        (Tensor::F64(value), ScalarType::C32) => Ok(Tensor::C32(cast_f64_to_c32(value)?)),
+        (Tensor::F64(value), ScalarType::C64) => {
+            Ok(Tensor::C64(promote_f64_ad_tensor_to_c64(value)?))
         }
-        (DynAdTensor::C32(value), ScalarType::F32) => Ok(DynAdTensor::F32(cast_c32_to_f32(value)?)),
-        (DynAdTensor::C32(value), ScalarType::F64) => Ok(DynAdTensor::F64(cast_c32_to_f64(value)?)),
-        (DynAdTensor::C32(value), ScalarType::C32) => Ok(DynAdTensor::C32(value.clone())),
-        (DynAdTensor::C32(value), ScalarType::C64) => Ok(DynAdTensor::C64(cast_c32_to_c64(value)?)),
-        (DynAdTensor::C64(value), ScalarType::F32) => Ok(DynAdTensor::F32(cast_c64_to_f32(value)?)),
-        (DynAdTensor::C64(value), ScalarType::F64) => Ok(DynAdTensor::F64(cast_c64_to_f64(value)?)),
-        (DynAdTensor::C64(value), ScalarType::C32) => Ok(DynAdTensor::C32(cast_c64_to_c32(value)?)),
-        (DynAdTensor::C64(value), ScalarType::C64) => Ok(DynAdTensor::C64(value.clone())),
+        (Tensor::C32(value), ScalarType::F32) => Ok(Tensor::F32(cast_c32_to_f32(value)?)),
+        (Tensor::C32(value), ScalarType::F64) => Ok(Tensor::F64(cast_c32_to_f64(value)?)),
+        (Tensor::C32(value), ScalarType::C32) => Ok(Tensor::C32(value.clone())),
+        (Tensor::C32(value), ScalarType::C64) => Ok(Tensor::C64(cast_c32_to_c64(value)?)),
+        (Tensor::C64(value), ScalarType::F32) => Ok(Tensor::F32(cast_c64_to_f32(value)?)),
+        (Tensor::C64(value), ScalarType::F64) => Ok(Tensor::F64(cast_c64_to_f64(value)?)),
+        (Tensor::C64(value), ScalarType::C32) => Ok(Tensor::C32(cast_c64_to_c32(value)?)),
+        (Tensor::C64(value), ScalarType::C64) => Ok(Tensor::C64(value.clone())),
     }
 }
 
 pub(super) fn promote_pair_to_common(
-    lhs: &DynAdTensor,
-    rhs: &DynAdTensor,
-) -> Result<(ScalarType, DynAdTensor, DynAdTensor)> {
+    lhs: &Tensor,
+    rhs: &Tensor,
+) -> Result<(ScalarType, Tensor, Tensor)> {
+    ensure_common_reverse_tape(&[lhs, rhs])?;
     let target = join_scalar_types(&[lhs.scalar_type(), rhs.scalar_type()])?;
     Ok((target, lhs.promote_to(target)?, rhs.promote_to(target)?))
 }
 
-pub(super) fn promote_many_to_common(
-    operands: &[&DynAdTensor],
-) -> Result<(ScalarType, Vec<DynAdTensor>)> {
+pub(super) fn promote_many_to_common(operands: &[&Tensor]) -> Result<(ScalarType, Vec<Tensor>)> {
+    ensure_common_reverse_tape(operands)?;
     let target = join_scalar_types(
         &operands
             .iter()
@@ -138,7 +140,7 @@ pub(super) fn promote_many_to_common(
     Ok((target, promoted))
 }
 
-impl DynAdTensor {
+impl Tensor {
     /// Explicitly casts the tensor to `target`, similar to PyTorch `tensor.to(dtype)`.
     ///
     /// This is distinct from implicit operation-local promotion. Explicit casts
@@ -148,11 +150,11 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{DynAdTensor, ScalarType};
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_dyadtensor::{ScalarType, Tensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f32>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// let x = Tensor::from_tensor(
+    ///     DenseTensor::<f32>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     /// let y = x.to_scalar_type(ScalarType::F64).unwrap();
     /// assert_eq!(y.scalar_type(), ScalarType::F64);

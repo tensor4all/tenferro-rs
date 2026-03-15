@@ -4,40 +4,41 @@ use chainrules::Tape;
 use chainrules_core::NodeId;
 use num_complex::Complex64;
 use tenferro_algebra::Scalar;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-use crate::{AdMode, AdTensor, StructuredTensor};
+use crate::core::AdMode;
+use crate::{AdTensor, StructuredTensor};
 
 pub(super) trait TensorLike<T: Scalar> {
-    fn tensor_ref(&self) -> &Tensor<T>;
+    fn tensor_ref(&self) -> &DenseTensor<T>;
 }
 
-impl<T: Scalar> TensorLike<T> for Tensor<T> {
-    fn tensor_ref(&self) -> &Tensor<T> {
+impl<T: Scalar> TensorLike<T> for DenseTensor<T> {
+    fn tensor_ref(&self) -> &DenseTensor<T> {
         self
     }
 }
 
 impl<T: Scalar> TensorLike<T> for StructuredTensor<T> {
-    fn tensor_ref(&self) -> &Tensor<T> {
+    fn tensor_ref(&self) -> &DenseTensor<T> {
         self.payload()
     }
 }
 
-pub(super) fn f64_2x2(values: [f64; 4]) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
+pub(super) fn f64_2x2(values: [f64; 4]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
 }
 
-pub(super) fn c64_2x2(values: [Complex64; 4]) -> Tensor<Complex64> {
-    Tensor::<Complex64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
+pub(super) fn c64_2x2(values: [Complex64; 4]) -> DenseTensor<Complex64> {
+    DenseTensor::<Complex64>::from_slice(&values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
 }
 
-pub(super) fn scalar_f64(value: f64) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+pub(super) fn scalar_f64(value: f64) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
-pub(super) fn scalar_c64(value: Complex64) -> Tensor<Complex64> {
-    Tensor::<Complex64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
+pub(super) fn scalar_c64(value: Complex64) -> DenseTensor<Complex64> {
+    DenseTensor::<Complex64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
 }
 
 pub(super) fn reverse_leaf_f64(
@@ -114,12 +115,12 @@ where
         .to_vec()
 }
 
-pub(super) fn tensor_from_vec_f64(data: &[f64], dims: &[usize]) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
+pub(super) fn tensor_from_vec_f64(data: &[f64], dims: &[usize]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
-pub(super) fn tensor_from_vec_c64(data: &[Complex64], dims: &[usize]) -> Tensor<Complex64> {
-    Tensor::<Complex64>::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
+pub(super) fn tensor_from_vec_c64(data: &[Complex64], dims: &[usize]) -> DenseTensor<Complex64> {
+    DenseTensor::<Complex64>::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
 pub(super) fn max_abs_diff<A, B>(a: &A, b: &B) -> f64
@@ -162,10 +163,10 @@ where
 }
 
 pub(super) fn add_scaled_f64(
-    base: &Tensor<f64>,
-    direction: &Tensor<f64>,
+    base: &DenseTensor<f64>,
+    direction: &DenseTensor<f64>,
     alpha: f64,
-) -> Tensor<f64> {
+) -> DenseTensor<f64> {
     assert_eq!(base.dims(), direction.dims());
     let data = tensor_to_vec_f64(base);
     let dir = tensor_to_vec_f64(direction);
@@ -178,10 +179,10 @@ pub(super) fn add_scaled_f64(
 }
 
 pub(super) fn add_scaled_c64(
-    base: &Tensor<Complex64>,
-    direction: &Tensor<Complex64>,
+    base: &DenseTensor<Complex64>,
+    direction: &DenseTensor<Complex64>,
     alpha: f64,
-) -> Tensor<Complex64> {
+) -> DenseTensor<Complex64> {
     assert_eq!(base.dims(), direction.dims());
     let data = tensor_to_vec_c64(base);
     let dir = tensor_to_vec_c64(direction);
@@ -193,7 +194,7 @@ pub(super) fn add_scaled_c64(
     tensor_from_vec_c64(&out, base.dims())
 }
 
-pub(super) fn scale_f64(t: &Tensor<f64>, alpha: f64) -> Tensor<f64> {
+pub(super) fn scale_f64(t: &DenseTensor<f64>, alpha: f64) -> DenseTensor<f64> {
     let data: Vec<f64> = tensor_to_vec_f64(t)
         .into_iter()
         .map(|x| x * alpha)
@@ -201,7 +202,7 @@ pub(super) fn scale_f64(t: &Tensor<f64>, alpha: f64) -> Tensor<f64> {
     tensor_from_vec_f64(&data, t.dims())
 }
 
-pub(super) fn scale_c64(t: &Tensor<Complex64>, alpha: Complex64) -> Tensor<Complex64> {
+pub(super) fn scale_c64(t: &DenseTensor<Complex64>, alpha: Complex64) -> DenseTensor<Complex64> {
     let data: Vec<Complex64> = tensor_to_vec_c64(t)
         .into_iter()
         .map(|x| x * alpha)
@@ -209,7 +210,11 @@ pub(super) fn scale_c64(t: &Tensor<Complex64>, alpha: Complex64) -> Tensor<Compl
     tensor_from_vec_c64(&data, t.dims())
 }
 
-pub(super) fn central_diff_f64(plus: &Tensor<f64>, minus: &Tensor<f64>, eps: f64) -> Tensor<f64> {
+pub(super) fn central_diff_f64(
+    plus: &DenseTensor<f64>,
+    minus: &DenseTensor<f64>,
+    eps: f64,
+) -> DenseTensor<f64> {
     assert_eq!(plus.dims(), minus.dims());
     let dims = plus.dims().to_vec();
     let plus_data = tensor_to_vec_f64(plus);
@@ -223,10 +228,10 @@ pub(super) fn central_diff_f64(plus: &Tensor<f64>, minus: &Tensor<f64>, eps: f64
 }
 
 pub(super) fn central_diff_c64(
-    plus: &Tensor<Complex64>,
-    minus: &Tensor<Complex64>,
+    plus: &DenseTensor<Complex64>,
+    minus: &DenseTensor<Complex64>,
     eps: f64,
-) -> Tensor<Complex64> {
+) -> DenseTensor<Complex64> {
     assert_eq!(plus.dims(), minus.dims());
     let dims = plus.dims().to_vec();
     let plus_data = tensor_to_vec_c64(plus);

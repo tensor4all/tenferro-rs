@@ -1,7 +1,7 @@
-use super::DynAdTensor;
+use super::Tensor;
 use crate::AdTensor;
 
-impl DynAdTensor {
+impl Tensor {
     /// Returns a detached primal tensor while intentionally dropping AD
     /// metadata.
     ///
@@ -12,15 +12,15 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{AdMode, DynAdTensor};
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_dyadtensor::Tensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let x = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     ///
     /// let detached = x.detach();
-    /// assert_eq!(detached.mode(), AdMode::Primal);
+    /// assert!(!detached.requires_grad());
     /// assert_eq!(detached.scalar_type(), x.scalar_type());
     /// assert!(detached.is_dense());
     /// ```

@@ -1,17 +1,17 @@
 use super::*;
 use crate::{set_default_runtime, RuntimeContext};
 use tenferro_prims::{CpuBackend, CpuContext, CudaContext};
-use tenferro_tensor::MemoryOrder;
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-fn vector(values: &[f64]) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
+fn vector(values: &[f64]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn matrix(values: &[f64], rows: usize, cols: usize) -> Tensor<f64> {
-    Tensor::<f64>::from_slice(values, &[rows, cols], MemoryOrder::ColumnMajor).unwrap()
+fn matrix(values: &[f64], rows: usize, cols: usize) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[rows, cols], MemoryOrder::ColumnMajor).unwrap()
 }
 
-fn as_slice(tensor: &Tensor<f64>) -> &[f64] {
+fn as_slice(tensor: &DenseTensor<f64>) -> &[f64] {
     tensor
         .buffer()
         .as_slice()

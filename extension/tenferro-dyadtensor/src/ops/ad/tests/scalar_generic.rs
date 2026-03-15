@@ -1,7 +1,7 @@
 use super::{max_abs_diff, reverse_leaf_f64, tensor_from_vec_f64 as tensor_from_slice};
 use chainrules::Tape;
 use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 use crate::ops::{
     acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cos_ad, cosh_ad,
@@ -14,8 +14,8 @@ use crate::{set_default_runtime, AdTensor, RuntimeContext};
 fn ad_unary_binary_reduction_generic_surface_exists() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
-    let x = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    let y = Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let x = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let y = DenseTensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_x = AdTensor::new_primal(x);
     let ad_y = AdTensor::new_primal(y);

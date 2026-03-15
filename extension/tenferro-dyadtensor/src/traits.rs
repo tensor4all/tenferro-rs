@@ -2,9 +2,10 @@ use std::hash::Hash;
 
 use tenferro_algebra::Scalar;
 
+use crate::core::AdMode;
 use crate::core::DynTensorTyped;
 use crate::structured::StructuredTensor;
-use crate::{AdMode, AdScalar, AdTensor, AdValue, DiffPolicy, DynScalar, Result};
+use crate::{AdTensor, AdValue, DiffPolicy, Result, Tensor};
 
 /// AD rule method result type alias.
 ///
@@ -77,22 +78,6 @@ impl<T: Clone> Differentiable for AdValue<T> {
 
     fn tangent_ref(&self) -> Option<&T> {
         self.tangent_ref()
-    }
-}
-
-impl<T: Clone> Differentiable for AdScalar<T> {
-    type Primal = T;
-
-    fn mode(&self) -> AdMode {
-        self.mode()
-    }
-
-    fn primal_ref(&self) -> &T {
-        self.primal()
-    }
-
-    fn tangent_ref(&self) -> Option<&T> {
-        self.tangent()
     }
 }
 
@@ -181,7 +166,7 @@ pub struct FactorizeResult<T> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_dyadtensor::{AllowedPairs, DynScalar, FactorizeOptions, FactorizeResult, Result, TensorKernel};
+/// use tenferro_dyadtensor::{AllowedPairs, FactorizeOptions, FactorizeResult, Result, Tensor, TensorKernel};
 ///
 /// #[derive(Clone)]
 /// struct DummyKernel;
@@ -201,21 +186,21 @@ pub struct FactorizeResult<T> {
 ///         Ok(FactorizeResult { left: Self, right: Self })
 ///     }
 ///
-///     fn axpby(&self, _a: DynScalar, _other: &Self, _b: DynScalar) -> Result<Self> {
+///     fn axpby(&self, _a: Tensor, _other: &Self, _b: Tensor) -> Result<Self> {
 ///         Ok(Self)
 ///     }
 ///
-///     fn scale(&self, _a: DynScalar) -> Result<Self> {
+///     fn scale(&self, _a: Tensor) -> Result<Self> {
 ///         Ok(Self)
 ///     }
 ///
-///     fn inner_product(&self, _other: &Self) -> Result<DynScalar> {
-///         Ok(DynScalar::F64(0.0))
+///     fn inner_product(&self, _other: &Self) -> Result<Tensor> {
+///         Ok(Tensor::from_slice(&[0.0_f64], &[]).unwrap())
 ///     }
 /// }
 ///
 /// let x = DummyKernel;
-/// let _ = x.scale(DynScalar::F64(2.0)).unwrap();
+/// let _ = x.scale(Tensor::from_slice(&[2.0_f64], &[]).unwrap()).unwrap();
 /// ```
 pub trait TensorKernel: Clone {
     /// Index label type used by this kernel.
@@ -232,13 +217,13 @@ pub trait TensorKernel: Clone {
     ) -> Result<FactorizeResult<Self>>;
 
     /// Affine combination `a * self + b * other`.
-    fn axpby(&self, a: DynScalar, other: &Self, b: DynScalar) -> Result<Self>;
+    fn axpby(&self, a: Tensor, other: &Self, b: Tensor) -> Result<Self>;
 
     /// Scalar multiply.
-    fn scale(&self, a: DynScalar) -> Result<Self>;
+    fn scale(&self, a: Tensor) -> Result<Self>;
 
     /// Inner product result.
-    fn inner_product(&self, other: &Self) -> Result<DynScalar>;
+    fn inner_product(&self, other: &Self) -> Result<Tensor>;
 }
 
 /// Operation-level AD rules (`rrule`, `frule`, `hvp`).

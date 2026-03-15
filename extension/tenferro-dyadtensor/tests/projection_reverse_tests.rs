@@ -1,11 +1,11 @@
 use num_complex::Complex64;
-use tenferro_dyadtensor::{DynAdTensor, Error};
+use tenferro_dyadtensor::{Error, Tensor};
 
 mod support;
 
 use support::{
-    reverse_rank0_c64, reverse_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64, scalar_c64,
-    vector_f64,
+    grad_wrt, reverse_rank0_c64, reverse_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64,
+    scalar_c64, vector_f64,
 };
 
 #[test]
@@ -35,9 +35,9 @@ fn scalar_compose_complex_reverse_splits_cotangent_back_into_real_components() {
     let re = reverse_rank0_f64(2.0);
     let im = reverse_rank0_f64_like(-3.0, &re);
 
-    let z = DynAdTensor::compose_complex(re.clone(), im.clone()).unwrap();
-    let cotangent = DynAdTensor::new_primal(scalar_c64(Complex64::new(0.5, -1.25)));
-    let grads = z.pullback_wrt(&cotangent, &[&re, &im]).unwrap();
+    let z = Tensor::compose_complex(re.clone(), im.clone()).unwrap();
+    let cotangent = Tensor::from_tensor(scalar_c64(Complex64::new(0.5, -1.25)));
+    let grads = grad_wrt(&z, &cotangent, &[&re, &im]);
     assert_eq!(
         grads[0]
             .as_ref()
@@ -77,10 +77,10 @@ fn tensor_complex_real_part_reverse_is_unsupported_on_homogeneous_tape() {
 
 #[test]
 fn tensor_compose_complex_primal_still_works_for_real_inputs() {
-    let re = DynAdTensor::new_primal(vector_f64(&[1.0, -3.0]));
-    let im = DynAdTensor::new_primal(vector_f64(&[2.0, 4.0]));
+    let re = Tensor::from_tensor(vector_f64(&[1.0, -3.0]));
+    let im = Tensor::from_tensor(vector_f64(&[2.0, 4.0]));
 
-    let out = DynAdTensor::compose_complex(re, im).unwrap();
+    let out = Tensor::compose_complex(re, im).unwrap();
     let values = out.as_c64().unwrap().primal().buffer().as_slice().unwrap();
     assert_eq!(values[0], Complex64::new(1.0, 2.0));
     assert_eq!(values[1], Complex64::new(-3.0, 4.0));

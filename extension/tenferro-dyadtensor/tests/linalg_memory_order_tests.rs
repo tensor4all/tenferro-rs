@@ -1,8 +1,8 @@
-use tenferro_dyadtensor::{set_default_runtime, DynAdTensor, RuntimeContext};
+use tenferro_dyadtensor::{set_default_runtime, RuntimeContext, Tensor};
 use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-fn matmul(lhs: &Tensor<f64>, rhs: &Tensor<f64>) -> Tensor<f64> {
+fn matmul(lhs: &DenseTensor<f64>, rhs: &DenseTensor<f64>) -> DenseTensor<f64> {
     assert_eq!(lhs.dims(), &[3, 3]);
     assert_eq!(rhs.dims(), &[3, 4]);
     let lhs_rm = lhs.contiguous(MemoryOrder::RowMajor);
@@ -19,10 +19,10 @@ fn matmul(lhs: &Tensor<f64>, rhs: &Tensor<f64>) -> Tensor<f64> {
             out[i * 4 + j] = acc;
         }
     }
-    Tensor::from_slice(&out, &[3, 4], MemoryOrder::RowMajor).unwrap()
+    DenseTensor::from_slice(&out, &[3, 4], MemoryOrder::RowMajor).unwrap()
 }
 
-fn max_abs_diff(lhs: &Tensor<f64>, rhs: &Tensor<f64>) -> f64 {
+fn max_abs_diff(lhs: &DenseTensor<f64>, rhs: &DenseTensor<f64>) -> f64 {
     assert_eq!(lhs.dims(), rhs.dims());
     let lhs_rm = lhs.contiguous(MemoryOrder::RowMajor);
     let rhs_rm = rhs.contiguous(MemoryOrder::RowMajor);
@@ -39,7 +39,7 @@ fn max_abs_diff(lhs: &Tensor<f64>, rhs: &Tensor<f64>) -> f64 {
 #[test]
 fn eager_qr_accepts_row_major_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let input = Tensor::<f64>::from_slice(
+    let input = DenseTensor::<f64>::from_slice(
         &[
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ],
@@ -48,7 +48,7 @@ fn eager_qr_accepts_row_major_dense_input() {
     )
     .unwrap();
     let input_expected = input.contiguous(MemoryOrder::RowMajor);
-    let out = DynAdTensor::new_primal(input).qr().unwrap();
+    let out = Tensor::from_tensor(input).qr().unwrap();
     let reconstructed = matmul(
         out.q.as_f64().unwrap().primal(),
         out.r.as_f64().unwrap().primal(),
@@ -63,7 +63,7 @@ fn eager_qr_accepts_row_major_dense_input() {
 #[test]
 fn eager_svd_accepts_row_major_dense_input() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let row_major = Tensor::<f64>::from_slice(
+    let row_major = DenseTensor::<f64>::from_slice(
         &[
             1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
         ],
@@ -71,7 +71,7 @@ fn eager_svd_accepts_row_major_dense_input() {
         MemoryOrder::RowMajor,
     )
     .unwrap();
-    let column_major = Tensor::<f64>::from_slice(
+    let column_major = DenseTensor::<f64>::from_slice(
         &[
             1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
         ],
@@ -80,8 +80,8 @@ fn eager_svd_accepts_row_major_dense_input() {
     )
     .unwrap();
 
-    let row_out = DynAdTensor::new_primal(row_major).svd().unwrap();
-    let col_out = DynAdTensor::new_primal(column_major).svd().unwrap();
+    let row_out = Tensor::from_tensor(row_major).svd().unwrap();
+    let col_out = Tensor::from_tensor(column_major).svd().unwrap();
 
     assert!(
         max_abs_diff(

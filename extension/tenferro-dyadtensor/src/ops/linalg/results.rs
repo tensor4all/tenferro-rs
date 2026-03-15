@@ -3,23 +3,23 @@ use tenferro_algebra::Scalar;
 
 use crate::{AdTensor, DynTensorTyped};
 
-/// AD-aware SVD result.
+/// Typed SVD result for internal builder wiring.
 ///
 /// # Examples
 ///
 /// ```text
-/// use tenferro_dyadtensor::{DynAdTensor, set_default_runtime, RuntimeContext};
+/// use tenferro_dyadtensor::{Tensor, set_default_runtime, RuntimeContext};
 /// use tenferro_prims::CpuContext;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 /// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-/// let ad_a = DynAdTensor::new_primal(a);
+/// let ad_a = Tensor::from_tensor(a);
 /// let out = ad_a.svd().unwrap();
 /// assert_eq!(out.s.dims(), &[2]);
 /// ```
 #[derive(Clone)]
-pub struct AdSvdResult<T: Scalar + DynTensorTyped> {
+pub struct TypedSvdResult<T: Scalar + DynTensorTyped> {
     /// Left singular vectors.
     pub u: AdTensor<T>,
     /// Singular values.
@@ -28,7 +28,7 @@ pub struct AdSvdResult<T: Scalar + DynTensorTyped> {
     pub vt: AdTensor<T>,
 }
 
-/// AD-aware QR result.
+/// Typed QR result for internal builder wiring.
 ///
 /// # Examples
 ///
@@ -38,14 +38,14 @@ pub struct AdSvdResult<T: Scalar + DynTensorTyped> {
 /// let _r = &out.r;
 /// ```
 #[derive(Clone)]
-pub struct AdQrResult<T: Scalar + DynTensorTyped> {
+pub struct TypedQrResult<T: Scalar + DynTensorTyped> {
     /// Q factor.
     pub q: AdTensor<T>,
     /// R factor.
     pub r: AdTensor<T>,
 }
 
-/// AD-aware LU result.
+/// Typed LU result for internal builder wiring.
 ///
 /// # Examples
 ///
@@ -55,7 +55,7 @@ pub struct AdQrResult<T: Scalar + DynTensorTyped> {
 /// let _u = &out.u;
 /// ```
 #[derive(Clone)]
-pub struct AdLuResult<T: Scalar + DynTensorTyped> {
+pub struct TypedLuResult<T: Scalar + DynTensorTyped> {
     /// Permutation indices.
     pub p: Option<Vec<usize>>,
     /// Lower factor.
@@ -64,7 +64,7 @@ pub struct AdLuResult<T: Scalar + DynTensorTyped> {
     pub u: AdTensor<T>,
 }
 
-/// AD-aware eigen decomposition result.
+/// Typed Hermitian eigen decomposition result for internal builder wiring.
 ///
 /// # Examples
 ///
@@ -74,14 +74,14 @@ pub struct AdLuResult<T: Scalar + DynTensorTyped> {
 /// let _vectors = &out.vectors;
 /// ```
 #[derive(Clone)]
-pub struct AdEigenResult<T: Scalar + DynTensorTyped> {
+pub struct TypedEigenResult<T: Scalar + DynTensorTyped> {
     /// Eigenvalues.
     pub values: AdTensor<T>,
     /// Eigenvectors.
     pub vectors: AdTensor<T>,
 }
 
-/// AD-aware general eigendecomposition result.
+/// Typed general eigendecomposition result for internal builder wiring.
 ///
 /// # Examples
 ///
@@ -91,7 +91,7 @@ pub struct AdEigenResult<T: Scalar + DynTensorTyped> {
 /// let _vectors = &out.vectors;
 /// ```
 #[derive(Clone)]
-pub struct AdEigResult<T>
+pub struct TypedEigResult<T>
 where
     T: Scalar,
     Complex<T>: Scalar + DynTensorTyped,
@@ -102,7 +102,7 @@ where
     pub vectors: AdTensor<Complex<T>>,
 }
 
-/// AD-aware sign/logabsdet result.
+/// Typed sign/logabsdet result for internal builder wiring.
 ///
 /// # Examples
 ///
@@ -112,14 +112,14 @@ where
 /// let _logabsdet = &out.logabsdet;
 /// ```
 #[derive(Clone)]
-pub struct AdSlogdetResult<T: Scalar + DynTensorTyped> {
+pub struct TypedSlogdetResult<T: Scalar + DynTensorTyped> {
     /// Sign tensor.
     pub sign: AdTensor<T>,
     /// Log-absolute-determinant tensor.
     pub logabsdet: AdTensor<T>,
 }
 
-/// AD-aware least squares result.
+/// Typed least-squares result for internal builder wiring.
 ///
 /// # Examples
 ///
@@ -129,7 +129,7 @@ pub struct AdSlogdetResult<T: Scalar + DynTensorTyped> {
 /// let _residual = &out.residual;
 /// ```
 #[derive(Clone)]
-pub struct AdLstsqResult<T: Scalar + DynTensorTyped> {
+pub struct TypedLstsqResult<T: Scalar + DynTensorTyped> {
     /// Least squares solution.
     pub x: AdTensor<T>,
     /// Residual tensor.

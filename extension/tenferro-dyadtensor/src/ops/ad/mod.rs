@@ -7,14 +7,14 @@
 //! # Examples
 //!
 //! ```text
-//! use tenferro_dyadtensor::{DynAdTensor, set_default_runtime, RuntimeContext};
+//! use tenferro_dyadtensor::{Tensor, set_default_runtime, RuntimeContext};
 //! use tenferro_prims::CpuContext;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
 //! let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 //! let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
 //!     .unwrap();
-//! let ad_a = DynAdTensor::new_primal(a);
+//! let ad_a = Tensor::new_primal(a);
 //! let out = ad_a.qr().unwrap();
 //! assert_eq!(out.q.dims(), &[2, 2]);
 //! ```
@@ -26,8 +26,9 @@ pub(crate) use tenferro_einsum as tf_einsum;
 use tenferro_linalg::SolveGrad;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
+use crate::core::NodeId;
 use crate::tape;
-use crate::{AdTensor, Error, NodeId, Result, StructuredTensor};
+use crate::{AdTensor, Error, Result, StructuredTensor};
 
 use super::{einsum_ad, sum_ad, EinsumRuntimeValue, ScalarRuntimeValue};
 

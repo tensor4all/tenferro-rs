@@ -1,11 +1,11 @@
 use chainrules_core::Differentiable;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 use crate::structured::StructuredTensor;
 
 fn diag(values: &[f64], dim: usize) -> StructuredTensor<f64> {
     StructuredTensor::from_diagonal_vector(
-        Tensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap(),
+        DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap(),
         dim,
     )
     .unwrap()
@@ -62,7 +62,7 @@ fn accumulate_tangent_and_num_elements_follow_structured_layout() {
 #[test]
 fn dense_zero_and_seed_tangents_preserve_dense_layout() {
     let dense = StructuredTensor::from_dense(
-        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap(),
     );
     let zero = dense.zero_tangent();

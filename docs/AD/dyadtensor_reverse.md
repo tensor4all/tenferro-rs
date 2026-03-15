@@ -1,14 +1,15 @@
-# Dyadtensor Reverse Pullback Coverage
+# Dyadtensor Reverse Gradient Coverage
 
-This note summarizes how reverse-mode pullbacks are wired in
-`tenferro-dyadtensor` builder/eager APIs.
+This note summarizes how reverse-mode gradients are wired in the
+`tenferro-dyadtensor` eager API.
 
 ## Goal
 
-Keep tape internals hidden from end-user tensor code while still allowing:
+Keep graph internals hidden from end-user tensor code while still allowing:
 
-- `out = op_ad(...).run()?`
-- `grads = ad::pullback(&out, &cotangent)?`
+- `out = x.exp()?.sum()?`
+- `grads = grad(&[&out], &[&x], None, GradOptions::default())?`
+- `out.backward(None, &[&x], BackwardOptions::default())?`
 
 without passing any explicit tape handle through user APIs.
 
@@ -36,20 +37,21 @@ tensor-local tape node:
 | `matrix_exp_ad(...).run()` | `tenferro_linalg::matrix_exp_rrule` |
 | `norm_ad(...).run()` | `tenferro_linalg::norm_rrule` |
 
-APIs:
+Public reverse entrypoints:
 
-- Same scalar domain (`output` and `wrt` share dtype):
-  - `ad::pullback`
-  - `ad::pullback_wrt`
+- `Tensor::set_requires_grad(...)`
+- `Tensor::grad()`
+- `Tensor::backward(...)`
+- free `grad(...)`
+- free `backward(...)`
 
-These keep tape symbols internal to dyadtensor while preserving a homogeneous
-`Tape<DynTensor>`.
+These keep graph symbols internal to dyadtensor while preserving a homogeneous
+reverse graph over runtime-typed tensor payloads.
 
 ## Current limits
 
 - Reverse-mode graphs are homogeneous: scalar AD values are represented as
-  rank-0 tensors, and cross-dtype reverse bridges are not part of the tape.
-- `ad::pullback` and `ad::pullback_wrt` are same-domain by design.
+  rank-0 tensors, and cross-dtype reverse bridges are not part of the graph.
 - `eig_ad` remains available for primal/forward paths, but reverse-mode for
   real inputs is currently rejected rather than maintaining a mixed-type bridge.
 

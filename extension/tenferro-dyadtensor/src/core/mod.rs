@@ -5,8 +5,8 @@ pub(crate) use dynamic::DynTensor;
 #[doc(hidden)]
 pub use dynamic::DynTensorTyped;
 pub use dynamic::{
-    DynAdEigResult, DynAdEigenResult, DynAdLstsqResult, DynAdLuResult, DynAdQrResult,
-    DynAdSlogdetResult, DynAdSvdResult, DynAdTensor, DynScalar, ScalarType,
+    EigResult, EigenResult, LstsqResult, LuResult, QrResult, ScalarType, SlogdetResult, SvdResult,
+    Tensor,
 };
 pub(crate) use value::AdTensorSnapshot;
-pub use value::{AdMode, AdScalar, AdTensor, AdValue, NodeId};
+pub use value::{AdMode, AdTensor, AdValue, NodeId};

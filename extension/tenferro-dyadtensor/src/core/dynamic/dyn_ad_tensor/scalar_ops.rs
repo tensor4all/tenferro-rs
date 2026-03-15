@@ -2,7 +2,7 @@ use chainrules::Tape;
 use chainrules_scalarops::{self, ScalarAd};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 use super::super::tensor_ops::{
     tensor_element, tensor_map_binary_typed, tensor_map_unary_typed, tensor_max_abs_diff_typed,
@@ -10,16 +10,17 @@ use super::super::tensor_ops::{
 };
 use super::merge::merge_add_ad_tensors;
 use super::promotion::{promote_many_to_common, promote_pair_to_common};
-use super::DynAdTensor;
+use super::Tensor;
 use crate::core::DynTensorTyped;
+use crate::structured::StructuredTensor;
 use crate::{AdTensor, DynTensor, Error, Result};
 
 fn tensor_scalar_rrule_typed<T>(
-    tensor_primal: &Tensor<T>,
+    tensor_primal: &DenseTensor<T>,
     scalar_primal: T,
-    cotangent: &Tensor<T>,
+    cotangent: &DenseTensor<T>,
     rrule: fn(T, T, T) -> (T, T),
-) -> Result<(Tensor<T>, T)>
+) -> Result<(DenseTensor<T>, T)>
 where
     T: Scalar + ScalarAd + Copy,
 {
@@ -49,7 +50,7 @@ where
     }
 
     Ok((
-        Tensor::from_slice(
+        DenseTensor::from_slice(
             &tensor_grad,
             &dims,
             tenferro_tensor::MemoryOrder::ColumnMajor,
@@ -60,13 +61,13 @@ where
 }
 
 fn tensor_binary_scalar_ad_typed<T>(
-    primal: &Tensor<T>,
-    tensor_tangent: Option<&Tensor<T>>,
+    primal: &DenseTensor<T>,
+    tensor_tangent: Option<&DenseTensor<T>>,
     scalar_primal: T,
     scalar_tangent: Option<T>,
     primal_rule: fn(T, T) -> T,
     frule: fn(T, T, T, T) -> (T, T),
-) -> Result<(Tensor<T>, Option<Tensor<T>>)>
+) -> Result<(DenseTensor<T>, Option<DenseTensor<T>>)>
 where
     T: Scalar + ScalarAd + Copy,
 {
@@ -90,11 +91,11 @@ where
     Ok((primal_out, tangent_out))
 }
 
-fn rank0_tensor<T>(value: T) -> Result<Tensor<T>>
+fn rank0_tensor<T>(value: T) -> Result<DenseTensor<T>>
 where
     T: Scalar + Copy,
 {
-    Tensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).map_err(Error::from)
+    DenseTensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).map_err(Error::from)
 }
 
 fn extract_rank0_scalar<T>(scalar: &AdTensor<T>, op_name: &'static str) -> Result<T>
@@ -135,8 +136,8 @@ where
 fn merge_tensor_scalar_output<T>(
     tensor: &AdTensor<T>,
     scalar: &AdTensor<T>,
-    primal: Tensor<T>,
-    tangent: Option<Tensor<T>>,
+    primal: DenseTensor<T>,
+    tangent: Option<DenseTensor<T>>,
     rrule: fn(T, T, T) -> (T, T),
 ) -> Result<AdTensor<T>>
 where
@@ -259,28 +260,32 @@ where
     )
 }
 
-impl DynAdTensor {
+impl Tensor {
     /// Scalar multiply with AD preservation for scalar and tensor inputs.
     ///
     /// # Examples
     ///
     /// ```rust
     /// use num_complex::Complex64;
-    /// use tenferro_dyadtensor::DynAdTensor;
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_dyadtensor::Tensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let x = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
-    /// let alpha = DynAdTensor::new_primal(
-    ///     Tensor::<Complex64>::from_slice(&[Complex64::new(0.0, 2.0)], &[], MemoryOrder::ColumnMajor)
+    /// let alpha = Tensor::from_tensor(
+    ///     DenseTensor::<Complex64>::from_slice(
+    ///         &[Complex64::new(0.0, 2.0)],
+    ///         &[],
+    ///         MemoryOrder::ColumnMajor,
+    ///     )
     ///         .unwrap(),
     /// );
     ///
     /// let y = x.scale(&alpha).unwrap();
     /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::C64);
     /// ```
-    pub fn scale(&self, scalar: &DynAdTensor) -> Result<Self> {
+    pub fn scale(&self, scalar: &Tensor) -> Result<Self> {
         let (_, tensor, alpha) = promote_pair_to_common(self, scalar)?;
         match (&tensor, &alpha) {
             (Self::F32(tensor), Self::F32(alpha)) => {
@@ -310,41 +315,41 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::DynAdTensor;
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_dyadtensor::Tensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let x = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
-    /// let y = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let y = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
-    /// let a = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// let a = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     /// );
-    /// let b = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[-1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// let b = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[-1.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     ///
     /// let out = x.axpby(&a, &y, &b).unwrap();
     /// assert_eq!(out.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
     /// ```
-    pub fn axpby(&self, a: &DynAdTensor, other: &Self, b: &DynAdTensor) -> Result<Self> {
+    pub fn axpby(&self, a: &Tensor, other: &Self, b: &Tensor) -> Result<Self> {
         let (_, promoted) = promote_many_to_common(&[self, a, other, b])?;
         let lhs = promoted[0].scale(&promoted[1])?;
         let rhs = promoted[2].scale(&promoted[3])?;
         match (lhs, rhs) {
             (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
+                merge_add_ad_tensors(lhs.snapshot()?, rhs.snapshot()?)?,
             )?)),
             (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
+                merge_add_ad_tensors(lhs.snapshot()?, rhs.snapshot()?)?,
             )?)),
             (Self::C32(lhs), Self::C32(rhs)) => Ok(Self::C32(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
+                merge_add_ad_tensors(lhs.snapshot()?, rhs.snapshot()?)?,
             )?)),
             (Self::C64(lhs), Self::C64(rhs)) => Ok(Self::C64(AdTensor::try_from(
-                merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
+                merge_add_ad_tensors(lhs.snapshot()?, rhs.snapshot()?)?,
             )?)),
             (lhs, rhs) => Err(Error::InvalidAdTensor {
                 message: format!(
@@ -361,20 +366,20 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::DynAdTensor;
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_dyadtensor::Tensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[2.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let x = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[2.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
-    /// let alpha = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
+    /// let alpha = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[2.0], &[], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     ///
     /// let y = x.div_scalar(&alpha).unwrap();
     /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
     /// ```
-    pub fn div_scalar(&self, scalar: &DynAdTensor) -> Result<Self> {
+    pub fn div_scalar(&self, scalar: &Tensor) -> Result<Self> {
         let (_, tensor, alpha) = promote_pair_to_common(self, scalar)?;
         match (&tensor, &alpha) {
             (Self::F32(tensor), Self::F32(alpha)) => {
@@ -404,14 +409,14 @@ impl DynAdTensor {
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::DynAdTensor;
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_dyadtensor::Tensor;
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let x = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
-    /// let y = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[2.5, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let y = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[2.5, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     ///
     /// assert_eq!(x.max_abs_diff_primal(&y).unwrap(), 2.0);
@@ -435,7 +440,7 @@ impl DynAdTensor {
 
 macro_rules! impl_dyn_ad_tensor_from {
     ($variant:ident, $ty:ty) => {
-        impl From<AdTensor<$ty>> for DynAdTensor {
+        impl From<AdTensor<$ty>> for Tensor {
             fn from(value: AdTensor<$ty>) -> Self {
                 Self::$variant(value)
             }
@@ -447,3 +452,23 @@ impl_dyn_ad_tensor_from!(F32, f32);
 impl_dyn_ad_tensor_from!(F64, f64);
 impl_dyn_ad_tensor_from!(C32, Complex32);
 impl_dyn_ad_tensor_from!(C64, Complex64);
+
+impl<T> From<tenferro_tensor::Tensor<T>> for Tensor
+where
+    T: tenferro_algebra::Scalar + crate::DynTensorTyped + 'static,
+    AdTensor<T>: Into<Self>,
+{
+    fn from(value: tenferro_tensor::Tensor<T>) -> Self {
+        Self::from_tensor(value)
+    }
+}
+
+impl<T> From<StructuredTensor<T>> for Tensor
+where
+    T: tenferro_algebra::Scalar + crate::DynTensorTyped + 'static,
+    AdTensor<T>: Into<Self>,
+{
+    fn from(value: StructuredTensor<T>) -> Self {
+        Self::from_structured(value)
+    }
+}

@@ -7,9 +7,9 @@ fn solve_triangular_builder_reverse_pullback_matches_rrule() {
     let tape = Tape::<crate::DynTensor>::new();
 
     let a = f64_2x2([2.0, 0.0, 1.0, 3.0]);
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let cotangent =
-        Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let ad_b_rev = reverse_leaf_f64(b.clone(), &tape);
@@ -44,9 +44,9 @@ fn solve_builder_reverse_pullback_matches_rrule() {
     let tape = Tape::<crate::DynTensor>::new();
 
     let a = f64_2x2([3.0, 1.0, 1.0, 2.0]);
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let cotangent =
-        Tensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[0.5, -0.25], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let ad_b_rev = reverse_leaf_f64(b.clone(), &tape);
@@ -79,9 +79,10 @@ fn norm_builder_reverse_pullback_l1_matches_rrule() {
 
     let tape = Tape::<crate::DynTensor>::new();
 
-    let a = Tensor::<f64>::from_slice(&[1.0, 3.0, -2.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
-    let cotangent: Tensor<f64> = Tensor::from_vec(vec![1.5], &[], &[], 0).unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[1.0, 3.0, -2.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    let cotangent: DenseTensor<f64> = DenseTensor::from_vec(vec![1.5], &[], &[], 0).unwrap();
 
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let out = crate::ops::norm_ad(&ad_a_rev)
@@ -140,7 +141,7 @@ fn solve_triangular_reverse_pullback_complex_matches_rrule() {
 
     let tape = Tape::<crate::DynTensor>::new();
 
-    let a = Tensor::<Complex64>::from_slice(
+    let a = DenseTensor::<Complex64>::from_slice(
         &[
             Complex64::new(2.0, 0.0),
             Complex64::new(0.0, 0.0),
@@ -151,13 +152,13 @@ fn solve_triangular_reverse_pullback_complex_matches_rrule() {
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let b = Tensor::<Complex64>::from_slice(
+    let b = DenseTensor::<Complex64>::from_slice(
         &[Complex64::new(1.0, 0.5), Complex64::new(2.0, -0.25)],
         &[2],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let cotangent = Tensor::<Complex64>::from_slice(
+    let cotangent = DenseTensor::<Complex64>::from_slice(
         &[Complex64::new(0.5, 0.0), Complex64::new(-0.25, 0.1)],
         &[2],
         MemoryOrder::ColumnMajor,
@@ -196,7 +197,7 @@ fn svd_builder_reverse_pullback_s_matches_rrule() {
     assert_reverse_on_tape(&out.s, &tape);
 
     let cotangent_s =
-        Tensor::<f64>::from_slice(&[1.0, -0.5], &[2], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[1.0, -0.5], &[2], MemoryOrder::ColumnMajor).unwrap();
     let ad_cotangent = AdTensor::new_primal(cotangent_s.clone());
     let grads = pullback_wrt(&out.s, &ad_cotangent, &[&ad_a_rev]).unwrap();
     let grad_a = grads[0].as_ref().expect("missing svd dA");
@@ -224,13 +225,14 @@ fn lstsq_builder_reverse_pullback_x_matches_rrule() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let tape = Tape::<crate::DynTensor>::new();
-    let a = Tensor::<f64>::from_slice(
+    let a = DenseTensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let b = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let b =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
 
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let ad_b_rev = reverse_leaf_f64(b.clone(), &tape);
@@ -238,7 +240,7 @@ fn lstsq_builder_reverse_pullback_x_matches_rrule() {
     assert_reverse_on_tape(&out.x, &tape);
 
     let cotangent_x =
-        Tensor::<f64>::from_slice(&[0.3, -0.7], &[2], MemoryOrder::ColumnMajor).unwrap();
+        DenseTensor::<f64>::from_slice(&[0.3, -0.7], &[2], MemoryOrder::ColumnMajor).unwrap();
     let ad_cotangent = AdTensor::new_primal(cotangent_x.clone());
     let grads = pullback_wrt(&out.x, &ad_cotangent, &[&ad_a_rev, &ad_b_rev]).unwrap();
     let grad_a = grads[0].as_ref().expect("missing lstsq dA");
@@ -258,8 +260,9 @@ fn eig_builder_rejects_reverse_mode_for_real_inputs() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 
     let tape = Tape::<crate::DynTensor>::new();
-    let a = Tensor::<f64>::from_slice(&[0.0, -1.0, 1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
-        .unwrap();
+    let a =
+        DenseTensor::<f64>::from_slice(&[0.0, -1.0, 1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
 
     let ad_a_rev = reverse_leaf_f64(a.clone(), &tape);
     let err = match eig(&ad_a_rev) {
@@ -278,13 +281,13 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     let ad_a_rev = reverse_leaf_f64(a, &tape);
 
     let qr_out = qr(&ad_a_rev).unwrap();
-    let qr_cot_q = AdTensor::new_primal(Tensor::<f64>::ones(
+    let qr_cot_q = AdTensor::new_primal(DenseTensor::<f64>::ones(
         qr_out.q.dims(),
         qr_out.q.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
     ));
     assert!(pullback_wrt(&qr_out.q, &qr_cot_q, &[&ad_a_rev]).unwrap()[0].is_some());
-    let qr_cot_r = AdTensor::new_primal(Tensor::<f64>::ones(
+    let qr_cot_r = AdTensor::new_primal(DenseTensor::<f64>::ones(
         qr_out.r.dims(),
         qr_out.r.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
@@ -292,13 +295,13 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     assert!(pullback_wrt(&qr_out.r, &qr_cot_r, &[&ad_a_rev]).unwrap()[0].is_some());
 
     let lu_out = lu(&ad_a_rev).unwrap();
-    let lu_cot_l = AdTensor::new_primal(Tensor::<f64>::ones(
+    let lu_cot_l = AdTensor::new_primal(DenseTensor::<f64>::ones(
         lu_out.l.dims(),
         lu_out.l.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
     ));
     assert!(pullback_wrt(&lu_out.l, &lu_cot_l, &[&ad_a_rev]).unwrap()[0].is_some());
-    let lu_cot_u = AdTensor::new_primal(Tensor::<f64>::ones(
+    let lu_cot_u = AdTensor::new_primal(DenseTensor::<f64>::ones(
         lu_out.u.dims(),
         lu_out.u.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
@@ -306,13 +309,13 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     assert!(pullback_wrt(&lu_out.u, &lu_cot_u, &[&ad_a_rev]).unwrap()[0].is_some());
 
     let eigen_out = eigen(&ad_a_rev).unwrap();
-    let eigen_cot_values = AdTensor::new_primal(Tensor::<f64>::ones(
+    let eigen_cot_values = AdTensor::new_primal(DenseTensor::<f64>::ones(
         eigen_out.values.dims(),
         eigen_out.values.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
     ));
     assert!(pullback_wrt(&eigen_out.values, &eigen_cot_values, &[&ad_a_rev]).unwrap()[0].is_some());
-    let eigen_cot_vectors = AdTensor::new_primal(Tensor::<f64>::ones(
+    let eigen_cot_vectors = AdTensor::new_primal(DenseTensor::<f64>::ones(
         eigen_out.vectors.dims(),
         eigen_out.vectors.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
@@ -322,7 +325,7 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     );
 
     let slogdet_out = slogdet(&ad_a_rev).unwrap();
-    let slogdet_cot_sign = AdTensor::new_primal(Tensor::<f64>::ones(
+    let slogdet_cot_sign = AdTensor::new_primal(DenseTensor::<f64>::ones(
         slogdet_out.sign.dims(),
         slogdet_out.sign.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
@@ -333,7 +336,7 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
         .expect("missing slogdet sign gradient");
     assert!(as_slice(sign_grad_a).iter().all(|x| x.abs() < 1e-12));
 
-    let slogdet_cot_logabs = AdTensor::new_primal(Tensor::<f64>::ones(
+    let slogdet_cot_logabs = AdTensor::new_primal(DenseTensor::<f64>::ones(
         slogdet_out.logabsdet.dims(),
         slogdet_out.logabsdet.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
@@ -343,17 +346,18 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
             .is_some()
     );
 
-    let a_ls = Tensor::<f64>::from_slice(
+    let a_ls = DenseTensor::<f64>::from_slice(
         &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
         &[3, 2],
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    let b_ls = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let b_ls =
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let ad_ls_a = reverse_leaf_f64(a_ls, &tape);
     let ad_ls_b = reverse_leaf_f64(b_ls, &tape);
     let lstsq_out = lstsq(&ad_ls_a, &ad_ls_b).unwrap();
-    let lstsq_cot_x = AdTensor::new_primal(Tensor::<f64>::ones(
+    let lstsq_cot_x = AdTensor::new_primal(DenseTensor::<f64>::ones(
         lstsq_out.x.dims(),
         lstsq_out.x.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,
@@ -362,7 +366,7 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     assert!(grads_x[0].is_some());
     assert!(grads_x[1].is_some());
 
-    let lstsq_cot_residual = AdTensor::new_primal(Tensor::<f64>::ones(
+    let lstsq_cot_residual = AdTensor::new_primal(DenseTensor::<f64>::ones(
         lstsq_out.residual.dims(),
         lstsq_out.residual.primal().logical_memory_space(),
         MemoryOrder::ColumnMajor,

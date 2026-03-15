@@ -126,18 +126,18 @@ The canonical conceptual path is still tensor-tensor elementwise execution.
 
 `tenferro-dyadtensor` keeps this boundary explicit in the dynamic API:
 
-- `DynAdTensor` is the canonical dynamic execution payload
+- `Tensor` is the canonical dynamic execution payload
 - tensor operations apply implicit result-type promotion internally when they
   need a common dtype (`complex` beats `real`, and 64-bit beats 32-bit)
-- `DynAdTensor::to_scalar_type(...)` is the explicit cast boundary, analogous
+- `Tensor::to_scalar_type(...)` is the explicit cast boundary, analogous
   to PyTorch `tensor.to(dtype)`
-- `DynAdTensor::detach()` drops tape metadata while preserving the same dynamic
+- `Tensor::detach()` drops tape metadata while preserving the same dynamic
   tensor object for storage/FFI-style boundaries
 
-Reverse-mode graphs are homogeneous `Tape<DynTensor>`, but the dynamic payload
-itself carries dtype at runtime. That means mixed-dtype reverse propagation is
-supported as long as operands share one reverse graph; gradients are cast back
-to each input dtype during pullback.
+Reverse-mode graphs are homogeneous over one runtime-typed tensor payload.
+That means mixed-dtype reverse propagation is supported as long as operands
+share one reverse graph; gradients are cast back to each input dtype during
+pullback.
 
 ## Seed Semantics
 
@@ -312,8 +312,8 @@ backend contracts in production code.
 - linalg and einsum AD entrypoints now dispatch through the relevant family
   traits and runtime slots
 - builder `.run()` now relies on an explicit default-runtime holder, while
-  reverse-mode bookkeeping attaches pullback rules directly to
-  `chainrules::Tape<DynTensor>`
+  reverse-mode bookkeeping stays on one homogeneous runtime-typed reverse
+  graph
 - many public examples still instantiate `CpuContext` directly because CPU is
   the most complete backend today, not because the API contract is CPU-only
 

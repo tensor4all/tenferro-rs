@@ -1,21 +1,21 @@
 use super::promotion::promote_many_to_common;
-use super::DynAdTensor;
+use super::Tensor;
 use crate::ops::ad;
 use crate::{AdTensor, Error, Result};
 
-impl DynAdTensor {
+impl Tensor {
     /// Runs eager AD full `sum` reduction on a dynamic tensor.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// use tenferro_dyadtensor::{set_default_runtime, DynAdTensor, RuntimeContext};
+    /// use tenferro_dyadtensor::{set_default_runtime, Tensor, RuntimeContext};
     /// use tenferro_prims::CpuContext;
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
     /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    /// let x = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let x = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     /// let y = x.sum().unwrap();
     /// assert_eq!(y.dims(), &[]);
@@ -36,23 +36,23 @@ impl DynAdTensor {
     ///
     /// ```rust
     /// use num_complex::Complex64;
-    /// use tenferro_dyadtensor::{set_default_runtime, DynAdTensor, RuntimeContext};
+    /// use tenferro_dyadtensor::{set_default_runtime, Tensor, RuntimeContext};
     /// use tenferro_prims::CpuContext;
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
     ///
     /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    /// let a = DynAdTensor::new_primal(
-    ///     Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
+    /// let a = Tensor::from_tensor(
+    ///     DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
-    /// let b = DynAdTensor::new_primal(
-    ///     Tensor::<Complex64>::from_slice(
+    /// let b = Tensor::from_tensor(
+    ///     DenseTensor::<Complex64>::from_slice(
     ///         &[Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.0)],
     ///         &[2],
     ///         MemoryOrder::ColumnMajor,
     ///     )
     ///     .unwrap(),
     /// );
-    /// let out = DynAdTensor::einsum("i,i->", &[&a, &b]).unwrap();
+    /// let out = Tensor::einsum("i,i->", &[&a, &b]).unwrap();
     /// assert_eq!(out.dims(), &[]);
     /// ```
     pub fn einsum(subscripts: &str, operands: &[&Self]) -> Result<Self> {
