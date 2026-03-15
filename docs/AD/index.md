@@ -14,7 +14,7 @@ verification procedures (reconstruction checks, finite-difference gradient check
 | Location | Content |
 |----------|---------|
 | [`docs/design/autodiff.md`](../design/autodiff.md) | Architecture and API: crate split, homogeneous `Tape<V>` engine, torch-like `Variable<V>` wrapper layer, `BackwardOptions`, and rank-0 tensor scalar semantics |
-| [`docs/design/einsum-dyadtensor.md`](../design/einsum-dyadtensor.md) | Einsum/dyadtensor-focused AD integration details on top of homogeneous `Tape<V>`, including retain/create semantics and tensor scalar conventions |
+| [`docs/design/einsum-dyadtensor.md`](../design/einsum-dyadtensor.md) | Einsum/frontend AD integration details on top of homogeneous `Tape<V>`, including retain/create semantics and tensor scalar conventions |
 | [`docs/design/linalg.md`](../design/linalg.md) | Linalg API: function signatures, result types, cotangent types, rrule/frule tables |
 | `docs/AD/` (this directory) | Mathematical details: derivations, formulas, verification for each operation |
 
@@ -34,7 +34,7 @@ source of formula detail.
 
 `chainrules-scalarops` intentionally stays small. Tensor-level wrappers such as
 `sin`, `cos`, `tanh`, `asin`, `pow`, `hypot`, `var`, and `std` are implemented
-one layer up in `tenferro-dyadtensor` by composing runtime-generic tensor prims.
+one layer up in `tenferro` by composing runtime-generic tensor prims.
 
 ### `tenferro-einsum`
 
@@ -60,14 +60,14 @@ one layer up in `tenferro-dyadtensor` by composing runtime-generic tensor prims.
 - `matrix_exp_rrule`, `matrix_exp_frule`
 - `norm_rrule`, `norm_frule`
 
-### `tenferro-dyadtensor`
+### `tenferro`
 
 - Dynamic eager tensor methods on `Tensor`:
   - tensor/reduction: `einsum`, `sum`, `mean`, `var`, `std`
   - scalar/analytic: `add`, `atan2`, `pow`, `hypot`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`
   - linalg: `svd`, `qr`, `lu`, `eigen`, `eig`, `lstsq`, `cholesky`, `solve`, `inv`, `det`, `slogdet`, `pinv`, `matrix_exp`, `solve_triangular`, `norm`
 - Internal builder plumbing still lives in `*_ad(...).run()` builders, but the preferred public surface is now the `Tensor` method API
-  - `eig` reverse mode is same-domain only; real-input reverse mode is currently unsupported in dyadtensor
+  - `eig` reverse mode is same-domain only; real-input reverse mode is currently unsupported in the `tenferro` frontend
 
 For a broader crate-by-crate support view, including primal coverage and
 runtime status, see [Supported Operations by Crate](../design/supported-ops.md).
@@ -88,4 +88,4 @@ runtime status, see [Supported Operations by Crate](../design/supported-ops.md).
 | [matrix_exp.md](./matrix_exp.md) | Matrix exponential (`matrix_exp_rrule`) | AD rules for `exp(A)` |
 | [norm.md](./norm.md) | Norm (`norm_rrule`) | AD rules for matrix and vector norms |
 | [scalar_ops.md](./scalar_ops.md) | Scalar and tensor pointwise/reduction ops | Scalar basis rules (`add`, `conj`, `sqrt`, `exp`, `log`, `atan2`, powers) plus tensor wrappers (`mean`, `var`, `std`, `sin`, `cos`, `tanh`, ...) |
-| [dyadtensor_reverse.md](./dyadtensor_reverse.md) | Dyadtensor reverse wiring | `.run()` pullback registration coverage, including mixed-type `eig` bridge pullback |
+| [dyadtensor_reverse.md](./dyadtensor_reverse.md) | Frontend reverse wiring | `.run()` pullback registration coverage, including mixed-type `eig` bridge pullback |

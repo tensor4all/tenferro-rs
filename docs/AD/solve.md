@@ -90,12 +90,12 @@ These match the formulas above and are the compatibility target for tenferro.
 - `solve_triangular_frule`: implemented (triangular JVP with triangular projection)
 - `solve_triangular_rrule`: implemented (triangular VJP with triangular projection;
   real and complex scalars use adjoint-based formulas)
-- `tenferro-dyadtensor::solve_ad(...).run()`: reverse node now registers a
+- `tenferro::solve_ad(...).run()`: reverse node now registers a
   local pullback backed by `solve_rrule`
-- `tenferro-dyadtensor::ad::solve_triangular_rrule`: implemented as a
-  stateless dyadtensor-facing wrapper for integration code
-- `tenferro-dyadtensor::solve_triangular_ad(...).run()`: reverse node now
-  registers a local pullback, so `tenferro-dyadtensor::ad::pullback` can
+- `tenferro::ad::solve_triangular_rrule`: implemented as a
+  stateless `tenferro`-frontend wrapper for integration code
+- `tenferro::solve_triangular_ad(...).run()`: reverse node now
+  registers a local pullback, so `tenferro::ad::pullback` can
   execute VJP without exposing tape internals
 
 ## Right-side solve ($XA = B$)

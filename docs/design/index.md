@@ -14,7 +14,7 @@
 | [inplace-indexing.md](./inplace-indexing.md) | Design for partial in-place updates (`set_item_`, `IndexPut` extension, AD safety policy) |
 | [algebra.md](./algebra.md) | `HasAlgebra`, `Semiring`, tropical and user-defined algebra extensibility |
 | [autodiff.md](./autodiff.md) | AD architecture (`chainrules-core` contracts, homogeneous `Tape<V>` graphs, `Variable<V>` query/mutation APIs), including `retain_graph`/`create_graph` usage examples |
-| [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration design for `tenferro-einsum` + dyadtensor-style wrappers on top of homogeneous `Tape<V>` and rank-0 tensor scalar semantics |
+| [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration design for `tenferro-einsum` + the `tenferro` frontend on top of homogeneous `Tape<V>` and rank-0 tensor scalar semantics |
 | [linalg-prims.md](./linalg-prims.md) | `tenferro-linalg-prims`: backend-facing factorization and solve contracts |
 | [linalg.md](./linalg.md) | `tenferro-linalg` public/composite layer and its relationship to prims/linalg-prims |
 | [capi.md](./capi.md) | C-API (FFI): opaque handles, DLPack interop, einsum + SVD + AD rules |

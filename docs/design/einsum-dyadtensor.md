@@ -1,6 +1,6 @@
 # Einsum + DyadTensor AD Design
 
-This document describes how `tenferro-einsum` and dyadtensor-style higher
+This document describes how `tenferro-einsum` and the `tenferro` frontend
 layers integrate with the current `chainrules` AD model.
 
 For the core AD contracts, see [autodiff.md](./autodiff.md). For math
@@ -20,7 +20,7 @@ model is homogeneous only.
 
 ## Core Decision
 
-Einsum and dyadtensor layers integrate with a single AD execution model:
+Einsum and frontend layers integrate with a single AD execution model:
 
 - reverse mode: homogeneous `Tape<V>` graphs
 - forward mode: `DualValue<V>`
@@ -32,7 +32,7 @@ Examples:
 
 - `tracked_einsum` works with `TrackedValue<Tensor<T>>`
 - `dual_einsum` works with `DualValue<Tensor<T>>`
-- dyadtensor wrappers may expose torch-like convenience APIs, but they still
+- frontend wrappers may expose torch-like convenience APIs, but they still
   lower to homogeneous `Variable<V>` / `Tape<V>` execution
 
 ## Tensor Scalar Semantics

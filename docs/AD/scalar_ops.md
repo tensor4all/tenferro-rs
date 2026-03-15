@@ -2,7 +2,7 @@
 
 This note records the scalar AD formulas implemented in
 `chainrules-scalarops` and the tensor-level wrappers exposed through
-`tenferro-dyadtensor`.
+`tenferro`.
 
 ## Scope
 
@@ -18,11 +18,11 @@ Implemented low-level scalar basis in `chainrules-scalarops`:
 - `powi` (integer exponent; a restricted `pow` case)
 
 Additional tensor-level scalar/analytic rules are implemented in
-`tenferro-dyadtensor` by composing runtime-generic tensor primitives on top of
+`tenferro` by composing runtime-generic tensor primitives on top of
 that basis.
 
 The tensor wrappers now share a centralized runtime-dispatch contract layer in
-`tenferro-dyadtensor`, so adding new scalar families does not require
+`tenferro`, so adding new scalar families does not require
 repeating backend-specific `Cpu/Cuda/Rocm` bounds at each eager or builder
 entrypoint.
 
@@ -177,7 +177,7 @@ This is `powf` with integer exponent semantics.
 - rrule: `dx = g * conj(1 - y^2)`
 - frule: `dy = dx * conj(1 - y^2)`
 
-## Tensor-Composite Rules in `tenferro-dyadtensor`
+## Tensor-Composite Rules in `tenferro`
 
 The following rules are implemented one layer up by composing the scalar and
 tensor primitive families. They are not exported as standalone
@@ -228,7 +228,7 @@ Aligned with PyTorch:
 
 ## Tensor Reduction Wrappers
 
-The tensor-level reduction builders in `tenferro-dyadtensor` reuse the scalar
+The tensor-level reduction builders in `tenferro` reuse the scalar
 rules above plus runtime-generic tensor primitives.
 
 ### `mean_ad`
@@ -280,6 +280,6 @@ Implementation placement:
 - scalar formulas and helper projection (`handle_r_to_c` equivalent):
   `extern/chainrules-scalarops`
 - tensor-level generic unary/binary/reduction wrappers:
-  `extension/tenferro-dyadtensor::scalar_ad_builders`
+  `tenferro::ops::scalar::ad`
 - eager AD entrypoints:
-  `extension/tenferro-dyadtensor::ad`
+  `tenferro::ops::ad`

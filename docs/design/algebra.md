@@ -137,7 +137,7 @@ AD must remain algebra-aware:
   primitive-family contracts rather than hard-coding only standard arithmetic.
 
 See [autodiff.md](./autodiff.md) for the AD architecture design and
-[einsum-dyadtensor.md](./einsum-dyadtensor.md) for einsum/dyadtensor integration details.
+[einsum-dyadtensor.md](./einsum-dyadtensor.md) for einsum/frontend integration details.
 
 ---
 

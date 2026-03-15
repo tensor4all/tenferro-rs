@@ -105,7 +105,7 @@ fn main() {
 }
 ```
 
-If you want autodiff, start from `extension/tenferro-dyadtensor`. For more
+If you want autodiff, start from `tenferro`. For more
 examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor`.
 
 ### Influences
@@ -139,14 +139,14 @@ semirings (e.g., tropical).
 For a detailed feature-by-feature mapping, see
 [`docs/design/reference/libtorch.md`](docs/design/reference/libtorch.md).
 
-## `tenferro-dyadtensor` AD Status
+## `tenferro` AD Status
 
 | Area | Status | Notes |
 | --- | --- | --- |
 | Multi-input backward | Strong | `einsum`, `solve`, `solve_triangular`, `lstsq` |
 | Forward mode | Strong | Best supported when only a few inputs carry tangents |
 | Multi-input HVP | Partial | Explicitly exposed for `einsum` |
-| Higher-order derivatives (non-HVP) | Partial | Available through chainrules-backed `Variable<Tensor<T>>` flows, but the dyadtensor convenience surface and validation depth are still limited |
+| Higher-order derivatives (non-HVP) | Partial | Available through chainrules-backed `Variable<Tensor<T>>` flows, but the `tenferro` frontend validation depth is still limited |
 | Linalg AD surface | Available | Broad op coverage, but validation depth is uneven across ops |
 | Complex/real matrices | Strong | Complex `einsum`, complex `solve_triangular`, and real-to-complex `eig` are covered |
 

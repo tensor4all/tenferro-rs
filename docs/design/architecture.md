@@ -121,7 +121,7 @@ Current status by layer:
 - `TensorScalarPrims` and `TensorAnalyticPrims` have real CPU execution for the
   current inventory, while CUDA/ROCm expose truthful unsupported capabilities
   where custom kernels do not yet exist.
-- `tenferro-linalg` and dyadtensor runtime entrypoints route through
+- `tenferro-linalg` and tenferro runtime entrypoints route through
   capability-driven backend contracts instead of direct
   `ensure_cpu_backend(...)` or `with_cpu_runtime(...)` production paths.
 
@@ -165,7 +165,7 @@ The dense parity audit separates follow-up work into two main buckets.
 
 - substrate gaps: scalar/analytic execution vocabulary breadth and semiring
   compatibility cleanup
-- layer gaps: CPU-only runtime assumptions in dyadtensor and composite linalg
+- layer gaps: CPU-only runtime assumptions in tenferro and composite linalg
 
 Those categories intentionally stay separate so the workspace does not confuse
 missing family coverage with abstraction drift.

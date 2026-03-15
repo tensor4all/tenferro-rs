@@ -3,7 +3,7 @@
 This document defines the current AD architecture for tenferro-rs.
 
 For math derivations, see [AD Formula Notes](../AD/index.md). For
-einsum/dyadtensor integration details, see
+einsum/frontend integration details, see
 [einsum-dyadtensor.md](./einsum-dyadtensor.md).
 
 ## Design Goals
@@ -124,7 +124,7 @@ convenience APIs only. Their semantic model is:
 
 The canonical conceptual path is still tensor-tensor elementwise execution.
 
-`tenferro-dyadtensor` keeps this boundary explicit in the dynamic API:
+`tenferro` keeps this boundary explicit in the dynamic API:
 
 - `Tensor` is the canonical dynamic execution payload
 - tensor operations apply implicit result-type promotion internally when they
@@ -197,7 +197,7 @@ unsupported in the current phase unless it fits the `V::Tangent = V` path.
 
 ## DyadTensor Code Layout
 
-`tenferro-dyadtensor` keeps the implementation tree aligned with the way users
+`tenferro` keeps the implementation tree aligned with the way users
 follow operations:
 
 - `core/` owns AD values and dynamic wrappers
@@ -307,7 +307,7 @@ Current AD tests should cover at least:
 The current eager AD surface uses runtime dispatch and capability-driven
 backend contracts in production code.
 
-- `extension/tenferro-dyadtensor` no longer routes production paths through
+- `extension/tenferro` no longer routes production paths through
   `with_cpu_runtime(...)`
 - linalg and einsum AD entrypoints now dispatch through the relevant family
   traits and runtime slots
