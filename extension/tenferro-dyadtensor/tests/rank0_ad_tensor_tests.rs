@@ -5,7 +5,7 @@ mod support;
 
 use support::{
     forward_rank0_c32, forward_rank0_f32, forward_rank0_f64, primal_rank0_c64, rank0_value_c32,
-    rank0_value_c64, reverse_rank0_c32, reverse_rank0_f32, reverse_rank0_c64,
+    rank0_value_c64, reverse_rank0_c32, reverse_rank0_c64, reverse_rank0_f32,
 };
 
 #[test]
@@ -89,10 +89,7 @@ fn rank0_explicit_cast_preserves_rank0_forward_tangent_across_precision_changes(
         &[-0.75_f64]
     );
 
-    let z = forward_rank0_c32(
-        Complex32::new(1.5, -2.0),
-        Complex32::new(-0.5, 3.0),
-    );
+    let z = forward_rank0_c32(Complex32::new(1.5, -2.0), Complex32::new(-0.5, 3.0));
     let w = z.to_scalar_type(ScalarType::C64).unwrap();
     assert_eq!(w.scalar_type(), ScalarType::C64);
     assert_eq!(
@@ -157,7 +154,14 @@ fn rank0_explicit_cast_reverse_pullback_casts_back_to_source_dtype() {
         )
         .unwrap();
     assert_eq!(
-        rank0_value_c32(complex_grads[0].as_ref().unwrap().as_c32().unwrap().structured_primal()),
+        rank0_value_c32(
+            complex_grads[0]
+                .as_ref()
+                .unwrap()
+                .as_c32()
+                .unwrap()
+                .structured_primal()
+        ),
         Complex32::new(3.5, 0.0)
     );
 }
