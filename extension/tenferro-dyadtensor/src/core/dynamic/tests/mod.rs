@@ -298,27 +298,44 @@ fn dyn_ad_tensor_promote_to_identity_keeps_all_supported_variants() {
 }
 
 #[test]
-fn dyn_ad_tensor_promote_to_rejects_cross_precision_casts() {
+fn dyn_ad_tensor_promote_to_supports_cross_precision_casts() {
     let x: DynAdTensor = AdTensor::new_primal(rank0_f64(2.0_f64)).into();
-    let err = match x.promote_to(ScalarType::F32) {
-        Ok(_) => panic!("cross-precision promote_to should be rejected"),
-        Err(err) => err,
-    };
-    assert!(
-        matches!(err, Error::InvalidAdTensor { message } if message.contains("unsupported promotion"))
+    let as_f32 = x.promote_to(ScalarType::F32).unwrap();
+    assert_eq!(as_f32.scalar_type(), ScalarType::F32);
+    assert_eq!(
+        as_f32
+            .as_f32()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[2.0_f32]
+    );
+
+    let as_c32 = x.promote_to(ScalarType::C32).unwrap();
+    assert_eq!(as_c32.scalar_type(), ScalarType::C32);
+    assert_eq!(
+        as_c32
+            .as_c32()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[Complex32::new(2.0_f32, 0.0)]
     );
 }
 
 #[test]
-fn rank0_dyn_ad_tensor_scale_rejects_cross_precision_join() {
+fn rank0_dyn_ad_tensor_scale_uses_result_type_join() {
     let lhs: DynAdTensor = AdTensor::new_primal(rank0_f32(2.0_f32)).into();
     let rhs: DynAdTensor = AdTensor::new_primal(rank0_f64(3.0_f64)).into();
-    let err = match lhs.scale(&rhs) {
-        Ok(_) => panic!("cross-precision scale should be rejected"),
-        Err(err) => err,
-    };
-    assert!(
-        matches!(err, Error::InvalidAdTensor { message } if message.contains("unsupported promotion"))
+    let out = lhs.scale(&rhs).unwrap();
+    assert_eq!(out.scalar_type(), ScalarType::F64);
+    assert_eq!(
+        out.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
+        &[6.0_f64]
     );
 }
 

@@ -1,12 +1,13 @@
 use num_complex::{Complex32, Complex64};
-use tenferro_dyadtensor::{AdMode, DynAdTensor, ScalarType};
+use tenferro_dyadtensor::{set_default_runtime, AdMode, DynAdTensor, RuntimeContext, ScalarType};
+use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor;
 
 mod support;
 
 use support::{
-    forward_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64, scalar_f32, scalar_f64,
-    scalar_c32, vector_c64, vector_f32,
+    forward_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64, scalar_c32, scalar_c64,
+    scalar_f32, scalar_f64, vector_c64, vector_f32,
 };
 
 fn c64_vec(values: &[Complex64]) -> Tensor<Complex64> {
@@ -168,6 +169,7 @@ fn c64_tensor_div_scalar_reverse_casts_back_scalar_gradient_to_real_dtype() {
 
 #[test]
 fn mixed_precision_ops_follow_result_type_lattice() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let coeff_f32 = DynAdTensor::new_primal(scalar_f32(1.0));
     let coeff_f64 = DynAdTensor::new_primal(scalar_f64(2.0));
     let coeff_c32 = DynAdTensor::new_primal(scalar_c32(Complex32::new(3.0, -0.5)));
@@ -184,18 +186,38 @@ fn mixed_precision_ops_follow_result_type_lattice() {
         Complex64::new(1.0, -0.5),
         Complex64::new(2.0, 1.25),
     ]));
+    let coeff_c64 = DynAdTensor::new_primal(scalar_c64(Complex64::new(1.0, -0.5)));
 
-    assert_eq!(coeff_f32.add(&coeff_f64).unwrap().scalar_type(), ScalarType::F64);
-    assert_eq!(coeff_f64.add(&coeff_c32).unwrap().scalar_type(), ScalarType::C64);
-    assert_eq!(coeff_f32.add(&complex_vec_c64).unwrap().scalar_type(), ScalarType::C64);
-    assert_eq!(complex_vec_c32.scale(&coeff_f64).unwrap().scalar_type(), ScalarType::C64);
     assert_eq!(
-        complex_vec_c32.div_scalar(&coeff_f64).unwrap().scalar_type(),
+        coeff_f32.add(&coeff_f64).unwrap().scalar_type(),
+        ScalarType::F64
+    );
+    assert_eq!(
+        coeff_f64.add(&coeff_c32).unwrap().scalar_type(),
+        ScalarType::C64
+    );
+    assert_eq!(
+        coeff_f32.add(&coeff_c64).unwrap().scalar_type(),
+        ScalarType::C64
+    );
+    assert_eq!(
+        complex_vec_c32.scale(&coeff_f64).unwrap().scalar_type(),
+        ScalarType::C64
+    );
+    assert_eq!(
+        complex_vec_c32
+            .div_scalar(&coeff_f64)
+            .unwrap()
+            .scalar_type(),
         ScalarType::C64
     );
     assert_eq!(
         real_vec_f32
-            .axpby(&coeff_f64, &DynAdTensor::new_primal(vector_f32(&[0.5, 1.0])), &coeff_f32)
+            .axpby(
+                &coeff_f64,
+                &DynAdTensor::new_primal(vector_f32(&[0.5, 1.0])),
+                &coeff_f32
+            )
             .unwrap()
             .scalar_type(),
         ScalarType::F64

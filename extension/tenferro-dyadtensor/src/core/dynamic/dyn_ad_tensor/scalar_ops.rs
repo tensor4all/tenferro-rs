@@ -9,7 +9,7 @@ use super::super::tensor_ops::{
     unflatten_index_column_major,
 };
 use super::merge::merge_add_ad_tensors;
-use super::promotion::join_scalar_types;
+use super::promotion::{promote_many_to_common, promote_pair_to_common};
 use super::DynAdTensor;
 use crate::core::DynTensorTyped;
 use crate::{AdTensor, DynTensor, Error, Result};
@@ -281,9 +281,7 @@ impl DynAdTensor {
     /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::C64);
     /// ```
     pub fn scale(&self, scalar: &DynAdTensor) -> Result<Self> {
-        let target = join_scalar_types(&[self.scalar_type(), scalar.scalar_type()])?;
-        let tensor = self.promote_to(target)?;
-        let alpha = scalar.promote_to(target)?;
+        let (_, tensor, alpha) = promote_pair_to_common(self, scalar)?;
         match (&tensor, &alpha) {
             (Self::F32(tensor), Self::F32(alpha)) => {
                 Ok(Self::F32(scale_ad_tensor_typed(tensor, alpha)?))
@@ -332,13 +330,10 @@ impl DynAdTensor {
     /// assert_eq!(out.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
     /// ```
     pub fn axpby(&self, a: &DynAdTensor, other: &Self, b: &DynAdTensor) -> Result<Self> {
-        let _ = join_scalar_types(&[
-            self.scalar_type(),
-            other.scalar_type(),
-            a.scalar_type(),
-            b.scalar_type(),
-        ])?;
-        match (self.scale(a)?, other.scale(b)?) {
+        let (_, promoted) = promote_many_to_common(&[self, a, other, b])?;
+        let lhs = promoted[0].scale(&promoted[1])?;
+        let rhs = promoted[2].scale(&promoted[3])?;
+        match (lhs, rhs) {
             (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(AdTensor::try_from(
                 merge_add_ad_tensors(lhs.snapshot(), rhs.snapshot())?,
             )?)),
@@ -380,9 +375,7 @@ impl DynAdTensor {
     /// assert_eq!(y.scalar_type(), tenferro_dyadtensor::ScalarType::F64);
     /// ```
     pub fn div_scalar(&self, scalar: &DynAdTensor) -> Result<Self> {
-        let target = join_scalar_types(&[self.scalar_type(), scalar.scalar_type()])?;
-        let tensor = self.promote_to(target)?;
-        let alpha = scalar.promote_to(target)?;
+        let (_, tensor, alpha) = promote_pair_to_common(self, scalar)?;
         match (&tensor, &alpha) {
             (Self::F32(tensor), Self::F32(alpha)) => {
                 Ok(Self::F32(div_ad_tensor_typed(tensor, alpha)?))

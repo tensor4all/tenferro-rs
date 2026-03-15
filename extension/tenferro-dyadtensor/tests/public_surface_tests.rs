@@ -34,19 +34,55 @@ fn diag_c64(values: &[Complex64]) -> DynAdTensor {
 }
 
 fn assert_cast_values(tensor: &DynAdTensor, expected: &[f64]) {
-    assert_eq!(tensor.as_f64().unwrap().primal().buffer().as_slice().unwrap(), expected);
+    assert_eq!(
+        tensor
+            .as_f64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        expected
+    );
 }
 
 fn assert_cast_values_f32(tensor: &DynAdTensor, expected: &[f32]) {
-    assert_eq!(tensor.as_f32().unwrap().primal().buffer().as_slice().unwrap(), expected);
+    assert_eq!(
+        tensor
+            .as_f32()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        expected
+    );
 }
 
 fn assert_cast_values_c32(tensor: &DynAdTensor, expected: &[Complex32]) {
-    assert_eq!(tensor.as_c32().unwrap().primal().buffer().as_slice().unwrap(), expected);
+    assert_eq!(
+        tensor
+            .as_c32()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        expected
+    );
 }
 
 fn assert_cast_values_c64(tensor: &DynAdTensor, expected: &[Complex64]) {
-    assert_eq!(tensor.as_c64().unwrap().primal().buffer().as_slice().unwrap(), expected);
+    assert_eq!(
+        tensor
+            .as_c64()
+            .unwrap()
+            .primal()
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        expected
+    );
 }
 
 fn assert_cast_preserves_layout(
@@ -97,7 +133,7 @@ fn dynadtensor_public_forward_constructor_preserves_tangent() {
 }
 
 #[test]
-fn dynadtensor_public_reverse_constructor_uses_dyntape() {
+fn dynadtensor_public_reverse_constructor_attaches_reverse_graph_metadata() {
     let x = DynAdTensor::new_reverse_leaf(scalar_f64(2.0)).unwrap();
 
     assert_eq!(x.mode(), AdMode::Reverse);
@@ -124,9 +160,7 @@ fn dynadtensor_public_rank0_complex_scale_does_not_require_adtensor() {
 #[test]
 fn dynadtensor_public_to_scalar_type_supports_cross_precision_cast() {
     let x = DynAdTensor::new_primal(scalar_f64(2.0));
-    let y = x
-        .to_scalar_type(ScalarType::F32)
-        .unwrap();
+    let y = x.to_scalar_type(ScalarType::F32).unwrap();
     assert_eq!(y.scalar_type(), ScalarType::F32);
     assert_eq!(
         y.as_f32().unwrap().primal().buffer().as_slice().unwrap(),
@@ -155,32 +189,20 @@ fn dynadtensor_public_to_scalar_type_supports_all_pairs_and_preserves_dense_layo
         assert_cast_values(cast, &[1.5, -2.0]);
     });
     assert_cast_preserves_layout(&real32, ScalarType::C32, ScalarType::C32, |cast| {
-        assert_cast_values_c32(
-            cast,
-            &[Complex32::new(1.5, 0.0), Complex32::new(-2.0, 0.0)],
-        );
+        assert_cast_values_c32(cast, &[Complex32::new(1.5, 0.0), Complex32::new(-2.0, 0.0)]);
     });
     assert_cast_preserves_layout(&real32, ScalarType::C64, ScalarType::C64, |cast| {
-        assert_cast_values_c64(
-            cast,
-            &[Complex64::new(1.5, 0.0), Complex64::new(-2.0, 0.0)],
-        );
+        assert_cast_values_c64(cast, &[Complex64::new(1.5, 0.0), Complex64::new(-2.0, 0.0)]);
     });
 
     assert_cast_preserves_layout(&real64, ScalarType::F32, ScalarType::F32, |cast| {
         assert_cast_values_f32(cast, &[2.5, -3.0]);
     });
     assert_cast_preserves_layout(&real64, ScalarType::C32, ScalarType::C32, |cast| {
-        assert_cast_values_c32(
-            cast,
-            &[Complex32::new(2.5, 0.0), Complex32::new(-3.0, 0.0)],
-        );
+        assert_cast_values_c32(cast, &[Complex32::new(2.5, 0.0), Complex32::new(-3.0, 0.0)]);
     });
     assert_cast_preserves_layout(&real64, ScalarType::C64, ScalarType::C64, |cast| {
-        assert_cast_values_c64(
-            cast,
-            &[Complex64::new(2.5, 0.0), Complex64::new(-3.0, 0.0)],
-        );
+        assert_cast_values_c64(cast, &[Complex64::new(2.5, 0.0), Complex64::new(-3.0, 0.0)]);
     });
 
     assert_cast_preserves_layout(&complex32, ScalarType::F32, ScalarType::F32, |cast| {
@@ -216,10 +238,7 @@ fn dynadtensor_public_to_scalar_type_preserves_diag_axis_classes() {
     let diag_complex = diag_c64(&[Complex64::new(2.0, 1.0), Complex64::new(-3.0, 0.5)]);
 
     assert_cast_preserves_layout(&diag_real, ScalarType::C64, ScalarType::C64, |cast| {
-        assert_cast_values_c64(
-            cast,
-            &[Complex64::new(1.0, 0.0), Complex64::new(-2.0, 0.0)],
-        );
+        assert_cast_values_c64(cast, &[Complex64::new(1.0, 0.0), Complex64::new(-2.0, 0.0)]);
     });
     assert_cast_preserves_layout(&diag_complex, ScalarType::F32, ScalarType::F32, |cast| {
         assert_cast_values_f32(cast, &[2.0, -3.0]);
