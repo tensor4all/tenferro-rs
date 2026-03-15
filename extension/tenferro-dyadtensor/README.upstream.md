@@ -27,8 +27,9 @@ The preferred public surface is `DynAdTensor` plus its eager methods. Runtime
 selection uses an explicit runtime holder, and reverse-mode bookkeeping
 attaches pullback rules directly to `chainrules::Tape<DynTensor>`, where
 rank-0 tensors carry scalar AD values. Mixed-dtype tensor ops apply implicit
-algebraic promotion internally, and reverse-mode pullbacks cast gradients back
-to each input dtype. Explicit numeric casts use `DynAdTensor::to_scalar_type`.
+result-type promotion internally (`complex` beats `real`, 64-bit beats
+32-bit), and reverse-mode pullbacks cast gradients back to each input dtype.
+Explicit numeric casts use `DynAdTensor::to_scalar_type`.
 
 ```rust
 use tenferro_dyadtensor::{DynAdTensor, set_default_runtime, RuntimeContext};

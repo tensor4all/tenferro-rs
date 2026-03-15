@@ -1,4 +1,4 @@
-use super::promotion::join_scalar_types;
+use super::promotion::promote_pair_to_common;
 use super::DynAdTensor;
 use crate::ops::ad;
 use crate::{Error, Result};
@@ -93,7 +93,7 @@ macro_rules! define_dyn_binary_method {
         #[doc = concat!(
             "Runs eager AD `",
             $doc_label,
-            "` on two dynamic tensors after applying the standard promotion join."
+            "` on two dynamic tensors after applying the dynamic result-type promotion rule."
         )]
         #[doc = ""]
         #[doc = "# Examples"]
@@ -114,9 +114,7 @@ macro_rules! define_dyn_binary_method {
         #[doc = "assert_eq!(out.dims(), &[]);"]
         #[doc = "```"]
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
-            let target = join_scalar_types(&[self.scalar_type(), rhs.scalar_type()])?;
-            let lhs = self.promote_to(target)?;
-            let rhs = rhs.promote_to(target)?;
+            let (_, lhs, rhs) = promote_pair_to_common(self, rhs)?;
             match (&lhs, &rhs) {
                 (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32($typed_fn(lhs, rhs)?)),
                 (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64($typed_fn(lhs, rhs)?)),
@@ -130,7 +128,7 @@ macro_rules! define_dyn_binary_method {
         #[doc = concat!(
             "Runs eager AD `",
             $doc_label,
-            "` on two real-valued dynamic tensors after applying the standard promotion join."
+            "` on two real-valued dynamic tensors after applying the dynamic result-type promotion rule."
         )]
         #[doc = ""]
         #[doc = "# Examples"]
@@ -151,9 +149,7 @@ macro_rules! define_dyn_binary_method {
         #[doc = "assert_eq!(out.dims(), &[]);"]
         #[doc = "```"]
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
-            let target = join_scalar_types(&[self.scalar_type(), rhs.scalar_type()])?;
-            let lhs = self.promote_to(target)?;
-            let rhs = rhs.promote_to(target)?;
+            let (_, lhs, rhs) = promote_pair_to_common(self, rhs)?;
             match (&lhs, &rhs) {
                 (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32($typed_fn(lhs, rhs)?)),
                 (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64($typed_fn(lhs, rhs)?)),

@@ -1,4 +1,4 @@
-use super::promotion::join_scalar_types;
+use super::promotion::promote_many_to_common;
 use super::DynAdTensor;
 use crate::ops::ad;
 use crate::{AdTensor, Error, Result};
@@ -61,16 +61,7 @@ impl DynAdTensor {
                 message: "einsum requires at least one operand".to_string(),
             });
         }
-        let target = join_scalar_types(
-            &operands
-                .iter()
-                .map(|operand| operand.scalar_type())
-                .collect::<Vec<_>>(),
-        )?;
-        let promoted = operands
-            .iter()
-            .map(|operand| operand.promote_to(target))
-            .collect::<Result<Vec<_>>>()?;
+        let (target, promoted) = promote_many_to_common(operands)?;
 
         match target {
             crate::ScalarType::F32 => {

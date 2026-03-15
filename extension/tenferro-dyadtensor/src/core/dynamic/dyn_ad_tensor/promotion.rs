@@ -4,52 +4,33 @@ use super::merge::map_ad_tensor_mixed_linear_typed;
 use super::DynAdTensor;
 use crate::{AdTensor, Error, Result, ScalarType};
 
-fn unsupported_promotion(from: ScalarType, to: ScalarType) -> Error {
-    Error::InvalidAdTensor {
-        message: format!("unsupported promotion from {from:?} to {to:?}"),
-    }
-}
-
 pub(super) fn join_scalar_types(types: &[ScalarType]) -> Result<ScalarType> {
-    let mut saw_c32 = false;
-    let mut saw_c64 = false;
-    let mut saw_f32 = false;
-    let mut saw_f64 = false;
+    if types.is_empty() {
+        return Err(Error::InvalidAdTensor {
+            message: "cannot join an empty scalar type set".to_string(),
+        });
+    }
 
+    let mut saw_complex = false;
+    let mut saw_64 = false;
     for ty in types {
         match ty {
-            ScalarType::F32 => saw_f32 = true,
-            ScalarType::F64 => saw_f64 = true,
-            ScalarType::C32 => saw_c32 = true,
-            ScalarType::C64 => saw_c64 = true,
+            ScalarType::F32 => {}
+            ScalarType::F64 => saw_64 = true,
+            ScalarType::C32 => saw_complex = true,
+            ScalarType::C64 => {
+                saw_complex = true;
+                saw_64 = true;
+            }
         }
     }
 
-    if saw_c32 && (saw_f64 || saw_c64) {
-        return Err(unsupported_promotion(ScalarType::C32, ScalarType::C64));
+    match (saw_complex, saw_64) {
+        (false, false) => Ok(ScalarType::F32),
+        (false, true) => Ok(ScalarType::F64),
+        (true, false) => Ok(ScalarType::C32),
+        (true, true) => Ok(ScalarType::C64),
     }
-    if saw_c64 && (saw_f32 || saw_c32) {
-        return Err(unsupported_promotion(ScalarType::C64, ScalarType::C32));
-    }
-    if saw_f32 && saw_f64 {
-        return Err(unsupported_promotion(ScalarType::F32, ScalarType::F64));
-    }
-
-    if saw_c64 {
-        return Ok(ScalarType::C64);
-    }
-    if saw_c32 {
-        return Ok(ScalarType::C32);
-    }
-    if saw_f64 {
-        return Ok(ScalarType::F64);
-    }
-    if saw_f32 {
-        return Ok(ScalarType::F32);
-    }
-    Err(Error::InvalidAdTensor {
-        message: "cannot join an empty scalar type set".to_string(),
-    })
 }
 
 fn promote_f32_ad_tensor_to_c32(tensor: &AdTensor<f32>) -> Result<AdTensor<Complex32>> {
@@ -58,6 +39,14 @@ fn promote_f32_ad_tensor_to_c32(tensor: &AdTensor<f32>) -> Result<AdTensor<Compl
 
 fn promote_f64_ad_tensor_to_c64(tensor: &AdTensor<f64>) -> Result<AdTensor<Complex64>> {
     map_ad_tensor_mixed_linear_typed(tensor, |x| Complex64::new(x, 0.0), |z| z.re)
+}
+
+fn cast_f32_to_c64(tensor: &AdTensor<f32>) -> Result<AdTensor<Complex64>> {
+    map_ad_tensor_mixed_linear_typed(tensor, |x| Complex64::new(x as f64, 0.0), |z| z.re as f32)
+}
+
+fn cast_f64_to_c32(tensor: &AdTensor<f64>) -> Result<AdTensor<Complex32>> {
+    map_ad_tensor_mixed_linear_typed(tensor, |x| Complex32::new(x as f32, 0.0), |z| z.re as f64)
 }
 
 fn cast_f32_to_f64(tensor: &AdTensor<f32>) -> Result<AdTensor<f64>> {
@@ -88,8 +77,65 @@ fn cast_c32_to_f32(tensor: &AdTensor<Complex32>) -> Result<AdTensor<f32>> {
     map_ad_tensor_mixed_linear_typed(tensor, |z| z.re, |x| Complex32::new(x, 0.0))
 }
 
+fn cast_c32_to_f64(tensor: &AdTensor<Complex32>) -> Result<AdTensor<f64>> {
+    map_ad_tensor_mixed_linear_typed(tensor, |z| z.re as f64, |x| Complex32::new(x as f32, 0.0))
+}
+
 fn cast_c64_to_f64(tensor: &AdTensor<Complex64>) -> Result<AdTensor<f64>> {
     map_ad_tensor_mixed_linear_typed(tensor, |z| z.re, |x| Complex64::new(x, 0.0))
+}
+
+fn cast_c64_to_f32(tensor: &AdTensor<Complex64>) -> Result<AdTensor<f32>> {
+    map_ad_tensor_mixed_linear_typed(tensor, |z| z.re as f32, |x| Complex64::new(x as f64, 0.0))
+}
+
+fn cast_dynadtensor(value: &DynAdTensor, target: ScalarType) -> Result<DynAdTensor> {
+    match (value, target) {
+        (DynAdTensor::F32(value), ScalarType::F32) => Ok(DynAdTensor::F32(value.clone())),
+        (DynAdTensor::F32(value), ScalarType::F64) => Ok(DynAdTensor::F64(cast_f32_to_f64(value)?)),
+        (DynAdTensor::F32(value), ScalarType::C32) => {
+            Ok(DynAdTensor::C32(promote_f32_ad_tensor_to_c32(value)?))
+        }
+        (DynAdTensor::F32(value), ScalarType::C64) => Ok(DynAdTensor::C64(cast_f32_to_c64(value)?)),
+        (DynAdTensor::F64(value), ScalarType::F32) => Ok(DynAdTensor::F32(cast_f64_to_f32(value)?)),
+        (DynAdTensor::F64(value), ScalarType::F64) => Ok(DynAdTensor::F64(value.clone())),
+        (DynAdTensor::F64(value), ScalarType::C32) => Ok(DynAdTensor::C32(cast_f64_to_c32(value)?)),
+        (DynAdTensor::F64(value), ScalarType::C64) => {
+            Ok(DynAdTensor::C64(promote_f64_ad_tensor_to_c64(value)?))
+        }
+        (DynAdTensor::C32(value), ScalarType::F32) => Ok(DynAdTensor::F32(cast_c32_to_f32(value)?)),
+        (DynAdTensor::C32(value), ScalarType::F64) => Ok(DynAdTensor::F64(cast_c32_to_f64(value)?)),
+        (DynAdTensor::C32(value), ScalarType::C32) => Ok(DynAdTensor::C32(value.clone())),
+        (DynAdTensor::C32(value), ScalarType::C64) => Ok(DynAdTensor::C64(cast_c32_to_c64(value)?)),
+        (DynAdTensor::C64(value), ScalarType::F32) => Ok(DynAdTensor::F32(cast_c64_to_f32(value)?)),
+        (DynAdTensor::C64(value), ScalarType::F64) => Ok(DynAdTensor::F64(cast_c64_to_f64(value)?)),
+        (DynAdTensor::C64(value), ScalarType::C32) => Ok(DynAdTensor::C32(cast_c64_to_c32(value)?)),
+        (DynAdTensor::C64(value), ScalarType::C64) => Ok(DynAdTensor::C64(value.clone())),
+    }
+}
+
+pub(super) fn promote_pair_to_common(
+    lhs: &DynAdTensor,
+    rhs: &DynAdTensor,
+) -> Result<(ScalarType, DynAdTensor, DynAdTensor)> {
+    let target = join_scalar_types(&[lhs.scalar_type(), rhs.scalar_type()])?;
+    Ok((target, lhs.promote_to(target)?, rhs.promote_to(target)?))
+}
+
+pub(super) fn promote_many_to_common(
+    operands: &[&DynAdTensor],
+) -> Result<(ScalarType, Vec<DynAdTensor>)> {
+    let target = join_scalar_types(
+        &operands
+            .iter()
+            .map(|operand| operand.scalar_type())
+            .collect::<Vec<_>>(),
+    )?;
+    let promoted = operands
+        .iter()
+        .map(|operand| operand.promote_to(target))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((target, promoted))
 }
 
 impl DynAdTensor {
@@ -112,40 +158,10 @@ impl DynAdTensor {
     /// assert_eq!(y.scalar_type(), ScalarType::F64);
     /// ```
     pub fn to_scalar_type(&self, target: ScalarType) -> Result<Self> {
-        match (self, target) {
-            (Self::F32(value), ScalarType::F32) => Ok(Self::F32(value.clone())),
-            (Self::F64(value), ScalarType::F64) => Ok(Self::F64(value.clone())),
-            (Self::C32(value), ScalarType::C32) => Ok(Self::C32(value.clone())),
-            (Self::C64(value), ScalarType::C64) => Ok(Self::C64(value.clone())),
-            (Self::F32(value), ScalarType::F64) => Ok(Self::F64(cast_f32_to_f64(value)?)),
-            (Self::F64(value), ScalarType::F32) => Ok(Self::F32(cast_f64_to_f32(value)?)),
-            (Self::C32(value), ScalarType::C64) => Ok(Self::C64(cast_c32_to_c64(value)?)),
-            (Self::C64(value), ScalarType::C32) => Ok(Self::C32(cast_c64_to_c32(value)?)),
-            (Self::F32(value), ScalarType::C32) => {
-                Ok(Self::C32(promote_f32_ad_tensor_to_c32(value)?))
-            }
-            (Self::F64(value), ScalarType::C64) => {
-                Ok(Self::C64(promote_f64_ad_tensor_to_c64(value)?))
-            }
-            (Self::C32(value), ScalarType::F32) => Ok(Self::F32(cast_c32_to_f32(value)?)),
-            (Self::C64(value), ScalarType::F64) => Ok(Self::F64(cast_c64_to_f64(value)?)),
-            _ => Err(unsupported_promotion(self.scalar_type(), target)),
-        }
+        cast_dynadtensor(self, target)
     }
 
     pub(crate) fn promote_to(&self, target: ScalarType) -> Result<Self> {
-        match (self, target) {
-            (Self::F32(value), ScalarType::F32) => Ok(Self::F32(value.clone())),
-            (Self::F64(value), ScalarType::F64) => Ok(Self::F64(value.clone())),
-            (Self::C32(value), ScalarType::C32) => Ok(Self::C32(value.clone())),
-            (Self::C64(value), ScalarType::C64) => Ok(Self::C64(value.clone())),
-            (Self::F32(value), ScalarType::C32) => {
-                Ok(Self::C32(promote_f32_ad_tensor_to_c32(value)?))
-            }
-            (Self::F64(value), ScalarType::C64) => {
-                Ok(Self::C64(promote_f64_ad_tensor_to_c64(value)?))
-            }
-            _ => Err(unsupported_promotion(self.scalar_type(), target)),
-        }
+        cast_dynadtensor(self, target)
     }
 }
