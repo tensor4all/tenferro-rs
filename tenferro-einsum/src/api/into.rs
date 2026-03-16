@@ -11,7 +11,7 @@ use crate::planning::tree::ContractionTree;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
 
-use super::borrowed::canonicalize_col_major_operands;
+use super::canonical::canonicalize_col_major_operands;
 
 /// Execute einsum using string notation, accumulating into an existing output.
 ///
