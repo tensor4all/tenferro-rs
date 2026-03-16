@@ -18,6 +18,7 @@ fn cpu_backend_is_split_into_focused_modules() {
         "mod contract;",
         "mod execution;",
         "mod gemm_support;",
+        "mod layout_fusion;",
         "mod plan;",
         "mod planning;",
     ] {
@@ -41,6 +42,7 @@ fn split_cpu_modules_stay_under_size_guideline() {
         format!("{ROOT}/contract.rs"),
         format!("{ROOT}/batched_gemm.rs"),
         format!("{ROOT}/gemm_support.rs"),
+        format!("{ROOT}/layout_fusion.rs"),
     ] {
         assert!(
             Path::new(&path).exists(),

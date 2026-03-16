@@ -43,3 +43,27 @@ fn manual_einsum_trace_returns_scalar() {
     assert!(result.dims().is_empty());
     assert!((data[result.offset() as usize] - 4.0).abs() < 1e-10);
 }
+
+#[test]
+fn manual_einsum_transposed_scalar_contraction_matches_backend() {
+    let mut ctx = CpuContext::new(1);
+    let subs = Subscripts::parse("ab,ba->").unwrap();
+    let lhs = tensor(&[1.0, -0.5, 2.0, 0.3, 1.2, -0.8], &[2, 3]);
+    let rhs = tensor(&[0.5, 1.0, -1.2, 0.7, 0.2, -0.4], &[3, 2]);
+    let size_dict = HashMap::from([('a' as u32, 2usize), ('b' as u32, 3usize)]);
+
+    let manual = manual_einsum(&subs, &[lhs.clone(), rhs.clone()], &size_dict).unwrap();
+    let backend =
+        einsum_with_subscripts::<Standard<f64>, CpuBackend>(&mut ctx, &subs, &[&lhs, &rhs], None)
+            .unwrap();
+
+    let manual_data = manual.buffer().as_slice().unwrap();
+    let backend_data = backend.buffer().as_slice().unwrap();
+    let manual_value = manual_data[manual.offset() as usize];
+    let backend_value = backend_data[backend.offset() as usize];
+
+    assert!(
+        (manual_value - backend_value).abs() < 1e-10,
+        "manual={manual_value}, backend={backend_value}"
+    );
+}

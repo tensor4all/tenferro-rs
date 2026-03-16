@@ -1,4 +1,3 @@
-use strided_perm::try_fuse_group;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
@@ -8,6 +7,7 @@ use crate::infra::typed_dispatch::{
 };
 use crate::SemiringBinaryOp;
 
+use super::layout_fusion::try_fuse_group_in_order;
 use super::plan::{build_contract_gemm_spec, ContractGemmSpec};
 
 #[cfg(feature = "gemm-faer")]
@@ -236,9 +236,9 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (batch_total, a_bs, b_bs, c_bs) = if nb == 0 {
             (1usize, 0isize, 0isize, 0isize)
         } else {
-            let (ta, sa) = try_fuse_group(&a_dims[..nb], &a_strides[..nb])?;
-            let (tb, sb) = try_fuse_group(&b_dims[..nb], &b_strides[..nb])?;
-            let (tc, sc) = try_fuse_group(&c_dims[..nb], &c_strides[..nb])?;
+            let (ta, sa) = try_fuse_group_in_order(&a_dims[..nb], &a_strides[..nb])?;
+            let (tb, sb) = try_fuse_group_in_order(&b_dims[..nb], &b_strides[..nb])?;
+            let (tc, sc) = try_fuse_group_in_order(&c_dims[..nb], &c_strides[..nb])?;
             if ta != tb || ta != tc {
                 return None;
             }
@@ -248,12 +248,12 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (m_raw, a_ms) = if nm == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(&a_dims[nb..nb + nm], &a_strides[nb..nb + nm])?
+            try_fuse_group_in_order(&a_dims[nb..nb + nm], &a_strides[nb..nb + nm])?
         };
         let (m_chk, c_ms) = if nm == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(&c_dims[nb..nb + nm], &c_strides[nb..nb + nm])?
+            try_fuse_group_in_order(&c_dims[nb..nb + nm], &c_strides[nb..nb + nm])?
         };
         if m_raw != m_chk {
             return None;
@@ -262,7 +262,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (k_raw, a_ks) = if nk == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(
+            try_fuse_group_in_order(
                 &a_dims[nb + nm..nb + nm + nk],
                 &a_strides[nb + nm..nb + nm + nk],
             )?
@@ -270,7 +270,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (k_chk, b_ks) = if nk == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(&b_dims[nb..nb + nk], &b_strides[nb..nb + nk])?
+            try_fuse_group_in_order(&b_dims[nb..nb + nk], &b_strides[nb..nb + nk])?
         };
         if k_raw != k_chk {
             return None;
@@ -279,7 +279,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (n_raw, b_ns) = if nn == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(
+            try_fuse_group_in_order(
                 &b_dims[nb + nk..nb + nk + nn],
                 &b_strides[nb + nk..nb + nk + nn],
             )?
@@ -287,7 +287,7 @@ fn try_execute_contract_gemm<T: Scalar + 'static>(
         let (n_chk, c_ns) = if nn == 0 {
             (1usize, 0isize)
         } else {
-            try_fuse_group(
+            try_fuse_group_in_order(
                 &c_dims[nb + nm..nb + nm + nn],
                 &c_strides[nb + nm..nb + nm + nn],
             )?

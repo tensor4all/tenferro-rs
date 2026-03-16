@@ -91,10 +91,21 @@ fn cpu_has_fast_path<T: Scalar>(desc: SemiringFastPathDescriptor) -> bool {
 /// Create a Tensor from a closure, column-major order.
 /// Equivalent to the old `StridedArray::from_fn_col_major`.
 fn tensor_from_fn<T: Scalar>(dims: &[usize], f: impl Fn(&[usize]) -> T) -> Tensor<T> {
+    tensor_from_fn_with_order(dims, MemoryOrder::ColumnMajor, f)
+}
+
+fn tensor_from_fn_with_order<T: Scalar>(
+    dims: &[usize],
+    order: MemoryOrder,
+    f: impl Fn(&[usize]) -> T,
+) -> Tensor<T> {
     let ndim = dims.len();
     let n_elements: usize = dims.iter().product();
     let mut data = vec![T::zero(); n_elements];
-    let strides = col_major_strides(dims);
+    let strides = match order {
+        MemoryOrder::ColumnMajor => col_major_strides(dims),
+        MemoryOrder::RowMajor => row_major_strides(dims),
+    };
     let mut idx = vec![0usize; ndim];
     for _ in 0..n_elements {
         let linear: usize = idx.iter().zip(strides.iter()).map(|(&i, &s)| i * s).sum();
@@ -108,7 +119,7 @@ fn tensor_from_fn<T: Scalar>(dims: &[usize], f: impl Fn(&[usize]) -> T) -> Tenso
             idx[d] = 0;
         }
     }
-    Tensor::from_slice(&data, dims, MemoryOrder::ColumnMajor).unwrap()
+    Tensor::from_slice(&data, dims, order).unwrap()
 }
 
 /// Zero-initialized Tensor (column-major).
@@ -130,6 +141,19 @@ fn col_major_strides(dims: &[usize]) -> Vec<usize> {
     strides[0] = 1;
     for i in 1..ndim {
         strides[i] = strides[i - 1] * dims[i - 1];
+    }
+    strides
+}
+
+fn row_major_strides(dims: &[usize]) -> Vec<usize> {
+    let ndim = dims.len();
+    if ndim == 0 {
+        return vec![];
+    }
+    let mut strides = vec![0usize; ndim];
+    strides[ndim - 1] = 1;
+    for i in (0..ndim - 1).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1];
     }
     strides
 }
@@ -775,6 +799,133 @@ fn contract_generic_fallback_with_b_only_mode() {
             "C[{i}] = {}, expected {expected}",
             tensor_get(&c, &[i])
         );
+    }
+}
+
+#[test]
+fn contract_transposed_scalar_contraction_matches_manual() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[2, 3], |idx| match idx {
+        [0, 0] => 1.0,
+        [1, 0] => -0.5,
+        [0, 1] => 2.0,
+        [1, 1] => 0.3,
+        [0, 2] => 1.2,
+        [1, 2] => -0.8,
+        _ => unreachable!(),
+    });
+    let b = tensor_from_fn(&[3, 2], |idx| match idx {
+        [0, 0] => 0.5,
+        [1, 0] => 1.0,
+        [2, 0] => -1.2,
+        [0, 1] => 0.7,
+        [1, 1] => 0.2,
+        [2, 1] => -0.4,
+        _ => unreachable!(),
+    });
+    let mut c = tensor_zeros::<f64>(&[]);
+
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
+        modes_a: vec![0, 1],
+        modes_b: vec![1, 0],
+        modes_c: vec![],
+    });
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3], &[3, 2], &[]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
+
+    let mut expected = 0.0;
+    for i in 0..2 {
+        for j in 0..3 {
+            expected += tensor_get(&a, &[i, j]) * tensor_get(&b, &[j, i]);
+        }
+    }
+
+    assert!(
+        (tensor_get(&c, &[]) - expected).abs() < 1e-10,
+        "C = {}, expected {expected}",
+        tensor_get(&c, &[])
+    );
+}
+
+#[test]
+fn contract_transposed_multi_axis_reduction_matches_manual() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[2, 3, 4], |idx| {
+        1.0 + idx[0] as f64 + 0.1 * idx[1] as f64 + 0.01 * idx[2] as f64
+    });
+    let b = tensor_from_fn(&[4, 3, 5], |idx| {
+        -0.5 + 0.2 * idx[0] as f64 - 0.05 * idx[1] as f64 + 0.01 * idx[2] as f64
+    });
+    let mut c = tensor_zeros::<f64>(&[2, 5]);
+
+    let desc = TestPrimitiveDescriptor::SemiringFastPath(SemiringFastPathDescriptor::Contract {
+        modes_a: vec![0, 1, 2],
+        modes_b: vec![2, 1, 3],
+        modes_c: vec![0, 3],
+    });
+    let plan = cpu_plan::<f64>(&mut ctx, &desc, &[&[2, 3, 4], &[4, 3, 5], &[2, 5]]).unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
+
+    for i in 0..2 {
+        for l in 0..5 {
+            let mut expected = 0.0;
+            for j in 0..3 {
+                for k in 0..4 {
+                    expected += tensor_get(&a, &[i, j, k]) * tensor_get(&b, &[k, j, l]);
+                }
+            }
+            assert!(
+                (tensor_get(&c, &[i, l]) - expected).abs() < 1e-10,
+                "C[{i},{l}] = {}, expected {expected}",
+                tensor_get(&c, &[i, l])
+            );
+        }
+    }
+}
+
+#[test]
+fn batched_gemm_mixed_batch_layouts_match_manual() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn_with_order(&[2, 3, 2, 2], MemoryOrder::RowMajor, |idx| {
+        1.0 + idx[0] as f64 + 0.1 * idx[1] as f64 + 0.01 * idx[2] as f64 + 0.001 * idx[3] as f64
+    });
+    let b = tensor_from_fn_with_order(&[3, 2, 2, 2], MemoryOrder::ColumnMajor, |idx| {
+        -0.5 + 0.2 * idx[0] as f64 - 0.05 * idx[1] as f64 + 0.01 * idx[2] as f64
+            - 0.001 * idx[3] as f64
+    });
+    let mut c = tensor_from_fn_with_order(&[2, 2, 2, 2], MemoryOrder::ColumnMajor, |_| 0.0);
+
+    let desc = TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
+        batch_dims: vec![2, 2],
+        m: 2,
+        n: 2,
+        k: 3,
+    });
+    let plan = cpu_plan::<f64>(
+        &mut ctx,
+        &desc,
+        &[&[2, 3, 2, 2], &[3, 2, 2, 2], &[2, 2, 2, 2]],
+    )
+    .unwrap();
+    cpu_execute(&mut ctx, &plan, 1.0, &[&a, &b], 0.0, &mut c).unwrap();
+
+    for batch0 in 0..2 {
+        for batch1 in 0..2 {
+            for i in 0..2 {
+                for j in 0..2 {
+                    let mut expected = 0.0;
+                    for k in 0..3 {
+                        expected += tensor_get(&a, &[i, k, batch0, batch1])
+                            * tensor_get(&b, &[k, j, batch0, batch1]);
+                    }
+                    assert!(
+                        (tensor_get(&c, &[i, j, batch0, batch1]) - expected).abs() < 1e-10,
+                        "C[{i},{j},{batch0},{batch1}] = {}, expected {expected}",
+                        tensor_get(&c, &[i, j, batch0, batch1])
+                    );
+                }
+            }
+        }
     }
 }
 

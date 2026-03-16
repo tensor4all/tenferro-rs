@@ -354,6 +354,61 @@ fn tensor_public_einsum_owned_accepts_owned_dynamic_operands() {
 }
 
 #[test]
+fn tensor_public_einsum_transposed_scalar_contraction_matches_manual() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    let lhs = Tensor::from_tensor(
+        DenseTensor::<Complex64>::from_slice(
+            &[
+                Complex64::new(1.0, 0.2),
+                Complex64::new(-0.5, 0.4),
+                Complex64::new(2.0, -0.1),
+                Complex64::new(0.3, -1.0),
+                Complex64::new(1.2, 0.7),
+                Complex64::new(-0.8, 0.5),
+            ],
+            &[2, 3],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
+    let rhs = Tensor::from_tensor(
+        DenseTensor::<Complex64>::from_slice(
+            &[
+                Complex64::new(0.5, -0.1),
+                Complex64::new(1.0, 0.6),
+                Complex64::new(-1.2, 0.3),
+                Complex64::new(0.7, -0.9),
+                Complex64::new(0.2, 1.1),
+                Complex64::new(-0.4, 0.8),
+            ],
+            &[3, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
+
+    let out = Tensor::einsum("ab,ba->", &[&lhs, &rhs]).unwrap();
+    let actual = match out.try_scalar_value().unwrap() {
+        tenferro::ScalarValue::C64(z) => z,
+        other => panic!("expected C64 scalar, got {other:?}"),
+    };
+
+    let lhs_vals = lhs.as_c64().unwrap().primal().buffer().as_slice().unwrap();
+    let rhs_vals = rhs.as_c64().unwrap().primal().buffer().as_slice().unwrap();
+    let mut expected = Complex64::new(0.0, 0.0);
+    for a in 0..2 {
+        for b in 0..3 {
+            expected += lhs_vals[a + 2 * b] * rhs_vals[b + 3 * a];
+        }
+    }
+
+    assert!(
+        (actual - expected).norm() < 1e-12,
+        "actual={actual:?}, expected={expected:?}"
+    );
+}
+
+#[test]
 fn tensor_public_linalg_single_result_methods_do_not_require_typed_api() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let a = Tensor::from_tensor(
