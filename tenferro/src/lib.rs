@@ -42,8 +42,9 @@ mod tape;
 pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
 pub(crate) use core::DynTensorTyped;
 pub use core::{
-    AdMode, EigResult, EigenResult, LstsqResult, LuResult, QrResult, ScalarType, SlogdetResult,
-    SvdResult, Tensor,
+    AdMode, CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
+    Tensor,
 };
 pub(crate) use core::{AdTensor, AdValue, DynTensor};
 pub use error::{Error, Result};

@@ -1,5 +1,46 @@
 use super::super::super::*;
 use super::common::dispatch_linalg_ad_runtime;
+use crate::DynTensorTyped;
+
+fn wrap_mixed_dense_linalg_output<TIn, TOut>(
+    op_name: &'static str,
+    inputs: &[&AdTensor<TIn>],
+    primal: Tensor<TOut>,
+    tangent: Option<Tensor<TOut>>,
+) -> Result<AdTensor<TOut>>
+where
+    TIn: Scalar + DynTensorTyped,
+    TOut: Scalar + DynTensorTyped,
+{
+    let tangent = tangent
+        .map(|tangent| normalize_output_tangent_shape(tangent, primal.dims(), op_name))
+        .transpose()?;
+
+    if has_reverse(inputs) {
+        let tape = derive_reverse_tape_handle(inputs)?.ok_or_else(|| Error::InvalidAdTensor {
+            message: "reverse-mode output requested but no reverse tape found".to_string(),
+        })?;
+        return AdTensor::new_reverse_output(
+            crate::structured::StructuredTensor::from_dense(primal),
+            &tape,
+            tangent.map(crate::structured::StructuredTensor::from_dense),
+        );
+    }
+
+    if has_forward(inputs) {
+        let tangent = tangent.ok_or_else(|| Error::InvalidAdTensor {
+            message: "forward-mode inputs must provide tangent output".to_string(),
+        })?;
+        return AdTensor::new_forward(
+            crate::structured::StructuredTensor::from_dense(primal),
+            crate::structured::StructuredTensor::from_dense(tangent),
+        );
+    }
+
+    Ok(AdTensor::new_primal(
+        crate::structured::StructuredTensor::from_dense(primal),
+    ))
+}
 
 /// Builder for AD SVD.
 /// # Examples
@@ -14,7 +55,8 @@ pub struct SvdAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SvdAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: LinalgRuntimeValue,
+    T::Real: DynTensorTyped,
 {
     /// Sets optional SVD options.
     /// # Examples
@@ -33,7 +75,7 @@ where
     /// ```ignore
     /// let _out = builder.run();
     /// ```
-    pub fn run(self) -> Result<TypedSvdResult<T>> {
+    pub fn run(self) -> Result<TypedSvdResult<T, T::Real>> {
         let operands = [self.tensor];
         ensure_dense_linalg_inputs("svd", &operands)?;
         let needs_tangent = has_forward(&operands) || has_any_tangent(&operands);
@@ -82,7 +124,7 @@ where
         };
 
         let out_u = wrap_same_type_dense_ad_output("svd_ad", &operands, primal.u, du)?;
-        let out_s = wrap_same_type_dense_ad_output("svd_ad", &operands, primal.s, ds)?;
+        let out_s = wrap_mixed_dense_linalg_output("svd_ad", &operands, primal.s, ds)?;
         let out_vt = wrap_same_type_dense_ad_output("svd_ad", &operands, primal.vt, dvt)?;
 
         let input_spec = collect_reverse_input_specs(&operands)
@@ -132,7 +174,7 @@ where
                 let spec = spec.clone();
                 let options = options.clone();
                 let a_primal = input_primal.clone();
-                tape::register_rule::<T>(
+                tape::register_mixed_rule::<T::Real, T>(
                     &tape,
                     node,
                     Box::new(move |cotangent| {

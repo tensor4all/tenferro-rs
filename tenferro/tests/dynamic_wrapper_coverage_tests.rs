@@ -465,7 +465,7 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     assert_eq!(complex32_qr.q.scalar_type(), ScalarType::C32);
     assert_eq!(complex32_qr.r.scalar_type(), ScalarType::C32);
 
-    let complex_err = match reverse!(matrix_c64(
+    let mut reverse_complex_svd = reverse!(matrix_c64(
         &[
             Complex64::new(4.0, 0.5),
             Complex64::new(1.0, -0.25),
@@ -473,15 +473,19 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
             Complex64::new(3.0, 1.0),
         ],
         &[2, 2],
-    ))
-    .svd()
-    {
-        Ok(_) => panic!("complex reverse-mode svd should stay rejected by the dynamic wrapper"),
-        Err(err) => err,
-    };
-    assert!(
-        matches!(complex_err, tenferro::Error::InvalidAdTensor { message } if message.contains("supports complex tensors only in primal mode"))
-    );
+    ));
+    reverse_complex_svd.set_requires_grad(true).unwrap();
+    let reverse_svd_loss = reverse_complex_svd.svd().unwrap().s.sum().unwrap();
+    let reverse_svd_grads = grad(
+        &[&reverse_svd_loss],
+        &[&reverse_complex_svd],
+        None,
+        GradOptions::default(),
+    )
+    .unwrap();
+    let reverse_svd_grad = reverse_svd_grads[0].as_ref().unwrap();
+    assert_eq!(reverse_svd_grad.scalar_type(), ScalarType::C64);
+    assert_eq!(reverse_svd_grad.dims(), &[2, 2]);
 
     let complex32_err = match reverse!(matrix_c32(
         &[
@@ -501,10 +505,7 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
         matches!(complex32_err, tenferro::Error::InvalidAdTensor { message } if message.contains("supports complex tensors only in primal mode"))
     );
 
-    let mismatch_err = match matrix32.solve(&rhs64) {
-        Ok(_) => panic!("solve should reject mixed dtypes"),
-        Err(err) => err,
-    };
+    let mismatch_err = matrix32.solve(&rhs64).unwrap_err();
     assert!(
         matches!(mismatch_err, tenferro::Error::InvalidAdTensor { message } if message.contains("requires matching dtypes"))
     );
@@ -515,6 +516,42 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     };
     assert!(
         matches!(lstsq_err, tenferro::Error::InvalidAdTensor { message } if message.contains("requires matching dtypes"))
+    );
+
+    let complex_solve = complex.solve(&make_c64_rhs()).unwrap();
+    assert_eq!(complex_solve.scalar_type(), ScalarType::C64);
+
+    let mut reverse_solve_a = primal!(matrix_c64(
+        &[
+            Complex64::new(4.0, 0.5),
+            Complex64::new(1.0, -0.25),
+            Complex64::new(1.0, 0.25),
+            Complex64::new(3.0, 1.0),
+        ],
+        &[2, 2],
+    ));
+    reverse_solve_a.set_requires_grad(true).unwrap();
+    let mut reverse_solve_b = make_c64_rhs();
+    reverse_solve_b.set_requires_grad(true).unwrap();
+    let solve_out = reverse_solve_a.solve(&reverse_solve_b).unwrap();
+    let solve_cotangent = primal!(vector_c64(&[
+        Complex64::new(1.0, -0.5),
+        Complex64::new(-0.25, 0.75),
+    ]));
+    let reverse_solve_grads = grad(
+        &[&solve_out],
+        &[&reverse_solve_a, &reverse_solve_b],
+        Some(&[solve_cotangent]),
+        GradOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        reverse_solve_grads[0].as_ref().unwrap().scalar_type(),
+        ScalarType::C64
+    );
+    assert_eq!(
+        reverse_solve_grads[1].as_ref().unwrap().scalar_type(),
+        ScalarType::C64
     );
 }
 

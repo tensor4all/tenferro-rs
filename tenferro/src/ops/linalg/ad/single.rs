@@ -64,7 +64,7 @@ pub struct SolveAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SolveAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: LinalgRuntimeValue,
 {
     /// Executes AD solve.
     /// # Examples

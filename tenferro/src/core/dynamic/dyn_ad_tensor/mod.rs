@@ -13,10 +13,13 @@ mod scalar_ops;
 mod shape;
 mod snapshot;
 
+use std::fmt;
+
 use num_complex::{Complex32, Complex64};
 
 pub use eager_linalg::{
-    EigResult, EigenResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult,
+    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    LuFactorResult, LuResult, QrResult, SlogdetResult, SolveExResult, SvdResult,
 };
 
 /// Runtime AD tensor wrapper.
@@ -60,4 +63,17 @@ pub enum Tensor {
     F64(crate::AdTensor<f64>),
     C32(crate::AdTensor<Complex32>),
     C64(crate::AdTensor<Complex64>),
+}
+
+impl fmt::Debug for Tensor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Tensor")
+            .field("scalar_type", &self.scalar_type())
+            .field("dims", &self.dims())
+            .field("axis_classes", &self.axis_classes())
+            .field("mode", &self.mode())
+            .field("is_dense", &self.is_dense())
+            .field("is_diag", &self.is_diag())
+            .finish()
+    }
 }

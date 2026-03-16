@@ -112,6 +112,19 @@ fn tensor_public_primal_constructor_handles_dense_and_diag() {
 }
 
 #[test]
+fn tensor_debug_prints_semantic_summary() {
+    let x = Tensor::from_tensor(vector_f64(&[1.0, 2.0]));
+    let rendered = format!("{x:?}");
+    assert!(rendered.contains("Tensor"));
+    assert!(rendered.contains("scalar_type: F64"));
+    assert!(rendered.contains("dims: [2]"));
+    assert!(rendered.contains("axis_classes: [0]"));
+    assert!(rendered.contains("mode: Primal"));
+    assert!(rendered.contains("is_dense: true"));
+    assert!(rendered.contains("is_diag: true"));
+}
+
+#[test]
 fn tensor_public_forward_constructor_preserves_tangent() {
     let x = Tensor::from_tensor(vector_f64(&[1.0, 2.0]));
     let dx = Tensor::from_tensor(vector_f64(&[0.5, -0.5]));

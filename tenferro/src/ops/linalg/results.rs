@@ -19,11 +19,15 @@ use crate::{AdTensor, DynTensorTyped};
 /// assert_eq!(out.s.dims(), &[2]);
 /// ```
 #[derive(Clone)]
-pub struct TypedSvdResult<T: Scalar + DynTensorTyped> {
+pub struct TypedSvdResult<T, R = T>
+where
+    T: Scalar + DynTensorTyped,
+    R: Scalar + DynTensorTyped,
+{
     /// Left singular vectors.
     pub u: AdTensor<T>,
     /// Singular values.
-    pub s: AdTensor<T>,
+    pub s: AdTensor<R>,
     /// Right singular vectors transposed.
     pub vt: AdTensor<T>,
 }
