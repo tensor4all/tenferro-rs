@@ -11,6 +11,7 @@ mod contract;
 mod execution;
 mod family_reduction;
 mod gemm_support;
+mod layout_fusion;
 mod plan;
 mod planning;
 mod reduction;

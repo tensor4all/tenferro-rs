@@ -16,7 +16,7 @@ use crate::execution::pool::BufferPool;
 use crate::execution::util::alloc_tensor_from_pool;
 use crate::planning::classify::compute_permutation;
 use crate::planning::plan::{GemmPlan, ReducePlan, StepPlan};
-use crate::planning::prepare::prepare_one_operand;
+use crate::planning::prepare::{prepare_one_operand, try_fuse_group_in_target_order};
 
 #[cfg(feature = "profile-dispatch")]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -315,9 +315,11 @@ where
     let c_direct = !plan.needs_final_permute && {
         let c_dims = output.dims();
         let c_strides = output.strides();
-        let g1 = strided_perm::try_fuse_group(&c_dims[..n_lo], &c_strides[..n_lo]);
-        let g2 =
-            strided_perm::try_fuse_group(&c_dims[n_lo..n_lo + n_ro], &c_strides[n_lo..n_lo + n_ro]);
+        let g1 = try_fuse_group_in_target_order(&c_dims[..n_lo], &c_strides[..n_lo]);
+        let g2 = try_fuse_group_in_target_order(
+            &c_dims[n_lo..n_lo + n_ro],
+            &c_strides[n_lo..n_lo + n_ro],
+        );
         g1.is_some() && g2.is_some()
     };
 
@@ -332,10 +334,12 @@ where
         let c_dims = output.dims().to_vec();
         let c_strides = output.strides().to_vec();
         let (_, m_stride) =
-            strided_perm::try_fuse_group(&c_dims[..n_lo], &c_strides[..n_lo]).unwrap();
-        let (_, n_stride) =
-            strided_perm::try_fuse_group(&c_dims[n_lo..n_lo + n_ro], &c_strides[n_lo..n_lo + n_ro])
-                .unwrap();
+            try_fuse_group_in_target_order(&c_dims[..n_lo], &c_strides[..n_lo]).unwrap();
+        let (_, n_stride) = try_fuse_group_in_target_order(
+            &c_dims[n_lo..n_lo + n_ro],
+            &c_strides[n_lo..n_lo + n_ro],
+        )
+        .unwrap();
         let mut fused_dims = Vec::with_capacity(2 + nb);
         let mut fused_strides = Vec::with_capacity(2 + nb);
         fused_dims.push(plan.m);

@@ -1,4 +1,3 @@
-use strided_perm::try_fuse_group;
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
@@ -9,6 +8,7 @@ use crate::infra::typed_dispatch::{
 
 use super::context::CpuContext;
 use super::gemm_support::{advance_batch_offset, batch_iteration_count, batch_offset};
+use super::layout_fusion::try_fuse_group_in_order;
 
 #[cfg(feature = "gemm-faer")]
 use super::gemm_support::FaerGemm;
@@ -127,9 +127,9 @@ pub(super) fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
     if nb == 0 {
         result = do_batch(0, 0, 0, &mut a_mat, &mut b_mat, &mut c_mat);
     } else {
-        let a_fused = try_fuse_group(batch_dims, a_batch);
-        let b_fused = try_fuse_group(batch_dims, b_batch);
-        let c_fused = try_fuse_group(batch_dims, c_batch);
+        let a_fused = try_fuse_group_in_order(batch_dims, a_batch);
+        let b_fused = try_fuse_group_in_order(batch_dims, b_batch);
+        let c_fused = try_fuse_group_in_order(batch_dims, c_batch);
         let total = batch_iteration_count(batch_dims)?;
 
         if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
@@ -246,9 +246,9 @@ pub(super) fn execute_batched_gemm_strided<T: FaerGemm>(
     if nb == 0 {
         do_batch(0, 0, 0);
     } else {
-        let a_fused = try_fuse_group(batch_dims, a_batch);
-        let b_fused = try_fuse_group(batch_dims, b_batch);
-        let c_fused = try_fuse_group(batch_dims, c_batch);
+        let a_fused = try_fuse_group_in_order(batch_dims, a_batch);
+        let b_fused = try_fuse_group_in_order(batch_dims, b_batch);
+        let c_fused = try_fuse_group_in_order(batch_dims, c_batch);
         let total = batch_iteration_count(batch_dims)?;
 
         if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =

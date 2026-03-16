@@ -89,6 +89,48 @@ fn prepare_one_operand_partial_fallback_when_group2_nonfusable() {
 }
 
 #[test]
+fn permute_or_copy_transposed_scalar_contraction_materializes_target_order() {
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+    let rhs = tensor(&[0.5, 1.0, -1.2, 0.7, 0.2, -0.4], &[3, 2]);
+    let expected = tensor(&[0.5, 0.7, 1.0, 0.2, -1.2, -0.4], &[2, 3]);
+
+    let prepared =
+        permute_or_copy::<Standard<f64>, CpuBackend>(&mut ctx, &rhs, &[1, 0], &[0, 1], &mut pool)
+            .unwrap();
+
+    assert_eq!(prepared.dims(), &[2, 3]);
+    assert!(prepared.is_col_major_contiguous());
+    assert_tensor_close(&prepared, &expected);
+}
+
+#[test]
+fn prepare_one_operand_transposed_scalar_contraction_materializes_target_order() {
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+    let rhs = tensor(&[0.5, 1.0, -1.2, 0.7, 0.2, -0.4], &[3, 2]);
+    let fallback_shape = [6, 1];
+    let expected = tensor(&[0.5, 0.7, 1.0, 0.2, -1.2, -0.4], &fallback_shape);
+
+    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &rhs,
+        &[1, 0],
+        &[0, 1],
+        0,
+        2,
+        0,
+        &fallback_shape,
+        &mut pool,
+    )
+    .unwrap();
+
+    assert_eq!(prepared.dims(), &fallback_shape);
+    assert!(prepared.is_col_major_contiguous());
+    assert_tensor_close(&prepared, &expected);
+}
+
+#[test]
 fn prepare_one_operand_partial_fallback_when_group1_nonfusable() {
     let mut ctx = CpuContext::new(1);
     let mut pool = BufferPool::new();

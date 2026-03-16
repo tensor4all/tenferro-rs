@@ -35,6 +35,40 @@ fn record_prepare_fallback(dims: &[usize]) {
     PREPARE_FALLBACK_ELEMS.fetch_add(n_elems as u64, Ordering::Relaxed);
 }
 
+pub(crate) fn try_fuse_group_in_target_order(
+    dims: &[usize],
+    strides: &[isize],
+) -> Option<(usize, isize)> {
+    match dims.len() {
+        0 => Some((1, 0)),
+        1 => Some((dims[0], strides[0])),
+        _ => {
+            if dims.len() != strides.len() {
+                return None;
+            }
+
+            let first_non_singleton = dims.iter().position(|&d| d > 1);
+            let Some(base_idx) = first_non_singleton else {
+                return Some((dims.iter().product(), *strides.first().unwrap_or(&0)));
+            };
+
+            let base_stride = strides[base_idx];
+            let mut expected_abs = base_stride.unsigned_abs();
+            for (&dim, &stride) in dims.iter().zip(strides.iter()) {
+                if dim <= 1 {
+                    continue;
+                }
+                if stride.unsigned_abs() != expected_abs {
+                    return None;
+                }
+                expected_abs = expected_abs.checked_mul(dim)?;
+            }
+
+            Some((dims.iter().product(), base_stride))
+        }
+    }
+}
+
 /// Prepare a single operand for GEMM: permute and try to fuse dimension groups.
 pub(crate) fn prepare_one_operand<A, B>(
     ctx: &mut BackendContext<A, B>,
@@ -52,8 +86,6 @@ where
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
     B: TensorSemiringCore<A>,
 {
-    use strided_perm::try_fuse_group;
-
     // Step 1: Permute (metadata-only, zero-copy)
     let permuted = if current_subs == target_subs {
         tensor.clone()
@@ -75,8 +107,8 @@ where
     let batch_dims = &dims[n_group1 + n_group2..];
     let batch_strides = &strides[n_group1 + n_group2..];
 
-    let fused_g1 = try_fuse_group(g1_dims, g1_strides);
-    let fused_g2 = try_fuse_group(g2_dims, g2_strides);
+    let fused_g1 = try_fuse_group_in_target_order(g1_dims, g1_strides);
+    let fused_g2 = try_fuse_group_in_target_order(g2_dims, g2_strides);
 
     match (fused_g1, fused_g2) {
         (Some((size1, stride1)), Some((size2, stride2))) => {
@@ -171,7 +203,7 @@ where
     let view = tensor.permute(&perm)?;
 
     // If the view happens to be contiguous, return it directly (zero allocation)
-    if view.is_contiguous() {
+    if view.is_col_major_contiguous() {
         return Ok(view);
     }
 
@@ -203,7 +235,7 @@ where
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
     B: TensorSemiringCore<A>,
 {
-    if tensor.is_contiguous() {
+    if tensor.is_col_major_contiguous() {
         return Ok(tensor.clone());
     }
 
