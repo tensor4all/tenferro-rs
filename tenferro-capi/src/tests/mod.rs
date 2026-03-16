@@ -312,3 +312,47 @@ fn dlpack_import_reports_axis_for_stride_overflow() {
         "unexpected error: {last_error}"
     );
 }
+
+#[test]
+fn dlpack_export_byte_offset_matches_tensor_offset() {
+    let data = vec![99.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let tensor = Tensor::from_vec(data, &[2, 3], &[1, 2], 1).unwrap();
+    assert_eq!(tensor.offset(), 1);
+
+    let handle = tensor_to_handle(tensor);
+    let mut status = TFE_INTERNAL_ERROR;
+    let dl = unsafe { tfe_tensor_f64_to_dlpack(handle, &mut status) };
+    assert_eq!(status, TFE_SUCCESS);
+    assert!(!dl.is_null());
+
+    let managed = unsafe { &*dl };
+    assert_eq!(managed.dl_tensor.byte_offset, 8);
+
+    unsafe {
+        if let Some(deleter) = (*dl).deleter {
+            deleter(dl);
+        }
+    }
+}
+
+#[test]
+fn dlpack_export_positive_offset_zero() {
+    let tensor =
+        Tensor::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(tensor.offset(), 0);
+
+    let handle = tensor_to_handle(tensor);
+    let mut status = TFE_INTERNAL_ERROR;
+    let dl = unsafe { tfe_tensor_f64_to_dlpack(handle, &mut status) };
+    assert_eq!(status, TFE_SUCCESS);
+    assert!(!dl.is_null());
+
+    let managed = unsafe { &*dl };
+    assert_eq!(managed.dl_tensor.byte_offset, 0);
+
+    unsafe {
+        if let Some(deleter) = (*dl).deleter {
+            deleter(dl);
+        }
+    }
+}

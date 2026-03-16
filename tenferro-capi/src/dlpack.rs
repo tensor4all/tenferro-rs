@@ -305,12 +305,20 @@ pub unsafe extern "C" fn tfe_tensor_f64_to_dlpack(
                 return Err(TFE_INTERNAL_ERROR);
             };
 
-            let byte_offset =
-                u64::try_from((tensor.offset() as i128) * (std::mem::size_of::<f64>() as i128))
-                    .map_err(|_| {
-                        set_last_error("to_dlpack: byte offset overflow");
-                        TFE_INVALID_ARGUMENT
-                    })?;
+            let offset = tensor.offset();
+            if offset < 0 {
+                set_last_error(
+                    "to_dlpack: negative tensor offset is not supported for DLPack export",
+                );
+                return Err(TFE_INVALID_ARGUMENT);
+            }
+            let byte_offset = u64::try_from(
+                (offset as i128) * (std::mem::size_of::<f64>() as i128),
+            )
+            .map_err(|_| {
+                set_last_error("to_dlpack: byte offset overflow");
+                TFE_INVALID_ARGUMENT
+            })?;
 
             let mut ctx = Box::new(ExportedDLPackTensor {
                 tensor,
