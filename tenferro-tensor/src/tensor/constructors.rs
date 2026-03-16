@@ -77,6 +77,9 @@ impl<T: Scalar> Tensor<T> {
 
     /// Create a tensor from a data slice.
     ///
+    /// `order` describes how to interpret `data` at the import boundary. View
+    /// operations continue to use tenferro's internal column-major semantics.
+    ///
     /// # Errors
     ///
     /// Returns an error if `data.len()` does not match the product of `dims`.

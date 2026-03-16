@@ -16,9 +16,15 @@
 //!
 //! # Memory layout
 //!
-//! [`Tensor`] stores explicit strides and is not tied to any particular memory
-//! order. [`MemoryOrder`] is only used as a parameter when allocating new memory
-//! (e.g., [`Tensor::zeros`], [`Tensor::contiguous`]).
+//! tenferro uses **column-major** layout as its internal canonical order.
+//! [`MemoryOrder`] is still accepted at import/materialization boundaries
+//! (e.g., [`Tensor::from_slice`], [`Tensor::contiguous`]), but view semantics
+//! such as [`Tensor::reshape`] follow the column-major internal contract.
+//!
+//! This matches Julia, Fortran, Eigen3's default layout, and BLAS/LAPACK-style
+//! linear algebra backends. Row-major ecosystems should normalize at the
+//! boundary rather than expecting the tensor core to preserve row-major
+//! semantics through view operations.
 //!
 //! # No strided-rs dependency
 //!

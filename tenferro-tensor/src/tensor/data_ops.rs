@@ -12,6 +12,10 @@ enum TriangularHalf {
 impl<T: Scalar> Tensor<T> {
     /// Return a contiguous copy of this tensor in the given memory order.
     ///
+    /// `order` controls the materialized output buffer only. It does not change
+    /// the internal column-major semantics used by view operations such as
+    /// [`reshape`](Tensor::reshape).
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -22,7 +26,17 @@ impl<T: Scalar> Tensor<T> {
     pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
         self.wait();
         if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
-            return self.clone();
+            return Tensor::from_parts(
+                self.buffer.clone(),
+                self.dims.clone(),
+                self.strides.clone(),
+                self.offset,
+                self.logical_memory_space,
+                self.preferred_compute_device,
+                self.event.clone(),
+                self.conjugated,
+                self.fw_grad.clone(),
+            );
         }
 
         let mut data = vec![T::zero(); self.len()];
@@ -51,7 +65,17 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T> {
         if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
-            return self;
+            return Tensor::from_parts(
+                self.buffer,
+                self.dims,
+                self.strides,
+                self.offset,
+                self.logical_memory_space,
+                self.preferred_compute_device,
+                self.event,
+                self.conjugated,
+                self.fw_grad,
+            );
         }
         self.contiguous(order)
     }
@@ -79,6 +103,34 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn is_col_major_contiguous(&self) -> bool {
         is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
+    }
+
+    /// Check if the tensor has row-major contiguous layout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// assert!(t.is_row_major_contiguous());
+    /// ```
+    pub fn is_row_major_contiguous(&self) -> bool {
+        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
+    }
+
+    /// Consume this tensor and return a contiguous column-major version.
+    ///
+    /// This is a convenience wrapper around `into_contiguous(MemoryOrder::ColumnMajor)`
+    /// since column-major is tenferro's canonical internal layout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let col_major = t.into_column_major();
+    /// assert!(col_major.is_col_major_contiguous());
+    /// ```
+    pub fn into_column_major(self) -> Tensor<T> {
+        self.into_contiguous(MemoryOrder::ColumnMajor)
     }
 
     /// Return a lazily-conjugated tensor (shared buffer, flag flip).

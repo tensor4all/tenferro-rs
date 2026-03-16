@@ -97,6 +97,7 @@ Burn FloatTensor<B>
   → B::float_into_data(tensor) → TensorData { bytes, shape, dtype }
   → bytes.as_slice::<f64>()
   → tenferro::Tensor::from_slice(slice, shape, MemoryOrder::RowMajor)
+  → .into_contiguous(MemoryOrder::ColumnMajor)
 ```
 
 **tenferro → Burn** (returning from forward/backward):
@@ -108,15 +109,15 @@ tenferro::Tensor<T>
   → B::float_from_data(data, device)
 ```
 
-### Zero-Copy Feasibility
+### Boundary Normalization
 
-True zero-copy is possible via `DataBuffer::from_external()` which wraps a raw pointer with a release callback. However:
+The canonical Burn bridge does **not** expose a zero-copy expert mode. Burn
+data is treated as row-major at the boundary, normalized into tenferro's
+column-major canonical tensors for computation, then materialized back to
+row-major when exporting to Burn again.
 
-- Burn's `TensorData` uses `Arc<Vec<u8>>`, so the Burn side can keep the data alive
-- tenferro can wrap Burn's data pointer via `from_external()` with an Arc clone as the release callback
-- Requires `unsafe` and careful lifetime management
-
-**Recommendation**: Start with copy-based conversion. Tensor network operations are typically O(n^3) or higher, so the O(n) copy overhead is negligible. Optimize to zero-copy only if profiling shows it matters.
+This keeps the integration contract simple and avoids ambiguous reshape/order
+behavior leaking across the bridge.
 
 ## Integration Architecture
 

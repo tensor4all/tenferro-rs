@@ -4,10 +4,7 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
 use super::Tensor;
-use crate::layout::{
-    compute_contiguous_strides, is_contiguous_in_order, validate_layout_against_len,
-};
-use crate::MemoryOrder;
+use crate::layout::{compute_contiguous_strides, validate_layout_against_len};
 
 impl<T: Scalar> Tensor<T> {
     /// Permute (reorder) the dimensions of the tensor.
@@ -147,6 +144,10 @@ impl<T: Scalar> Tensor<T> {
 
     /// Reshape the tensor to a new shape.
     ///
+    /// Reshape follows tenferro's internal column-major semantics for contiguous
+    /// tensors. Import/export helpers may accept other memory orders, but the
+    /// reshaped view itself is laid out as column-major metadata.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -168,12 +169,10 @@ impl<T: Scalar> Tensor<T> {
             ));
         }
 
-        let order = if is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor) {
-            MemoryOrder::ColumnMajor
-        } else {
-            MemoryOrder::RowMajor
-        };
-        let new_strides = Arc::from(compute_contiguous_strides(new_dims, order));
+        let new_strides = Arc::from(compute_contiguous_strides(
+            new_dims,
+            crate::MemoryOrder::ColumnMajor,
+        ));
         Ok(self.shared_view_with(Arc::from(new_dims), new_strides, self.offset))
     }
 

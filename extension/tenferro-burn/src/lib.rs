@@ -5,6 +5,11 @@
 //! tensor network contraction routines, enabling seamless integration of
 //! tensor network methods into Burn-based deep learning pipelines.
 //!
+//! Burn tensors are treated as row-major boundary values. The bridge
+//! normalizes them into tenferro's internal column-major canonical layout for
+//! computation, then materializes row-major buffers again when exporting back
+//! to Burn.
+//!
 //! # Examples
 //!
 //! ```ignore

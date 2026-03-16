@@ -5,12 +5,22 @@
 //! export back to owned `ndarray::ArrayD<T>`. An optional `frontend` feature
 //! adds a convenience conversion into `tenferro::Tensor`.
 //!
+//! The canonical bridge normalizes at the boundary:
+//!
+//! - `ndarray -> tenferro_tensor::Tensor<T>` first materializes a standard
+//!   row-major ndarray layout, then converts into tenferro's internal
+//!   column-major canonical tensor layout
+//! - `tenferro_tensor::Tensor<T> -> ndarray` always materializes a standard
+//!   row-major owned ndarray result
+//!
+//! This keeps the interop contract simple and avoids exposing a separate
+//! zero-copy expert mode with layout-dependent reshape semantics.
+//!
 //! # Examples
 //!
 //! ```ignore
 //! use ndarray::Array2;
 //! use tenferro_ndarray::{ndarray_to_tensor, tensor_to_ndarray};
-//! use tenferro_tensor::{MemoryOrder, Tensor};
 //!
 //! let array = Array2::from_shape_vec((2, 2), vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let tensor = ndarray_to_tensor(array);
@@ -18,7 +28,7 @@
 //! assert_eq!(roundtrip.shape(), &[2, 2]);
 //! ```
 
-use ndarray::{ArrayBase, ArrayD, Data, Dimension, IxDyn, ShapeBuilder};
+use ndarray::{ArrayBase, ArrayD, Data, Dimension, IxDyn};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -51,29 +61,32 @@ fn ensure_main_memory(space: LogicalMemorySpace) -> Result<()> {
     Ok(())
 }
 
-fn usize_strides(strides: &[isize]) -> Result<Vec<usize>> {
+fn row_major_strides(dims: &[usize]) -> Vec<isize> {
+    let ndim = dims.len();
+    if ndim == 0 {
+        return vec![];
+    }
+
+    let mut strides = vec![0isize; ndim];
+    strides[ndim - 1] = 1;
+    for i in (0..ndim - 1).rev() {
+        strides[i] = strides[i + 1] * dims[i + 1] as isize;
+    }
     strides
-        .iter()
-        .map(|&stride| {
-            usize::try_from(stride).map_err(|_| {
-                Error::InvalidArgument(format!(
-                    "negative ndarray/tenferro stride {stride} is not supported by the bridge"
-                ))
-            })
-        })
-        .collect()
 }
 
-fn can_zero_copy_tensor_to_ndarray<T: Scalar>(tensor: &Tensor<T>) -> bool {
-    tensor.logical_memory_space() == LogicalMemorySpace::MainMemory
-        && !tensor.is_conjugated()
-        && tensor.offset() == 0
-        && tensor.buffer().is_owned()
-        && tensor.buffer().is_unique()
-        && tensor
-            .strides()
-            .iter()
-            .all(|&stride| stride > 0 || tensor.len() <= 1)
+fn standard_row_major_owned<T, S, D>(array: ArrayBase<S, D>) -> ArrayD<T>
+where
+    T: Clone,
+    S: Data<Elem = T>,
+    D: Dimension,
+{
+    let array = array.into_dyn();
+    if array.is_standard_layout() {
+        array.into_owned()
+    } else {
+        array.as_standard_layout().to_owned()
+    }
 }
 
 fn into_owned_data<T: Scalar>(tensor: Tensor<T>, context: &str) -> Result<Vec<T>> {
@@ -84,10 +97,9 @@ fn into_owned_data<T: Scalar>(tensor: Tensor<T>, context: &str) -> Result<Vec<T>
 
 /// Fallibly converts an ndarray array into a typed tenferro tensor.
 ///
-/// This is the canonical interop entry point. The bridge preserves shape,
-/// strides, and offset. Owned ndarray inputs use best-effort zero-copy by
-/// moving CPU storage into the target tensor; borrowed or shared inputs fall
-/// back to `into_owned()`.
+/// This is the canonical interop entry point. The bridge first materializes a
+/// standard row-major ndarray layout, then normalizes it into tenferro's
+/// internal column-major tensor layout.
 ///
 /// # Examples
 ///
@@ -105,11 +117,16 @@ where
     S: Data<Elem = T>,
     D: Dimension,
 {
-    let array = array.into_dyn().into_owned();
+    let array = standard_row_major_owned(array);
     let dims = array.shape().to_vec();
-    let strides = array.strides().to_vec();
     let (data, offset) = array.into_raw_vec_and_offset();
-    Tensor::from_vec(data, &dims, &strides, offset.unwrap_or(0) as isize)
+    let tensor = Tensor::from_vec(
+        data,
+        &dims,
+        &row_major_strides(&dims),
+        offset.unwrap_or(0) as isize,
+    )?;
+    Ok(tensor.into_contiguous(MemoryOrder::ColumnMajor))
 }
 
 /// Converts an owned ndarray array into a typed tenferro tensor, panicking on
@@ -136,8 +153,9 @@ where
 
 /// Fallibly converts a typed tenferro tensor into an owned ndarray array.
 ///
-/// The bridge attempts zero-copy for unique owned CPU buffers whose layout can
-/// be expressed by ndarray. Otherwise it materializes a row-major CPU copy.
+/// The canonical bridge always materializes a standard row-major owned ndarray
+/// result. This keeps row-major downstream integrations simple while tenferro
+/// continues to use column-major canonical tensors internally.
 ///
 /// # Examples
 ///
@@ -152,17 +170,6 @@ where
 /// ```
 pub fn try_tensor_to_ndarray<T: Scalar>(tensor: Tensor<T>) -> Result<ArrayD<T>> {
     ensure_main_memory(tensor.logical_memory_space())?;
-
-    if can_zero_copy_tensor_to_ndarray(&tensor) {
-        let dims = tensor.dims().to_vec();
-        let strides = usize_strides(tensor.strides())?;
-        let data = into_owned_data(
-            tensor,
-            "expected unique owned CPU tensor buffer for zero-copy ndarray export",
-        )?;
-        return ArrayD::from_shape_vec(IxDyn(&dims).strides(IxDyn(&strides)), data)
-            .map_err(shape_error);
-    }
 
     let row_major = tensor.into_contiguous(MemoryOrder::RowMajor);
     let dims = row_major.dims().to_vec();
