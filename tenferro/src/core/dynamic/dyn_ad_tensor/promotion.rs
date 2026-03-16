@@ -140,6 +140,49 @@ pub(super) fn promote_many_to_common(operands: &[&Tensor]) -> Result<(ScalarType
     Ok((target, promoted))
 }
 
+fn cast_dynadtensor_owned(value: Tensor, target: ScalarType) -> Result<Tensor> {
+    match (value, target) {
+        (Tensor::F32(value), ScalarType::F32) => Ok(Tensor::F32(value)),
+        (Tensor::F32(value), ScalarType::F64) => Ok(Tensor::F64(cast_f32_to_f64(&value)?)),
+        (Tensor::F32(value), ScalarType::C32) => {
+            Ok(Tensor::C32(promote_f32_ad_tensor_to_c32(&value)?))
+        }
+        (Tensor::F32(value), ScalarType::C64) => Ok(Tensor::C64(cast_f32_to_c64(&value)?)),
+        (Tensor::F64(value), ScalarType::F32) => Ok(Tensor::F32(cast_f64_to_f32(&value)?)),
+        (Tensor::F64(value), ScalarType::F64) => Ok(Tensor::F64(value)),
+        (Tensor::F64(value), ScalarType::C32) => Ok(Tensor::C32(cast_f64_to_c32(&value)?)),
+        (Tensor::F64(value), ScalarType::C64) => {
+            Ok(Tensor::C64(promote_f64_ad_tensor_to_c64(&value)?))
+        }
+        (Tensor::C32(value), ScalarType::F32) => Ok(Tensor::F32(cast_c32_to_f32(&value)?)),
+        (Tensor::C32(value), ScalarType::F64) => Ok(Tensor::F64(cast_c32_to_f64(&value)?)),
+        (Tensor::C32(value), ScalarType::C32) => Ok(Tensor::C32(value)),
+        (Tensor::C32(value), ScalarType::C64) => Ok(Tensor::C64(cast_c32_to_c64(&value)?)),
+        (Tensor::C64(value), ScalarType::F32) => Ok(Tensor::F32(cast_c64_to_f32(&value)?)),
+        (Tensor::C64(value), ScalarType::F64) => Ok(Tensor::F64(cast_c64_to_f64(&value)?)),
+        (Tensor::C64(value), ScalarType::C32) => Ok(Tensor::C32(cast_c64_to_c32(&value)?)),
+        (Tensor::C64(value), ScalarType::C64) => Ok(Tensor::C64(value)),
+    }
+}
+
+pub(super) fn promote_many_to_common_owned(
+    operands: Vec<Tensor>,
+) -> Result<(ScalarType, Vec<Tensor>)> {
+    let operand_refs: Vec<&Tensor> = operands.iter().collect();
+    ensure_common_reverse_tape(&operand_refs)?;
+    let target = join_scalar_types(
+        &operand_refs
+            .iter()
+            .map(|operand| operand.scalar_type())
+            .collect::<Vec<_>>(),
+    )?;
+    let promoted = operands
+        .into_iter()
+        .map(|operand| cast_dynadtensor_owned(operand, target))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((target, promoted))
+}
+
 impl Tensor {
     /// Explicitly casts the tensor to `target`, similar to PyTorch `tensor.to(dtype)`.
     ///

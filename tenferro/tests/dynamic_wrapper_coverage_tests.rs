@@ -362,6 +362,39 @@ fn tensor_dynamic_tensor_wrappers_cover_all_variants_and_errors() {
     .unwrap();
     assert_eq!(owned_dot.scalar_type(), ScalarType::C64);
 
+    let owned_dot_f32 = Tensor::einsum_owned(
+        "i,i->",
+        vec![
+            primal!(vector_f32(&[1.0, 2.0])),
+            primal!(vector_f32(&[3.0, 4.0])),
+        ],
+    )
+    .unwrap();
+    assert_eq!(owned_dot_f32.scalar_type(), ScalarType::F32);
+
+    let owned_dot_f64 = Tensor::einsum_owned(
+        "i,i->",
+        vec![
+            primal!(vector_f64(&[1.0, 2.0])),
+            primal!(vector_f64(&[3.0, 4.0])),
+        ],
+    )
+    .unwrap();
+    assert_eq!(owned_dot_f64.scalar_type(), ScalarType::F64);
+
+    let owned_dot_c32 = Tensor::einsum_owned(
+        "i,i->",
+        vec![
+            primal!(vector_f32(&[1.0, 2.0])),
+            primal!(vector_c32(&[
+                Complex32::new(1.0, 0.5),
+                Complex32::new(-2.0, 1.0),
+            ])),
+        ],
+    )
+    .unwrap();
+    assert_eq!(owned_dot_c32.scalar_type(), ScalarType::C32);
+
     let err = match Tensor::einsum("->", &[]) {
         Ok(_) => panic!("einsum should reject an empty operand list"),
         Err(err) => err,

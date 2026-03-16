@@ -1,5 +1,6 @@
 mod binary;
 mod borrowed;
+mod canonical;
 mod into;
 mod owned;
 
