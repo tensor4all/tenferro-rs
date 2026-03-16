@@ -19,7 +19,7 @@ use super::*;
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn solve_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn solve_frule<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -27,7 +27,6 @@ pub fn solve_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     tangent_b: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {

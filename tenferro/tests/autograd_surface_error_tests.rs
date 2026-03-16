@@ -28,7 +28,7 @@ fn c64_vector(values: &[Complex64]) -> Tensor {
 fn grad_and_backward_reject_create_graph() {
     let x = Tensor::from_slice(&[1.0_f64], &[1]).unwrap();
 
-    let grad_err = match grad(
+    let grad_err = grad(
         &[&x],
         &[&x],
         None,
@@ -36,10 +36,8 @@ fn grad_and_backward_reject_create_graph() {
             create_graph: true,
             ..GradOptions::default()
         },
-    ) {
-        Ok(_) => panic!("grad(create_graph=true) should fail"),
-        Err(err) => err,
-    };
+    )
+    .unwrap_err();
     assert!(matches!(
         grad_err,
         Error::UnsupportedAdOp {
@@ -47,7 +45,7 @@ fn grad_and_backward_reject_create_graph() {
         }
     ));
 
-    let backward_err = match backward(
+    let backward_err = backward(
         &[&x],
         None,
         &[&x],
@@ -55,10 +53,8 @@ fn grad_and_backward_reject_create_graph() {
             create_graph: true,
             ..BackwardOptions::default()
         },
-    ) {
-        Ok(_) => panic!("backward(create_graph=true) should fail"),
-        Err(err) => err,
-    };
+    )
+    .unwrap_err();
     assert!(matches!(
         backward_err,
         Error::UnsupportedAdOp {
@@ -73,15 +69,13 @@ fn grad_rejects_grad_output_length_mismatch() {
     let grad_output = Tensor::from_slice(&[1.0_f64], &[1]).unwrap();
     let extra = Tensor::from_slice(&[2.0_f64], &[1]).unwrap();
 
-    let err = match grad(
+    let err = grad(
         &[&output],
         &[&output],
         Some(&[grad_output, extra]),
         GradOptions::default(),
-    ) {
-        Ok(_) => panic!("grad should reject mismatched grad_outputs"),
-        Err(err) => err,
-    };
+    )
+    .unwrap_err();
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 }
 
@@ -97,10 +91,7 @@ fn grad_rejects_outputs_from_distinct_reverse_graphs() {
     let out_x = x.exp().unwrap().sum().unwrap();
     let out_y = y.exp().unwrap().sum().unwrap();
 
-    let err = match grad(&[&out_x, &out_y], &[&x, &y], None, GradOptions::default()) {
-        Ok(_) => panic!("grad should reject outputs from different reverse graphs"),
-        Err(err) => err,
-    };
+    let err = grad(&[&out_x, &out_y], &[&x, &y], None, GradOptions::default()).unwrap_err();
     assert!(matches!(err, Error::MixedReverseTape { .. }));
 }
 

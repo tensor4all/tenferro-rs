@@ -5,7 +5,8 @@ mod scalar_type;
 mod tensor_ops;
 
 pub use dyn_ad_tensor::{
-    EigResult, EigenResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult, Tensor,
+    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    LuFactorResult, LuResult, QrResult, SlogdetResult, SolveExResult, SvdResult, Tensor,
 };
 pub use dyn_tensor::DynTensor;
 #[doc(hidden)]

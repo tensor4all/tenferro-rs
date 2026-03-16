@@ -99,7 +99,7 @@ unary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::MatrixExp,
     op = "matrix_exp",
-    bounds = (T: RealLinalgRuntimeValue),
+    bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::matrix_exp::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 

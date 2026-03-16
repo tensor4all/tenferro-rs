@@ -37,9 +37,10 @@ eager_unary!(
     /// ```ignore
     /// let out = tenferro::ad::svd(&a)?;
     /// ```
-    fn svd -> TypedSvdResult<T> => svd_ad;
+    fn svd -> TypedSvdResult<T, T::Real> => svd_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: LinalgRuntimeValue,
+        T::Real: DynTensorTyped,
     }
 );
 
@@ -135,7 +136,7 @@ eager_binary!(
     /// ```
     fn solve -> AdTensor<T> => solve_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: LinalgRuntimeValue,
     }
 );
 

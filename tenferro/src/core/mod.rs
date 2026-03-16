@@ -5,7 +5,8 @@ pub use dynamic::DynTensor;
 #[doc(hidden)]
 pub use dynamic::DynTensorTyped;
 pub use dynamic::{
-    EigResult, EigenResult, LstsqResult, LuResult, QrResult, ScalarType, SlogdetResult, SvdResult,
+    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
     Tensor,
 };
 pub(crate) use value::AdTensorSnapshot;

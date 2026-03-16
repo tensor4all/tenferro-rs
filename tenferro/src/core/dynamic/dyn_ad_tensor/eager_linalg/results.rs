@@ -123,3 +123,85 @@ pub struct LstsqResult {
     /// Residual tensor.
     pub residual: Tensor,
 }
+
+/// Dynamic AD-aware LU factorization result.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = x.lu_factor()?;
+/// let _factors = &out.factors;
+/// ```
+#[derive(Clone)]
+pub struct LuFactorResult {
+    /// Packed LU factors.
+    pub factors: Tensor,
+    /// Flattened forward row permutations.
+    pub pivots: Vec<usize>,
+}
+
+/// Dynamic AD-aware LU factorization result with status codes.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = x.lu_factor_ex()?;
+/// let _info = &out.info;
+/// ```
+#[derive(Clone)]
+pub struct LuFactorExResult {
+    /// Packed LU factors.
+    pub factors: Tensor,
+    /// Flattened forward row permutations.
+    pub pivots: Vec<usize>,
+    /// Per-batch numerical status.
+    pub info: Vec<i32>,
+}
+
+/// Dynamic AD-aware solve result with status codes.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = a.solve_ex(&b)?;
+/// let _solution = &out.solution;
+/// ```
+#[derive(Clone)]
+pub struct SolveExResult {
+    /// Solution tensor.
+    pub solution: Tensor,
+    /// Per-batch numerical status.
+    pub info: Vec<i32>,
+}
+
+/// Dynamic AD-aware inverse result with status codes.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = x.inv_ex()?;
+/// let _inverse = &out.inverse;
+/// ```
+#[derive(Clone)]
+pub struct InvExResult {
+    /// Inverse tensor.
+    pub inverse: Tensor,
+    /// Per-batch numerical status.
+    pub info: Vec<i32>,
+}
+
+/// Dynamic AD-aware Cholesky result with status codes.
+///
+/// # Examples
+///
+/// ```ignore
+/// let out = x.cholesky_ex()?;
+/// let _l = &out.l;
+/// ```
+#[derive(Clone)]
+pub struct CholeskyExResult {
+    /// Lower-triangular factor.
+    pub l: Tensor,
+    /// Per-batch numerical status.
+    pub info: Vec<i32>,
+}

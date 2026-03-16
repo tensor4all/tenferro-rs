@@ -1,39 +1,54 @@
 use super::Tensor;
 use crate::ops::ad;
 use crate::{AdMode, Error, Result, ScalarType};
-use num_complex::{Complex32, Complex64};
+use tenferro_algebra::Scalar;
 
+mod extra;
 mod results;
 
 pub use results::{
-    EigResult, EigenResult, LstsqResult, LuResult, QrResult, SlogdetResult, SvdResult,
+    CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
+    LuFactorResult, LuResult, QrResult, SlogdetResult, SolveExResult, SvdResult,
 };
 
-fn real_only_error(op: &'static str, dtype: ScalarType) -> Error {
+pub(super) fn real_only_error(op: &'static str, dtype: ScalarType) -> Error {
     Error::InvalidAdTensor {
         message: format!("{op} currently requires a real Tensor input, got {dtype:?}"),
     }
 }
 
-fn primal_complex_only_error(op: &'static str) -> Error {
+pub(super) fn primal_only_error(op: &'static str) -> Error {
+    Error::InvalidAdTensor {
+        message: format!("{op} currently supports only primal tensors"),
+    }
+}
+
+pub(super) fn primal_complex_only_error(op: &'static str) -> Error {
     Error::InvalidAdTensor {
         message: format!("{op} currently supports complex tensors only in primal mode"),
     }
 }
 
-fn same_dtype_error(op: &'static str, lhs: ScalarType, rhs: ScalarType) -> Error {
+pub(super) fn same_dtype_error(op: &'static str, lhs: ScalarType, rhs: ScalarType) -> Error {
     Error::InvalidAdTensor {
         message: format!("{op} requires matching dtypes, got lhs={lhs:?}, rhs={rhs:?}"),
     }
 }
 
 impl Tensor {
-    fn dense_primal_c32(
-        value: &crate::AdTensor<Complex32>,
+    fn dense_primal_with_mode_error<T>(
+        value: &crate::AdTensor<T>,
         op: &'static str,
-    ) -> Result<tenferro_tensor::Tensor<Complex32>> {
+        mode_error: fn(&'static str) -> Error,
+    ) -> Result<tenferro_tensor::Tensor<T>>
+    where
+        T: Scalar + crate::DynTensorTyped + crate::runtime::contracts::LinalgRuntimeValue,
+    {
+        if !value.is_dense() {
+            return Err(Error::UnsupportedStructuredLinalg { op });
+        }
         if value.mode() != AdMode::Primal {
-            return Err(primal_complex_only_error(op));
+            return Err(mode_error(op));
         }
         value
             .structured_primal()
@@ -43,19 +58,24 @@ impl Tensor {
             })
     }
 
-    fn dense_primal_c64(
-        value: &crate::AdTensor<Complex64>,
+    pub(super) fn dense_primal_only<T>(
+        value: &crate::AdTensor<T>,
         op: &'static str,
-    ) -> Result<tenferro_tensor::Tensor<Complex64>> {
-        if value.mode() != AdMode::Primal {
-            return Err(primal_complex_only_error(op));
-        }
-        value
-            .structured_primal()
-            .to_dense()
-            .map_err(|e| Error::InvalidAdTensor {
-                message: format!("{op} failed to densify structured complex input: {e}"),
-            })
+    ) -> Result<tenferro_tensor::Tensor<T>>
+    where
+        T: Scalar + crate::DynTensorTyped + crate::runtime::contracts::LinalgRuntimeValue,
+    {
+        Self::dense_primal_with_mode_error(value, op, primal_only_error)
+    }
+
+    pub(super) fn dense_primal_complex_only<T>(
+        value: &crate::AdTensor<T>,
+        op: &'static str,
+    ) -> Result<tenferro_tensor::Tensor<T>>
+    where
+        T: Scalar + crate::DynTensorTyped + crate::runtime::contracts::LinalgRuntimeValue,
+    {
+        Self::dense_primal_with_mode_error(value, op, primal_complex_only_error)
     }
 
     /// Runs eager AD SVD on a dynamic tensor.
@@ -85,21 +105,19 @@ impl Tensor {
                 })
             }
             Self::C32(value) => {
-                let dense = Self::dense_primal_c32(value, "svd")?;
-                let out = crate::ops::svd(&dense).run()?;
+                let out = ad::svd(value)?;
                 Ok(SvdResult {
-                    u: Tensor::from_tensor(out.u),
-                    s: Tensor::from_tensor(out.s),
-                    vt: Tensor::from_tensor(out.vt),
+                    u: out.u.into(),
+                    s: out.s.into(),
+                    vt: out.vt.into(),
                 })
             }
             Self::C64(value) => {
-                let dense = Self::dense_primal_c64(value, "svd")?;
-                let out = crate::ops::svd(&dense).run()?;
+                let out = ad::svd(value)?;
                 Ok(SvdResult {
-                    u: Tensor::from_tensor(out.u),
-                    s: Tensor::from_tensor(out.s),
-                    vt: Tensor::from_tensor(out.vt),
+                    u: out.u.into(),
+                    s: out.s.into(),
+                    vt: out.vt.into(),
                 })
             }
         }
@@ -130,7 +148,7 @@ impl Tensor {
                 })
             }
             Self::C32(value) => {
-                let dense = Self::dense_primal_c32(value, "qr")?;
+                let dense = Self::dense_primal_complex_only(value, "qr")?;
                 let out = crate::ops::qr(&dense).run()?;
                 Ok(QrResult {
                     q: Tensor::from_tensor(out.q),
@@ -138,7 +156,7 @@ impl Tensor {
                 })
             }
             Self::C64(value) => {
-                let dense = Self::dense_primal_c64(value, "qr")?;
+                let dense = Self::dense_primal_complex_only(value, "qr")?;
                 let out = crate::ops::qr(&dense).run()?;
                 Ok(QrResult {
                     q: Tensor::from_tensor(out.q),
@@ -174,7 +192,24 @@ impl Tensor {
                     u: out.u.into(),
                 })
             }
-            _ => Err(real_only_error("lu", self.scalar_type())),
+            Self::C32(value) => {
+                let dense = Self::dense_primal_complex_only(value, "lu")?;
+                let out = crate::ops::lu(&dense).run()?;
+                Ok(LuResult {
+                    p: out.p,
+                    l: Tensor::from_tensor(out.l),
+                    u: Tensor::from_tensor(out.u),
+                })
+            }
+            Self::C64(value) => {
+                let dense = Self::dense_primal_complex_only(value, "lu")?;
+                let out = crate::ops::lu(&dense).run()?;
+                Ok(LuResult {
+                    p: out.p,
+                    l: Tensor::from_tensor(out.l),
+                    u: Tensor::from_tensor(out.u),
+                })
+            }
         }
     }
 
@@ -202,7 +237,22 @@ impl Tensor {
                     vectors: out.vectors.into(),
                 })
             }
-            _ => Err(real_only_error("eigen", self.scalar_type())),
+            Self::C32(value) => {
+                let dense = Self::dense_primal_complex_only(value, "eigen")?;
+                let out = crate::ops::eigen(&dense).run()?;
+                Ok(EigenResult {
+                    values: Tensor::from_tensor(out.values),
+                    vectors: Tensor::from_tensor(out.vectors),
+                })
+            }
+            Self::C64(value) => {
+                let dense = Self::dense_primal_complex_only(value, "eigen")?;
+                let out = crate::ops::eigen(&dense).run()?;
+                Ok(EigenResult {
+                    values: Tensor::from_tensor(out.values),
+                    vectors: Tensor::from_tensor(out.vectors),
+                })
+            }
         }
     }
 
@@ -277,7 +327,14 @@ impl Tensor {
         match self {
             Self::F32(value) => Ok(Self::F32(ad::cholesky(value)?)),
             Self::F64(value) => Ok(Self::F64(ad::cholesky(value)?)),
-            _ => Err(real_only_error("cholesky", self.scalar_type())),
+            Self::C32(value) => {
+                let dense = Self::dense_primal_complex_only(value, "cholesky")?;
+                Ok(Self::from_tensor(crate::ops::cholesky(&dense).run()?))
+            }
+            Self::C64(value) => {
+                let dense = Self::dense_primal_complex_only(value, "cholesky")?;
+                Ok(Self::from_tensor(crate::ops::cholesky(&dense).run()?))
+            }
         }
     }
 
@@ -292,6 +349,8 @@ impl Tensor {
         match (self, rhs) {
             (Self::F32(lhs), Self::F32(rhs)) => Ok(Self::F32(ad::solve(lhs, rhs)?)),
             (Self::F64(lhs), Self::F64(rhs)) => Ok(Self::F64(ad::solve(lhs, rhs)?)),
+            (Self::C32(lhs), Self::C32(rhs)) => Ok(Self::C32(ad::solve(lhs, rhs)?)),
+            (Self::C64(lhs), Self::C64(rhs)) => Ok(Self::C64(ad::solve(lhs, rhs)?)),
             (lhs, rhs) => Err(same_dtype_error(
                 "solve",
                 lhs.scalar_type(),
@@ -332,7 +391,14 @@ impl Tensor {
         match self {
             Self::F32(value) => Ok(Self::F32(ad::inv(value)?)),
             Self::F64(value) => Ok(Self::F64(ad::inv(value)?)),
-            _ => Err(real_only_error("inv", self.scalar_type())),
+            Self::C32(value) => {
+                let dense = Self::dense_primal_complex_only(value, "inv")?;
+                Ok(Self::from_tensor(crate::ops::inv(&dense).run()?))
+            }
+            Self::C64(value) => {
+                let dense = Self::dense_primal_complex_only(value, "inv")?;
+                Ok(Self::from_tensor(crate::ops::inv(&dense).run()?))
+            }
         }
     }
 
@@ -405,7 +471,14 @@ impl Tensor {
         match self {
             Self::F32(value) => Ok(Self::F32(ad::matrix_exp(value)?)),
             Self::F64(value) => Ok(Self::F64(ad::matrix_exp(value)?)),
-            _ => Err(real_only_error("matrix_exp", self.scalar_type())),
+            Self::C32(value) => {
+                let dense = Self::dense_primal_complex_only(value, "matrix_exp")?;
+                Ok(Self::from_tensor(crate::ops::matrix_exp(&dense).run()?))
+            }
+            Self::C64(value) => {
+                let dense = Self::dense_primal_complex_only(value, "matrix_exp")?;
+                Ok(Self::from_tensor(crate::ops::matrix_exp(&dense).run()?))
+            }
         }
     }
 
