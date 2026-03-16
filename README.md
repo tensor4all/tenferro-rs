@@ -136,6 +136,28 @@ batch convention, compile-time generics (`Tensor<T>`) instead of runtime dtype
 dispatch, and algebra-parameterized primitive families enabling custom
 semirings (e.g., tropical).
 
+### Memory Layout Policy
+
+tenferro uses **column-major** layout as its internal canonical order.
+
+This choice is deliberate:
+
+- it aligns naturally with **Julia** and **Fortran**
+- it matches the default storage convention of **Eigen3**
+- it fits the surrounding **BLAS/LAPACK** ecosystem and the linalg backends
+  tenferro targets
+
+Rust integrations such as `ndarray`, Burn, or downstream row-major
+applications are expected to normalize at the boundary:
+
+- import row-major data explicitly
+- convert into tenferro's column-major canonical tensors for computation
+- materialize row-major buffers again when exporting back out
+
+That keeps the internal semantics simple and avoids ambiguous reshape behavior
+for unit-dimension layouts where row-major and column-major strides can look
+identical.
+
 For a detailed feature-by-feature mapping, see
 [`docs/design/reference/libtorch.md`](docs/design/reference/libtorch.md).
 

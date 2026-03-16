@@ -2,25 +2,22 @@ mod organization;
 
 use burn::backend::{Autodiff, NdArray};
 use burn::tensor::{Tensor, TensorPrimitive};
-use tenferro_tensor::{MemoryOrder, Tensor as TfTensor};
+use tenferro_tensor::Tensor as TfTensor;
 
 use crate::{burn_to_tenferro, einsum, tenferro_to_burn};
 
 #[test]
-fn burn_to_tenferro_preserves_shape_and_row_major_values() {
+fn burn_to_tenferro_normalizes_to_column_major_internal_layout() {
     let device = Default::default();
     let burn = Tensor::<NdArray<f64>, 2>::from_data([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], &device);
 
     let tenferro = burn_to_tenferro::<NdArray<f64>>(burn.into_primitive().tensor());
 
     assert_eq!(tenferro.dims(), &[2, 3]);
-    assert_eq!(tenferro.strides(), &[3, 1]);
+    assert_eq!(tenferro.strides(), &[1, 2]);
     assert_eq!(
-        tenferro
-            .into_contiguous(MemoryOrder::RowMajor)
-            .try_into_data_vec()
-            .unwrap(),
-        vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        tenferro.try_into_data_vec().unwrap(),
+        vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
     );
 }
 

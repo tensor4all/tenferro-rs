@@ -12,6 +12,10 @@ enum TriangularHalf {
 impl<T: Scalar> Tensor<T> {
     /// Return a contiguous copy of this tensor in the given memory order.
     ///
+    /// `order` controls the materialized output buffer only. It does not change
+    /// the internal column-major semantics used by view operations such as
+    /// [`reshape`](Tensor::reshape).
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -22,7 +26,17 @@ impl<T: Scalar> Tensor<T> {
     pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T> {
         self.wait();
         if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
-            return self.clone();
+            return Tensor::from_parts(
+                self.buffer.clone(),
+                self.dims.clone(),
+                self.strides.clone(),
+                self.offset,
+                self.logical_memory_space,
+                self.preferred_compute_device,
+                self.event.clone(),
+                self.conjugated,
+                self.fw_grad.clone(),
+            );
         }
 
         let mut data = vec![T::zero(); self.len()];
@@ -51,7 +65,17 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T> {
         if is_contiguous_in_order(&self.dims, &self.strides, order) && self.offset == 0 {
-            return self;
+            return Tensor::from_parts(
+                self.buffer,
+                self.dims,
+                self.strides,
+                self.offset,
+                self.logical_memory_space,
+                self.preferred_compute_device,
+                self.event,
+                self.conjugated,
+                self.fw_grad,
+            );
         }
         self.contiguous(order)
     }

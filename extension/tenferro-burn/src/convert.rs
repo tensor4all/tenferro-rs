@@ -29,6 +29,10 @@ fn row_major_strides(dims: &[usize]) -> Vec<isize> {
 /// Fallibly convert a Burn backend tensor primitive into a tenferro
 /// `Tensor<f64>`.
 ///
+/// Burn tensors are treated as row-major boundary values. The canonical bridge
+/// normalizes them into tenferro's internal column-major tensor layout before
+/// returning.
+///
 /// # Current Limitations
 ///
 /// This function currently supports only Burn backends whose float element
@@ -54,9 +58,11 @@ pub fn try_burn_to_tenferro<B: Backend<FloatElem = f64>>(
         Error::InvalidArgument("burn_to_tenferro only supports f64 float tensors".into())
     })?;
 
-    TfTensor::from_vec(values, &dims, &row_major_strides(&dims), 0).map_err(|err| {
-        Error::InvalidArgument(format!("Burn TensorData must be dense row-major: {err}"))
-    })
+    let tensor =
+        TfTensor::from_vec(values, &dims, &row_major_strides(&dims), 0).map_err(|err| {
+            Error::InvalidArgument(format!("Burn TensorData must be dense row-major: {err}"))
+        })?;
+    Ok(tensor.into_contiguous(MemoryOrder::ColumnMajor))
 }
 
 /// Convert a Burn backend tensor primitive into a tenferro `Tensor<f64>`,
@@ -82,6 +88,7 @@ pub fn burn_to_tenferro<B: Backend<FloatElem = f64>>(tensor: FloatTensor<B>) -> 
 /// The `device` parameter specifies which Burn device the resulting tensor
 /// should be placed on. For the `NdArray` backend this is typically
 /// `NdArrayDevice::Cpu`, obtainable via `Default::default()`.
+/// The bridge always materializes a row-major owned buffer at this boundary.
 ///
 /// # Current Limitations
 ///

@@ -558,6 +558,28 @@ fn reshape_non_contiguous_fails() {
     );
 }
 
+#[test]
+fn reshape_row_major_with_unit_dims_uses_column_major_internal_layout() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[1, 2, 2], ROW).unwrap();
+    let r = t.reshape(&[4, 1]).unwrap();
+    assert_eq!(r.dims(), &[4, 1]);
+    assert_eq!(r.strides(), &[1, 4]);
+
+    let dense = r.contiguous(COL);
+    assert_eq!(dense.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn reshape_row_major_matrix_to_tensor_with_unit_dims_uses_column_major_internal_layout() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[4, 1], ROW).unwrap();
+    let r = t.reshape(&[2, 2, 1]).unwrap();
+    assert_eq!(r.dims(), &[2, 2, 1]);
+    assert_eq!(r.strides(), &[1, 2, 4]);
+
+    let dense = r.contiguous(COL);
+    assert_eq!(dense.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
+
 // ============================================================================
 // Select
 // ============================================================================

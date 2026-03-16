@@ -1,9 +1,31 @@
 //! Tests for chainrules-core: Differentiable impls, NodeId, SavePolicy,
 //! AutodiffError construction and display, ReverseRule default HVP.
 
+use std::hint::black_box;
+
 use chainrules_core::{
     AdResult, AutodiffError, Differentiable, ForwardRule, NodeId, ReverseRule, SavePolicy,
 };
+
+#[inline(never)]
+fn call_f32_zero_tangent(x: &f32) -> f32 {
+    <f32 as Differentiable>::zero_tangent(x)
+}
+
+#[inline(never)]
+fn call_f32_accumulate_tangent(a: f32, b: &f32) -> f32 {
+    <f32 as Differentiable>::accumulate_tangent(a, b)
+}
+
+#[inline(never)]
+fn call_f32_num_elements(x: &f32) -> usize {
+    <f32 as Differentiable>::num_elements(x)
+}
+
+#[inline(never)]
+fn call_f32_seed_cotangent(x: &f32) -> f32 {
+    <f32 as Differentiable>::seed_cotangent(x)
+}
 
 // ============================================================================
 // Differentiable for f64
@@ -45,22 +67,27 @@ fn f64_seed_cotangent() {
 
 #[test]
 fn f32_zero_tangent() {
-    assert_eq!(42.0_f32.zero_tangent(), 0.0_f32);
+    let x = black_box(42.0_f32);
+    assert_eq!(call_f32_zero_tangent(&x), 0.0_f32);
 }
 
 #[test]
 fn f32_accumulate_tangent() {
-    assert_eq!(f32::accumulate_tangent(1.5, &2.5), 4.0);
+    let lhs = black_box(1.5_f32);
+    let rhs = black_box(2.5_f32);
+    assert_eq!(call_f32_accumulate_tangent(lhs, &rhs), 4.0);
 }
 
 #[test]
 fn f32_num_elements() {
-    assert_eq!(42.0_f32.num_elements(), 1);
+    let x = black_box(42.0_f32);
+    assert_eq!(call_f32_num_elements(&x), 1);
 }
 
 #[test]
 fn f32_seed_cotangent() {
-    assert_eq!(42.0_f32.seed_cotangent(), 1.0_f32);
+    let x = black_box(42.0_f32);
+    assert_eq!(call_f32_seed_cotangent(&x), 1.0_f32);
 }
 
 // ============================================================================
