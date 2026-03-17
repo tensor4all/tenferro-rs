@@ -189,6 +189,8 @@ fn primal_linalg_builders_cover_all_ops() {
         .run()
         .unwrap();
     assert_eq!(out_lu_solve.dims(), &[2]);
+    // Error path: run() without .pivots() returns an error.
+    assert!(lu_solve(&out_lu_factor.factors, &b).run().is_err());
     let out_exp = matrix_exp(&a).run().unwrap();
     assert_eq!(out_exp.dims(), &[2, 2]);
     let out_power = matrix_power(&a).exponent(3).run().unwrap();
