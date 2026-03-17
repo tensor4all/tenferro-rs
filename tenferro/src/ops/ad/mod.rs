@@ -19,21 +19,29 @@
 //! assert_eq!(out.q.dims(), &[2, 2]);
 //! ```
 
+#[cfg(test)]
 use std::collections::HashMap;
 
-use tenferro_algebra::{Scalar, Standard};
+use tenferro_algebra::Scalar;
+#[cfg(test)]
+use tenferro_algebra::Standard;
+#[cfg(test)]
 pub(crate) use tenferro_einsum as tf_einsum;
+#[cfg(test)]
 use tenferro_linalg::SolveGrad;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
+#[cfg(test)]
 use crate::core::NodeId;
 use crate::structured::StructuredTensor;
+#[cfg(test)]
 use crate::tape;
 use crate::{AdTensor, Error, Result};
 
 use super::{einsum_ad, sum_ad, EinsumRuntimeValue, ScalarRuntimeValue};
 
 mod layout;
+#[cfg(test)]
 mod pullback;
 mod scalar_eager;
 
@@ -42,6 +50,7 @@ pub use super::linalg::ad::eager::{
     solve_triangular, svd,
 };
 pub(crate) use layout::normalize_cotangent_payload;
+#[cfg(test)]
 pub use pullback::{
     einsum_frule, einsum_hvp, einsum_rrule, pullback, pullback_wrt, solve_triangular_rrule,
 };

@@ -10,4 +10,6 @@ pub use dynamic::{
     Tensor,
 };
 pub(crate) use value::AdTensorSnapshot;
-pub use value::{AdMode, AdTensor, AdValue, NodeId};
+#[cfg(test)]
+pub use value::AdValue;
+pub use value::{AdMode, AdTensor, NodeId};

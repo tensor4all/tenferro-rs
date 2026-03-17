@@ -4,9 +4,8 @@ use chainrules_core::Differentiable as _;
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
 use tenferro_linalg::{
-    CholeskyExResult, EigResult, EigenResult, InvExResult, LinalgScalar, LstsqResult,
-    LuFactorExResult, LuFactorResult, LuPivot, LuResult, NormKind, QrResult, SlogdetResult,
-    SolveExResult, SvdOptions, SvdResult,
+    CholeskyExResult, EigenResult, InvExResult, LinalgScalar, LuFactorExResult, LuFactorResult,
+    LuPivot, LuResult, NormKind, QrResult, SolveExResult, SvdOptions,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 

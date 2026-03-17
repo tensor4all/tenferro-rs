@@ -22,6 +22,7 @@ where
     /// ```ignore
     /// let _builder = builder.pivot(pivot);
     /// ```
+    #[allow(dead_code)]
     pub fn pivot(mut self, pivot: LuPivot) -> Self {
         self.pivot = pivot;
         self

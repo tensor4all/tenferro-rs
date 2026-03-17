@@ -173,6 +173,18 @@ where
     Ok(())
 }
 
+/// Unflatten a linear index into a pre-allocated buffer (column-major).
+pub(super) fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
+    debug_assert!(
+        flat < dims.iter().product::<usize>(),
+        "flat index {flat} out of range for dims {dims:?}"
+    );
+    for d in 0..dims.len() {
+        out[d] = flat % dims[d];
+        flat /= dims[d];
+    }
+}
+
 pub(crate) fn is_supported_scalar_type<T: Scalar + 'static>() -> bool {
     let tid = TypeId::of::<T>();
     matches_any_type_id!(tid; f32, f64, Complex32, Complex64)

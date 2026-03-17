@@ -1,62 +1,5 @@
-use super::common::{binary_linalg_builder, dispatch_linalg_runtime, unary_linalg_builder};
+use super::common::{dispatch_linalg_runtime, unary_linalg_builder};
 use super::*;
-
-/// Builder for SVD.
-/// # Examples
-///
-/// ```ignore
-/// let _builder = svd(/* ... */);
-/// ```
-pub struct SvdBuilder<'a, T: LinalgScalar> {
-    tensor: &'a Tensor<T>,
-    options: Option<&'a SvdOptions>,
-}
-
-impl<'a, T> SvdBuilder<'a, T>
-where
-    T: LinalgRuntimeValue,
-{
-    /// Sets optional SVD options.
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let _builder = builder.options(&options);
-    /// ```
-    pub fn options(mut self, options: &'a SvdOptions) -> Self {
-        self.options = Some(options);
-        self
-    }
-
-    /// Executes SVD.
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let _out = builder.run();
-    /// ```
-    pub fn run(self) -> Result<SvdResult<T, T::Real>> {
-        dispatch_linalg_runtime!(
-            T,
-            tenferro_linalg::backend::LinalgCapabilityOp::ThinSvd,
-            "svd",
-            |ctx| {
-                tenferro_linalg::svd::<T, _>(ctx, self.tensor, self.options).map_err(Error::from)
-            }
-        )
-    }
-}
-
-/// Creates an SVD builder.
-/// # Examples
-///
-/// ```ignore
-/// let _ = svd(/* ... */);
-/// ```
-pub fn svd<'a, T: LinalgScalar>(tensor: &'a Tensor<T>) -> SvdBuilder<'a, T> {
-    SvdBuilder {
-        tensor,
-        options: None,
-    }
-}
 
 unary_linalg_builder!(
     QrBuilder,
@@ -89,6 +32,7 @@ where
     /// ```ignore
     /// let _builder = builder.pivot(pivot);
     /// ```
+    #[allow(dead_code)]
     pub fn pivot(mut self, pivot: LuPivot) -> Self {
         self.pivot = pivot;
         self
@@ -153,16 +97,6 @@ unary_linalg_builder!(
     op = "eigen",
     bounds = (T: LinalgRuntimeValue),
     call = |ctx, builder| tenferro_linalg::eigen::<T, _>(ctx, builder.tensor).map_err(Error::from)
-);
-
-binary_linalg_builder!(
-    LstsqBuilder,
-    lstsq,
-    returns = LstsqResult<T>,
-    capability = tenferro_linalg::backend::LinalgCapabilityOp::Lstsq,
-    op = "lstsq",
-    bounds = (T: LinalgRuntimeValue),
-    call = |ctx, builder| tenferro_linalg::lstsq::<T, _>(ctx, builder.a, builder.b).map_err(Error::from)
 );
 
 unary_linalg_builder!(

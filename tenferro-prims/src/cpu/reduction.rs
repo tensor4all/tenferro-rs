@@ -2,19 +2,8 @@ use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::Result;
 
+use crate::cpu::common::unflatten_index_into;
 use crate::for_each_index;
-
-/// Unflatten a linear index into a pre-allocated buffer (column-major).
-fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
-    debug_assert!(
-        flat < dims.iter().product::<usize>(),
-        "flat index {flat} out of range for dims {dims:?}"
-    );
-    for d in 0..dims.len() {
-        out[d] = flat % dims[d];
-        flat /= dims[d];
-    }
-}
 
 /// Scale all elements of the output by `beta`, or zero them if `beta == 0`.
 pub(super) fn scale_output<T: Scalar>(output: &mut StridedViewMut<T>, beta: T) {

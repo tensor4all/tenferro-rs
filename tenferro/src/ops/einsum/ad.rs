@@ -207,6 +207,7 @@ where
     /// ```text
     /// let _builder = builder.size_dict(&size_dict);
     /// ```
+    #[allow(dead_code)]
     pub fn size_dict(mut self, size_dict: &'a HashMap<u32, usize>) -> Self {
         self.size_dict = Some(size_dict);
         self

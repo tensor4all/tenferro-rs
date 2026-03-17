@@ -270,6 +270,7 @@ impl DynTensor {
         self.as_c64().map(StructuredTensor::payload)
     }
 
+    #[cfg(test)]
     pub(crate) fn typed_ref<T>(&self) -> Option<&StructuredTensor<T>>
     where
         T: DynTensorTyped,

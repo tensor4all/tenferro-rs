@@ -17,9 +17,7 @@ fn ad_builders_are_split_into_focused_modules() {
 
     for relative in [
         "src/ops/einsum/mod.rs",
-        "src/ops/einsum/primal.rs",
         "src/ops/einsum/ad.rs",
-        "src/ops/einsum/chainrules.rs",
         "src/ops/reduction/mod.rs",
         "src/ops/reduction/ad.rs",
         "src/ops/scalar/mod.rs",
@@ -119,9 +117,7 @@ fn split_ad_test_modules_stay_under_size_guideline() {
 #[test]
 fn split_ad_builder_modules_stay_under_size_guideline() {
     for relative in [
-        "src/ops/einsum/primal.rs",
         "src/ops/einsum/ad.rs",
-        "src/ops/einsum/chainrules.rs",
         "src/ops/reduction/ad.rs",
         "src/ops/scalar/primal.rs",
         "src/ops/scalar/ad/common.rs",
