@@ -147,6 +147,12 @@ impl<T> DataBuffer<T> {
         match &*self.inner {
             BufferInner::Owned(v) => Some(v.as_slice()),
             BufferInner::External { ptr, len, .. } => {
+                debug_assert!(!ptr.is_null(), "external buffer ptr is null");
+                debug_assert_eq!(
+                    *ptr as usize % std::mem::align_of::<T>(),
+                    0,
+                    "external buffer ptr is not properly aligned"
+                );
                 Some(unsafe { std::slice::from_raw_parts(*ptr, *len) })
             }
             BufferInner::Gpu { .. } => None,
