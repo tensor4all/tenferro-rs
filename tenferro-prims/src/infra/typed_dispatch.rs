@@ -1,11 +1,3 @@
-macro_rules! matches_any_type_id {
-    ($tid:expr; $($ty:ty),+ $(,)?) => {{
-        false $(|| $tid == std::any::TypeId::of::<$ty>())+
-    }};
-}
-
-pub(crate) use matches_any_type_id;
-
 macro_rules! dispatch_type_id {
     ($tid:expr, $concrete:ident, [$($ty:ty),+ $(,)?], $body:block) => {{
         $(

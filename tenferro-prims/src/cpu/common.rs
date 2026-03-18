@@ -1,4 +1,3 @@
-use std::any::TypeId;
 use std::ops::{Add, Div, Mul};
 
 use num_complex::{Complex32, Complex64, ComplexFloat};
@@ -8,7 +7,7 @@ use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
-use crate::infra::typed_dispatch::matches_any_type_id;
+use crate::infra::typed_dispatch::{dispatch_real_scalar_type, dispatch_standard_scalar_type};
 use crate::{for_each_index, validate_rank, validate_shape_count, validate_shape_eq};
 
 pub(crate) trait CpuScalarValue:
@@ -186,11 +185,11 @@ pub(super) fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [u
 }
 
 pub(crate) fn is_supported_scalar_type<T: Scalar + 'static>() -> bool {
-    let tid = TypeId::of::<T>();
-    matches_any_type_id!(tid; f32, f64, Complex32, Complex64)
+    dispatch_standard_scalar_type!(T, _Concrete, { return true });
+    false
 }
 
 pub(crate) fn is_supported_ordered_real_type<T: Scalar + 'static>() -> bool {
-    let tid = TypeId::of::<T>();
-    matches_any_type_id!(tid; f32, f64)
+    dispatch_real_scalar_type!(T, _Concrete, { return true });
+    false
 }
