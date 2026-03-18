@@ -43,6 +43,11 @@ log_quiet_ok() {
   fi
 }
 
+managed_asset_requires_execute_bit() {
+  local asset_path="$1"
+  [[ "$asset_path" == *.sh ]]
+}
+
 json_get() {
   python3 - "$1" "$2" <<'PY'
 import json
@@ -235,6 +240,10 @@ while IFS=$'\t' read -r _asset_id asset_path expected_hash; do
   actual_hash="$(sha256_file "$asset_path")"
   if [[ "$actual_hash" != "$expected_hash" ]]; then
     log "managed-file-modified: $asset_path"
+    MODIFIED=1
+  fi
+  if managed_asset_requires_execute_bit "$asset_path" && [[ ! -x "$asset_path" ]]; then
+    log "managed-file-not-executable: $asset_path"
     MODIFIED=1
   fi
 done < <(emit_lock_assets "$LOCK_PATH")

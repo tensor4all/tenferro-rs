@@ -10,7 +10,7 @@
     },
     "check-agent-assets-script": {
       "path": "scripts/check-agent-assets.sh",
-      "sha256": "da0d4eb54a4b751518b3dae32bf6ba8af454707fcf149467cb5c46dc15d3d66a"
+      "sha256": "27cd71797e833ba1faaf03445a11ee87a6ee931dea207bd298c5e03c20cebacf"
     },
     "check-docs-site-script": {
       "path": "scripts/check-docs-site.py",
@@ -38,7 +38,7 @@
     },
     "docs-workflow": {
       "path": ".github/workflows/docs.yml",
-      "sha256": "50d5c944e9a9f4a4ff186e7aa2c7983ebef090764c30b215f3325641a70cd653"
+      "sha256": "81e62da7fe381cd26144256e1f5a095d473c83173f875fc3c909f5a6e93a47f8"
     },
     "manifest": {
       "path": "ai/manifest.json",
@@ -66,11 +66,11 @@
     },
     "sync-agent-assets-script": {
       "path": "scripts/sync-agent-assets.sh",
-      "sha256": "be53e83a9ba57bd99f9d2fdde48d9c3262ee80e93b1ee802b34231329080e269"
+      "sha256": "a54d7dcf5f66e54310721c038df84a873814f4ced645c3ea46c10caa9e3368d2"
     }
   },
-  "bundle_revision": "f9a2b836869c0bee7f74e29602e29724820af9c1",
+  "bundle_revision": "a5f235fe22b2aac6e6fbffea73fadcdb2788abff",
   "source_ref": "main",
   "source_repo": "tensor4all/template-rs",
-  "synced_at": "2026-03-18T22:05:42Z"
+  "synced_at": "2026-03-18T23:27:14Z"
 }

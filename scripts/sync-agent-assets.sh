@@ -33,6 +33,14 @@ log() {
   printf '%s\n' "$*"
 }
 
+ensure_expected_mode() {
+  local asset_path="$1"
+
+  if [[ "$asset_path" == *.sh ]]; then
+    chmod a+x "$asset_path"
+  fi
+}
+
 json_get() {
   python3 - "$1" "$2" <<'PY'
 import json
@@ -262,6 +270,7 @@ while IFS=$'\t' read -r asset_id asset_source asset_target; do
     fetch_remote_file "$asset_source" >"$tmp_asset"
   fi
   mv "$tmp_asset" "$asset_target"
+  ensure_expected_mode "$asset_target"
   asset_hash="$(sha256_file "$asset_target")"
   printf '%s\t%s\t%s\n' "$asset_id" "$asset_target" "$asset_hash" >>"$LOCK_RECORDS"
 done < <(emit_manifest_assets "$UPSTREAM_MANIFEST_TMP")
