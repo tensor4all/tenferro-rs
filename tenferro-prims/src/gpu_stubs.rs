@@ -89,9 +89,23 @@ impl Drop for CudaBackend {
     }
 }
 
+/// # Safety
+///
+/// `CudaBackend` can be safely sent across threads because:
+/// - The `_handle` is an opaque pointer to a cuTENSOR handle
+/// - The `_lib` (`libloading::Library`) is thread-safe after loading
+/// - The handle is read-only after construction
+/// - Drop clears the handle before the library is unloaded, preventing use-after-free
 #[cfg(not(feature = "cuda"))]
 unsafe impl Send for CudaBackend {}
 
+/// # Safety
+///
+/// `CudaBackend` can be safely shared across threads because:
+/// - The cuTENSOR handle is designed for concurrent use from multiple threads
+/// - The library handle (`_lib`) is read-only after construction
+/// - Symbol lookup via `dlsym` is thread-safe on POSIX systems
+/// - Drop uses `&mut self`, ensuring exclusive access during cleanup
 #[cfg(not(feature = "cuda"))]
 unsafe impl Sync for CudaBackend {}
 
@@ -276,8 +290,22 @@ impl Drop for RocmBackend {
     }
 }
 
+/// # Safety
+///
+/// `RocmBackend` can be safely sent across threads because:
+/// - The `_handle` is an opaque pointer to a hipTENSOR handle
+/// - The `_lib` (`libloading::Library`) is thread-safe after loading
+/// - The handle is read-only after construction
+/// - Drop clears the handle before the library is unloaded, preventing use-after-free
 unsafe impl Send for RocmBackend {}
 
+/// # Safety
+///
+/// `RocmBackend` can be safely shared across threads because:
+/// - The hipTENSOR handle is designed for concurrent use from multiple threads
+/// - The library handle (`_lib`) is read-only after construction
+/// - Symbol lookup via `dlsym` is thread-safe on POSIX systems
+/// - Drop uses `&mut self`, ensuring exclusive access during cleanup
 unsafe impl Sync for RocmBackend {}
 
 impl RocmBackend {
