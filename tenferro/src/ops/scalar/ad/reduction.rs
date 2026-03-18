@@ -38,6 +38,9 @@ define_unary_ad_builder!(StdAdBuilder, std_ad, "std", real, |builder| {
         builder.tensor,
         |input| analytic_full_reduction_primal("std_ad_primal", AnalyticReductionOp::Std, input),
         |input, primal, tangent| {
+            if scalar_from_rank0_tensor(primal, "std_ad")? == T::zero() {
+                return broadcast_scalar_like(T::zero(), primal);
+            }
             let var_tangent = variance_reduction_tangent("std_ad_var_tangent", input, tangent)?;
             let two = two_tensor_like(primal)?;
             let denom = scalar_binary_primal("std_ad_denom", ScalarBinaryOp::Mul, primal, &two)?;
@@ -47,6 +50,9 @@ define_unary_ad_builder!(StdAdBuilder, std_ad, "std", real, |builder| {
             let centered = centered_input_tensor("std_ad_centered", input)?;
             let cotangent_scalar = scalar_from_rank0_tensor(cotangent, "std_ad")?;
             let primal_scalar = scalar_from_rank0_tensor(primal, "std_ad")?;
+            if primal_scalar == T::zero() {
+                return broadcast_scalar_like(T::zero(), input);
+            }
             let coeff = cotangent_scalar / (scalar_from_usize::<T>(input.len())? * primal_scalar);
             let coeff_tensor = broadcast_scalar_like(coeff, input)?;
             scalar_binary_primal(

@@ -96,3 +96,23 @@ fn split_einsum_modules_stay_under_size_guideline() {
         );
     }
 }
+
+#[test]
+fn dispatch_cleanup_guards_against_unwraps_and_usize_flop_math() {
+    let contents = fs::read_to_string(repo_path("src/execution/dispatch.rs")).unwrap();
+
+    assert!(
+        !contents.contains(
+            "try_fuse_group_in_target_order(&c_dims[..n_lo], &c_strides[..n_lo]).unwrap()"
+        ),
+        "dispatch direct-write path should not unwrap fused-layout probes"
+    );
+    assert!(
+        !contents.contains("let flops = 2 * batch_total * plan.m * plan.n * plan.k;"),
+        "dispatch profiling should not compute FLOPS in usize arithmetic"
+    );
+    assert!(
+        contents.contains("checked_mul") || contents.contains("saturating_mul"),
+        "dispatch profiling should use checked or saturating multiply for GEMM FLOPS"
+    );
+}

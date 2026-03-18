@@ -7,6 +7,7 @@ mod completion_event;
 #[cfg(feature = "cuda")]
 mod cuda;
 mod organization;
+mod views;
 
 #[test]
 fn tensor_debug_is_summary_style() {

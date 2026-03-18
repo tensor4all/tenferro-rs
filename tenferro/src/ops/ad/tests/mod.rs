@@ -4,6 +4,7 @@ mod einsum_one_stage_complex;
 mod einsum_one_stage_real;
 mod einsum_two_stage;
 mod linalg_finite_difference;
+mod reduction_edge_cases;
 mod scalar_generic;
 mod structured_pullbacks;
 mod support;

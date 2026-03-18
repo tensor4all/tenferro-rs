@@ -125,7 +125,15 @@ impl<T: Scalar> Tensor<T> {
             used[i] = true;
             used[j] = true;
             diag_dims.push(self.dims[i]);
-            diag_strides.push(self.strides[i] + self.strides[j]);
+            let stride = self.strides[i]
+                .checked_add(self.strides[j])
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "diagonal stride overflow for axes ({i}, {j}) with strides {} and {}",
+                        self.strides[i], self.strides[j]
+                    ))
+                })?;
+            diag_strides.push(stride);
         }
 
         let mut new_dims = Vec::new();
