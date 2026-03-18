@@ -7,6 +7,57 @@ use super::*;
 use crate::SemiringBinaryOp;
 
 #[cfg(not(feature = "cuda"))]
+fn assert_send<T: Send>() {}
+
+#[cfg(not(feature = "cuda"))]
+fn assert_sync<T: Sync>() {}
+
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn cuda_backend_is_send() {
+    assert_send::<CudaBackend>();
+}
+
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn rocm_backend_is_send() {
+    assert_send::<RocmBackend>();
+}
+
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn cuda_backend_drop_clears_handle() {
+    use std::mem;
+
+    let backend = CudaBackend {
+        _handle: 0x1234 as *mut c_void,
+        _lib: unsafe { libloading::Library::new("libm.so.6").unwrap() },
+    };
+
+    let handle_ptr = &backend._handle as *const *mut c_void as usize;
+    let handle_before = unsafe { *(handle_ptr as *const *mut c_void) };
+    assert!(!handle_before.is_null());
+
+    mem::drop(backend);
+}
+
+#[test]
+fn rocm_backend_drop_clears_handle() {
+    use std::mem;
+
+    let backend = RocmBackend {
+        _handle: 0x1234 as *mut c_void,
+        _lib: unsafe { libloading::Library::new("libm.so.6").unwrap() },
+    };
+
+    let handle_ptr = &backend._handle as *const *mut c_void as usize;
+    let handle_before = unsafe { *(handle_ptr as *const *mut c_void) };
+    assert!(!handle_before.is_null());
+
+    mem::drop(backend);
+}
+
+#[cfg(not(feature = "cuda"))]
 #[test]
 fn cuda_stub_reports_errors_and_resolves_conj() {
     let mut ctx = CudaContext::default();
