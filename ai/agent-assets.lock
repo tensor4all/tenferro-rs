@@ -22,7 +22,7 @@
     },
     "common-agent-rules": {
       "path": "ai/vendor/template-rs/common-agent-rules.md",
-      "sha256": "4437f421624645329d8584afc06d98ce850cdccc877a78342db653863247f7a4"
+      "sha256": "3ee4d2f5ee04374204ce6aca956b6d59501fc27aa80dd7aa7b1f80bfb58b2a43"
     },
     "configure-repo-settings-script": {
       "path": "scripts/configure-repo-settings.sh",
@@ -30,11 +30,11 @@
     },
     "create-pr-script": {
       "path": "scripts/create-pr.sh",
-      "sha256": "4cea89ab85a44f541c4a55d2cf9de011b05be79a23bc1ee5b6e7d7778be147ce"
+      "sha256": "5f172c2ed764866773f093c795df2d3799b2d3db1a2d23f4253969340973397c"
     },
     "createpr-command": {
       "path": ".claude/commands/createpr.md",
-      "sha256": "fcd08e9b2c05318be80c85309165972f49c6d2a7df9e7e3e8a96884d29fa7108"
+      "sha256": "62bc454c8c6fce3b5fa8f6ff1250adb79c022204c08c44b73f0be7818d28091c"
     },
     "docs-workflow": {
       "path": ".github/workflows/docs.yml",
@@ -50,15 +50,15 @@
     },
     "numerical-rust-rules": {
       "path": "ai/vendor/template-rs/numerical-rust-rules.md",
-      "sha256": "a11fbe4b2d42aa0da7ea1bacb643d2d25a953fe4b7f8b0d81c8689de9227e56e"
+      "sha256": "2e7b14bc37ee0215b40b75c1cdaf565e0ef3843e9f3fa1b1021e9b0d16947908"
     },
     "pr-workflow-rules": {
       "path": "ai/vendor/template-rs/pr-workflow-rules.md",
-      "sha256": "fcce0a20b7b6234420574bc71e251001958e74626adda97b6c5ea183c1c4d20c"
+      "sha256": "c5b3cc0003cf17b337319108c6900b7d7f22f468de83dd90e93f3b239560e0f9"
     },
     "repo-settings": {
       "path": "ai/repo-settings.json",
-      "sha256": "814a366f7d87442cd6e2cfa768d31fe7d2bb1ba5a2bdb74809f39c9e86bc5638"
+      "sha256": "29c4faf5a3d7c6753c8d8abe619a5482334aef3539a1875d5dd1bdbca9e92d7d"
     },
     "sync-agent-assets-command": {
       "path": ".claude/commands/sync-agent-assets.md",
@@ -69,8 +69,8 @@
       "sha256": "be53e83a9ba57bd99f9d2fdde48d9c3262ee80e93b1ee802b34231329080e269"
     }
   },
-  "bundle_revision": "b8e9542e7123cb845b887de604269eaa228eaf41",
+  "bundle_revision": "f9a2b836869c0bee7f74e29602e29724820af9c1",
   "source_ref": "main",
   "source_repo": "tensor4all/template-rs",
-  "synced_at": "2026-03-08T11:20:20Z"
+  "synced_at": "2026-03-18T22:05:42Z"
 }

@@ -50,7 +50,9 @@ ensure_body_file() {
     git log --format='- %s' "${BASE_BRANCH}..HEAD" 2>/dev/null || true
     printf '\n## Verification\n\n'
     printf -- '- `cargo fmt --all --check`\n'
-    printf -- '- `cargo llvm-cov --workspace --release --json --output-path coverage.json`\n'
+    printf -- '- `cargo nextest run --workspace --release --no-fail-fast`\n'
+    printf -- '- `cargo test --doc --workspace --release`\n'
+    printf -- '- `cargo llvm-cov nextest --workspace --release --json --output-path coverage.json`\n'
     printf -- '- `python3 scripts/check-coverage.py coverage.json`\n'
     printf -- '- `cargo doc --workspace --no-deps`\n'
     printf -- '- `python3 scripts/check-docs-site.py`\n'
@@ -73,7 +75,9 @@ append_ai_attribution() {
 
 run_required_checks() {
   cargo fmt --all --check
-  cargo llvm-cov --workspace --release --json --output-path coverage.json
+  cargo nextest run --workspace --release --no-fail-fast
+  cargo test --doc --workspace --release
+  cargo llvm-cov nextest --workspace --release --json --output-path coverage.json
   python3 scripts/check-coverage.py coverage.json
   cargo doc --workspace --no-deps
   python3 scripts/check-docs-site.py

@@ -6,8 +6,8 @@
     "strict": true,
     "contexts": [
       "rustfmt",
-      "cargo test (ubuntu-latest)",
-      "cargo test (macos-latest)",
+      "nextest (ubuntu-latest)",
+      "nextest (macos-latest)",
       "coverage",
       "docs-site"
     ]
