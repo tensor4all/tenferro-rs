@@ -7,6 +7,7 @@ use super::Tensor;
 use crate::structured::StructuredTensor;
 use crate::{backward, AdTensor, BackwardOptions, DynTensor, Error, Result};
 
+#[cfg(test)]
 fn reverse_tape_from_anchor(anchor: &Tensor, op_name: &'static str) -> Result<Tape<DynTensor>> {
     let tape = match anchor {
         Tensor::F32(value) => value.reverse_tape(),
@@ -154,6 +155,7 @@ impl Tensor {
         AdTensor::new_primal(tensor).into()
     }
 
+    #[cfg(test)]
     pub(crate) fn new_forward<T>(
         primal: impl Into<StructuredTensor<T>>,
         tangent: impl Into<StructuredTensor<T>>,
@@ -165,6 +167,7 @@ impl Tensor {
         Ok(AdTensor::new_forward(primal, tangent)?.into())
     }
 
+    #[cfg(test)]
     pub(crate) fn new_reverse_leaf<T>(primal: impl Into<StructuredTensor<T>>) -> Result<Self>
     where
         T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
@@ -174,6 +177,7 @@ impl Tensor {
         Ok(AdTensor::new_reverse_leaf(primal, &tape)?.into())
     }
 
+    #[cfg(test)]
     pub(crate) fn new_reverse_leaf_with_tangent<T>(
         primal: impl Into<StructuredTensor<T>>,
         tangent: impl Into<StructuredTensor<T>>,
@@ -186,6 +190,7 @@ impl Tensor {
         Ok(AdTensor::new_reverse_leaf_with_tangent(primal, tangent, &tape)?.into())
     }
 
+    #[cfg(test)]
     pub(crate) fn new_reverse_sibling<T>(
         &self,
         primal: impl Into<StructuredTensor<T>>,
@@ -198,6 +203,7 @@ impl Tensor {
         Ok(AdTensor::new_reverse_leaf(primal, &tape)?.into())
     }
 
+    #[cfg(test)]
     pub(crate) fn new_reverse_sibling_with_tangent<T>(
         &self,
         primal: impl Into<StructuredTensor<T>>,
@@ -360,15 +366,7 @@ impl Tensor {
         }
     }
 
-    pub(crate) fn tape_id(&self) -> Option<u64> {
-        match self {
-            Self::F32(v) => v.tape().map(|tape| tape.id() as u64),
-            Self::F64(v) => v.tape().map(|tape| tape.id() as u64),
-            Self::C32(v) => v.tape().map(|tape| tape.id() as u64),
-            Self::C64(v) => v.tape().map(|tape| tape.id() as u64),
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn node_id(&self) -> Option<crate::core::NodeId> {
         match self {
             Self::F32(v) => v.node_id(),
@@ -378,6 +376,7 @@ impl Tensor {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn shares_reverse_graph(&self, other: &Self) -> bool {
         match (
             reverse_tape_from_anchor(self, "Tensor::shares_reverse_graph"),

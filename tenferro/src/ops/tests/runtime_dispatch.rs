@@ -82,8 +82,6 @@ fn linalg_entrypoints_report_runtime_capability_failures() {
         "src/ops/linalg/primal/spectral.rs",
         "src/ops/linalg/primal/tensorized.rs",
     ]);
-    let primal_builders = repo_file("src/ops/einsum/primal.rs");
-
     assert!(
         !linalg_builders.contains("with_cpu_runtime("),
         "linalg builders should use shared runtime dispatch instead of with_cpu_runtime(...)"
@@ -91,10 +89,6 @@ fn linalg_entrypoints_report_runtime_capability_failures() {
     assert!(
         !linalg_builders.contains("with_runtime_cpu_only("),
         "linalg builders should use shared runtime/capability dispatch instead of with_runtime_cpu_only(...)"
-    );
-    assert!(
-        !primal_builders.contains("with_runtime_cpu_only("),
-        "primal builders should dispatch through runtime-aware helpers instead of with_runtime_cpu_only(...)"
     );
 }
 

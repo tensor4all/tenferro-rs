@@ -6,7 +6,7 @@ use strided_view::{StridedArray, StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
-use crate::cpu::common::{execute_unary_map, CpuScalarValue};
+use crate::cpu::common::{execute_unary_map, unflatten_index_into, CpuScalarValue};
 use crate::for_each_index;
 
 fn scalar_from_usize<S: CpuScalarValue>(value: usize) -> Result<S> {
@@ -35,13 +35,6 @@ fn build_reduction_input_index(
             *slot = out_idx[out_pos];
             out_pos += 1;
         }
-    }
-}
-
-fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
-    for (axis, &dim) in dims.iter().enumerate() {
-        out[axis] = flat % dim;
-        flat /= dim;
     }
 }
 

@@ -91,6 +91,7 @@ impl<T: Scalar> AdTensor<T> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn accumulate_leaf_hvp(&self, hvp: StructuredTensor<T>) -> Result<()>
     where
         T: Clone,

@@ -1,7 +1,9 @@
 mod core;
 mod tensor;
 
-pub use core::{AdMode, AdValue, NodeId};
+#[cfg(test)]
+pub use core::AdValue;
+pub use core::{AdMode, NodeId};
 pub use tensor::AdTensor;
 pub(crate) use tensor::AdTensorSnapshot;
 

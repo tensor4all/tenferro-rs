@@ -64,6 +64,7 @@ where
     /// ```ignore
     /// let _builder = builder.options(&options);
     /// ```
+    #[allow(dead_code)]
     pub fn options(mut self, options: &'a SvdOptions) -> Self {
         self.options = Some(options);
         self

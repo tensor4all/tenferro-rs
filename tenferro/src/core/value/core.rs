@@ -36,6 +36,7 @@ pub enum AdMode {
 /// let dual = AdValue::forward(3.0_f64, 1.0_f64);
 /// assert_eq!(dual.mode(), AdMode::Forward);
 /// ```
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum AdValue<T> {
     /// Primal-only value.
@@ -44,6 +45,7 @@ pub enum AdValue<T> {
     Forward { primal: T, tangent: T },
 }
 
+#[cfg(test)]
 impl<T> AdValue<T> {
     /// Creates a primal-only value.
     ///
@@ -170,6 +172,7 @@ impl<T> AdValue<T> {
     }
 }
 
+#[cfg(test)]
 impl<T> From<T> for AdValue<T> {
     fn from(value: T) -> Self {
         Self::Primal(value)

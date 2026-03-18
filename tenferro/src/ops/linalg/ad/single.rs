@@ -220,6 +220,7 @@ where
     /// ```ignore
     /// let _builder = builder.rcond(1e-12);
     /// ```
+    #[allow(dead_code)]
     pub fn rcond(mut self, rcond: f64) -> Self {
         self.rcond = Some(rcond);
         self
@@ -339,6 +340,7 @@ where
     /// ```ignore
     /// let _builder = builder.upper(true);
     /// ```
+    #[allow(dead_code)]
     pub fn upper(mut self, upper: bool) -> Self {
         self.upper = upper;
         self
@@ -414,6 +416,7 @@ where
     /// ```ignore
     /// let _builder = builder.kind(kind);
     /// ```
+    #[allow(dead_code)]
     pub fn kind(mut self, kind: NormKind) -> Self {
         self.kind = kind;
         self

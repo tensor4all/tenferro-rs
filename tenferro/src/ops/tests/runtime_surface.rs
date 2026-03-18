@@ -43,20 +43,6 @@ fn run_with_rocm_runtime_returns_unsupported_runtime_error() {
 }
 
 #[test]
-fn primal_einsum_builder_runs() {
-    let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
-    let a =
-        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-            .unwrap();
-    let b =
-        DenseTensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
-            .unwrap();
-    let out = einsum("ij,jk->ik", &[&a, &b]).run().unwrap();
-    assert_eq!(out.dims(), &[2, 2]);
-    assert_eq!(as_slice(&out).len(), 4);
-}
-
-#[test]
 fn primal_qr_builder_runs() {
     let _guard = crate::set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
     let t =

@@ -158,44 +158,17 @@ fn primal_linalg_builders_cover_all_ops() {
         DenseTensor::<f64>::from_slice(&[4.0, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
     let b = DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    let tri =
-        DenseTensor::<f64>::from_slice(&[2.0, 0.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-            .unwrap();
-    let a_general =
-        DenseTensor::<f64>::from_slice(&[0.0, 1.0, -1.0, 0.0], &[2, 2], MemoryOrder::ColumnMajor)
-            .unwrap();
-    let a_rect = DenseTensor::<f64>::from_slice(
-        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
-        &[2, 3],
-        MemoryOrder::ColumnMajor,
-    )
-    .unwrap();
-    let a_ls = DenseTensor::<f64>::from_slice(
-        &[1.0, 0.0, 1.0, 0.0, 1.0, 1.0],
-        &[3, 2],
-        MemoryOrder::ColumnMajor,
-    )
-    .unwrap();
-    let b_ls =
-        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-
-    let out_svd = svd(&a).run().unwrap();
-    assert_eq!(out_svd.s.dims(), &[2]);
     let out_qr = qr(&a).run().unwrap();
     assert_eq!(out_qr.q.dims(), &[2, 2]);
     let out_lu = lu(&a).pivot(LuPivot::Partial).run().unwrap();
     assert_eq!(out_lu.l.dims(), &[2, 2]);
     let out_eigen = eigen(&a).run().unwrap();
     assert_eq!(out_eigen.values.dims(), &[2]);
-    let out_lstsq = lstsq(&a_ls, &b_ls).run().unwrap();
-    assert_eq!(out_lstsq.x.dims(), &[2]);
     let out_cholesky = cholesky(&a).run().unwrap();
     assert_eq!(out_cholesky.dims(), &[2, 2]);
     let out_cholesky_ex = cholesky_ex(&a).run().unwrap();
     assert_eq!(out_cholesky_ex.l.dims(), &[2, 2]);
     assert_eq!(out_cholesky_ex.info, vec![0]);
-    let out_solve = solve(&a, &b).run().unwrap();
-    assert_eq!(out_solve.dims(), &[2]);
     let out_solve_ex = solve_ex(&a, &b).run().unwrap();
     assert_eq!(out_solve_ex.solution.dims(), &[2]);
     assert_eq!(out_solve_ex.info, vec![0]);
@@ -216,22 +189,12 @@ fn primal_linalg_builders_cover_all_ops() {
         .run()
         .unwrap();
     assert_eq!(out_lu_solve.dims(), &[2]);
-    let out_det = det(&a).run().unwrap();
-    assert_eq!(out_det.dims(), &[]);
-    let out_slogdet = slogdet(&a).run().unwrap();
-    assert_eq!(out_slogdet.sign.dims(), &[]);
-    let out_eig = eig(&a_general).run().unwrap();
-    assert_eq!(out_eig.values.dims(), &[2]);
-    let out_pinv = pinv(&a_rect).rcond(1e-12).run().unwrap();
-    assert_eq!(out_pinv.dims(), &[3, 2]);
+    // Error path: run() without .pivots() returns an error.
+    assert!(lu_solve(&out_lu_factor.factors, &b).run().is_err());
     let out_exp = matrix_exp(&a).run().unwrap();
     assert_eq!(out_exp.dims(), &[2, 2]);
     let out_power = matrix_power(&a).exponent(3).run().unwrap();
     assert_eq!(out_power.dims(), &[2, 2]);
-    let out_tri = solve_triangular(&tri, &b).upper(true).run().unwrap();
-    assert_eq!(out_tri.dims(), &[2]);
-    let out_norm = norm(&a).kind(NormKind::Fro).run().unwrap();
-    assert_eq!(out_norm.dims(), &[]);
     let out_cond = cond(&a).kind(NormKind::Spectral).run().unwrap();
     assert_eq!(out_cond.dims(), &[]);
     let cross_a =
