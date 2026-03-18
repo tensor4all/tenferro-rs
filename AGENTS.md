@@ -272,6 +272,18 @@ AD functions (`tracked_einsum`, `dual_einsum`, `einsum_rrule`, `einsum_frule`);
 `tenferro-linalg` owns linalg AD functions (`svd_rrule`, `svd_frule`, etc.),
 while `tenferro-linalg-prims` owns only backend-facing execution contracts.
 
+## AI Workflow Scripts
+
+Repository-local headless launchers live under `ai/`:
+
+- `ai/run-codex-solve-bug.sh`
+- `ai/run-claude-solve-bug.sh`
+
+These scripts resolve their prompt path relative to `ai/`, but they always run
+the agent from the repository top-level directory. Their default prompt is
+`ai/solve_bug_issue.md`, and JSON output is the default mode unless `--text` is
+passed.
+
 ### Dependency Graph (POC)
 
 ```
