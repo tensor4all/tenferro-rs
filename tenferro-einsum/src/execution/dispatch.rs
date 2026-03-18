@@ -38,6 +38,17 @@ static GEMM_FLOPS: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "profile-dispatch")]
 static GEMM_CALLS_TINY: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(feature = "profile-dispatch")]
+fn gemm_flops_u64(plan: &GemmPlan) -> u64 {
+    plan.batch_sizes
+        .iter()
+        .try_fold(2u64, |acc, &dim| acc.checked_mul(u64::try_from(dim).ok()?))
+        .and_then(|acc| acc.checked_mul(u64::try_from(plan.m).ok()?))
+        .and_then(|acc| acc.checked_mul(u64::try_from(plan.n).ok()?))
+        .and_then(|acc| acc.checked_mul(u64::try_from(plan.k).ok()?))
+        .unwrap_or(u64::MAX)
+}
+
 /// Reset and print accumulated dispatch profiling counters.
 #[cfg(feature = "profile-dispatch")]
 pub fn print_and_reset_profile() {
@@ -308,38 +319,28 @@ where
     #[cfg(feature = "profile-dispatch")]
     PREPARE_NS.fetch_add(_prep_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
 
-    // Try to write GEMM directly into output (skip temp buffer).
-    // Requires: no final permute needed AND output's lo/ro dims are fusable.
     let n_lo = plan.lo_modes.len();
     let n_ro = plan.ro_modes.len();
-    let c_direct = !plan.needs_final_permute && {
+    let c_direct = if plan.needs_final_permute {
+        None
+    } else {
         let c_dims = output.dims();
         let c_strides = output.strides();
-        let g1 = try_fuse_group_in_target_order(&c_dims[..n_lo], &c_strides[..n_lo]);
-        let g2 = try_fuse_group_in_target_order(
-            &c_dims[n_lo..n_lo + n_ro],
-            &c_strides[n_lo..n_lo + n_ro],
-        );
-        g1.is_some() && g2.is_some()
+        match (
+            try_fuse_group_in_target_order(&c_dims[..n_lo], &c_strides[..n_lo]),
+            try_fuse_group_in_target_order(
+                &c_dims[n_lo..n_lo + n_ro],
+                &c_strides[n_lo..n_lo + n_ro],
+            ),
+        ) {
+            (Some((_, m_stride)), Some((_, n_stride))) => Some((m_stride, n_stride)),
+            _ => None,
+        }
     };
 
-    if c_direct {
-        // Direct write: fuse output's lo→M, ro→N dims and write GEMM directly.
-        //
-        // We must take sole ownership of the underlying buffer so that
-        // Arc::get_mut succeeds when the GEMM backend requests mutable
-        // access.  `view_as_strided` clones the Arc, so we swap output
-        // with a placeholder, create the fused view, and drop the
-        // intermediate to bring the refcount back to 1.
+    if let Some((m_stride, n_stride)) = c_direct {
         let c_dims = output.dims().to_vec();
         let c_strides = output.strides().to_vec();
-        let (_, m_stride) =
-            try_fuse_group_in_target_order(&c_dims[..n_lo], &c_strides[..n_lo]).unwrap();
-        let (_, n_stride) = try_fuse_group_in_target_order(
-            &c_dims[n_lo..n_lo + n_ro],
-            &c_strides[n_lo..n_lo + n_ro],
-        )
-        .unwrap();
         let mut fused_dims = Vec::with_capacity(2 + nb);
         let mut fused_strides = Vec::with_capacity(2 + nb);
         fused_dims.push(plan.m);
@@ -349,7 +350,6 @@ where
         fused_dims.extend_from_slice(&c_dims[n_lo + n_ro..]);
         fused_strides.extend_from_slice(&c_strides[n_lo + n_ro..]);
 
-        // Swap output with a tiny placeholder to get sole Arc ownership.
         let placeholder = alloc_tensor_from_pool::<Alg::Scalar>(&[], memory_space, pool);
         let out_tensor = std::mem::replace(output, placeholder);
         let mut c_fused = out_tensor.view_as_strided(fused_dims, fused_strides)?;
@@ -382,20 +382,16 @@ where
         #[cfg(feature = "profile-dispatch")]
         {
             GEMM_NS.fetch_add(_gemm_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            let batch_total: usize = plan.batch_sizes.iter().product();
-            let flops = 2 * batch_total * plan.m * plan.n * plan.k;
-            GEMM_FLOPS.fetch_add(flops as u64, Ordering::Relaxed);
+            GEMM_FLOPS.fetch_add(gemm_flops_u64(plan), Ordering::Relaxed);
             if plan.m * plan.n * plan.k <= 64 {
                 GEMM_CALLS_TINY.fetch_add(1, Ordering::Relaxed);
             }
         }
 
-        // Restore original shape and write back to output.
         let restored = c_fused.view_as_strided(c_dims, c_strides)?;
         drop(c_fused); // Arc refcount → 1
         *output = restored;
     } else {
-        // Fallback: GEMM into temp buffer, then permute/copy to output.
         let mut temp =
             alloc_tensor_from_pool::<Alg::Scalar>(&plan.c_gemm_shape, memory_space, pool);
         let owned_plan;
@@ -425,9 +421,7 @@ where
         #[cfg(feature = "profile-dispatch")]
         {
             GEMM_NS.fetch_add(_gemm_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
-            let batch_total: usize = plan.batch_sizes.iter().product();
-            let flops = 2 * batch_total * plan.m * plan.n * plan.k;
-            GEMM_FLOPS.fetch_add(flops as u64, Ordering::Relaxed);
+            GEMM_FLOPS.fetch_add(gemm_flops_u64(plan), Ordering::Relaxed);
             if plan.m * plan.n * plan.k <= 64 {
                 GEMM_CALLS_TINY.fetch_add(1, Ordering::Relaxed);
             }
