@@ -393,10 +393,23 @@ pub(crate) struct DynamicLibrary {
     handle: *mut c_void,
 }
 
-#[cfg(unix)]
+/// # Safety
+///
+/// `DynamicLibrary` can be safely sent across threads because:
+/// - The handle is an opaque `dlopen` pointer that represents loaded library state
+/// - The library handle is managed by the dynamic linker and is thread-safe for symbol lookup
+/// - The handle remains valid as long as the `DynamicLibrary` exists (until `dlclose` in Drop)
+/// - Symbol loading via `dlsym` is thread-safe on POSIX systems
 unsafe impl Send for DynamicLibrary {}
 
-#[cfg(unix)]
+/// # Safety
+///
+/// `DynamicLibrary` can be safely shared across threads because:
+/// - The `dlopen`/`dlsym`/`dlclose` functions are thread-safe on POSIX systems
+/// - Multiple threads can safely call `dlsym` on the same handle concurrently
+/// - The handle is read-only after construction - only Drop modifies it via `dlclose`
+/// - Drop uses `dlclose` which is safe to call once; the Rust borrow checker ensures
+///   no concurrent access during Drop since `&mut self` is required
 unsafe impl Sync for DynamicLibrary {}
 
 #[cfg(unix)]

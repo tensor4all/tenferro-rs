@@ -83,6 +83,19 @@ pub struct CudaBackend {
 }
 
 #[cfg(not(feature = "cuda"))]
+impl Drop for CudaBackend {
+    fn drop(&mut self) {
+        self._handle = std::ptr::null_mut();
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+unsafe impl Send for CudaBackend {}
+
+#[cfg(not(feature = "cuda"))]
+unsafe impl Sync for CudaBackend {}
+
+#[cfg(not(feature = "cuda"))]
 impl CudaBackend {
     /// Materialize a lazily-conjugated tensor on GPU.
     ///
@@ -256,6 +269,16 @@ pub struct RocmBackend {
     _handle: *mut c_void,
     _lib: libloading::Library,
 }
+
+impl Drop for RocmBackend {
+    fn drop(&mut self) {
+        self._handle = std::ptr::null_mut();
+    }
+}
+
+unsafe impl Send for RocmBackend {}
+
+unsafe impl Sync for RocmBackend {}
 
 impl RocmBackend {
     /// Materialize a lazily-conjugated tensor on GPU.

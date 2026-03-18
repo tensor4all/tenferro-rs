@@ -55,6 +55,13 @@ where
         }
 
         let x_solution = backend::slice_bridge::solve_triangular_vec(ctx, r_b, &qtb, k, 1, true)?;
+        if x_solution.len() != x_buf.len() {
+            return Err(Error::DeviceError(format!(
+                "solve_triangular_vec returned unexpected size: expected {}, got {}",
+                x_buf.len(),
+                x_solution.len()
+            )));
+        }
         x_buf.copy_from_slice(&x_solution);
         x_data[batch * n..(batch + 1) * n].copy_from_slice(&x_buf);
 
