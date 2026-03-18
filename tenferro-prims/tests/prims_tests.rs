@@ -2727,6 +2727,45 @@ macro_rules! typed_prims_tests {
             }
 
             #[test]
+            fn batched_gemm_zero_contraction_respects_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_zeros::<$T>(&[2, 0]);
+                let b = tensor_zeros::<$T>(&[0, 3]);
+                let mut c = tensor_from_fn(&[2, 3], |_| <$T as TestScalar>::from_f64(5.0));
+
+                let desc =
+                    TestPrimitiveDescriptor::SemiringCore(SemiringCoreDescriptor::BatchedGemm {
+                        batch_dims: vec![],
+                        m: 2,
+                        n: 3,
+                        k: 0,
+                    });
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 0], &[0, 3], &[2, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a, &b],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                let expected = <$T as TestScalar>::from_f64(15.0);
+                for i in 0..2 {
+                    for j in 0..3 {
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
             fn reduce_sum_axis0() {
                 let mut ctx = CpuContext::new(1);
                 let a = tensor_from_fn(&[3, 4], |idx| {
@@ -3436,6 +3475,45 @@ macro_rules! typed_prims_tests {
                         }
                         let expected = <$T as TestScalar>::from_f64(2.0) * matmul
                             + <$T as TestScalar>::from_f64(3.0) * <$T as TestScalar>::from_f64(5.0);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
+                            "C[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            tensor_get(&c, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(tensor_get(&c, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn contract_zero_contraction_respects_beta() {
+                let mut ctx = CpuContext::new(1);
+                let a = tensor_zeros::<$T>(&[2, 0]);
+                let b = tensor_zeros::<$T>(&[0, 3]);
+                let mut c = tensor_from_fn(&[2, 3], |_| <$T as TestScalar>::from_f64(4.0));
+
+                let desc = TestPrimitiveDescriptor::SemiringFastPath(
+                    SemiringFastPathDescriptor::Contract {
+                        modes_a: vec![0, 1],
+                        modes_b: vec![1, 2],
+                        modes_c: vec![0, 2],
+                    },
+                );
+                let plan = cpu_plan::<$T>(&mut ctx, &desc, &[&[2, 0], &[0, 3], &[2, 3]]).unwrap();
+                cpu_execute(
+                    &mut ctx,
+                    &plan,
+                    <$T as TestScalar>::from_f64(2.0),
+                    &[&a, &b],
+                    <$T as TestScalar>::from_f64(3.0),
+                    &mut c,
+                )
+                .unwrap();
+
+                let expected = <$T as TestScalar>::from_f64(12.0);
+                for i in 0..2 {
+                    for j in 0..3 {
                         assert!(
                             <$T as TestScalar>::approx_eq(tensor_get(&c, &[i, j]), expected),
                             "C[{i},{j}] = {:?}, expected {:?}, diff = {}",

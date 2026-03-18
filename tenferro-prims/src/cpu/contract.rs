@@ -9,6 +9,7 @@ use crate::SemiringBinaryOp;
 
 use super::layout_fusion::try_fuse_group_in_order;
 use super::plan::{build_contract_gemm_spec, ContractGemmSpec};
+use super::reduction::scale_output;
 
 #[cfg(feature = "gemm-faer")]
 use super::gemm_support::FaerGemm;
@@ -61,6 +62,11 @@ pub(super) fn execute_contract<T: Scalar>(
     modes_c: &[u32],
     cached_gemm_spec: Option<&ContractGemmSpec>,
 ) -> Result<()> {
+    if inputs.iter().any(|view| view.dims().contains(&0)) || output.dims().contains(&0) {
+        scale_output(output, beta);
+        return Ok(());
+    }
+
     if let Some(done) = try_execute_contract_gemm(
         alpha,
         inputs,

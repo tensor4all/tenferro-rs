@@ -9,6 +9,7 @@ use crate::infra::typed_dispatch::{
 use super::context::CpuContext;
 use super::gemm_support::{advance_batch_offset, batch_iteration_count, batch_offset};
 use super::layout_fusion::try_fuse_group_in_order;
+use super::reduction::scale_output;
 
 #[cfg(feature = "gemm-faer")]
 use super::gemm_support::FaerGemm;
@@ -301,6 +302,11 @@ pub(super) fn execute_batched_gemm<T: Scalar + 'static>(
     n: usize,
     k: usize,
 ) -> Result<()> {
+    if inputs.iter().any(|view| view.dims().contains(&0)) || output.dims().contains(&0) {
+        scale_output(output, beta);
+        return Ok(());
+    }
+
     dispatch_standard_scalar_type!(T, Concrete, {
         let a = cast_strided_view!(inputs[0], T, Concrete);
         let b = cast_strided_view!(inputs[1], T, Concrete);
