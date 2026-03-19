@@ -50,6 +50,8 @@ When in doubt, ask: *"Would an experienced software engineer consider this clean
 
 ## Build Environment
 
+- By default, use the repository's normal `./target` directory for Rust build
+  artifacts.
 - Do not treat NFS or other network filesystems as a normal location for Rust
   development worktrees. Strongly prefer putting the repository or worktree
   itself on local disk.
@@ -59,9 +61,10 @@ When in doubt, ask: *"Would an experienced software engineer consider this clean
 - Continue on NFS only if the user explicitly wants to proceed anyway.
 - When proceeding on NFS, place Cargo build artifacts on local disk rather than
   inside the repository checkout.
-- Prefer a stable repo-specific local target directory such as
-  `CARGO_TARGET_DIR=/tmp/<repo>-target` for `cargo build`, `cargo nextest run`,
-  `cargo test --doc`, `cargo llvm-cov`, and similar heavy commands.
+- Also move `CARGO_TARGET_DIR` outside the repository when run isolation or
+  local disk layout makes a dedicated external target directory preferable.
+- In those cases, prefer a stable repo-specific local path such as
+  `/tmp/<repo>-target` or another local-disk directory.
 
 ## File Organization
 

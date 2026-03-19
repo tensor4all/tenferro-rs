@@ -20,6 +20,7 @@ EOF
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(git -C "$script_dir" rev-parse --show-toplevel)"
+repo_name="$(basename "$repo_root")"
 
 prompt_arg="solve_bug_issue.md"
 model=""
@@ -74,7 +75,7 @@ if [[ ! -f "$prompt_path" ]]; then
 fi
 
 if [[ -z "$run_dir" ]]; then
-  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/codex-solve-bug.XXXXXX")"
+  run_dir="$(mktemp -d "${TMPDIR:-/tmp}/${repo_name}-codex-solve-bug.XXXXXX")"
 else
   mkdir -p "$run_dir"
   run_dir="$(cd -- "$run_dir" && pwd -P)"
