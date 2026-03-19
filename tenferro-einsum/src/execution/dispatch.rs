@@ -13,7 +13,7 @@ use tenferro_tensor::Tensor;
 
 use crate::execution::backend::{BackendContext, BackendPlan, EinsumBackend};
 use crate::execution::pool::BufferPool;
-use crate::execution::util::alloc_tensor_from_pool;
+use crate::execution::util::{alloc_tensor_from_pool, apply_diag_plan};
 use crate::planning::classify::compute_permutation;
 use crate::planning::plan::{GemmPlan, ReducePlan, StepPlan};
 use crate::planning::prepare::{prepare_one_operand, try_fuse_group_in_target_order};
@@ -103,14 +103,14 @@ where
     // 1. Diagonal extraction (zero-copy view)
     let a_diag;
     let a_ref = if let Some(ref dp) = plan.diag_a {
-        a_diag = a.diagonal(&dp.axis_pairs)?;
+        a_diag = apply_diag_plan(a, dp)?;
         &a_diag
     } else {
         a
     };
     let b_diag;
     let b_ref = if let Some(ref dp) = plan.diag_b {
-        b_diag = b.diagonal(&dp.axis_pairs)?;
+        b_diag = apply_diag_plan(b, dp)?;
         &b_diag
     } else {
         b
