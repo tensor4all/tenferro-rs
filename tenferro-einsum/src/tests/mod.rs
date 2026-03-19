@@ -1,3 +1,4 @@
+pub(crate) mod ellipsis;
 pub(crate) mod organization;
 pub(crate) mod semiring_backend;
 

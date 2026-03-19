@@ -10,6 +10,7 @@ use crate::execution::execute::{execute_nested, execute_tree};
 use crate::execution::pool::BufferPool;
 use crate::execution::util::{compute_output_shape, infer_memory_space};
 use crate::planning::tree::ContractionTree;
+use crate::syntax::ellipsis::expand_ellipsis_in_notation;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
 
@@ -24,6 +25,10 @@ use super::canonical::canonicalize_col_major_operands;
 /// Parentheses in the subscript string specify contraction order
 /// explicitly (e.g., `"ij,(jk,kl)->il"` contracts B and C first).
 /// Without parentheses, the contraction order is optimized automatically.
+///
+/// Ellipsis notation (`...`) is supported for batch dimensions,
+/// following NumPy/PyTorch/JAX conventions. The ellipsis expands to
+/// the appropriate number of batch dimensions based on tensor shapes.
 ///
 /// # Arguments
 ///
@@ -49,6 +54,10 @@ use super::canonical::canonicalize_col_major_operands;
 /// let c =
 ///     einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
 ///
+/// // Batch matrix multiplication with ellipsis notation
+/// let c =
+///     einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None).unwrap();
+///
 /// // Explicit contraction order: contract B*C first, then A
 /// let d = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,(jk,kl)->il", &[&a, &b, &c], None)
 ///     .unwrap();
@@ -69,9 +78,12 @@ where
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
 {
-    let subs = Subscripts::parse(subscripts)?;
-    let nested = if subscripts.contains('(') {
-        Some(NestedEinsum::parse(subscripts)?)
+    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    let expanded_notation = expand_ellipsis_in_notation(subscripts, &shapes)?;
+
+    let subs = Subscripts::parse(&expanded_notation)?;
+    let nested = if expanded_notation.contains('(') {
+        Some(NestedEinsum::parse(&expanded_notation)?)
     } else {
         None
     };
