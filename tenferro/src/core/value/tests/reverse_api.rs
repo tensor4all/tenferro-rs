@@ -1,5 +1,5 @@
-use chainrules::Tape;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tidu::Tape;
 
 use super::*;
 

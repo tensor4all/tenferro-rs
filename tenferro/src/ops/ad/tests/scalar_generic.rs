@@ -1,7 +1,7 @@
 use super::{max_abs_diff, reverse_leaf_f64, tensor_from_vec_f64 as tensor_from_slice};
-use chainrules::Tape;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tidu::Tape;
 
 use crate::ops::{
     acos_ad, acosh_ad, add_ad, asin_ad, asinh_ad, atan2_ad, atan_ad, atanh_ad, cos_ad, cosh_ad,
@@ -355,4 +355,126 @@ fn cos_and_tanh_reverse_pullback_match_expected_dense_gradients() {
         &[2],
     );
     assert!(max_abs_diff(tanh_grads[0].as_ref().unwrap().payload(), &expected_tanh) < 1e-12);
+}
+
+#[test]
+fn remaining_analytic_unary_reverse_pullbacks_match_reference_derivatives() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    fn assert_reverse_unary(
+        input: DenseTensor<f64>,
+        cotangent: DenseTensor<f64>,
+        expected: DenseTensor<f64>,
+        run: impl Fn(&AdTensor<f64>) -> crate::Result<AdTensor<f64>>,
+    ) {
+        let tape = Tape::<crate::DynTensor>::new();
+        let x = reverse_leaf_f64(input, &tape);
+        let out = run(&x).unwrap();
+        let cotangent = AdTensor::new_primal(cotangent);
+        let grads = crate::ops::ad::pullback_wrt(&out, &cotangent, &[&x]).unwrap();
+        assert!(max_abs_diff(grads[0].as_ref().unwrap().payload(), &expected) < 1e-12);
+    }
+
+    assert_reverse_unary(
+        tensor_from_slice(&[2.0, 4.0], &[2]),
+        tensor_from_slice(&[1.0, -2.0], &[2]),
+        tensor_from_slice(&[0.5, -0.5], &[2]),
+        |x| log_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.5, 3.0], &[2]),
+        tensor_from_slice(&[2.0, -4.0], &[2]),
+        tensor_from_slice(&[4.0 / 3.0, -1.0], &[2]),
+        |x| log1p_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.0, std::f64::consts::FRAC_PI_3], &[2]),
+        tensor_from_slice(&[1.0, -2.0], &[2]),
+        tensor_from_slice(&[1.0, -1.0], &[2]),
+        |x| sin_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.25, -0.5], &[2]),
+        tensor_from_slice(&[2.0, -3.0], &[2]),
+        tensor_from_slice(
+            &[
+                2.0 / (1.0_f64 - 0.25_f64.powi(2)).sqrt(),
+                -3.0 / (1.0_f64 - 0.5_f64.powi(2)).sqrt(),
+            ],
+            &[2],
+        ),
+        |x| asin_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.25, -0.5], &[2]),
+        tensor_from_slice(&[2.0, -3.0], &[2]),
+        tensor_from_slice(
+            &[
+                -2.0 / (1.0_f64 - 0.25_f64.powi(2)).sqrt(),
+                3.0 / (1.0_f64 - 0.5_f64.powi(2)).sqrt(),
+            ],
+            &[2],
+        ),
+        |x| acos_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.25, -0.5], &[2]),
+        tensor_from_slice(&[2.0, -3.0], &[2]),
+        tensor_from_slice(
+            &[
+                2.0 / (1.0_f64 + 0.25_f64.powi(2)),
+                -3.0 / (1.0_f64 + 0.5_f64.powi(2)),
+            ],
+            &[2],
+        ),
+        |x| atan_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.25, 1.25], &[2]),
+        tensor_from_slice(&[1.5, -0.75], &[2]),
+        tensor_from_slice(&[1.5 * 0.25_f64.cosh(), -0.75 * 1.25_f64.cosh()], &[2]),
+        |x| sinh_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.25, 1.25], &[2]),
+        tensor_from_slice(&[1.5, -0.75], &[2]),
+        tensor_from_slice(&[1.5 * 0.25_f64.sinh(), -0.75 * 1.25_f64.sinh()], &[2]),
+        |x| cosh_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.25, 1.25], &[2]),
+        tensor_from_slice(&[1.5, -0.75], &[2]),
+        tensor_from_slice(
+            &[
+                1.5 / (1.0_f64 + 0.25_f64.powi(2)).sqrt(),
+                -0.75 / (1.0_f64 + 1.25_f64.powi(2)).sqrt(),
+            ],
+            &[2],
+        ),
+        |x| asinh_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[2.0, 3.0], &[2]),
+        tensor_from_slice(&[1.25, -0.5], &[2]),
+        tensor_from_slice(
+            &[
+                1.25 / (2.0_f64 - 1.0).sqrt() / (2.0_f64 + 1.0).sqrt(),
+                -0.5 / (3.0_f64 - 1.0).sqrt() / (3.0_f64 + 1.0).sqrt(),
+            ],
+            &[2],
+        ),
+        |x| acosh_ad(x).run(),
+    );
+    assert_reverse_unary(
+        tensor_from_slice(&[0.25, -0.5], &[2]),
+        tensor_from_slice(&[2.0, -3.0], &[2]),
+        tensor_from_slice(
+            &[
+                2.0 / (1.0_f64 - 0.25_f64.powi(2)),
+                -3.0 / (1.0_f64 - 0.5_f64.powi(2)),
+            ],
+            &[2],
+        ),
+        |x| atanh_ad(x).run(),
+    );
 }

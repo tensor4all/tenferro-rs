@@ -36,7 +36,7 @@ pub struct GradOptions {
     pub create_graph: bool,
 }
 
-fn reverse_tape(output: &Tensor) -> Option<chainrules::Tape<crate::DynTensor>> {
+fn reverse_tape(output: &Tensor) -> Option<tidu::Tape<crate::DynTensor>> {
     match output {
         Tensor::F32(value) => value.reverse_tape(),
         Tensor::F64(value) => value.reverse_tape(),
@@ -128,7 +128,7 @@ pub fn grad(
     }
 
     let mut accum = vec![None; inputs.len()];
-    let mut shared_tape: Option<chainrules::Tape<crate::DynTensor>> = None;
+    let mut shared_tape: Option<tidu::Tape<crate::DynTensor>> = None;
 
     for (index, output) in outputs.iter().enumerate() {
         let seed = match grad_outputs {

@@ -1,5 +1,5 @@
 use crate::core::AdMode;
-use ::chainrules::{NodeId as ChainNodeId, Tape};
+use ::tidu::{NodeId as ChainNodeId, Tape};
 
 use super::*;
 use crate::{DynTensor, DynTensorTyped};

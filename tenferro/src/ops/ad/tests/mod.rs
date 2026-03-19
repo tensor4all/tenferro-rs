@@ -9,9 +9,9 @@ mod scalar_generic;
 mod structured_pullbacks;
 mod support;
 
-use chainrules::Tape;
 use num_complex::Complex64;
 use tenferro_linalg::NormKind;
+use tidu::Tape;
 
 use super::*;
 use crate::ops::tests::with_cpu_runtime;

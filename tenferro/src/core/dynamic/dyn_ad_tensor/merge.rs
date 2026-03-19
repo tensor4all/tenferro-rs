@@ -1,9 +1,9 @@
 use core::ops::Add;
 
-use chainrules::Tape;
-use chainrules_scalarops::{self, ScalarAd};
+use chainrules::{self, ScalarAd};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
+use tidu::Tape;
 
 use super::super::tensor_ops::{tensor_map_binary_typed, tensor_map_unary_typed};
 use crate::core::{AdTensorSnapshot, DynTensor, DynTensorTyped, NodeId};
@@ -157,7 +157,7 @@ where
 struct AdTensorBinaryState<T: Scalar> {
     primal: StructuredTensor<T>,
     tangent: Option<StructuredTensor<T>>,
-    reverse: Option<(NodeId, ::chainrules::Tape<DynTensor>)>,
+    reverse: Option<(NodeId, ::tidu::Tape<DynTensor>)>,
 }
 
 fn split_ad_tensor_state<T: Scalar>(value: AdTensorSnapshot<T>) -> AdTensorBinaryState<T> {

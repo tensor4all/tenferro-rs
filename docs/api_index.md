@@ -31,9 +31,9 @@ Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
 
 Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
-         chainrules          AD engine: Tape<V>, TrackedValue<V>,
+         chainrules          Scalar AD rules for primitive real/complex operations
+         tidu                AD engine: Tape<V>, TrackedValue<V>,
                              DualValue<V> (← chainrules-core)
-         chainrules-scalarops Scalar AD rules for primitive real/complex operations
 
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
@@ -142,7 +142,7 @@ minimum element type requirements. `Conjugate` trait for complex conjugation
 Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
 `ComputeDevice` (Cpu, Cuda, Rocm), workspace-wide `Error`/`Result` types.
 
-## External Crates (extern/)
+## External Crates
 
 <a id="chainrules-core"></a>
 ### [chainrules-core](chainrules_core/index.html) <small>(Extern)</small>
@@ -155,25 +155,22 @@ tensor type. `Differentiable` trait defines the tangent space; concrete types
 <a id="chainrules"></a>
 ### [chainrules](chainrules/index.html) <small>(Extern)</small>
 
-AD engine (like Zygote.jl in Julia's ecosystem). Provides homogeneous
-`Tape<V>` graphs (explicit tape, TensorFlow GradientTape style),
-`TrackedValue<V>` (reverse-mode wrapper), `DualValue<V>` (forward-mode
-wrapper), and `Variable<V>` for torch-like gradient queries and accumulation.
-Gradient computation uses `tape.pullback()` / `tape.hvp()` or the
-`Variable<V>` / `autograd::grad_*` surface. Tensor scalar semantics follow
-PyTorch: scalar tensors are rank-0, while implicit reverse seeds still depend
-on `num_elements() == 1`. Depends only on `chainrules-core` and re-exports it
-so downstream crates can depend on just `chainrules` for both traits and engine.
-
-Operation-specific AD rules live with their operations, not here.
-
-<a id="chainrules-scalarops"></a>
-### [chainrules-scalarops](chainrules_scalarops/index.html) <small>(Extern)</small>
-
-Scalar-focused AD rules layered on top of `chainrules` and `chainrules-core`.
+Scalar-focused AD rules layered on top of `chainrules-core`.
 Provides `rrule` and `frule` implementations for primitive scalar arithmetic,
 projection, conjugation, powers, and related real/complex helper operations so
 tensor crates can reuse the same scalar differentiation behavior.
+
+Operation-specific AD rules live with their operations, not here.
+
+<a id="tidu"></a>
+### [tidu](tidu/index.html) <small>(Extern)</small>
+
+AD engine (like Zygote.jl in Julia's ecosystem). Provides homogeneous
+`Tape<V>` graphs (explicit tape, TensorFlow GradientTape style),
+`TrackedValue<V>` (reverse-mode wrapper), and `DualValue<V>` (forward-mode
+wrapper). Gradient computation uses `tape.pullback()` / `tape.hvp()`, while
+the `tenferro` frontend exposes eager `backward(...)` / `grad(...)` helpers on
+top of the same tape model.
 
 ## Extension Crates (extension/)
 

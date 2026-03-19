@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::AdMode;
 use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
-use ::chainrules::Tape;
+use ::tidu::Tape;
 
 #[test]
 fn public_ad_builders_cover_helper_paths_and_builder_options() {

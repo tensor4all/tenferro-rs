@@ -1,5 +1,5 @@
-use chainrules::Tape;
 use tenferro_tensor::MemoryOrder;
+use tidu::Tape;
 
 use super::super::ScalarType;
 use super::layout::with_axis_classes_ad_tensor_typed;

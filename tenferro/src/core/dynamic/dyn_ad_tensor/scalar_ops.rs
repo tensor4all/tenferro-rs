@@ -1,8 +1,8 @@
-use chainrules::Tape;
-use chainrules_scalarops::{self, ScalarAd};
+use chainrules::{self, ScalarAd};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tidu::Tape;
 
 use super::super::tensor_ops::{
     tensor_element, tensor_map_binary_typed, tensor_map_unary_typed, tensor_max_abs_diff_typed,
@@ -227,16 +227,10 @@ where
         tensor.tangent(),
         extract_rank0_scalar(scalar, "scale")?,
         extract_rank0_scalar_tangent(scalar, "scale")?,
-        chainrules_scalarops::mul,
-        chainrules_scalarops::mul_frule,
+        chainrules::mul,
+        chainrules::mul_frule,
     )?;
-    merge_tensor_scalar_output(
-        tensor,
-        scalar,
-        primal,
-        tangent,
-        chainrules_scalarops::mul_rrule,
-    )
+    merge_tensor_scalar_output(tensor, scalar, primal, tangent, chainrules::mul_rrule)
 }
 
 fn div_ad_tensor_typed<T>(tensor: &AdTensor<T>, scalar: &AdTensor<T>) -> Result<AdTensor<T>>
@@ -248,16 +242,10 @@ where
         tensor.tangent(),
         extract_rank0_scalar(scalar, "div_scalar")?,
         extract_rank0_scalar_tangent(scalar, "div_scalar")?,
-        chainrules_scalarops::div,
-        chainrules_scalarops::div_frule,
+        chainrules::div,
+        chainrules::div_frule,
     )?;
-    merge_tensor_scalar_output(
-        tensor,
-        scalar,
-        primal,
-        tangent,
-        chainrules_scalarops::div_rrule,
-    )
+    merge_tensor_scalar_output(tensor, scalar, primal, tangent, chainrules::div_rrule)
 }
 
 impl Tensor {

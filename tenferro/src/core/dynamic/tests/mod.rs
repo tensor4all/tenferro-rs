@@ -2,10 +2,10 @@ mod organization;
 mod scalar_type;
 
 use super::*;
-use chainrules::Tape;
 use chainrules_core::Differentiable;
 use num_complex::{Complex32, Complex64};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tidu::Tape;
 
 use crate::core::AdMode;
 use crate::structured::StructuredTensor;

@@ -360,17 +360,16 @@ Notes:
 - All linalg AD tests use central finite-difference verification
   (`eps = 1e-6`, `atol = 1e-4`).
 - `tenferro-linalg` AD rules depend only on `chainrules-core` (not the full
-  `chainrules` engine); test infrastructure calls `svd_rrule` etc. directly
+  `tidu` engine); test infrastructure calls `svd_rrule` etc. directly
   without requiring a tape.
 
 ---
 
-### chainrules-core / chainrules
+### chainrules-core / chainrules / tidu
 
-- Tape: leaf registration, pullback execution
-- TrackedValue: tracking propagation
-- DualValue: tangent propagation
-- Gradients: accumulate / get
+- `chainrules-core`: shared AD traits and rule interfaces
+- `chainrules`: engine-independent scalar rules and scalar forward/reverse helpers
+- `tidu`: tape, tracked values, dual values, and pullback execution
 
 ## Benchmark Tests (`tensor4all/benchmark_einsum`)
 

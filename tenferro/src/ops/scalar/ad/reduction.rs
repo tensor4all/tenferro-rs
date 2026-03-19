@@ -1,4 +1,4 @@
-use super::common::*;
+use super::{builders::*, common::*};
 
 define_unary_ad_builder!(MeanAdBuilder, mean_ad, "mean", generic, |builder| {
     run_scalar_unary_ad(

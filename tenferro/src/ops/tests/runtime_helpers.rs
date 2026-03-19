@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::AdMode;
 use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
-use ::chainrules::Tape;
+use ::tidu::Tape;
 
 #[test]
 fn runtime_helpers_cover_mode_and_shape_paths() {

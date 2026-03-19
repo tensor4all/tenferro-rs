@@ -44,7 +44,7 @@ tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
 tenferro-linalg-prims = { path = "../tenferro-linalg-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-chainrules-core = { path = "../extern/chainrules-core" }
+chainrules-core.workspace = true
 faer = { workspace = true, optional = true }
 cblas-sys = { workspace = true, optional = true }
 cblas-src = { workspace = true, optional = true }

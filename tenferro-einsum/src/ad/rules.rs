@@ -1,7 +1,7 @@
-use chainrules::{AdResult, Differentiable, DualValue};
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
+use tidu::{AdResult, Differentiable, DualValue};
 
 use crate::api::{einsum, einsum_with_subscripts};
 use crate::execution::backend::{BackendContext, EinsumBackend};
@@ -14,7 +14,7 @@ use crate::syntax::subscripts::Subscripts;
 /// # Examples
 ///
 /// ```ignore
-/// use chainrules::DualValue;
+/// use tidu::DualValue;
 /// use tenferro_algebra::Standard;
 /// use tenferro_einsum::dual_einsum;
 /// use tenferro_prims::{CpuBackend, CpuContext};
@@ -38,7 +38,7 @@ where
 {
     let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.primal()).collect();
     let output = einsum::<Alg, Backend>(ctx, subscripts, &primals, None)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+        .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
         operands.iter().map(|op| op.tangent()).collect();
@@ -47,7 +47,7 @@ where
     }
 
     let tangent = einsum_frule::<Alg, Backend>(ctx, subscripts, &primals, &tangents)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+        .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
     DualValue::with_tangent(output, tangent)
 }
 

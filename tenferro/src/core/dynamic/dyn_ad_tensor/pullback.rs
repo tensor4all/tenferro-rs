@@ -1,4 +1,4 @@
-use chainrules::Tape;
+use tidu::Tape;
 
 use super::Tensor;
 use crate::core::{DynTensor, NodeId};
@@ -62,7 +62,7 @@ fn reverse_handle(value: &Tensor) -> Option<(NodeId, Tape<DynTensor>)> {
 fn dyn_pullback_grads(
     output: &Tensor,
     cotangent: &Tensor,
-) -> Result<(Tape<DynTensor>, chainrules::Gradients<DynTensor>)> {
+) -> Result<(Tape<DynTensor>, tidu::Gradients<DynTensor>)> {
     let seed = normalize_dyn_cotangent(output, cotangent, "Tensor::pullback_wrt")?;
     match output {
         Tensor::F32(value) => {

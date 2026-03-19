@@ -1,4 +1,4 @@
-use super::common::*;
+use super::{builders::*, common::*};
 
 define_binary_ad_builder!(AddAdBuilder, add_ad, "add", generic, |builder| {
     run_scalar_binary_ad(

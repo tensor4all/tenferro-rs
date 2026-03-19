@@ -8,7 +8,7 @@ use super::merge::{
 use super::Tensor;
 use crate::core::{AdTensorSnapshot, DynTensorTyped};
 use crate::{tape, AdTensor, Error, Result};
-use chainrules::Tape;
+use tidu::Tape;
 
 fn ensure_reverse_leaf_attached<T>(input: &AdTensor<T>) -> Result<()>
 where

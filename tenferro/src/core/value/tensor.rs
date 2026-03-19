@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use chainrules::{NodeId as ChainNodeId, Tape, TrackedValue};
 use tenferro_algebra::Scalar;
 use tenferro_tensor::Tensor;
+use tidu::{NodeId as ChainNodeId, Tape, TrackedValue};
 
 use crate::core::{AdMode, DynTensor, DynTensorTyped, NodeId};
 use crate::structured::StructuredTensor;
@@ -54,7 +54,7 @@ pub(crate) enum AdTensorSnapshot<T: Scalar> {
 
 /// Tensor newtype carrying AD mode information.
 ///
-/// Reverse-mode values participate in a homogeneous `chainrules::Tape<DynTensor>`.
+/// Reverse-mode values participate in a homogeneous `tidu::Tape<DynTensor>`.
 /// Scalars in reverse-mode are
 /// represented as rank-0 tensors rather than a separate scalar graph type.
 ///
@@ -142,7 +142,7 @@ impl<T: Scalar> AdTensor<T> {
     /// # Examples
     ///
     /// ```text
-    /// use chainrules::Tape;
+    /// use tidu::Tape;
     /// use tenferro::{core::{AdTensor, DynTensor}};
     ///
     /// let tape = Tape::<DynTensor>::new();
@@ -297,7 +297,7 @@ impl<T: Scalar> AdTensor<T> {
     /// # Examples
     ///
     /// ```text
-    /// use chainrules::Tape;
+    /// use tidu::Tape;
     /// use tenferro::{core::{AdTensor, DynTensor}};
     ///
     /// let tape = Tape::<DynTensor>::new();
@@ -314,7 +314,7 @@ impl<T: Scalar> AdTensor<T> {
     /// # Examples
     ///
     /// ```text
-    /// use chainrules::Tape;
+    /// use tidu::Tape;
     /// use tenferro::{core::{AdTensor, DynTensor}};
     ///
     /// let tape = Tape::<DynTensor>::new();

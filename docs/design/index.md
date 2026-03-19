@@ -13,7 +13,7 @@
 | [tensor.md](./tensor.md) | `Tensor<T>`, `TensorView`, ownership model, async `CompletionEvent` |
 | [inplace-indexing.md](./inplace-indexing.md) | Design for partial in-place updates (`set_item_`, `IndexPut` extension, AD safety policy) |
 | [algebra.md](./algebra.md) | `HasAlgebra`, `Semiring`, tropical and user-defined algebra extensibility |
-| [autodiff.md](./autodiff.md) | AD architecture (`chainrules-core` contracts, homogeneous `Tape<V>` graphs, `Variable<V>` query/mutation APIs), including `retain_graph`/`create_graph` usage examples |
+| [autodiff.md](./autodiff.md) | AD architecture (`chainrules-core` contracts, `chainrules` scalar rules, `tidu` homogeneous `Tape<V>` graphs, and `backward`/`grad` frontend APIs) |
 | [einsum-dyadtensor.md](./einsum-dyadtensor.md) | AD integration design for `tenferro-einsum` + the `tenferro` frontend on top of homogeneous `Tape<V>` and rank-0 tensor scalar semantics |
 | [linalg-prims.md](./linalg-prims.md) | `tenferro-linalg-prims`: backend-facing factorization and solve contracts |
 | [linalg.md](./linalg.md) | `tenferro-linalg` public/composite layer and its relationship to prims/linalg-prims |

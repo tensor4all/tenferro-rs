@@ -1,10 +1,10 @@
 #![allow(dead_code)]
 
-use chainrules::Tape;
 use chainrules_core::NodeId;
 use num_complex::Complex64;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tidu::Tape;
 
 use crate::core::AdMode;
 use crate::structured::StructuredTensor;

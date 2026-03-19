@@ -754,7 +754,7 @@ implemented.
 | **Einsum with contraction tree** | `tenferro-einsum` | `Subscripts`, `ContractionTree`, opt_einsum-style optimization |
 | **Linalg decompositions + AD** | `tenferro-linalg` | SVD/QR/LU/eigen with `(m, n, *)` col-major convention |
 | **AD core traits** | `chainrules-core` | `Differentiable`, `ReverseRule`, `ForwardRule` |
-| **AD tape engine** | `chainrules` | `Tape`, `TrackedValue`, `DualValue`, `pullback` |
+| **AD tape engine** | `tidu` | `Tape`, `TrackedValue`, `DualValue`, `pullback` |
 | **C FFI** | `tenferro-capi` | Opaque handles, DLPack interop |
 | **Tropical algebras** | `tenferro-tropical` | MaxPlus, MinPlus, MaxMul |
 
@@ -766,7 +766,7 @@ implemented.
 | **Batch convention** | `(*, m, n)` — last 2 dims | `(m, n, *)` — first 2 dims |
 | **Type dispatch** | Runtime (dynamic dtype/device) | Compile-time generics `Tensor<T>` |
 | **Algebra dispatch** | N/A (always standard arithmetic) | semiring-family traits parameterized by algebra |
-| **AD system** | Integrated (autograd built into Tensor) | Separated (chainrules-core + chainrules) |
+| **AD system** | Integrated (autograd built into Tensor) | Separated (chainrules-core + chainrules + tidu) |
 | **Backend dispatch** | Runtime dispatcher with dispatch keys | Trait-based static dispatch |
 
 ---

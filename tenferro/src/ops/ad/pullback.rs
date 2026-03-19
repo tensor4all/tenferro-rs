@@ -3,7 +3,7 @@ use crate::core::DynTensorTyped;
 use crate::runtime::contracts::LinalgRuntimeValue;
 use crate::runtime::dispatch::{dispatch_einsum_runtime, with_linalg_runtime};
 use crate::DynTensor;
-use chainrules::Tape;
+use tidu::Tape;
 
 /// Reverse pullback from a reverse-mode output tensor.
 ///

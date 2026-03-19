@@ -1,9 +1,9 @@
 mod organization;
 
-use chainrules::Tape;
 use chainrules_core::AutodiffError;
 use num_complex::Complex64;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tidu::Tape;
 
 use super::*;
 use crate::structured::StructuredTensor;

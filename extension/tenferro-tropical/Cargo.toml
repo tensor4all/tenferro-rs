@@ -13,7 +13,7 @@ tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-prims = { path = "../../tenferro-prims" }
 tenferro-tensor = { path = "../../tenferro-tensor" }
 tenferro-einsum = { path = "../../tenferro-einsum" }
-chainrules = { path = "../../extern/chainrules" }
+tidu.workspace = true
 strided-view.workspace = true
 strided-traits.workspace = true
 strided-perm.workspace = true

@@ -13,7 +13,7 @@ verification procedures (reconstruction checks, finite-difference gradient check
 
 | Location | Content |
 |----------|---------|
-| [`docs/design/autodiff.md`](../design/autodiff.md) | Architecture and API: crate split, homogeneous `Tape<V>` engine, torch-like `Variable<V>` wrapper layer, `BackwardOptions`, and rank-0 tensor scalar semantics |
+| [`docs/design/autodiff.md`](../design/autodiff.md) | Architecture and API: crate split, homogeneous `Tape<V>` engine, `backward`/`grad` frontend APIs, and rank-0 tensor scalar semantics |
 | [`docs/design/einsum-dyadtensor.md`](../design/einsum-dyadtensor.md) | Einsum/frontend AD integration details on top of homogeneous `Tape<V>`, including retain/create semantics and tensor scalar conventions |
 | [`docs/design/linalg.md`](../design/linalg.md) | Linalg API: function signatures, result types, cotangent types, rrule/frule tables |
 | `docs/AD/` (this directory) | Mathematical details: derivations, formulas, verification for each operation |
@@ -25,16 +25,24 @@ verification procedures (reconstruction checks, finite-difference gradient check
 This section is the quick inventory; the per-operation notes below remain the
 source of formula detail.
 
-### `chainrules-scalarops`
+### `chainrules`
 
 - Scalar arithmetic: `add`, `sub`, `mul`, `div` plus matching `*_rrule` / `*_frule`
 - Unary scalar rules: `conj`, `sqrt`, `exp`, `log`
 - Binary scalar rules: `atan2`
 - Power helpers: `powf`, `powi`
 
-`chainrules-scalarops` intentionally stays small. Tensor-level wrappers such as
+`chainrules` intentionally stays small. Tensor-level wrappers such as
 `sin`, `cos`, `tanh`, `asin`, `pow`, `hypot`, `var`, and `std` are implemented
 one layer up in `tenferro` by composing runtime-generic tensor prims.
+
+### `tidu`
+
+`tidu` owns the execution engine:
+
+- reverse mode: `Tape<V>` and `TrackedValue<V>`
+- forward mode: `DualValue<V>`
+- HVP: `Tape::hvp`
 
 ### `tenferro-einsum`
 

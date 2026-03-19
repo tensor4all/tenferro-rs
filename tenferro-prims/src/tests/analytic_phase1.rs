@@ -11,6 +11,59 @@ fn tensor_f64(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn run_unary_f64(ctx: &mut CpuContext, op: AnalyticUnaryOp, input: &Tensor<f64>) -> Tensor<f64> {
+    let plan = <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::plan(
+        ctx,
+        &AnalyticPrimsDescriptor::PointwiseUnary { op },
+        &[&[input.len()], &[input.len()]],
+    )
+    .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        input.dims(),
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        ctx,
+        &plan,
+        1.0,
+        &[input],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+    output
+}
+
+fn run_binary_f64(
+    ctx: &mut CpuContext,
+    op: AnalyticBinaryOp,
+    lhs: &Tensor<f64>,
+    rhs: &Tensor<f64>,
+) -> Tensor<f64> {
+    let plan = <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::plan(
+        ctx,
+        &AnalyticPrimsDescriptor::PointwiseBinary { op },
+        &[&[lhs.len()], &[rhs.len()], &[lhs.len()]],
+    )
+    .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        lhs.dims(),
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        ctx,
+        &plan,
+        1.0,
+        &[lhs, rhs],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+    output
+}
+
 #[test]
 fn cpu_analytic_phase1_supports_exp_log_tanh_and_pow() {
     for op in [
@@ -213,6 +266,84 @@ fn cpu_analytic_phase2_executes_extended_unary_and_moment_reductions() {
     )
     .unwrap();
     assert_eq!(std_out.buffer().as_slice().unwrap(), &[1.0, 1.0]);
+}
+
+#[test]
+fn cpu_analytic_phase2_executes_remaining_unary_and_binary_inventory() {
+    let mut ctx = CpuContext::new(1);
+
+    let expm1 = run_unary_f64(
+        &mut ctx,
+        AnalyticUnaryOp::Expm1,
+        &tensor_f64(&[0.0, 1.0], &[2]),
+    );
+    assert!((expm1.buffer().as_slice().unwrap()[1] - (std::f64::consts::E - 1.0)).abs() < 1.0e-12);
+
+    let log1p = run_unary_f64(
+        &mut ctx,
+        AnalyticUnaryOp::Log1p,
+        &tensor_f64(&[0.0, 3.0], &[2]),
+    );
+    assert!((log1p.buffer().as_slice().unwrap()[1] - 4.0_f64.ln()).abs() < 1.0e-12);
+
+    let tan = run_unary_f64(
+        &mut ctx,
+        AnalyticUnaryOp::Tan,
+        &tensor_f64(&[0.0, std::f64::consts::FRAC_PI_4], &[2]),
+    );
+    assert!((tan.buffer().as_slice().unwrap()[1] - 1.0).abs() < 1.0e-12);
+
+    let acos = run_unary_f64(
+        &mut ctx,
+        AnalyticUnaryOp::Acos,
+        &tensor_f64(&[1.0, 0.5], &[2]),
+    );
+    assert!((acos.buffer().as_slice().unwrap()[1] - std::f64::consts::FRAC_PI_3).abs() < 1.0e-12);
+
+    let cosh = run_unary_f64(
+        &mut ctx,
+        AnalyticUnaryOp::Cosh,
+        &tensor_f64(&[0.0, 1.0], &[2]),
+    );
+    assert!((cosh.buffer().as_slice().unwrap()[1] - 1.0_f64.cosh()).abs() < 1.0e-12);
+
+    let acosh = run_unary_f64(
+        &mut ctx,
+        AnalyticUnaryOp::Acosh,
+        &tensor_f64(&[1.0, 2.0], &[2]),
+    );
+    assert!((acosh.buffer().as_slice().unwrap()[1] - 2.0_f64.acosh()).abs() < 1.0e-12);
+
+    let atanh = run_unary_f64(
+        &mut ctx,
+        AnalyticUnaryOp::Atanh,
+        &tensor_f64(&[0.0, 0.5], &[2]),
+    );
+    assert!((atanh.buffer().as_slice().unwrap()[1] - 0.5_f64.atanh()).abs() < 1.0e-12);
+
+    let atan2 = run_binary_f64(
+        &mut ctx,
+        AnalyticBinaryOp::Atan2,
+        &tensor_f64(&[0.0, 1.0], &[2]),
+        &tensor_f64(&[1.0, 1.0], &[2]),
+    );
+    assert!((atan2.buffer().as_slice().unwrap()[1] - std::f64::consts::FRAC_PI_4).abs() < 1.0e-12);
+
+    let hypot = run_binary_f64(
+        &mut ctx,
+        AnalyticBinaryOp::Hypot,
+        &tensor_f64(&[3.0, 5.0], &[2]),
+        &tensor_f64(&[4.0, 12.0], &[2]),
+    );
+    assert_eq!(hypot.buffer().as_slice().unwrap(), &[5.0, 13.0]);
+
+    let xlogy = run_binary_f64(
+        &mut ctx,
+        AnalyticBinaryOp::Xlogy,
+        &tensor_f64(&[0.0, 2.0], &[2]),
+        &tensor_f64(&[0.5, std::f64::consts::E], &[2]),
+    );
+    assert_eq!(xlogy.buffer().as_slice().unwrap(), &[0.0, 2.0]);
 }
 
 #[test]

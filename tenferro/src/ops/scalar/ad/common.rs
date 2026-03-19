@@ -1,4 +1,4 @@
-pub(super) use chainrules_scalarops::ScalarAd;
+pub(super) use chainrules::ScalarAd;
 pub(super) use num_traits::NumCast;
 pub(super) use tenferro_algebra::Scalar;
 pub(super) use tenferro_prims::{
@@ -20,165 +20,123 @@ pub(super) use crate::ops::scalar::primal::{
 };
 pub(super) use crate::runtime::contracts::{GenericAdRuntimeValue, RealAdRuntimeValue};
 
-macro_rules! define_unary_ad_builder {
-    ($builder:ident, $ctor:ident, $doc_op:literal, generic, |$self_ident:ident| $run:block) => {
-        #[doc = concat!("Builder for AD `", $doc_op, "` on tensors.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&x).run()?;\n```")]
-        pub struct $builder<'a, T: Scalar> {
-            tensor: &'a AdTensor<T>,
-        }
-
-        impl<'a, T> $builder<'a, T>
-        where
-            T: GenericAdRuntimeValue,
-        {
-            #[doc = concat!("Executes AD `", $doc_op, "`.")]
-            #[doc = ""]
-            #[doc = "# Examples"]
-            #[doc = ""]
-            #[doc = "```ignore\nlet out = builder.run()?;\n```"]
-            pub fn run(self) -> Result<AdTensor<T>> {
-                let $self_ident = self;
-                $run
-            }
-        }
-
-        #[doc = concat!("Creates a builder for AD `", $doc_op, "`.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&x).run()?;\n```")]
-        pub fn $ctor<'a, T>(tensor: &'a AdTensor<T>) -> $builder<'a, T>
-        where
-            T: GenericAdRuntimeValue,
-        {
-            $builder { tensor }
-        }
-    };
-    ($builder:ident, $ctor:ident, $doc_op:literal, real, |$self_ident:ident| $run:block) => {
-        #[doc = concat!("Builder for AD `", $doc_op, "` on tensors.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&x).run()?;\n```")]
-        pub struct $builder<'a, T: Scalar> {
-            tensor: &'a AdTensor<T>,
-        }
-
-        impl<'a, T> $builder<'a, T>
-        where
-            T: RealAdRuntimeValue,
-        {
-            #[doc = concat!("Executes AD `", $doc_op, "`.")]
-            #[doc = ""]
-            #[doc = "# Examples"]
-            #[doc = ""]
-            #[doc = "```ignore\nlet out = builder.run()?;\n```"]
-            pub fn run(self) -> Result<AdTensor<T>> {
-                let $self_ident = self;
-                $run
-            }
-        }
-
-        #[doc = concat!("Creates a builder for AD `", $doc_op, "`.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&x).run()?;\n```")]
-        pub fn $ctor<'a, T>(tensor: &'a AdTensor<T>) -> $builder<'a, T>
-        where
-            T: RealAdRuntimeValue,
-        {
-            $builder { tensor }
-        }
-    };
+fn dense_host_values<T>(tensor: &Tensor<T>, op_name: &'static str) -> Result<Vec<T>>
+where
+    T: Scalar + Copy,
+{
+    let contiguous = tensor.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+    let slice = contiguous
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("{op_name} could not materialize dense tensor on host memory"),
+        })?;
+    let start = usize::try_from(contiguous.offset()).map_err(|_| Error::InvalidAdTensor {
+        message: format!(
+            "{op_name} computed negative dense tensor offset {}",
+            contiguous.offset()
+        ),
+    })?;
+    let end = start
+        .checked_add(contiguous.len())
+        .ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("{op_name} dense tensor offset overflow"),
+        })?;
+    slice
+        .get(start..end)
+        .map(|values| values.to_vec())
+        .ok_or_else(|| Error::InvalidAdTensor {
+            message: format!("{op_name} dense tensor slice [{start}..{end}) is out of bounds"),
+        })
 }
 
-pub(super) use define_unary_ad_builder;
-
-macro_rules! define_binary_ad_builder {
-    ($builder:ident, $ctor:ident, $doc_op:literal, generic, |$self_ident:ident| $run:block) => {
-        #[doc = concat!("Builder for AD `", $doc_op, "` on tensors.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&a, &b).run()?;\n```")]
-        pub struct $builder<'a, T: Scalar> {
-            lhs: &'a AdTensor<T>,
-            rhs: &'a AdTensor<T>,
-        }
-
-        impl<'a, T> $builder<'a, T>
-        where
-            T: GenericAdRuntimeValue,
-        {
-            #[doc = concat!("Executes AD `", $doc_op, "`.")]
-            #[doc = ""]
-            #[doc = "# Examples"]
-            #[doc = ""]
-            #[doc = "```ignore\nlet out = builder.run()?;\n```"]
-            pub fn run(self) -> Result<AdTensor<T>> {
-                let $self_ident = self;
-                $run
-            }
-        }
-
-        #[doc = concat!("Creates a builder for AD `", $doc_op, "`.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&a, &b).run()?;\n```")]
-        pub fn $ctor<'a, T>(lhs: &'a AdTensor<T>, rhs: &'a AdTensor<T>) -> $builder<'a, T>
-        where
-            T: GenericAdRuntimeValue,
-        {
-            $builder { lhs, rhs }
-        }
-    };
-    ($builder:ident, $ctor:ident, $doc_op:literal, real, |$self_ident:ident| $run:block) => {
-        #[doc = concat!("Builder for AD `", $doc_op, "` on tensors.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&a, &b).run()?;\n```")]
-        pub struct $builder<'a, T: Scalar> {
-            lhs: &'a AdTensor<T>,
-            rhs: &'a AdTensor<T>,
-        }
-
-        impl<'a, T> $builder<'a, T>
-        where
-            T: RealAdRuntimeValue,
-        {
-            #[doc = concat!("Executes AD `", $doc_op, "`.")]
-            #[doc = ""]
-            #[doc = "# Examples"]
-            #[doc = ""]
-            #[doc = "```ignore\nlet out = builder.run()?;\n```"]
-            pub fn run(self) -> Result<AdTensor<T>> {
-                let $self_ident = self;
-                $run
-            }
-        }
-
-        #[doc = concat!("Creates a builder for AD `", $doc_op, "`.")]
-        #[doc = ""]
-        #[doc = "# Examples"]
-        #[doc = ""]
-        #[doc = concat!("```ignore\nlet out = tenferro::", stringify!($ctor), "(&a, &b).run()?;\n```")]
-        pub fn $ctor<'a, T>(lhs: &'a AdTensor<T>, rhs: &'a AdTensor<T>) -> $builder<'a, T>
-        where
-            T: RealAdRuntimeValue,
-        {
-            $builder { lhs, rhs }
-        }
-    };
+fn elementwise_unary_primal_tensor<T>(
+    op_name: &'static str,
+    input: &Tensor<T>,
+    mut primal: impl FnMut(T) -> T,
+) -> Result<Tensor<T>>
+where
+    T: GenericAdRuntimeValue,
+{
+    let values = dense_host_values(input, op_name)?;
+    let output: Vec<T> = values.into_iter().map(&mut primal).collect();
+    Tensor::from_slice(
+        &output,
+        input.dims(),
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .map_err(Error::from)
 }
 
-pub(super) use define_binary_ad_builder;
+fn elementwise_unary_tangent_tensor<T>(
+    op_name: &'static str,
+    input: &Tensor<T>,
+    tangent: &Tensor<T>,
+    mut frule: impl FnMut(T, T) -> (T, T),
+) -> Result<Tensor<T>>
+where
+    T: GenericAdRuntimeValue,
+{
+    let input_values = dense_host_values(input, op_name)?;
+    let tangent_values = dense_host_values(tangent, op_name)?;
+    if input_values.len() != tangent_values.len() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} elementwise tangent length mismatch: {} vs {}",
+                input_values.len(),
+                tangent_values.len()
+            ),
+        });
+    }
+    let output: Vec<T> = input_values
+        .into_iter()
+        .zip(tangent_values)
+        .map(|(x, dx)| frule(x, dx).1)
+        .collect();
+    Tensor::from_slice(
+        &output,
+        input.dims(),
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .map_err(Error::from)
+}
+
+fn elementwise_unary_pullback_tensor<T>(
+    op_name: &'static str,
+    input: &Tensor<T>,
+    primal: &Tensor<T>,
+    cotangent: &Tensor<T>,
+    mut rrule: impl FnMut(T, T, T) -> T,
+) -> Result<Tensor<T>>
+where
+    T: GenericAdRuntimeValue,
+{
+    let input_values = dense_host_values(input, op_name)?;
+    let primal_values = dense_host_values(primal, op_name)?;
+    let cotangent_values = dense_host_values(cotangent, op_name)?;
+    if input_values.len() != primal_values.len() || input_values.len() != cotangent_values.len() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "{op_name} elementwise pullback length mismatch: input={}, primal={}, cotangent={}",
+                input_values.len(),
+                primal_values.len(),
+                cotangent_values.len()
+            ),
+        });
+    }
+    let output: Vec<T> = input_values
+        .into_iter()
+        .zip(primal_values)
+        .zip(cotangent_values)
+        .map(|((x, y), cot)| rrule(x, y, cot))
+        .collect();
+    Tensor::from_slice(
+        &output,
+        input.dims(),
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .map_err(Error::from)
+}
 
 pub(super) fn scalar_from_usize<T: ScalarAd>(value: usize) -> Result<T> {
     let Some(real) = <T::Real as NumCast>::from(value) else {
@@ -204,18 +162,6 @@ where
     T: Scalar + ScalarAd + Copy,
 {
     broadcast_scalar_like(T::one(), template)
-}
-
-pub(super) fn mul_with_conj_factor<T>(
-    op_name: &'static str,
-    value: &Tensor<T>,
-    factor: &Tensor<T>,
-) -> Result<Tensor<T>>
-where
-    T: GenericAdRuntimeValue,
-{
-    let conj_factor = scalar_unary_primal(op_name, ScalarUnaryOp::Conj, factor)?;
-    scalar_binary_primal(op_name, ScalarBinaryOp::Mul, value, &conj_factor)
 }
 
 pub(super) fn centered_input_tensor<T>(
@@ -312,6 +258,40 @@ where
     }
 
     Ok(out)
+}
+
+pub(super) fn run_elementwise_scalar_unary_ad<T, FPrimalElem, FFruleElem, FRruleElem>(
+    op_name: &'static str,
+    pullback_op_name: &'static str,
+    input: &AdTensor<T>,
+    primal_elem: FPrimalElem,
+    frule_elem: FFruleElem,
+    rrule_elem: FRruleElem,
+) -> Result<AdTensor<T>>
+where
+    T: GenericAdRuntimeValue,
+    FPrimalElem: Fn(T) -> T + Copy,
+    FFruleElem: Fn(T, T) -> (T, T) + Copy,
+    FRruleElem: Fn(T, T, T) -> T + Send + Sync + Copy + 'static,
+{
+    run_scalar_unary_ad(
+        op_name,
+        pullback_op_name,
+        input,
+        move |tensor| elementwise_unary_primal_tensor(op_name, tensor, primal_elem),
+        move |input_primal, _output_primal, tangent| {
+            elementwise_unary_tangent_tensor(op_name, input_primal, tangent, frule_elem)
+        },
+        move |input_primal, output_primal, cotangent| {
+            elementwise_unary_pullback_tensor(
+                pullback_op_name,
+                input_primal,
+                output_primal,
+                cotangent,
+                rrule_elem,
+            )
+        },
+    )
 }
 
 pub(super) fn run_scalar_binary_ad<T, FPrimal, FTangent, FPullback>(

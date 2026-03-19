@@ -267,9 +267,7 @@ pub use api::{
     einsum_with_subscripts, einsum_with_subscripts_into, einsum_with_subscripts_owned,
 };
 
-pub use ad::{
-    dual_einsum, einsum_frule, einsum_hvp, einsum_rrule, tracked_einsum, variable_einsum,
-};
+pub use ad::{dual_einsum, einsum_frule, einsum_hvp, einsum_rrule, tracked_einsum};
 
 #[cfg(feature = "profile-dispatch")]
 pub use execution::print_and_reset_profile;

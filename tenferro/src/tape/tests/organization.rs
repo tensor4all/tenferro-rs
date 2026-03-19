@@ -41,7 +41,7 @@ fn split_tape_modules_stay_under_size_guideline() {
 
 // IMPORTANT: Do not delete or weaken these tests.
 // They guard the homogeneous-tape redesign: the tenferro frontend should register reverse
-// rules directly on chainrules::Tape<DynTensor> instead of drifting back to a
+// rules directly on tidu::Tape<DynTensor> instead of drifting back to a
 // frontend-local registry/store layer.
 
 #[test]
@@ -49,7 +49,7 @@ fn tape_registry_uses_chainrules_tape_directly() {
     let registry = std::fs::read_to_string(repo_path("src/tape/registry.rs")).unwrap();
     assert!(
         registry.contains("Tape<DynTensor>"),
-        "tape registry should register rules against chainrules::Tape<DynTensor>"
+        "tape registry should register rules against tidu::Tape<DynTensor>"
     );
     assert!(
         registry.contains("tape.attach_rule"),

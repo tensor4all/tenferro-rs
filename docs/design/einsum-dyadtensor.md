@@ -1,7 +1,8 @@
 # Einsum + DyadTensor AD Design
 
 This document describes how `tenferro-einsum` and the `tenferro` frontend
-layers integrate with the current `chainrules` AD model.
+layers integrate with the current `tidu` AD engine and `chainrules` scalar
+rule layer.
 
 For the core AD contracts, see [autodiff.md](./autodiff.md). For math
 derivations, see [AD Formula Notes](../AD/index.md).
@@ -10,8 +11,7 @@ derivations, see [AD Formula Notes](../AD/index.md).
 
 This document covers:
 
-- how einsum uses `Tape<V>`, `TrackedValue<V>`, `DualValue<V>`, and
-  `Variable<V>`
+- how einsum uses `Tape<V>`, `TrackedValue<V>`, and `DualValue<V>`
 - tensor scalar semantics for loss construction
 - `retain_graph` / `create_graph` expectations at the integration boundary
 
@@ -24,7 +24,6 @@ Einsum and frontend layers integrate with a single AD execution model:
 
 - reverse mode: homogeneous `Tape<V>` graphs
 - forward mode: `DualValue<V>`
-- torch-like wrapper APIs: `Variable<V>`
 
 There is no mixed runtime-erased tape path for custom values.
 
@@ -32,8 +31,8 @@ Examples:
 
 - `tracked_einsum` works with `TrackedValue<Tensor<T>>`
 - `dual_einsum` works with `DualValue<Tensor<T>>`
-- frontend wrappers may expose torch-like convenience APIs, but they still
-  lower to homogeneous `Variable<V>` / `Tape<V>` execution
+- frontend wrappers may expose eager convenience APIs, but they still
+  lower to homogeneous `TrackedValue<V>` / `Tape<V>` execution
 
 ## Tensor Scalar Semantics
 
@@ -70,14 +69,13 @@ The reverse-mode flow is:
 1. build leaves on `Tape<Tensor<T>>`
 2. execute tracked einsum operations
 3. obtain a rank-0 loss tensor
-4. call `tape.pullback(&loss)` or use `Variable<V>::backward`
+4. call `tape.pullback(&loss)` or the higher-level `tenferro::backward(...)`
 
 ### Query APIs
 
 Higher layers that need query-style gradients use:
 
-- `autograd::grad_tangent`
-- `autograd::grad_variable`
+- `tenferro::grad`
 
 These remain monomorphic. They do not mutate `.grad()` / `.hvp()` buffers.
 
@@ -92,7 +90,8 @@ let loss = tracked_einsum("i,i->", &[&x, &x]).unwrap();
 let hv = tape.hvp(&loss).unwrap();
 ```
 
-`backward_hvp(create_graph = true)` is still unsupported in the current phase.
+High-level eager HVP wrappers are still intentionally limited in the current
+phase; the low-level `tidu::Tape::hvp` path is the source of truth.
 
 ## Forward-Mode Integration
 
@@ -107,10 +106,8 @@ let hv = tape.hvp(&loss).unwrap();
 
 The integration layer should assume the following core rules:
 
-- `effective_retain_graph = retain_graph.unwrap_or(create_graph)`
-- `grad_tangent(create_graph = true)` is unsupported
-- `grad_variable(create_graph = true)` is supported only when `V::Tangent = V`
-  and the participating rules expose graph-aware pullback wiring
+- `retain_graph = false` frees the shared tape after eager reverse queries
+- `tenferro::grad(create_graph = true)` is currently unsupported
 - non-scalar outputs require explicit seed cotangents
 - single-element outputs may omit the seed
 
@@ -135,7 +132,7 @@ Integration tests should cover at least:
 
 - tracked einsum producing rank-0 tensor losses
 - backward on homogeneous tensor graphs
-- `grad_tangent` and `grad_variable` behavior on supported einsum wrappers
+- `tenferro::grad` behavior on supported einsum wrappers
 - HVP on homogeneous tensor graphs with tangent-seeded leaves
 - shape `[1]` tensors continuing to follow normal tensor semantics instead of
   scalar shortcuts

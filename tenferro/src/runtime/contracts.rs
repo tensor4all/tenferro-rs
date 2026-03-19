@@ -1,6 +1,6 @@
 //! Hidden runtime contract aliases for the public tenferro frontend surface.
 
-use chainrules_scalarops::ScalarAd;
+use chainrules::ScalarAd;
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Standard};

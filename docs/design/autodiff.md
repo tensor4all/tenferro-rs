@@ -34,13 +34,21 @@ It does not provide an execution engine.
 
 ### `chainrules`
 
-`chainrules` provides the execution engine:
+`chainrules` provides engine-independent scalar AD rules and helpers:
+
+- scalar `rrule` / `frule` entrypoints (`add`, `mul`, `sqrt`, `exp`, `sin`, ...)
+- `ScalarAd`
+- real/complex projection helpers such as `handle_r_to_c_*`
+
+It does not provide a tape or tracked-value runtime.
+
+### `tidu`
+
+`tidu` provides the execution engine:
 
 - `Tape<V>`: reverse-mode tape for homogeneous graphs
 - `TrackedValue<V>`: reverse-mode tracked value
 - `DualValue<V>`: forward-mode value+tangent wrapper
-- `Variable<V>`: torch-like reverse-mode wrapper with `.grad()` / `.hvp()`
-- `BackwardOptions<V>`
 - `AutogradGraph<V>`
 
 There is no heterogeneous tape surface in the current design. A graph contains
@@ -57,7 +65,7 @@ Examples:
 The reverse-mode model is intentionally monomorphic.
 
 - Every `Tape<V>` contains only values of type `V`
-- Every `Variable<V>` in an `AutogradGraph<V>` shares the same `V`
+- Every `TrackedValue<V>` in an `AutogradGraph<V>` shares the same `V`
 - Downstream custom-type AD remains supported through `Differentiable`
   implementations and operation-specific rules
 
@@ -66,38 +74,33 @@ This is the only graph model that the current public API supports.
 ## Public Surface
 
 ```rust
-pub struct BackwardOptions<V: Differentiable> {
-    pub retain_graph: Option<bool>,
+pub struct BackwardOptions {
+    pub retain_graph: bool,
     pub create_graph: bool,
-    pub seed_grad: Option<V::Tangent>,
+}
+
+pub struct GradOptions {
+    pub retain_graph: bool,
+    pub create_graph: bool,
 }
 
 pub struct Tape<V: Differentiable> { /* internal */ }
 pub struct TrackedValue<V: Differentiable> { /* internal */ }
 pub struct DualValue<V: Differentiable> { /* internal */ }
-pub struct Variable<V: Differentiable> { /* internal */ }
 
-pub mod autograd {
-    pub fn add<V>(lhs: &Variable<V>, rhs: &Variable<V>) -> AdResult<Variable<V>>;
-    pub fn square<V>(x: &Variable<V>) -> AdResult<Variable<V>>;
+pub fn grad(
+    outputs: &[&Tensor],
+    inputs: &[&Tensor],
+    grad_outputs: Option<&[Tensor]>,
+    options: GradOptions,
+) -> Result<Vec<Option<Tensor>>>;
 
-    pub fn grad_tangent<V>(
-        output: &Variable<V>,
-        inputs: &[&Variable<V>],
-        options: BackwardOptions<V>,
-    ) -> AdResult<Vec<V::Tangent>>
-    where
-        V: Differentiable,
-        V::Tangent: Clone;
-
-    pub fn grad_variable<V>(
-        output: &Variable<V>,
-        inputs: &[&Variable<V>],
-        options: BackwardOptions<V>,
-    ) -> AdResult<Vec<Variable<V>>>
-    where
-        V: Differentiable<Tangent = V> + Clone + Add<Output = V> + Mul<Output = V> + 'static;
-}
+pub fn backward(
+    outputs: &[&Tensor],
+    grad_outputs: Option<&[Tensor]>,
+    inputs: &[&Tensor],
+    options: BackwardOptions,
+) -> Result<()>;
 ```
 
 ## Tensor Scalar Semantics
@@ -145,16 +148,14 @@ Reverse-mode implicit seed creation is based on `Differentiable::num_elements()`
 rather than tensor rank.
 
 - implicit seed is allowed when `num_elements() == 1`
-- otherwise `seed_grad` is required
+- otherwise an explicit cotangent seed is required
 
 This applies to:
 
 - `Tape::pullback`
 - `Tape::hvp`
-- `Variable::backward`
-- `Variable::backward_hvp`
-- `autograd::grad_tangent`
-- `autograd::grad_variable`
+- `tenferro::backward`
+- `tenferro::grad`
 
 That means:
 
@@ -165,35 +166,15 @@ That means:
 
 ## `retain_graph` / `create_graph` Contract
 
-The effective retain policy follows PyTorch:
+Current frontend behavior:
 
-```text
-effective_retain_graph = options.retain_graph.unwrap_or(options.create_graph)
-```
+- `retain_graph = false` frees the shared tape after `tenferro::grad` /
+  `tenferro::backward`
+- `create_graph = true` is currently rejected by the eager `tenferro` frontend
+- `tidu::Tape::hvp` remains available for low-level tangent-seeded reverse
+  queries
 
-### `grad_tangent`
-
-- returns detached `V::Tangent`
-- rejects `create_graph = true` with `ModeNotSupported`
-- requires `seed_grad` when `output.num_elements() != 1`
-
-### `grad_variable`
-
-- returns `Variable<V>` results
-- supports graph-connected outputs only when `V::Tangent = V`
-- requires `seed_grad` when `output.num_elements() != 1`
-- may reject `create_graph = true` on operations that do not yet provide
-  graph-aware pullback wiring
-
-### `backward_hvp`
-
-- updates both `.grad()` and `.hvp()`
-- requires tangent-seeded leaves
-- currently rejects `create_graph = true`
-
-There is no fallback heterogeneous graph path for `V::Tangent != V`. If
-higher-order graph-connected gradients are needed, the operation/type is simply
-unsupported in the current phase unless it fits the `V::Tangent = V` path.
+There is no fallback heterogeneous graph path for `V::Tangent != V`.
 
 ## DyadTensor Code Layout
 
@@ -214,9 +195,8 @@ across unrelated roots such as `api/`, `dyn_types/`, and `reverse_tape/`.
 
 - `AutogradGraph<V>` is shared through `Arc<Mutex<_>>`
 - backward execution is single-threaded per graph in this phase
-- `Variable<V>::backward` and `backward_hvp` accumulate into stored buffers
-- `autograd::grad_*` query APIs do not mutate stored `.grad()` / `.hvp()`
-  buffers
+- `tenferro::backward` accumulates into leaf `.grad()` buffers
+- `tenferro::grad` is a query API and does not mutate stored `.grad()` buffers
 - `zero_grad()` is explicit per leaf; there is no graph-wide reset helper
 
 ## Custom Types
@@ -252,7 +232,7 @@ assert_eq!(grads.get(x.node_id().unwrap()).unwrap().0, 1.0);
 ### Reverse mode on tensors
 
 ```rust,ignore
-use chainrules::Tape;
+use tidu::Tape;
 use std::cell::RefCell;
 use std::rc::Rc;
 use tenferro_algebra::Standard;
@@ -277,7 +257,7 @@ let _gx = grads.get(x.node_id().unwrap()).unwrap();
 ### Forward mode on tensors
 
 ```rust,ignore
-use chainrules::DualValue;
+use tidu::DualValue;
 use tenferro_algebra::Standard;
 use tenferro_einsum::dual_einsum;
 use tenferro_prims::{CpuBackend, CpuContext};
@@ -299,8 +279,8 @@ Current AD tests should cover at least:
 - non-scalar outputs requiring explicit seeds
 - single-element outputs allowing implicit seeds
 - `retain_graph` / `create_graph` lifetime behavior
-- detached tangent query behavior for `grad_tangent`
-- graph-connected higher-order behavior for supported `grad_variable` cases
+- eager `backward(...)` / `grad(...)` behavior on supported tensor wrappers
+- low-level `DualValue` and HVP behavior on supported operation families
 
 ## Current Runtime Status
 

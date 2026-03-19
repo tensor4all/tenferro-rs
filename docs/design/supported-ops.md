@@ -169,7 +169,7 @@ Internal builder APIs are implemented for:
 ### Runtime status
 
 - API contract: runtime-generic across CPU, CUDA, and ROCm
-- internal chainrules-backed einsum helpers remain backend-parametric over `tenferro-einsum::EinsumBackend`; runtime selection still happens through the frontend runtime context type
+- internal tidu-backed einsum helpers remain backend-parametric over `tenferro-einsum::EinsumBackend`; runtime selection still happens through the frontend runtime context type
 - Structured tensor materialization and compressed einsum reuse the same einsum runtime-dispatch layer rather than maintaining separate CPU/CUDA/ROCm builder paths
 - Builder execution uses an explicit default-runtime holder, and reverse-mode bookkeeping stays on one homogeneous runtime-typed graph
 - `Tensor` is the canonical public payload for downstream tensor algebra; implicit result-type promotion happens inside mixed-dtype tensor ops (`complex` beats `real`, 64-bit beats 32-bit), explicit numeric casts use `to_scalar_type(...)`, and `detach()` drops AD metadata without switching to a second public tensor type
@@ -216,7 +216,7 @@ The exported C surface currently focuses on a narrow, stable subset:
 - Zero-copy interoperability is intentionally unsupported.
 - Conversion helpers are CPU-buffer oriented and reject non-owned/non-CPU materialization through checked errors.
 
-## `chainrules-scalarops`
+## `chainrules`
 
 This external crate provides the scalar formula basis reused by
 `tenferro` tensor-level wrappers.
@@ -228,6 +228,6 @@ This external crate provides the scalar formula basis reused by
 
 The broader tensor-level analytic families in `tenferro` are built
 from these scalar formulas plus runtime-generic tensor primitives. They are not
-all exported directly from `chainrules-scalarops`.
+all exported directly from `chainrules`.
 
 For formula details, see [AD Formula Notes](../AD/index.md).

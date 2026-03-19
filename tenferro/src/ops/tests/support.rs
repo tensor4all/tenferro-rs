@@ -3,9 +3,9 @@ use crate::runtime::dispatch::{unsupported_runtime_capability, with_runtime};
 use crate::structured::StructuredTensor;
 use crate::AdTensor;
 use crate::Result;
-use chainrules::Tape;
 use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor as DenseTensor;
+use tidu::Tape;
 
 pub(crate) fn with_cpu_runtime<R>(
     op: &'static str,

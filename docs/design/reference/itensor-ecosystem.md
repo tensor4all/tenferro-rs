@@ -134,7 +134,7 @@ Architecture:
 block-sparse-einsum (separate crate)
     |
     +-- uses: chainrules-core (Differentiable, ReverseRule for AD)
-    +-- uses: chainrules (Tape, TrackedValue for AD engine)
+    +-- uses: tidu (Tape, TrackedValue for AD engine)
     +-- uses: tenferro-prims (batched_gemm for individual dense blocks)
     +-- uses: tenferro-device (device abstraction)
     |

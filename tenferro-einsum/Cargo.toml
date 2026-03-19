@@ -12,7 +12,7 @@ tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
 tenferro-tensor = { path = "../tenferro-tensor" }
-chainrules = { path = "../extern/chainrules" }
+tidu.workspace = true
 strided-view.workspace = true
 strided-perm.workspace = true
 num-traits.workspace = true

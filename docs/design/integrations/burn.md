@@ -235,7 +235,7 @@ impl<B: TensorNetworkOps, C: CheckpointStrategy>
 
 ### Why not use tenferro's Tape inside Burn?
 
-tenferro has its own AD engine (`chainrules::Tape`), but using two separate AD tapes would create a discontinuity: Burn couldn't propagate gradients through the boundary. Instead, we extract only the **mathematical VJP rule** from tenferro's rrule implementations and call it within Burn's backward pass. This gives Burn full visibility of the gradient flow.
+tenferro has its own AD engine (`tidu::Tape`), but using two separate AD tapes would create a discontinuity: Burn couldn't propagate gradients through the boundary. Instead, we extract only the **mathematical VJP rule** from tenferro's rrule implementations and call it within Burn's backward pass. This gives Burn full visibility of the gradient flow.
 
 ### Why a separate crate?
 
@@ -289,5 +289,5 @@ preserving the small POC-facing API.
 - Burn custom operation example: `burn/examples/custom-cubecl-kernel/`
 - Burn autodiff internals: `burn/crates/burn-autodiff/src/ops/backward.rs`
 - Burn backend trait: `burn/crates/burn-backend/src/backend/base.rs`
-- tenferro chainrules-core: `tenferro-rs/extern/chainrules-core/src/lib.rs`
+- tenferro chainrules-core: `tensor4all/chainrules-rs/crates/chainrules-core/src/lib.rs`
 - tenferro tensor type: `tenferro-rs/tenferro-tensor/src/tensor/mod.rs`

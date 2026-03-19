@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use chainrules::{autograd, AdResult, Differentiable, TrackedValue, Variable};
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_tensor::Tensor;
+use tidu::{AdResult, Differentiable, TrackedValue};
 
 use crate::api::einsum;
 use crate::execution::backend::{BackendContext, EinsumBackend};
@@ -18,7 +18,7 @@ use super::rules::einsum_frule_impl;
 ///
 /// ```ignore
 /// use std::sync::{Arc, Mutex};
-/// use chainrules::Tape;
+/// use tidu::Tape;
 /// use tenferro_algebra::Standard;
 /// use tenferro_einsum::tracked_einsum;
 /// use tenferro_prims::{CpuBackend, CpuContext};
@@ -43,12 +43,12 @@ where
     BackendContext<Alg, Backend>: Send,
 {
     let subs = Subscripts::parse(subscripts)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+        .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.value()).collect();
     let output = einsum::<Alg, Backend>(
         &mut *ctx.lock().map_err(|_| {
-            chainrules::AutodiffError::InvalidArgument(
+            tidu::AutodiffError::InvalidArgument(
                 "tracked_einsum backend context lock is poisoned".to_string(),
             )
         })?,
@@ -56,7 +56,7 @@ where
         &primals,
         None,
     )
-    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+    .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
 
     let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
         operands.iter().map(|op| op.tangent()).collect();
@@ -64,7 +64,7 @@ where
         Some(
             einsum_frule_impl::<Alg, Backend>(
                 &mut *ctx.lock().map_err(|_| {
-                    chainrules::AutodiffError::InvalidArgument(
+                    tidu::AutodiffError::InvalidArgument(
                         "tracked_einsum backend context lock is poisoned".to_string(),
                     )
                 })?,
@@ -73,7 +73,7 @@ where
                 &primals,
                 &tangents,
             )
-            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?,
+            .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?,
         )
     } else {
         None
@@ -88,13 +88,13 @@ where
         .iter()
         .filter(|op| op.requires_grad())
         .find_map(|op| op.tape())
-        .ok_or(chainrules::AutodiffError::MissingNode)?
+        .ok_or(tidu::AutodiffError::MissingNode)?
         .clone();
 
     for op in operands.iter().filter(|op| op.requires_grad()) {
         if let Some(op_tape) = op.tape() {
             if !tape.same_tape(op_tape) {
-                return Err(chainrules::AutodiffError::InvalidArgument(
+                return Err(tidu::AutodiffError::InvalidArgument(
                     "tracked_einsum: operands belong to different AD tapes".into(),
                 ));
             }
@@ -111,80 +111,4 @@ where
     };
 
     Ok(tape.record_op(output, Box::new(rule), tangent_out))
-}
-
-/// Variable einsum (monomorphic reverse/forward-mode via `Variable` API).
-///
-/// # Examples
-///
-/// ```ignore
-/// use std::sync::{Arc, Mutex};
-/// use chainrules::Variable;
-/// use tenferro_algebra::Standard;
-/// use tenferro_einsum::variable_einsum;
-/// use tenferro_prims::{CpuBackend, CpuContext};
-///
-/// let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
-/// let out = variable_einsum::<Standard<f64>, CpuBackend>(ctx, "ij,jk->ik", &[&a, &b]).unwrap();
-/// let _ = out.value();
-/// ```
-pub fn variable_einsum<Alg: 'static, Backend>(
-    ctx: Arc<Mutex<BackendContext<Alg, Backend>>>,
-    subscripts: &str,
-    operands: &[&Variable<Tensor<Alg::Scalar>>],
-) -> AdResult<Variable<Tensor<Alg::Scalar>>>
-where
-    Alg: Semiring + Send + Sync,
-    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
-    Backend: EinsumBackend<Alg> + Send + Sync + 'static,
-    Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>> + 'static,
-    BackendContext<Alg, Backend>: Send,
-{
-    let subs = Subscripts::parse(subscripts)
-        .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
-
-    let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.value()).collect();
-    let output = einsum::<Alg, Backend>(
-        &mut *ctx.lock().map_err(|_| {
-            chainrules::AutodiffError::InvalidArgument(
-                "variable_einsum backend context lock is poisoned".to_string(),
-            )
-        })?,
-        subscripts,
-        &primals,
-        None,
-    )
-    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
-
-    let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
-        operands.iter().map(|op| op.tangent()).collect();
-    let tangent_out = if tangents.iter().any(Option::is_some) {
-        Some(
-            einsum_frule_impl::<Alg, Backend>(
-                &mut *ctx.lock().map_err(|_| {
-                    chainrules::AutodiffError::InvalidArgument(
-                        "variable_einsum backend context lock is poisoned".to_string(),
-                    )
-                })?,
-                &subs,
-                None,
-                &primals,
-                &tangents,
-            )
-            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?,
-        )
-    } else {
-        None
-    };
-
-    let rule = EinsumReverseRule::<Alg, Backend> {
-        ctx: ctx.clone(),
-        subscripts: subs,
-        primals: primals.iter().map(|&t| t.clone()).collect(),
-        input_tangents: operands.iter().map(|op| op.tangent().cloned()).collect(),
-        input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
-        _phantom: PhantomData,
-    };
-
-    autograd::record_op(output, operands, Box::new(rule), tangent_out)
 }

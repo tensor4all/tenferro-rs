@@ -31,8 +31,8 @@ Shared: tenferro-algebra
     Semiring/algebra vocabulary and scalar typing
         tenferro-device
     workspace error and device abstractions
-        chainrules-core / chainrules
-    AD traits and engine
+        chainrules-core / chainrules / tidu
+    AD traits, scalar rules, and engine
 
 Layer 1: CPU/GPU backend implementations
     faer / BLAS / LAPACK / cuTENSOR / future GPU linalg providers

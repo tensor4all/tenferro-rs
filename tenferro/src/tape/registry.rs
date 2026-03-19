@@ -1,4 +1,4 @@
-use ::chainrules::{ReverseRule, Tape};
+use ::tidu::{ReverseRule, Tape};
 use chainrules_core::AutodiffError;
 
 use crate::core::{DynTensorTyped, NodeId};

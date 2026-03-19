@@ -1,12 +1,12 @@
 # Scalar and Reduction AD Rules
 
 This note records the scalar AD formulas implemented in
-`chainrules-scalarops` and the tensor-level wrappers exposed through
+`chainrules` and the tensor-level wrappers exposed through
 `tenferro`.
 
 ## Scope
 
-Implemented low-level scalar basis in `chainrules-scalarops`:
+Implemented low-level scalar basis in `chainrules`:
 
 - `add`, `sub`, `mul`, `div`
 - `conj`
@@ -181,7 +181,7 @@ This is `powf` with integer exponent semantics.
 
 The following rules are implemented one layer up by composing the scalar and
 tensor primitive families. They are not exported as standalone
-`chainrules-scalarops::*_rrule` / `*_frule` functions.
+`chainrules::*_rrule` / `*_frule` functions.
 
 ### Unary analytic wrappers
 
@@ -278,7 +278,7 @@ not the design direction for `#441`.
 Implementation placement:
 
 - scalar formulas and helper projection (`handle_r_to_c` equivalent):
-  `extern/chainrules-scalarops`
+  `tensor4all/chainrules-rs/crates/chainrules`
 - tensor-level generic unary/binary/reduction wrappers:
   `tenferro::ops::scalar::ad`
 - eager AD entrypoints:

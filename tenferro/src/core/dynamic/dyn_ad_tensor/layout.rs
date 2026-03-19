@@ -2,9 +2,9 @@ mod structured;
 
 use num_traits::Zero;
 
-use chainrules::Tape;
 use tenferro_algebra::Scalar;
 use tenferro_tensor::{MemoryOrder, Tensor};
+use tidu::Tape;
 
 use super::super::tensor_ops::{tensor_element, unflatten_index_column_major};
 use crate::core::{AdTensorSnapshot, DynTensorTyped};

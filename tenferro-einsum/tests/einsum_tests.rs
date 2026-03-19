@@ -991,8 +991,8 @@ fn einsum_wrong_operand_count() {
 
 #[test]
 fn tracked_einsum_matmul_pullback() {
-    use chainrules::Tape;
     use std::sync::{Arc, Mutex};
+    use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
@@ -1111,8 +1111,8 @@ fn tracked_einsum_matmul_pullback() {
 
 #[test]
 fn tracked_einsum_rejects_mixed_tapes() {
-    use chainrules::Tape;
     use std::sync::{Arc, Mutex};
+    use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
@@ -1131,7 +1131,7 @@ fn tracked_einsum_rejects_mixed_tapes() {
 
 #[test]
 fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
-    use chainrules::TrackedValue;
+    use tidu::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let a =
@@ -1148,7 +1148,7 @@ fn tracked_einsum_without_grad_returns_plain_tracked_tensor() {
 
 #[test]
 fn tracked_einsum_rejects_invalid_subscripts() {
-    use chainrules::TrackedValue;
+    use tidu::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
@@ -1157,12 +1157,12 @@ fn tracked_einsum_rejects_invalid_subscripts() {
     let err = tracked_einsum::<S, CpuBackend>(ctx, "ij,jk", &[&a, &b])
         .err()
         .unwrap();
-    assert!(matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("->")));
+    assert!(matches!(err, tidu::AutodiffError::InvalidArgument(msg) if msg.contains("->")));
 }
 
 #[test]
 fn tracked_einsum_rejects_poisoned_backend_context_on_entry() {
-    use chainrules::TrackedValue;
+    use tidu::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
@@ -1172,14 +1172,12 @@ fn tracked_einsum_rejects_poisoned_backend_context_on_entry() {
     let err = tracked_einsum::<S, CpuBackend>(ctx, "ij,jk->ik", &[&a, &b])
         .err()
         .unwrap();
-    assert!(
-        matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned"))
-    );
+    assert!(matches!(err, tidu::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned")));
 }
 
 #[test]
 fn tracked_einsum_pullback_rejects_poisoned_backend_context() {
-    use chainrules::Tape;
+    use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
@@ -1191,14 +1189,12 @@ fn tracked_einsum_pullback_rejects_poisoned_backend_context() {
     poison_mutex(&ctx);
 
     let err = tape.pullback(&loss).err().unwrap();
-    assert!(
-        matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned"))
-    );
+    assert!(matches!(err, tidu::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned")));
 }
 
 #[test]
 fn tracked_einsum_hvp_rejects_poisoned_backend_context() {
-    use chainrules::Tape;
+    use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
@@ -1212,9 +1208,7 @@ fn tracked_einsum_hvp_rejects_poisoned_backend_context() {
     poison_mutex(&ctx);
 
     let err = tape.hvp(&loss).err().unwrap();
-    assert!(
-        matches!(err, chainrules::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned"))
-    );
+    assert!(matches!(err, tidu::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned")));
 }
 
 // ============================================================================
@@ -2463,8 +2457,8 @@ fn einsum_no_fw_grad_unchanged() {
 /// grad_A = 2*C @ B^T, and d(grad_A)/dt = 2*(dA@B)@B^T
 #[test]
 fn hvp_via_fw_grad_composition() {
-    use chainrules::Tape;
     use std::sync::{Arc, Mutex};
+    use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
@@ -2557,8 +2551,8 @@ fn hvp_via_fw_grad_composition() {
 
 #[test]
 fn hvp_via_leaf_with_tangent_tracks_einsum_direction() {
-    use chainrules::Tape;
     use std::sync::{Arc, Mutex};
+    use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
@@ -2587,8 +2581,8 @@ fn hvp_via_leaf_with_tangent_tracks_einsum_direction() {
 
 #[test]
 fn einsum_hvp_matches_manual_matmul_rule() {
-    use chainrules::Differentiable;
     use tenferro_einsum::einsum_hvp;
+    use tidu::Differentiable;
 
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
@@ -3091,7 +3085,7 @@ fn einsum_into_parenthesized() {
 
 #[test]
 fn dual_einsum_parenthesized() {
-    use chainrules::DualValue;
+    use tidu::DualValue;
     // dual_einsum with parenthesized subscripts must produce same tangent as flat
     let mut ctx = CpuContext::new(1);
 
@@ -3129,7 +3123,7 @@ fn dual_einsum_parenthesized() {
 
 #[test]
 fn dual_einsum_without_tangents_returns_primal_only() {
-    use chainrules::DualValue;
+    use tidu::DualValue;
 
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();

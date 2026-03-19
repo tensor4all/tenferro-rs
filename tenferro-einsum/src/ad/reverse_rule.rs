@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use chainrules::{AdResult, Differentiable, NodeId, ReverseRule};
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_tensor::Tensor;
+use tidu::{AdResult, Differentiable, NodeId, ReverseRule};
 
 use crate::api::einsum_with_subscripts;
 use crate::execution::backend::{BackendContext, EinsumBackend};
@@ -44,7 +44,7 @@ where
         let n = self.primals.len();
         let mut results = Vec::new();
         let mut ctx = self.ctx.lock().map_err(|_| {
-            chainrules::AutodiffError::InvalidArgument(
+            tidu::AutodiffError::InvalidArgument(
                 "einsum reverse-rule backend context lock is poisoned".to_string(),
             )
         })?;
@@ -72,7 +72,7 @@ where
 
             let mut grad =
                 einsum_with_subscripts::<Alg, Backend>(&mut *ctx, &rev_subs, &rev_operands, None)
-                    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+                    .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
 
             if rev_operands.iter().any(|t| t.has_fw_grad()) {
                 let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
@@ -106,7 +106,7 @@ where
         let n = self.primals.len();
         let mut results = Vec::new();
         let mut ctx = self.ctx.lock().map_err(|_| {
-            chainrules::AutodiffError::InvalidArgument(
+            tidu::AutodiffError::InvalidArgument(
                 "einsum reverse-rule backend context lock is poisoned".to_string(),
             )
         })?;
@@ -136,7 +136,7 @@ where
 
             let grad =
                 einsum_with_subscripts::<Alg, Backend>(&mut *ctx, &rev_subs, &rev_operands, None)
-                    .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+                    .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
             let grad_tangent = einsum_frule_impl::<Alg, Backend>(
                 &mut *ctx,
                 &rev_subs,
@@ -144,7 +144,7 @@ where
                 &rev_operands,
                 &rev_tangents,
             )
-            .map_err(|e| chainrules::AutodiffError::InvalidArgument(format!("{e}")))?;
+            .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
             results.push((node_id, grad, grad_tangent));
         }
 

@@ -23,7 +23,7 @@ pub enum AdMode {
 ///
 /// This is the primary extension point of the crate for primal/forward-mode
 /// values. Reverse-mode graph values are represented by [`crate::AdTensor`]
-/// on a homogeneous `chainrules::Tape<crate::DynTensor>`.
+/// on a homogeneous `tidu::Tape<crate::DynTensor>`.
 ///
 /// # Examples
 ///

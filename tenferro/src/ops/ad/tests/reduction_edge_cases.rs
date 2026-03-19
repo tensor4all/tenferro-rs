@@ -1,6 +1,6 @@
 use super::{reverse_leaf_f64, tensor_from_vec_f64 as tensor_from_slice, tensor_to_vec_f64};
-use chainrules::Tape;
 use tenferro_prims::CpuContext;
+use tidu::Tape;
 
 use crate::ops::std_ad;
 use crate::{set_default_runtime, AdTensor, RuntimeContext};
