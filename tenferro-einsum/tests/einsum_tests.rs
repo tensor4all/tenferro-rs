@@ -1431,6 +1431,91 @@ macro_rules! typed_einsum_tests {
             }
 
             #[test]
+            fn einsum_binary_multi_repeat_contract() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 2, 2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(
+                        idx[0] + 10 * idx[1] + 100 * idx[2] + 1000 * idx[3] + 1,
+                    )
+                });
+                let b = make_tensor(&[3, 2], |idx| {
+                    <$T as TestScalar>::from_usize(idx[0] * 2 + idx[1] + 1)
+                });
+
+                let c = einsum::<TS, CpuBackend>(&mut ctx, "iiij,jk->ik", &[&a, &b], None).unwrap();
+                assert_eq!(c.dims(), &[2, 2]);
+
+                for i in 0..2 {
+                    for k in 0..2 {
+                        let mut expected = <$T as TestScalar>::from_f64(0.0);
+                        for j in 0..3 {
+                            expected = expected + get_t(&a, &[i, i, i, j]) * get_t(&b, &[j, k]);
+                        }
+                        assert!(
+                            <$T as TestScalar>::approx_eq(get_t(&c, &[i, k]), expected),
+                            "C[{i},{k}] = {:?}, expected {:?}, diff = {}",
+                            get_t(&c, &[i, k]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(get_t(&c, &[i, k]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn einsum_multi_repeat_diagonal_extract() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 2, 2, 3], |idx| {
+                    <$T as TestScalar>::from_usize(
+                        idx[0] + 10 * idx[1] + 100 * idx[2] + 1000 * idx[3] + 1,
+                    )
+                });
+
+                let y = einsum::<TS, CpuBackend>(&mut ctx, "iiij->ij", &[&a], None).unwrap();
+                assert_eq!(y.dims(), &[2, 3]);
+
+                for i in 0..2 {
+                    for j in 0..3 {
+                        let expected = get_t(&a, &[i, i, i, j]);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(get_t(&y, &[i, j]), expected),
+                            "Y[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            get_t(&y, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(get_t(&y, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
+            fn einsum_binary_four_way_repeat_outer_product() {
+                let mut ctx = CpuContext::new(1);
+                let a = make_tensor(&[2, 2, 2, 2], |idx| {
+                    <$T as TestScalar>::from_usize(
+                        idx[0] + 10 * idx[1] + 100 * idx[2] + 1000 * idx[3] + 1,
+                    )
+                });
+                let v = make_tensor(&[3], |idx| <$T as TestScalar>::from_usize(idx[0] + 2));
+
+                let y = einsum::<TS, CpuBackend>(&mut ctx, "iiii,j->ij", &[&a, &v], None).unwrap();
+                assert_eq!(y.dims(), &[2, 3]);
+
+                for i in 0..2 {
+                    for j in 0..3 {
+                        let expected = get_t(&a, &[i, i, i, i]) * get_t(&v, &[j]);
+                        assert!(
+                            <$T as TestScalar>::approx_eq(get_t(&y, &[i, j]), expected),
+                            "Y[{i},{j}] = {:?}, expected {:?}, diff = {}",
+                            get_t(&y, &[i, j]),
+                            expected,
+                            <$T as TestScalar>::diff_norm(get_t(&y, &[i, j]), expected)
+                        );
+                    }
+                }
+            }
+
+            #[test]
             fn einsum_matmul() {
                 let mut ctx = CpuContext::new(1);
                 let a = make_tensor(&[2, 3], |idx| {

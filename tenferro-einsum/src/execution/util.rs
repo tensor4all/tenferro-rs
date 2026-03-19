@@ -5,6 +5,7 @@ use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::execution::pool::BufferPool;
+use crate::planning::plan::DiagPlan;
 use crate::syntax::subscripts::Subscripts;
 
 pub(crate) const MAX_POOLED_BYTES: usize = 64 * 1024 * 1024; // 64 MB
@@ -30,6 +31,15 @@ pub(crate) fn alloc_tensor_from_pool<T: Scalar>(
     }
     Tensor::from_vec(data, dims, &strides, 0)
         .unwrap_or_else(|_| Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor))
+}
+
+/// Apply a staged diagonal extraction plan to a tensor.
+pub(crate) fn apply_diag_plan<T: Scalar>(tensor: &Tensor<T>, plan: &DiagPlan) -> Result<Tensor<T>> {
+    let mut current = tensor.clone();
+    for stage in &plan.stages {
+        current = current.diagonal(&stage.axis_pairs)?;
+    }
+    Ok(current)
 }
 
 /// Infer the common memory space from a set of operand tensors.

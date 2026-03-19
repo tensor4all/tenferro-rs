@@ -7,8 +7,9 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::execution::backend::BackendContext;
 use crate::execution::pool::BufferPool;
-use crate::execution::util::alloc_tensor_from_pool;
+use crate::execution::util::{alloc_tensor_from_pool, apply_diag_plan};
 use crate::planning::classify::compute_permutation;
+use crate::planning::plan::compute_diag_plan_for_labels;
 
 fn copy_structural_permute<Alg, Backend>(
     ctx: &mut BackendContext<Alg, Backend>,
@@ -151,38 +152,17 @@ where
             <Backend as TensorSemiringCore<Alg>>::execute(ctx, &plan, alpha, &[input], beta, output)
         } else {
             // Diagonal extraction: repeated labels appear in output
-            // Diagonal extraction + copy
-            let mut axis_pairs = Vec::new();
-            for &l in &repeated_in_output {
-                let positions = &label_positions[&l];
-                if positions.len() != 2 {
-                    return Err(tenferro_device::Error::InvalidArgument(format!(
-                        "label {} appears {} times in input; only 2-way diagonal supported",
-                        l,
-                        positions.len()
-                    )));
-                }
-                axis_pairs.push((positions[0], positions[1]));
-            }
+            let labels_to_extract: HashSet<u32> = repeated_in_output.iter().copied().collect();
+            let diag_plan =
+                compute_diag_plan_for_labels(subs_a, &labels_to_extract).ok_or_else(|| {
+                    tenferro_device::Error::InvalidArgument(
+                        "expected repeated labels to produce a diagonal extraction plan".into(),
+                    )
+                })?;
 
-            // Extract diagonal as a new Tensor (shares buffer via Arc)
-            let diag_tensor = input.diagonal(&axis_pairs)?;
-
-            // Build subscripts after diagonal extraction
-            let mut used = vec![false; subs_a.len()];
-            for &(a, b) in &axis_pairs {
-                used[a] = true;
-                used[b] = true;
-            }
-            let mut after_diag_subs: Vec<u32> = Vec::new();
-            for (i, &l) in subs_a.iter().enumerate() {
-                if !used[i] {
-                    after_diag_subs.push(l);
-                }
-            }
-            for &l in &repeated_in_output {
-                after_diag_subs.push(l);
-            }
+            // Extract diagonal as a new Tensor (shares buffer via Arc).
+            let diag_tensor = apply_diag_plan(input, &diag_plan)?;
+            let after_diag_subs = diag_plan.result_subs.clone();
 
             // Check if we need reduction or just permutation
             let after_set: HashSet<u32> = after_diag_subs.iter().copied().collect();
@@ -282,36 +262,15 @@ where
 
         // Stage 1: Diagonal extraction
         if !diag_extract_labels.is_empty() {
-            let mut axis_pairs = Vec::new();
-            for &l in &diag_extract_labels {
-                let positions: Vec<usize> = current_subs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, &s)| s == l)
-                    .map(|(i, _)| i)
-                    .collect();
-                for pair in positions.windows(2) {
-                    axis_pairs.push((pair[0], pair[1]));
-                }
-            }
-            current = current.diagonal(&axis_pairs)?;
-
-            // Rebuild subscripts: unused positions first, then one copy per diagonal label
-            let mut used = vec![false; current_subs.len()];
-            for &(a, b) in &axis_pairs {
-                used[a] = true;
-                used[b] = true;
-            }
-            let mut new_subs = Vec::new();
-            for (i, &l) in current_subs.iter().enumerate() {
-                if !used[i] {
-                    new_subs.push(l);
-                }
-            }
-            for &l in &diag_extract_labels {
-                new_subs.push(l);
-            }
-            current_subs = new_subs;
+            let labels_to_extract: HashSet<u32> = diag_extract_labels.iter().copied().collect();
+            let diag_plan = compute_diag_plan_for_labels(&current_subs, &labels_to_extract)
+                .ok_or_else(|| {
+                    tenferro_device::Error::InvalidArgument(
+                        "expected repeated labels to produce a diagonal extraction plan".into(),
+                    )
+                })?;
+            current = apply_diag_plan(&current, &diag_plan)?;
+            current_subs = diag_plan.result_subs.clone();
         }
 
         // Stage 2: Trace/Reduce for labels remaining in input but not in output.

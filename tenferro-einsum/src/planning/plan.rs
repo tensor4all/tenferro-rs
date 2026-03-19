@@ -16,12 +16,20 @@ pub(crate) struct ReducePlan {
 /// Pre-computed diagonal extraction plan for one operand.
 ///
 /// When an operand has repeated labels (e.g. `A[i,i,j]`), this plan
-/// describes how to extract the diagonal via `Tensor::diagonal` before
-/// the main contraction.  Only 2-way repetition per label is supported.
-pub(crate) struct DiagPlan {
-    /// Axis pairs to pass to `Tensor::diagonal` (position-based).
+/// describes how to extract the diagonal via one or more
+/// `Tensor::diagonal` stages before the main contraction.
+pub(crate) struct DiagStage {
+    /// Axis pairs to pass to `Tensor::diagonal` for this stage.
     pub(crate) axis_pairs: Vec<(usize, usize)>,
-    /// Subscripts after diagonal extraction: `[non_used..., diag_labels...]`.
+    /// Subscripts after this stage: `[non_used..., diag_labels...]`.
+    pub(crate) result_subs: Vec<u32>,
+}
+
+/// Pre-computed multi-stage diagonal extraction plan for one operand.
+pub(crate) struct DiagPlan {
+    /// Sequential diagonal stages, each using only disjoint axis pairs.
+    pub(crate) stages: Vec<DiagStage>,
+    /// Final subscripts after all diagonal extraction stages.
     pub(crate) result_subs: Vec<u32>,
 }
 
@@ -115,60 +123,103 @@ pub(crate) fn compute_reduce_plan(
 /// Pre-compute a diagonal extraction plan for an operand with repeated labels.
 ///
 /// Returns `None` if all labels are unique (no diagonal extraction needed).
-/// Only 2-way repetition per label is supported; 3+ way repetition returns
-/// an error via the `Err` variant of the returned `Result`.
+pub(crate) fn compute_diag_plan_for_labels(
+    subs: &[u32],
+    labels_to_extract: &HashSet<u32>,
+) -> Option<DiagPlan> {
+    fn label_positions(subs: &[u32]) -> HashMap<u32, Vec<usize>> {
+        let mut positions = HashMap::new();
+        for (i, &label) in subs.iter().enumerate() {
+            positions.entry(label).or_insert_with(Vec::new).push(i);
+        }
+        positions
+    }
+
+    fn build_diag_stage(subs: &[u32], labels_to_extract: &HashSet<u32>) -> Option<DiagStage> {
+        let positions_by_label = label_positions(subs);
+        let mut seen = HashSet::new();
+        let repeated_labels: Vec<u32> = subs
+            .iter()
+            .copied()
+            .filter(|label| {
+                labels_to_extract.contains(label)
+                    && positions_by_label
+                        .get(label)
+                        .is_some_and(|positions| positions.len() > 1)
+                    && seen.insert(*label)
+            })
+            .collect();
+
+        if repeated_labels.is_empty() {
+            return None;
+        }
+
+        let mut axis_pairs = Vec::new();
+        let mut used = vec![false; subs.len()];
+        let mut diag_labels = Vec::new();
+
+        for label in repeated_labels {
+            let positions = &positions_by_label[&label];
+            for chunk in positions.chunks(2) {
+                if let [left, right] = chunk {
+                    axis_pairs.push((*left, *right));
+                    used[*left] = true;
+                    used[*right] = true;
+                    diag_labels.push(label);
+                }
+            }
+        }
+
+        if axis_pairs.is_empty() {
+            return None;
+        }
+
+        let mut result_subs = Vec::with_capacity(subs.len() - axis_pairs.len());
+        for (i, &label) in subs.iter().enumerate() {
+            if !used[i] {
+                result_subs.push(label);
+            }
+        }
+        result_subs.extend(diag_labels);
+
+        Some(DiagStage {
+            axis_pairs,
+            result_subs,
+        })
+    }
+
+    let mut current_subs = subs.to_vec();
+    let mut stages = Vec::new();
+    while let Some(stage) = build_diag_stage(&current_subs, labels_to_extract) {
+        current_subs = stage.result_subs.clone();
+        stages.push(stage);
+    }
+
+    if stages.is_empty() {
+        None
+    } else {
+        Some(DiagPlan {
+            stages,
+            result_subs: current_subs,
+        })
+    }
+}
+
 pub(crate) fn compute_diag_plan(subs: &[u32]) -> Result<Option<DiagPlan>, String> {
-    // Find labels that appear more than once
+    let mut repeated_labels = HashSet::new();
     let mut label_positions: HashMap<u32, Vec<usize>> = HashMap::new();
     for (i, &label) in subs.iter().enumerate() {
         label_positions.entry(label).or_default().push(i);
     }
-
-    let mut axis_pairs = Vec::new();
-    let mut repeated_labels = Vec::new();
-    for (&label, positions) in &label_positions {
-        match positions.len() {
-            1 => {} // unique, nothing to do
-            2 => {
-                axis_pairs.push((positions[0], positions[1]));
-                repeated_labels.push(label);
-            }
-            n => {
-                return Err(format!(
-                    "label {} appears {} times in operand; only 2-way diagonal supported",
-                    label, n
-                ));
-            }
+    for &label in subs {
+        if label_positions
+            .get(&label)
+            .is_some_and(|positions| positions.len() > 1)
+        {
+            repeated_labels.insert(label);
         }
     }
-
-    if axis_pairs.is_empty() {
-        return Ok(None);
-    }
-
-    // Build result_subs matching Tensor::diagonal output layout:
-    // [non_used_axes..., diag_axes...]
-    let mut used = vec![false; subs.len()];
-    for &(a, b) in &axis_pairs {
-        used[a] = true;
-        used[b] = true;
-    }
-
-    let mut result_subs = Vec::new();
-    for (i, &label) in subs.iter().enumerate() {
-        if !used[i] {
-            result_subs.push(label);
-        }
-    }
-    // Diagonal axes are appended in the order of axis_pairs
-    for &label in &repeated_labels {
-        result_subs.push(label);
-    }
-
-    Ok(Some(DiagPlan {
-        axis_pairs,
-        result_subs,
-    }))
+    Ok(compute_diag_plan_for_labels(subs, &repeated_labels))
 }
 
 /// Compile step plans for all steps in a contraction tree.
