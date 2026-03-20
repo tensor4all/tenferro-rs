@@ -82,6 +82,22 @@ CUDA phase-1 uses a hybrid backend:
 
 No CPU transfer is permitted inside CUDA execution paths.
 
+### cuTENSOR capability audit
+
+The direct/custom split is based on the official cuTENSOR unary operator table,
+not on the currently minimal wrapper in `tenferro-prims`.
+
+- real dtypes support direct unary operators such as `SQRT`, `RCP`, `EXP`,
+  `LOG`, `ABS`, `NEG`, `SIN`, `COS`, `TAN`, `SINH`, `COSH`, `ASIN`, `ACOS`,
+  `ATAN`, `ASINH`, `ACOSH`, and `ATANH`
+- complex direct unary support is limited to `IDENTITY` and `CONJ`
+- binary direct support remains limited to the library's binary element-wise
+  operators such as `ADD`, `MUL`, `MAX`, and `MIN`
+
+This means the existing classification stays mostly intact, but the wrapper
+layer must be extended to expose the required cuTENSOR operator constants and
+support predicates must remain truthful per dtype.
+
 ### Why not depend on `cubecl`
 
 `cubecl` is a full runtime/compiler stack rather than a small helper library.
@@ -183,9 +199,28 @@ The stable cache key includes:
 - primitive family and op
 - dtype
 - rank/layout variant
-- backend ABI version
+- custom-runtime ABI version
 - device SM architecture
 - compile options
+- kernel source hash
+- CUDA driver version
+- cuTENSOR library version
+
+### Cache Invalidation
+
+The cache is invalidated by construction through the stable key. The key must
+change when any of these inputs change:
+
+- embedded CUDA C++ source bytes
+- entrypoint name
+- launch/compile options
+- SM architecture
+- CUDA driver version
+- cuTENSOR version
+- custom-runtime ABI version constant
+
+The ABI version constant is a manually bumped integer for any change to launch
+metadata encoding, scalar packing, or artifact serialization.
 
 ### Cache Layout
 
@@ -225,6 +260,20 @@ This model is required for:
 - `Mean`
 - multi-stage moment operations
 
+### cuTENSOR Workspace
+
+The current CUDA backend estimates workspace size when creating plans but does
+not use that value during execution. Phase-1 must fix this.
+
+- plan metadata must retain the estimated workspace size
+- execute-time code must allocate GPU workspace when the requested size is
+  non-zero
+- null workspace is valid only when the estimated workspace size is zero
+
+Workspace allocation may share the same bounded GPU allocation machinery as
+scratch buffers, but it must remain explicit in the internal plan/execution
+model.
+
 ## Scratch Allocation
 
 Scratch buffers are GPU-resident and managed by `CudaContext`.
@@ -233,6 +282,7 @@ Scratch buffers are GPU-resident and managed by `CudaContext`.
 - acquired at execute time
 - reused across invocations where possible
 - returned to a small context-local cache after execution
+- bounded to avoid unbounded GPU memory growth
 
 Expected needs:
 
@@ -240,6 +290,12 @@ Expected needs:
 - `Var`: at least two scratch slots
 - `Std`: same as `Var`, followed by final square-root step
 - diagonal-family ops: zero or one scratch slot depending on kernel path
+
+Retention policy:
+
+- at most four cached scratch buffers per `(device, dtype)` bucket
+- buffers larger than `64 MiB` are not retained after execution
+- excess retained buffers are evicted in least-recently-used order
 
 ## Error Model
 
