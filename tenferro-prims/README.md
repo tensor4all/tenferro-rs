@@ -71,12 +71,18 @@ CUDA scalar-family support today is:
 - real `f32`/`f64`: full scalar inventory
 - complex `Complex32`/`Complex64`: unary `Neg`, `Conj`, `Abs`, `Reciprocal`, `Real`, `Imag`, `Square`; binary `Add`, `Sub`, `Mul`, `Div`; reductions `Sum`, `Prod`, `Mean`
 - real-only on CUDA: `Maximum`, `Minimum`, `ClampMin`, `ClampMax`, `Max`, `Min`
+  These remain real-only because phase-1 does not define an ordering for
+  complex tensors.
 
 CUDA analytic-family support today is:
 
 - real `f32`/`f64`: full analytic inventory
 - complex `Complex32`/`Complex64`: all analytic unary ops plus binary `Pow` and `Xlogy`
 - real-only on CUDA: `Atan2`, `Hypot`, `Var`, `Std`
+  Complex `Var`/`Std` remain intentionally unsupported because phase-1 does not
+  fix a canonical real-valued complex reduction contract; callers should
+  compose the desired statistic explicitly from `real`, `imag`, `abs`, and
+  existing reductions.
 
 The cache root is selected in this order:
 
