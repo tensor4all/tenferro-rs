@@ -4,7 +4,7 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
 use super::Tensor;
-use crate::layout::{compute_contiguous_strides, copy_strided};
+use crate::layout::compute_contiguous_strides;
 use crate::MemoryOrder;
 
 impl<T: Scalar> Tensor<T> {
