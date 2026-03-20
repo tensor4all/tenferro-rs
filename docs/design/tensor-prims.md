@@ -119,10 +119,12 @@ Current state by family:
   when they need semiring execution without naming a concrete backend type.
 - `TensorScalarPrims` has explicit CPU planning/execution for the phase-1
   unary, binary, and reduction inventory, and explicit CUDA execution for the
-  real `f32`/`f64` phase-1 inventory.
+  real `f32`/`f64` inventory plus the supported complex subset on
+  `Complex32`/`Complex64`.
 - `TensorAnalyticPrims` has explicit CPU planning/execution for the phase-1
   unary, binary, and reduction inventory, and explicit CUDA execution for the
-  real `f32`/`f64` phase-1 inventory.
+  real `f32`/`f64` inventory plus the supported complex subset on
+  `Complex32`/`Complex64`.
 - ROCm remains a truthful stub backend for scalar and analytic families in this
   phase.
 

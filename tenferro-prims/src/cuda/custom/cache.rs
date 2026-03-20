@@ -5,19 +5,58 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use tenferro_device::{Error, Result};
 
-pub(super) fn pointwise_module_key(
+fn module_key(
+    tag: &[u8],
     source: &str,
     sm_major: i32,
     sm_minor: i32,
     driver_version: i32,
+    compile_options: &[String],
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"tenferro-prims-cuda-pointwise-real-v1");
+    hasher.update(tag);
     hasher.update(source.as_bytes());
     hasher.update(sm_major.to_le_bytes());
     hasher.update(sm_minor.to_le_bytes());
     hasher.update(driver_version.to_le_bytes());
+    for option in compile_options {
+        hasher.update(option.as_bytes());
+    }
     format!("{:x}", hasher.finalize())
+}
+
+pub(super) fn pointwise_real_module_key(
+    source: &str,
+    sm_major: i32,
+    sm_minor: i32,
+    driver_version: i32,
+    compile_options: &[String],
+) -> String {
+    module_key(
+        b"tenferro-prims-cuda-pointwise-real-v1",
+        source,
+        sm_major,
+        sm_minor,
+        driver_version,
+        compile_options,
+    )
+}
+
+pub(super) fn pointwise_complex_module_key(
+    source: &str,
+    sm_major: i32,
+    sm_minor: i32,
+    driver_version: i32,
+    compile_options: &[String],
+) -> String {
+    module_key(
+        b"tenferro-prims-cuda-pointwise-complex-v1",
+        source,
+        sm_major,
+        sm_minor,
+        driver_version,
+        compile_options,
+    )
 }
 
 pub(super) fn load_ptx(cache_key: &str) -> Result<Option<String>> {

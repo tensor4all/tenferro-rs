@@ -47,7 +47,7 @@ and solve kernels stay in `tenferro-linalg-prims`.
 | Backend | Status |
 | --- | --- |
 | CPU | Semiring core/fast path, scalar, and analytic families are implemented. |
-| CUDA | Semiring core/fast path are implemented. Scalar and analytic families are implemented for real `f32`/`f64` tensors with GPU-resident execution. |
+| CUDA | Semiring core/fast path are implemented. Scalar and analytic families execute GPU-resident on real `f32`/`f64` tensors, plus the supported complex subset on `Complex32`/`Complex64`. |
 | ROCm | Stub only. Support predicates remain false and planning/execution return unsupported errors. |
 
 CUDA support is opt-in via `--features cuda`. GPU support is truthful rather
@@ -65,6 +65,18 @@ The CUDA backend uses two execution paths:
   pointwise cases
 - custom CUDA C++ kernels for phase-1 scalar/analytic gaps, compiled with
   `NVRTC` and cached on disk as PTX artifacts
+
+CUDA scalar-family support today is:
+
+- real `f32`/`f64`: full scalar inventory
+- complex `Complex32`/`Complex64`: unary `Neg`, `Conj`, `Abs`, `Reciprocal`, `Real`, `Imag`, `Square`; binary `Add`, `Sub`, `Mul`, `Div`; reductions `Sum`, `Prod`, `Mean`
+- real-only on CUDA: `Maximum`, `Minimum`, `ClampMin`, `ClampMax`, `Max`, `Min`
+
+CUDA analytic-family support today is:
+
+- real `f32`/`f64`: full analytic inventory
+- complex `Complex32`/`Complex64`: all analytic unary ops plus binary `Pow` and `Xlogy`
+- real-only on CUDA: `Atan2`, `Hypot`, `Var`, `Std`
 
 The cache root is selected in this order:
 

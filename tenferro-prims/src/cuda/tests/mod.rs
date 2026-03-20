@@ -1,3 +1,4 @@
+mod complex;
 mod organization;
 
 use tenferro_algebra::Standard;
@@ -71,7 +72,7 @@ fn cuda_device_zero_is_available() -> bool {
     .unwrap_or(false)
 }
 
-fn cuda_runtime_is_available() -> Option<&'static str> {
+pub(super) fn cuda_runtime_is_available() -> Option<&'static str> {
     let path = available_cutensor_library_path()?;
     if cuda_device_zero_is_available() {
         Some(path)

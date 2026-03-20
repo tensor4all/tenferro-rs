@@ -15,14 +15,18 @@ use crate::{
     AnalyticUnaryOp,
 };
 
-use super::custom::{RealBinaryKernelOp, RealUnaryKernelOp};
+use super::custom::{
+    ComplexBinaryKernelOp, ComplexUnaryKernelOp, RealBinaryKernelOp, RealUnaryKernelOp,
+};
 use super::family_common::{
-    plan_reduction_shapes, scale_real_alpha, supports_real_scalar_type, validate_pointwise_shapes,
+    plan_reduction_shapes, scale_real_alpha, supports_complex_scalar_type,
+    supports_real_scalar_type, validate_pointwise_shapes,
 };
 use super::planning::plan_reduction;
 use super::pointwise_ops::{
-    execute_binary_trinary, execute_copy_with_accum, execute_custom_real_binary,
-    execute_custom_real_unary, execute_direct_unary, execute_square,
+    execute_binary_trinary, execute_copy_with_accum, execute_custom_complex_binary,
+    execute_custom_complex_unary, execute_custom_real_binary, execute_custom_real_unary,
+    execute_direct_unary, execute_square,
 };
 use super::runtime::{
     allocate_workspace, ensure_device_tensor, new_gpu_tensor, null_stream,
@@ -75,14 +79,17 @@ pub(super) fn plan_analytic_descriptor<S: Scalar + 'static>(
 }
 
 pub(super) fn has_analytic_support<S: Scalar + 'static>(desc: AnalyticPrimsDescriptor) -> bool {
-    if !supports_real_scalar_type::<S>() {
-        return false;
+    if supports_real_scalar_type::<S>() {
+        return true;
     }
-    match desc {
-        AnalyticPrimsDescriptor::PointwiseUnary { .. } => true,
-        AnalyticPrimsDescriptor::PointwiseBinary { .. } => true,
-        AnalyticPrimsDescriptor::Reduction { .. } => true,
+    if supports_complex_scalar_type::<S>() {
+        return match desc {
+            AnalyticPrimsDescriptor::PointwiseUnary { op } => supports_complex_analytic_unary(op),
+            AnalyticPrimsDescriptor::PointwiseBinary { op } => supports_complex_analytic_binary(op),
+            AnalyticPrimsDescriptor::Reduction { .. } => false,
+        };
     }
+    false
 }
 
 pub(super) fn execute_analytic_plan<S: Scalar + 'static>(
@@ -141,7 +148,11 @@ fn execute_analytic_unary<S: Scalar + 'static>(
     validate_runtime_shape("input", inputs[0].dims(), &plan.shapes[0])?;
     validate_runtime_shape("output", output.dims(), &plan.shapes[1])?;
 
-    if let Some(op_a) = direct_analytic_unary(op) {
+    if supports_complex_scalar_type::<S>() {
+        return execute_complex_analytic_unary(ctx, op, alpha, inputs[0], beta, output);
+    }
+
+    if let Some(op_a) = direct_real_analytic_unary(op) {
         return execute_direct_unary(ctx, op_a, alpha, inputs[0], beta, output);
     }
 
@@ -157,6 +168,37 @@ fn execute_analytic_unary<S: Scalar + 'static>(
         }
     };
     execute_custom_real_unary(ctx, custom_op, alpha, inputs[0], beta, output)
+}
+
+fn execute_complex_analytic_unary<S: Scalar + 'static>(
+    ctx: &mut CudaContext,
+    op: AnalyticUnaryOp,
+    alpha: S,
+    input: &Tensor<S>,
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()> {
+    let custom_op = match op {
+        AnalyticUnaryOp::Sqrt => ComplexUnaryKernelOp::Sqrt,
+        AnalyticUnaryOp::Rsqrt => ComplexUnaryKernelOp::Rsqrt,
+        AnalyticUnaryOp::Exp => ComplexUnaryKernelOp::Exp,
+        AnalyticUnaryOp::Expm1 => ComplexUnaryKernelOp::Expm1,
+        AnalyticUnaryOp::Log => ComplexUnaryKernelOp::Log,
+        AnalyticUnaryOp::Log1p => ComplexUnaryKernelOp::Log1p,
+        AnalyticUnaryOp::Sin => ComplexUnaryKernelOp::Sin,
+        AnalyticUnaryOp::Cos => ComplexUnaryKernelOp::Cos,
+        AnalyticUnaryOp::Tan => ComplexUnaryKernelOp::Tan,
+        AnalyticUnaryOp::Tanh => ComplexUnaryKernelOp::Tanh,
+        AnalyticUnaryOp::Asin => ComplexUnaryKernelOp::Asin,
+        AnalyticUnaryOp::Acos => ComplexUnaryKernelOp::Acos,
+        AnalyticUnaryOp::Atan => ComplexUnaryKernelOp::Atan,
+        AnalyticUnaryOp::Sinh => ComplexUnaryKernelOp::Sinh,
+        AnalyticUnaryOp::Cosh => ComplexUnaryKernelOp::Cosh,
+        AnalyticUnaryOp::Asinh => ComplexUnaryKernelOp::Asinh,
+        AnalyticUnaryOp::Acosh => ComplexUnaryKernelOp::Acosh,
+        AnalyticUnaryOp::Atanh => ComplexUnaryKernelOp::Atanh,
+    };
+    execute_custom_complex_unary(ctx, custom_op, alpha, input, beta, output)
 }
 
 fn execute_analytic_binary<S: Scalar + 'static>(
@@ -176,6 +218,10 @@ fn execute_analytic_binary<S: Scalar + 'static>(
     validate_runtime_shape("rhs", inputs[1].dims(), &plan.shapes[1])?;
     validate_runtime_shape("output", output.dims(), &plan.shapes[2])?;
 
+    if supports_complex_scalar_type::<S>() {
+        return execute_complex_analytic_binary(ctx, op, alpha, inputs, beta, output);
+    }
+
     let custom_op = match op {
         AnalyticBinaryOp::Pow => RealBinaryKernelOp::Pow,
         AnalyticBinaryOp::Atan2 => RealBinaryKernelOp::Atan2,
@@ -183,6 +229,27 @@ fn execute_analytic_binary<S: Scalar + 'static>(
         AnalyticBinaryOp::Xlogy => RealBinaryKernelOp::Xlogy,
     };
     execute_custom_real_binary(ctx, custom_op, alpha, inputs[0], inputs[1], beta, output)
+}
+
+fn execute_complex_analytic_binary<S: Scalar + 'static>(
+    ctx: &mut CudaContext,
+    op: AnalyticBinaryOp,
+    alpha: S,
+    inputs: &[&Tensor<S>],
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()> {
+    let custom_op = match op {
+        AnalyticBinaryOp::Pow => ComplexBinaryKernelOp::Pow,
+        AnalyticBinaryOp::Xlogy => ComplexBinaryKernelOp::Xlogy,
+        _ => {
+            return Err(Error::InvalidArgument(format!(
+                "analytic binary operation {op:?} is not supported on CUDA for {}",
+                std::any::type_name::<S>()
+            )))
+        }
+    };
+    execute_custom_complex_binary(ctx, custom_op, alpha, inputs[0], inputs[1], beta, output)
 }
 
 fn execute_analytic_reduction<S: Scalar + 'static>(
@@ -315,7 +382,35 @@ fn reduction_output_dims(
         .collect()
 }
 
-fn direct_analytic_unary(op: AnalyticUnaryOp) -> Option<CutensorOperator> {
+fn supports_complex_analytic_unary(op: AnalyticUnaryOp) -> bool {
+    matches!(
+        op,
+        AnalyticUnaryOp::Sqrt
+            | AnalyticUnaryOp::Rsqrt
+            | AnalyticUnaryOp::Exp
+            | AnalyticUnaryOp::Expm1
+            | AnalyticUnaryOp::Log
+            | AnalyticUnaryOp::Log1p
+            | AnalyticUnaryOp::Sin
+            | AnalyticUnaryOp::Cos
+            | AnalyticUnaryOp::Tan
+            | AnalyticUnaryOp::Tanh
+            | AnalyticUnaryOp::Asin
+            | AnalyticUnaryOp::Acos
+            | AnalyticUnaryOp::Atan
+            | AnalyticUnaryOp::Sinh
+            | AnalyticUnaryOp::Cosh
+            | AnalyticUnaryOp::Asinh
+            | AnalyticUnaryOp::Acosh
+            | AnalyticUnaryOp::Atanh
+    )
+}
+
+fn supports_complex_analytic_binary(op: AnalyticBinaryOp) -> bool {
+    matches!(op, AnalyticBinaryOp::Pow | AnalyticBinaryOp::Xlogy)
+}
+
+fn direct_real_analytic_unary(op: AnalyticUnaryOp) -> Option<CutensorOperator> {
     match op {
         AnalyticUnaryOp::Sqrt => Some(CUTENSOR_OP_SQRT),
         AnalyticUnaryOp::Rsqrt => None,

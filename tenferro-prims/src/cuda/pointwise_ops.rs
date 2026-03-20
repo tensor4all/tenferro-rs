@@ -1,13 +1,18 @@
 use std::ffi::c_void;
 
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::{CutensorOperator, CUTENSOR_OP_ADD, CUTENSOR_OP_IDENTITY, CUTENSOR_OP_MUL};
-use crate::infra::typed_dispatch::{cast_scalar_value, dispatch_real_scalar_type};
+use crate::infra::typed_dispatch::{
+    cast_scalar_value, dispatch_complex_scalar_type, dispatch_real_scalar_type,
+};
 
-use super::custom::{RealBinaryKernelOp, RealUnaryKernelOp};
+use super::custom::{
+    ComplexBinaryKernelOp, ComplexUnaryKernelOp, RealBinaryKernelOp, RealUnaryKernelOp,
+};
 use super::planning::{plan_elementwise_binary, plan_elementwise_trinary, TrinaryPlanSpec};
 use super::runtime::{
     make_contiguous_on_cuda, null_stream, prepare_custom_output, tensor_device_addr_with_offset,
@@ -239,6 +244,110 @@ pub(super) fn execute_custom_real_binary<S: Scalar + 'static>(
 
     Err(Error::InvalidArgument(format!(
         "custom CUDA binary path is not supported for {}",
+        std::any::type_name::<S>()
+    )))
+}
+
+pub(super) fn execute_custom_complex_unary<S: Scalar + 'static>(
+    ctx: &mut CudaContext,
+    op: ComplexUnaryKernelOp,
+    alpha: S,
+    input: &Tensor<S>,
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()> {
+    let contiguous_input = make_contiguous_on_cuda(ctx, input)?;
+    let (contiguous_output, needs_copy_back) = prepare_custom_output(ctx, output)?;
+    let input_addr =
+        tensor_device_addr_with_offset("custom complex unary input", &contiguous_input)?;
+    let output_addr =
+        tensor_device_addr_with_offset("custom complex unary output", &contiguous_output)?;
+
+    dispatch_complex_scalar_type!(S, Concrete, {
+        let alpha_concrete = cast_scalar_value!(alpha, S, Concrete);
+        let beta_concrete = cast_scalar_value!(beta, S, Concrete);
+        if std::mem::size_of::<Concrete>() == std::mem::size_of::<Complex32>() {
+            ctx.custom.launch_pointwise_complex_unary_c32(
+                op,
+                input_addr,
+                output_addr,
+                contiguous_input.len(),
+                cast_scalar_value!(alpha_concrete, Concrete, Complex32),
+                cast_scalar_value!(beta_concrete, Concrete, Complex32),
+            )?;
+        } else {
+            ctx.custom.launch_pointwise_complex_unary_c64(
+                op,
+                input_addr,
+                output_addr,
+                contiguous_input.len(),
+                cast_scalar_value!(alpha_concrete, Concrete, Complex64),
+                cast_scalar_value!(beta_concrete, Concrete, Complex64),
+            )?;
+        }
+        return if needs_copy_back {
+            write_custom_output_back(ctx, &contiguous_output, output)
+        } else {
+            Ok(())
+        };
+    });
+
+    Err(Error::InvalidArgument(format!(
+        "custom CUDA complex unary path is not supported for {}",
+        std::any::type_name::<S>()
+    )))
+}
+
+pub(super) fn execute_custom_complex_binary<S: Scalar + 'static>(
+    ctx: &mut CudaContext,
+    op: ComplexBinaryKernelOp,
+    alpha: S,
+    lhs: &Tensor<S>,
+    rhs: &Tensor<S>,
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()> {
+    let contiguous_lhs = make_contiguous_on_cuda(ctx, lhs)?;
+    let contiguous_rhs = make_contiguous_on_cuda(ctx, rhs)?;
+    let (contiguous_output, needs_copy_back) = prepare_custom_output(ctx, output)?;
+    let lhs_addr = tensor_device_addr_with_offset("custom complex binary lhs", &contiguous_lhs)?;
+    let rhs_addr = tensor_device_addr_with_offset("custom complex binary rhs", &contiguous_rhs)?;
+    let output_addr =
+        tensor_device_addr_with_offset("custom complex binary output", &contiguous_output)?;
+
+    dispatch_complex_scalar_type!(S, Concrete, {
+        let alpha_concrete = cast_scalar_value!(alpha, S, Concrete);
+        let beta_concrete = cast_scalar_value!(beta, S, Concrete);
+        if std::mem::size_of::<Concrete>() == std::mem::size_of::<Complex32>() {
+            ctx.custom.launch_pointwise_complex_binary_c32(
+                op,
+                lhs_addr,
+                rhs_addr,
+                output_addr,
+                contiguous_lhs.len(),
+                cast_scalar_value!(alpha_concrete, Concrete, Complex32),
+                cast_scalar_value!(beta_concrete, Concrete, Complex32),
+            )?;
+        } else {
+            ctx.custom.launch_pointwise_complex_binary_c64(
+                op,
+                lhs_addr,
+                rhs_addr,
+                output_addr,
+                contiguous_lhs.len(),
+                cast_scalar_value!(alpha_concrete, Concrete, Complex64),
+                cast_scalar_value!(beta_concrete, Concrete, Complex64),
+            )?;
+        }
+        return if needs_copy_back {
+            write_custom_output_back(ctx, &contiguous_output, output)
+        } else {
+            Ok(())
+        };
+    });
+
+    Err(Error::InvalidArgument(format!(
+        "custom CUDA complex binary path is not supported for {}",
         std::any::type_name::<S>()
     )))
 }

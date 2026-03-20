@@ -13,14 +13,15 @@ use crate::{
     ScalarUnaryOp,
 };
 
-use super::custom::RealUnaryKernelOp;
+use super::custom::{ComplexBinaryKernelOp, ComplexUnaryKernelOp, RealUnaryKernelOp};
 use super::family_common::{
-    plan_reduction_shapes, scale_real_alpha, supports_real_scalar_type, validate_pointwise_shapes,
+    plan_reduction_shapes, scale_standard_alpha, supports_complex_scalar_type,
+    supports_real_scalar_type, validate_pointwise_shapes,
 };
 use super::planning::plan_reduction;
 use super::pointwise_ops::{
-    execute_binary_trinary, execute_copy_with_accum, execute_custom_real_unary,
-    execute_direct_unary,
+    execute_binary_trinary, execute_copy_with_accum, execute_custom_complex_binary,
+    execute_custom_complex_unary, execute_custom_real_unary, execute_direct_unary,
 };
 use super::runtime::{
     allocate_workspace, ensure_device_tensor, new_gpu_tensor, null_stream,
@@ -73,15 +74,17 @@ pub(super) fn plan_scalar_descriptor<S: Scalar + 'static>(
 }
 
 pub(super) fn has_scalar_support<S: Scalar + 'static>(desc: ScalarPrimsDescriptor) -> bool {
-    if !supports_real_scalar_type::<S>() {
-        return false;
+    if supports_real_scalar_type::<S>() {
+        return true;
     }
-
-    match desc {
-        ScalarPrimsDescriptor::PointwiseUnary { .. } => true,
-        ScalarPrimsDescriptor::PointwiseBinary { .. } => true,
-        ScalarPrimsDescriptor::Reduction { .. } => true,
+    if supports_complex_scalar_type::<S>() {
+        return match desc {
+            ScalarPrimsDescriptor::PointwiseUnary { op } => supports_complex_scalar_unary(op),
+            ScalarPrimsDescriptor::PointwiseBinary { op } => supports_complex_scalar_binary(op),
+            ScalarPrimsDescriptor::Reduction { op, .. } => supports_complex_scalar_reduction(op),
+        };
     }
+    false
 }
 
 pub(super) fn execute_scalar_plan<S: Scalar + 'static>(
@@ -140,7 +143,11 @@ fn execute_scalar_unary<S: Scalar + 'static>(
     validate_runtime_shape("input", inputs[0].dims(), &plan.shapes[0])?;
     validate_runtime_shape("output", output.dims(), &plan.shapes[1])?;
 
-    if let Some(op_a) = direct_scalar_unary(op) {
+    if supports_complex_scalar_type::<S>() {
+        return execute_complex_scalar_unary(ctx, op, alpha, inputs[0], beta, output);
+    }
+
+    if let Some(op_a) = direct_real_scalar_unary(op) {
         return execute_direct_unary(ctx, op_a, alpha, inputs[0], beta, output);
     }
 
@@ -171,6 +178,67 @@ fn execute_scalar_unary<S: Scalar + 'static>(
     }
 }
 
+fn execute_complex_scalar_unary<S: Scalar + 'static>(
+    ctx: &mut CudaContext,
+    op: ScalarUnaryOp,
+    alpha: S,
+    input: &Tensor<S>,
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()> {
+    match op {
+        ScalarUnaryOp::Neg => {
+            execute_custom_complex_unary(ctx, ComplexUnaryKernelOp::Neg, alpha, input, beta, output)
+        }
+        ScalarUnaryOp::Conj => execute_custom_complex_unary(
+            ctx,
+            ComplexUnaryKernelOp::Conj,
+            alpha,
+            input,
+            beta,
+            output,
+        ),
+        ScalarUnaryOp::Abs => {
+            execute_custom_complex_unary(ctx, ComplexUnaryKernelOp::Abs, alpha, input, beta, output)
+        }
+        ScalarUnaryOp::Reciprocal => execute_custom_complex_unary(
+            ctx,
+            ComplexUnaryKernelOp::Reciprocal,
+            alpha,
+            input,
+            beta,
+            output,
+        ),
+        ScalarUnaryOp::Real => execute_custom_complex_unary(
+            ctx,
+            ComplexUnaryKernelOp::Real,
+            alpha,
+            input,
+            beta,
+            output,
+        ),
+        ScalarUnaryOp::Imag => execute_custom_complex_unary(
+            ctx,
+            ComplexUnaryKernelOp::Imag,
+            alpha,
+            input,
+            beta,
+            output,
+        ),
+        ScalarUnaryOp::Square => execute_binary_trinary(
+            ctx,
+            input,
+            input,
+            output,
+            CUTENSOR_OP_IDENTITY,
+            CUTENSOR_OP_MUL,
+            alpha,
+            S::one(),
+            beta,
+        ),
+    }
+}
+
 fn execute_scalar_binary<S: Scalar + 'static>(
     ctx: &mut CudaContext,
     plan: &CudaPlan<S>,
@@ -188,6 +256,10 @@ fn execute_scalar_binary<S: Scalar + 'static>(
     validate_runtime_shape("rhs", inputs[1].dims(), &plan.shapes[1])?;
     validate_runtime_shape("output", output.dims(), &plan.shapes[2])?;
 
+    if supports_complex_scalar_type::<S>() {
+        return execute_complex_scalar_binary(ctx, op, alpha, inputs, beta, output);
+    }
+
     if matches!(
         op,
         ScalarBinaryOp::Maximum
@@ -201,6 +273,43 @@ fn execute_scalar_binary<S: Scalar + 'static>(
     }
 
     execute_scalar_binary_homogeneous(ctx, op, alpha, inputs, beta, output)
+}
+
+fn execute_complex_scalar_binary<S: Scalar + 'static>(
+    ctx: &mut CudaContext,
+    op: ScalarBinaryOp,
+    alpha: S,
+    inputs: &[&Tensor<S>],
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()> {
+    match op {
+        ScalarBinaryOp::Add | ScalarBinaryOp::Mul => {
+            execute_scalar_binary_homogeneous(ctx, op, alpha, inputs, beta, output)
+        }
+        ScalarBinaryOp::Sub => execute_custom_complex_binary(
+            ctx,
+            ComplexBinaryKernelOp::Sub,
+            alpha,
+            inputs[0],
+            inputs[1],
+            beta,
+            output,
+        ),
+        ScalarBinaryOp::Div => execute_custom_complex_binary(
+            ctx,
+            ComplexBinaryKernelOp::Div,
+            alpha,
+            inputs[0],
+            inputs[1],
+            beta,
+            output,
+        ),
+        _ => Err(Error::InvalidArgument(format!(
+            "scalar binary operation {op:?} is not supported on CUDA for {}",
+            std::any::type_name::<S>()
+        ))),
+    }
 }
 
 fn execute_scalar_binary_homogeneous<S: Scalar + 'static>(
@@ -255,7 +364,7 @@ fn execute_scalar_reduction<S: Scalar + 'static>(
         ScalarReductionOp::Min => CUTENSOR_OP_MIN,
     };
     let scaled_alpha = if matches!(op, ScalarReductionOp::Mean) {
-        scale_real_alpha(alpha, reduced_total)?
+        scale_standard_alpha(alpha, reduced_total)?
     } else {
         alpha
     };
@@ -294,7 +403,34 @@ fn execute_scalar_reduction<S: Scalar + 'static>(
     super::planning::check_status(status, "cutensorReduce")
 }
 
-fn direct_scalar_unary(op: ScalarUnaryOp) -> Option<CutensorOperator> {
+fn supports_complex_scalar_unary(op: ScalarUnaryOp) -> bool {
+    matches!(
+        op,
+        ScalarUnaryOp::Neg
+            | ScalarUnaryOp::Conj
+            | ScalarUnaryOp::Abs
+            | ScalarUnaryOp::Reciprocal
+            | ScalarUnaryOp::Real
+            | ScalarUnaryOp::Imag
+            | ScalarUnaryOp::Square
+    )
+}
+
+fn supports_complex_scalar_binary(op: ScalarBinaryOp) -> bool {
+    matches!(
+        op,
+        ScalarBinaryOp::Add | ScalarBinaryOp::Sub | ScalarBinaryOp::Mul | ScalarBinaryOp::Div
+    )
+}
+
+fn supports_complex_scalar_reduction(op: ScalarReductionOp) -> bool {
+    matches!(
+        op,
+        ScalarReductionOp::Sum | ScalarReductionOp::Prod | ScalarReductionOp::Mean
+    )
+}
+
+fn direct_real_scalar_unary(op: ScalarUnaryOp) -> Option<CutensorOperator> {
     match op {
         ScalarUnaryOp::Neg => Some(CUTENSOR_OP_NEG),
         ScalarUnaryOp::Conj => Some(CUTENSOR_OP_CONJ),
