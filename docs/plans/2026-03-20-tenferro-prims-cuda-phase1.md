@@ -399,14 +399,28 @@ git commit -m "feat: add cuda analytic primitive support"
 - Modify: `docs/design/tensor-prims.md`
 - Modify: `docs/design/supported-ops.md`
 
-**Step 1: Audit public docs for touched types and functions**
+**Step 1: Re-audit the implementation against the phase-1 invariants**
+
+Before the final completion commit, verify that the implementation still
+obeys all mandatory principles from the design doc:
+- GPU-resident CUDA execution only
+- no CPU fallback inside CUDA execution
+- truthful `has_*_support()` and planning behavior
+- no public CUDA-specific trait/API expansion
+- bounded workspace/scratch retention
+- backend-specific optional features only
+- docs/tests/support tables aligned with implementation
+
+Treat any violation here as a blocking issue for completion.
+
+**Step 2: Audit public docs for touched types and functions**
 
 Check that every public type, trait, and function touched by this work has:
 - minimal doc comments
 - `# Examples` blocks
 - truthful backend notes
 
-**Step 2: Run formatting and targeted verification**
+**Step 3: Run formatting and targeted verification**
 
 Run:
 - `cargo fmt --all`
@@ -417,7 +431,7 @@ Expected:
 - CPU-only tests pass
 - CUDA-feature tests compile and pass where runtime is available
 
-**Step 3: Run full repository verification**
+**Step 4: Run full repository verification**
 
 Run:
 - `cargo fmt --all --check`
@@ -430,7 +444,7 @@ Run:
 Expected:
 - PASS, except GPU runtime tests may be skipped on non-GPU environments
 
-**Step 4: Commit**
+**Step 5: Commit**
 
 ```bash
 git add tenferro-prims/src tenferro-prims/README.md docs/design/tensor-prims.md docs/design/supported-ops.md

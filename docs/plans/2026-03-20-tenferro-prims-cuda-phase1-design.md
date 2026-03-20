@@ -19,6 +19,24 @@ CUDA.
 - Add persistent caching for custom CUDA kernels compiled at runtime.
 - Keep CUDA and ROCm as optional backend-specific Cargo features across crates.
 
+## Implementation Invariants
+
+These invariants are mandatory for phase-1 implementation and must be re-audited
+at the end of the work before the final completion commit.
+
+- keep CUDA execution GPU-resident once tensors are on device
+- do not add CPU fallback inside CUDA execution paths
+- keep `has_*_support()` and planning behavior truthful to current
+  implementation
+- do not add new public CUDA-specific traits or descriptors
+- use direct `cuTENSOR` only where the mapping is clean and truthful
+- use custom kernels through the minimal in-tree NVRTC runtime and persistent
+  cache
+- keep workspace and scratch allocation explicit and bounded
+- keep backend features optional and backend-specific (`cuda`, `rocm`)
+- keep README, rustdoc, support tables, and tests aligned with the actual
+  implementation
+
 ## Non-Goals
 
 - Do not add CPU fallback execution for unsupported CUDA operations.
