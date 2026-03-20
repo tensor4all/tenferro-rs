@@ -113,8 +113,6 @@ impl<T: Scalar> Tensor<T> {
             let contiguous_tensor = tensor.contiguous(MemoryOrder::ColumnMajor);
             let src = contiguous_tensor.buffer().as_slice().unwrap();
 
-            let stack_offset = (stack_idx as isize) * result_strides[dim];
-
             let mut index = vec![0usize; ndim];
             let n_elements: usize = first.dims.iter().product();
 
