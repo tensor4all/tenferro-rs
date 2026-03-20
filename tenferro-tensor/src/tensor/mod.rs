@@ -1,4 +1,5 @@
 mod autodiff;
+mod combine;
 mod constructors;
 mod data_ops;
 mod metadata;
