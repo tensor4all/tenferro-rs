@@ -2,6 +2,7 @@ use super::*;
 use tenferro_device::LogicalMemorySpace;
 
 mod buffer;
+mod combine;
 mod completion_event;
 
 #[cfg(feature = "cuda")]
