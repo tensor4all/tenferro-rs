@@ -1,3 +1,7 @@
+#[cfg(feature = "cuda")]
+use crate::ScalarUnaryOp;
+#[cfg(feature = "cuda")]
+use num_complex::Complex64;
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -137,17 +141,25 @@ fn cpu_scalar_phase1_mean_reduction_handles_non_contiguous_input() {
     assert_eq!(mean_out.buffer().as_slice().unwrap(), &[3.0, 4.0]);
 }
 
+#[cfg(feature = "cuda")]
 #[test]
-fn cuda_scalar_phase1_does_not_advertise_unimplemented_ops() {
+fn cuda_scalar_phase1_advertises_real_add_div_and_mean() {
     assert!(
-        !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
             ScalarPrimsDescriptor::PointwiseBinary {
                 op: ScalarBinaryOp::Add,
             }
         )
     );
     assert!(
-        !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Div,
+            }
+        )
+    );
+    assert!(
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
             ScalarPrimsDescriptor::Reduction {
                 modes_a: vec![0, 1],
                 modes_c: vec![1],
@@ -155,4 +167,92 @@ fn cuda_scalar_phase1_does_not_advertise_unimplemented_ops() {
             }
         )
     );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_scalar_phase1_advertises_complex_subset_and_rejects_real_only_ops() {
+    for desc in [
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Neg,
+        },
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Conj,
+        },
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Abs,
+        },
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Reciprocal,
+        },
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Real,
+        },
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Imag,
+        },
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Square,
+        },
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Add,
+        },
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Sub,
+        },
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Mul,
+        },
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Div,
+        },
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: ScalarReductionOp::Sum,
+        },
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: ScalarReductionOp::Prod,
+        },
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: ScalarReductionOp::Mean,
+        },
+    ] {
+        assert!(<crate::CudaBackend as TensorScalarPrims<
+            Standard<Complex64>,
+        >>::has_scalar_support(desc));
+    }
+
+    for desc in [
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Maximum,
+        },
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Minimum,
+        },
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::ClampMin,
+        },
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::ClampMax,
+        },
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: ScalarReductionOp::Max,
+        },
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: ScalarReductionOp::Min,
+        },
+    ] {
+        assert!(!<crate::CudaBackend as TensorScalarPrims<
+            Standard<Complex64>,
+        >>::has_scalar_support(desc));
+    }
 }

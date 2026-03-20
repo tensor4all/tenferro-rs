@@ -1,3 +1,5 @@
+#[cfg(feature = "cuda")]
+use num_complex::Complex64;
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -346,8 +348,9 @@ fn cpu_analytic_phase2_executes_remaining_unary_and_binary_inventory() {
     assert_eq!(xlogy.buffer().as_slice().unwrap(), &[0.0, 2.0]);
 }
 
+#[cfg(feature = "cuda")]
 #[test]
-fn cuda_analytic_phase1_does_not_advertise_unimplemented_ops() {
+fn cuda_analytic_phase1_advertises_real_exp_log_pow_and_var() {
     for desc in [
         AnalyticPrimsDescriptor::PointwiseUnary {
             op: AnalyticUnaryOp::Exp,
@@ -358,9 +361,108 @@ fn cuda_analytic_phase1_does_not_advertise_unimplemented_ops() {
         AnalyticPrimsDescriptor::PointwiseBinary {
             op: AnalyticBinaryOp::Pow,
         },
+        AnalyticPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: AnalyticReductionOp::Var,
+        },
+    ] {
+        assert!(
+            <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(desc)
+        );
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_analytic_phase1_advertises_complex_subset_and_rejects_real_only_ops() {
+    for desc in [
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Sqrt,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Rsqrt,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Exp,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Expm1,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Log,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Log1p,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Sin,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Cos,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Tan,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Tanh,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Asin,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Acos,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Atan,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Sinh,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Cosh,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Asinh,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Acosh,
+        },
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Atanh,
+        },
+        AnalyticPrimsDescriptor::PointwiseBinary {
+            op: AnalyticBinaryOp::Pow,
+        },
+        AnalyticPrimsDescriptor::PointwiseBinary {
+            op: AnalyticBinaryOp::Xlogy,
+        },
+    ] {
+        assert!(<crate::CudaBackend as TensorAnalyticPrims<
+            Standard<Complex64>,
+        >>::has_analytic_support(desc));
+    }
+
+    for desc in [
+        AnalyticPrimsDescriptor::PointwiseBinary {
+            op: AnalyticBinaryOp::Atan2,
+        },
+        AnalyticPrimsDescriptor::PointwiseBinary {
+            op: AnalyticBinaryOp::Hypot,
+        },
+        AnalyticPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: AnalyticReductionOp::Var,
+        },
+        AnalyticPrimsDescriptor::Reduction {
+            modes_a: vec![0, 1],
+            modes_c: vec![1],
+            op: AnalyticReductionOp::Std,
+        },
     ] {
         assert!(!<crate::CudaBackend as TensorAnalyticPrims<
-            Standard<f64>,
+            Standard<Complex64>,
         >>::has_analytic_support(desc));
     }
 }

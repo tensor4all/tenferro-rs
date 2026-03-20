@@ -1,4 +1,5 @@
 mod organization;
+mod placement;
 mod scalar_type;
 
 use super::*;
