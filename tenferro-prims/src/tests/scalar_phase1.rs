@@ -137,17 +137,25 @@ fn cpu_scalar_phase1_mean_reduction_handles_non_contiguous_input() {
     assert_eq!(mean_out.buffer().as_slice().unwrap(), &[3.0, 4.0]);
 }
 
+#[cfg(feature = "cuda")]
 #[test]
-fn cuda_scalar_phase1_does_not_advertise_unimplemented_ops() {
+fn cuda_scalar_phase1_advertises_real_add_div_and_mean() {
     assert!(
-        !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
             ScalarPrimsDescriptor::PointwiseBinary {
                 op: ScalarBinaryOp::Add,
             }
         )
     );
     assert!(
-        !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Div,
+            }
+        )
+    );
+    assert!(
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
             ScalarPrimsDescriptor::Reduction {
                 modes_a: vec![0, 1],
                 modes_c: vec![1],

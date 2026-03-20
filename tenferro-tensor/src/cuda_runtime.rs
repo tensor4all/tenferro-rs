@@ -114,7 +114,7 @@ pub(super) fn transfer_tensor<T: Scalar>(
     source: &Tensor<T>,
     target: LogicalMemorySpace,
 ) -> Result<Tensor<T>> {
-    match (source.logical_memory_space, target) {
+    match (source.logical_memory_space(), target) {
         (LogicalMemorySpace::MainMemory, LogicalMemorySpace::GpuMemory { .. }) => {
             let host_data = source
                 .buffer()

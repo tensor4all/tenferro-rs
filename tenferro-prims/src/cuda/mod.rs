@@ -34,17 +34,29 @@ use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::*;
 use crate::{
-    SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
+    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp,
+    ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp,
+    SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorAnalyticPrims, TensorScalarPrims,
+    TensorSemiringCore, TensorSemiringFastPath,
 };
 
+mod analytic_family;
+mod custom;
+mod diagonal;
 mod execution;
+mod family_common;
 mod planning;
+mod pointwise_ops;
+mod runtime;
+mod scalar_family;
 mod scalar_type;
 mod wrappers;
 
+use analytic_family::{execute_analytic_plan, has_analytic_support, plan_analytic_descriptor};
 use execution::{execute_plan, has_fast_path, plan_core_descriptor, plan_fast_descriptor};
 use planning::check_status;
-use wrappers::{HandleWrapper, PlanWrapper};
+use scalar_family::{execute_scalar_plan, has_scalar_support, plan_scalar_descriptor};
+use wrappers::HandleWrapper;
 
 /// CUDA execution context backed by cudarc + cuTENSOR vtable.
 ///
@@ -59,11 +71,13 @@ use wrappers::{HandleWrapper, PlanWrapper};
 /// ```
 pub struct CudaContext {
     /// cuTENSOR library handle (RAII — Drop calls cutensorDestroy).
-    pub(super) handle: HandleWrapper,
+    handle: HandleWrapper,
     /// CUDA device ordinal used for runtime API calls.
-    pub(super) device_id: usize,
+    device_id: usize,
     /// cuTENSOR function pointer vtable loaded via libloading.
-    pub(super) vtable: Arc<CutensorVtable>,
+    vtable: Arc<CutensorVtable>,
+    /// Custom CUDA kernel runtime and cache.
+    custom: custom::CustomCudaRuntime,
 }
 
 /// CUDA plan — wraps a cuTENSOR operation plan handle.
@@ -86,13 +100,47 @@ pub struct CudaContext {
 enum CudaPlanDescriptor {
     Core(SemiringCoreDescriptor),
     Fast(SemiringFastPathDescriptor),
+    Scalar(CudaScalarPlan),
+    Analytic(CudaAnalyticPlan),
+}
+
+#[derive(Clone, Debug)]
+enum CudaScalarPlan {
+    PointwiseUnary {
+        op: ScalarUnaryOp,
+    },
+    PointwiseBinary {
+        op: ScalarBinaryOp,
+    },
+    Reduction {
+        modes_a: Vec<u32>,
+        modes_c: Vec<u32>,
+        op: ScalarReductionOp,
+        reduced_total: usize,
+    },
+}
+
+#[derive(Clone, Debug)]
+enum CudaAnalyticPlan {
+    PointwiseUnary {
+        op: AnalyticUnaryOp,
+    },
+    PointwiseBinary {
+        op: AnalyticBinaryOp,
+    },
+    Reduction {
+        modes_a: Vec<u32>,
+        modes_c: Vec<u32>,
+        op: AnalyticReductionOp,
+        reduced_total: usize,
+    },
 }
 
 pub struct CudaPlan<T: Scalar> {
-    /// Compiled cuTENSOR plan (RAII — Drop calls cutensorDestroyPlan).
-    plan: PlanWrapper,
     /// Family descriptor (for execute dispatch).
     desc: CudaPlanDescriptor,
+    /// Planned input/output shapes used to validate runtime tensors.
+    shapes: Vec<Vec<usize>>,
     _marker: PhantomData<T>,
 }
 
@@ -173,6 +221,7 @@ impl CudaBackend {
             handle,
             device_id: 0,
             vtable: Arc::clone(&vtable),
+            custom: custom::CustomCudaRuntime::new(0)?,
         };
 
         Ok((
@@ -258,6 +307,62 @@ impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for CudaBackend {
 
     fn has_fast_path(desc: SemiringFastPathDescriptor) -> bool {
         has_fast_path(desc)
+    }
+}
+
+impl<S: Scalar + 'static> TensorScalarPrims<Standard<S>> for CudaBackend {
+    type Plan = CudaPlan<S>;
+    type Context = CudaContext;
+
+    fn plan(
+        ctx: &mut CudaContext,
+        desc: &ScalarPrimsDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<CudaPlan<S>> {
+        plan_scalar_descriptor::<S>(ctx, desc, shapes)
+    }
+
+    fn execute(
+        ctx: &mut CudaContext,
+        plan: &CudaPlan<S>,
+        alpha: S,
+        inputs: &[&Tensor<S>],
+        beta: S,
+        output: &mut Tensor<S>,
+    ) -> Result<()> {
+        execute_scalar_plan(ctx, plan, alpha, inputs, beta, output)
+    }
+
+    fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool {
+        has_scalar_support::<S>(desc)
+    }
+}
+
+impl<S: Scalar + 'static> TensorAnalyticPrims<Standard<S>> for CudaBackend {
+    type Plan = CudaPlan<S>;
+    type Context = CudaContext;
+
+    fn plan(
+        ctx: &mut CudaContext,
+        desc: &AnalyticPrimsDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<CudaPlan<S>> {
+        plan_analytic_descriptor::<S>(ctx, desc, shapes)
+    }
+
+    fn execute(
+        ctx: &mut CudaContext,
+        plan: &CudaPlan<S>,
+        alpha: S,
+        inputs: &[&Tensor<S>],
+        beta: S,
+        output: &mut Tensor<S>,
+    ) -> Result<()> {
+        execute_analytic_plan(ctx, plan, alpha, inputs, beta, output)
+    }
+
+    fn has_analytic_support(desc: AnalyticPrimsDescriptor) -> bool {
+        has_analytic_support::<S>(desc)
     }
 }
 

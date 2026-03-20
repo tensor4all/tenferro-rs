@@ -10,9 +10,6 @@ use crate::SemiringBinaryOp;
 fn assert_send<T: Send>() {}
 
 #[cfg(not(feature = "cuda"))]
-fn assert_sync<T: Sync>() {}
-
-#[cfg(not(feature = "cuda"))]
 #[test]
 fn cuda_backend_is_send() {
     assert_send::<CudaBackend>();

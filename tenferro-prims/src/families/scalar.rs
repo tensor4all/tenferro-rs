@@ -2,7 +2,9 @@ use tenferro_algebra::{Algebra, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
+#[cfg(not(feature = "cuda"))]
+use crate::{CudaBackend, CudaContext};
+use crate::{RocmBackend, RocmContext};
 
 /// Pointwise scalar unary operations.
 ///
@@ -154,6 +156,7 @@ pub trait TensorScalarPrims<Alg: Algebra> {
     fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool;
 }
 
+#[cfg(not(feature = "cuda"))]
 impl<S: Scalar> TensorScalarPrims<Standard<S>> for CudaBackend {
     type Plan = ();
     type Context = CudaContext;

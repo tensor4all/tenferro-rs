@@ -167,6 +167,7 @@ impl<S: Scalar> TensorSemiringCore<Standard<S>> for CudaBackend {
     }
 }
 
+#[cfg(not(feature = "cuda"))]
 impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for CudaBackend {
     type Plan = CudaPlan<S>;
     type Context = CudaContext;

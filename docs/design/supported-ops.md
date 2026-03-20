@@ -48,7 +48,8 @@ substrate before they can be added cleanly.
 ### Runtime status
 
 - CPU: semiring/scalar/analytic families are implemented.
-- CUDA and ROCm: semiring runtime hooks exist, but `TensorScalarPrims` and `TensorAnalyticPrims` currently advertise `has_*_support(...) == false` in phase 1.
+- CUDA: semiring core/fast path are implemented, and scalar/analytic families are implemented for real `f32`/`f64` tensors with GPU-resident execution.
+- ROCm: backend symbols exist as truthful stubs; support predicates remain false and planning/execution return unsupported errors.
 
 ## `tenferro-linalg-prims`
 
