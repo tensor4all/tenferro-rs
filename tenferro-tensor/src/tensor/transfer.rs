@@ -1,5 +1,5 @@
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_device::{LogicalMemorySpace, Result};
 
 use super::Tensor;
 
@@ -25,7 +25,7 @@ impl<T: Scalar> Tensor<T> {
 
         #[cfg(not(feature = "cuda"))]
         {
-            Err(Error::DeviceError(
+            Err(tenferro_device::Error::DeviceError(
                 "GPU memory transfer not available: rebuild with `tenferro-tensor --features cuda`"
                     .into(),
             ))

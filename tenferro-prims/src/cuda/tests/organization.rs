@@ -13,8 +13,15 @@ fn line_count(path: &str) -> usize {
 fn cuda_backend_is_split_into_focused_modules() {
     let root = fs::read_to_string(format!("{ROOT}/mod.rs")).unwrap();
     for needle in [
+        "mod analytic_family;",
+        "mod custom;",
+        "mod diagonal;",
         "mod execution;",
+        "mod family_common;",
         "mod planning;",
+        "mod pointwise_ops;",
+        "mod runtime;",
+        "mod scalar_family;",
         "mod scalar_type;",
         "mod wrappers;",
     ] {
@@ -29,9 +36,17 @@ fn cuda_backend_is_split_into_focused_modules() {
 #[test]
 fn split_cuda_modules_stay_under_size_guideline() {
     for path in [
+        format!("{ROOT}/analytic_family.rs"),
+        format!("{ROOT}/custom/cache.rs"),
+        format!("{ROOT}/custom/mod.rs"),
+        format!("{ROOT}/diagonal.rs"),
         format!("{ROOT}/mod.rs"),
         format!("{ROOT}/execution.rs"),
+        format!("{ROOT}/family_common.rs"),
         format!("{ROOT}/planning.rs"),
+        format!("{ROOT}/pointwise_ops.rs"),
+        format!("{ROOT}/runtime.rs"),
+        format!("{ROOT}/scalar_family.rs"),
         format!("{ROOT}/scalar_type.rs"),
         format!("{ROOT}/wrappers.rs"),
     ] {
