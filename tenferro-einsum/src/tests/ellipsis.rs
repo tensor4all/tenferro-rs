@@ -344,3 +344,21 @@ fn test_ellipsis_with_actual_values() {
 
     assert_eq!(result.dims(), &[2, 2, 3]);
 }
+
+#[test]
+fn test_ellipsis_issue_529_example() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a3d = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
+    let b3d = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a3d, &b3d], None);
+
+    assert!(
+        result.is_ok(),
+        "Ellipsis notation should be supported as per issue #529"
+    );
+    assert_eq!(result.unwrap().dims(), &[2, 2, 2]);
+}
