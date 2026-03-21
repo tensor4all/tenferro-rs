@@ -348,6 +348,144 @@ fn cuda_public_svd_cutoff_preserves_zero_fill_semantics() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_det_matches_cpu_f32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu =
+            Tensor::from_slice(&[2.0_f32, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let expected = det(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = det(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            "cuda public det f32",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            2048.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_det_matches_cpu_f64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu =
+            Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let expected = det(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = det(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            "cuda public det f64",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            2048.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_slogdet_matches_cpu_f32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu =
+            Tensor::from_slice(&[2.0_f32, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let expected = slogdet(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = slogdet(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.sign.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.logabsdet.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.sign.dims(), expected.sign.dims());
+        assert_eq!(got.logabsdet.dims(), expected.logabsdet.dims());
+        assert_close_real_slice(
+            "cuda public slogdet sign f32",
+            &tensor_data_on_cpu(&got.sign),
+            &tensor_data_on_cpu(&expected.sign),
+            2048.0_f32 * f32::EPSILON,
+        );
+        assert_close_real_slice(
+            "cuda public slogdet logabsdet f32",
+            &tensor_data_on_cpu(&got.logabsdet),
+            &tensor_data_on_cpu(&expected.logabsdet),
+            2048.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_slogdet_matches_cpu_f64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu =
+            Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let expected = slogdet(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = slogdet(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.sign.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.logabsdet.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.sign.dims(), expected.sign.dims());
+        assert_eq!(got.logabsdet.dims(), expected.logabsdet.dims());
+        assert_close_real_slice(
+            "cuda public slogdet sign f64",
+            &tensor_data_on_cpu(&got.sign),
+            &tensor_data_on_cpu(&expected.sign),
+            2048.0_f64 * f64::EPSILON,
+        );
+        assert_close_real_slice(
+            "cuda public slogdet logabsdet f64",
+            &tensor_data_on_cpu(&got.logabsdet),
+            &tensor_data_on_cpu(&expected.logabsdet),
+            2048.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_solve_ex_matches_cpu_generic() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -1348,6 +1486,30 @@ fn public_cuda_svd_reconstructs_wide_complex64_matrix() {
 #[cfg(feature = "cuda")]
 fn public_cuda_svd_cutoff_preserves_zero_fill_semantics() {
     cuda_public_svd_cutoff_preserves_zero_fill_semantics();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_det_matches_cpu_for_small_matrix_f32() {
+    cuda_public_det_matches_cpu_f32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_det_matches_cpu_for_small_matrix_f64() {
+    cuda_public_det_matches_cpu_f64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_slogdet_matches_cpu_for_small_matrix_f32() {
+    cuda_public_slogdet_matches_cpu_f32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_slogdet_matches_cpu_for_small_matrix_f64() {
+    cuda_public_slogdet_matches_cpu_f64_impl();
 }
 
 #[test]

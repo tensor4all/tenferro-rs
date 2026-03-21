@@ -307,8 +307,8 @@ fn slogdet_path_uses_tensor_lu_and_log_without_slice_bridge() {
     let slogdet = file_section(&linear_systems, "pub fn slogdet", "#[cfg(test)]");
 
     assert!(
-        slogdet.contains("let lu = lu_factor(ctx, tensor)?;"),
-        "slogdet should derive from tensor-native LU"
+        slogdet.contains("TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;"),
+        "slogdet should derive from backend tensor LU without packed host cleanup"
     );
     assert!(
         slogdet.contains("scalar_unary_same_shape"),

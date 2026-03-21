@@ -1636,6 +1636,26 @@ fn cuda_backend_reports_only_wired_capabilities() {
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f32>>::has_linalg_support(
+            LinalgCapabilityOp::Det
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+            LinalgCapabilityOp::Det
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f32>>::has_linalg_support(
+            LinalgCapabilityOp::Slogdet
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+            LinalgCapabilityOp::Slogdet
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f32>>::has_linalg_support(
             LinalgCapabilityOp::ThinSvd
         ) == has_native_cuda
     );
@@ -1673,6 +1693,16 @@ fn cuda_backend_reports_only_wired_capabilities() {
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::Qr
         ) == has_native_cuda
+    );
+    assert!(
+        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex32>>::has_linalg_support(
+            LinalgCapabilityOp::Det
+        )
+    );
+    assert!(
+        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+            LinalgCapabilityOp::Det
+        )
     );
     assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(

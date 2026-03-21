@@ -9,7 +9,12 @@ mod svdvals;
 mod thin_svd;
 mod wrappers;
 
+use tenferro_algebra::Standard;
 use tenferro_device::Result;
+use tenferro_prims::{
+    AnalyticPrimsDescriptor, AnalyticUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor,
+    ScalarReductionOp, ScalarUnaryOp, TensorAnalyticPrims, TensorScalarPrims,
+};
 use tenferro_tensor::Tensor;
 
 use super::TensorLinalgContextFor;
@@ -35,6 +40,136 @@ fn unsupported<T, S: CudaLinalgScalar>(op: &str) -> Result<T> {
     runtime::unsupported(op)
 }
 
+fn has_real_det_support_f32() -> bool {
+    <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Mul,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Prod,
+        },
+    )
+}
+
+fn has_real_det_support_f64() -> bool {
+    <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Mul,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Prod,
+        },
+    )
+}
+
+fn has_det_support<T: CudaLinalgScalar>() -> bool {
+    match T::cuda_data_type() {
+        scalar_type::CudaDataType::F32 => lu::has_lu_support::<T>() && has_real_det_support_f32(),
+        scalar_type::CudaDataType::F64 => lu::has_lu_support::<T>() && has_real_det_support_f64(),
+        _ => false,
+    }
+}
+
+fn has_real_slogdet_support_f32() -> bool {
+    has_real_det_support_f32()
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseUnary {
+                op: ScalarUnaryOp::Abs,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Greater,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Mul,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Add,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Sub,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+            ScalarPrimsDescriptor::Reduction {
+                modes_a: vec![0],
+                modes_c: vec![],
+                op: ScalarReductionOp::Sum,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorAnalyticPrims<Standard<f32>>>::has_analytic_support(
+            AnalyticPrimsDescriptor::PointwiseUnary {
+                op: AnalyticUnaryOp::Log,
+            },
+        )
+}
+
+fn has_real_slogdet_support_f64() -> bool {
+    has_real_det_support_f64()
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseUnary {
+                op: ScalarUnaryOp::Abs,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Greater,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Mul,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Add,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::Sub,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::Reduction {
+                modes_a: vec![0],
+                modes_c: vec![],
+                op: ScalarReductionOp::Sum,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            AnalyticPrimsDescriptor::PointwiseUnary {
+                op: AnalyticUnaryOp::Log,
+            },
+        )
+}
+
+fn has_slogdet_support<T: CudaLinalgScalar>() -> bool {
+    match T::cuda_data_type() {
+        scalar_type::CudaDataType::F32 => {
+            lu::has_lu_support::<T>() && has_real_slogdet_support_f32()
+        }
+        scalar_type::CudaDataType::F64 => {
+            lu::has_lu_support::<T>() && has_real_slogdet_support_f64()
+        }
+        _ => false,
+    }
+}
+
 impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     type Context = tenferro_prims::CudaContext;
 
@@ -50,6 +185,8 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
                 | LinalgCapabilityOp::LuFactorEx
                 | LinalgCapabilityOp::Cholesky
                 | LinalgCapabilityOp::CholeskyEx
+                | LinalgCapabilityOp::Det
+                | LinalgCapabilityOp::Slogdet
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::SolveEx => solve::has_solve_support::<T>(),
@@ -64,6 +201,8 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
                 cholesky::has_cholesky_support::<T>()
             }
             LinalgCapabilityOp::ThinSvd => thin_svd::has_thin_svd_support::<T>(),
+            LinalgCapabilityOp::Det => has_det_support::<T>(),
+            LinalgCapabilityOp::Slogdet => has_slogdet_support::<T>(),
             _ => false,
         }
     }

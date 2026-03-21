@@ -32,6 +32,19 @@ fn permutation_sign_from_forward_pivots(pivots: &[usize], n: usize) -> Result<i3
     Ok(sign)
 }
 
+fn backend_pivots_to_usize(pivots: &[i32]) -> Result<Vec<usize>> {
+    pivots
+        .iter()
+        .map(|&pivot| {
+            usize::try_from(pivot).map_err(|_| {
+                Error::InvalidArgument(format!(
+                    "backend LU pivot {pivot} is negative and cannot be converted to usize"
+                ))
+            })
+        })
+        .collect()
+}
+
 /// Solve a square linear system `A x = b`.
 pub fn solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
@@ -123,8 +136,8 @@ where
     } else {
         batch_dims.to_vec()
     };
-    let lu = lu_factor(ctx, tensor)?;
-    let diagonal = lu.factors.diagonal(&[(0, 1)])?;
+    let lu = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
+    let diagonal = lu.u.diagonal(&[(0, 1)])?;
     let kept_axes: Vec<usize> = (0..batch_dims.len()).collect();
     let diagonal_prod = crate::prims_bridge::scalar_reduce_keep_axes(
         ctx,
@@ -132,11 +145,12 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Prod,
     )?;
+    let pivots = backend_pivots_to_usize(&lu.pivots)?;
 
     let sign_len = if dims.is_empty() { 1 } else { bc };
     let mut sign_data = vec![T::one(); sign_len];
     for batch in 0..bc {
-        let sign = permutation_sign_from_forward_pivots(&lu.pivots[batch * n..(batch + 1) * n], n)?;
+        let sign = permutation_sign_from_forward_pivots(&pivots[batch * n..(batch + 1) * n], n)?;
         if sign < 0 {
             sign_data[batch] = T::zero() - T::one();
         }
@@ -174,8 +188,8 @@ where
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
-    let lu = lu_factor(ctx, tensor)?;
-    let diagonal = lu.factors.diagonal(&[(0, 1)])?;
+    let lu = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
+    let diagonal = lu.u.diagonal(&[(0, 1)])?;
     let abs_diagonal = crate::prims_bridge::scalar_unary_same_shape(
         ctx,
         &diagonal,
@@ -193,6 +207,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Sum,
     )?;
+    let pivots = backend_pivots_to_usize(&lu.pivots)?;
 
     let zero_diagonal = crate::prims_bridge::full_like_constant(
         T::zero(),
@@ -233,7 +248,7 @@ where
     let sign_len = if batch_dims.is_empty() { 1 } else { bc };
     let mut sign_data = vec![T::one(); sign_len];
     for batch in 0..bc {
-        let sign = permutation_sign_from_forward_pivots(&lu.pivots[batch * n..(batch + 1) * n], n)?;
+        let sign = permutation_sign_from_forward_pivots(&pivots[batch * n..(batch + 1) * n], n)?;
         if sign < 0 {
             sign_data[batch] = T::zero() - T::one();
         }
