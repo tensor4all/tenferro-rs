@@ -1,5 +1,6 @@
 mod cholesky;
 mod lu;
+mod qr;
 mod runtime;
 mod scalar_type;
 mod solve;
@@ -38,12 +39,14 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
         matches!(
             op,
             LinalgCapabilityOp::Solve
+                | LinalgCapabilityOp::Qr
                 | LinalgCapabilityOp::LuFactor
                 | LinalgCapabilityOp::LuFactorEx
                 | LinalgCapabilityOp::Cholesky
                 | LinalgCapabilityOp::CholeskyEx
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
+            LinalgCapabilityOp::Qr => qr::has_qr_support::<T>(),
             LinalgCapabilityOp::LuFactor | LinalgCapabilityOp::LuFactorEx => {
                 lu::has_lu_support::<T>()
             }
@@ -76,7 +79,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     }
 
     fn qr(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<QrTensorResult<T>> {
-        unsupported::<QrTensorResult<T>, T>("qr")
+        qr::qr(_ctx, _a)
     }
 
     fn thin_svd(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<SvdTensorResult<T>> {

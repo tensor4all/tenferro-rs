@@ -28,6 +28,10 @@ type FnCusolverDnSgetrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnDgetrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f64, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnSgeqrfBufferSize =
+    unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f32, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnDgeqrfBufferSize =
+    unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f64, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnSgetrf = unsafe extern "C" fn(
     CusolverDnHandle,
     i32,
@@ -68,6 +72,72 @@ type FnCusolverDnDgetrs = unsafe extern "C" fn(
     *const f64,
     i32,
     *const i32,
+    *mut f64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnSgeqrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut f32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnDgeqrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    *mut f64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnSorgqrBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnDorgqrBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnSorgqr = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut f32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnDorgqr = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
     *mut f64,
     i32,
     *mut i32,
@@ -123,10 +193,18 @@ pub(super) struct CusolverDnApi {
     set_stream: FnCusolverDnSetStream,
     sgetrf_buffer_size: FnCusolverDnSgetrfBufferSize,
     dgetrf_buffer_size: FnCusolverDnDgetrfBufferSize,
+    sgeqrf_buffer_size: FnCusolverDnSgeqrfBufferSize,
+    dgeqrf_buffer_size: FnCusolverDnDgeqrfBufferSize,
     sgetrf: FnCusolverDnSgetrf,
     dgetrf: FnCusolverDnDgetrf,
+    sgeqrf: FnCusolverDnSgeqrf,
+    dgeqrf: FnCusolverDnDgeqrf,
     sgetrs: FnCusolverDnSgetrs,
     dgetrs: FnCusolverDnDgetrs,
+    sorgqr_buffer_size: FnCusolverDnSorgqrBufferSize,
+    dorgqr_buffer_size: FnCusolverDnDorgqrBufferSize,
+    sorgqr: FnCusolverDnSorgqr,
+    dorgqr: FnCusolverDnDorgqr,
     spotrf_buffer_size: FnCusolverDnSpotrfBufferSize,
     dpotrf_buffer_size: FnCusolverDnDpotrfBufferSize,
     spotrf: FnCusolverDnSpotrf,
@@ -180,10 +258,18 @@ impl CusolverDnApi {
             set_stream: load_symbol(&lib, "cusolverDnSetStream")?,
             sgetrf_buffer_size: load_symbol(&lib, "cusolverDnSgetrf_bufferSize")?,
             dgetrf_buffer_size: load_symbol(&lib, "cusolverDnDgetrf_bufferSize")?,
+            sgeqrf_buffer_size: load_symbol(&lib, "cusolverDnSgeqrf_bufferSize")?,
+            dgeqrf_buffer_size: load_symbol(&lib, "cusolverDnDgeqrf_bufferSize")?,
             sgetrf: load_symbol(&lib, "cusolverDnSgetrf")?,
             dgetrf: load_symbol(&lib, "cusolverDnDgetrf")?,
+            sgeqrf: load_symbol(&lib, "cusolverDnSgeqrf")?,
+            dgeqrf: load_symbol(&lib, "cusolverDnDgeqrf")?,
             sgetrs: load_symbol(&lib, "cusolverDnSgetrs")?,
             dgetrs: load_symbol(&lib, "cusolverDnDgetrs")?,
+            sorgqr_buffer_size: load_symbol(&lib, "cusolverDnSorgqr_bufferSize")?,
+            dorgqr_buffer_size: load_symbol(&lib, "cusolverDnDorgqr_bufferSize")?,
+            sorgqr: load_symbol(&lib, "cusolverDnSorgqr")?,
+            dorgqr: load_symbol(&lib, "cusolverDnDorgqr")?,
             spotrf_buffer_size: load_symbol(&lib, "cusolverDnSpotrf_bufferSize")?,
             dpotrf_buffer_size: load_symbol(&lib, "cusolverDnDpotrf_bufferSize")?,
             spotrf: load_symbol(&lib, "cusolverDnSpotrf")?,
@@ -337,6 +423,197 @@ impl CusolverDnApi {
             ),
             _ => Err(Error::DeviceError(format!(
                 "CUDA solve currently supports only f32/f64, got {dtype:?}"
+            ))),
+        }
+    }
+
+    pub(super) fn geqrf_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        m: i32,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+    ) -> Result<i32> {
+        let mut lwork = 0;
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe {
+                    (self.sgeqrf_buffer_size)(handle, m, n, a.cast::<f32>(), lda, &mut lwork)
+                },
+                "cusolverDnSgeqrf_bufferSize",
+            )?,
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe {
+                    (self.dgeqrf_buffer_size)(handle, m, n, a.cast::<f64>(), lda, &mut lwork)
+                },
+                "cusolverDnDgeqrf_bufferSize",
+            )?,
+            _ => {
+                return Err(Error::DeviceError(format!(
+                    "CUDA QR currently supports only f32/f64, got {dtype:?}"
+                )));
+            }
+        }
+        Ok(lwork)
+    }
+
+    pub(super) fn geqrf(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        m: i32,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+        tau: *mut c_void,
+        workspace: *mut c_void,
+        lwork: i32,
+        info: *mut i32,
+    ) -> Result<()> {
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe {
+                    (self.sgeqrf)(
+                        handle,
+                        m,
+                        n,
+                        a.cast::<f32>(),
+                        lda,
+                        tau.cast::<f32>(),
+                        workspace.cast::<f32>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnSgeqrf",
+            ),
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe {
+                    (self.dgeqrf)(
+                        handle,
+                        m,
+                        n,
+                        a.cast::<f64>(),
+                        lda,
+                        tau.cast::<f64>(),
+                        workspace.cast::<f64>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnDgeqrf",
+            ),
+            _ => Err(Error::DeviceError(format!(
+                "CUDA QR currently supports only f32/f64, got {dtype:?}"
+            ))),
+        }
+    }
+
+    pub(super) fn orgqr_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        m: i32,
+        n: i32,
+        k: i32,
+        a: *mut c_void,
+        lda: i32,
+        tau: *mut c_void,
+    ) -> Result<i32> {
+        let mut lwork = 0;
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe {
+                    (self.sorgqr_buffer_size)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<f32>(),
+                        lda,
+                        tau.cast::<f32>(),
+                        &mut lwork,
+                    )
+                },
+                "cusolverDnSorgqr_bufferSize",
+            )?,
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe {
+                    (self.dorgqr_buffer_size)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<f64>(),
+                        lda,
+                        tau.cast::<f64>(),
+                        &mut lwork,
+                    )
+                },
+                "cusolverDnDorgqr_bufferSize",
+            )?,
+            _ => {
+                return Err(Error::DeviceError(format!(
+                    "CUDA QR currently supports only f32/f64, got {dtype:?}"
+                )));
+            }
+        }
+        Ok(lwork)
+    }
+
+    pub(super) fn orgqr(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        m: i32,
+        n: i32,
+        k: i32,
+        a: *mut c_void,
+        lda: i32,
+        tau: *mut c_void,
+        workspace: *mut c_void,
+        lwork: i32,
+        info: *mut i32,
+    ) -> Result<()> {
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe {
+                    (self.sorgqr)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<f32>(),
+                        lda,
+                        tau.cast::<f32>(),
+                        workspace.cast::<f32>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnSorgqr",
+            ),
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe {
+                    (self.dorgqr)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<f64>(),
+                        lda,
+                        tau.cast::<f64>(),
+                        workspace.cast::<f64>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnDorgqr",
+            ),
+            _ => Err(Error::DeviceError(format!(
+                "CUDA QR currently supports only f32/f64, got {dtype:?}"
             ))),
         }
     }
