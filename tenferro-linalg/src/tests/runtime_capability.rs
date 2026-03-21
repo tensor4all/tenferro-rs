@@ -206,6 +206,21 @@ fn svd_cutoff_path_stays_tensor_native() {
 }
 
 #[test]
+fn pinv_path_stays_tensor_native() {
+    let spectral = repo_file("src/primal/spectral.rs");
+    let pinv = file_section(&spectral, "pub fn pinv", "pub fn matrix_exp");
+
+    assert!(
+        !pinv.contains("extract_slice("),
+        "pinv should avoid extract_slice(...)"
+    );
+    assert!(
+        !pinv.contains("backend::slice_bridge::"),
+        "pinv should avoid slice_bridge helpers"
+    );
+}
+
+#[test]
 fn nuclear_norm_branch_stays_tensor_native_after_svdvals() {
     let norms = repo_file("src/primal/norms.rs");
     let nuclear = file_section(

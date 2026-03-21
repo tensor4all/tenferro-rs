@@ -60,6 +60,88 @@ where
         .ok_or_else(|| Error::DeviceError("expected owned CPU output tensor".into()))
 }
 
+pub(crate) fn batched_gemm_with_semiring_tensors<T, C>(
+    ctx: &mut C,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T>,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    C: TensorSemiringContextFor<Standard<T>>,
+{
+    let lhs = lhs.contiguous(MemoryOrder::ColumnMajor);
+    let rhs = rhs.contiguous(MemoryOrder::ColumnMajor);
+
+    if lhs.ndim() != rhs.ndim() || lhs.ndim() < 2 {
+        return Err(Error::InvalidArgument(format!(
+            "batched_gemm expects tensors with matching rank >= 2, got lhs {:?}, rhs {:?}",
+            lhs.dims(),
+            rhs.dims()
+        )));
+    }
+    if lhs.dims()[0] != m || lhs.dims()[1] != k {
+        return Err(Error::ShapeMismatch {
+            expected: vec![m, k],
+            got: lhs.dims()[..2].to_vec(),
+        });
+    }
+    if rhs.dims()[0] != k || rhs.dims()[1] != n {
+        return Err(Error::ShapeMismatch {
+            expected: vec![k, n],
+            got: rhs.dims()[..2].to_vec(),
+        });
+    }
+    if lhs.dims()[2..] != rhs.dims()[2..] {
+        return Err(Error::ShapeMismatch {
+            expected: lhs.dims()[2..].to_vec(),
+            got: rhs.dims()[2..].to_vec(),
+        });
+    }
+    if lhs.logical_memory_space() != rhs.logical_memory_space() {
+        return Err(Error::InvalidArgument(
+            "batched_gemm expects inputs in the same logical memory space".into(),
+        ));
+    }
+
+    let batch_dims = lhs.dims()[2..].to_vec();
+    let output_dims = {
+        let mut dims = Vec::with_capacity(lhs.ndim());
+        dims.push(m);
+        dims.push(n);
+        dims.extend_from_slice(&batch_dims);
+        dims
+    };
+    let mut output = Tensor::zeros(
+        &output_dims,
+        lhs.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let desc = SemiringCoreDescriptor::BatchedGemm {
+        batch_dims,
+        m,
+        n,
+        k,
+    };
+    let plan = <C::SemiringBackend as TensorSemiringCore<Standard<T>>>::plan(
+        ctx,
+        &desc,
+        &[lhs.dims(), rhs.dims(), output.dims()],
+    )?;
+    <C::SemiringBackend as TensorSemiringCore<Standard<T>>>::execute(
+        ctx,
+        &plan,
+        T::one(),
+        &[&lhs, &rhs],
+        T::zero(),
+        &mut output,
+    )?;
+
+    Ok(output)
+}
+
 pub(crate) fn batched_gemm_with_semiring_context<T, C>(
     ctx: &mut C,
     a: &[T],
