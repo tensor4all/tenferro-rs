@@ -33,7 +33,10 @@ fn as_i32(value: usize, label: &str) -> Result<i32> {
 
 #[cfg(feature = "cuda")]
 fn solve_supported<T: CudaLinalgScalar>() -> bool {
-    matches!(T::cuda_data_type(), CudaDataType::F32 | CudaDataType::F64)
+    matches!(
+        T::cuda_data_type(),
+        CudaDataType::F32 | CudaDataType::F64 | CudaDataType::Complex32 | CudaDataType::Complex64
+    )
 }
 
 #[cfg(feature = "cuda")]
@@ -85,7 +88,7 @@ where
 
     if !solve_supported::<T>() {
         return Err(Error::DeviceError(format!(
-            "CUDA solve_ex currently supports only f32/f64, got {:?}",
+            "CUDA solve_ex currently supports only f32/f64/complex32/complex64, got {:?}",
             T::cuda_data_type()
         )));
     }
@@ -250,7 +253,7 @@ where
 
     if !solve_supported::<T>() {
         return Err(Error::DeviceError(format!(
-            "CUDA solve currently supports only f32/f64, got {:?}",
+            "CUDA solve currently supports only f32/f64/complex32/complex64, got {:?}",
             T::cuda_data_type()
         )));
     }

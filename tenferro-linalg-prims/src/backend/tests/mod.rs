@@ -142,14 +142,22 @@ fn ex_capabilities_track_cpu_ex_implementation_state() {
         "CUDA SolveEx capability should match whether native CUDA kernels are compiled in",
     );
     assert!(
-        !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(SolveEx),
-        "HIP should not report SolveEx before support is wired",
+        <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<
+            num_complex::Complex64,
+        >>::has_linalg_support(SolveEx)
+            == cfg!(feature = "cuda"),
+        "CUDA complex SolveEx capability should match whether native CUDA kernels are compiled in",
     );
     assert!(
-        !<crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<
+        <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<
             num_complex::Complex64,
-        >>::has_linalg_support(SolveEx),
-        "CUDA should not report complex SolveEx capability",
+        >>::has_linalg_support(crate::LinalgCapabilityOp::Solve)
+            == cfg!(feature = "cuda"),
+        "CUDA complex Solve capability should match whether native CUDA kernels are compiled in",
+    );
+    assert!(
+        !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(SolveEx),
+        "HIP should not report SolveEx before support is wired",
     );
 
     assert!(

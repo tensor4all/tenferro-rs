@@ -3,6 +3,7 @@ use std::os::raw::c_char;
 use std::sync::Arc;
 
 use libloading::Library;
+use num_complex::{Complex32, Complex64};
 use tenferro_device::{Error, Result};
 
 use super::runtime::{check_cublas_status, check_cusolver_status};
@@ -61,6 +62,22 @@ type FnCusolverDnSgetrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnDgetrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f64, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnCgetrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZgetrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
 type FnCusolverDnSgeqrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnDgeqrfBufferSize =
@@ -89,6 +106,26 @@ type FnCusolverDnDgetrf = unsafe extern "C" fn(
     *mut i32,
     *mut i32,
 ) -> CusolverStatus;
+type FnCusolverDnCgetrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    *mut i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZgetrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
+    *mut i32,
+    *mut i32,
+) -> CusolverStatus;
 type FnCusolverDnSgetrs = unsafe extern "C" fn(
     CusolverDnHandle,
     CublasOperation,
@@ -110,6 +147,30 @@ type FnCusolverDnDgetrs = unsafe extern "C" fn(
     i32,
     *const i32,
     *mut f64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnCgetrs = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    i32,
+    *const Complex32,
+    i32,
+    *const i32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZgetrs = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    i32,
+    *const Complex64,
+    i32,
+    *const i32,
+    *mut Complex64,
     i32,
     *mut i32,
 ) -> CusolverStatus;
@@ -268,18 +329,24 @@ pub(super) struct CusolverDnApi {
     set_stream: FnCusolverDnSetStream,
     sgetrf_buffer_size: FnCusolverDnSgetrfBufferSize,
     dgetrf_buffer_size: FnCusolverDnDgetrfBufferSize,
+    cgetrf_buffer_size: FnCusolverDnCgetrfBufferSize,
+    zgetrf_buffer_size: FnCusolverDnZgetrfBufferSize,
     sgeqrf_buffer_size: FnCusolverDnSgeqrfBufferSize,
     dgeqrf_buffer_size: FnCusolverDnDgeqrfBufferSize,
     sgesvd_buffer_size: FnCusolverDnSgesvdBufferSize,
     dgesvd_buffer_size: FnCusolverDnDgesvdBufferSize,
     sgetrf: FnCusolverDnSgetrf,
     dgetrf: FnCusolverDnDgetrf,
+    cgetrf: FnCusolverDnCgetrf,
+    zgetrf: FnCusolverDnZgetrf,
     sgeqrf: FnCusolverDnSgeqrf,
     dgeqrf: FnCusolverDnDgeqrf,
     sgesvd: FnCusolverDnSgesvd,
     dgesvd: FnCusolverDnDgesvd,
     sgetrs: FnCusolverDnSgetrs,
     dgetrs: FnCusolverDnDgetrs,
+    cgetrs: FnCusolverDnCgetrs,
+    zgetrs: FnCusolverDnZgetrs,
     sorgqr_buffer_size: FnCusolverDnSorgqrBufferSize,
     dorgqr_buffer_size: FnCusolverDnDorgqrBufferSize,
     sorgqr: FnCusolverDnSorgqr,
@@ -400,18 +467,24 @@ impl CusolverDnApi {
             set_stream: load_symbol(&lib, "cusolverDnSetStream")?,
             sgetrf_buffer_size: load_symbol(&lib, "cusolverDnSgetrf_bufferSize")?,
             dgetrf_buffer_size: load_symbol(&lib, "cusolverDnDgetrf_bufferSize")?,
+            cgetrf_buffer_size: load_symbol(&lib, "cusolverDnCgetrf_bufferSize")?,
+            zgetrf_buffer_size: load_symbol(&lib, "cusolverDnZgetrf_bufferSize")?,
             sgeqrf_buffer_size: load_symbol(&lib, "cusolverDnSgeqrf_bufferSize")?,
             dgeqrf_buffer_size: load_symbol(&lib, "cusolverDnDgeqrf_bufferSize")?,
             sgesvd_buffer_size: load_symbol(&lib, "cusolverDnSgesvd_bufferSize")?,
             dgesvd_buffer_size: load_symbol(&lib, "cusolverDnDgesvd_bufferSize")?,
             sgetrf: load_symbol(&lib, "cusolverDnSgetrf")?,
             dgetrf: load_symbol(&lib, "cusolverDnDgetrf")?,
+            cgetrf: load_symbol(&lib, "cusolverDnCgetrf")?,
+            zgetrf: load_symbol(&lib, "cusolverDnZgetrf")?,
             sgeqrf: load_symbol(&lib, "cusolverDnSgeqrf")?,
             dgeqrf: load_symbol(&lib, "cusolverDnDgeqrf")?,
             sgesvd: load_symbol(&lib, "cusolverDnSgesvd")?,
             dgesvd: load_symbol(&lib, "cusolverDnDgesvd")?,
             sgetrs: load_symbol(&lib, "cusolverDnSgetrs")?,
             dgetrs: load_symbol(&lib, "cusolverDnDgetrs")?,
+            cgetrs: load_symbol(&lib, "cusolverDnCgetrs")?,
+            zgetrs: load_symbol(&lib, "cusolverDnZgetrs")?,
             sorgqr_buffer_size: load_symbol(&lib, "cusolverDnSorgqr_bufferSize")?,
             dorgqr_buffer_size: load_symbol(&lib, "cusolverDnDorgqr_bufferSize")?,
             sorgqr: load_symbol(&lib, "cusolverDnSorgqr")?,
@@ -461,11 +534,18 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDgetrf_bufferSize",
             )?,
-            _ => {
-                return Err(Error::DeviceError(format!(
-                    "CUDA solve currently supports only f32/f64, got {dtype:?}"
-                )));
-            }
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cgetrf_buffer_size)(handle, m, n, a.cast::<Complex32>(), lda, &mut lwork)
+                },
+                "cusolverDnCgetrf_bufferSize",
+            )?,
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zgetrf_buffer_size)(handle, m, n, a.cast::<Complex64>(), lda, &mut lwork)
+                },
+                "cusolverDnZgetrf_bufferSize",
+            )?,
         }
         Ok(lwork)
     }
@@ -513,9 +593,36 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDgetrf",
             ),
-            _ => Err(Error::DeviceError(format!(
-                "CUDA solve currently supports only f32/f64, got {dtype:?}"
-            ))),
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cgetrf)(
+                        handle,
+                        m,
+                        n,
+                        a.cast::<Complex32>(),
+                        lda,
+                        workspace.cast::<Complex32>(),
+                        pivots,
+                        info,
+                    )
+                },
+                "cusolverDnCgetrf",
+            ),
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zgetrf)(
+                        handle,
+                        m,
+                        n,
+                        a.cast::<Complex64>(),
+                        lda,
+                        workspace.cast::<Complex64>(),
+                        pivots,
+                        info,
+                    )
+                },
+                "cusolverDnZgetrf",
+            ),
         }
     }
 
@@ -567,9 +674,40 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDgetrs",
             ),
-            _ => Err(Error::DeviceError(format!(
-                "CUDA solve currently supports only f32/f64, got {dtype:?}"
-            ))),
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cgetrs)(
+                        handle,
+                        CUBLAS_OP_N,
+                        n,
+                        nrhs,
+                        a.cast::<Complex32>(),
+                        lda,
+                        pivots,
+                        b.cast::<Complex32>(),
+                        ldb,
+                        info,
+                    )
+                },
+                "cusolverDnCgetrs",
+            ),
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zgetrs)(
+                        handle,
+                        CUBLAS_OP_N,
+                        n,
+                        nrhs,
+                        a.cast::<Complex64>(),
+                        lda,
+                        pivots,
+                        b.cast::<Complex64>(),
+                        ldb,
+                        info,
+                    )
+                },
+                "cusolverDnZgetrs",
+            ),
         }
     }
 
