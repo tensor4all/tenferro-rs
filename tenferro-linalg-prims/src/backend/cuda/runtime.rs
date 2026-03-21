@@ -1,5 +1,4 @@
 use std::ffi::c_void;
-use std::ptr;
 
 #[cfg(feature = "cuda")]
 use cudarc::runtime::result as cuda_result;
@@ -101,9 +100,10 @@ pub(super) fn load_runtime(ctx: &tenferro_prims::CudaContext) -> Result<CudaLina
     let candidates = default_library_candidates();
     let cublas_api = CublasApi::load(&candidates.cublas)?;
     let cusolver_api = CusolverDnApi::load(&candidates.cusolver)?;
-
-    let cublas_handle = cublas_api.create_handle(ptr::null_mut())?;
-    let cusolver_handle = cusolver_api.create_handle(ptr::null_mut())?;
+    let stream = ctx.shared_runtime().clone().context().default_stream();
+    let raw_stream = stream.cu_stream() as *mut c_void;
+    let cublas_handle = cublas_api.create_handle(raw_stream)?;
+    let cusolver_handle = cusolver_api.create_handle(raw_stream)?;
 
     Ok(CudaLinalgRuntime {
         cublas_handle,

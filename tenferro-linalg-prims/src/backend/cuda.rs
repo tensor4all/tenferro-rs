@@ -1,3 +1,4 @@
+mod lu;
 mod runtime;
 mod scalar_type;
 mod solve;
@@ -33,7 +34,18 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     type Context = tenferro_prims::CudaContext;
 
     fn has_linalg_support(op: LinalgCapabilityOp) -> bool {
-        matches!(op, LinalgCapabilityOp::Solve) && solve::has_solve_support::<T>()
+        matches!(
+            op,
+            LinalgCapabilityOp::Solve
+                | LinalgCapabilityOp::LuFactor
+                | LinalgCapabilityOp::LuFactorEx
+        ) && match op {
+            LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
+            LinalgCapabilityOp::LuFactor | LinalgCapabilityOp::LuFactorEx => {
+                lu::has_lu_support::<T>()
+            }
+            _ => false,
+        }
     }
 
     fn solve_ex(
@@ -70,11 +82,11 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     }
 
     fn lu_factor_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorExResult<T>> {
-        unsupported::<LuTensorExResult<T>, T>("lu_factor_ex")
+        lu::lu_factor_ex(_ctx, _a)
     }
 
     fn lu_factor(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorResult<T>> {
-        unsupported::<LuTensorResult<T>, T>("lu_factor")
+        lu::lu_factor(_ctx, _a)
     }
 
     fn cholesky_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {

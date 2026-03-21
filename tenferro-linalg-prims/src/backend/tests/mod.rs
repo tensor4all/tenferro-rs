@@ -132,20 +132,44 @@ fn cpu_backend_svdvals_matches_thin_svd_after_move() {
 fn ex_capabilities_track_cpu_ex_implementation_state() {
     use crate::LinalgCapabilityOp::{CholeskyEx, LuFactorEx, SolveEx};
 
-    for op in [SolveEx, LuFactorEx, CholeskyEx] {
-        assert!(
-            <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(op),
-            "CPU should report {op:?} once the corresponding EX semantics exist",
-        );
-        assert!(
-            !<crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(op),
-            "CUDA should not report {op:?} before support is wired",
-        );
-        assert!(
-            !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(op),
-            "HIP should not report {op:?} before support is wired",
-        );
-    }
+    assert!(
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(SolveEx),
+        "CPU should report SolveEx once the corresponding EX semantics exist",
+    );
+    assert!(
+        !<crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(SolveEx),
+        "CUDA should not report SolveEx before support is wired",
+    );
+    assert!(
+        !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(SolveEx),
+        "HIP should not report SolveEx before support is wired",
+    );
+
+    assert!(
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(LuFactorEx),
+        "CPU should report LuFactorEx once the corresponding EX semantics exist",
+    );
+    assert!(
+        <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(LuFactorEx),
+        "CUDA should report LuFactorEx once native kernels are wired",
+    );
+    assert!(
+        !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(LuFactorEx),
+        "HIP should not report LuFactorEx before support is wired",
+    );
+
+    assert!(
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(CholeskyEx),
+        "CPU should report CholeskyEx once the corresponding EX semantics exist",
+    );
+    assert!(
+        !<crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(CholeskyEx),
+        "CUDA should not report CholeskyEx before support is wired",
+    );
+    assert!(
+        !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(CholeskyEx),
+        "HIP should not report CholeskyEx before support is wired",
+    );
 }
 
 #[test]
