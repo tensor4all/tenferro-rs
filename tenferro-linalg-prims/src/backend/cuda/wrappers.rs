@@ -82,6 +82,22 @@ type FnCusolverDnSgeqrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnDgeqrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f64, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnCgeqrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZgeqrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
 type FnCusolverDnSgesvdBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnDgesvdBufferSize =
@@ -196,6 +212,28 @@ type FnCusolverDnDgeqrf = unsafe extern "C" fn(
     i32,
     *mut i32,
 ) -> CusolverStatus;
+type FnCusolverDnCgeqrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZgeqrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
+    *mut Complex64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
 type FnCusolverDnSorgqrBufferSize = unsafe extern "C" fn(
     CusolverDnHandle,
     i32,
@@ -214,6 +252,26 @@ type FnCusolverDnDorgqrBufferSize = unsafe extern "C" fn(
     *mut f64,
     i32,
     *mut f64,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnCungqrBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZungqrBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
     *mut i32,
 ) -> CusolverStatus;
 type FnCusolverDnSorgqr = unsafe extern "C" fn(
@@ -237,6 +295,30 @@ type FnCusolverDnDorgqr = unsafe extern "C" fn(
     i32,
     *mut f64,
     *mut f64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnCungqr = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZungqr = unsafe extern "C" fn(
+    CusolverDnHandle,
+    i32,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
+    *mut Complex64,
     i32,
     *mut i32,
 ) -> CusolverStatus;
@@ -369,6 +451,8 @@ pub(super) struct CusolverDnApi {
     zgetrf_buffer_size: FnCusolverDnZgetrfBufferSize,
     sgeqrf_buffer_size: FnCusolverDnSgeqrfBufferSize,
     dgeqrf_buffer_size: FnCusolverDnDgeqrfBufferSize,
+    cgeqrf_buffer_size: FnCusolverDnCgeqrfBufferSize,
+    zgeqrf_buffer_size: FnCusolverDnZgeqrfBufferSize,
     sgesvd_buffer_size: FnCusolverDnSgesvdBufferSize,
     dgesvd_buffer_size: FnCusolverDnDgesvdBufferSize,
     sgetrf: FnCusolverDnSgetrf,
@@ -377,6 +461,8 @@ pub(super) struct CusolverDnApi {
     zgetrf: FnCusolverDnZgetrf,
     sgeqrf: FnCusolverDnSgeqrf,
     dgeqrf: FnCusolverDnDgeqrf,
+    cgeqrf: FnCusolverDnCgeqrf,
+    zgeqrf: FnCusolverDnZgeqrf,
     sgesvd: FnCusolverDnSgesvd,
     dgesvd: FnCusolverDnDgesvd,
     sgetrs: FnCusolverDnSgetrs,
@@ -385,8 +471,12 @@ pub(super) struct CusolverDnApi {
     zgetrs: FnCusolverDnZgetrs,
     sorgqr_buffer_size: FnCusolverDnSorgqrBufferSize,
     dorgqr_buffer_size: FnCusolverDnDorgqrBufferSize,
+    cungqr_buffer_size: FnCusolverDnCungqrBufferSize,
+    zungqr_buffer_size: FnCusolverDnZungqrBufferSize,
     sorgqr: FnCusolverDnSorgqr,
     dorgqr: FnCusolverDnDorgqr,
+    cungqr: FnCusolverDnCungqr,
+    zungqr: FnCusolverDnZungqr,
     spotrf_buffer_size: FnCusolverDnSpotrfBufferSize,
     dpotrf_buffer_size: FnCusolverDnDpotrfBufferSize,
     cpotrf_buffer_size: FnCusolverDnCpotrfBufferSize,
@@ -511,6 +601,8 @@ impl CusolverDnApi {
             zgetrf_buffer_size: load_symbol(&lib, "cusolverDnZgetrf_bufferSize")?,
             sgeqrf_buffer_size: load_symbol(&lib, "cusolverDnSgeqrf_bufferSize")?,
             dgeqrf_buffer_size: load_symbol(&lib, "cusolverDnDgeqrf_bufferSize")?,
+            cgeqrf_buffer_size: load_symbol(&lib, "cusolverDnCgeqrf_bufferSize")?,
+            zgeqrf_buffer_size: load_symbol(&lib, "cusolverDnZgeqrf_bufferSize")?,
             sgesvd_buffer_size: load_symbol(&lib, "cusolverDnSgesvd_bufferSize")?,
             dgesvd_buffer_size: load_symbol(&lib, "cusolverDnDgesvd_bufferSize")?,
             sgetrf: load_symbol(&lib, "cusolverDnSgetrf")?,
@@ -519,6 +611,8 @@ impl CusolverDnApi {
             zgetrf: load_symbol(&lib, "cusolverDnZgetrf")?,
             sgeqrf: load_symbol(&lib, "cusolverDnSgeqrf")?,
             dgeqrf: load_symbol(&lib, "cusolverDnDgeqrf")?,
+            cgeqrf: load_symbol(&lib, "cusolverDnCgeqrf")?,
+            zgeqrf: load_symbol(&lib, "cusolverDnZgeqrf")?,
             sgesvd: load_symbol(&lib, "cusolverDnSgesvd")?,
             dgesvd: load_symbol(&lib, "cusolverDnDgesvd")?,
             sgetrs: load_symbol(&lib, "cusolverDnSgetrs")?,
@@ -527,8 +621,12 @@ impl CusolverDnApi {
             zgetrs: load_symbol(&lib, "cusolverDnZgetrs")?,
             sorgqr_buffer_size: load_symbol(&lib, "cusolverDnSorgqr_bufferSize")?,
             dorgqr_buffer_size: load_symbol(&lib, "cusolverDnDorgqr_bufferSize")?,
+            cungqr_buffer_size: load_symbol(&lib, "cusolverDnCungqr_bufferSize")?,
+            zungqr_buffer_size: load_symbol(&lib, "cusolverDnZungqr_bufferSize")?,
             sorgqr: load_symbol(&lib, "cusolverDnSorgqr")?,
             dorgqr: load_symbol(&lib, "cusolverDnDorgqr")?,
+            cungqr: load_symbol(&lib, "cusolverDnCungqr")?,
+            zungqr: load_symbol(&lib, "cusolverDnZungqr")?,
             spotrf_buffer_size: load_symbol(&lib, "cusolverDnSpotrf_bufferSize")?,
             dpotrf_buffer_size: load_symbol(&lib, "cusolverDnDpotrf_bufferSize")?,
             cpotrf_buffer_size: load_symbol(&lib, "cusolverDnCpotrf_bufferSize")?,
@@ -778,11 +876,18 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDgeqrf_bufferSize",
             )?,
-            _ => {
-                return Err(Error::DeviceError(format!(
-                    "CUDA QR currently supports only f32/f64, got {dtype:?}"
-                )));
-            }
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cgeqrf_buffer_size)(handle, m, n, a.cast::<Complex32>(), lda, &mut lwork)
+                },
+                "cusolverDnCgeqrf_bufferSize",
+            )?,
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zgeqrf_buffer_size)(handle, m, n, a.cast::<Complex64>(), lda, &mut lwork)
+                },
+                "cusolverDnZgeqrf_bufferSize",
+            )?,
         }
         Ok(lwork)
     }
@@ -833,9 +938,38 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDgeqrf",
             ),
-            _ => Err(Error::DeviceError(format!(
-                "CUDA QR currently supports only f32/f64, got {dtype:?}"
-            ))),
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cgeqrf)(
+                        handle,
+                        m,
+                        n,
+                        a.cast::<Complex32>(),
+                        lda,
+                        tau.cast::<Complex32>(),
+                        workspace.cast::<Complex32>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnCgeqrf",
+            ),
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zgeqrf)(
+                        handle,
+                        m,
+                        n,
+                        a.cast::<Complex64>(),
+                        lda,
+                        tau.cast::<Complex64>(),
+                        workspace.cast::<Complex64>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnZgeqrf",
+            ),
         }
     }
 
@@ -882,11 +1016,36 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDorgqr_bufferSize",
             )?,
-            _ => {
-                return Err(Error::DeviceError(format!(
-                    "CUDA QR currently supports only f32/f64, got {dtype:?}"
-                )));
-            }
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cungqr_buffer_size)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<Complex32>(),
+                        lda,
+                        tau.cast::<Complex32>(),
+                        &mut lwork,
+                    )
+                },
+                "cusolverDnCungqr_bufferSize",
+            )?,
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zungqr_buffer_size)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<Complex64>(),
+                        lda,
+                        tau.cast::<Complex64>(),
+                        &mut lwork,
+                    )
+                },
+                "cusolverDnZungqr_bufferSize",
+            )?,
         }
         Ok(lwork)
     }
@@ -940,9 +1099,40 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDorgqr",
             ),
-            _ => Err(Error::DeviceError(format!(
-                "CUDA QR currently supports only f32/f64, got {dtype:?}"
-            ))),
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cungqr)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<Complex32>(),
+                        lda,
+                        tau.cast::<Complex32>(),
+                        workspace.cast::<Complex32>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnCungqr",
+            ),
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zungqr)(
+                        handle,
+                        m,
+                        n,
+                        k,
+                        a.cast::<Complex64>(),
+                        lda,
+                        tau.cast::<Complex64>(),
+                        workspace.cast::<Complex64>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnZungqr",
+            ),
         }
     }
 
