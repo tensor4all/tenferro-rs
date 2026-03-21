@@ -1,4 +1,8 @@
 use super::*;
+#[cfg(feature = "cuda")]
+use num_complex::Complex;
+#[cfg(feature = "cuda")]
+use num_traits::Float;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 #[cfg(feature = "cuda")]
@@ -21,17 +25,6 @@ fn with_cuda_ctx<T>(f: impl FnOnce(&mut tenferro_prims::CudaContext) -> T) -> Op
 }
 
 #[cfg(feature = "cuda")]
-fn tensor_data_on_cpu(tensor: &Tensor<f64>) -> Vec<f64> {
-    let cpu = tensor
-        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
-        .unwrap();
-    let contiguous = cpu.contiguous(MemoryOrder::ColumnMajor);
-    let offset = contiguous.offset() as usize;
-    let len = contiguous.dims().iter().product::<usize>().max(1);
-    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
-}
-
-#[cfg(feature = "cuda")]
 fn assert_close_slice(label: &str, got: &[f64], expected: &[f64], atol: f64) {
     assert_eq!(
         got.len(),
@@ -47,6 +40,17 @@ fn assert_close_slice(label: &str, got: &[f64], expected: &[f64], atol: f64) {
             "{label}[{idx}] diff {diff} exceeded tolerance {atol}; got {got_v}, expected {exp_v}"
         );
     }
+}
+
+#[cfg(feature = "cuda")]
+fn tensor_data_on_cpu<T: tenferro_algebra::Scalar + Copy>(tensor: &Tensor<T>) -> Vec<T> {
+    let cpu = tensor
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let contiguous = cpu.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.dims().iter().product::<usize>().max(1);
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
 #[cfg(feature = "cuda")]
@@ -80,6 +84,70 @@ fn reconstruct_thin_svd_col_major(
         }
     }
     matmul_col_major(&scaled_u, m, k, vt, n)
+}
+
+#[cfg(feature = "cuda")]
+fn matmul_col_major_complex<T: Float>(
+    lhs: &[Complex<T>],
+    m: usize,
+    k: usize,
+    rhs: &[Complex<T>],
+    n: usize,
+) -> Vec<Complex<T>> {
+    let mut out = vec![Complex::new(T::zero(), T::zero()); m * n];
+    for col in 0..n {
+        for row in 0..m {
+            let mut acc = Complex::new(T::zero(), T::zero());
+            for inner in 0..k {
+                acc = acc + lhs[row + inner * m] * rhs[inner + col * k];
+            }
+            out[row + col * m] = acc;
+        }
+    }
+    out
+}
+
+#[cfg(feature = "cuda")]
+fn gram_col_major_complex<T: Float>(q: &[Complex<T>], m: usize, k: usize) -> Vec<Complex<T>> {
+    let mut out = vec![Complex::new(T::zero(), T::zero()); k * k];
+    for col in 0..k {
+        for row in 0..k {
+            let mut acc = Complex::new(T::zero(), T::zero());
+            for inner in 0..m {
+                acc = acc + q[inner + row * m].conj() * q[inner + col * m];
+            }
+            out[row + col * k] = acc;
+        }
+    }
+    out
+}
+
+#[cfg(feature = "cuda")]
+fn assert_close_complex_slice<T: Float + std::fmt::Debug>(
+    label: &str,
+    got: &[Complex<T>],
+    expected: &[Complex<T>],
+    atol: T,
+) {
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "{label}: length mismatch {} vs {}",
+        got.len(),
+        expected.len()
+    );
+    for (idx, (&got_v, &exp_v)) in got.iter().zip(expected.iter()).enumerate() {
+        let re_diff = (got_v.re - exp_v.re).abs();
+        let im_diff = (got_v.im - exp_v.im).abs();
+        assert!(
+            re_diff <= atol,
+            "{label}[{idx}].re diff {re_diff:?} exceeded tolerance {atol:?}; got {got_v:?}, expected {exp_v:?}"
+        );
+        assert!(
+            im_diff <= atol,
+            "{label}[{idx}].im diff {im_diff:?} exceeded tolerance {atol:?}; got {got_v:?}, expected {exp_v:?}"
+        );
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -276,6 +344,126 @@ fn cuda_public_solve_ex_matches_cpu_generic() {
             &tensor_data_on_cpu(&got.solution),
             &tensor_data(&expected.solution),
             256.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_qr_reconstructs_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(1.0_f32, 0.5),
+                Complex::new(2.0, -1.0),
+                Complex::new(3.0, 0.25),
+                Complex::new(4.0, 1.5),
+                Complex::new(5.0, -0.75),
+                Complex::new(6.0, 0.0),
+            ],
+            &[3, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = qr(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.q.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.r.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.q.dims(), &[3, 2]);
+        assert_eq!(got.r.dims(), &[2, 2]);
+
+        let q = tensor_data_on_cpu(&got.q);
+        let r = tensor_data_on_cpu(&got.r);
+        let reconstructed = matmul_col_major_complex(&q, 3, 2, &r, 2);
+        assert_close_complex_slice(
+            "cuda public complex32 qr reconstruction",
+            &reconstructed,
+            &tensor_data_on_cpu(&a_cpu),
+            4096.0_f32 * f32::EPSILON,
+        );
+
+        let gram = gram_col_major_complex(&q, 3, 2);
+        let identity = vec![
+            Complex::new(1.0_f32, 0.0),
+            Complex::new(0.0, 0.0),
+            Complex::new(0.0, 0.0),
+            Complex::new(1.0, 0.0),
+        ];
+        assert_close_complex_slice(
+            "cuda public complex32 qr unitary",
+            &gram,
+            &identity,
+            4096.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_qr_reconstructs_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(1.0_f64, 0.5),
+                Complex::new(2.0, -1.0),
+                Complex::new(3.0, 0.25),
+                Complex::new(4.0, 1.5),
+                Complex::new(5.0, -0.75),
+                Complex::new(6.0, 0.0),
+            ],
+            &[3, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = qr(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.q.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.r.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.q.dims(), &[3, 2]);
+        assert_eq!(got.r.dims(), &[2, 2]);
+
+        let q = tensor_data_on_cpu(&got.q);
+        let r = tensor_data_on_cpu(&got.r);
+        let reconstructed = matmul_col_major_complex(&q, 3, 2, &r, 2);
+        assert_close_complex_slice(
+            "cuda public complex64 qr reconstruction",
+            &reconstructed,
+            &tensor_data_on_cpu(&a_cpu),
+            4096.0_f64 * f64::EPSILON,
+        );
+
+        let gram = gram_col_major_complex(&q, 3, 2);
+        let identity = vec![
+            Complex::new(1.0_f64, 0.0),
+            Complex::new(0.0, 0.0),
+            Complex::new(0.0, 0.0),
+            Complex::new(1.0, 0.0),
+        ];
+        assert_close_complex_slice(
+            "cuda public complex64 qr unitary",
+            &gram,
+            &identity,
+            4096.0_f64 * f64::EPSILON,
         );
     }) else {
         return;
@@ -555,6 +743,18 @@ fn public_cuda_svd_cutoff_preserves_zero_fill_semantics() {
 #[cfg(feature = "cuda")]
 fn public_cuda_solve_ex_matches_cpu_for_mixed_batch() {
     cuda_public_solve_ex_matches_cpu_generic();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_qr_reconstructs_complex32_matrix() {
+    cuda_public_qr_reconstructs_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_qr_reconstructs_complex64_matrix() {
+    cuda_public_qr_reconstructs_complex64_impl();
 }
 
 #[test]
