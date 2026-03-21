@@ -4,6 +4,7 @@ mod qr;
 mod runtime;
 mod scalar_type;
 mod solve;
+mod solve_triangular;
 mod wrappers;
 
 use tenferro_device::Result;
@@ -39,6 +40,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
         matches!(
             op,
             LinalgCapabilityOp::Solve
+                | LinalgCapabilityOp::SolveTriangular
                 | LinalgCapabilityOp::Qr
                 | LinalgCapabilityOp::LuFactor
                 | LinalgCapabilityOp::LuFactorEx
@@ -46,6 +48,9 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
                 | LinalgCapabilityOp::CholeskyEx
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
+            LinalgCapabilityOp::SolveTriangular => {
+                solve_triangular::has_solve_triangular_support::<T>()
+            }
             LinalgCapabilityOp::Qr => qr::has_qr_support::<T>(),
             LinalgCapabilityOp::LuFactor | LinalgCapabilityOp::LuFactorEx => {
                 lu::has_lu_support::<T>()
@@ -70,12 +75,12 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     }
 
     fn solve_triangular(
-        _ctx: &mut Self::Context,
-        _a: &Tensor<T>,
-        _b: &Tensor<T>,
-        _upper: bool,
+        ctx: &mut Self::Context,
+        a: &Tensor<T>,
+        b: &Tensor<T>,
+        upper: bool,
     ) -> Result<Tensor<T>> {
-        unsupported::<Tensor<T>, T>("solve_triangular")
+        solve_triangular::solve_triangular(ctx, a, b, upper)
     }
 
     fn qr(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<QrTensorResult<T>> {

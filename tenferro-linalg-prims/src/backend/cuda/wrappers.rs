@@ -16,10 +16,42 @@ type CusolverDnHandle = *mut c_void;
 type CudaStream = *mut c_void;
 
 const CUBLAS_OP_N: CublasOperation = 0;
+const CUBLAS_SIDE_LEFT: i32 = 0;
+const CUBLAS_FILL_MODE_LOWER: i32 = 0;
+const CUBLAS_FILL_MODE_UPPER: i32 = 1;
+const CUBLAS_DIAG_NON_UNIT: i32 = 0;
 
 type FnCublasCreate = unsafe extern "C" fn(*mut CublasHandle) -> CublasStatus;
 type FnCublasDestroy = unsafe extern "C" fn(CublasHandle) -> CublasStatus;
 type FnCublasSetStream = unsafe extern "C" fn(CublasHandle, CudaStream) -> CublasStatus;
+type FnCublasStrsm = unsafe extern "C" fn(
+    CublasHandle,
+    i32,
+    i32,
+    CublasOperation,
+    i32,
+    i32,
+    i32,
+    *const f32,
+    *const f32,
+    i32,
+    *mut f32,
+    i32,
+) -> CublasStatus;
+type FnCublasDtrsm = unsafe extern "C" fn(
+    CublasHandle,
+    i32,
+    i32,
+    CublasOperation,
+    i32,
+    i32,
+    i32,
+    *const f64,
+    *const f64,
+    i32,
+    *mut f64,
+    i32,
+) -> CublasStatus;
 
 type FnCusolverDnCreate = unsafe extern "C" fn(*mut CusolverDnHandle) -> CusolverStatus;
 type FnCusolverDnDestroy = unsafe extern "C" fn(CusolverDnHandle) -> CusolverStatus;
@@ -184,6 +216,8 @@ pub(super) struct CublasApi {
     create: FnCublasCreate,
     destroy: FnCublasDestroy,
     set_stream: FnCublasSetStream,
+    strsm: FnCublasStrsm,
+    dtrsm: FnCublasDtrsm,
 }
 
 pub(super) struct CusolverDnApi {
@@ -230,6 +264,8 @@ impl CublasApi {
             create: load_symbol(&lib, "cublasCreate_v2")?,
             destroy: load_symbol(&lib, "cublasDestroy_v2")?,
             set_stream: load_symbol(&lib, "cublasSetStream_v2")?,
+            strsm: load_symbol(&lib, "cublasStrsm_v2")?,
+            dtrsm: load_symbol(&lib, "cublasDtrsm_v2")?,
             _lib: lib,
         })
     }
@@ -246,6 +282,67 @@ impl CublasApi {
             "cublasSetStream_v2",
         )?;
         Ok(handle)
+    }
+
+    pub(super) fn trsm(
+        &self,
+        dtype: CudaDataType,
+        handle: CublasHandle,
+        side: i32,
+        uplo: i32,
+        trans: CublasOperation,
+        diag: i32,
+        m: i32,
+        n: i32,
+        alpha: *const c_void,
+        a: *const c_void,
+        lda: i32,
+        b: *mut c_void,
+        ldb: i32,
+    ) -> Result<()> {
+        match dtype {
+            CudaDataType::F32 => check_cublas_status(
+                unsafe {
+                    (self.strsm)(
+                        handle,
+                        side,
+                        uplo,
+                        trans,
+                        diag,
+                        m,
+                        n,
+                        alpha.cast::<f32>(),
+                        a.cast::<f32>(),
+                        lda,
+                        b.cast::<f32>(),
+                        ldb,
+                    )
+                },
+                "cublasStrsm_v2",
+            ),
+            CudaDataType::F64 => check_cublas_status(
+                unsafe {
+                    (self.dtrsm)(
+                        handle,
+                        side,
+                        uplo,
+                        trans,
+                        diag,
+                        m,
+                        n,
+                        alpha.cast::<f64>(),
+                        a.cast::<f64>(),
+                        lda,
+                        b.cast::<f64>(),
+                        ldb,
+                    )
+                },
+                "cublasDtrsm_v2",
+            ),
+            _ => Err(Error::DeviceError(format!(
+                "CUDA triangular solve currently supports only f32/f64, got {dtype:?}"
+            ))),
+        }
     }
 }
 
