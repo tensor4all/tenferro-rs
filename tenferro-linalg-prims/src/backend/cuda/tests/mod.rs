@@ -49,6 +49,34 @@ fn tensor_data_on_cpu<T: crate::KernelLinalgScalar>(tensor: &Tensor<T>) -> Vec<T
     contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
+fn matmul_col_major<T: Float>(lhs: &[T], m: usize, k: usize, rhs: &[T], n: usize) -> Vec<T> {
+    let mut out = vec![T::zero(); m * n];
+    for col in 0..n {
+        for row in 0..m {
+            let mut acc = T::zero();
+            for inner in 0..k {
+                acc = acc + lhs[row + inner * m] * rhs[inner + col * k];
+            }
+            out[row + col * m] = acc;
+        }
+    }
+    out
+}
+
+fn gram_col_major<T: Float>(q: &[T], m: usize, k: usize) -> Vec<T> {
+    let mut out = vec![T::zero(); k * k];
+    for col in 0..k {
+        for row in 0..k {
+            let mut acc = T::zero();
+            for inner in 0..m {
+                acc = acc + q[inner + row * m] * q[inner + col * m];
+            }
+            out[row + col * k] = acc;
+        }
+    }
+    out
+}
+
 #[cfg(feature = "cuda")]
 fn cuda_solve_matches_cpu_for_small_real_matrix_generic<T>()
 where
@@ -295,6 +323,73 @@ where
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_qr_reconstructs_small_real_matrix_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0),
+            cast::<T>(2.0),
+            cast::<T>(3.0),
+            cast::<T>(4.0),
+            cast::<T>(5.0),
+            cast::<T>(6.0),
+        ],
+        &[3, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+
+    let got =
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::qr(&mut cuda_ctx, &a_gpu)
+            .unwrap();
+
+    assert_eq!(got.q.dims(), &[3, 2]);
+    assert_eq!(got.r.dims(), &[2, 2]);
+    assert_eq!(
+        got.q.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_eq!(
+        got.r.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+
+    let q = tensor_data_on_cpu(&got.q);
+    let r = tensor_data_on_cpu(&got.r);
+    let reconstructed = matmul_col_major(&q, 3, 2, &r, 2);
+    assert_close_slice(
+        "cuda qr reconstruction",
+        &reconstructed,
+        a_cpu.buffer().as_slice().unwrap(),
+        cast::<T>(1024.0) * T::epsilon(),
+    );
+
+    let gram = gram_col_major(&q, 3, 2);
+    let identity = vec![T::one(), T::zero(), T::zero(), T::one()];
+    assert_close_slice(
+        "cuda qr orthogonality",
+        &gram,
+        &identity,
+        cast::<T>(1024.0) * T::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_cholesky_matches_cpu_for_small_real_matrix_generic<T>()
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -402,6 +497,44 @@ where
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_cholesky_reports_minor_for_non_spd_matrix_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let a_gpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0),
+            cast::<T>(2.0),
+            cast::<T>(2.0),
+            cast::<T>(1.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap()
+    .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+    .unwrap();
+
+    let err = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::cholesky(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("positive definite"));
+    assert!(msg.contains("minor 2"), "unexpected cholesky error: {msg}");
+}
+
+#[cfg(feature = "cuda")]
 #[test]
 fn cuda_linalg_scalar_maps_supported_standard_dtypes() {
     assert_eq!(
@@ -437,6 +570,11 @@ fn cuda_backend_reports_only_wired_capabilities() {
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+            LinalgCapabilityOp::Qr
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
             LinalgCapabilityOp::LuFactor
         ) == has_native_cuda
     );
@@ -463,6 +601,11 @@ fn cuda_backend_reports_only_wired_capabilities() {
     assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::Solve
+        )
+    );
+    assert!(
+        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+            LinalgCapabilityOp::Qr
         )
     );
     assert!(
@@ -594,6 +737,18 @@ fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f64() {
 
 #[test]
 #[cfg(feature = "cuda")]
+fn cuda_qr_reconstructs_small_real_matrix_f32() {
+    cuda_qr_reconstructs_small_real_matrix_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_qr_reconstructs_small_real_matrix_f64() {
+    cuda_qr_reconstructs_small_real_matrix_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f32() {
     cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f32>();
 }
@@ -626,4 +781,16 @@ fn cuda_cholesky_ex_matches_cpu_for_mixed_batch_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_cholesky_ex_matches_cpu_for_mixed_batch_f64() {
     cuda_cholesky_ex_matches_cpu_for_mixed_batch_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_reports_minor_for_non_spd_matrix_f32() {
+    cuda_cholesky_reports_minor_for_non_spd_matrix_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_reports_minor_for_non_spd_matrix_f64() {
+    cuda_cholesky_reports_minor_for_non_spd_matrix_generic::<f64>();
 }

@@ -44,17 +44,89 @@ fn cholesky_dtype<T: CudaLinalgScalar>() -> Result<CudaDataType> {
 }
 
 #[cfg(feature = "cuda")]
+fn checked_mul(lhs: usize, rhs: usize, label: &str) -> Result<usize> {
+    lhs.checked_mul(rhs)
+        .ok_or_else(|| Error::InvalidArgument(format!("{label} overflow: {lhs} * {rhs}")))
+}
+
+#[cfg(feature = "cuda")]
 pub(super) fn cholesky<T>(ctx: &mut tenferro_prims::CudaContext, a: &Tensor<T>) -> Result<Tensor<T>>
 where
     T: CudaLinalgScalar,
 {
-    let result = cholesky_ex(ctx, a)?;
-    if let Some(info) = result.info.iter().copied().find(|info| *info > 0) {
-        return Err(Error::InvalidArgument(format!(
-            "cholesky: matrix is not positive definite (minor {info})"
-        )));
+    let dtype = cholesky_dtype::<T>()?;
+    let (n, batch_dims) = validate_square(a)?;
+    let bc = batch_count(batch_dims);
+    let l = clone_batched_column_major(ctx, a)?;
+    if n == 0 || bc == 0 {
+        return Ok(l.tril(0));
     }
-    Ok(result.l)
+
+    let runtime = load_runtime(ctx)?;
+    let l_base = context_device_ptr(ctx, &l, "cholesky l")?.cast::<T>();
+    let l_offset = l.offset() as usize;
+    let mat_size = checked_mul(n, n, "cholesky matrix size")?;
+    let lda = i32::try_from(n)
+        .map_err(|_| Error::InvalidArgument("cholesky lda exceeds i32 range".into()))?;
+    let n_i32 = lda;
+    let first_l_ptr = unsafe { l_base.add(l_offset) }.cast::<c_void>();
+    let lwork = runtime.cusolver_api().potrf_buffer_size(
+        dtype,
+        runtime.cusolver_handle.raw,
+        CUBLAS_FILL_MODE_LOWER,
+        n_i32,
+        first_l_ptr,
+        lda,
+    )?;
+    let workspace = DeviceAllocation::alloc(
+        ctx,
+        checked_mul(
+            usize::try_from(lwork).map_err(|_| {
+                Error::InvalidArgument(format!("cholesky workspace size was negative: {lwork}"))
+            })?,
+            std::mem::size_of::<T>(),
+            "cholesky workspace bytes",
+        )?,
+        "cudaMalloc(cholesky workspace)",
+    )?;
+    let info_alloc =
+        DeviceAllocation::alloc(ctx, std::mem::size_of::<i32>(), "cudaMalloc(cholesky info)")?;
+    let mut host_info = [0_i32; 1];
+
+    for batch in 0..bc {
+        let l_ptr = unsafe { l_base.add(l_offset + batch * mat_size) }.cast::<c_void>();
+        runtime.cusolver_api().potrf(
+            dtype,
+            runtime.cusolver_handle.raw,
+            CUBLAS_FILL_MODE_LOWER,
+            n_i32,
+            l_ptr,
+            lda,
+            workspace.as_mut_ptr(),
+            lwork,
+            info_alloc.as_mut_ptr().cast::<i32>(),
+        )?;
+        copy_device_to_host(
+            ctx,
+            info_alloc.as_mut_ptr().cast::<c_void>(),
+            &mut host_info,
+            "cudaMemcpyDtoH(cholesky info)",
+        )?;
+        let batch_info = host_info[0];
+        if batch_info < 0 {
+            return Err(Error::DeviceError(format!(
+                "cholesky reported an invalid parameter at position {}",
+                -batch_info
+            )));
+        }
+        if batch_info > 0 {
+            return Err(Error::InvalidArgument(format!(
+                "cholesky: matrix is not positive definite (minor {batch_info})"
+            )));
+        }
+    }
+
+    Ok(l.tril(0))
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -98,9 +170,7 @@ where
     let l_base = context_device_ptr(ctx, &l, "cholesky l")?.cast::<T>();
     let a_offset = a_work.offset() as usize;
     let l_offset = l.offset() as usize;
-    let mat_size = n
-        .checked_mul(n)
-        .ok_or_else(|| Error::InvalidArgument("cholesky matrix size overflow".into()))?;
+    let mat_size = checked_mul(n, n, "cholesky matrix size")?;
     let lda = i32::try_from(n)
         .map_err(|_| Error::InvalidArgument("cholesky lda exceeds i32 range".into()))?;
     let n_i32 = lda;
@@ -115,9 +185,13 @@ where
     )?;
     let workspace = DeviceAllocation::alloc(
         ctx,
-        usize::try_from(lwork).map_err(|_| {
-            Error::InvalidArgument(format!("cholesky workspace size was negative: {lwork}"))
-        })? * std::mem::size_of::<T>(),
+        checked_mul(
+            usize::try_from(lwork).map_err(|_| {
+                Error::InvalidArgument(format!("cholesky workspace size was negative: {lwork}"))
+            })?,
+            std::mem::size_of::<T>(),
+            "cholesky workspace bytes",
+        )?,
         "cudaMalloc(cholesky workspace)",
     )?;
 
