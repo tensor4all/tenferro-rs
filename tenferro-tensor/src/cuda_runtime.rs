@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use tenferro_algebra::Scalar;
 use tenferro_device::cuda::runtime::{
-    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, ZeroTrailingByCountsSpec,
+    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, TriangularHalf,
+    TriangularPartSpec, ZeroTrailingByCountsSpec,
 };
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
@@ -193,6 +194,59 @@ where
 
     unsafe {
         runtime.zero_trailing_by_counts_raw(src_ptr, dst_ptr, keep_counts_ptr, &spec)?;
+    }
+
+    Ok(output)
+}
+
+pub(super) fn triangular_part_tensor<T: Scalar>(
+    source: &Tensor<T>,
+    diagonal: isize,
+    lower: bool,
+) -> Result<Tensor<T>> {
+    let space = source.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let out_strides = compute_contiguous_strides(source.dims(), MemoryOrder::ColumnMajor);
+    let output = Tensor::from_parts(
+        alloc_gpu_buffer(source.len(), space)?,
+        Arc::from(source.dims()),
+        Arc::from(out_strides),
+        0,
+        space,
+        source.preferred_compute_device(),
+        None,
+        source.is_conjugated(),
+        None,
+    );
+    if source.is_empty() {
+        return Ok(output);
+    }
+
+    let src_ptr = source
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("source tensor buffer is not on GPU".into()))?;
+    let dst_ptr = output
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("output tensor buffer is not on GPU".into()))?
+        as *mut T;
+    let spec = TriangularPartSpec::new(
+        source.dims(),
+        source.strides(),
+        source.offset(),
+        output.strides(),
+        output.offset(),
+        diagonal,
+        if lower {
+            TriangularHalf::Lower
+        } else {
+            TriangularHalf::Upper
+        },
+    )?;
+
+    unsafe {
+        runtime.triangular_part_raw(src_ptr, dst_ptr, &spec)?;
     }
 
     Ok(output)

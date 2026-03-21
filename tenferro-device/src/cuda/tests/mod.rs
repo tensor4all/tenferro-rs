@@ -216,6 +216,56 @@ fn host_zero_trailing_by_counts_reference<T: Copy + Default>(
     dst
 }
 
+fn host_triangular_part_reference<T: Copy + Default>(
+    src: &[T],
+    dims: &[usize],
+    src_strides: &[isize],
+    src_offset: isize,
+    dst_strides: &[isize],
+    diagonal: isize,
+    half: tenferro_device::cuda::runtime::TriangularHalf,
+) -> Vec<T> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![T::default(); numel];
+    if numel == 0 {
+        return dst;
+    }
+
+    for linear_idx in 0..numel {
+        let mut remainder = linear_idx;
+        let mut src_index = src_offset;
+        let mut dst_index = 0isize;
+        let mut row = 0usize;
+        let mut col = 0usize;
+
+        for axis in 0..dims.len() {
+            let coord = remainder % dims[axis];
+            remainder /= dims[axis];
+            src_index += (coord as isize) * src_strides[axis];
+            dst_index += (coord as isize) * dst_strides[axis];
+            if axis == 0 {
+                row = coord;
+            } else if axis == 1 {
+                col = coord;
+            }
+        }
+
+        let keep = match half {
+            tenferro_device::cuda::runtime::TriangularHalf::Lower => {
+                (col as isize - row as isize) <= diagonal
+            }
+            tenferro_device::cuda::runtime::TriangularHalf::Upper => {
+                (col as isize - row as isize) >= diagonal
+            }
+        };
+        if keep {
+            dst[dst_index as usize] = src[src_index as usize];
+        }
+    }
+
+    dst
+}
+
 #[test]
 fn cuda_runtime_can_get_or_create_device_zero_handle() {
     if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
@@ -641,4 +691,90 @@ fn cuda_runtime_zero_trailing_by_counts_rejects_non_integer_keep_counts() {
         .zero_trailing_by_counts(&src, &dst, &keep_counts, &spec)
         .unwrap_err();
     assert!(err.to_string().contains("integer-valued"));
+}
+
+#[test]
+fn cuda_runtime_triangular_part_f64_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+
+    let runtime = tenferro_device::cuda::runtime::get_or_init(0).unwrap();
+    let src_host: Vec<f64> = (1..=24).map(|value| value as f64).collect();
+    let src = runtime.alloc::<f64>(src_host.len()).unwrap();
+    let dst = runtime.alloc::<f64>(src_host.len()).unwrap();
+    runtime.copy_htod(&src_host, &src).unwrap();
+
+    let dims = [3usize, 2, 4];
+    let src_strides = [1isize, 3, 6];
+    let spec = TriangularPartSpec::new(
+        &dims,
+        &src_strides,
+        0,
+        &[1isize, 3, 6],
+        0,
+        -1,
+        TriangularHalf::Lower,
+    )
+    .unwrap();
+
+    runtime.triangular_part(&src, &dst, &spec).unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_triangular_part_reference(
+        &src_host,
+        &dims,
+        &src_strides,
+        0,
+        &[1isize, 3, 6],
+        -1,
+        TriangularHalf::Lower,
+    );
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_triangular_part_complex64_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+
+    let runtime = tenferro_device::cuda::runtime::get_or_init(0).unwrap();
+    let src_host: Vec<Complex64> = (1..=18)
+        .map(|value| Complex64::new(value as f64, -(value as f64)))
+        .collect();
+    let src = runtime.alloc::<Complex64>(src_host.len()).unwrap();
+    let dst = runtime.alloc::<Complex64>(src_host.len()).unwrap();
+    runtime.copy_htod(&src_host, &src).unwrap();
+
+    let dims = [3usize, 3, 2];
+    let src_strides = [1isize, 3, 9];
+    let spec = TriangularPartSpec::new(
+        &dims,
+        &src_strides,
+        0,
+        &[1isize, 3, 9],
+        0,
+        1,
+        TriangularHalf::Upper,
+    )
+    .unwrap();
+
+    runtime.triangular_part(&src, &dst, &spec).unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_triangular_part_reference(
+        &src_host,
+        &dims,
+        &src_strides,
+        0,
+        &[1isize, 3, 9],
+        1,
+        TriangularHalf::Upper,
+    );
+    assert_eq!(got, expected);
 }

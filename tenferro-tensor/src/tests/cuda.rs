@@ -162,3 +162,52 @@ fn gpu_zero_trailing_by_counts_matches_cpu_for_complex_payload_when_cuda_is_avai
 
     assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
 }
+
+#[test]
+fn gpu_tril_matches_cpu_for_batched_view_when_cuda_is_available() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let data: Vec<f64> = (1..=24).map(|value| value as f64).collect();
+    let base = Tensor::<f64>::from_slice(&data, &[2, 3, 4], MemoryOrder::ColumnMajor).unwrap();
+    let view = base.permute(&[1, 0, 2]).unwrap();
+    let expected = view.tril(-1);
+
+    let gpu = view
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = gpu
+        .tril(-1)
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+
+    assert_eq!(got.dims(), expected.dims());
+    assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+}
+
+#[test]
+fn gpu_triu_matches_cpu_for_complex_batched_view_when_cuda_is_available() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let data: Vec<Complex64> = (1..=18)
+        .map(|value| Complex64::new(value as f64, -(value as f64)))
+        .collect();
+    let base =
+        Tensor::<Complex64>::from_slice(&data, &[3, 3, 2], MemoryOrder::ColumnMajor).unwrap();
+    let view = base.permute(&[1, 0, 2]).unwrap();
+    let expected = view.triu(1);
+
+    let gpu = view
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = gpu
+        .triu(1)
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+
+    assert_eq!(got.dims(), expected.dims());
+    assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+}

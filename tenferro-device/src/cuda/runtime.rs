@@ -54,6 +54,62 @@ extern "C" __global__ void strided_copy_kernel(
 }
 "#;
 
+const TRIANGULAR_PART_KERNEL_NAME: &str = "triangular_part_kernel";
+const TRIANGULAR_PART_CUDA_SRC: &str = r#"
+extern "C" __global__ void triangular_part_kernel(
+    const unsigned char* src,
+    unsigned char* dst,
+    const long long* dims,
+    const long long* src_strides,
+    long long src_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    long long diagonal,
+    int half,
+    unsigned long long elem_size,
+    unsigned long long numel
+) {
+    unsigned long long linear_idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (linear_idx >= numel) {
+        return;
+    }
+
+    unsigned long long remainder = linear_idx;
+    long long src_index = src_offset;
+    long long dst_index = dst_offset;
+    long long row = 0;
+    long long col = 0;
+
+    for (int axis = 0; axis < ndim; ++axis) {
+        long long coord = (long long)(remainder % (unsigned long long)dims[axis]);
+        remainder /= (unsigned long long)dims[axis];
+        src_index += coord * src_strides[axis];
+        dst_index += coord * dst_strides[axis];
+        if (axis == 0) {
+            row = coord;
+        } else if (axis == 1) {
+            col = coord;
+        }
+    }
+
+    bool keep = half == 0 ? ((col - row) <= diagonal) : ((col - row) >= diagonal);
+    unsigned long long src_byte = (unsigned long long)src_index * elem_size;
+    unsigned long long dst_byte = (unsigned long long)dst_index * elem_size;
+    if (keep) {
+        for (unsigned long long byte_idx = 0; byte_idx < elem_size; ++byte_idx) {
+            dst[dst_byte + byte_idx] = src[src_byte + byte_idx];
+        }
+    } else {
+        for (unsigned long long byte_idx = 0; byte_idx < elem_size; ++byte_idx) {
+            dst[dst_byte + byte_idx] = 0;
+        }
+    }
+}
+"#;
+
 const ZERO_TRAILING_VALIDATE_KERNEL_NAME_F32: &str = "validate_keep_counts_f32";
 const ZERO_TRAILING_VALIDATE_KERNEL_NAME_F64: &str = "validate_keep_counts_f64";
 const ZERO_TRAILING_KERNEL_NAME_F32: &str = "zero_trailing_by_counts_f32";
@@ -620,6 +676,16 @@ fn zero_trailing_ptx() -> Result<Ptx> {
     .map_err(Error::DeviceError)
 }
 
+fn triangular_part_ptx() -> Result<Ptx> {
+    static PTX: OnceLock<std::result::Result<Ptx, String>> = OnceLock::new();
+    PTX.get_or_init(|| {
+        compile_ptx(TRIANGULAR_PART_CUDA_SRC)
+            .map_err(|err| format!("NVRTC compile failed for triangular-part kernel: {err:?}"))
+    })
+    .clone()
+    .map_err(Error::DeviceError)
+}
+
 fn checked_num_bytes<T>(len: usize) -> Result<usize> {
     len.checked_mul(std::mem::size_of::<T>())
         .ok_or_else(|| Error::DeviceError("CUDA allocation size overflow".into()))
@@ -824,6 +890,33 @@ pub enum ContiguousOrder {
     RowMajor,
 }
 
+/// Which triangular half to keep when materializing a matrix or batched matrix.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::cuda::runtime::TriangularHalf;
+///
+/// let half = TriangularHalf::Lower;
+/// assert_eq!(half, TriangularHalf::Lower);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriangularHalf {
+    /// Keep the lower triangle.
+    Lower,
+    /// Keep the upper triangle.
+    Upper,
+}
+
+impl TriangularHalf {
+    fn as_i32(self) -> i32 {
+        match self {
+            TriangularHalf::Lower => 0,
+            TriangularHalf::Upper => 1,
+        }
+    }
+}
+
 /// Low-level specification for copying a strided source layout into a destination layout.
 ///
 /// The `dims`, `src_strides`, and `dst_strides` arrays describe the same logical tensor
@@ -906,6 +999,192 @@ impl StridedCopySpec {
     /// ```
     pub fn dst_strides(&self) -> &[isize] {
         &self.dst_strides
+    }
+}
+
+/// Low-level specification for materializing a triangular matrix view on the GPU.
+///
+/// The first two dimensions are interpreted as the matrix rows and columns.
+/// Any remaining dimensions are treated as batch dimensions and copied
+/// elementwise. The output shape matches the input shape.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+///
+/// let spec = TriangularPartSpec::new(
+///     &[3, 2, 4],
+///     &[1, 3, 6],
+///     0,
+///     &[1, 3, 6],
+///     0,
+///     -1,
+///     TriangularHalf::Lower,
+/// ).unwrap();
+/// assert_eq!(spec.diagonal(), -1);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriangularPartSpec {
+    dims: Vec<usize>,
+    src_strides: Vec<isize>,
+    src_offset: isize,
+    dst_strides: Vec<isize>,
+    dst_offset: isize,
+    diagonal: isize,
+    half: TriangularHalf,
+}
+
+impl TriangularPartSpec {
+    /// Build a triangular-copy specification.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(
+    ///     &[2, 3],
+    ///     &[1, 2],
+    ///     0,
+    ///     &[1, 2],
+    ///     0,
+    ///     0,
+    ///     TriangularHalf::Upper,
+    /// ).unwrap();
+    /// assert_eq!(spec.half(), TriangularHalf::Upper);
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        dims: &[usize],
+        src_strides: &[isize],
+        src_offset: isize,
+        dst_strides: &[isize],
+        dst_offset: isize,
+        diagonal: isize,
+        half: TriangularHalf,
+    ) -> Result<Self> {
+        if dims.len() < 2 {
+            return Err(Error::InvalidArgument(
+                "triangular copy requires rank >= 2".into(),
+            ));
+        }
+        if dims.len() != src_strides.len() || dims.len() != dst_strides.len() {
+            return Err(Error::InvalidArgument(format!(
+                "triangular copy rank mismatch: dims={} src_strides={} dst_strides={}",
+                dims.len(),
+                src_strides.len(),
+                dst_strides.len()
+            )));
+        }
+
+        Ok(Self {
+            dims: dims.to_vec(),
+            src_strides: src_strides.to_vec(),
+            src_offset,
+            dst_strides: dst_strides.to_vec(),
+            dst_offset,
+            diagonal,
+            half,
+        })
+    }
+
+    /// Returns the triangular diagonal offset.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(&[2, 2], &[1, 2], 0, &[1, 2], 0, 1, TriangularHalf::Lower).unwrap();
+    /// assert_eq!(spec.diagonal(), 1);
+    /// ```
+    pub fn diagonal(&self) -> isize {
+        self.diagonal
+    }
+
+    /// Returns which half is preserved.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(&[2, 2], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Upper).unwrap();
+    /// assert_eq!(spec.half(), TriangularHalf::Upper);
+    /// ```
+    pub fn half(&self) -> TriangularHalf {
+        self.half
+    }
+
+    /// Returns the logical dimensions described by this triangular-copy spec.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
+    /// assert_eq!(spec.dims(), &[2, 3]);
+    /// ```
+    pub fn dims(&self) -> &[usize] {
+        &self.dims
+    }
+
+    /// Returns the source strides described by this triangular-copy spec.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
+    /// assert_eq!(spec.src_strides(), &[1, 2]);
+    /// ```
+    pub fn src_strides(&self) -> &[isize] {
+        &self.src_strides
+    }
+
+    /// Returns the source element offset.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 4, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
+    /// assert_eq!(spec.src_offset(), 4);
+    /// ```
+    pub fn src_offset(&self) -> isize {
+        self.src_offset
+    }
+
+    /// Returns the destination strides described by this triangular-copy spec.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 0, 0, TriangularHalf::Lower).unwrap();
+    /// assert_eq!(spec.dst_strides(), &[1, 2]);
+    /// ```
+    pub fn dst_strides(&self) -> &[isize] {
+        &self.dst_strides
+    }
+
+    /// Returns the destination element offset.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{TriangularHalf, TriangularPartSpec};
+    ///
+    /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 5, 0, TriangularHalf::Lower).unwrap();
+    /// assert_eq!(spec.dst_offset(), 5);
+    /// ```
+    pub fn dst_offset(&self) -> isize {
+        self.dst_offset
     }
 }
 
@@ -1619,6 +1898,113 @@ impl CudaRuntime {
                 .arg(&numel_u64)
                 .launch(launch_config)
                 .map_err(|err| cuda_error("CUDA zero-trailing launch", err))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    /// Launches the triangular-copy kernel on raw device allocations.
+    ///
+    /// # Safety
+    ///
+    /// `src` and `dst` must point to live device allocations compatible with `spec`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, TriangularHalf, TriangularPartSpec};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let src = runtime.alloc_raw::<f32>(24).unwrap();
+    /// let dst = runtime.alloc_raw::<f32>(24).unwrap();
+    /// let spec = TriangularPartSpec::new(&[3, 2, 4], &[1, 3, 6], 0, &[1, 3, 6], 0, 0, TriangularHalf::Lower).unwrap();
+    /// unsafe {
+    ///     runtime.triangular_part_raw(src, dst, &spec).unwrap();
+    ///     runtime.free_raw(src).unwrap();
+    ///     runtime.free_raw(dst).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn triangular_part_raw<T>(
+        &self,
+        src: *const T,
+        dst: *mut T,
+        spec: &TriangularPartSpec,
+    ) -> Result<()> {
+        if spec.dims.len() != spec.src_strides.len() || spec.dims.len() != spec.dst_strides.len() {
+            return Err(Error::InvalidArgument(format!(
+                "triangular copy rank mismatch: dims={} src_strides={} dst_strides={}",
+                spec.dims.len(),
+                spec.src_strides.len(),
+                spec.dst_strides.len()
+            )));
+        }
+
+        let numel = checked_numel(&spec.dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        self.bind_context()?;
+        let ctx = self.context();
+        let stream = ctx.default_stream();
+        let module = ctx
+            .load_module(triangular_part_ptx()?)
+            .map_err(|err| cuda_error("CUDA module load", err))?;
+        let kernel = module
+            .load_function(TRIANGULAR_PART_KERNEL_NAME)
+            .map_err(|err| cuda_error("CUDA load function", err))?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(&spec.dims)?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dims", err))?;
+        let src_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.src_strides, "src stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD src strides", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.dst_strides, "dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dst strides", err))?;
+        let ndim = i32::try_from(spec.dims.len())
+            .map_err(|_| Error::InvalidArgument("triangular copy rank exceeds i32 range".into()))?;
+        let src_offset = i64::try_from(spec.src_offset)
+            .map_err(|_| Error::InvalidArgument("source offset exceeds i64 range".into()))?;
+        let dst_offset = i64::try_from(spec.dst_offset)
+            .map_err(|_| Error::InvalidArgument("destination offset exceeds i64 range".into()))?;
+        let diagonal = i64::try_from(spec.diagonal)
+            .map_err(|_| Error::InvalidArgument("diagonal exceeds i64 range".into()))?;
+        let half = spec.half.as_i32();
+        let elem_size = u64::try_from(std::mem::size_of::<T>())
+            .map_err(|_| Error::InvalidArgument("element size exceeds u64 range".into()))?;
+        let numel_u64 = u64::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("triangular copy numel exceeds u64 range".into())
+        })?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("triangular copy currently requires len <= u32::MAX".into())
+        })?;
+        let src_ptr = src as u64;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            stream
+                .launch_builder(&kernel)
+                .arg(&src_ptr)
+                .arg(&dst_ptr)
+                .arg(&dims_dev)
+                .arg(&src_strides_dev)
+                .arg(&src_offset)
+                .arg(&dst_strides_dev)
+                .arg(&dst_offset)
+                .arg(&ndim)
+                .arg(&diagonal)
+                .arg(&half)
+                .arg(&elem_size)
+                .arg(&numel_u64)
+                .launch(config)
+                .map_err(|err| cuda_error("CUDA triangular-part kernel launch", err))?;
         }
         stream
             .synchronize()
@@ -2455,6 +2841,30 @@ impl CudaRuntime {
                 spec,
             )
         }
+    }
+
+    /// Launches the triangular-copy kernel from one device buffer to another.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, TriangularHalf, TriangularPartSpec};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let src = runtime.alloc::<f32>(24).unwrap();
+    /// let dst = runtime.alloc::<f32>(24).unwrap();
+    /// let spec = TriangularPartSpec::new(&[3, 2, 4], &[1, 3, 6], 0, &[1, 3, 6], 0, 0, TriangularHalf::Upper).unwrap();
+    /// runtime.triangular_part(&src, &dst, &spec).unwrap();
+    /// ```
+    pub fn triangular_part<T>(
+        &self,
+        src: &CudaBuffer<T>,
+        dst: &CudaBuffer<T>,
+        spec: &TriangularPartSpec,
+    ) -> Result<()> {
+        self.ensure_same_device(src.device_id())?;
+        self.ensure_same_device(dst.device_id())?;
+        unsafe { self.triangular_part_raw(src.ptr.cast::<T>(), dst.ptr.cast::<T>(), spec) }
     }
 
     fn ensure_same_device(&self, device_id: usize) -> Result<()> {

@@ -205,6 +205,19 @@ impl<T: Scalar> Tensor<T> {
             return self.contiguous(MemoryOrder::ColumnMajor);
         }
 
+        #[cfg(feature = "cuda")]
+        if matches!(
+            self.logical_memory_space,
+            LogicalMemorySpace::GpuMemory { .. }
+        ) {
+            return crate::cuda_runtime::triangular_part_tensor(
+                self,
+                diagonal,
+                matches!(half, TriangularHalf::Lower),
+            )
+            .unwrap_or_else(|err| panic!("triangular_part: GPU materialization failed: {err}"));
+        }
+
         let m = self.dims[0];
         let n = self.dims[1];
         let out_strides = compute_contiguous_strides(&self.dims, MemoryOrder::ColumnMajor);
