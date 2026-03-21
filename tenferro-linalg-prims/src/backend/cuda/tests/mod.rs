@@ -1193,6 +1193,190 @@ where
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_cholesky_matches_cpu_for_small_complex32_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex32::new(4.0, 0.0),
+            Complex32::new(1.0, -1.0),
+            Complex32::new(1.0, 1.0),
+            Complex32::new(3.0, 0.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex32,
+    >>::cholesky(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex32>>::cholesky(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_complex_slice(
+        "cuda cholesky complex32",
+        &tensor_data_on_cpu(&got),
+        &tensor_data_on_cpu(&expected),
+        256.0_f32 * f32::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_matches_cpu_for_small_complex64_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(4.0, 0.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(1.0, 1.0),
+            Complex64::new(3.0, 0.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex64,
+    >>::cholesky(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::cholesky(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_complex_slice(
+        "cuda cholesky complex64",
+        &tensor_data_on_cpu(&got),
+        &tensor_data_on_cpu(&expected),
+        256.0_f64 * f64::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_complex32() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex32::new(1.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(2.0, 0.0),
+            Complex32::new(1.0, 0.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex32,
+    >>::cholesky_ex(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex32>>::cholesky_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_close_complex_slice(
+        "cuda cholesky_ex complex32",
+        &tensor_data_on_cpu(&got.l),
+        &tensor_data_on_cpu(&expected.l),
+        256.0_f32 * f32::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_complex64() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(2.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex64,
+    >>::cholesky_ex(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::cholesky_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_close_complex_slice(
+        "cuda cholesky_ex complex64",
+        &tensor_data_on_cpu(&got.l),
+        &tensor_data_on_cpu(&expected.l),
+        256.0_f64 * f64::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_svdvals_matches_cpu_for_small_real_matrix_generic<T>(wide: bool)
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -1356,6 +1540,21 @@ fn cuda_backend_reports_only_wired_capabilities() {
         ) == has_native_cuda
     );
     assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+            LinalgCapabilityOp::Cholesky
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+            LinalgCapabilityOp::CholeskyEx
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+            LinalgCapabilityOp::ThinSvd
+        ) == false
+    );
+    assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::SolveTriangular
         )
@@ -1363,16 +1562,6 @@ fn cuda_backend_reports_only_wired_capabilities() {
     assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::Qr
-        )
-    );
-    assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
-            LinalgCapabilityOp::Cholesky
-        )
-    );
-    assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
-            LinalgCapabilityOp::ThinSvd
         )
     );
 }
@@ -1405,16 +1594,16 @@ fn cuda_backend_reports_ex_capabilities_only_when_wired() {
         "CUDA SolveEx capability should match whether native CUDA kernels are compiled in for f32",
     );
     assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
-            LinalgCapabilityOp::CholeskyEx
-        ),
-        "CUDA should not report complex CholeskyEx capability",
-    );
-    assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::SolveEx
         ) == has_native_cuda,
         "CUDA should report complex SolveEx capability once native CUDA kernels are compiled in",
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+            LinalgCapabilityOp::CholeskyEx
+        ) == has_native_cuda,
+        "CUDA should report complex CholeskyEx capability once native CUDA kernels are compiled in",
     );
 }
 
@@ -1968,6 +2157,30 @@ fn cuda_cholesky_reports_minor_for_non_spd_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_cholesky_reports_minor_for_non_spd_matrix_f64() {
     cuda_cholesky_reports_minor_for_non_spd_matrix_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_matches_cpu_for_small_complex_matrix_c32() {
+    cuda_cholesky_matches_cpu_for_small_complex32_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_matches_cpu_for_small_complex_matrix_c64() {
+    cuda_cholesky_matches_cpu_for_small_complex64_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_c32() {
+    cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_complex32();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_c64() {
+    cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_complex64();
 }
 
 #[test]

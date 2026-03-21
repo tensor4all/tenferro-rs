@@ -256,6 +256,22 @@ type FnCusolverDnDpotrfBufferSize = unsafe extern "C" fn(
     i32,
     *mut i32,
 ) -> CusolverStatus;
+type FnCusolverDnCpotrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZpotrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
 type FnCusolverDnSpotrf = unsafe extern "C" fn(
     CusolverDnHandle,
     CublasOperation,
@@ -273,6 +289,26 @@ type FnCusolverDnDpotrf = unsafe extern "C" fn(
     *mut f64,
     i32,
     *mut f64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnCpotrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZpotrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
     i32,
     *mut i32,
 ) -> CusolverStatus;
@@ -353,8 +389,12 @@ pub(super) struct CusolverDnApi {
     dorgqr: FnCusolverDnDorgqr,
     spotrf_buffer_size: FnCusolverDnSpotrfBufferSize,
     dpotrf_buffer_size: FnCusolverDnDpotrfBufferSize,
+    cpotrf_buffer_size: FnCusolverDnCpotrfBufferSize,
+    zpotrf_buffer_size: FnCusolverDnZpotrfBufferSize,
     spotrf: FnCusolverDnSpotrf,
     dpotrf: FnCusolverDnDpotrf,
+    cpotrf: FnCusolverDnCpotrf,
+    zpotrf: FnCusolverDnZpotrf,
 }
 
 #[allow(dead_code)]
@@ -491,8 +531,12 @@ impl CusolverDnApi {
             dorgqr: load_symbol(&lib, "cusolverDnDorgqr")?,
             spotrf_buffer_size: load_symbol(&lib, "cusolverDnSpotrf_bufferSize")?,
             dpotrf_buffer_size: load_symbol(&lib, "cusolverDnDpotrf_bufferSize")?,
+            cpotrf_buffer_size: load_symbol(&lib, "cusolverDnCpotrf_bufferSize")?,
+            zpotrf_buffer_size: load_symbol(&lib, "cusolverDnZpotrf_bufferSize")?,
             spotrf: load_symbol(&lib, "cusolverDnSpotrf")?,
             dpotrf: load_symbol(&lib, "cusolverDnDpotrf")?,
+            cpotrf: load_symbol(&lib, "cusolverDnCpotrf")?,
+            zpotrf: load_symbol(&lib, "cusolverDnZpotrf")?,
             _lib: lib,
         })
     }
@@ -1024,11 +1068,32 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDpotrf_bufferSize",
             )?,
-            _ => {
-                return Err(Error::DeviceError(format!(
-                    "CUDA cholesky currently supports only f32/f64, got {dtype:?}"
-                )));
-            }
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cpotrf_buffer_size)(
+                        handle,
+                        uplo,
+                        n,
+                        a.cast::<Complex32>(),
+                        lda,
+                        &mut lwork,
+                    )
+                },
+                "cusolverDnCpotrf_bufferSize",
+            )?,
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zpotrf_buffer_size)(
+                        handle,
+                        uplo,
+                        n,
+                        a.cast::<Complex64>(),
+                        lda,
+                        &mut lwork,
+                    )
+                },
+                "cusolverDnZpotrf_bufferSize",
+            )?,
         }
         Ok(lwork)
     }
@@ -1076,9 +1141,36 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDpotrf",
             ),
-            _ => Err(Error::DeviceError(format!(
-                "CUDA cholesky currently supports only f32/f64, got {dtype:?}"
-            ))),
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cpotrf)(
+                        handle,
+                        uplo,
+                        n,
+                        a.cast::<Complex32>(),
+                        lda,
+                        workspace.cast::<Complex32>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnCpotrf",
+            ),
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zpotrf)(
+                        handle,
+                        uplo,
+                        n,
+                        a.cast::<Complex64>(),
+                        lda,
+                        workspace.cast::<Complex64>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnZpotrf",
+            ),
         }
     }
 }

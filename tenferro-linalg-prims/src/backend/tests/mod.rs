@@ -130,7 +130,7 @@ fn cpu_backend_svdvals_matches_thin_svd_after_move() {
 
 #[test]
 fn ex_capabilities_track_cpu_ex_implementation_state() {
-    use crate::LinalgCapabilityOp::{CholeskyEx, LuFactor, LuFactorEx, SolveEx};
+    use crate::LinalgCapabilityOp::{Cholesky, CholeskyEx, LuFactor, LuFactorEx, SolveEx};
 
     assert!(
         <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(SolveEx),
@@ -202,6 +202,20 @@ fn ex_capabilities_track_cpu_ex_implementation_state() {
     assert!(
         <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(CholeskyEx) == cfg!(feature = "cuda"),
         "CUDA CholeskyEx capability should match whether native CUDA kernels are compiled in",
+    );
+    assert!(
+        <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<
+            num_complex::Complex32,
+        >>::has_linalg_support(Cholesky)
+            == cfg!(feature = "cuda"),
+        "CUDA complex Cholesky capability should match whether native CUDA kernels are compiled in",
+    );
+    assert!(
+        <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<
+            num_complex::Complex64,
+        >>::has_linalg_support(CholeskyEx)
+            == cfg!(feature = "cuda"),
+        "CUDA complex CholeskyEx capability should match whether native CUDA kernels are compiled in",
     );
     assert!(
         !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(CholeskyEx),

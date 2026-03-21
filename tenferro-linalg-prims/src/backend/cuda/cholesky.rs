@@ -22,7 +22,10 @@ const CUBLAS_FILL_MODE_LOWER: i32 = 0;
 
 #[cfg(feature = "cuda")]
 pub(super) fn has_cholesky_support<T: CudaLinalgScalar>() -> bool {
-    matches!(T::cuda_data_type(), CudaDataType::F32 | CudaDataType::F64)
+    matches!(
+        T::cuda_data_type(),
+        CudaDataType::F32 | CudaDataType::F64 | CudaDataType::Complex32 | CudaDataType::Complex64
+    )
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -37,7 +40,7 @@ fn cholesky_dtype<T: CudaLinalgScalar>() -> Result<CudaDataType> {
         Ok(T::cuda_data_type())
     } else {
         Err(Error::DeviceError(format!(
-            "CUDA cholesky currently supports only f32/f64, got {:?}",
+            "CUDA cholesky currently supports only f32/f64/complex32/complex64, got {:?}",
             T::cuda_data_type()
         )))
     }
