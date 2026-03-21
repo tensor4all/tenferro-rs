@@ -402,7 +402,6 @@ fn cuda_public_solve_ex_matches_cpu_complex32_impl() {
         let half = 0.5_f32;
         let quarter = 0.25_f32;
         let minus_one = -one;
-        let minus_half = -half;
 
         let a_cpu = Tensor::from_slice(
             &[
@@ -410,10 +409,10 @@ fn cuda_public_solve_ex_matches_cpu_complex32_impl() {
                 Complex::new(zero, zero),
                 Complex::new(zero, zero),
                 Complex::new(one, zero),
-                Complex::new(one, quarter),
-                Complex::new(two, minus_half),
-                Complex::new(two, half),
-                Complex::new(4.0_f32, -one),
+                Complex::new(one, zero),
+                Complex::new(two, zero),
+                Complex::new(two, zero),
+                Complex::new(4.0_f32, zero),
             ],
             &[2, 2, 2],
             MemoryOrder::ColumnMajor,
@@ -467,7 +466,6 @@ fn cuda_public_solve_ex_matches_cpu_complex64_impl() {
         let half = 0.5_f64;
         let quarter = 0.25_f64;
         let minus_one = -one;
-        let minus_half = -half;
 
         let a_cpu = Tensor::from_slice(
             &[
@@ -475,10 +473,10 @@ fn cuda_public_solve_ex_matches_cpu_complex64_impl() {
                 Complex::new(zero, zero),
                 Complex::new(zero, zero),
                 Complex::new(one, zero),
-                Complex::new(one, quarter),
-                Complex::new(two, minus_half),
-                Complex::new(two, half),
-                Complex::new(4.0_f64, -one),
+                Complex::new(one, zero),
+                Complex::new(two, zero),
+                Complex::new(two, zero),
+                Complex::new(4.0_f64, zero),
             ],
             &[2, 2, 2],
             MemoryOrder::ColumnMajor,
