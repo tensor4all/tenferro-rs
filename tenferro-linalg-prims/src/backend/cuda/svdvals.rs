@@ -48,7 +48,10 @@ fn tensor_device_ptr_any<T: tenferro_algebra::Scalar>(
 
 #[cfg(feature = "cuda")]
 fn svdvals_supported<T: CudaLinalgScalar>() -> bool {
-    matches!(T::cuda_data_type(), CudaDataType::F32 | CudaDataType::F64)
+    matches!(
+        T::cuda_data_type(),
+        CudaDataType::F32 | CudaDataType::F64 | CudaDataType::Complex32 | CudaDataType::Complex64
+    )
 }
 
 #[cfg(feature = "cuda")]
@@ -57,7 +60,7 @@ fn svdvals_dtype<T: CudaLinalgScalar>() -> Result<CudaDataType> {
         Ok(T::cuda_data_type())
     } else {
         Err(Error::DeviceError(format!(
-            "CUDA svdvals currently supports only f32/f64, got {:?}",
+            "CUDA svdvals currently supports only f32/f64/complex, got {:?}",
             T::cuda_data_type()
         )))
     }
@@ -142,7 +145,7 @@ where
     )?;
     let rwork = DeviceAllocation::alloc(
         ctx,
-        checked_mul(k, std::mem::size_of::<T::Real>(), "svdvals rwork bytes")?,
+        checked_mul(5 * k, std::mem::size_of::<T::Real>(), "svdvals rwork bytes")?,
         "cudaMalloc(svdvals rwork)",
     )?;
     let info =

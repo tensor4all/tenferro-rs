@@ -102,6 +102,10 @@ type FnCusolverDnSgesvdBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnDgesvdBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnCgesvdBufferSize =
+    unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnZgesvdBufferSize =
+    unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnSgetrf = unsafe extern "C" fn(
     CusolverDnHandle,
     i32,
@@ -430,6 +434,42 @@ type FnCusolverDnDgesvd = unsafe extern "C" fn(
     *mut f64,
     *mut i32,
 ) -> CusolverStatus;
+type FnCusolverDnCgesvd = unsafe extern "C" fn(
+    CusolverDnHandle,
+    c_char,
+    c_char,
+    i32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut f32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut Complex32,
+    i32,
+    *mut f32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnZgesvd = unsafe extern "C" fn(
+    CusolverDnHandle,
+    c_char,
+    c_char,
+    i32,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut f64,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut Complex64,
+    i32,
+    *mut f64,
+    *mut i32,
+) -> CusolverStatus;
 
 pub(super) struct CublasApi {
     _lib: Arc<Library>,
@@ -455,6 +495,8 @@ pub(super) struct CusolverDnApi {
     zgeqrf_buffer_size: FnCusolverDnZgeqrfBufferSize,
     sgesvd_buffer_size: FnCusolverDnSgesvdBufferSize,
     dgesvd_buffer_size: FnCusolverDnDgesvdBufferSize,
+    cgesvd_buffer_size: FnCusolverDnCgesvdBufferSize,
+    zgesvd_buffer_size: FnCusolverDnZgesvdBufferSize,
     sgetrf: FnCusolverDnSgetrf,
     dgetrf: FnCusolverDnDgetrf,
     cgetrf: FnCusolverDnCgetrf,
@@ -465,6 +507,8 @@ pub(super) struct CusolverDnApi {
     zgeqrf: FnCusolverDnZgeqrf,
     sgesvd: FnCusolverDnSgesvd,
     dgesvd: FnCusolverDnDgesvd,
+    cgesvd: FnCusolverDnCgesvd,
+    zgesvd: FnCusolverDnZgesvd,
     sgetrs: FnCusolverDnSgetrs,
     dgetrs: FnCusolverDnDgetrs,
     cgetrs: FnCusolverDnCgetrs,
@@ -605,6 +649,8 @@ impl CusolverDnApi {
             zgeqrf_buffer_size: load_symbol(&lib, "cusolverDnZgeqrf_bufferSize")?,
             sgesvd_buffer_size: load_symbol(&lib, "cusolverDnSgesvd_bufferSize")?,
             dgesvd_buffer_size: load_symbol(&lib, "cusolverDnDgesvd_bufferSize")?,
+            cgesvd_buffer_size: load_symbol(&lib, "cusolverDnCgesvd_bufferSize")?,
+            zgesvd_buffer_size: load_symbol(&lib, "cusolverDnZgesvd_bufferSize")?,
             sgetrf: load_symbol(&lib, "cusolverDnSgetrf")?,
             dgetrf: load_symbol(&lib, "cusolverDnDgetrf")?,
             cgetrf: load_symbol(&lib, "cusolverDnCgetrf")?,
@@ -615,6 +661,8 @@ impl CusolverDnApi {
             zgeqrf: load_symbol(&lib, "cusolverDnZgeqrf")?,
             sgesvd: load_symbol(&lib, "cusolverDnSgesvd")?,
             dgesvd: load_symbol(&lib, "cusolverDnDgesvd")?,
+            cgesvd: load_symbol(&lib, "cusolverDnCgesvd")?,
+            zgesvd: load_symbol(&lib, "cusolverDnZgesvd")?,
             sgetrs: load_symbol(&lib, "cusolverDnSgetrs")?,
             dgetrs: load_symbol(&lib, "cusolverDnDgetrs")?,
             cgetrs: load_symbol(&lib, "cusolverDnCgetrs")?,
@@ -1153,11 +1201,14 @@ impl CusolverDnApi {
                 unsafe { (self.dgesvd_buffer_size)(handle, m, n, &mut lwork) },
                 "cusolverDnDgesvd_bufferSize",
             )?,
-            _ => {
-                return Err(Error::DeviceError(format!(
-                    "CUDA svdvals currently supports only f32/f64, got {dtype:?}"
-                )));
-            }
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe { (self.cgesvd_buffer_size)(handle, m, n, &mut lwork) },
+                "cusolverDnCgesvd_bufferSize",
+            )?,
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe { (self.zgesvd_buffer_size)(handle, m, n, &mut lwork) },
+                "cusolverDnZgesvd_bufferSize",
+            )?,
         }
         Ok(lwork)
     }
@@ -1229,9 +1280,52 @@ impl CusolverDnApi {
                 },
                 "cusolverDnDgesvd",
             ),
-            _ => Err(Error::DeviceError(format!(
-                "CUDA svdvals currently supports only f32/f64, got {dtype:?}"
-            ))),
+            CudaDataType::Complex32 => check_cusolver_status(
+                unsafe {
+                    (self.cgesvd)(
+                        handle,
+                        jobu,
+                        jobvt,
+                        m,
+                        n,
+                        a.cast::<Complex32>(),
+                        lda,
+                        s.cast::<f32>(),
+                        u.cast::<Complex32>(),
+                        ldu,
+                        vt.cast::<Complex32>(),
+                        ldvt,
+                        workspace.cast::<Complex32>(),
+                        lwork,
+                        rwork.cast::<f32>(),
+                        info,
+                    )
+                },
+                "cusolverDnCgesvd",
+            ),
+            CudaDataType::Complex64 => check_cusolver_status(
+                unsafe {
+                    (self.zgesvd)(
+                        handle,
+                        jobu,
+                        jobvt,
+                        m,
+                        n,
+                        a.cast::<Complex64>(),
+                        lda,
+                        s.cast::<f64>(),
+                        u.cast::<Complex64>(),
+                        ldu,
+                        vt.cast::<Complex64>(),
+                        ldvt,
+                        workspace.cast::<Complex64>(),
+                        lwork,
+                        rwork.cast::<f64>(),
+                        info,
+                    )
+                },
+                "cusolverDnZgesvd",
+            ),
         }
     }
 

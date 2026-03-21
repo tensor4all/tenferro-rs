@@ -37,7 +37,10 @@ fn as_i32(value: usize, label: &str) -> Result<i32> {
 
 #[cfg(feature = "cuda")]
 fn thin_svd_supported<T: CudaLinalgScalar>() -> bool {
-    matches!(T::cuda_data_type(), CudaDataType::F32 | CudaDataType::F64)
+    matches!(
+        T::cuda_data_type(),
+        CudaDataType::F32 | CudaDataType::F64 | CudaDataType::Complex32 | CudaDataType::Complex64
+    )
 }
 
 #[cfg(feature = "cuda")]
@@ -57,7 +60,7 @@ fn thin_svd_dtype<T: CudaLinalgScalar>() -> Result<CudaDataType> {
         Ok(T::cuda_data_type())
     } else {
         Err(Error::DeviceError(format!(
-            "CUDA thin_svd currently supports only f32/f64, got {:?}",
+            "CUDA thin_svd currently supports only f32/f64/complex, got {:?}",
             T::cuda_data_type()
         )))
     }
