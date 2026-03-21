@@ -273,6 +273,11 @@ fn has_real_norm_support_f32() -> bool {
                 op: AnalyticUnaryOp::Sqrt,
             },
         )
+        && <tenferro_prims::CudaBackend as TensorAnalyticPrims<Standard<f32>>>::has_analytic_support(
+            AnalyticPrimsDescriptor::PointwiseBinary {
+                op: tenferro_prims::AnalyticBinaryOp::Pow,
+            },
+        )
 }
 
 fn has_real_norm_support_f64() -> bool {
@@ -304,6 +309,11 @@ fn has_real_norm_support_f64() -> bool {
         && <tenferro_prims::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
             AnalyticPrimsDescriptor::PointwiseUnary {
                 op: AnalyticUnaryOp::Sqrt,
+            },
+        )
+        && <tenferro_prims::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            AnalyticPrimsDescriptor::PointwiseBinary {
+                op: tenferro_prims::AnalyticBinaryOp::Pow,
             },
         )
 }

@@ -375,22 +375,6 @@ fn cpu_analytic_phase2_executes_remaining_unary_and_binary_inventory() {
 }
 
 #[test]
-fn cuda_analytic_phase1_does_not_advertise_unimplemented_ops() {
-    for desc in [
-        AnalyticPrimsDescriptor::PointwiseUnary {
-            op: AnalyticUnaryOp::Exp,
-        },
-        AnalyticPrimsDescriptor::PointwiseBinary {
-            op: AnalyticBinaryOp::Pow,
-        },
-    ] {
-        assert!(!<crate::CudaBackend as TensorAnalyticPrims<
-            Standard<f64>,
-        >>::has_analytic_support(desc));
-    }
-}
-
-#[test]
 fn cuda_analytic_phase1_supports_and_executes_sqrt_when_runtime_available() {
     let Some((_backend, mut ctx)) = load_cuda_backend() else {
         return;
@@ -490,4 +474,56 @@ fn cuda_analytic_phase1_supports_and_executes_log_when_runtime_available() {
     for (lhs, rhs) in got.iter().zip(expected.iter()) {
         assert!((lhs - rhs).abs() < 1.0e-12, "got {lhs}, expected {rhs}");
     }
+}
+
+#[test]
+fn cuda_analytic_phase1_supports_and_executes_pow_when_runtime_available() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+
+    let desc = AnalyticPrimsDescriptor::PointwiseBinary {
+        op: AnalyticBinaryOp::Pow,
+    };
+    assert!(
+        <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            desc.clone()
+        )
+    );
+
+    let plan = <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &desc,
+        &[&[2], &[2], &[2]],
+    )
+    .unwrap();
+
+    let bases = tensor_f64(&[2.0, 9.0], &[2])
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let exponents = tensor_f64(&[3.0, 0.5], &[2])
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        &[2],
+        tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    );
+
+    <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&bases, &exponents],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+
+    let round_trip = output
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let got = round_trip.buffer().as_slice().unwrap();
+    assert!((got[0] - 8.0).abs() < 1.0e-12, "got {}", got[0]);
+    assert!((got[1] - 3.0).abs() < 1.0e-12, "got {}", got[1]);
 }

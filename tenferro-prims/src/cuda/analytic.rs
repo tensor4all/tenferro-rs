@@ -4,14 +4,14 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{
-    cuda::runtime::{CudaRuntime, RealUnaryOp},
+    cuda::runtime::{CudaRuntime, RealBinaryOp, RealUnaryOp},
     Error, LogicalMemorySpace, Result,
 };
 use tenferro_tensor::Tensor;
 
 use crate::{
-    validate_execute_inputs, validate_shape_count, validate_shape_eq, AnalyticPrimsDescriptor,
-    AnalyticUnaryOp, CudaBackend, TensorAnalyticPrims,
+    validate_execute_inputs, validate_shape_count, validate_shape_eq, AnalyticBinaryOp,
+    AnalyticPrimsDescriptor, AnalyticUnaryOp, CudaBackend, TensorAnalyticPrims,
 };
 
 use super::CudaContext;
@@ -26,8 +26,14 @@ use super::CudaContext;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CudaAnalyticPlan<T: Scalar> {
-    op: AnalyticUnaryOp,
+    kind: CudaAnalyticPlanKind,
     _marker: PhantomData<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CudaAnalyticPlanKind {
+    Unary(AnalyticUnaryOp),
+    Binary(AnalyticBinaryOp),
 }
 
 trait RuntimeRealAnalyticScalar: Scalar + 'static {
@@ -39,6 +45,23 @@ trait RuntimeRealAnalyticScalar: Scalar + 'static {
         dims: &[usize],
         src_strides: &[isize],
         src_offset: isize,
+        beta: Self,
+        dst: *mut Self,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()>;
+
+    unsafe fn pointwise_binary_raw(
+        runtime: &CudaRuntime,
+        op: RealBinaryOp,
+        alpha: Self,
+        lhs: *const Self,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs: *const Self,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
         beta: Self,
         dst: *mut Self,
         dst_strides: &[isize],
@@ -80,6 +103,41 @@ impl RuntimeRealAnalyticScalar for f32 {
             )
         }
     }
+
+    unsafe fn pointwise_binary_raw(
+        runtime: &CudaRuntime,
+        op: RealBinaryOp,
+        alpha: Self,
+        lhs: *const Self,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs: *const Self,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        beta: Self,
+        dst: *mut Self,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        unsafe {
+            runtime.pointwise_binary_real_f32_raw(
+                op,
+                alpha,
+                lhs,
+                dims,
+                lhs_strides,
+                lhs_offset,
+                rhs,
+                rhs_strides,
+                rhs_offset,
+                beta,
+                dst,
+                dst_strides,
+                dst_offset,
+            )
+        }
+    }
 }
 
 impl RuntimeRealAnalyticScalar for f64 {
@@ -111,6 +169,41 @@ impl RuntimeRealAnalyticScalar for f64 {
             )
         }
     }
+
+    unsafe fn pointwise_binary_raw(
+        runtime: &CudaRuntime,
+        op: RealBinaryOp,
+        alpha: Self,
+        lhs: *const Self,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs: *const Self,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        beta: Self,
+        dst: *mut Self,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        unsafe {
+            runtime.pointwise_binary_real_f64_raw(
+                op,
+                alpha,
+                lhs,
+                dims,
+                lhs_strides,
+                lhs_offset,
+                rhs,
+                rhs_strides,
+                rhs_offset,
+                beta,
+                dst,
+                dst_strides,
+                dst_offset,
+            )
+        }
+    }
 }
 
 fn validate_pointwise_shapes(shapes: &[&[usize]], arity: usize, op_name: &str) -> Result<()> {
@@ -126,12 +219,25 @@ fn supports_analytic_unary(op: AnalyticUnaryOp) -> bool {
     matches!(op, AnalyticUnaryOp::Log | AnalyticUnaryOp::Sqrt)
 }
 
+fn supports_analytic_binary(op: AnalyticBinaryOp) -> bool {
+    matches!(op, AnalyticBinaryOp::Pow)
+}
+
 fn to_runtime_unary(op: AnalyticUnaryOp) -> Result<RealUnaryOp> {
     match op {
         AnalyticUnaryOp::Log => Ok(RealUnaryOp::Log),
         AnalyticUnaryOp::Sqrt => Ok(RealUnaryOp::Sqrt),
         _ => Err(Error::InvalidArgument(format!(
             "analytic unary operation {op:?} is not implemented on CudaBackend"
+        ))),
+    }
+}
+
+fn to_runtime_binary(op: AnalyticBinaryOp) -> Result<RealBinaryOp> {
+    match op {
+        AnalyticBinaryOp::Pow => Ok(RealBinaryOp::Pow),
+        _ => Err(Error::InvalidArgument(format!(
+            "analytic binary operation {op:?} is not implemented on CudaBackend"
         ))),
     }
 }
@@ -195,7 +301,20 @@ where
                 )));
             }
             Ok(CudaAnalyticPlan {
-                op: *op,
+                kind: CudaAnalyticPlanKind::Unary(*op),
+                _marker: PhantomData,
+            })
+        }
+        AnalyticPrimsDescriptor::PointwiseBinary { op } => {
+            validate_pointwise_shapes(shapes, 2, "CudaAnalyticPointwiseBinary")?;
+            if !supports_analytic_binary(*op) {
+                return Err(Error::InvalidArgument(format!(
+                    "analytic binary operation {op:?} is not supported on CudaBackend for {}",
+                    std::any::type_name::<S>()
+                )));
+            }
+            Ok(CudaAnalyticPlan {
+                kind: CudaAnalyticPlanKind::Binary(*op),
                 _marker: PhantomData,
             })
         }
@@ -222,32 +341,56 @@ where
         ));
     }
 
-    validate_execute_inputs(inputs, 1, "CudaAnalyticPointwiseUnary")?;
-    let input = resolved_input(ctx, inputs[0]);
-    ensure_cuda_tensor(&input, ctx.device_id(), "CUDA analytic input")?;
-    ensure_cuda_tensor(output, ctx.device_id(), "CUDA analytic output")?;
-
     let runtime = Arc::clone(ctx.shared_runtime());
-    let runtime_op = to_runtime_unary(plan.op)?;
     let output_dims = output.dims().to_vec();
     let output_strides = output.strides().to_vec();
     let output_offset = output.offset();
     let output_ptr = tensor_device_mut_ptr(output, "CUDA analytic output")?;
 
     unsafe {
-        S::pointwise_unary_raw(
-            runtime.as_ref(),
-            runtime_op,
-            alpha,
-            tensor_device_ptr(&input, "CUDA analytic input")?,
-            &output_dims,
-            input.strides(),
-            input.offset(),
-            beta,
-            output_ptr,
-            &output_strides,
-            output_offset,
-        )
+        match &plan.kind {
+            CudaAnalyticPlanKind::Unary(op) => {
+                validate_execute_inputs(inputs, 1, "CudaAnalyticPointwiseUnary")?;
+                let input = resolved_input(ctx, inputs[0]);
+                ensure_cuda_tensor(&input, ctx.device_id(), "CUDA analytic input")?;
+                S::pointwise_unary_raw(
+                    runtime.as_ref(),
+                    to_runtime_unary(*op)?,
+                    alpha,
+                    tensor_device_ptr(&input, "CUDA analytic input")?,
+                    &output_dims,
+                    input.strides(),
+                    input.offset(),
+                    beta,
+                    output_ptr,
+                    &output_strides,
+                    output_offset,
+                )
+            }
+            CudaAnalyticPlanKind::Binary(op) => {
+                validate_execute_inputs(inputs, 2, "CudaAnalyticPointwiseBinary")?;
+                let lhs = resolved_input(ctx, inputs[0]);
+                let rhs = resolved_input(ctx, inputs[1]);
+                ensure_cuda_tensor(&lhs, ctx.device_id(), "CUDA analytic lhs")?;
+                ensure_cuda_tensor(&rhs, ctx.device_id(), "CUDA analytic rhs")?;
+                S::pointwise_binary_raw(
+                    runtime.as_ref(),
+                    to_runtime_binary(*op)?,
+                    alpha,
+                    tensor_device_ptr(&lhs, "CUDA analytic lhs")?,
+                    &output_dims,
+                    lhs.strides(),
+                    lhs.offset(),
+                    tensor_device_ptr(&rhs, "CUDA analytic rhs")?,
+                    rhs.strides(),
+                    rhs.offset(),
+                    beta,
+                    output_ptr,
+                    &output_strides,
+                    output_offset,
+                )
+            }
+        }
     }
 }
 
@@ -291,6 +434,8 @@ macro_rules! impl_cuda_analytic_prims_real {
                     desc,
                     AnalyticPrimsDescriptor::PointwiseUnary {
                         op: AnalyticUnaryOp::Log | AnalyticUnaryOp::Sqrt
+                    } | AnalyticPrimsDescriptor::PointwiseBinary {
+                        op: AnalyticBinaryOp::Pow
                     }
                 )
             }

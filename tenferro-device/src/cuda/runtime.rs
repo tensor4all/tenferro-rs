@@ -519,6 +519,8 @@ extern "C" __global__ void pointwise_binary_real_f32(
         mapped = x > y ? 1.0f : 0.0f;
     } else if (op_code == 7) {
         mapped = x >= y ? 1.0f : 0.0f;
+    } else if (op_code == 8) {
+        mapped = powf(x, y);
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
@@ -566,6 +568,8 @@ extern "C" __global__ void pointwise_binary_real_f64(
         mapped = x > y ? 1.0 : 0.0;
     } else if (op_code == 7) {
         mapped = x >= y ? 1.0 : 0.0;
+    } else if (op_code == 8) {
+        mapped = pow(x, y);
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
@@ -869,6 +873,7 @@ fn binary_opcode(op: RealBinaryOp) -> i32 {
         RealBinaryOp::Minimum => 5,
         RealBinaryOp::Greater => 6,
         RealBinaryOp::GreaterEqual => 7,
+        RealBinaryOp::Pow => 8,
     }
 }
 
@@ -1423,6 +1428,7 @@ pub enum RealBinaryOp {
     Minimum,
     Greater,
     GreaterEqual,
+    Pow,
 }
 
 /// Real reduction operations exposed by the Layer 0 CUDA runtime.

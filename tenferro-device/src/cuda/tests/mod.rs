@@ -62,6 +62,25 @@ fn host_binary_add_reference(
     dst
 }
 
+fn host_binary_pow_reference(
+    lhs: &[f64],
+    rhs: &[f64],
+    dims: &[usize],
+    lhs_strides: &[isize],
+    rhs_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<f64> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0.0; numel];
+    for linear_idx in 0..numel {
+        let lhs_idx = linear_offset(linear_idx, dims, lhs_strides, 0) as usize;
+        let rhs_idx = linear_offset(linear_idx, dims, rhs_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = lhs[lhs_idx].powf(rhs[rhs_idx]);
+    }
+    dst
+}
+
 fn host_unary_abs_reference(
     src: &[f64],
     dims: &[usize],
@@ -531,6 +550,54 @@ fn cuda_runtime_real_unary_log_matches_host_reference() {
     assert_eq!(got.len(), expected.len());
     for (lhs, rhs) in got.iter().zip(expected.iter()) {
         assert!((lhs - rhs).abs() < 1.0e-12, "got {lhs}, expected {rhs}");
+    }
+}
+
+#[test]
+fn cuda_runtime_real_binary_pow_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    let runtime = tenferro_device::cuda::runtime::get_or_init(0).unwrap();
+    let dims = [4usize];
+    let strides = [1isize];
+    let lhs_host = vec![2.0_f64, 9.0, 16.0, 27.0];
+    let rhs_host = vec![3.0_f64, 0.5, 0.25, 2.0];
+    let lhs = runtime.alloc::<f64>(lhs_host.len()).unwrap();
+    let rhs = runtime.alloc::<f64>(rhs_host.len()).unwrap();
+    let dst = runtime.alloc::<f64>(lhs_host.len()).unwrap();
+    runtime.copy_htod(&lhs_host, &lhs).unwrap();
+    runtime.copy_htod(&rhs_host, &rhs).unwrap();
+
+    unsafe {
+        runtime
+            .pointwise_binary_real_f64_raw(
+                tenferro_device::cuda::runtime::RealBinaryOp::Pow,
+                1.0,
+                lhs.device_ptr().cast_const(),
+                &dims,
+                &strides,
+                0,
+                rhs.device_ptr().cast_const(),
+                &strides,
+                0,
+                0.0,
+                dst.device_ptr(),
+                &strides,
+                0,
+            )
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected =
+        host_binary_pow_reference(&lhs_host, &rhs_host, &dims, &strides, &strides, &strides);
+    for (idx, (got_v, exp_v)) in got.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (got_v - exp_v).abs() < 1.0e-12,
+            "pow mismatch at {idx}: got {got_v}, expected {exp_v}"
+        );
     }
 }
 

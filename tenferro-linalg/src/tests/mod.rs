@@ -36,6 +36,18 @@ fn vector_norm_primal_rrule_and_frule_match_expected_values() {
 }
 
 #[test]
+fn vector_lp_norm_matches_manual_formula_and_rejects_invalid_p() {
+    let mut ctx = CpuContext::new(1);
+    let x = Tensor::from_slice(&[2.0_f64, -3.0, 4.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+
+    let lp = norm(&mut ctx, &x, NormKind::Lp(3.0)).unwrap();
+    let expected = (2.0_f64.powi(3) + 3.0_f64.powi(3) + 4.0_f64.powi(3)).powf(1.0 / 3.0);
+    assert!((tensor_data(&lp)[0] - expected).abs() < 1e-12);
+
+    assert!(norm(&mut ctx, &x, NormKind::Lp(0.5)).is_err());
+}
+
+#[test]
 fn linalg_scalar_helpers_and_validation_accept_valid_inputs() {
     assert_eq!(<f64 as LinalgScalar>::abs_real(&black_box(-1.5_f64)), 1.5);
     assert_eq!(<f32 as LinalgScalar>::abs_real(&black_box(-1.5_f32)), 1.5);

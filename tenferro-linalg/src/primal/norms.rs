@@ -90,14 +90,13 @@ where
             NormKind::Lp(_) => {}
         }
 
-        let input = ensure_col_major(tensor);
-        let offset = input.offset() as usize;
-        let len = tensor.dims()[0];
-        let vec_data = &extract_slice(&input)?[offset..offset + len];
-
         let value = match kind {
             NormKind::Fro => {
                 let mut sum = T::zero();
+                let input = ensure_col_major(tensor);
+                let offset = input.offset() as usize;
+                let len = tensor.dims()[0];
+                let vec_data = &extract_slice(&input)?[offset..offset + len];
                 for &v in vec_data {
                     sum = sum + v * v;
                 }
@@ -107,11 +106,40 @@ where
                 if p < 1.0 {
                     return Err(invalid_vector_lp_exponent_error(p));
                 }
-                let (p_t, mut sum) = (scalar_from::<T>(p)?, T::zero());
-                for &v in vec_data {
-                    sum = sum + v.abs().powf(p_t);
-                }
-                sum.powf(T::one() / p_t)
+                let p_t = scalar_from::<T>(p)?;
+                let abs = crate::prims_bridge::scalar_unary_same_shape(
+                    ctx,
+                    tensor,
+                    tenferro_prims::ScalarUnaryOp::Abs,
+                )?;
+                let p_tensor = crate::prims_bridge::full_like_constant(
+                    p_t,
+                    tensor.dims(),
+                    tensor.logical_memory_space(),
+                )?;
+                let abs_pow_p = crate::prims_bridge::analytic_binary_same_shape(
+                    ctx,
+                    &abs,
+                    &p_tensor,
+                    tenferro_prims::AnalyticBinaryOp::Pow,
+                )?;
+                let sum = crate::prims_bridge::scalar_reduce_keep_axes(
+                    ctx,
+                    &abs_pow_p,
+                    &[],
+                    tenferro_prims::ScalarReductionOp::Sum,
+                )?;
+                let inv_p_tensor = crate::prims_bridge::full_like_constant(
+                    T::one() / p_t,
+                    &[],
+                    sum.logical_memory_space(),
+                )?;
+                return crate::prims_bridge::analytic_binary_same_shape(
+                    ctx,
+                    &sum,
+                    &inv_p_tensor,
+                    tenferro_prims::AnalyticBinaryOp::Pow,
+                );
             }
             NormKind::L1 | NormKind::Inf | NormKind::Nuclear | NormKind::Spectral => unreachable!(),
         };

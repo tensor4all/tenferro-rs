@@ -385,6 +385,25 @@ fn fro_norm_path_is_tensor_native_and_uses_sqrt_bridge() {
 }
 
 #[test]
+fn vector_lp_norm_path_is_tensor_native_and_uses_pow_bridge() {
+    let norms = repo_file("src/primal/norms.rs");
+    let vector_lp = file_section(
+        &norms,
+        "            NormKind::Lp(p) => {",
+        "            NormKind::L1 | NormKind::Inf | NormKind::Nuclear | NormKind::Spectral => unreachable!(),",
+    );
+
+    assert!(
+        !vector_lp.contains("extract_slice("),
+        "vector Lp norm should avoid host slice extraction"
+    );
+    assert!(
+        vector_lp.contains("analytic_binary_same_shape"),
+        "vector Lp norm should route through the analytic binary Pow bridge"
+    );
+}
+
+#[test]
 fn cond_path_multiplies_norms_tensor_natively() {
     let norms = repo_file("src/primal/norms.rs");
     let cond = file_section(&norms, "pub fn cond", "#[cfg(test)]");

@@ -1,9 +1,10 @@
 use tenferro_algebra::Standard;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{
-    AnalyticPrimsDescriptor, AnalyticUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor,
-    ScalarReductionOp, ScalarUnaryOp, SemiringCoreDescriptor, TensorAnalyticPrims,
-    TensorScalarContextFor, TensorScalarPrims, TensorSemiringContextFor, TensorSemiringCore,
+    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticUnaryOp, ScalarBinaryOp,
+    ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp, SemiringCoreDescriptor,
+    TensorAnalyticPrims, TensorScalarContextFor, TensorScalarPrims, TensorSemiringContextFor,
+    TensorSemiringCore,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -264,6 +265,34 @@ where
     <<C as TensorScalarContextFor<Standard<T>>>::ScalarBackend as TensorAnalyticPrims<
         Standard<T>,
     >>::execute(ctx, &plan, T::one(), &[input], T::zero(), &mut output)?;
+    Ok(output)
+}
+
+pub(crate) fn analytic_binary_same_shape<T, C>(
+    ctx: &mut C,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T>,
+    op: AnalyticBinaryOp,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar + crate::KernelLinalgScalar,
+    C: TensorScalarContextFor<Standard<T>>,
+    <C as TensorScalarContextFor<Standard<T>>>::ScalarBackend:
+        TensorAnalyticPrims<Standard<T>, Context = C>,
+{
+    let desc = AnalyticPrimsDescriptor::PointwiseBinary { op };
+    let mut output = Tensor::zeros(
+        lhs.dims(),
+        lhs.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan =
+        <<C as TensorScalarContextFor<Standard<T>>>::ScalarBackend as TensorAnalyticPrims<
+            Standard<T>,
+        >>::plan(ctx, &desc, &[lhs.dims(), rhs.dims(), output.dims()])?;
+    <<C as TensorScalarContextFor<Standard<T>>>::ScalarBackend as TensorAnalyticPrims<
+        Standard<T>,
+    >>::execute(ctx, &plan, T::one(), &[lhs, rhs], T::zero(), &mut output)?;
     Ok(output)
 }
 
