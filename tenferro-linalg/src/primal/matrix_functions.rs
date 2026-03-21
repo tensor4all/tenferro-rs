@@ -12,6 +12,7 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixPower, "matrix_power")?;
+    require_main_memory_tensor(tensor, "matrix_power")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let bc = batch_count(batch_dims);

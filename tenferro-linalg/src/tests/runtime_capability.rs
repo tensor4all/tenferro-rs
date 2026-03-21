@@ -404,6 +404,28 @@ fn vector_lp_norm_path_is_tensor_native_and_uses_pow_bridge() {
 }
 
 #[test]
+fn matrix_power_requires_main_memory_before_host_slice_path() {
+    let matrix_functions = repo_file("src/primal/matrix_functions.rs");
+    let matrix_power = file_section(&matrix_functions, "pub fn matrix_power", "#[cfg(test)]");
+
+    assert!(
+        matrix_power.contains("require_main_memory_tensor(tensor, \"matrix_power\")?"),
+        "matrix_power should reject non-main-memory tensors before host-slice logic"
+    );
+}
+
+#[test]
+fn matrix_exp_requires_main_memory_before_host_slice_path() {
+    let spectral = repo_file("src/primal/spectral.rs");
+    let matrix_exp = file_section(&spectral, "pub fn matrix_exp", "#[cfg(test)]");
+
+    assert!(
+        matrix_exp.contains("require_main_memory_tensor(tensor, \"matrix_exp\")?"),
+        "matrix_exp should reject non-main-memory tensors before host-slice logic"
+    );
+}
+
+#[test]
 fn cond_path_multiplies_norms_tensor_natively() {
     let norms = repo_file("src/primal/norms.rs");
     let cond = file_section(&norms, "pub fn cond", "#[cfg(test)]");

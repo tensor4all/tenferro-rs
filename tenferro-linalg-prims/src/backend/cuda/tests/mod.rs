@@ -1680,6 +1680,16 @@ fn cuda_backend_reports_only_wired_capabilities() {
         ) == has_native_cuda
     );
     assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f32>>::has_linalg_support(
+            LinalgCapabilityOp::Inv
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+            LinalgCapabilityOp::Inv
+        ) == has_native_cuda
+    );
+    assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f32>>::has_linalg_support(
             LinalgCapabilityOp::Lstsq
         )

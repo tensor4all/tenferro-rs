@@ -342,6 +342,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
             op,
             LinalgCapabilityOp::Solve
                 | LinalgCapabilityOp::SolveEx
+                | LinalgCapabilityOp::Inv
                 | LinalgCapabilityOp::SolveTriangular
                 | LinalgCapabilityOp::Qr
                 | LinalgCapabilityOp::ThinSvd
@@ -356,6 +357,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::SolveEx => solve::has_solve_support::<T>(),
+            LinalgCapabilityOp::Inv => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::SolveTriangular => {
                 solve_triangular::has_solve_triangular_support::<T>()
             }

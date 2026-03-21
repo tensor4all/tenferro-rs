@@ -174,6 +174,7 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixExp, "matrix_exp")?;
+    require_main_memory_tensor(tensor, "matrix_exp")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);

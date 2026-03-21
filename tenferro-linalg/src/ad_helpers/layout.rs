@@ -13,6 +13,20 @@ pub(crate) fn extract_slice<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<&[T]>
         .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))
 }
 
+/// Require a main-memory tensor before entering host-slice algorithms.
+pub(crate) fn require_main_memory_tensor<T: LinalgScalar>(
+    tensor: &Tensor<T>,
+    op: &str,
+) -> Result<()> {
+    if tensor.logical_memory_space() == tenferro_device::LogicalMemorySpace::MainMemory {
+        Ok(())
+    } else {
+        Err(Error::DeviceError(format!(
+            "{op} is only implemented for main-memory tensors"
+        )))
+    }
+}
+
 /// Convert an f64 constant to scalar type `T`.
 pub(crate) fn scalar_from<T: LinalgScalar>(val: f64) -> Result<T> {
     T::from(val).ok_or_else(|| {
