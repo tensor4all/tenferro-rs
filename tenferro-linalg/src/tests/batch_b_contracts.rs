@@ -444,7 +444,6 @@ fn cuda_public_fro_norm_matches_cpu_small_real_matrix() {
 }
 
 #[cfg(feature = "cuda")]
-#[cfg(feature = "cuda")]
 fn cuda_public_det_matches_cpu_f32_impl() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);

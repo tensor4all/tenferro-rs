@@ -166,6 +166,21 @@ fn cholesky_ex_section_does_not_extract_cpu_slices() {
 }
 
 #[test]
+fn lstsq_section_does_not_extract_cpu_slices() {
+    let least_squares = repo_file("src/primal/least_squares.rs");
+    let lstsq = file_section(&least_squares, "pub fn lstsq", "pub fn cholesky");
+
+    assert!(
+        !lstsq.contains("extract_slice("),
+        "lstsq should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !lstsq.contains("backend::slice_bridge::"),
+        "lstsq should stay tensor-native and avoid slice_bridge helpers"
+    );
+}
+
+#[test]
 fn lu_factor_ex_section_does_not_extract_cpu_slices() {
     let decompositions = repo_file("src/primal/decompositions.rs");
     let lu_factor_ex = file_section(&decompositions, "pub fn lu_factor_ex", "pub fn lu_solve");
