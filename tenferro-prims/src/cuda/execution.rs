@@ -7,8 +7,8 @@ use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::{
-    validate_execute_inputs, validate_shape_count, SemiringBinaryOp, SemiringCoreDescriptor,
-    SemiringFastPathDescriptor,
+    validate_execute_inputs, validate_shape_count, validate_shape_eq, SemiringBinaryOp,
+    SemiringCoreDescriptor, SemiringFastPathDescriptor,
 };
 
 use super::planning::{
@@ -16,7 +16,7 @@ use super::planning::{
     plan_permutation, plan_reduction,
 };
 use super::scalar_type::{scalar_compute_descriptor, scalar_data_type};
-use super::{CudaContext, CudaPlan, CudaPlanDescriptor};
+use super::{CudaContext, CudaPlan, CudaPlanDescriptor, CudaPlanStorage};
 use crate::cuda_ffi::{CUTENSOR_OP_ADD, CUTENSOR_OP_MUL};
 
 pub(super) fn plan_core_descriptor<S: Scalar>(
@@ -60,7 +60,7 @@ pub(super) fn plan_core_descriptor<S: Scalar>(
                 &strides_b, &modes_c, shapes[2], &strides_c,
             )?;
             Ok(CudaPlan {
-                plan,
+                plan: CudaPlanStorage::Compiled(plan),
                 desc: CudaPlanDescriptor::Core(desc.clone()),
                 _marker: PhantomData,
             })
@@ -89,23 +89,17 @@ pub(super) fn plan_core_descriptor<S: Scalar>(
                 CUTENSOR_OP_ADD,
             )?;
             Ok(CudaPlan {
-                plan,
+                plan: CudaPlanStorage::Compiled(plan),
                 desc: CudaPlanDescriptor::Core(desc.clone()),
                 _marker: PhantomData,
             })
         }
         SemiringCoreDescriptor::MakeContiguous => {
             validate_shape_count(shapes, 2, "MakeContiguous")?;
-            let ndim = shapes[0].len();
-            let modes: Vec<i32> = (0..ndim as i32).collect();
-            let strides_a = default_col_major_strides(shapes[0]);
-            let strides_b = default_col_major_strides(shapes[1]);
-            let plan = plan_permutation(
-                ctx, data_type, compute, &modes, shapes[0], &strides_a, &modes, shapes[1],
-                &strides_b,
-            )?;
+            validate_shape_eq(shapes[1], shapes[0], "MakeContiguous output")?;
+            let _ = (data_type, compute);
             Ok(CudaPlan {
-                plan,
+                plan: CudaPlanStorage::DeferredMakeContiguous,
                 desc: CudaPlanDescriptor::Core(desc.clone()),
                 _marker: PhantomData,
             })
@@ -151,7 +145,7 @@ pub(super) fn plan_fast_descriptor<S: Scalar>(
                 &strides_c,
             )?;
             Ok(CudaPlan {
-                plan,
+                plan: CudaPlanStorage::Compiled(plan),
                 desc: CudaPlanDescriptor::Fast(desc.clone()),
                 _marker: PhantomData,
             })
@@ -175,7 +169,7 @@ pub(super) fn plan_fast_descriptor<S: Scalar>(
                 cutensor_op,
             )?;
             Ok(CudaPlan {
-                plan,
+                plan: CudaPlanStorage::Compiled(plan),
                 desc: CudaPlanDescriptor::Fast(desc.clone()),
                 _marker: PhantomData,
             })
@@ -205,6 +199,11 @@ pub(super) fn execute_plan<S: Scalar>(
         CudaPlanDescriptor::Core(SemiringCoreDescriptor::BatchedGemm { .. })
         | CudaPlanDescriptor::Fast(SemiringFastPathDescriptor::Contract { .. }) => {
             validate_execute_inputs(inputs, 2, "Contraction")?;
+            let CudaPlanStorage::Compiled(plan_handle) = &plan.plan else {
+                return Err(Error::DeviceError(
+                    "CUDA contraction plan was not compiled".into(),
+                ));
+            };
             let a_ptr = inputs[0]
                 .buffer()
                 .as_device_ptr()
@@ -225,7 +224,7 @@ pub(super) fn execute_plan<S: Scalar>(
             let status = unsafe {
                 (ctx.vtable.contract)(
                     handle,
-                    plan.plan.raw,
+                    plan_handle.raw,
                     alpha_ptr,
                     a_ptr,
                     b_ptr,
@@ -241,6 +240,22 @@ pub(super) fn execute_plan<S: Scalar>(
         }
         CudaPlanDescriptor::Core(SemiringCoreDescriptor::MakeContiguous) => {
             validate_execute_inputs(inputs, 1, "MakeContiguous")?;
+            validate_shape_eq(output.dims(), inputs[0].dims(), "MakeContiguous output")?;
+            let data_type = scalar_data_type::<S>()?;
+            let compute = scalar_compute_descriptor::<S>(&ctx.vtable)?;
+            let ndim = inputs[0].dims().len();
+            let modes: Vec<i32> = (0..ndim as i32).collect();
+            let plan_handle = plan_permutation(
+                ctx,
+                data_type,
+                compute,
+                &modes,
+                inputs[0].dims(),
+                inputs[0].strides(),
+                &modes,
+                output.dims(),
+                output.strides(),
+            )?;
             let a_ptr = inputs[0]
                 .buffer()
                 .as_device_ptr()
@@ -253,12 +268,17 @@ pub(super) fn execute_plan<S: Scalar>(
                 as *const c_void as *mut c_void;
 
             let status = unsafe {
-                (ctx.vtable.permute)(handle, plan.plan.raw, alpha_ptr, a_ptr, b_ptr, stream)
+                (ctx.vtable.permute)(handle, plan_handle.raw, alpha_ptr, a_ptr, b_ptr, stream)
             };
             check_status(status, "cutensorPermute")
         }
         CudaPlanDescriptor::Core(SemiringCoreDescriptor::ReduceAdd { .. }) => {
             validate_execute_inputs(inputs, 1, "ReduceAdd")?;
+            let CudaPlanStorage::Compiled(plan_handle) = &plan.plan else {
+                return Err(Error::DeviceError(
+                    "CUDA reduction plan was not compiled".into(),
+                ));
+            };
             let a_ptr = inputs[0]
                 .buffer()
                 .as_device_ptr()
@@ -274,7 +294,7 @@ pub(super) fn execute_plan<S: Scalar>(
             let status = unsafe {
                 (ctx.vtable.reduce)(
                     handle,
-                    plan.plan.raw,
+                    plan_handle.raw,
                     alpha_ptr,
                     a_ptr,
                     beta_ptr,
@@ -289,6 +309,11 @@ pub(super) fn execute_plan<S: Scalar>(
         }
         CudaPlanDescriptor::Fast(SemiringFastPathDescriptor::ElementwiseBinary { .. }) => {
             validate_execute_inputs(inputs, 2, "ElementwiseBinary")?;
+            let CudaPlanStorage::Compiled(plan_handle) = &plan.plan else {
+                return Err(Error::DeviceError(
+                    "CUDA elementwise-binary plan was not compiled".into(),
+                ));
+            };
             let a_ptr = inputs[0]
                 .buffer()
                 .as_device_ptr()
@@ -309,7 +334,7 @@ pub(super) fn execute_plan<S: Scalar>(
             let status = unsafe {
                 (ctx.vtable.elementwise_binary_execute)(
                     handle,
-                    plan.plan.raw,
+                    plan_handle.raw,
                     alpha_ptr,
                     a_ptr,
                     gamma_ptr,
@@ -320,6 +345,9 @@ pub(super) fn execute_plan<S: Scalar>(
             };
             check_status(status, "cutensorElementwiseBinaryExecute")
         }
+        _ => Err(Error::DeviceError(
+            "CUDA execution for this semiring descriptor is not implemented yet".into(),
+        )),
     }
 }
 

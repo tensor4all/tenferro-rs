@@ -62,13 +62,13 @@ pub mod tensor_context;
 pub(crate) mod tensor_helpers;
 
 // Device backends
-pub mod cpu;
+pub(crate) mod cpu;
 #[cfg(feature = "linalg-faer")]
 pub(crate) mod cpu_faer;
 #[cfg(feature = "linalg-lapack")]
 pub(crate) mod cpu_lapack;
-pub mod cuda;
-pub mod hip;
+pub(crate) mod cuda;
+pub(crate) mod hip;
 
 // ============================================================================
 // Re-exports
@@ -84,11 +84,10 @@ pub use tensor_context::TensorLinalgContextFor;
 // CPU backend (public)
 #[cfg(feature = "linalg-lapack")]
 pub use blas_lapack_backend::BlasLapackBackend;
-pub use cpu::CpuTensorLinalgBackend;
+pub use tenferro_linalg_prims::backend::CpuTensorLinalgBackend;
 
 // GPU backend stubs (public)
-pub use cuda::CudaTensorLinalgBackend;
-pub use hip::HipTensorLinalgBackend;
+pub use tenferro_linalg_prims::backend::{CudaTensorLinalgBackend, HipTensorLinalgBackend};
 
 use tenferro_device::Result;
 

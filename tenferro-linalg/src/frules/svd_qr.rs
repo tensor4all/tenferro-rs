@@ -33,8 +33,10 @@ pub fn svd_frule<T, C>(
 where
     T: KernelLinalgScalar,
     T::Real: num_traits::Float,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
+    T::Real: tenferro_tensor::KeepCountScalar,
 {
     let result = svd(ctx, tensor, options)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;

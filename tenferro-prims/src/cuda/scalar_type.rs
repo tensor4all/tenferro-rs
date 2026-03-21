@@ -11,23 +11,25 @@ use crate::infra::typed_dispatch::{
 };
 
 pub(super) fn scalar_data_type<T: Scalar>() -> Result<CutensorDataType> {
-    macro_rules! cutensor_data_type_for {
-        (f32) => {
-            CUTENSOR_R_32F
+    dispatch_real_scalar_type!(T, Concrete, {
+        let _ = std::marker::PhantomData::<Concrete>;
+        return if std::mem::size_of::<Concrete>() == std::mem::size_of::<f32>() {
+            Ok(CUTENSOR_R_32F)
+        } else {
+            Ok(CUTENSOR_R_64F)
         };
-        (f64) => {
-            CUTENSOR_R_64F
-        };
-        (Complex32) => {
-            CUTENSOR_C_32F
-        };
-        (Complex64) => {
-            CUTENSOR_C_64F
-        };
-    }
-
+    });
     dispatch_standard_scalar_type!(T, Concrete, {
-        return Ok(cutensor_data_type_for!(Concrete));
+        let _ = std::marker::PhantomData::<Concrete>;
+        return if std::mem::size_of::<Concrete>() == std::mem::size_of::<Complex32>() {
+            Ok(CUTENSOR_C_32F)
+        } else if std::mem::size_of::<Concrete>() == std::mem::size_of::<Complex64>() {
+            Ok(CUTENSOR_C_64F)
+        } else {
+            Err(Error::DeviceError(
+                "Unsupported scalar type for CUDA backend".into(),
+            ))
+        };
     });
 
     Err(Error::DeviceError(

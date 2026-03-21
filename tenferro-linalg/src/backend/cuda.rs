@@ -4,10 +4,9 @@
 //! All methods currently return `Error::DeviceError`.
 
 use super::tensor_api::{
-    EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
-    TensorLinalgBackend,
+    CholeskyTensorExResult, EigTensorResult, EigenTensorResult, LuTensorExResult, LuTensorResult,
+    QrTensorResult, SolveTensorExResult, SvdTensorResult, TensorLinalgBackend,
 };
-use super::tensor_context::TensorLinalgContextFor;
 use crate::KernelLinalgScalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
@@ -37,6 +36,14 @@ impl<T: KernelLinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
         false
     }
 
+    fn solve_ex(
+        _ctx: &mut Self::Context,
+        _a: &Tensor<T>,
+        _b: &Tensor<T>,
+    ) -> Result<SolveTensorExResult<T>> {
+        unsupported()
+    }
+
     fn solve(_ctx: &mut Self::Context, _a: &Tensor<T>, _b: &Tensor<T>) -> Result<Tensor<T>> {
         unsupported()
     }
@@ -54,7 +61,16 @@ impl<T: KernelLinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
     fn thin_svd(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<SvdTensorResult<T>> {
         unsupported()
     }
+    fn svdvals(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<Tensor<T::Real>> {
+        unsupported()
+    }
+    fn lu_factor_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorExResult<T>> {
+        unsupported()
+    }
     fn lu_factor(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorResult<T>> {
+        unsupported()
+    }
+    fn cholesky_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {
         unsupported()
     }
     fn cholesky(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<Tensor<T>> {
@@ -66,10 +82,6 @@ impl<T: KernelLinalgScalar> TensorLinalgBackend<T> for CudaTensorLinalgBackend {
     fn eig(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<EigTensorResult<T>> {
         unsupported()
     }
-}
-
-impl<T: KernelLinalgScalar> TensorLinalgContextFor<T> for tenferro_prims::CudaContext {
-    type Backend = CudaTensorLinalgBackend;
 }
 
 #[cfg(test)]

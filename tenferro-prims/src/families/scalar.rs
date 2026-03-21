@@ -2,7 +2,9 @@ use tenferro_algebra::{Algebra, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
+#[cfg(not(feature = "cuda"))]
+use crate::{CudaBackend, CudaContext};
+use crate::{RocmBackend, RocmContext};
 
 /// Pointwise scalar unary operations.
 ///
@@ -27,6 +29,9 @@ pub enum ScalarUnaryOp {
 
 /// Pointwise scalar binary operations.
 ///
+/// Ordered-real comparison operators return numeric masks in the same scalar
+/// dtype as their inputs: `1` where the predicate holds and `0` otherwise.
+///
 /// # Examples
 ///
 /// ```
@@ -43,6 +48,8 @@ pub enum ScalarBinaryOp {
     Div,
     Maximum,
     Minimum,
+    Greater,
+    GreaterEqual,
     ClampMin,
     ClampMax,
 }
@@ -154,6 +161,7 @@ pub trait TensorScalarPrims<Alg: Algebra> {
     fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool;
 }
 
+#[cfg(not(feature = "cuda"))]
 impl<S: Scalar> TensorScalarPrims<Standard<S>> for CudaBackend {
     type Plan = ();
     type Context = CudaContext;

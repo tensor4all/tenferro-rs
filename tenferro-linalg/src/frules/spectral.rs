@@ -34,8 +34,10 @@ pub fn eig_frule<
 ) -> AdResult<(EigResult<T>, EigResult<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
+    T::Real: tenferro_tensor::KeepCountScalar,
 {
     // Forward pass
     let eig_result = eig(ctx, tensor).map_err(to_ad_err)?;
@@ -127,8 +129,10 @@ pub fn pinv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
+    T::Real: tenferro_tensor::KeepCountScalar,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Pinv, "pinv_frule")
         .map_err(to_ad_err)?;

@@ -4,7 +4,7 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
 use super::Tensor;
-use crate::layout::{compute_contiguous_strides, copy_strided};
+use crate::layout::compute_contiguous_strides;
 use crate::MemoryOrder;
 
 impl<T: Scalar> Tensor<T> {
@@ -112,8 +112,6 @@ impl<T: Scalar> Tensor<T> {
         for (stack_idx, tensor) in tensors.iter().enumerate() {
             let contiguous_tensor = tensor.contiguous(MemoryOrder::ColumnMajor);
             let src = contiguous_tensor.buffer().as_slice().unwrap();
-
-            let stack_offset = (stack_idx as isize) * result_strides[dim];
 
             let mut index = vec![0usize; ndim];
             let n_elements: usize = first.dims.iter().product();

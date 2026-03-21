@@ -22,12 +22,53 @@ pub fn norm<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> Result<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm")?;
 
     if tensor.ndim() == 1 {
+        match kind {
+            NormKind::L1 => {
+                let abs = crate::prims_bridge::scalar_unary_same_shape(
+                    ctx,
+                    tensor,
+                    tenferro_prims::ScalarUnaryOp::Abs,
+                )?;
+                return crate::prims_bridge::scalar_reduce_keep_axes(
+                    ctx,
+                    &abs,
+                    &[],
+                    tenferro_prims::ScalarReductionOp::Sum,
+                );
+            }
+            NormKind::Inf => {
+                if tensor.dims()[0] == 0 {
+                    return crate::prims_bridge::full_like_constant(
+                        T::zero(),
+                        &[],
+                        tensor.logical_memory_space(),
+                    );
+                }
+                let abs = crate::prims_bridge::scalar_unary_same_shape(
+                    ctx,
+                    tensor,
+                    tenferro_prims::ScalarUnaryOp::Abs,
+                )?;
+                return crate::prims_bridge::scalar_reduce_keep_axes(
+                    ctx,
+                    &abs,
+                    &[],
+                    tenferro_prims::ScalarReductionOp::Max,
+                );
+            }
+            NormKind::Nuclear | NormKind::Spectral => {
+                return Err(matrix_only_norm_kind_error(kind));
+            }
+            NormKind::Fro | NormKind::Lp(_) => {}
+        }
+
         let input = ensure_col_major(tensor);
         let offset = input.offset() as usize;
         let len = tensor.dims()[0];
@@ -41,8 +82,6 @@ where
                 }
                 sum.sqrt()
             }
-            NormKind::L1 => vec_data.iter().fold(T::zero(), |acc, &v| acc + v.abs()),
-            NormKind::Inf => vec_data.iter().fold(T::zero(), |acc, &v| acc.max(v.abs())),
             NormKind::Lp(p) => {
                 if p < 1.0 {
                     return Err(invalid_vector_lp_exponent_error(p));
@@ -53,29 +92,102 @@ where
                 }
                 sum.powf(T::one() / p_t)
             }
-            NormKind::Nuclear | NormKind::Spectral => {
-                return Err(matrix_only_norm_kind_error(kind));
-            }
+            NormKind::L1 | NormKind::Inf | NormKind::Nuclear | NormKind::Spectral => unreachable!(),
         };
 
         return tensor_from_data(vec![value], &[]);
     }
 
     let (m, n, batch_dims) = validate_2d(tensor)?;
-    let bc = batch_count(batch_dims);
-    let mat_size = m * n;
     let out_dims = if batch_dims.is_empty() {
         vec![]
     } else {
         batch_dims.to_vec()
     };
 
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-
     match kind {
+        NormKind::Nuclear => {
+            let singular_values = svdvals(ctx, tensor)?;
+            let kept_axes: Vec<usize> = (1..singular_values.ndim()).collect();
+            crate::prims_bridge::scalar_reduce_keep_axes(
+                ctx,
+                &singular_values,
+                &kept_axes,
+                tenferro_prims::ScalarReductionOp::Sum,
+            )
+        }
+        NormKind::Spectral => {
+            let singular_values = svdvals(ctx, tensor)?;
+            let kept_axes: Vec<usize> = (1..singular_values.ndim()).collect();
+            crate::prims_bridge::scalar_reduce_keep_axes(
+                ctx,
+                &singular_values,
+                &kept_axes,
+                tenferro_prims::ScalarReductionOp::Max,
+            )
+        }
+        NormKind::L1 => {
+            if m == 0 || n == 0 {
+                return crate::prims_bridge::full_like_constant(
+                    T::zero(),
+                    &out_dims,
+                    tensor.logical_memory_space(),
+                );
+            }
+            let abs = crate::prims_bridge::scalar_unary_same_shape(
+                ctx,
+                tensor,
+                tenferro_prims::ScalarUnaryOp::Abs,
+            )?;
+            let kept_axes: Vec<usize> = std::iter::once(1).chain(2..abs.ndim()).collect();
+            let column_sums = crate::prims_bridge::scalar_reduce_keep_axes(
+                ctx,
+                &abs,
+                &kept_axes,
+                tenferro_prims::ScalarReductionOp::Sum,
+            )?;
+            let batch_axes: Vec<usize> = (1..column_sums.ndim()).collect();
+            crate::prims_bridge::scalar_reduce_keep_axes(
+                ctx,
+                &column_sums,
+                &batch_axes,
+                tenferro_prims::ScalarReductionOp::Max,
+            )
+        }
+        NormKind::Inf => {
+            if m == 0 || n == 0 {
+                return crate::prims_bridge::full_like_constant(
+                    T::zero(),
+                    &out_dims,
+                    tensor.logical_memory_space(),
+                );
+            }
+            let abs = crate::prims_bridge::scalar_unary_same_shape(
+                ctx,
+                tensor,
+                tenferro_prims::ScalarUnaryOp::Abs,
+            )?;
+            let kept_axes: Vec<usize> = std::iter::once(0).chain(2..abs.ndim()).collect();
+            let row_sums = crate::prims_bridge::scalar_reduce_keep_axes(
+                ctx,
+                &abs,
+                &kept_axes,
+                tenferro_prims::ScalarReductionOp::Sum,
+            )?;
+            let batch_axes: Vec<usize> = (1..row_sums.ndim()).collect();
+            crate::prims_bridge::scalar_reduce_keep_axes(
+                ctx,
+                &row_sums,
+                &batch_axes,
+                tenferro_prims::ScalarReductionOp::Max,
+            )
+        }
         NormKind::Fro => {
+            let bc = batch_count(batch_dims);
+            let mat_size = m * n;
+            let input = ensure_col_major(tensor);
+            let data = extract_slice(&input)?;
+            let offset = input.offset() as usize;
             let mut out = vec![T::zero(); bc];
             for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
                 let start = offset + batch * mat_size;
@@ -85,77 +197,6 @@ where
                     sum = sum + v * v;
                 }
                 *out_slot = sum.sqrt();
-            }
-            tensor_from_data(out, &out_dims)
-        }
-        NormKind::Nuclear => {
-            let svd_result = svd(ctx, tensor, None)?;
-            let s_data = extract_slice(&svd_result.s)?;
-            let s_off = svd_result.s.offset() as usize;
-            let k = m.min(n);
-            let mut out = vec![T::zero(); bc];
-            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
-                let mut sum = T::zero();
-                let start = s_off + batch * k;
-                for i in 0..k {
-                    sum = sum + s_data[start + i];
-                }
-                *out_slot = sum;
-            }
-            tensor_from_data(out, &out_dims)
-        }
-        NormKind::Spectral => {
-            let svd_result = svd(ctx, tensor, None)?;
-            let s_data = extract_slice(&svd_result.s)?;
-            let s_off = svd_result.s.offset() as usize;
-            let k = m.min(n);
-            let mut out = vec![T::zero(); bc];
-            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
-                *out_slot = s_data[s_off + batch * k];
-            }
-            tensor_from_data(out, &out_dims)
-        }
-        NormKind::L1 => {
-            let mut out = vec![T::zero(); bc];
-            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
-                if m == 0 || n == 0 {
-                    *out_slot = T::zero();
-                    continue;
-                }
-                let start = offset + batch * mat_size;
-                let mut max_col_sum = T::zero();
-                for j in 0..n {
-                    let mut col_sum = T::zero();
-                    for i in 0..m {
-                        col_sum = col_sum + data[start + i + j * m].abs();
-                    }
-                    if j == 0 || col_sum > max_col_sum {
-                        max_col_sum = col_sum;
-                    }
-                }
-                *out_slot = max_col_sum;
-            }
-            tensor_from_data(out, &out_dims)
-        }
-        NormKind::Inf => {
-            let mut out = vec![T::zero(); bc];
-            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
-                if m == 0 || n == 0 {
-                    *out_slot = T::zero();
-                    continue;
-                }
-                let start = offset + batch * mat_size;
-                let mut max_row_sum = T::zero();
-                for i in 0..m {
-                    let mut row_sum = T::zero();
-                    for j in 0..n {
-                        row_sum = row_sum + data[start + i + j * m].abs();
-                    }
-                    if i == 0 || row_sum > max_row_sum {
-                        max_row_sum = row_sum;
-                    }
-                }
-                *out_slot = max_row_sum;
             }
             tensor_from_data(out, &out_dims)
         }
@@ -173,7 +214,8 @@ pub fn cond<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> Result<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     match kind {
@@ -189,14 +231,10 @@ where
     let lhs = norm(ctx, tensor, kind)?;
     let inverse = inv(ctx, tensor)?;
     let rhs = norm(ctx, &inverse, kind)?;
-    let lhs_data = extract_slice(&lhs)?;
-    let rhs_data = extract_slice(&rhs)?;
-    let lhs_offset = lhs.offset() as usize;
-    let rhs_offset = rhs.offset() as usize;
-    let len = lhs.dims().iter().product::<usize>().max(1);
-    let mut out = vec![T::zero(); len];
-    for i in 0..len {
-        out[i] = lhs_data[lhs_offset + i] * rhs_data[rhs_offset + i];
-    }
-    tensor_from_data(out, lhs.dims())
+    crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &lhs,
+        &rhs,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )
 }

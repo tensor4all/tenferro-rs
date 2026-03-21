@@ -5,12 +5,13 @@
 
 use num_traits::Zero;
 use tenferro_algebra::Scalar;
-use tenferro_device::Result;
+use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use super::col_major_strides;
 use super::tensor_api::{
-    EigTensorResult, EigenTensorResult, LuTensorResult, QrTensorResult, SvdTensorResult,
+    CholeskyTensorExResult, EigTensorResult, EigenTensorResult, LuTensorExResult, LuTensorResult,
+    QrTensorResult, SolveTensorExResult, SvdTensorResult,
 };
 use super::tensor_helpers::{
     batch_count, ensure_col_major, extract_contiguous_slice, validate_matrix_shape,
@@ -22,6 +23,106 @@ use crate::KernelLinalgScalar;
 fn tensor_from_data<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>> {
     let strides = col_major_strides(dims);
     Tensor::from_vec(data, dims, &strides, 0)
+}
+
+fn first_zero_pivot_from_u<T: KernelLinalgScalar>(
+    u: &[T],
+    diag_len: usize,
+    leading_dim: usize,
+) -> i32 {
+    for i in 0..diag_len {
+        if u[i * (leading_dim + 1)] == T::zero() {
+            return (i + 1) as i32;
+        }
+    }
+    0
+}
+
+fn extract_leading_principal_minor<T: KernelLinalgScalar>(
+    a: &[T],
+    n: usize,
+    k: usize,
+    minor: &mut [T],
+) {
+    for col in 0..k {
+        let src = col * n;
+        let dst = col * k;
+        minor[dst..dst + k].copy_from_slice(&a[src..src + k]);
+    }
+}
+
+fn first_failing_leading_principal_minor<T: KernelLinalgScalar>(
+    a: &[T],
+    n: usize,
+    minor_a: &mut [T],
+    minor_l: &mut [T],
+) -> Result<i32> {
+    for k in 1..=n {
+        let minor_len = k * k;
+        extract_leading_principal_minor(a, n, k, &mut minor_a[..minor_len]);
+        minor_l[..minor_len].fill(T::zero());
+        if super::cpu::cholesky_slices(&minor_a[..minor_len], k, &mut minor_l[..minor_len]).is_err()
+        {
+            return Ok(k as i32);
+        }
+    }
+
+    Err(Error::DeviceError(
+        "CPU cholesky_ex failed a batch but no failing leading principal minor was found".into(),
+    ))
+}
+
+/// Solve `A x = b` while preserving successful batch payloads and reporting per-batch status.
+pub(crate) fn solve_ex<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+) -> Result<SolveTensorExResult<T>>
+where
+    T: KernelLinalgScalar,
+{
+    let (n, batch_dims) = validate_square(a)?;
+    let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
+    let nrhs = rhs.nrhs;
+    let bc = batch_count(batch_dims);
+
+    let a_contig = ensure_col_major(a);
+    let b_contig = ensure_col_major(b);
+    let a_data = extract_contiguous_slice(&a_contig)?;
+    let b_data = extract_contiguous_slice(&b_contig)?;
+    let a_off = a_contig.offset() as usize;
+    let b_off = b_contig.offset() as usize;
+
+    let mat_a = n * n;
+    let mat_b = n * nrhs;
+    let mut solution_data = vec![T::zero(); mat_b * bc];
+    let mut info = vec![0i32; bc];
+
+    let mut perm = vec![0usize; n];
+    let mut l_buf = vec![T::zero(); mat_a];
+    let mut u_buf = vec![T::zero(); mat_a];
+
+    for i in 0..bc {
+        let a_slice = &a_data[a_off + i * mat_a..a_off + (i + 1) * mat_a];
+        let b_slice = &b_data[b_off + i * mat_b..b_off + (i + 1) * mat_b];
+
+        perm.fill(0);
+        l_buf.fill(T::zero());
+        u_buf.fill(T::zero());
+        super::cpu::lu_slices(a_slice, n, n, &mut perm, &mut l_buf, &mut u_buf)?;
+
+        let batch_info = first_zero_pivot_from_u(&u_buf, n, n);
+        info[i] = batch_info;
+        if batch_info == 0 {
+            let solution_slice = &mut solution_data[i * mat_b..(i + 1) * mat_b];
+            super::cpu::solve_slices(a_slice, b_slice, n, nrhs, solution_slice)?;
+        }
+    }
+
+    Ok(SolveTensorExResult {
+        solution: tensor_from_data(solution_data, &rhs.output_dims)?,
+        info,
+    })
 }
 
 /// Solve `A x = b` via the selected CPU slice backend.
@@ -235,6 +336,60 @@ where
     })
 }
 
+/// LU factorization while preserving payloads and reporting per-batch status.
+pub(crate) fn lu_factor_ex<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+) -> Result<LuTensorExResult<T>>
+where
+    T: KernelLinalgScalar,
+{
+    let (m, n, batch_dims) = validate_matrix_shape(a)?;
+    let k = m.min(n);
+    let bc = batch_count(batch_dims);
+
+    let a_contig = ensure_col_major(a);
+    let a_data = extract_contiguous_slice(&a_contig)?;
+    let a_off = a_contig.offset() as usize;
+    let mat_size = m * n;
+
+    let mut l_data = vec![T::zero(); m * k * bc];
+    let mut u_data = vec![T::zero(); k * n * bc];
+    let mut all_pivots = vec![0i32; m * bc];
+    let mut info = vec![0i32; bc];
+
+    let mut perm = vec![0usize; m];
+    let mut l_buf = vec![T::zero(); m * k];
+    let mut u_buf = vec![T::zero(); k * n];
+
+    for i in 0..bc {
+        let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
+        perm.fill(0);
+        l_buf.fill(T::zero());
+        u_buf.fill(T::zero());
+        super::cpu::lu_slices(a_slice, m, n, &mut perm, &mut l_buf, &mut u_buf)?;
+
+        l_data[i * m * k..(i + 1) * m * k].copy_from_slice(&l_buf);
+        u_data[i * k * n..(i + 1) * k * n].copy_from_slice(&u_buf);
+        info[i] = first_zero_pivot_from_u(&u_buf, k, k);
+        for (j, &p) in perm.iter().enumerate() {
+            all_pivots[i * m + j] = p as i32;
+        }
+    }
+
+    let mut l_shape = vec![m, k];
+    l_shape.extend_from_slice(batch_dims);
+    let mut u_shape = vec![k, n];
+    u_shape.extend_from_slice(batch_dims);
+
+    Ok(LuTensorExResult {
+        l: tensor_from_data(l_data, &l_shape)?,
+        u: tensor_from_data(u_data, &u_shape)?,
+        pivots: all_pivots,
+        info,
+    })
+}
+
 /// Cholesky decomposition via the selected CPU slice backend.
 pub(crate) fn cholesky<T>(_ctx: &mut tenferro_prims::CpuContext, a: &Tensor<T>) -> Result<Tensor<T>>
 where
@@ -261,6 +416,56 @@ where
     let mut out_shape = vec![n, n];
     out_shape.extend_from_slice(batch_dims);
     tensor_from_data(l_data, &out_shape)
+}
+
+/// Cholesky decomposition while preserving payloads and reporting per-batch status.
+pub(crate) fn cholesky_ex<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+) -> Result<CholeskyTensorExResult<T>>
+where
+    T: KernelLinalgScalar,
+{
+    let (n, batch_dims) = validate_square(a)?;
+    let bc = batch_count(batch_dims);
+
+    let a_contig = ensure_col_major(a);
+    let a_data = extract_contiguous_slice(&a_contig)?;
+    let a_off = a_contig.offset() as usize;
+    let mat_size = n * n;
+
+    let mut l_data = vec![T::zero(); mat_size * bc];
+    let mut info = vec![0i32; bc];
+
+    let mut l_buf = vec![T::zero(); mat_size];
+    let mut minor_a_buf = vec![T::zero(); mat_size];
+    let mut minor_l_buf = vec![T::zero(); mat_size];
+
+    for i in 0..bc {
+        let a_slice = &a_data[a_off + i * mat_size..a_off + (i + 1) * mat_size];
+        l_buf.fill(T::zero());
+
+        match super::cpu::cholesky_slices(a_slice, n, &mut l_buf) {
+            Ok(()) => {
+                l_data[i * mat_size..(i + 1) * mat_size].copy_from_slice(&l_buf);
+            }
+            Err(_) => {
+                info[i] = first_failing_leading_principal_minor(
+                    a_slice,
+                    n,
+                    &mut minor_a_buf,
+                    &mut minor_l_buf,
+                )?;
+            }
+        }
+    }
+
+    let mut out_shape = vec![n, n];
+    out_shape.extend_from_slice(batch_dims);
+    Ok(CholeskyTensorExResult {
+        l: tensor_from_data(l_data, &out_shape)?,
+        info,
+    })
 }
 
 /// Hermitian eigendecomposition via the selected CPU slice backend.

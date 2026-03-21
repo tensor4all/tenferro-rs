@@ -41,26 +41,12 @@ pub fn svd<T: KernelLinalgScalar, C>(
     options: Option<&SvdOptions>,
 ) -> Result<SvdResult<T, T::Real>>
 where
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
+    T::Real: tenferro_tensor::KeepCountScalar,
 {
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::thin_svd(ctx, tensor)?;
-
-    let u_input = ensure_col_major(&result.u);
-    let s_input = ensure_col_major(&result.s);
-    let vt_input = ensure_col_major(&result.vt);
-    let u_data_in = extract_slice(&u_input)?;
-    let s_data_in = extract_slice(&s_input)?;
-    let vt_data_in = extract_slice(&vt_input)?;
-    let u_offset = u_input.offset() as usize;
-    let s_offset = s_input.offset() as usize;
-    let vt_offset = vt_input.offset() as usize;
-
-    let m = result.u.dims()[0];
-    let k = result.s.dims()[0];
-    let n = result.vt.dims()[1];
-    let batch_dims = &result.s.dims()[1..];
-    let bc = batch_count(batch_dims);
 
     let Some(opts) = options else {
         return Ok(SvdResult {
@@ -69,52 +55,67 @@ where
             vt: result.vt,
         });
     };
+
+    let k = result.s.dims()[0];
     let max_k = opts.max_rank.map_or(k, |r| r.min(k));
+    let u = result.u.narrow(1, 0, max_k)?;
+    let s = result.s.narrow(0, 0, max_k)?;
+    let vt = result.vt.narrow(0, 0, max_k)?;
 
-    let mut u_data = vec![T::zero(); m * max_k * bc];
-    let mut s_data = vec![<T::Real>::zero(); max_k * bc];
-    let mut vt_data = vec![T::zero(); max_k * n * bc];
-
-    for b in 0..bc {
-        let u_full = &u_data_in[u_offset + b * m * k..u_offset + (b + 1) * m * k];
-        let s_full = &s_data_in[s_offset + b * k..s_offset + (b + 1) * k];
-        let vt_full = &vt_data_in[vt_offset + b * k * n..vt_offset + (b + 1) * k * n];
-
-        let actual_k = if let Some(cutoff) = opts.cutoff {
-            let cutoff_r: T::Real = scalar_from(cutoff)?;
-            let mut ak = max_k;
-            while ak > 0 && s_full[ak - 1] < cutoff_r {
-                ak -= 1;
-            }
-            ak
-        } else {
-            max_k
-        };
-
-        for j in 0..actual_k {
-            for i in 0..m {
-                u_data[b * m * max_k + i + j * m] = u_full[i + j * m];
-            }
-        }
-        for i in 0..actual_k {
-            s_data[b * max_k + i] = s_full[i];
-        }
-        for j in 0..n {
-            for i in 0..actual_k {
-                vt_data[b * max_k * n + i + j * max_k] = vt_full[i + j * k];
-            }
-        }
+    if max_k == 0 {
+        return Ok(SvdResult { u, s, vt });
     }
 
-    let u_dims = output_dims(&[m, max_k], batch_dims);
-    let s_dims = output_dims(&[max_k], batch_dims);
-    let vt_dims = output_dims(&[max_k, n], batch_dims);
+    if opts.cutoff.is_none() {
+        return Ok(SvdResult { u, s, vt });
+    }
+
+    let cutoff_r: T::Real = scalar_from(opts.cutoff.unwrap())?;
+    let cutoff_tensor =
+        crate::prims_bridge::full_like_constant(cutoff_r, s.dims(), s.logical_memory_space())?;
+    let mask = crate::prims_bridge::scalar_binary_same_shape::<T::Real, C>(
+        ctx,
+        &s,
+        &cutoff_tensor,
+        tenferro_prims::ScalarBinaryOp::GreaterEqual,
+    )?;
+    let kept_axes: Vec<usize> = (1..s.ndim()).collect();
+    let keep_counts =
+        crate::prims_bridge::scalar_sum_keep_axes::<T::Real, C>(ctx, &mask, &kept_axes)?;
 
     Ok(SvdResult {
-        u: tensor_from_data(u_data, &u_dims)?,
-        s: tensor_from_data(s_data, &s_dims)?,
-        vt: tensor_from_data(vt_data, &vt_dims)?,
+        u: backend::tensor_helpers::zero_trailing_by_counts(&u, &keep_counts, 1, 2)?,
+        s: backend::tensor_helpers::zero_trailing_by_counts(&s, &keep_counts, 0, 1)?,
+        vt: backend::tensor_helpers::zero_trailing_by_counts(&vt, &keep_counts, 0, 2)?,
     })
+}
+
+/// Compute singular values only for a batched matrix.
+///
+/// Input shape: `(m, n, *)`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_linalg::svdvals;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::<f64>::zeros(
+///     &[3, 4],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// );
+/// let _values = svdvals(&mut ctx, &a).unwrap();
+/// ```
+pub fn svdvals<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T::Real>>
+where
+    C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
+{
+    <C::Backend as backend::TensorLinalgBackend<T>>::svdvals(ctx, tensor)
 }
 
 /// Compute the QR decomposition of a batched matrix.
@@ -295,7 +296,21 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    lu_factor_impl(ctx, tensor)
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuFactorEx, "lu_factor_ex")?;
+
+    let (m, n, batch_dims) = validate_2d(tensor)?;
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_ex(ctx, tensor)?;
+    let factors = pack_lu_factors(&result.l, &result.u, m, n, batch_dims)?;
+
+    Ok(LuFactorExResult {
+        factors,
+        pivots: result
+            .pivots
+            .into_iter()
+            .map(|pivot| pivot as usize)
+            .collect(),
+        info: result.info,
+    })
 }
 
 /// Solve `A x = b` from a packed LU factorization.

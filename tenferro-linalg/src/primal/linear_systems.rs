@@ -1,5 +1,37 @@
 use super::*;
 
+fn permutation_sign_from_forward_pivots(pivots: &[usize], n: usize) -> Result<i32> {
+    if pivots.len() != n {
+        return Err(Error::InvalidArgument(format!(
+            "det expects {n} pivots per batch, got {}",
+            pivots.len()
+        )));
+    }
+
+    let mut visited = vec![false; n];
+    let mut sign = 1i32;
+    for i in 0..n {
+        if visited[i] {
+            continue;
+        }
+        let mut j = i;
+        while !visited[j] {
+            visited[j] = true;
+            let next = pivots[j];
+            if next >= n {
+                return Err(Error::InvalidArgument(format!(
+                    "det pivot index {next} is out of range for n={n}"
+                )));
+            }
+            if next != i {
+                sign = -sign;
+            }
+            j = next;
+        }
+    }
+    Ok(sign)
+}
+
 /// Solve a square linear system `A x = b`.
 pub fn solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
@@ -25,41 +57,10 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::SolveEx, "solve_ex")?;
-
-    let (n, batch_dims) = validate_square(a)?;
-    let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
-    let bc = batch_count(batch_dims);
-
-    let a_input = ensure_col_major(a);
-    let b_input = ensure_col_major(b);
-    let a_data = extract_slice(&a_input)?;
-    let b_data = extract_slice(&b_input)?;
-    let a_offset = a_input.offset() as usize;
-    let b_offset = b_input.offset() as usize;
-
-    let mat_size = n * n;
-    let rhs_size = n * rhs.nrhs;
-    let mut solution = vec![T::zero(); rhs_size * bc];
-    let mut info = vec![0_i32; bc];
-
-    for batch in 0..bc {
-        let a_start = a_offset + batch * mat_size;
-        let b_start = b_offset + batch * rhs_size;
-        let a_slice = &a_data[a_start..a_start + mat_size];
-        let b_slice = &b_data[b_start..b_start + rhs_size];
-        let x_out = &mut solution[batch * rhs_size..(batch + 1) * rhs_size];
-        match backend::slice_bridge::solve_vec(ctx, a_slice, b_slice, n, rhs.nrhs) {
-            Ok(solution_b) => x_out.copy_from_slice(&solution_b),
-            Err(_) => {
-                x_out.fill(T::zero());
-                info[batch] = 1;
-            }
-        }
-    }
-
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::solve_ex(ctx, a, b)?;
     Ok(SolveExResult {
-        solution: tensor_from_data(solution, &rhs.output_dims)?,
-        info,
+        solution: result.solution,
+        info: result.info,
     })
 }
 
@@ -73,29 +74,12 @@ where
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
-    let mut eye_mat = vec![T::zero(); n * n];
-    for i in 0..n {
-        eye_mat[i + i * n] = T::one();
+    let mut rhs = Tensor::eye(n, tensor.logical_memory_space(), MemoryOrder::ColumnMajor);
+    for _ in batch_dims {
+        rhs = rhs.unsqueeze(-1)?;
     }
-
-    let mut inv_data = vec![T::zero(); n * n * bc];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let a_b = &data[start..start + mat_size];
-        let x_out = &mut inv_data[b * mat_size..(b + 1) * mat_size];
-        let inverse_b = backend::slice_bridge::solve_vec(ctx, a_b, &eye_mat, n, n)?;
-        x_out.copy_from_slice(&inverse_b);
-    }
-
-    let dims = output_dims(&[n, n], batch_dims);
-    tensor_from_data(inv_data, &dims)
+    let rhs = rhs.broadcast(&output_dims(&[n, n], batch_dims))?;
+    solve(ctx, tensor, &rhs)
 }
 
 /// Compute the inverse with numerical status information.
@@ -105,14 +89,13 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv_ex")?;
     let (n, batch_dims) = validate_square(tensor)?;
-    let bc = batch_count(batch_dims);
-    let mut eye_data = vec![T::zero(); n * n * bc];
-    let eye = identity_matrix::<T>(n);
-    for batch in 0..bc {
-        eye_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&eye);
+    let mut rhs = Tensor::eye(n, tensor.logical_memory_space(), MemoryOrder::ColumnMajor);
+    for _ in batch_dims {
+        rhs = rhs.unsqueeze(-1)?;
     }
-    let rhs = tensor_from_data(eye_data, &output_dims(&[n, n], batch_dims))?;
+    let rhs = rhs.broadcast(&output_dims(&[n, n], batch_dims))?;
     let result = solve_ex(ctx, tensor, &rhs)?;
     Ok(InvExResult {
         inverse: result.solution,
@@ -127,72 +110,52 @@ pub fn det<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> Result<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
     let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
-    let mut det_data = vec![T::zero(); bc];
-    let mut perm = vec![0usize; n];
-    let mut l_buf = vec![T::zero(); n * n];
-    let mut u_buf = vec![T::zero(); n * n];
-    let mut visited = vec![false; n];
-
-    for (b, det_slot) in det_data.iter_mut().enumerate().take(bc) {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        let (pivot_vec, l_result, u_result) =
-            backend::slice_bridge::lu_factor_vec(ctx, batch_data, n, n)?;
-        perm.iter_mut()
-            .zip(pivot_vec.iter())
-            .for_each(|(dst, &pivot)| *dst = pivot as usize);
-        l_buf.copy_from_slice(&l_result);
-        u_buf.copy_from_slice(&u_result);
-
-        let mut d = T::one();
-        for i in 0..n {
-            d = d * u_buf[i + i * n];
-        }
-
-        let mut sign = 1i32;
-        visited.fill(false);
-        for i in 0..n {
-            if !visited[i] {
-                visited[i] = true;
-                let mut j = perm[i];
-                while j != i {
-                    sign = -sign;
-                    visited[j] = true;
-                    j = perm[j];
-                }
-            }
-        }
-
-        if sign < 0 {
-            d = T::zero() - d;
-        }
-        *det_slot = d;
-    }
-
     let dims = if batch_dims.is_empty() {
         vec![]
     } else {
         batch_dims.to_vec()
     };
+    let lu = lu_factor(ctx, tensor)?;
+    let diagonal = lu.factors.diagonal(&[(0, 1)])?;
+    let kept_axes: Vec<usize> = (0..batch_dims.len()).collect();
+    let diagonal_prod = crate::prims_bridge::scalar_reduce_keep_axes(
+        ctx,
+        &diagonal,
+        &kept_axes,
+        tenferro_prims::ScalarReductionOp::Prod,
+    )?;
 
-    if dims.is_empty() {
-        Tensor::from_vec(det_data, &dims, &[], 0)
-    } else {
-        tensor_from_data(det_data, &dims)
+    let sign_len = if dims.is_empty() { 1 } else { bc };
+    let mut sign_data = vec![T::one(); sign_len];
+    for batch in 0..bc {
+        let sign = permutation_sign_from_forward_pivots(&lu.pivots[batch * n..(batch + 1) * n], n)?;
+        if sign < 0 {
+            sign_data[batch] = T::zero() - T::one();
+        }
     }
+
+    let sign_host = tensor_from_data(sign_data, &dims)?;
+    let sign_tensor =
+        if tensor.logical_memory_space() == tenferro_device::LogicalMemorySpace::MainMemory {
+            sign_host
+        } else {
+            sign_host.to_memory_space_async(tensor.logical_memory_space())?
+        };
+
+    crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &diagonal_prod,
+        &sign_tensor,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )
 }
 
 /// Compute sign and log-absolute-determinant of a square matrix.
@@ -202,83 +165,101 @@ pub fn slogdet<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> Result<SlogdetResult<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
+    let lu = lu_factor(ctx, tensor)?;
+    let diagonal = lu.factors.diagonal(&[(0, 1)])?;
+    let abs_diagonal = crate::prims_bridge::scalar_unary_same_shape(
+        ctx,
+        &diagonal,
+        tenferro_prims::ScalarUnaryOp::Abs,
+    )?;
+    let logabsdet_factor = crate::prims_bridge::analytic_unary_same_shape(
+        ctx,
+        &abs_diagonal,
+        tenferro_prims::AnalyticUnaryOp::Log,
+    )?;
+    let kept_axes: Vec<usize> = (0..batch_dims.len()).collect();
+    let logabsdet = crate::prims_bridge::scalar_reduce_keep_axes(
+        ctx,
+        &logabsdet_factor,
+        &kept_axes,
+        tenferro_prims::ScalarReductionOp::Sum,
+    )?;
+
+    let zero_diagonal = crate::prims_bridge::full_like_constant(
+        T::zero(),
+        diagonal.dims(),
+        tensor.logical_memory_space(),
+    )?;
+    let negative_mask = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &zero_diagonal,
+        &diagonal,
+        tenferro_prims::ScalarBinaryOp::Greater,
+    )?;
+    let double_negative = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &negative_mask,
+        &negative_mask,
+        tenferro_prims::ScalarBinaryOp::Add,
+    )?;
+    let one = crate::prims_bridge::full_like_constant(
+        T::one(),
+        diagonal.dims(),
+        tensor.logical_memory_space(),
+    )?;
+    let sign_factors = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &one,
+        &double_negative,
+        tenferro_prims::ScalarBinaryOp::Sub,
+    )?;
+    let sign_from_diag = crate::prims_bridge::scalar_reduce_keep_axes(
+        ctx,
+        &sign_factors,
+        &kept_axes,
+        tenferro_prims::ScalarReductionOp::Prod,
+    )?;
+
     let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
-    let mut sign_data = vec![T::zero(); bc];
-    let mut logabsdet_data = vec![T::zero(); bc];
-    let mut perm = vec![0usize; n];
-    let mut l_buf = vec![T::zero(); n * n];
-    let mut u_buf = vec![T::zero(); n * n];
-    let mut visited = vec![false; n];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let batch_data = &data[start..start + mat_size];
-
-        let (pivot_vec, l_result, u_result) =
-            backend::slice_bridge::lu_factor_vec(ctx, batch_data, n, n)?;
-        perm.iter_mut()
-            .zip(pivot_vec.iter())
-            .for_each(|(dst, &pivot)| *dst = pivot as usize);
-        l_buf.copy_from_slice(&l_result);
-        u_buf.copy_from_slice(&u_result);
-
-        let mut log_abs = T::zero();
-        let mut sign = T::one();
-        for i in 0..n {
-            let diag = u_buf[i + i * n];
-            log_abs = log_abs + diag.abs().ln();
-            if diag < T::zero() {
-                sign = T::zero() - sign;
-            }
+    let sign_len = if batch_dims.is_empty() { 1 } else { bc };
+    let mut sign_data = vec![T::one(); sign_len];
+    for batch in 0..bc {
+        let sign = permutation_sign_from_forward_pivots(&lu.pivots[batch * n..(batch + 1) * n], n)?;
+        if sign < 0 {
+            sign_data[batch] = T::zero() - T::one();
         }
-
-        let mut perm_sign = 1i32;
-        visited.fill(false);
-        for i in 0..n {
-            if !visited[i] {
-                visited[i] = true;
-                let mut j = perm[i];
-                while j != i {
-                    perm_sign = -perm_sign;
-                    visited[j] = true;
-                    j = perm[j];
-                }
-            }
-        }
-        if perm_sign < 0 {
-            sign = T::zero() - sign;
-        }
-
-        sign_data[b] = sign;
-        logabsdet_data[b] = log_abs;
     }
-
     let dims = if batch_dims.is_empty() {
         vec![]
     } else {
         batch_dims.to_vec()
     };
-
-    if dims.is_empty() {
-        Ok(SlogdetResult {
-            sign: Tensor::from_vec(sign_data, &dims, &[], 0)?,
-            logabsdet: Tensor::from_vec(logabsdet_data, &dims, &[], 0)?,
-        })
+    let sign_perm_host = if dims.is_empty() {
+        Tensor::from_vec(sign_data, &dims, &[], 0)?
     } else {
-        Ok(SlogdetResult {
-            sign: tensor_from_data(sign_data, &dims)?,
-            logabsdet: tensor_from_data(logabsdet_data, &dims)?,
-        })
-    }
+        tensor_from_data(sign_data, &dims)?
+    };
+    let sign_perm =
+        if tensor.logical_memory_space() == tenferro_device::LogicalMemorySpace::MainMemory {
+            sign_perm_host
+        } else {
+            sign_perm_host.to_memory_space_async(tensor.logical_memory_space())?
+        };
+    let sign = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &sign_perm,
+        &sign_from_diag,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+
+    Ok(SlogdetResult { sign, logabsdet })
 }

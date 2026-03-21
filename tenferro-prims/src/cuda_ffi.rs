@@ -312,6 +312,7 @@ pub type FnElementwiseTrinaryExecute = unsafe extern "C" fn(
 /// let lib = unsafe { libloading::Library::new("/usr/lib/libcutensor.so") }.unwrap();
 /// let vtable = unsafe { CutensorVtable::load(&lib) }.unwrap();
 /// ```
+#[derive(Debug)]
 pub struct CutensorVtable {
     // Handle lifecycle (2)
     pub create: FnCreate,

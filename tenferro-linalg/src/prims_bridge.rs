@@ -1,6 +1,10 @@
 use tenferro_algebra::Standard;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
-use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringContextFor, TensorSemiringCore};
+use tenferro_prims::{
+    AnalyticPrimsDescriptor, AnalyticUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor,
+    ScalarReductionOp, ScalarUnaryOp, SemiringCoreDescriptor, TensorAnalyticPrims,
+    TensorScalarContextFor, TensorScalarPrims, TensorSemiringContextFor, TensorSemiringCore,
+};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::LinalgScalar;
@@ -72,6 +76,175 @@ where
         T,
         <C as TensorSemiringContextFor<Standard<T>>>::SemiringBackend,
     >(ctx, a, m, k, b, n)
+}
+
+pub(crate) fn full_like_constant<T: LinalgScalar>(
+    value: T,
+    dims: &[usize],
+    memory_space: LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    let host = Tensor::from_slice(
+        &vec![value; dims.iter().product()],
+        dims,
+        MemoryOrder::ColumnMajor,
+    )?;
+    if memory_space == LogicalMemorySpace::MainMemory {
+        Ok(host)
+    } else {
+        host.to_memory_space_async(memory_space)
+    }
+}
+
+pub(crate) fn scalar_binary_same_shape<T, C>(
+    ctx: &mut C,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T>,
+    op: ScalarBinaryOp,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    C: TensorScalarContextFor<Standard<T>>,
+{
+    let desc = ScalarPrimsDescriptor::PointwiseBinary { op };
+    let mut output = Tensor::zeros(
+        lhs.dims(),
+        lhs.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
+        ctx,
+        &desc,
+        &[lhs.dims(), rhs.dims(), output.dims()],
+    )?;
+    <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::execute(
+        ctx,
+        &plan,
+        T::one(),
+        &[lhs, rhs],
+        T::zero(),
+        &mut output,
+    )?;
+    Ok(output)
+}
+
+pub(crate) fn scalar_unary_same_shape<T, C>(
+    ctx: &mut C,
+    input: &Tensor<T>,
+    op: ScalarUnaryOp,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    C: TensorScalarContextFor<Standard<T>>,
+{
+    let desc = ScalarPrimsDescriptor::PointwiseUnary { op };
+    let mut output = Tensor::zeros(
+        input.dims(),
+        input.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
+        ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )?;
+    <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::execute(
+        ctx,
+        &plan,
+        T::one(),
+        &[input],
+        T::zero(),
+        &mut output,
+    )?;
+    Ok(output)
+}
+
+pub(crate) fn analytic_unary_same_shape<T, C>(
+    ctx: &mut C,
+    input: &Tensor<T>,
+    op: AnalyticUnaryOp,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar + crate::KernelLinalgScalar,
+    C: TensorScalarContextFor<Standard<T>>,
+    <C as TensorScalarContextFor<Standard<T>>>::ScalarBackend:
+        TensorAnalyticPrims<Standard<T>, Context = C>,
+{
+    let desc = AnalyticPrimsDescriptor::PointwiseUnary { op };
+    let mut output = Tensor::zeros(
+        input.dims(),
+        input.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan =
+        <<C as TensorScalarContextFor<Standard<T>>>::ScalarBackend as TensorAnalyticPrims<
+            Standard<T>,
+        >>::plan(ctx, &desc, &[input.dims(), output.dims()])?;
+    <<C as TensorScalarContextFor<Standard<T>>>::ScalarBackend as TensorAnalyticPrims<
+        Standard<T>,
+    >>::execute(ctx, &plan, T::one(), &[input], T::zero(), &mut output)?;
+    Ok(output)
+}
+
+pub(crate) fn scalar_reduce_keep_axes<T, C>(
+    ctx: &mut C,
+    input: &Tensor<T>,
+    kept_axes: &[usize],
+    op: ScalarReductionOp,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    C: TensorScalarContextFor<Standard<T>>,
+{
+    let modes_a: Vec<u32> = (0..input.ndim())
+        .map(|axis| {
+            u32::try_from(axis)
+                .map_err(|_| Error::InvalidArgument(format!("axis {axis} exceeds u32 range")))
+        })
+        .collect::<Result<_>>()?;
+    let modes_c: Vec<u32> = kept_axes
+        .iter()
+        .map(|&axis| {
+            u32::try_from(axis)
+                .map_err(|_| Error::InvalidArgument(format!("axis {axis} exceeds u32 range")))
+        })
+        .collect::<Result<_>>()?;
+    let output_dims: Vec<usize> = kept_axes.iter().map(|&axis| input.dims()[axis]).collect();
+    let desc = ScalarPrimsDescriptor::Reduction {
+        modes_a,
+        modes_c,
+        op,
+    };
+    let mut output = Tensor::zeros(
+        &output_dims,
+        input.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
+        ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )?;
+    <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::execute(
+        ctx,
+        &plan,
+        T::one(),
+        &[input],
+        T::zero(),
+        &mut output,
+    )?;
+    Ok(output)
+}
+
+pub(crate) fn scalar_sum_keep_axes<T, C>(
+    ctx: &mut C,
+    input: &Tensor<T>,
+    kept_axes: &[usize],
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    C: TensorScalarContextFor<Standard<T>>,
+{
+    scalar_reduce_keep_axes(ctx, input, kept_axes, ScalarReductionOp::Sum)
 }
 
 #[cfg(test)]

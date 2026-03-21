@@ -1,6 +1,25 @@
 use super::*;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
+#[cfg(feature = "cuda")]
+fn with_cuda_ctx<T>(f: impl FnOnce(&mut tenferro_prims::CudaContext) -> T) -> Option<T> {
+    let path = [
+        "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so",
+        "/usr/lib/x86_64-linux-gnu/libcutensor.so",
+        "/usr/lib/libcutensor.so",
+    ]
+    .into_iter()
+    .find(|path| std::path::Path::new(path).exists())?;
+    let (_backend, mut ctx) = tenferro_prims::CudaBackend::load(path).ok()?;
+    Some(f(&mut ctx))
+}
+
+#[cfg(not(feature = "cuda"))]
+fn with_cuda_ctx<T>(f: impl FnOnce(&mut tenferro_prims::CudaContext) -> T) -> Option<T> {
+    let mut ctx = tenferro_prims::CudaContext::new();
+    Some(f(&mut ctx))
+}
+
 #[test]
 fn cross_matches_right_hand_rule_with_trailing_batches() {
     let mut ctx = CpuContext::new(1);
@@ -363,39 +382,42 @@ fn tensorsolve_rejects_rank_and_shape_contract_violations() {
 
 #[test]
 fn batch_b_ops_reject_cuda_context() {
-    let mut ctx = tenferro_prims::CudaContext::new();
+    with_cuda_ctx(|ctx| {
+        let a_vec =
+            Tensor::from_slice(&[1.0_f64, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+        let b_vec =
+            Tensor::from_slice(&[0.0_f64, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+        assert!(matches!(
+            cross(ctx, &a_vec, &b_vec),
+            Err(tenferro_device::Error::DeviceError(_))
+        ));
 
-    let a_vec = Tensor::from_slice(&[1.0_f64, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-    let b_vec = Tensor::from_slice(&[0.0_f64, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-    assert!(matches!(
-        cross(&mut ctx, &a_vec, &b_vec),
-        Err(tenferro_device::Error::DeviceError(_))
-    ));
+        let reflectors =
+            Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let tau = Tensor::from_slice(&[0.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        assert!(matches!(
+            householder_product(ctx, &reflectors, &tau),
+            Err(tenferro_device::Error::DeviceError(_))
+        ));
 
-    let reflectors =
-        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-    let tau = Tensor::from_slice(&[0.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    assert!(matches!(
-        householder_product(&mut ctx, &reflectors, &tau),
-        Err(tenferro_device::Error::DeviceError(_))
-    ));
+        let x = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        assert!(matches!(
+            vander(ctx, &x, Some(3), true),
+            Err(tenferro_device::Error::DeviceError(_))
+        ));
 
-    let x = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    assert!(matches!(
-        vander(&mut ctx, &x, Some(3), true),
-        Err(tenferro_device::Error::DeviceError(_))
-    ));
+        let eye = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+        assert!(matches!(
+            tensorinv(ctx, &eye, 1),
+            Err(tenferro_device::Error::DeviceError(_))
+        ));
 
-    let eye =
-        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-    assert!(matches!(
-        tensorinv(&mut ctx, &eye, 1),
-        Err(tenferro_device::Error::DeviceError(_))
-    ));
-
-    let rhs = Tensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-    assert!(matches!(
-        tensorsolve(&mut ctx, &eye, &rhs, None),
-        Err(tenferro_device::Error::DeviceError(_))
-    ));
+        let rhs = Tensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        assert!(matches!(
+            tensorsolve(ctx, &eye, &rhs, None),
+            Err(tenferro_device::Error::DeviceError(_))
+        ));
+    });
 }

@@ -62,6 +62,137 @@ fn lu_solve_uses_lu_factor_output() {
 }
 
 #[test]
+fn solve_ex_mixed_batches_preserve_successful_solution_and_report_zero_pivot() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 1.0, //
+            1.0, 2.0, 2.0, 4.0,
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = Tensor::from_slice(
+        &[3.0_f64, -1.0, 1.0, 1.0],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result = solve_ex(&mut ctx, &a, &b).unwrap();
+    assert_eq!(result.info, vec![0, 2]);
+
+    let payload = tensor_data(&result.solution);
+    assert_eq!(&payload[..2], &[3.0, -1.0]);
+}
+
+#[test]
+fn inv_ex_mixed_batches_preserve_successful_inverse_and_report_zero_pivot() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 1.0, //
+            1.0, 2.0, 2.0, 4.0,
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result = inv_ex(&mut ctx, &a).unwrap();
+    assert_eq!(result.info, vec![0, 2]);
+
+    let payload = tensor_data(&result.inverse);
+    assert_eq!(&payload[..4], &[1.0, 0.0, 0.0, 1.0]);
+}
+
+#[test]
+fn cholesky_ex_mixed_batches_preserve_successful_factor_and_report_failing_minor() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            4.0_f64, 2.0, 2.0, 3.0, //
+            1.0, 2.0, 2.0, 1.0,
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result = cholesky_ex(&mut ctx, &a).unwrap();
+    assert_eq!(result.info, vec![0, 2]);
+
+    let payload = tensor_data(&result.l);
+    assert_eq!(&payload[..3], &[2.0, 1.0, 0.0]);
+    assert!((payload[3] - (2.0_f64).sqrt()).abs() < 1e-12);
+}
+
+#[test]
+fn cholesky_ex_multi_axis_batches_follow_column_major_batch_order() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            4.0_f64, 2.0, 2.0, 3.0, //
+            1.0, 2.0, 2.0, 1.0, //
+            -1.0, 0.0, 0.0, 1.0, //
+            9.0, 0.0, 0.0, 4.0,
+        ],
+        &[2, 2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result = cholesky_ex(&mut ctx, &a).unwrap();
+    assert_eq!(result.info, vec![0, 2, 1, 0]);
+
+    let payload = tensor_data(&result.l);
+    assert_eq!(&payload[..3], &[2.0, 1.0, 0.0]);
+    assert!((payload[3] - (2.0_f64).sqrt()).abs() < 1e-12);
+    assert_eq!(&payload[12..16], &[3.0, 0.0, 0.0, 2.0]);
+}
+
+#[test]
+fn lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[1.0e-20_f64, 0.0, 0.0, 1.0],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result = lu_factor_ex(&mut ctx, &a).unwrap();
+    assert_eq!(result.info, vec![0]);
+}
+
+#[test]
+fn lu_factor_ex_mixed_batches_preserve_successful_packed_factors_and_info() {
+    let mut ctx = CpuContext::new(1);
+    let good =
+        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let batched = Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 1.0, //
+            1.0, 2.0, 2.0, 4.0,
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected = lu_factor(&mut ctx, &good).unwrap();
+    let result = lu_factor_ex(&mut ctx, &batched).unwrap();
+
+    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(&result.pivots[..2], expected.pivots.as_slice());
+    assert_eq!(
+        &tensor_data(&result.factors)[..4],
+        tensor_data(&expected.factors).as_slice()
+    );
+}
+
+#[test]
 fn structured_ex_and_lu_solve_reject_invalid_contracts() {
     let mut ctx = CpuContext::new(1);
     let a =

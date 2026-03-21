@@ -38,8 +38,10 @@ pub fn eig_rrule<
 ) -> AdResult<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
+    T::Real: tenferro_tensor::KeepCountScalar,
 {
     let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
     let bc = batch_count(batch_dims);
@@ -130,8 +132,10 @@ pub fn pinv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
+    T::Real: tenferro_tensor::KeepCountScalar,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Pinv, "pinv_rrule")
         .map_err(to_ad_err)?;

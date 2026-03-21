@@ -107,32 +107,9 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::CholeskyEx, "cholesky_ex")?;
-
-    let (n, batch_dims) = validate_square(tensor)?;
-    let bc = batch_count(batch_dims);
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let mat_size = n * n;
-
-    let mut factors = vec![T::zero(); mat_size * bc];
-    let mut info = vec![0_i32; bc];
-
-    for batch in 0..bc {
-        let start = offset + batch * mat_size;
-        let a_slice = &data[start..start + mat_size];
-        let l_out = &mut factors[batch * mat_size..(batch + 1) * mat_size];
-        match backend::slice_bridge::cholesky_vec(ctx, a_slice, n) {
-            Ok(factor_b) => l_out.copy_from_slice(&factor_b),
-            Err(_) => {
-                l_out.fill(T::zero());
-                info[batch] = 1;
-            }
-        }
-    }
-
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::cholesky_ex(ctx, tensor)?;
     Ok(CholeskyExResult {
-        l: tensor_from_data(factors, &output_dims(&[n, n], batch_dims))?,
-        info,
+        l: result.l,
+        info: result.info,
     })
 }

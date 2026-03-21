@@ -44,8 +44,10 @@ pub fn pinv<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> Result<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
+    T::Real: tenferro_tensor::KeepCountScalar,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Pinv, "pinv")?;
 
