@@ -472,6 +472,29 @@ fn cuda_public_lp_norm_matches_cpu_vector() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_lu_no_pivot_rejects_gpu_tensor_before_host_slice_fallback() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let a_gpu =
+            Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap()
+                .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory {
+                    device_id: 0,
+                })
+                .unwrap();
+
+        let err = lu(ctx, &a_gpu, LuPivot::NoPivot).unwrap_err();
+        assert!(matches!(err, tenferro_device::Error::DeviceError(_)));
+        assert!(
+            err.to_string()
+                .contains("NoPivot LU is only implemented for main-memory tensors"),
+            "lu(NoPivot) should fail before host-slice extraction, got: {err}"
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_det_matches_cpu_f32_impl() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -1707,6 +1730,12 @@ fn public_cuda_fro_norm_matches_cpu_for_small_real_matrix() {
 #[cfg(feature = "cuda")]
 fn public_cuda_lp_norm_matches_cpu_for_small_real_vector() {
     cuda_public_lp_norm_matches_cpu_vector();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_lu_no_pivot_rejects_gpu_tensor_before_host_slice_fallback() {
+    cuda_public_lu_no_pivot_rejects_gpu_tensor_before_host_slice_fallback();
 }
 
 #[test]

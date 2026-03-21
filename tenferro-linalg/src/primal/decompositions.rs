@@ -193,6 +193,11 @@ where
     C::Backend: 'static,
 {
     if pivot == LuPivot::NoPivot {
+        if tensor.logical_memory_space() != tenferro_device::LogicalMemorySpace::MainMemory {
+            return Err(Error::DeviceError(
+                "NoPivot LU is only implemented for main-memory tensors".into(),
+            ));
+        }
         let (m, n, batch_dims) = validate_2d(tensor)?;
         let bc = batch_count(batch_dims);
         let k = m.min(n);
