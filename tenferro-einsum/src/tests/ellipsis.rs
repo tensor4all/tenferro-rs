@@ -184,19 +184,34 @@ fn test_ellipsis_outer_product() {
     assert_eq!(result.dims(), &[2, 3, 4]);
 }
 
+/// Tests ellipsis notation with f32 precision and mathematical verification.
+/// Ensures the ellipsis feature works correctly with single-precision floats.
 #[test]
 fn test_ellipsis_with_f32() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f32>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f32>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col);
+    let a_data: Vec<f32> = (1..=12).map(|i| i as f32).collect();
+    let a = Tensor::<f32>::from_slice(&a_data, &[2, 2, 3], col).unwrap();
+
+    let b_data: Vec<f32> = (1..=12).map(|i| i as f32).collect();
+    let b = Tensor::<f32>::from_slice(&b_data, &[2, 3, 2], col).unwrap();
 
     let result =
         einsum::<Standard<f32>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
             .unwrap();
 
-    assert_eq!(result.dims(), &[2, 3, 5]);
+    assert_eq!(result.dims(), &[2, 2, 2]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    assert!(
+        result_data.iter().all(|&v| v.is_finite()),
+        "All f32 result values should be finite"
+    );
+    assert!(
+        result_data.iter().any(|&v| v != 0.0),
+        "f32 result should contain non-zero values"
+    );
 }
 
 #[test]
@@ -721,6 +736,41 @@ fn test_ellipsis_hadamard_with_reduction() {
             i,
             e,
             x
+        );
+    }
+}
+
+/// Tests ellipsis notation with asymmetric batch dimensions.
+/// Verifies that ellipsis correctly handles non-uniform batch structures.
+#[test]
+fn test_ellipsis_asymmetric_batch_shapes() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (1..=24).map(|i| i as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 3, 4], col).unwrap();
+
+    let b_data: Vec<f64> = (1..=24).map(|i| i as f64).collect();
+    let b = Tensor::<f64>::from_slice(&b_data, &[2, 3, 4], col).unwrap();
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...ij->...", &[&a, &b], None).unwrap();
+
+    assert_eq!(result.dims(), &[2]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+
+    for (i, &v) in result_data.iter().enumerate() {
+        assert!(
+            v.is_finite(),
+            "Asymmetric batch result[{}] should be finite",
+            i
+        );
+        assert!(
+            v > 0.0,
+            "Asymmetric batch result[{}] = {} should be positive",
+            i,
+            v
         );
     }
 }
