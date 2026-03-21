@@ -15,11 +15,11 @@ type CublasHandle = *mut c_void;
 type CusolverDnHandle = *mut c_void;
 type CudaStream = *mut c_void;
 
-const CUBLAS_OP_N: CublasOperation = 0;
-const CUBLAS_SIDE_LEFT: i32 = 0;
-const CUBLAS_FILL_MODE_LOWER: i32 = 0;
-const CUBLAS_FILL_MODE_UPPER: i32 = 1;
-const CUBLAS_DIAG_NON_UNIT: i32 = 0;
+pub(super) const CUBLAS_OP_N: CublasOperation = 0;
+pub(super) const CUBLAS_SIDE_LEFT: i32 = 0;
+pub(super) const CUBLAS_FILL_MODE_LOWER: i32 = 0;
+pub(super) const CUBLAS_FILL_MODE_UPPER: i32 = 1;
+pub(super) const CUBLAS_DIAG_NON_UNIT: i32 = 0;
 
 type FnCublasCreate = unsafe extern "C" fn(*mut CublasHandle) -> CublasStatus;
 type FnCublasDestroy = unsafe extern "C" fn(CublasHandle) -> CublasStatus;

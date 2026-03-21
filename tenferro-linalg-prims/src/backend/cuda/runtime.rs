@@ -121,6 +121,10 @@ pub(super) fn load_runtime(_ctx: &tenferro_prims::CudaContext) -> Result<CudaLin
 }
 
 impl CudaLinalgRuntime {
+    pub(super) fn cublas_api(&self) -> &CublasApi {
+        &self._cublas_api
+    }
+
     pub(super) fn cusolver_api(&self) -> &CusolverDnApi {
         &self._cusolver_api
     }

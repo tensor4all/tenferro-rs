@@ -16,6 +16,11 @@ use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime};
 use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
+use super::wrappers::{
+    CUBLAS_DIAG_NON_UNIT, CUBLAS_FILL_MODE_LOWER, CUBLAS_FILL_MODE_UPPER, CUBLAS_OP_N,
+    CUBLAS_SIDE_LEFT,
+};
+#[cfg(feature = "cuda")]
 use crate::backend::linalg_utils::clone_batched_column_major;
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{batch_count, validate_solve_rhs_shape, validate_square};
@@ -97,6 +102,7 @@ where
     let mask_dst =
         context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?.cast::<T>();
 
+    let kept_axes: [usize; 0] = [];
     let reduced_axes: Vec<usize> = (0..nonzero_mask.ndim()).collect();
 
     match dtype {
@@ -140,7 +146,7 @@ where
                 reduced.dims(),
                 reduced.strides(),
                 reduced.offset(),
-                &[],
+                &kept_axes,
                 &reduced_axes,
             )?;
         },
@@ -184,7 +190,7 @@ where
                 reduced.dims(),
                 reduced.strides(),
                 reduced.offset(),
-                &[],
+                &kept_axes,
                 &reduced_axes,
             )?;
         },
@@ -255,7 +261,11 @@ where
     let a_offset = a_work.offset() as usize;
     let x_offset = x_work.offset() as usize;
     let alpha = T::one();
-    let uplo = if upper { 1 } else { 0 };
+    let uplo = if upper {
+        CUBLAS_FILL_MODE_UPPER
+    } else {
+        CUBLAS_FILL_MODE_LOWER
+    };
 
     for batch in 0..bc {
         let a_ptr = unsafe { a_base.add(a_offset + batch * a_stride) }.cast::<c_void>();
@@ -263,10 +273,10 @@ where
         runtime.cublas_api().trsm(
             dtype,
             runtime.cublas_handle.raw,
-            0,
+            CUBLAS_SIDE_LEFT,
             uplo,
-            0,
-            0,
+            CUBLAS_OP_N,
+            CUBLAS_DIAG_NON_UNIT,
             n_i32,
             nrhs_i32,
             (&alpha as *const T).cast::<c_void>(),
