@@ -43,6 +43,29 @@ fn assert_close_slice(label: &str, got: &[f64], expected: &[f64], atol: f64) {
 }
 
 #[cfg(feature = "cuda")]
+fn assert_close_real_slice<T: Float + std::fmt::Debug>(
+    label: &str,
+    got: &[T],
+    expected: &[T],
+    atol: T,
+) {
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "{label}: length mismatch {} vs {}",
+        got.len(),
+        expected.len()
+    );
+    for (idx, (&got_v, &exp_v)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (got_v - exp_v).abs();
+        assert!(
+            diff <= atol,
+            "{label}[{idx}] diff {diff:?} exceeded tolerance {atol:?}; got {got_v:?}, expected {exp_v:?}"
+        );
+    }
+}
+
+#[cfg(feature = "cuda")]
 fn tensor_data_on_cpu<T: tenferro_algebra::Scalar + Copy>(tensor: &Tensor<T>) -> Vec<T> {
     let cpu = tensor
         .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
@@ -84,6 +107,24 @@ fn reconstruct_thin_svd_col_major(
         }
     }
     matmul_col_major(&scaled_u, m, k, vt, n)
+}
+
+#[cfg(feature = "cuda")]
+fn reconstruct_thin_svd_col_major_complex<T: Float>(
+    u: &[Complex<T>],
+    m: usize,
+    k: usize,
+    s: &[T],
+    vt: &[Complex<T>],
+    n: usize,
+) -> Vec<Complex<T>> {
+    let mut scaled_u = u.to_vec();
+    for col in 0..k {
+        for row in 0..m {
+            scaled_u[row + col * m] = scaled_u[row + col * m] * Complex::new(s[col], T::zero());
+        }
+    }
+    matmul_col_major_complex(&scaled_u, m, k, vt, n)
 }
 
 #[cfg(feature = "cuda")]
@@ -470,6 +511,300 @@ fn cuda_public_qr_reconstructs_complex64_impl() {
     };
 }
 
+#[cfg(feature = "cuda")]
+fn cuda_public_svdvals_matches_cpu_complex32_impl(wide: bool) {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = if wide {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f32, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[2, 3],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        } else {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f32, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[3, 2],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        };
+        let expected = svdvals(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = svdvals(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            if wide {
+                "cuda public complex32 svdvals wide"
+            } else {
+                "cuda public complex32 svdvals tall"
+            },
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_svdvals_matches_cpu_complex64_impl(wide: bool) {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = if wide {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f64, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[2, 3],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        } else {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f64, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[3, 2],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        };
+        let expected = svdvals(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = svdvals(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            if wide {
+                "cuda public complex64 svdvals wide"
+            } else {
+                "cuda public complex64 svdvals tall"
+            },
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_svd_reconstructs_complex32_impl(wide: bool) {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = if wide {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f32, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[2, 3],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        } else {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f32, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[3, 2],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        };
+        let expected = svd(&mut cpu_ctx, &a_cpu, None).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = svd(ctx, &a_gpu, None).unwrap();
+        assert_eq!(
+            got.u.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.s.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.vt.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.u.dims(), expected.u.dims());
+        assert_eq!(got.s.dims(), expected.s.dims());
+        assert_eq!(got.vt.dims(), expected.vt.dims());
+        assert_close_real_slice(
+            if wide {
+                "cuda public complex32 svd singular values wide"
+            } else {
+                "cuda public complex32 svd singular values tall"
+            },
+            &tensor_data_on_cpu(&got.s),
+            &tensor_data_on_cpu(&expected.s),
+            4096.0_f32 * f32::EPSILON,
+        );
+
+        let reconstructed = reconstruct_thin_svd_col_major_complex(
+            &tensor_data_on_cpu(&got.u),
+            a_cpu.dims()[0],
+            got.s.dims()[0],
+            &tensor_data_on_cpu(&got.s),
+            &tensor_data_on_cpu(&got.vt),
+            a_cpu.dims()[1],
+        );
+        assert_close_complex_slice(
+            if wide {
+                "cuda public complex32 svd reconstruction wide"
+            } else {
+                "cuda public complex32 svd reconstruction tall"
+            },
+            &reconstructed,
+            &tensor_data_on_cpu(&a_cpu),
+            8192.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_svd_reconstructs_complex64_impl(wide: bool) {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = if wide {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f64, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[2, 3],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        } else {
+            Tensor::from_slice(
+                &[
+                    Complex::new(3.0_f64, 0.5),
+                    Complex::new(1.0, -0.25),
+                    Complex::new(0.0, 0.5),
+                    Complex::new(1.0, 0.25),
+                    Complex::new(2.0, -1.0),
+                    Complex::new(1.0, 0.0),
+                ],
+                &[3, 2],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+        };
+        let expected = svd(&mut cpu_ctx, &a_cpu, None).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = svd(ctx, &a_gpu, None).unwrap();
+        assert_eq!(
+            got.u.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.s.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.vt.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.u.dims(), expected.u.dims());
+        assert_eq!(got.s.dims(), expected.s.dims());
+        assert_eq!(got.vt.dims(), expected.vt.dims());
+        assert_close_real_slice(
+            if wide {
+                "cuda public complex64 svd singular values wide"
+            } else {
+                "cuda public complex64 svd singular values tall"
+            },
+            &tensor_data_on_cpu(&got.s),
+            &tensor_data_on_cpu(&expected.s),
+            4096.0_f64 * f64::EPSILON,
+        );
+
+        let reconstructed = reconstruct_thin_svd_col_major_complex(
+            &tensor_data_on_cpu(&got.u),
+            a_cpu.dims()[0],
+            got.s.dims()[0],
+            &tensor_data_on_cpu(&got.s),
+            &tensor_data_on_cpu(&got.vt),
+            a_cpu.dims()[1],
+        );
+        assert_close_complex_slice(
+            if wide {
+                "cuda public complex64 svd reconstruction wide"
+            } else {
+                "cuda public complex64 svd reconstruction tall"
+            },
+            &reconstructed,
+            &tensor_data_on_cpu(&a_cpu),
+            8192.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
 #[test]
 fn cross_matches_right_hand_rule_with_trailing_batches() {
     let mut ctx = CpuContext::new(1);
@@ -731,6 +1066,54 @@ fn public_cuda_svd_reconstructs_tall_matrix() {
 #[cfg(feature = "cuda")]
 fn public_cuda_svd_reconstructs_wide_matrix() {
     cuda_public_svd_reconstructs_generic(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svdvals_matches_cpu_for_tall_complex32_matrix() {
+    cuda_public_svdvals_matches_cpu_complex32_impl(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svdvals_matches_cpu_for_wide_complex32_matrix() {
+    cuda_public_svdvals_matches_cpu_complex32_impl(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svdvals_matches_cpu_for_tall_complex64_matrix() {
+    cuda_public_svdvals_matches_cpu_complex64_impl(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svdvals_matches_cpu_for_wide_complex64_matrix() {
+    cuda_public_svdvals_matches_cpu_complex64_impl(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_reconstructs_tall_complex32_matrix() {
+    cuda_public_svd_reconstructs_complex32_impl(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_reconstructs_wide_complex32_matrix() {
+    cuda_public_svd_reconstructs_complex32_impl(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_reconstructs_tall_complex64_matrix() {
+    cuda_public_svd_reconstructs_complex64_impl(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_reconstructs_wide_complex64_matrix() {
+    cuda_public_svd_reconstructs_complex64_impl(true);
 }
 
 #[test]
