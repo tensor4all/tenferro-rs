@@ -371,13 +371,18 @@ fn test_ellipsis_issue_529_example() {
     let result_tensor = result.unwrap();
     assert_eq!(result_tensor.dims(), &[2, 2, 2]);
 
-    // Verify we got actual computed values (not all zeros)
     let result_data = result_tensor
         .buffer()
         .as_slice()
         .expect("CPU tensor should have slice access");
+
     assert!(
         result_data.iter().any(|&v| v != 0.0),
         "Result should contain non-zero values"
+    );
+
+    assert!(
+        result_data.iter().all(|&v| v.is_finite()),
+        "All result values should be finite"
     );
 }
