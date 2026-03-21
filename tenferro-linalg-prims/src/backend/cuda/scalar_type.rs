@@ -1,12 +1,32 @@
+/// Hidden CUDA dtype inventory for linalg backend dispatch.
+///
+/// # Examples
+///
+/// ```ignore
+/// let _ = tenferro_linalg_prims::backend::CudaDataType::F64;
+/// ```
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CudaDataType {
+pub enum CudaDataType {
     F32,
     F64,
     Complex32,
     Complex64,
 }
 
-pub(crate) trait CudaLinalgScalar: crate::KernelLinalgScalar {
+/// Hidden marker for scalars that can bind to the CUDA linalg backend.
+///
+/// High-level crates use this only as a compile-time contract so their generic
+/// runtime dispatch does not advertise CUDA linalg for unsupported dtypes.
+///
+/// # Examples
+///
+/// ```ignore
+/// fn require_cuda_linalg<T: tenferro_linalg_prims::backend::CudaLinalgScalar>() {}
+/// require_cuda_linalg::<f64>();
+/// ```
+#[doc(hidden)]
+pub trait CudaLinalgScalar: crate::KernelLinalgScalar {
     fn cuda_data_type() -> CudaDataType;
 }
 

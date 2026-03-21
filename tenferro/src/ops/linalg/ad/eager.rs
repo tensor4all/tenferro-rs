@@ -40,7 +40,7 @@ eager_unary!(
     fn svd -> TypedSvdResult<T, T::Real> => svd_ad;
     where {
         T: LinalgRuntimeValue,
-        T::Real: DynTensorTyped,
+        T::Real: DynTensorTyped + tenferro_tensor::KeepCountScalar,
     }
 );
 

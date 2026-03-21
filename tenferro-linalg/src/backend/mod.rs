@@ -87,7 +87,9 @@ pub use blas_lapack_backend::BlasLapackBackend;
 pub use tenferro_linalg_prims::backend::CpuTensorLinalgBackend;
 
 // GPU backend stubs (public)
-pub use tenferro_linalg_prims::backend::{CudaTensorLinalgBackend, HipTensorLinalgBackend};
+pub use tenferro_linalg_prims::backend::{
+    CudaDataType, CudaLinalgScalar, CudaTensorLinalgBackend, HipTensorLinalgBackend,
+};
 
 use tenferro_device::Result;
 

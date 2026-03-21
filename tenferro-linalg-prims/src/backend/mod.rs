@@ -32,7 +32,7 @@ use tenferro_device::Result;
 pub use blas_lapack_backend::BlasLapackBackend;
 pub use context::TensorLinalgContextFor;
 pub use cpu::CpuTensorLinalgBackend;
-pub use cuda::CudaTensorLinalgBackend;
+pub use cuda::{CudaDataType, CudaLinalgScalar, CudaTensorLinalgBackend};
 #[cfg(feature = "linalg-faer")]
 pub use faer_backend::FaerBackend;
 pub use hip::HipTensorLinalgBackend;

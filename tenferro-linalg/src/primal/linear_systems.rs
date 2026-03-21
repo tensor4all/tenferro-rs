@@ -45,6 +45,18 @@ fn backend_pivots_to_usize(pivots: &[i32]) -> Result<Vec<usize>> {
         .collect()
 }
 
+fn inverse_rhs<T: KernelLinalgScalar>(
+    n: usize,
+    batch_dims: &[usize],
+    memory_space: tenferro_device::LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    let mut rhs = Tensor::eye(n, memory_space, MemoryOrder::ColumnMajor);
+    for _ in batch_dims {
+        rhs = rhs.unsqueeze(-1)?;
+    }
+    rhs.broadcast(&output_dims(&[n, n], batch_dims))
+}
+
 /// Solve a square linear system `A x = b`.
 pub fn solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
@@ -87,11 +99,10 @@ where
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
-    let mut rhs = Tensor::eye(n, tensor.logical_memory_space(), MemoryOrder::ColumnMajor);
-    for _ in batch_dims {
-        rhs = rhs.unsqueeze(-1)?;
+    let rhs = inverse_rhs::<T>(n, batch_dims, tensor.logical_memory_space())?;
+    if n == 0 {
+        return Ok(rhs);
     }
-    let rhs = rhs.broadcast(&output_dims(&[n, n], batch_dims))?;
     solve(ctx, tensor, &rhs)
 }
 
@@ -104,11 +115,13 @@ where
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv_ex")?;
     let (n, batch_dims) = validate_square(tensor)?;
-    let mut rhs = Tensor::eye(n, tensor.logical_memory_space(), MemoryOrder::ColumnMajor);
-    for _ in batch_dims {
-        rhs = rhs.unsqueeze(-1)?;
+    let rhs = inverse_rhs::<T>(n, batch_dims, tensor.logical_memory_space())?;
+    if n == 0 {
+        return Ok(InvExResult {
+            inverse: rhs,
+            info: vec![0; batch_count(batch_dims)],
+        });
     }
-    let rhs = rhs.broadcast(&output_dims(&[n, n], batch_dims))?;
     let result = solve_ex(ctx, tensor, &rhs)?;
     Ok(InvExResult {
         inverse: result.solution,

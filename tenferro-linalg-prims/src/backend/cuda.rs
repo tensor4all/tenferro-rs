@@ -23,7 +23,7 @@ use crate::{
     LuTensorExResult, LuTensorResult, QrTensorResult, SolveTensorExResult, SvdTensorResult,
     TensorLinalgPrims,
 };
-use scalar_type::CudaLinalgScalar;
+pub use scalar_type::{CudaDataType, CudaLinalgScalar};
 
 /// Marker type for the CUDA tensor linalg backend.
 ///

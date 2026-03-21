@@ -4,13 +4,16 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
     AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp, CpuBackend,
-    CpuContext, CudaBackend, CudaContext, TensorAnalyticPrims,
+    CpuContext, TensorAnalyticPrims,
 };
+#[cfg(feature = "cuda")]
+use crate::{CudaBackend, CudaContext};
 
 fn tensor_f64(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
+#[cfg(feature = "cuda")]
 fn available_cutensor_library_path() -> Option<&'static str> {
     [
         "/usr/lib/x86_64-linux-gnu/libcutensor.so",
@@ -22,6 +25,7 @@ fn available_cutensor_library_path() -> Option<&'static str> {
     .find(|path| std::path::Path::new(path).exists())
 }
 
+#[cfg(feature = "cuda")]
 fn cuda_device_zero_is_available() -> bool {
     std::panic::catch_unwind(|| {
         cudarc::runtime::result::device::get_count()
@@ -31,6 +35,7 @@ fn cuda_device_zero_is_available() -> bool {
     .unwrap_or(false)
 }
 
+#[cfg(feature = "cuda")]
 fn load_cuda_backend() -> Option<(CudaBackend, CudaContext)> {
     let path = available_cutensor_library_path()?;
     if !cuda_device_zero_is_available() {
@@ -374,6 +379,7 @@ fn cpu_analytic_phase2_executes_remaining_unary_and_binary_inventory() {
     assert_eq!(xlogy.buffer().as_slice().unwrap(), &[0.0, 2.0]);
 }
 
+#[cfg(feature = "cuda")]
 #[test]
 fn cuda_analytic_phase1_supports_and_executes_sqrt_when_runtime_available() {
     let Some((_backend, mut ctx)) = load_cuda_backend() else {
@@ -425,6 +431,7 @@ fn cuda_analytic_phase1_supports_and_executes_sqrt_when_runtime_available() {
     }
 }
 
+#[cfg(feature = "cuda")]
 #[test]
 fn cuda_analytic_phase1_supports_and_executes_log_when_runtime_available() {
     let Some((_backend, mut ctx)) = load_cuda_backend() else {
@@ -476,6 +483,7 @@ fn cuda_analytic_phase1_supports_and_executes_log_when_runtime_available() {
     }
 }
 
+#[cfg(feature = "cuda")]
 #[test]
 fn cuda_analytic_phase1_supports_and_executes_pow_when_runtime_available() {
     let Some((_backend, mut ctx)) = load_cuda_backend() else {

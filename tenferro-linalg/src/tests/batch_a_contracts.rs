@@ -108,6 +108,46 @@ fn inv_ex_mixed_batches_preserve_successful_inverse_and_report_zero_pivot() {
 }
 
 #[test]
+fn inv_0x0_returns_empty_inverse() {
+    let mut ctx = CpuContext::new(1);
+    let a: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0], &[1, 0], 0).unwrap();
+
+    let inverse = inv(&mut ctx, &a).unwrap();
+    let contiguous = inverse.contiguous(MemoryOrder::ColumnMajor);
+
+    assert_eq!(inverse.dims(), &[0, 0]);
+    assert!(contiguous.buffer().as_slice().unwrap().is_empty());
+}
+
+#[test]
+fn inv_ex_0x0_batches_return_empty_inverse_and_batch_shaped_zero_info() {
+    let mut ctx = CpuContext::new(1);
+    let two_batch: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0, 2], &[1, 0, 0], 0).unwrap();
+    let zero_batch: Tensor<f64> = Tensor::from_vec(vec![], &[0, 0, 0], &[1, 0, 0], 0).unwrap();
+
+    let two_batch_result = inv_ex(&mut ctx, &two_batch).unwrap();
+    let zero_batch_result = inv_ex(&mut ctx, &zero_batch).unwrap();
+
+    let two_batch_contiguous = two_batch_result
+        .inverse
+        .contiguous(MemoryOrder::ColumnMajor);
+    assert_eq!(two_batch_result.inverse.dims(), &[0, 0, 2]);
+    assert!(two_batch_contiguous.buffer().as_slice().unwrap().is_empty());
+    assert_eq!(two_batch_result.info, vec![0, 0]);
+
+    let zero_batch_contiguous = zero_batch_result
+        .inverse
+        .contiguous(MemoryOrder::ColumnMajor);
+    assert_eq!(zero_batch_result.inverse.dims(), &[0, 0, 0]);
+    assert!(zero_batch_contiguous
+        .buffer()
+        .as_slice()
+        .unwrap()
+        .is_empty());
+    assert!(zero_batch_result.info.is_empty());
+}
+
+#[test]
 fn cholesky_ex_mixed_batches_preserve_successful_factor_and_report_failing_minor() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::from_slice(
