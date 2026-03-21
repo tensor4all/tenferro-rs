@@ -30,9 +30,17 @@ const LU_SPLIT_LOWER_KERNEL_NAME_F32: &str = "lu_split_lower_f32";
 #[cfg(feature = "cuda")]
 const LU_SPLIT_LOWER_KERNEL_NAME_F64: &str = "lu_split_lower_f64";
 #[cfg(feature = "cuda")]
+const LU_SPLIT_LOWER_KERNEL_NAME_C32: &str = "lu_split_lower_complex32";
+#[cfg(feature = "cuda")]
+const LU_SPLIT_LOWER_KERNEL_NAME_C64: &str = "lu_split_lower_complex64";
+#[cfg(feature = "cuda")]
 const LU_SPLIT_UPPER_KERNEL_NAME_F32: &str = "lu_split_upper_f32";
 #[cfg(feature = "cuda")]
 const LU_SPLIT_UPPER_KERNEL_NAME_F64: &str = "lu_split_upper_f64";
+#[cfg(feature = "cuda")]
+const LU_SPLIT_UPPER_KERNEL_NAME_C32: &str = "lu_split_upper_complex32";
+#[cfg(feature = "cuda")]
+const LU_SPLIT_UPPER_KERNEL_NAME_C64: &str = "lu_split_upper_complex64";
 
 #[cfg(feature = "cuda")]
 const LU_SPLIT_CUDA_SRC: &str = r#"
@@ -100,6 +108,77 @@ extern "C" __global__ void lu_split_lower_f64(
     }
 }
 
+typedef struct { float re; float im; } complex32_t;
+typedef struct { double re; double im; } complex64_t;
+
+extern "C" __global__ void lu_split_lower_complex32(
+    const complex32_t* packed,
+    complex32_t* out,
+    unsigned long long m,
+    unsigned long long n,
+    unsigned long long k,
+    unsigned long long matrix_size,
+    unsigned long long out_matrix_size,
+    unsigned long long numel
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    unsigned long long batch = idx / out_matrix_size;
+    unsigned long long within = idx % out_matrix_size;
+    unsigned long long row = within % m;
+    unsigned long long col = within / m;
+    unsigned long long src = batch * matrix_size + col * m + row;
+
+    if (row < col) {
+        out[idx].re = 0.0f;
+        out[idx].im = 0.0f;
+    } else if (row == col) {
+        out[idx].re = 1.0f;
+        out[idx].im = 0.0f;
+    } else {
+        out[idx] = packed[src];
+    }
+}
+
+extern "C" __global__ void lu_split_lower_complex64(
+    const complex64_t* packed,
+    complex64_t* out,
+    unsigned long long m,
+    unsigned long long n,
+    unsigned long long k,
+    unsigned long long matrix_size,
+    unsigned long long out_matrix_size,
+    unsigned long long numel
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    unsigned long long batch = idx / out_matrix_size;
+    unsigned long long within = idx % out_matrix_size;
+    unsigned long long row = within % m;
+    unsigned long long col = within / m;
+    unsigned long long src = batch * matrix_size + col * m + row;
+
+    if (row < col) {
+        out[idx].re = 0.0;
+        out[idx].im = 0.0;
+    } else if (row == col) {
+        out[idx].re = 1.0;
+        out[idx].im = 0.0;
+    } else {
+        out[idx] = packed[src];
+    }
+}
+
 extern "C" __global__ void lu_split_upper_f32(
     const float* packed,
     float* out,
@@ -159,6 +238,68 @@ extern "C" __global__ void lu_split_upper_f64(
         out[idx] = 0.0;
     }
 }
+
+extern "C" __global__ void lu_split_upper_complex32(
+    const complex32_t* packed,
+    complex32_t* out,
+    unsigned long long m,
+    unsigned long long n,
+    unsigned long long k,
+    unsigned long long matrix_size,
+    unsigned long long out_matrix_size,
+    unsigned long long numel
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    unsigned long long batch = idx / out_matrix_size;
+    unsigned long long within = idx % out_matrix_size;
+    unsigned long long row = within % k;
+    unsigned long long col = within / k;
+    unsigned long long src = batch * matrix_size + col * m + row;
+
+    if (row <= col) {
+        out[idx] = packed[src];
+    } else {
+        out[idx].re = 0.0f;
+        out[idx].im = 0.0f;
+    }
+}
+
+extern "C" __global__ void lu_split_upper_complex64(
+    const complex64_t* packed,
+    complex64_t* out,
+    unsigned long long m,
+    unsigned long long n,
+    unsigned long long k,
+    unsigned long long matrix_size,
+    unsigned long long out_matrix_size,
+    unsigned long long numel
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    unsigned long long batch = idx / out_matrix_size;
+    unsigned long long within = idx % out_matrix_size;
+    unsigned long long row = within % k;
+    unsigned long long col = within / k;
+    unsigned long long src = batch * matrix_size + col * m + row;
+
+    if (row <= col) {
+        out[idx] = packed[src];
+    } else {
+        out[idx].re = 0.0;
+        out[idx].im = 0.0;
+    }
+}
 "#;
 
 #[cfg(feature = "cuda")]
@@ -192,7 +333,10 @@ fn to_u64(value: usize, label: &str) -> Result<u64> {
 
 #[cfg(feature = "cuda")]
 pub(super) fn has_lu_support<T: CudaLinalgScalar>() -> bool {
-    matches!(T::cuda_data_type(), CudaDataType::F32 | CudaDataType::F64)
+    matches!(
+        T::cuda_data_type(),
+        CudaDataType::F32 | CudaDataType::F64 | CudaDataType::Complex32 | CudaDataType::Complex64
+    )
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -331,7 +475,7 @@ where
 {
     if !has_lu_support::<T>() {
         return Err(Error::DeviceError(format!(
-            "CUDA lu_factor currently supports only f32/f64, got {:?}",
+            "CUDA lu_factor currently supports only f32/f64/complex32/complex64, got {:?}",
             T::cuda_data_type()
         )));
     }
@@ -469,7 +613,14 @@ where
             LU_SPLIT_LOWER_KERNEL_NAME_F64,
             LU_SPLIT_UPPER_KERNEL_NAME_F64,
         ),
-        _ => unreachable!("unsupported LU dtype filtered above"),
+        CudaDataType::Complex32 => (
+            LU_SPLIT_LOWER_KERNEL_NAME_C32,
+            LU_SPLIT_UPPER_KERNEL_NAME_C32,
+        ),
+        CudaDataType::Complex64 => (
+            LU_SPLIT_LOWER_KERNEL_NAME_C64,
+            LU_SPLIT_UPPER_KERNEL_NAME_C64,
+        ),
     };
 
     ctx.shared_runtime()

@@ -651,6 +651,220 @@ where
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_lu_factor_matches_cpu_for_small_complex32_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex32::new(2.0, 1.0),
+            Complex32::new(1.0, -1.0),
+            Complex32::new(3.0, 0.5),
+            Complex32::new(4.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex32,
+    >>::lu_factor(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex32>>::lu_factor(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_close_complex_slice(
+        "cuda lu_factor complex32 lower factor",
+        &tensor_data_on_cpu(&got.l),
+        &tensor_data_on_cpu(&expected.l),
+        256.0_f32 * f32::epsilon(),
+    );
+    assert_close_complex_slice(
+        "cuda lu_factor complex32 upper factor",
+        &tensor_data_on_cpu(&got.u),
+        &tensor_data_on_cpu(&expected.u),
+        256.0_f32 * f32::epsilon(),
+    );
+    assert_eq!(got.pivots, expected.pivots);
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_matches_cpu_for_small_complex64_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(2.0, 1.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(3.0, 0.5),
+            Complex64::new(4.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex64,
+    >>::lu_factor(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::lu_factor(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_close_complex_slice(
+        "cuda lu_factor complex64 lower factor",
+        &tensor_data_on_cpu(&got.l),
+        &tensor_data_on_cpu(&expected.l),
+        256.0_f64 * f64::epsilon(),
+    );
+    assert_close_complex_slice(
+        "cuda lu_factor complex64 upper factor",
+        &tensor_data_on_cpu(&got.u),
+        &tensor_data_on_cpu(&expected.u),
+        256.0_f64 * f64::epsilon(),
+    );
+    assert_eq!(got.pivots, expected.pivots);
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex32() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex32::new(1.0, 0.25),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, -0.5), //
+            Complex32::new(1.0, 0.0),
+            Complex32::new(2.0, 0.5),
+            Complex32::new(2.0, -0.25),
+            Complex32::new(4.0, 0.75),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex32,
+    >>::lu_factor_ex(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got =
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex32>>::lu_factor_ex(
+            &mut cuda_ctx,
+            &a_gpu,
+        )
+        .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_close_complex_slice(
+        "cuda lu_factor_ex complex32 lower factor",
+        &tensor_data_on_cpu(&got.l),
+        &tensor_data_on_cpu(&expected.l),
+        256.0_f32 * f32::epsilon(),
+    );
+    assert_close_complex_slice(
+        "cuda lu_factor_ex complex32 upper factor",
+        &tensor_data_on_cpu(&got.u),
+        &tensor_data_on_cpu(&expected.u),
+        256.0_f32 * f32::epsilon(),
+    );
+    assert_eq!(got.pivots, expected.pivots);
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex64() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 0.25),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, -0.5), //
+            Complex64::new(1.0, 0.0),
+            Complex64::new(2.0, 0.5),
+            Complex64::new(2.0, -0.25),
+            Complex64::new(4.0, 0.75),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex64,
+    >>::lu_factor_ex(&mut cpu_ctx, &a_cpu)
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got =
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::lu_factor_ex(
+            &mut cuda_ctx,
+            &a_gpu,
+        )
+        .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_close_complex_slice(
+        "cuda lu_factor_ex complex64 lower factor",
+        &tensor_data_on_cpu(&got.l),
+        &tensor_data_on_cpu(&expected.l),
+        256.0_f64 * f64::epsilon(),
+    );
+    assert_close_complex_slice(
+        "cuda lu_factor_ex complex64 upper factor",
+        &tensor_data_on_cpu(&got.u),
+        &tensor_data_on_cpu(&expected.u),
+        256.0_f64 * f64::epsilon(),
+    );
+    assert_eq!(got.pivots, expected.pivots);
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_qr_reconstructs_small_real_matrix_generic<T>()
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -1001,14 +1215,14 @@ fn cuda_backend_reports_only_wired_capabilities() {
         ) == has_native_cuda
     );
     assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::LuFactor
-        )
+        ) == has_native_cuda
     );
     assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::LuFactorEx
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
@@ -1542,6 +1756,30 @@ fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f64() {
     cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_matches_cpu_for_small_complex_matrix_c32() {
+    cuda_lu_factor_matches_cpu_for_small_complex32_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_matches_cpu_for_small_complex_matrix_c64() {
+    cuda_lu_factor_matches_cpu_for_small_complex64_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_c32() {
+    cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex32();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_c64() {
+    cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex64();
 }
 
 #[test]
