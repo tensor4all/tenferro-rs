@@ -6,6 +6,7 @@ mod scalar_type;
 mod solve;
 mod solve_triangular;
 mod svdvals;
+mod thin_svd;
 mod wrappers;
 
 use tenferro_device::Result;
@@ -43,6 +44,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
             LinalgCapabilityOp::Solve
                 | LinalgCapabilityOp::SolveTriangular
                 | LinalgCapabilityOp::Qr
+                | LinalgCapabilityOp::ThinSvd
                 | LinalgCapabilityOp::LuFactor
                 | LinalgCapabilityOp::LuFactorEx
                 | LinalgCapabilityOp::Cholesky
@@ -59,6 +61,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
             LinalgCapabilityOp::Cholesky | LinalgCapabilityOp::CholeskyEx => {
                 cholesky::has_cholesky_support::<T>()
             }
+            LinalgCapabilityOp::ThinSvd => thin_svd::has_thin_svd_support::<T>(),
             _ => false,
         }
     }
@@ -88,8 +91,8 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
         qr::qr(_ctx, _a)
     }
 
-    fn thin_svd(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<SvdTensorResult<T>> {
-        unsupported::<SvdTensorResult<T>, T>("thin_svd")
+    fn thin_svd(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<SvdTensorResult<T>> {
+        thin_svd::thin_svd(ctx, a)
     }
 
     fn svdvals(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<Tensor<T::Real>> {
