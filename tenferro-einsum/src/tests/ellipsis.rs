@@ -348,12 +348,23 @@ fn test_ellipsis_with_actual_values() {
 /// Tests the exact example from issue #529: batched matrix multiplication with ellipsis notation.
 /// This verifies that the ellipsis (...) notation works correctly for batch dimensions,
 /// as required for NumPy/PyTorch/JAX compatibility.
+///
+/// # Mathematical Verification (Column-Major Storage)
+///
+/// Input data [1,2,3,4,5,6,7,8] with shape [2,2,2] in column-major:
+/// - Batch 0: A[0] = [[1,5],[3,7]], B[0] = [[1,5],[3,7]]
+/// - Batch 1: A[1] = [[2,6],[4,8]], B[1] = [[2,6],[4,8]]
+///
+/// Matrix multiplication C[b] = A[b] @ B[b]:
+/// - C[0] = [[16,40],[24,64]]
+/// - C[1] = [[28,60],[40,88]]
+///
+/// Result stored in column-major: [16,28,24,40,40,60,64,88]
 #[test]
 fn test_ellipsis_issue_529_example() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    // Create batched tensors with actual values (not zeros) to verify computation works
     let a_data: Vec<f64> = (0..8).map(|i| (i + 1) as f64).collect();
     let b_data: Vec<f64> = (0..8).map(|i| (i + 1) as f64).collect();
 
@@ -385,4 +396,15 @@ fn test_ellipsis_issue_529_example() {
         result_data.iter().all(|&v| v.is_finite()),
         "All result values should be finite"
     );
+
+    let expected: Vec<f64> = vec![16.0, 28.0, 24.0, 40.0, 40.0, 60.0, 64.0, 88.0];
+    for (i, (&got, &exp)) in result_data.iter().zip(expected.iter()).enumerate() {
+        assert!(
+            (got - exp).abs() < 1e-10,
+            "Result[{}] = {}, expected {}",
+            i,
+            got,
+            exp
+        );
+    }
 }
