@@ -404,13 +404,33 @@ fn vector_lp_norm_path_is_tensor_native_and_uses_pow_bridge() {
 }
 
 #[test]
-fn matrix_power_requires_main_memory_before_host_slice_path() {
+fn matrix_power_path_is_tensor_native_and_uses_tensor_power_logic() {
     let matrix_functions = repo_file("src/primal/matrix_functions.rs");
     let matrix_power = file_section(&matrix_functions, "pub fn matrix_power", "#[cfg(test)]");
 
     assert!(
-        matrix_power.contains("require_main_memory_tensor(tensor, \"matrix_power\")?"),
-        "matrix_power should reject non-main-memory tensors before host-slice logic"
+        !matrix_power.contains("require_main_memory_tensor(tensor, \"matrix_power\")?"),
+        "matrix_power should not reject non-main-memory tensors before tensor-native power logic"
+    );
+    assert!(
+        !matrix_power.contains("extract_slice("),
+        "matrix_power should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !matrix_power.contains("backend::slice_bridge::"),
+        "matrix_power should stay tensor-native and avoid slice_bridge helpers"
+    );
+    assert!(
+        matrix_power.contains("batched_gemm_with_semiring_tensors"),
+        "matrix_power should use tensor-native batched GEMM for exponentiation by squaring"
+    );
+    assert!(
+        matrix_power.contains("batched_identity"),
+        "matrix_power should build the identity tensor natively"
+    );
+    assert!(
+        matrix_power.contains("inv(ctx, tensor)?"),
+        "matrix_power should use tensor-native inverse logic for negative exponents"
     );
 }
 

@@ -1,5 +1,17 @@
 use super::*;
 
+fn batched_identity<T: KernelLinalgScalar>(
+    n: usize,
+    batch_dims: &[usize],
+    logical_memory_space: tenferro_device::LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    let mut reshape_dims = vec![n, n];
+    reshape_dims.extend(std::iter::repeat(1).take(batch_dims.len()));
+    let eye = Tensor::eye(n, logical_memory_space, MemoryOrder::ColumnMajor);
+    let eye = eye.reshape(&reshape_dims)?;
+    eye.broadcast(&output_dims(&[n, n], batch_dims))
+}
+
 /// Raise a square matrix to an integer power.
 pub fn matrix_power<T: KernelLinalgScalar, C>(
     ctx: &mut C,
@@ -9,25 +21,18 @@ pub fn matrix_power<T: KernelLinalgScalar, C>(
 where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C: tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixPower, "matrix_power")?;
-    require_main_memory_tensor(tensor, "matrix_power")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
-    let bc = batch_count(batch_dims);
-    let dims = output_dims(&[n, n], batch_dims);
 
     if exponent == 0 {
-        let eye = identity_matrix::<T>(n);
-        let mut data = vec![T::zero(); n * n * bc];
-        for batch in 0..bc {
-            data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&eye);
-        }
-        return tensor_from_data(data, &dims);
+        return batched_identity::<T>(n, batch_dims, tensor.logical_memory_space());
     }
 
-    let positive_exponent = if exponent < 0 {
+    let mut positive_exponent = if exponent < 0 {
         let abs = exponent.checked_abs().ok_or_else(|| {
             Error::InvalidArgument("matrix_power does not support i64::MIN exponent".into())
         })?;
@@ -37,18 +42,23 @@ where
         exponent as u64
     };
 
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let mat_size = n * n;
-    let mut out = vec![T::zero(); mat_size * bc];
+    let mut result = batched_identity::<T>(n, batch_dims, tensor.logical_memory_space())?;
+    let mut base = tensor.clone();
 
-    for batch in 0..bc {
-        let start = offset + batch * mat_size;
-        let a_slice = &data[start..start + mat_size];
-        let powered = matrix_power_single(ctx, a_slice, n, positive_exponent)?;
-        out[batch * mat_size..(batch + 1) * mat_size].copy_from_slice(&powered);
+    while positive_exponent > 0 {
+        if positive_exponent & 1 == 1 {
+            result = crate::prims_bridge::batched_gemm_with_semiring_tensors(
+                ctx, &result, &base, n, n, n,
+            )?;
+        }
+        let next_exponent = positive_exponent >> 1;
+        if next_exponent > 0 {
+            base = crate::prims_bridge::batched_gemm_with_semiring_tensors(
+                ctx, &base, &base, n, n, n,
+            )?;
+        }
+        positive_exponent = next_exponent;
     }
 
-    tensor_from_data(out, &dims)
+    Ok(result)
 }

@@ -334,6 +334,17 @@ fn has_pinv_support<T: CudaLinalgScalar>() -> bool {
     }
 }
 
+fn has_matrix_power_support<T: CudaLinalgScalar>() -> bool {
+    solve::has_solve_support::<T>()
+        && matches!(
+            T::cuda_data_type(),
+            scalar_type::CudaDataType::F32
+                | scalar_type::CudaDataType::F64
+                | scalar_type::CudaDataType::Complex32
+                | scalar_type::CudaDataType::Complex64
+        )
+}
+
 impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     type Context = tenferro_prims::CudaContext;
 
@@ -353,6 +364,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
                 | LinalgCapabilityOp::Det
                 | LinalgCapabilityOp::Slogdet
                 | LinalgCapabilityOp::Pinv
+                | LinalgCapabilityOp::MatrixPower
                 | LinalgCapabilityOp::Norm
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
@@ -372,6 +384,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
             LinalgCapabilityOp::Det => has_det_support::<T>(),
             LinalgCapabilityOp::Slogdet => has_slogdet_support::<T>(),
             LinalgCapabilityOp::Pinv => has_pinv_support::<T>(),
+            LinalgCapabilityOp::MatrixPower => has_matrix_power_support::<T>(),
             LinalgCapabilityOp::Norm => has_norm_support::<T>(),
             _ => false,
         }
