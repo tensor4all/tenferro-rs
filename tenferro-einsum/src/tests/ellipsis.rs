@@ -345,13 +345,20 @@ fn test_ellipsis_with_actual_values() {
     assert_eq!(result.dims(), &[2, 2, 3]);
 }
 
+/// Tests the exact example from issue #529: batched matrix multiplication with ellipsis notation.
+/// This verifies that the ellipsis (...) notation works correctly for batch dimensions,
+/// as required for NumPy/PyTorch/JAX compatibility.
 #[test]
 fn test_ellipsis_issue_529_example() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a3d = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
-    let b3d = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
+    // Create batched tensors with actual values (not zeros) to verify computation works
+    let a_data: Vec<f64> = (0..8).map(|i| (i + 1) as f64).collect();
+    let b_data: Vec<f64> = (0..8).map(|i| (i + 1) as f64).collect();
+
+    let a3d = Tensor::<f64>::from_slice(&a_data, &[2, 2, 2], col).unwrap();
+    let b3d = Tensor::<f64>::from_slice(&b_data, &[2, 2, 2], col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a3d, &b3d], None);
@@ -360,5 +367,17 @@ fn test_ellipsis_issue_529_example() {
         result.is_ok(),
         "Ellipsis notation should be supported as per issue #529"
     );
-    assert_eq!(result.unwrap().dims(), &[2, 2, 2]);
+
+    let result_tensor = result.unwrap();
+    assert_eq!(result_tensor.dims(), &[2, 2, 2]);
+
+    // Verify we got actual computed values (not all zeros)
+    let result_data = result_tensor
+        .buffer()
+        .as_slice()
+        .expect("CPU tensor should have slice access");
+    assert!(
+        result_data.iter().any(|&v| v != 0.0),
+        "Result should contain non-zero values"
+    );
 }
