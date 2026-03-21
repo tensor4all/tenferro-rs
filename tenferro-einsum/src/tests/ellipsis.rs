@@ -408,3 +408,39 @@ fn test_ellipsis_issue_529_example() {
         );
     }
 }
+
+/// Verifies that ellipsis notation produces identical results to explicit batch indexing.
+/// This confirms that the ellipsis expansion is semantically correct.
+#[test]
+fn test_ellipsis_equivalence_to_explicit() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (0..12).map(|i| (i + 1) as f64).collect();
+    let b_data: Vec<f64> = (0..12).map(|i| (i + 13) as f64).collect();
+
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 2, 3], col).unwrap();
+    let b = Tensor::<f64>::from_slice(&b_data, &[2, 3, 2], col).unwrap();
+
+    let result_ellipsis =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+            .unwrap();
+
+    let result_explicit =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
+
+    assert_eq!(result_ellipsis.dims(), result_explicit.dims());
+
+    let ellipsis_data = result_ellipsis.buffer().as_slice().unwrap();
+    let explicit_data = result_explicit.buffer().as_slice().unwrap();
+
+    for (i, (&e, &x)) in ellipsis_data.iter().zip(explicit_data.iter()).enumerate() {
+        assert!(
+            (e - x).abs() < 1e-14,
+            "Ellipsis result[{}] = {} differs from explicit result {}",
+            i,
+            e,
+            x
+        );
+    }
+}
