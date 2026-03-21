@@ -474,11 +474,18 @@ fn cuda_backend_reports_only_wired_capabilities() {
 
 #[test]
 fn cuda_backend_reports_ex_capabilities_only_when_wired() {
+    let has_native_cuda = cfg!(feature = "cuda");
+    assert!(
+        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+            LinalgCapabilityOp::SolveEx
+        ),
+        "CUDA should not report SolveEx before the native EX solve kernel exists",
+    );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
             LinalgCapabilityOp::CholeskyEx
-        ),
-        "CUDA should report CholeskyEx once the native real kernel exists",
+        ) == has_native_cuda,
+        "CUDA CholeskyEx capability should match whether native CUDA kernels are compiled in",
     );
     assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(

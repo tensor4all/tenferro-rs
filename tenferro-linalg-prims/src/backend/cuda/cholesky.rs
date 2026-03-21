@@ -26,7 +26,7 @@ pub(super) fn has_cholesky_support<T: CudaLinalgScalar>() -> bool {
 }
 
 #[cfg(not(feature = "cuda"))]
-fn has_cholesky_support<T: CudaLinalgScalar>() -> bool {
+pub(super) fn has_cholesky_support<T: CudaLinalgScalar>() -> bool {
     let _ = T::cuda_data_type();
     false
 }
@@ -76,7 +76,7 @@ pub(super) fn cholesky_ex<T>(
 where
     T: CudaLinalgScalar,
 {
-    let _dtype = cholesky_dtype::<T>()?;
+    let dtype = cholesky_dtype::<T>()?;
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
 
@@ -104,6 +104,22 @@ where
     let lda = i32::try_from(n)
         .map_err(|_| Error::InvalidArgument("cholesky lda exceeds i32 range".into()))?;
     let n_i32 = lda;
+    let first_a_ptr = unsafe { a_base.add(a_offset) }.cast::<c_void>();
+    let lwork = runtime.cusolver_api().potrf_buffer_size(
+        dtype,
+        runtime.cusolver_handle.raw,
+        CUBLAS_FILL_MODE_LOWER,
+        n_i32,
+        first_a_ptr,
+        lda,
+    )?;
+    let workspace = DeviceAllocation::alloc(
+        ctx,
+        usize::try_from(lwork).map_err(|_| {
+            Error::InvalidArgument(format!("cholesky workspace size was negative: {lwork}"))
+        })? * std::mem::size_of::<T>(),
+        "cudaMalloc(cholesky workspace)",
+    )?;
 
     let mut info = vec![0i32; bc];
     let info_alloc =
@@ -114,24 +130,8 @@ where
         let a_ptr = unsafe { a_base.add(a_offset + batch * mat_size) }.cast::<c_void>();
         let l_ptr = unsafe { l_base.add(l_offset + batch * mat_size) };
 
-        let lwork = runtime.cusolver_api().potrf_buffer_size(
-            T::cuda_data_type(),
-            runtime.cusolver_handle.raw,
-            CUBLAS_FILL_MODE_LOWER,
-            n_i32,
-            a_ptr,
-            lda,
-        )?;
-        let workspace = DeviceAllocation::alloc(
-            ctx,
-            usize::try_from(lwork).map_err(|_| {
-                Error::InvalidArgument(format!("cholesky workspace size was negative: {lwork}"))
-            })? * std::mem::size_of::<T>(),
-            "cudaMalloc(cholesky workspace)",
-        )?;
-
         runtime.cusolver_api().potrf(
-            T::cuda_data_type(),
+            dtype,
             runtime.cusolver_handle.raw,
             CUBLAS_FILL_MODE_LOWER,
             n_i32,
