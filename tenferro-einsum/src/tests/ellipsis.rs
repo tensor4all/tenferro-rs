@@ -623,3 +623,104 @@ fn test_ellipsis_full_contraction_scalar() {
         expected
     );
 }
+
+/// Tests ellipsis notation with a single batch element (batch size = 1).
+/// Verifies that the implementation correctly handles degenerate batch dimensions.
+#[test]
+fn test_ellipsis_single_batch_element() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (1..=6).map(|i| i as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[1, 2, 3], col).unwrap();
+
+    let b_data: Vec<f64> = (1..=12).map(|i| i as f64).collect();
+    let b = Tensor::<f64>::from_slice(&b_data, &[1, 3, 4], col).unwrap();
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+            .unwrap();
+
+    assert_eq!(result.dims(), &[1, 2, 4]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    assert!(
+        result_data.iter().all(|&v| v.is_finite()),
+        "All result values should be finite with single batch element"
+    );
+}
+
+/// Tests ellipsis notation with batched transpose operation.
+/// Verifies that ellipsis works correctly for permutation operations across batches.
+#[test]
+fn test_ellipsis_batched_transpose() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (1..=12).map(|i| i as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 3, 2], col).unwrap();
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij->...ji", &[&a], None).unwrap();
+
+    assert_eq!(result.dims(), &[2, 2, 3]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    let original_data = a.buffer().as_slice().unwrap();
+
+    for (i, &v) in result_data.iter().enumerate() {
+        assert!(v.is_finite(), "Transpose result[{}] should be finite", i);
+        assert!(
+            original_data.contains(&v),
+            "Transpose result[{}] = {} should exist in original data",
+            i,
+            v
+        );
+    }
+}
+
+/// Tests ellipsis notation with Hadamard (element-wise) product followed by batch reduction.
+/// Verifies that ellipsis correctly handles element-wise operations with subsequent contraction.
+#[test]
+fn test_ellipsis_hadamard_with_reduction() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (1..=12).map(|i| i as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 2, 3], col).unwrap();
+
+    let b_data: Vec<f64> = (1..=12).map(|i| (i * 2) as f64).collect();
+    let b = Tensor::<f64>::from_slice(&b_data, &[2, 2, 3], col).unwrap();
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...ij->...", &[&a, &b], None).unwrap();
+
+    assert_eq!(result.dims(), &[2]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+
+    for (i, &v) in result_data.iter().enumerate() {
+        assert!(v.is_finite(), "Hadamard reduction[{}] should be finite", i);
+        assert!(
+            v > 0.0,
+            "Hadamard reduction[{}] = {} should be positive",
+            i,
+            v
+        );
+    }
+
+    let result_explicit =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bij,bij->b", &[&a, &b], None).unwrap();
+
+    let explicit_data = result_explicit.buffer().as_slice().unwrap();
+
+    for (i, (&e, &x)) in result_data.iter().zip(explicit_data.iter()).enumerate() {
+        assert!(
+            (e - x).abs() < 1e-14,
+            "Ellipsis Hadamard[{}] = {} differs from explicit {}",
+            i,
+            e,
+            x
+        );
+    }
+}
