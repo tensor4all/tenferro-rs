@@ -389,8 +389,8 @@ fn vector_lp_norm_path_is_tensor_native_and_uses_pow_bridge() {
     let norms = repo_file("src/primal/norms.rs");
     let vector_lp = file_section(
         &norms,
-        "            NormKind::Lp(p) => {",
-        "            NormKind::L1 | NormKind::Inf | NormKind::Nuclear | NormKind::Spectral => unreachable!(),",
+        "        let NormKind::Lp(p) = kind else {",
+        "    let (m, n, batch_dims) = validate_2d(tensor)?;",
     );
 
     assert!(
