@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::os::raw::c_char;
 use std::sync::Arc;
 
 use libloading::Library;
@@ -64,6 +65,10 @@ type FnCusolverDnSgeqrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnDgeqrfBufferSize =
     unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut f64, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnSgesvdBufferSize =
+    unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut i32) -> CusolverStatus;
+type FnCusolverDnDgesvdBufferSize =
+    unsafe extern "C" fn(CusolverDnHandle, i32, i32, *mut i32) -> CusolverStatus;
 type FnCusolverDnSgetrf = unsafe extern "C" fn(
     CusolverDnHandle,
     i32,
@@ -210,6 +215,42 @@ type FnCusolverDnDpotrf = unsafe extern "C" fn(
     i32,
     *mut i32,
 ) -> CusolverStatus;
+type FnCusolverDnSgesvd = unsafe extern "C" fn(
+    CusolverDnHandle,
+    c_char,
+    c_char,
+    i32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut f32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnDgesvd = unsafe extern "C" fn(
+    CusolverDnHandle,
+    c_char,
+    c_char,
+    i32,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    *mut f64,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    *mut i32,
+) -> CusolverStatus;
 
 pub(super) struct CublasApi {
     _lib: Arc<Library>,
@@ -229,10 +270,14 @@ pub(super) struct CusolverDnApi {
     dgetrf_buffer_size: FnCusolverDnDgetrfBufferSize,
     sgeqrf_buffer_size: FnCusolverDnSgeqrfBufferSize,
     dgeqrf_buffer_size: FnCusolverDnDgeqrfBufferSize,
+    sgesvd_buffer_size: FnCusolverDnSgesvdBufferSize,
+    dgesvd_buffer_size: FnCusolverDnDgesvdBufferSize,
     sgetrf: FnCusolverDnSgetrf,
     dgetrf: FnCusolverDnDgetrf,
     sgeqrf: FnCusolverDnSgeqrf,
     dgeqrf: FnCusolverDnDgeqrf,
+    sgesvd: FnCusolverDnSgesvd,
+    dgesvd: FnCusolverDnDgesvd,
     sgetrs: FnCusolverDnSgetrs,
     dgetrs: FnCusolverDnDgetrs,
     sorgqr_buffer_size: FnCusolverDnSorgqrBufferSize,
@@ -357,10 +402,14 @@ impl CusolverDnApi {
             dgetrf_buffer_size: load_symbol(&lib, "cusolverDnDgetrf_bufferSize")?,
             sgeqrf_buffer_size: load_symbol(&lib, "cusolverDnSgeqrf_bufferSize")?,
             dgeqrf_buffer_size: load_symbol(&lib, "cusolverDnDgeqrf_bufferSize")?,
+            sgesvd_buffer_size: load_symbol(&lib, "cusolverDnSgesvd_bufferSize")?,
+            dgesvd_buffer_size: load_symbol(&lib, "cusolverDnDgesvd_bufferSize")?,
             sgetrf: load_symbol(&lib, "cusolverDnSgetrf")?,
             dgetrf: load_symbol(&lib, "cusolverDnDgetrf")?,
             sgeqrf: load_symbol(&lib, "cusolverDnSgeqrf")?,
             dgeqrf: load_symbol(&lib, "cusolverDnDgeqrf")?,
+            sgesvd: load_symbol(&lib, "cusolverDnSgesvd")?,
+            dgesvd: load_symbol(&lib, "cusolverDnDgesvd")?,
             sgetrs: load_symbol(&lib, "cusolverDnSgetrs")?,
             dgetrs: load_symbol(&lib, "cusolverDnDgetrs")?,
             sorgqr_buffer_size: load_symbol(&lib, "cusolverDnSorgqr_bufferSize")?,
@@ -711,6 +760,105 @@ impl CusolverDnApi {
             ),
             _ => Err(Error::DeviceError(format!(
                 "CUDA QR currently supports only f32/f64, got {dtype:?}"
+            ))),
+        }
+    }
+
+    pub(super) fn gesvd_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        m: i32,
+        n: i32,
+    ) -> Result<i32> {
+        let mut lwork = 0;
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe { (self.sgesvd_buffer_size)(handle, m, n, &mut lwork) },
+                "cusolverDnSgesvd_bufferSize",
+            )?,
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe { (self.dgesvd_buffer_size)(handle, m, n, &mut lwork) },
+                "cusolverDnDgesvd_bufferSize",
+            )?,
+            _ => {
+                return Err(Error::DeviceError(format!(
+                    "CUDA svdvals currently supports only f32/f64, got {dtype:?}"
+                )));
+            }
+        }
+        Ok(lwork)
+    }
+
+    pub(super) fn gesvd(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        jobu: c_char,
+        jobvt: c_char,
+        m: i32,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+        s: *mut c_void,
+        u: *mut c_void,
+        ldu: i32,
+        vt: *mut c_void,
+        ldvt: i32,
+        workspace: *mut c_void,
+        lwork: i32,
+        rwork: *mut c_void,
+        info: *mut i32,
+    ) -> Result<()> {
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe {
+                    (self.sgesvd)(
+                        handle,
+                        jobu,
+                        jobvt,
+                        m,
+                        n,
+                        a.cast::<f32>(),
+                        lda,
+                        s.cast::<f32>(),
+                        u.cast::<f32>(),
+                        ldu,
+                        vt.cast::<f32>(),
+                        ldvt,
+                        workspace.cast::<f32>(),
+                        lwork,
+                        rwork.cast::<f32>(),
+                        info,
+                    )
+                },
+                "cusolverDnSgesvd",
+            ),
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe {
+                    (self.dgesvd)(
+                        handle,
+                        jobu,
+                        jobvt,
+                        m,
+                        n,
+                        a.cast::<f64>(),
+                        lda,
+                        s.cast::<f64>(),
+                        u.cast::<f64>(),
+                        ldu,
+                        vt.cast::<f64>(),
+                        ldvt,
+                        workspace.cast::<f64>(),
+                        lwork,
+                        rwork.cast::<f64>(),
+                        info,
+                    )
+                },
+                "cusolverDnDgesvd",
+            ),
+            _ => Err(Error::DeviceError(format!(
+                "CUDA svdvals currently supports only f32/f64, got {dtype:?}"
             ))),
         }
     }

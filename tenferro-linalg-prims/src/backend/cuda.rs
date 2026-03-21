@@ -5,6 +5,7 @@ mod runtime;
 mod scalar_type;
 mod solve;
 mod solve_triangular;
+mod svdvals;
 mod wrappers;
 
 use tenferro_device::Result;
@@ -92,7 +93,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     }
 
     fn svdvals(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<Tensor<T::Real>> {
-        unsupported::<Tensor<T::Real>, T>("svdvals")
+        svdvals::svdvals(_ctx, _a)
     }
 
     fn lu_factor_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorExResult<T>> {

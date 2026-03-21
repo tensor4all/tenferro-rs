@@ -695,6 +695,85 @@ where
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_svdvals_matches_cpu_for_small_real_matrix_generic<T>(wide: bool)
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = if wide {
+        Tensor::from_slice(
+            &[
+                cast::<T>(3.0),
+                cast::<T>(1.0),
+                cast::<T>(1.0),
+                cast::<T>(2.0),
+                cast::<T>(0.0),
+                cast::<T>(1.0),
+            ],
+            &[2, 3],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap()
+    } else {
+        Tensor::from_slice(
+            &[
+                cast::<T>(3.0),
+                cast::<T>(1.0),
+                cast::<T>(0.0),
+                cast::<T>(1.0),
+                cast::<T>(2.0),
+                cast::<T>(1.0),
+            ],
+            &[3, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap()
+    };
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::thin_svd(
+            &mut cpu_ctx,
+            &a_cpu,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::svdvals(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.dims(), expected.s.dims());
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_slice(
+        if wide {
+            "cuda svdvals wide"
+        } else {
+            "cuda svdvals tall"
+        },
+        &tensor_data_on_cpu(&got),
+        &tensor_data_on_cpu(&expected.s),
+        cast::<T>(2048.0) * T::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
 #[test]
 fn cuda_linalg_scalar_maps_supported_standard_dtypes() {
     assert_eq!(
@@ -999,4 +1078,28 @@ fn cuda_cholesky_reports_minor_for_non_spd_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_cholesky_reports_minor_for_non_spd_matrix_f64() {
     cuda_cholesky_reports_minor_for_non_spd_matrix_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_svdvals_matches_cpu_for_small_tall_real_matrix_f32() {
+    cuda_svdvals_matches_cpu_for_small_real_matrix_generic::<f32>(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_svdvals_matches_cpu_for_small_tall_real_matrix_f64() {
+    cuda_svdvals_matches_cpu_for_small_real_matrix_generic::<f64>(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_svdvals_matches_cpu_for_small_wide_real_matrix_f32() {
+    cuda_svdvals_matches_cpu_for_small_real_matrix_generic::<f32>(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_svdvals_matches_cpu_for_small_wide_real_matrix_f64() {
+    cuda_svdvals_matches_cpu_for_small_real_matrix_generic::<f64>(true);
 }
