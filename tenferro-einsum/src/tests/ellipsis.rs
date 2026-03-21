@@ -444,3 +444,97 @@ fn test_ellipsis_equivalence_to_explicit() {
         );
     }
 }
+
+/// Tests ellipsis notation with row-major (C-order) memory layout.
+/// Verifies that the ellipsis feature works correctly regardless of memory order.
+#[test]
+fn test_ellipsis_row_major_order() {
+    let mut ctx = make_context();
+    let row = MemoryOrder::RowMajor;
+
+    let a_data: Vec<f64> = (0..12).map(|i| (i + 1) as f64).collect();
+    let b_data: Vec<f64> = (0..12).map(|i| (i + 13) as f64).collect();
+
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 2, 3], row).unwrap();
+    let b = Tensor::<f64>::from_slice(&b_data, &[2, 3, 2], row).unwrap();
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+            .unwrap();
+
+    assert_eq!(result.dims(), &[2, 2, 2]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    assert!(
+        result_data.iter().all(|&v| v.is_finite()),
+        "All result values should be finite in row-major order"
+    );
+}
+
+/// Tests ellipsis notation with 4-dimensional batch dimensions.
+/// Verifies that the ellipsis correctly expands to multiple batch dimensions.
+#[test]
+fn test_ellipsis_four_batch_dims() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a = Tensor::<f64>::zeros(&[2, 3, 4, 5, 6], LogicalMemorySpace::MainMemory, col);
+    let b = Tensor::<f64>::zeros(&[2, 3, 4, 6, 7], LogicalMemorySpace::MainMemory, col);
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+            .unwrap();
+
+    assert_eq!(result.dims(), &[2, 3, 4, 5, 7]);
+}
+
+/// Tests ellipsis notation with scalar contraction (trace) across batch dimensions.
+#[test]
+fn test_ellipsis_batched_trace() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (0..18).map(|i| (i + 1) as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 3, 3], col).unwrap();
+
+    let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ii->...", &[&a], None).unwrap();
+
+    assert_eq!(result.dims(), &[2]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    assert!(
+        result_data.iter().all(|&v| v.is_finite()),
+        "All trace values should be finite"
+    );
+}
+
+/// Tests that ellipsis and explicit notation produce identical results for trace operation.
+#[test]
+fn test_ellipsis_trace_equivalence() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (0..18).map(|i| (i + 1) as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 3, 3], col).unwrap();
+
+    let result_ellipsis =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ii->...", &[&a], None).unwrap();
+
+    let result_explicit =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bii->b", &[&a], None).unwrap();
+
+    assert_eq!(result_ellipsis.dims(), result_explicit.dims());
+
+    let ellipsis_data = result_ellipsis.buffer().as_slice().unwrap();
+    let explicit_data = result_explicit.buffer().as_slice().unwrap();
+
+    for (i, (&e, &x)) in ellipsis_data.iter().zip(explicit_data.iter()).enumerate() {
+        assert!(
+            (e - x).abs() < 1e-14,
+            "Ellipsis trace[{}] = {} differs from explicit trace {}",
+            i,
+            e,
+            x
+        );
+    }
+}
