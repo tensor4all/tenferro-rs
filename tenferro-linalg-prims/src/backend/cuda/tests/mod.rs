@@ -2298,6 +2298,324 @@ fn cuda_qr_reconstructs_small_complex64_matrix() {
     );
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_qr_reconstructs_wide_complex32_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex32::new(cast::<f32>(1.0), cast::<f32>(0.5)),
+            Complex32::new(cast::<f32>(2.0), cast::<f32>(-1.0)),
+            Complex32::new(cast::<f32>(3.0), cast::<f32>(0.25)),
+            Complex32::new(cast::<f32>(4.0), cast::<f32>(1.5)),
+            Complex32::new(cast::<f32>(5.0), cast::<f32>(-0.75)),
+            Complex32::new(cast::<f32>(6.0), cast::<f32>(0.0)),
+        ],
+        &[2, 3],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex32>>::qr(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.q.dims(), &[2, 2]);
+    assert_eq!(got.r.dims(), &[2, 3]);
+    assert_eq!(
+        got.q.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_eq!(
+        got.r.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+
+    let q = tensor_data_on_cpu(&got.q);
+    let r = tensor_data_on_cpu(&got.r);
+    let reconstructed = matmul_col_major_complex(&q, 2, 2, &r, 3);
+    assert_close_complex_slice(
+        "cuda complex qr wide reconstruction",
+        &reconstructed,
+        a_cpu.buffer().as_slice().unwrap(),
+        cast::<f32>(2048.0) * f32::epsilon(),
+    );
+
+    let gram = gram_col_major_complex(&q, 2, 2);
+    let identity = vec![
+        Complex32::new(1.0, 0.0),
+        Complex32::new(0.0, 0.0),
+        Complex32::new(0.0, 0.0),
+        Complex32::new(1.0, 0.0),
+    ];
+    assert_close_complex_slice(
+        "cuda complex qr wide orthogonality",
+        &gram,
+        &identity,
+        cast::<f32>(2048.0) * f32::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_qr_reconstructs_wide_complex64_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(cast::<f64>(1.0), cast::<f64>(0.5)),
+            Complex64::new(cast::<f64>(2.0), cast::<f64>(-1.0)),
+            Complex64::new(cast::<f64>(3.0), cast::<f64>(0.25)),
+            Complex64::new(cast::<f64>(4.0), cast::<f64>(1.5)),
+            Complex64::new(cast::<f64>(5.0), cast::<f64>(-0.75)),
+            Complex64::new(cast::<f64>(6.0), cast::<f64>(0.0)),
+        ],
+        &[2, 3],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::qr(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.q.dims(), &[2, 2]);
+    assert_eq!(got.r.dims(), &[2, 3]);
+    assert_eq!(
+        got.q.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_eq!(
+        got.r.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+
+    let q = tensor_data_on_cpu(&got.q);
+    let r = tensor_data_on_cpu(&got.r);
+    let reconstructed = matmul_col_major_complex(&q, 2, 2, &r, 3);
+    assert_close_complex_slice(
+        "cuda complex qr wide reconstruction",
+        &reconstructed,
+        a_cpu.buffer().as_slice().unwrap(),
+        cast::<f64>(2048.0) * f64::epsilon(),
+    );
+
+    let gram = gram_col_major_complex(&q, 2, 2);
+    let identity = vec![
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(1.0, 0.0),
+    ];
+    assert_close_complex_slice(
+        "cuda complex qr wide orthogonality",
+        &gram,
+        &identity,
+        cast::<f64>(2048.0) * f64::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_qr_reconstructs_batched_complex32_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex32::new(1.0, 0.5),
+            Complex32::new(2.0, -1.0),
+            Complex32::new(3.0, 0.25),
+            Complex32::new(4.0, 1.5),
+            Complex32::new(5.0, -0.75),
+            Complex32::new(6.0, 0.0),
+            Complex32::new(1.0, -0.25),
+            Complex32::new(2.0, 0.75),
+            Complex32::new(3.0, -1.5),
+            Complex32::new(4.0, 0.5),
+            Complex32::new(5.0, 0.0),
+            Complex32::new(6.0, 0.25),
+        ],
+        &[3, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex32>>::qr(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.q.dims(), &[3, 2, 2]);
+    assert_eq!(got.r.dims(), &[2, 2, 2]);
+    assert_eq!(
+        got.q.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_eq!(
+        got.r.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+
+    let q = tensor_data_on_cpu(&got.q);
+    let r = tensor_data_on_cpu(&got.r);
+    let input = tensor_data_on_cpu(&a_cpu);
+    let matrix_stride = 3 * 2;
+    let r_stride = 2 * 2;
+    for batch in 0..2 {
+        let q_slice = &q[batch * matrix_stride..(batch + 1) * matrix_stride];
+        let r_slice = &r[batch * r_stride..(batch + 1) * r_stride];
+        let input_slice = &input[batch * matrix_stride..(batch + 1) * matrix_stride];
+        let reconstructed = matmul_col_major_complex(q_slice, 3, 2, r_slice, 2);
+        assert_close_complex_slice(
+            if batch == 0 {
+                "cuda complex qr batched reconstruction batch0"
+            } else {
+                "cuda complex qr batched reconstruction batch1"
+            },
+            &reconstructed,
+            input_slice,
+            cast::<f32>(4096.0) * f32::epsilon(),
+        );
+        let gram = gram_col_major_complex(q_slice, 3, 2);
+        let identity = vec![
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, 0.0),
+        ];
+        assert_close_complex_slice(
+            if batch == 0 {
+                "cuda complex qr batched orthogonality batch0"
+            } else {
+                "cuda complex qr batched orthogonality batch1"
+            },
+            &gram,
+            &identity,
+            cast::<f32>(4096.0) * f32::epsilon(),
+        );
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_qr_reconstructs_batched_complex64_matrix() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 0.5),
+            Complex64::new(2.0, -1.0),
+            Complex64::new(3.0, 0.25),
+            Complex64::new(4.0, 1.5),
+            Complex64::new(5.0, -0.75),
+            Complex64::new(6.0, 0.0),
+            Complex64::new(1.0, -0.25),
+            Complex64::new(2.0, 0.75),
+            Complex64::new(3.0, -1.5),
+            Complex64::new(4.0, 0.5),
+            Complex64::new(5.0, 0.0),
+            Complex64::new(6.0, 0.25),
+        ],
+        &[3, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::qr(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.q.dims(), &[3, 2, 2]);
+    assert_eq!(got.r.dims(), &[2, 2, 2]);
+    assert_eq!(
+        got.q.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_eq!(
+        got.r.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+
+    let q = tensor_data_on_cpu(&got.q);
+    let r = tensor_data_on_cpu(&got.r);
+    let input = tensor_data_on_cpu(&a_cpu);
+    let matrix_stride = 3 * 2;
+    let r_stride = 2 * 2;
+    for batch in 0..2 {
+        let q_slice = &q[batch * matrix_stride..(batch + 1) * matrix_stride];
+        let r_slice = &r[batch * r_stride..(batch + 1) * r_stride];
+        let input_slice = &input[batch * matrix_stride..(batch + 1) * matrix_stride];
+        let reconstructed = matmul_col_major_complex(q_slice, 3, 2, r_slice, 2);
+        assert_close_complex_slice(
+            if batch == 0 {
+                "cuda complex qr batched reconstruction batch0"
+            } else {
+                "cuda complex qr batched reconstruction batch1"
+            },
+            &reconstructed,
+            input_slice,
+            cast::<f64>(4096.0) * f64::epsilon(),
+        );
+        let gram = gram_col_major_complex(q_slice, 3, 2);
+        let identity = vec![
+            Complex64::new(1.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(1.0, 0.0),
+        ];
+        assert_close_complex_slice(
+            if batch == 0 {
+                "cuda complex qr batched orthogonality batch0"
+            } else {
+                "cuda complex qr batched orthogonality batch1"
+            },
+            &gram,
+            &identity,
+            cast::<f64>(4096.0) * f64::epsilon(),
+        );
+    }
+}
+
 #[test]
 #[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f32() {
