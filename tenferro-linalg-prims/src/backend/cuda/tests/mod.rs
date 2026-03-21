@@ -7,6 +7,7 @@ fn cuda_runtime_available() -> bool {
     std::env::var_os("TENFERRO_TEST_CUDA").is_some()
 }
 
+#[cfg(feature = "cuda")]
 fn cutensor_path() -> Option<&'static str> {
     [
         "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so",
@@ -48,6 +49,7 @@ fn tensor_data_on_cpu<T: crate::KernelLinalgScalar>(tensor: &Tensor<T>) -> Vec<T
     contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
+#[cfg(feature = "cuda")]
 fn cuda_solve_matches_cpu_for_small_real_matrix_generic<T>()
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -114,6 +116,7 @@ where
     );
 }
 
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_matches_cpu_for_small_real_matrix_generic<T>()
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -170,6 +173,7 @@ where
     assert_eq!(got.pivots, expected.pivots);
 }
 
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_generic<T>()
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -231,6 +235,7 @@ where
     assert_eq!(got.pivots, expected.pivots);
 }
 
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic<T>()
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -311,20 +316,21 @@ fn cuda_linalg_scalar_maps_supported_standard_dtypes() {
 
 #[test]
 fn cuda_backend_reports_only_wired_capabilities() {
+    let has_native_cuda = cfg!(feature = "cuda");
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
             LinalgCapabilityOp::Solve
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
             LinalgCapabilityOp::LuFactor
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
             LinalgCapabilityOp::LuFactorEx
-        )
+        ) == has_native_cuda
     );
     assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
@@ -407,6 +413,7 @@ fn cuda_wrappers_label_missing_library_errors() {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_runtime_loads_solver_handles_with_real_context() {
     if !cuda_runtime_available() {
         return;
@@ -421,41 +428,49 @@ fn cuda_runtime_loads_solver_handles_with_real_context() {
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_solve_matches_cpu_for_small_real_matrix_f32() {
     cuda_solve_matches_cpu_for_small_real_matrix_generic::<f32>();
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_solve_matches_cpu_for_small_real_matrix_f64() {
     cuda_solve_matches_cpu_for_small_real_matrix_generic::<f64>();
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_matches_cpu_for_small_real_matrix_f32() {
     cuda_lu_factor_matches_cpu_for_small_real_matrix_generic::<f32>();
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_matches_cpu_for_small_real_matrix_f64() {
     cuda_lu_factor_matches_cpu_for_small_real_matrix_generic::<f64>();
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f32() {
     cuda_lu_factor_ex_matches_cpu_for_mixed_batch_generic::<f32>();
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f64() {
     cuda_lu_factor_ex_matches_cpu_for_mixed_batch_generic::<f64>();
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f32() {
     cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f32>();
 }
 
 #[test]
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f64() {
     cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f64>();
 }

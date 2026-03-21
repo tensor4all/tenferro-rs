@@ -150,8 +150,9 @@ fn ex_capabilities_track_cpu_ex_implementation_state() {
         "CPU should report LuFactorEx once the corresponding EX semantics exist",
     );
     assert!(
-        <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(LuFactorEx),
-        "CUDA should report LuFactorEx once native kernels are wired",
+        <crate::backend::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(LuFactorEx)
+            == cfg!(feature = "cuda"),
+        "CUDA LuFactorEx capability should match whether native CUDA kernels are compiled in",
     );
     assert!(
         !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(LuFactorEx),
