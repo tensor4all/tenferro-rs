@@ -14,6 +14,8 @@
 //! let vtable = unsafe { CutensorVtable::load(&lib) }.unwrap();
 //! ```
 
+#![allow(non_camel_case_types)]
+
 use std::ffi::{c_void, CStr, CString};
 
 #[cfg(unix)]
@@ -71,6 +73,8 @@ pub const CUTENSOR_C_64F: CutensorDataType = 5;
 pub type CutensorOperator = i32;
 /// Identity (no transformation).
 pub const CUTENSOR_OP_IDENTITY: CutensorOperator = 1;
+/// Square root.
+pub const CUTENSOR_OP_SQRT: CutensorOperator = 2;
 /// Addition.
 pub const CUTENSOR_OP_ADD: CutensorOperator = 3;
 /// Multiplication.
@@ -81,6 +85,40 @@ pub const CUTENSOR_OP_MAX: CutensorOperator = 6;
 pub const CUTENSOR_OP_MIN: CutensorOperator = 7;
 /// Complex conjugate.
 pub const CUTENSOR_OP_CONJ: CutensorOperator = 9;
+/// Reciprocal.
+pub const CUTENSOR_OP_RCP: CutensorOperator = 10;
+/// Hyperbolic tangent.
+pub const CUTENSOR_OP_TANH: CutensorOperator = 12;
+/// Exponential.
+pub const CUTENSOR_OP_EXP: CutensorOperator = 22;
+/// Natural logarithm.
+pub const CUTENSOR_OP_LOG: CutensorOperator = 23;
+/// Absolute value.
+pub const CUTENSOR_OP_ABS: CutensorOperator = 24;
+/// Negation.
+pub const CUTENSOR_OP_NEG: CutensorOperator = 25;
+/// Sine.
+pub const CUTENSOR_OP_SIN: CutensorOperator = 26;
+/// Cosine.
+pub const CUTENSOR_OP_COS: CutensorOperator = 27;
+/// Tangent.
+pub const CUTENSOR_OP_TAN: CutensorOperator = 28;
+/// Hyperbolic sine.
+pub const CUTENSOR_OP_SINH: CutensorOperator = 29;
+/// Hyperbolic cosine.
+pub const CUTENSOR_OP_COSH: CutensorOperator = 30;
+/// Inverse sine.
+pub const CUTENSOR_OP_ASIN: CutensorOperator = 31;
+/// Inverse cosine.
+pub const CUTENSOR_OP_ACOS: CutensorOperator = 32;
+/// Inverse tangent.
+pub const CUTENSOR_OP_ATAN: CutensorOperator = 33;
+/// Inverse hyperbolic sine.
+pub const CUTENSOR_OP_ASINH: CutensorOperator = 34;
+/// Inverse hyperbolic cosine.
+pub const CUTENSOR_OP_ACOSH: CutensorOperator = 35;
+/// Inverse hyperbolic tangent.
+pub const CUTENSOR_OP_ATANH: CutensorOperator = 36;
 
 /// cuTENSOR algorithm selection (mirrors `cutensorAlgo_t`).
 pub type CutensorAlgo = i32;

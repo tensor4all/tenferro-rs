@@ -79,6 +79,21 @@
       "target": "scripts/sync-agent-assets.sh"
     },
     {
+      "id": "run-codex-solve-bug-script",
+      "source": "ai/run-codex-solve-bug.sh",
+      "target": "ai/run-codex-solve-bug.sh"
+    },
+    {
+      "id": "run-claude-solve-bug-script",
+      "source": "ai/run-claude-solve-bug.sh",
+      "target": "ai/run-claude-solve-bug.sh"
+    },
+    {
+      "id": "solve-bug-issue-prompt",
+      "source": "ai/solve_bug_issue.md",
+      "target": "ai/solve_bug_issue.md"
+    },
+    {
       "id": "check-repo-settings-script",
       "source": "scripts/check-repo-settings.sh",
       "target": "scripts/check-repo-settings.sh"

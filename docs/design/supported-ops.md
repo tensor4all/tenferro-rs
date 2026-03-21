@@ -48,7 +48,25 @@ substrate before they can be added cleanly.
 ### Runtime status
 
 - CPU: semiring/scalar/analytic families are implemented.
-- CUDA and ROCm: semiring runtime hooks exist, but `TensorScalarPrims` and `TensorAnalyticPrims` currently advertise `has_*_support(...) == false` in phase 1.
+- CUDA: semiring core/fast path are implemented. Scalar/analytic families execute GPU-resident on real `f32`/`f64`, plus the complex subset listed below on `Complex32`/`Complex64`.
+- ROCm: backend symbols exist as truthful stubs; support predicates remain false and planning/execution return unsupported errors.
+
+CUDA scalar-family subset:
+
+- real `f32`/`f64`: full scalar inventory
+- complex `Complex32`/`Complex64`: unary `Neg`, `Conj`, `Abs`, `Reciprocal`, `Real`, `Imag`, `Square`; binary `Add`, `Sub`, `Mul`, `Div`; reductions `Sum`, `Prod`, `Mean`
+- real-only on CUDA: `Maximum`, `Minimum`, `ClampMin`, `ClampMax`, `Max`, `Min`
+  Phase-1 does not define an ordering for complex tensors, so ordered scalar
+  ops stay real-only.
+
+CUDA analytic-family subset:
+
+- real `f32`/`f64`: full analytic inventory
+- complex `Complex32`/`Complex64`: all analytic unary ops plus binary `Pow` and `Xlogy`
+- real-only on CUDA: `Atan2`, `Hypot`, `Var`, `Std`
+  Complex `Var`/`Std` are intentionally unsupported in phase-1 because the
+  runtime does not commit to a canonical real-valued complex reduction
+  contract; callers must compose their chosen statistic explicitly.
 
 ## `tenferro-linalg-prims`
 

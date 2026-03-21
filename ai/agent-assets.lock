@@ -22,7 +22,7 @@
     },
     "common-agent-rules": {
       "path": "ai/vendor/template-rs/common-agent-rules.md",
-      "sha256": "3ee4d2f5ee04374204ce6aca956b6d59501fc27aa80dd7aa7b1f80bfb58b2a43"
+      "sha256": "55b91d3ee445ab7182c9d58dd301e6720d4a86bd2be5ff81bb1ae7561d4867b6"
     },
     "configure-repo-settings-script": {
       "path": "scripts/configure-repo-settings.sh",
@@ -42,7 +42,7 @@
     },
     "manifest": {
       "path": "ai/manifest.json",
-      "sha256": "daa655183d5f326a501876a35288c576885dd8a91bee86b1fd4e4138bd20d5e1"
+      "sha256": "76d7e8203381af30ea64efbc1605d8022579d9d35ff14e85b2916f182e341c24"
     },
     "monitor-pr-checks-script": {
       "path": "scripts/monitor-pr-checks.sh",
@@ -60,6 +60,18 @@
       "path": "ai/repo-settings.json",
       "sha256": "29c4faf5a3d7c6753c8d8abe619a5482334aef3539a1875d5dd1bdbca9e92d7d"
     },
+    "run-claude-solve-bug-script": {
+      "path": "ai/run-claude-solve-bug.sh",
+      "sha256": "c7d3ce424fbb895b6aff336e8cd8ab9dd35fb53e4f8a3dd50a4149f303ed91ec"
+    },
+    "run-codex-solve-bug-script": {
+      "path": "ai/run-codex-solve-bug.sh",
+      "sha256": "5a910675780923b3f549661b47bb4c357f1fa16de3abad866869eb07eb041a93"
+    },
+    "solve-bug-issue-prompt": {
+      "path": "ai/solve_bug_issue.md",
+      "sha256": "db2b4aeb42d241370f167a76b38c512183854cc587bb0f29576446ef47012b8f"
+    },
     "sync-agent-assets-command": {
       "path": ".claude/commands/sync-agent-assets.md",
       "sha256": "46c7102ddb6d9277cd6984750cff05c0d1d04c054f67d12e16466ea1f9a4875b"
@@ -69,8 +81,8 @@
       "sha256": "a54d7dcf5f66e54310721c038df84a873814f4ced645c3ea46c10caa9e3368d2"
     }
   },
-  "bundle_revision": "a5f235fe22b2aac6e6fbffea73fadcdb2788abff",
+  "bundle_revision": "6170e66761f71bf31272c13932e2c6a156ad9afb",
   "source_ref": "main",
   "source_repo": "tensor4all/template-rs",
-  "synced_at": "2026-03-18T23:27:14Z"
+  "synced_at": "2026-03-20T11:15:38Z"
 }

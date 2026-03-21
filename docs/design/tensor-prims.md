@@ -118,11 +118,15 @@ Current state by family:
 - `TensorSemiringContextFor<Alg>` is the context-side bridge higher layers use
   when they need semiring execution without naming a concrete backend type.
 - `TensorScalarPrims` has explicit CPU planning/execution for the phase-1
-  unary, binary, and reduction inventory, with truthful `false` capability
-  reporting for unwired CUDA/ROCm cases.
+  unary, binary, and reduction inventory, and explicit CUDA execution for the
+  real `f32`/`f64` inventory plus the supported complex subset on
+  `Complex32`/`Complex64`.
 - `TensorAnalyticPrims` has explicit CPU planning/execution for the phase-1
-  unary and binary inventory, and the current tensor-level surface also wires
-  `Var` and `Std` through the analytic reduction family.
+  unary, binary, and reduction inventory, and explicit CUDA execution for the
+  real `f32`/`f64` inventory plus the supported complex subset on
+  `Complex32`/`Complex64`.
+- ROCm remains a truthful stub backend for scalar and analytic families in this
+  phase.
 
 The backend code is also split by concern instead of a single dispatcher file:
 
@@ -133,8 +137,13 @@ The backend code is also split by concern instead of a single dispatcher file:
   GEMM helpers, and `scratch.rs` for BLAS scratch-pool reuse.
 - CUDA keeps `mod.rs` for backend/context types and runtime loading,
   `planning.rs` for cuTENSOR descriptor/plan construction,
-  `execution.rs` for family dispatch, `scalar_type.rs` for dtype mapping,
-  and `wrappers.rs` for RAII handle management.
+  `execution.rs` for semiring dispatch, `scalar_family.rs` and
+  `analytic_family.rs` for family-specific planning/execution,
+  `diagonal.rs` for semiring diagonal kernels, `pointwise_ops.rs` for shared
+  pointwise helpers, `runtime.rs` for GPU-resident scratch/workspace helpers,
+  `custom/` for NVRTC-backed custom kernel compilation and caching,
+  `scalar_type.rs` for dtype mapping, and `wrappers.rs` for RAII handle
+  management.
 - Einsum keeps eager API entrypoints and AD rules in separate module trees so
   new execution APIs do not accumulate AD-specific wiring in the same file.
 
