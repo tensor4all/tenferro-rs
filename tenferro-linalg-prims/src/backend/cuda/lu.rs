@@ -8,9 +8,11 @@ use cudarc::driver::{LaunchConfig, PushKernelArg};
 #[cfg(feature = "cuda")]
 use cudarc::nvrtc::{compile_ptx, Ptx};
 #[cfg(feature = "cuda")]
-use num_traits::Zero;
-use tenferro_device::{Error, Result};
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_device::Error;
+use tenferro_device::Result;
+#[cfg(feature = "cuda")]
+use tenferro_tensor::MemoryOrder;
+use tenferro_tensor::Tensor;
 
 #[cfg(feature = "cuda")]
 use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime, DeviceAllocation};
@@ -256,58 +258,6 @@ fn pivots_to_forward_perm(m: usize, pivots: &[i32]) -> Result<Vec<usize>> {
 }
 
 #[cfg(feature = "cuda")]
-fn batch_coords_from_linear(mut batch: usize, batch_dims: &[usize]) -> Vec<usize> {
-    let mut coords = Vec::with_capacity(batch_dims.len());
-    for &dim in batch_dims {
-        coords.push(batch % dim);
-        batch /= dim;
-    }
-    coords
-}
-
-#[cfg(feature = "cuda")]
-fn first_zero_pivot_from_batch<T>(
-    ctx: &mut tenferro_prims::CudaContext,
-    packed: &Tensor<T>,
-    batch_dims: &[usize],
-    batch: usize,
-    m: usize,
-    n: usize,
-) -> Result<i32>
-where
-    T: CudaLinalgScalar,
-{
-    let coords = batch_coords_from_linear(batch, batch_dims);
-    let mut view = packed.clone();
-    for (axis, coord) in coords.into_iter().enumerate() {
-        view = view.select(2 + axis, coord)?;
-    }
-
-    let diag = view
-        .diagonal(&[(0, 1)])?
-        .contiguous(MemoryOrder::ColumnMajor);
-    let diag_len = m.min(n);
-    let mut host_diag = vec![T::zero(); diag_len];
-    let diag_ptr = diag
-        .buffer()
-        .as_device_ptr()
-        .ok_or_else(|| Error::DeviceError("LU diagonal tensor buffer is not on GPU".into()))?;
-    copy_device_to_host(
-        ctx,
-        diag_ptr.cast::<c_void>(),
-        &mut host_diag,
-        "cudaMemcpyDtoH(lu_factor diagonal)",
-    )?;
-
-    for (index, value) in host_diag.iter().enumerate() {
-        if value.abs_real() == T::Real::zero() {
-            return Ok((index + 1) as i32);
-        }
-    }
-    Ok(0)
-}
-
-#[cfg(feature = "cuda")]
 fn launch_lu_split<T: CudaLinalgScalar>(
     ctx: &mut tenferro_prims::CudaContext,
     packed: &Tensor<T>,
@@ -500,14 +450,13 @@ where
             "cudaMemcpyDtoH(lu_factor info)",
         )?;
         check_getrf_info(host_info[0], true, "lu_factor/getrf")?;
+        if collect_info {
+            info[batch] = host_info[0];
+        }
 
         let perm = pivots_to_forward_perm(m, &host_pivots)?;
         for (i, &p) in perm.iter().enumerate() {
             pivots_out[batch * m + i] = p as i32;
-        }
-
-        if collect_info {
-            info[batch] = first_zero_pivot_from_batch(ctx, &a_work, batch_dims, batch, m, n)?;
         }
     }
 

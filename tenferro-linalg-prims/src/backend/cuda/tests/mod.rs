@@ -231,6 +231,64 @@ where
     assert_eq!(got.pivots, expected.pivots);
 }
 
+fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0e-20),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(1.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::lu_factor_ex(
+            &mut cpu_ctx,
+            &a_cpu,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::lu_factor_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, vec![0]);
+    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.l),
+        tensor_data_on_cpu(&expected.l),
+        "cuda lu_factor_ex lower factor mismatch for small nonzero pivot"
+    );
+    assert_eq!(
+        tensor_data_on_cpu(&got.u),
+        tensor_data_on_cpu(&expected.u),
+        "cuda lu_factor_ex upper factor mismatch for small nonzero pivot"
+    );
+    assert_eq!(got.pivots, expected.pivots);
+}
+
 #[test]
 fn cuda_linalg_scalar_maps_supported_standard_dtypes() {
     assert_eq!(
@@ -390,4 +448,14 @@ fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f32() {
 #[test]
 fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f64() {
     cuda_lu_factor_ex_matches_cpu_for_mixed_batch_generic::<f64>();
+}
+
+#[test]
+fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f32() {
+    cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f32>();
+}
+
+#[test]
+fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f64() {
+    cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f64>();
 }
