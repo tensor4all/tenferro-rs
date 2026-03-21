@@ -261,6 +261,27 @@ fn matrix_power_supports_zero_positive_and_negative_exponents() {
 }
 
 #[test]
+fn matrix_power_zero_batched_returns_identity_per_batch() {
+    let mut ctx = CpuContext::new(1);
+    let batched = Tensor::from_slice(
+        &[
+            2.0_f64, 0.0, 0.0, 3.0, //
+            4.0, 0.0, 0.0, 5.0,
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let pow0 = matrix_power(&mut ctx, &batched, 0).unwrap();
+    assert_eq!(pow0.dims(), &[2, 2, 2]);
+    assert_eq!(
+        tensor_data(&pow0),
+        vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+    );
+}
+
+#[test]
 fn matrix_power_rejects_non_square_input() {
     let mut ctx = CpuContext::new(1);
     let rect = Tensor::from_slice(

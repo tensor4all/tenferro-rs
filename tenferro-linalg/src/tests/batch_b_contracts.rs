@@ -603,6 +603,57 @@ fn cuda_public_matrix_power_matches_cpu_small_real_matrix_f64() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_matrix_power_matches_cpu_small_complex_matrix_c64() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(1.0_f64, 1.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(2.0, -1.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let expected_pos = matrix_power(&mut cpu_ctx, &a_cpu, 2).unwrap();
+        let got_pos = matrix_power(ctx, &a_gpu, 2).unwrap();
+        assert_eq!(
+            got_pos.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got_pos.dims(), expected_pos.dims());
+        assert_close_complex_slice(
+            "cuda public matrix power complex positive exponent",
+            &tensor_data_on_cpu(&got_pos),
+            &tensor_data_on_cpu(&expected_pos),
+            4096.0_f64 * f64::EPSILON,
+        );
+
+        let expected_neg = matrix_power(&mut cpu_ctx, &a_cpu, -1).unwrap();
+        let got_neg = matrix_power(ctx, &a_gpu, -1).unwrap();
+        assert_eq!(
+            got_neg.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got_neg.dims(), expected_neg.dims());
+        assert_close_complex_slice(
+            "cuda public matrix power complex negative exponent",
+            &tensor_data_on_cpu(&got_neg),
+            &tensor_data_on_cpu(&expected_neg),
+            4096.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cpu_context_matrix_exp_reject_gpu_tensors_before_host_slice_fallback_impl() {
     let Some(()) = with_cuda_ctx(|_| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -1887,6 +1938,12 @@ fn public_cuda_lu_no_pivot_rejects_gpu_tensor_before_host_slice_fallback() {
 #[cfg(feature = "cuda")]
 fn public_cuda_matrix_power_matches_cpu_for_small_real_matrix_f64() {
     cuda_public_matrix_power_matches_cpu_small_real_matrix_f64();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_matrix_power_matches_cpu_for_small_complex_matrix_c64() {
+    cuda_public_matrix_power_matches_cpu_small_complex_matrix_c64();
 }
 
 #[test]
