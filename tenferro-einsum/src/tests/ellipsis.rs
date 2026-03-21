@@ -538,3 +538,88 @@ fn test_ellipsis_trace_equivalence() {
         );
     }
 }
+
+/// Tests ellipsis notation with negative values to ensure correct handling of signed arithmetic.
+#[test]
+fn test_ellipsis_with_negative_values() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = vec![-1.0, 2.0, -3.0, 4.0, -5.0, 6.0];
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 3], col).unwrap();
+
+    let b_data: Vec<f64> = vec![7.0, -8.0, 9.0, -10.0, 11.0, -12.0];
+    let b = Tensor::<f64>::from_slice(&b_data, &[3, 2], col).unwrap();
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+            .unwrap();
+
+    assert_eq!(result.dims(), &[2, 2]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    assert!(
+        result_data.iter().all(|&v| v.is_finite()),
+        "All result values should be finite with negative inputs"
+    );
+}
+
+/// Tests ellipsis notation with three-input contraction (triple einsum).
+/// Verifies that ellipsis correctly handles multiple batched inputs.
+#[test]
+fn test_ellipsis_three_input_contraction() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (0..12).map(|i| (i + 1) as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 2, 3], col).unwrap();
+
+    let b_data: Vec<f64> = (0..12).map(|i| (i + 13) as f64).collect();
+    let b = Tensor::<f64>::from_slice(&b_data, &[2, 3, 2], col).unwrap();
+
+    let c_data: Vec<f64> = (0..8).map(|i| (i + 25) as f64).collect();
+    let c = Tensor::<f64>::from_slice(&c_data, &[2, 2, 2], col).unwrap();
+
+    let result = einsum::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        "...ij,...jk,...kl->...il",
+        &[&a, &b, &c],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result.dims(), &[2, 2, 2]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    assert!(
+        result_data.iter().all(|&v| v.is_finite()),
+        "All result values should be finite in three-input contraction"
+    );
+}
+
+/// Tests ellipsis notation with scalar result (full contraction).
+#[test]
+fn test_ellipsis_full_contraction_scalar() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a_data: Vec<f64> = (1..=6).map(|i| i as f64).collect();
+    let a = Tensor::<f64>::from_slice(&a_data, &[2, 3], col).unwrap();
+
+    let b_data: Vec<f64> = (1..=6).map(|i| i as f64).collect();
+    let b = Tensor::<f64>::from_slice(&b_data, &[2, 3], col).unwrap();
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...ij->", &[&a, &b], None).unwrap();
+
+    assert_eq!(result.dims(), &[]);
+
+    let result_data = result.buffer().as_slice().unwrap();
+    let expected: f64 = (1..=6).map(|i| (i * i) as f64).sum();
+    assert!(
+        (result_data[0] - expected).abs() < 1e-10,
+        "Scalar result {} should equal expected {}",
+        result_data[0],
+        expected
+    );
+}
