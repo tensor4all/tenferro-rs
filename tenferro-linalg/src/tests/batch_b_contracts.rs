@@ -392,6 +392,236 @@ fn cuda_public_solve_ex_matches_cpu_generic() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_solve_ex_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let zero = 0.0_f32;
+        let one = 1.0_f32;
+        let two = one + one;
+        let three = two + one;
+        let half = 0.5_f32;
+        let quarter = 0.25_f32;
+        let minus_one = -one;
+        let minus_half = -half;
+
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(one, zero),
+                Complex::new(zero, zero),
+                Complex::new(zero, zero),
+                Complex::new(one, zero),
+                Complex::new(one, quarter),
+                Complex::new(two, minus_half),
+                Complex::new(two, half),
+                Complex::new(4.0_f32, -one),
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b_cpu = Tensor::from_slice(
+            &[
+                Complex::new(three, minus_one),
+                Complex::new(one, half),
+                Complex::new(-one, -quarter),
+                Complex::new(-two, half),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = solve_ex(&mut cpu_ctx, &a_cpu, &b_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let b_gpu = b_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = solve_ex(ctx, &a_gpu, &b_gpu).unwrap();
+        assert_eq!(
+            got.solution.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.solution.dims(), expected.solution.dims());
+        assert_eq!(got.info, expected.info);
+        assert_close_complex_slice(
+            "cuda public complex solve_ex",
+            &tensor_data_on_cpu(&got.solution),
+            &tensor_data_on_cpu(&expected.solution),
+            4096.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_solve_ex_matches_cpu_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let zero = 0.0_f64;
+        let one = 1.0_f64;
+        let two = one + one;
+        let three = two + one;
+        let half = 0.5_f64;
+        let quarter = 0.25_f64;
+        let minus_one = -one;
+        let minus_half = -half;
+
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(one, zero),
+                Complex::new(zero, zero),
+                Complex::new(zero, zero),
+                Complex::new(one, zero),
+                Complex::new(one, quarter),
+                Complex::new(two, minus_half),
+                Complex::new(two, half),
+                Complex::new(4.0_f64, -one),
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b_cpu = Tensor::from_slice(
+            &[
+                Complex::new(three, minus_one),
+                Complex::new(one, half),
+                Complex::new(-one, -quarter),
+                Complex::new(-two, half),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = solve_ex(&mut cpu_ctx, &a_cpu, &b_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let b_gpu = b_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = solve_ex(ctx, &a_gpu, &b_gpu).unwrap();
+        assert_eq!(
+            got.solution.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.solution.dims(), expected.solution.dims());
+        assert_eq!(got.info, expected.info);
+        assert_close_complex_slice(
+            "cuda public complex solve_ex",
+            &tensor_data_on_cpu(&got.solution),
+            &tensor_data_on_cpu(&expected.solution),
+            4096.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_cholesky_ex_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let zero = 0.0_f32;
+        let one = 1.0_f32;
+        let two = one + one;
+        let three = two + one;
+        let four = two + two;
+        let half = 0.5_f32;
+        let minus_half = -half;
+
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(four, zero),
+                Complex::new(one, half),
+                Complex::new(one, minus_half),
+                Complex::new(three, zero),
+                Complex::new(one, zero),
+                Complex::new(two, minus_half),
+                Complex::new(two, half),
+                Complex::new(one, zero),
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = cholesky_ex(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = cholesky_ex(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.l.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.l.dims(), expected.l.dims());
+        assert_eq!(got.info, expected.info);
+        assert_close_complex_slice(
+            "cuda public complex cholesky_ex",
+            &tensor_data_on_cpu(&got.l),
+            &tensor_data_on_cpu(&expected.l),
+            4096.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_cholesky_ex_matches_cpu_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let zero = 0.0_f64;
+        let one = 1.0_f64;
+        let two = one + one;
+        let three = two + one;
+        let four = two + two;
+        let half = 0.5_f64;
+        let minus_half = -half;
+
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(four, zero),
+                Complex::new(one, half),
+                Complex::new(one, minus_half),
+                Complex::new(three, zero),
+                Complex::new(one, zero),
+                Complex::new(two, minus_half),
+                Complex::new(two, half),
+                Complex::new(one, zero),
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = cholesky_ex(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = cholesky_ex(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.l.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.l.dims(), expected.l.dims());
+        assert_eq!(got.info, expected.info);
+        assert_close_complex_slice(
+            "cuda public complex cholesky_ex",
+            &tensor_data_on_cpu(&got.l),
+            &tensor_data_on_cpu(&expected.l),
+            4096.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_qr_reconstructs_complex32_impl() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let a_cpu = Tensor::from_slice(
@@ -1126,6 +1356,30 @@ fn public_cuda_svd_cutoff_preserves_zero_fill_semantics() {
 #[cfg(feature = "cuda")]
 fn public_cuda_solve_ex_matches_cpu_for_mixed_batch() {
     cuda_public_solve_ex_matches_cpu_generic();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_solve_ex_matches_cpu_for_mixed_batch_complex32() {
+    cuda_public_solve_ex_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_solve_ex_matches_cpu_for_mixed_batch_complex64() {
+    cuda_public_solve_ex_matches_cpu_complex64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_cholesky_ex_matches_cpu_for_mixed_batch_complex32() {
+    cuda_public_cholesky_ex_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_cholesky_ex_matches_cpu_for_mixed_batch_complex64() {
+    cuda_public_cholesky_ex_matches_cpu_complex64_impl();
 }
 
 #[test]
