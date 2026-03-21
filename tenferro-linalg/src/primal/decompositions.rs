@@ -345,6 +345,7 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
+    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::EigenSym, "eigen")?;
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
     let data = extract_slice(&input)?;

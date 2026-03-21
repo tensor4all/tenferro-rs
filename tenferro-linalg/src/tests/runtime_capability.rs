@@ -151,6 +151,29 @@ fn inv_ex_section_requires_inverse_capability() {
 }
 
 #[test]
+fn eigen_section_requires_capability_before_hermitian_validation() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let eigen = file_section(&decompositions, "pub fn eigen", "#[cfg(test)]");
+    let capability_gate =
+        "require_linalg_support::<T, C>(backend::LinalgCapabilityOp::EigenSym, \"eigen\")?";
+    let extract_slice = "extract_slice(&input)?";
+    let validation = "validate_hermitian_batches(data, offset, n, bc, \"eigen\")?";
+
+    assert!(
+        eigen.contains(capability_gate),
+        "eigen should gate through capability checks rather than direct backend-name or host-slice heuristics"
+    );
+    assert!(
+        eigen.find(capability_gate) < eigen.find(validation),
+        "eigen should require capability before validating Hermitian batches from host slices"
+    );
+    assert!(
+        eigen.find(capability_gate) < eigen.find(extract_slice),
+        "eigen should require capability before any host-slice extraction"
+    );
+}
+
+#[test]
 fn cholesky_ex_section_does_not_extract_cpu_slices() {
     let least_squares = repo_file("src/primal/least_squares.rs");
     let cholesky_ex = file_section(&least_squares, "pub fn cholesky_ex", "#[cfg(test)]");

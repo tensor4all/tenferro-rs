@@ -1908,6 +1908,29 @@ fn batch_b_ops_reject_cuda_context() {
             Err(tenferro_device::Error::DeviceError(_))
         ));
 
+        #[cfg(feature = "cuda")]
+        {
+            let hermitian = Tensor::from_slice(
+                &[
+                    2.0_f64, 1.0, 1.0, 3.0, //
+                    4.0, 0.5, 0.5, 5.0,
+                ],
+                &[2, 2, 2],
+                MemoryOrder::ColumnMajor,
+            )
+            .unwrap()
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+            let eigen_err = eigen(ctx, &hermitian).unwrap_err();
+            assert!(matches!(eigen_err, tenferro_device::Error::DeviceError(_)));
+            assert!(
+                eigen_err
+                    .to_string()
+                    .contains("not supported on the current linalg backend"),
+                "eigen should fail through capability gating before host-slice validation"
+            );
+        }
+
         let rhs = Tensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
         assert!(matches!(
             tensorsolve(ctx, &eye, &rhs, None),
