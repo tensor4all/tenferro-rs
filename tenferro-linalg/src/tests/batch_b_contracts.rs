@@ -486,6 +486,79 @@ fn cuda_public_slogdet_matches_cpu_f64_impl() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_lu_factor_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f32, 1.0),
+                Complex::new(1.0, -1.0),
+                Complex::new(3.0, 0.5),
+                Complex::new(4.0, -2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = lu_factor(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = lu_factor(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.factors.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.factors.dims(), expected.factors.dims());
+        assert_eq!(got.pivots, expected.pivots);
+        assert_close_complex_slice(
+            "cuda public lu_factor complex32 factors",
+            &tensor_data_on_cpu(&got.factors),
+            &tensor_data_on_cpu(&expected.factors),
+            4096.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_lu_factor_ex_matches_cpu_mixed_batch_f64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                1.0_f64, 0.0, 0.0, 1.0, //
+                1.0, 2.0, 2.0, 4.0,
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = lu_factor_ex(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = lu_factor_ex(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.factors.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.factors.dims(), expected.factors.dims());
+        assert_eq!(got.pivots, expected.pivots);
+        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.factors),
+            tensor_data_on_cpu(&expected.factors)
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_solve_ex_matches_cpu_generic() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -1510,6 +1583,18 @@ fn public_cuda_slogdet_matches_cpu_for_small_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn public_cuda_slogdet_matches_cpu_for_small_matrix_f64() {
     cuda_public_slogdet_matches_cpu_f64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_lu_factor_matches_cpu_for_small_complex32_matrix() {
+    cuda_public_lu_factor_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f64() {
+    cuda_public_lu_factor_ex_matches_cpu_mixed_batch_f64_impl();
 }
 
 #[test]

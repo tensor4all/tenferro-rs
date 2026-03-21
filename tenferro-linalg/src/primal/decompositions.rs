@@ -280,10 +280,15 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    let result = lu_factor_impl(ctx, tensor)?;
+    validate_2d(tensor)?;
+    let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
     Ok(LuFactorResult {
-        factors: result.factors,
-        pivots: result.pivots,
+        factors: pack_lu_factors(&result.l, &result.u)?,
+        pivots: result
+            .pivots
+            .into_iter()
+            .map(|pivot| pivot as usize)
+            .collect(),
     })
 }
 
@@ -298,9 +303,9 @@ where
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuFactorEx, "lu_factor_ex")?;
 
-    let (m, n, batch_dims) = validate_2d(tensor)?;
+    validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_ex(ctx, tensor)?;
-    let factors = pack_lu_factors(&result.l, &result.u, m, n, batch_dims)?;
+    let factors = pack_lu_factors(&result.l, &result.u)?;
 
     Ok(LuFactorExResult {
         factors,

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tenferro_algebra::Scalar;
 use tenferro_device::cuda::runtime::{
     self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, TriangularHalf,
-    TriangularPartSpec, ZeroTrailingByCountsSpec,
+    TriangularMergeSpec, TriangularPartSpec, ZeroTrailingByCountsSpec,
 };
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
@@ -247,6 +247,63 @@ pub(super) fn triangular_part_tensor<T: Scalar>(
 
     unsafe {
         runtime.triangular_part_raw(src_ptr, dst_ptr, &spec)?;
+    }
+
+    Ok(output)
+}
+
+pub(super) fn merge_strict_lower_and_upper_tensor<T: Scalar>(
+    lower: &Tensor<T>,
+    upper: &Tensor<T>,
+) -> Result<Tensor<T>> {
+    let space = lower.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let batch_dims = &lower.dims()[2..];
+    let output_dims: Vec<usize> = std::iter::once(lower.dims()[0])
+        .chain(std::iter::once(upper.dims()[1]))
+        .chain(batch_dims.iter().copied())
+        .collect();
+    let out_strides = compute_contiguous_strides(&output_dims, MemoryOrder::ColumnMajor);
+    let output = Tensor::from_parts(
+        alloc_gpu_buffer(output_dims.iter().product(), space)?,
+        Arc::from(output_dims),
+        Arc::from(out_strides),
+        0,
+        space,
+        lower.preferred_compute_device(),
+        None,
+        lower.is_conjugated(),
+        None,
+    );
+    if output.is_empty() {
+        return Ok(output);
+    }
+
+    let lower_ptr = lower
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("lower tensor buffer is not on GPU".into()))?;
+    let upper_ptr = upper
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("upper tensor buffer is not on GPU".into()))?;
+    let dst_ptr = output
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("output tensor buffer is not on GPU".into()))?
+        as *mut T;
+    let spec = TriangularMergeSpec::new(
+        output.dims(),
+        lower.strides(),
+        lower.offset(),
+        upper.strides(),
+        upper.offset(),
+        output.strides(),
+        output.offset(),
+    )?;
+
+    unsafe {
+        runtime.triangular_merge_raw(lower_ptr, upper_ptr, dst_ptr, &spec)?;
     }
 
     Ok(output)

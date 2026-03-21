@@ -110,6 +110,60 @@ extern "C" __global__ void triangular_part_kernel(
 }
 "#;
 
+const TRIANGULAR_MERGE_KERNEL_NAME: &str = "triangular_merge_kernel";
+const TRIANGULAR_MERGE_CUDA_SRC: &str = r#"
+extern "C" __global__ void triangular_merge_kernel(
+    const unsigned char* lower_src,
+    const unsigned char* upper_src,
+    unsigned char* dst,
+    const long long* dims,
+    const long long* lower_strides,
+    long long lower_offset,
+    const long long* upper_strides,
+    long long upper_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long elem_size,
+    unsigned long long numel
+) {
+    unsigned long long linear_idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (linear_idx >= numel) {
+        return;
+    }
+
+    unsigned long long remainder = linear_idx;
+    long long lower_index = lower_offset;
+    long long upper_index = upper_offset;
+    long long dst_index = dst_offset;
+    long long row = 0;
+    long long col = 0;
+
+    for (int axis = 0; axis < ndim; ++axis) {
+        long long coord = (long long)(remainder % (unsigned long long)dims[axis]);
+        remainder /= (unsigned long long)dims[axis];
+        lower_index += coord * lower_strides[axis];
+        upper_index += coord * upper_strides[axis];
+        dst_index += coord * dst_strides[axis];
+        if (axis == 0) {
+            row = coord;
+        } else if (axis == 1) {
+            col = coord;
+        }
+    }
+
+    const unsigned char* src = row > col ? lower_src : upper_src;
+    unsigned long long src_byte =
+        (unsigned long long)(row > col ? lower_index : upper_index) * elem_size;
+    unsigned long long dst_byte = (unsigned long long)dst_index * elem_size;
+    for (unsigned long long byte_idx = 0; byte_idx < elem_size; ++byte_idx) {
+        dst[dst_byte + byte_idx] = src[src_byte + byte_idx];
+    }
+}
+"#;
+
 const ZERO_TRAILING_VALIDATE_KERNEL_NAME_F32: &str = "validate_keep_counts_f32";
 const ZERO_TRAILING_VALIDATE_KERNEL_NAME_F64: &str = "validate_keep_counts_f64";
 const ZERO_TRAILING_KERNEL_NAME_F32: &str = "zero_trailing_by_counts_f32";
@@ -686,6 +740,16 @@ fn triangular_part_ptx() -> Result<Ptx> {
     .map_err(Error::DeviceError)
 }
 
+fn triangular_merge_ptx() -> Result<Ptx> {
+    static PTX: OnceLock<std::result::Result<Ptx, String>> = OnceLock::new();
+    PTX.get_or_init(|| {
+        compile_ptx(TRIANGULAR_MERGE_CUDA_SRC)
+            .map_err(|err| format!("NVRTC compile failed for triangular-merge kernel: {err:?}"))
+    })
+    .clone()
+    .map_err(Error::DeviceError)
+}
+
 fn checked_num_bytes<T>(len: usize) -> Result<usize> {
     len.checked_mul(std::mem::size_of::<T>())
         .ok_or_else(|| Error::DeviceError("CUDA allocation size overflow".into()))
@@ -1183,6 +1247,133 @@ impl TriangularPartSpec {
     /// let spec = TriangularPartSpec::new(&[2, 3], &[1, 2], 0, &[1, 2], 5, 0, TriangularHalf::Lower).unwrap();
     /// assert_eq!(spec.dst_offset(), 5);
     /// ```
+    pub fn dst_offset(&self) -> isize {
+        self.dst_offset
+    }
+}
+
+/// Low-level specification for merging a strict-lower source and an upper-with-diagonal source.
+///
+/// The logical output shape is `dims`. The first source is read when `row > col`,
+/// and the second source is read otherwise. The first two dimensions are
+/// interpreted as matrix rows and columns; trailing dimensions are batch dims.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::cuda::runtime::TriangularMergeSpec;
+///
+/// let spec = TriangularMergeSpec::new(
+///     &[3, 2, 4],
+///     &[1, 3, 6],
+///     0,
+///     &[1, 3, 6],
+///     0,
+///     &[1, 3, 6],
+///     0,
+/// ).unwrap();
+/// assert_eq!(spec.dims(), &[3, 2, 4]);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TriangularMergeSpec {
+    dims: Vec<usize>,
+    lower_strides: Vec<isize>,
+    lower_offset: isize,
+    upper_strides: Vec<isize>,
+    upper_offset: isize,
+    dst_strides: Vec<isize>,
+    dst_offset: isize,
+}
+
+impl TriangularMergeSpec {
+    /// Build a triangular-merge specification.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::TriangularMergeSpec;
+    ///
+    /// let spec = TriangularMergeSpec::new(
+    ///     &[2, 3],
+    ///     &[1, 2],
+    ///     0,
+    ///     &[1, 2],
+    ///     0,
+    ///     &[1, 2],
+    ///     0,
+    /// ).unwrap();
+    /// assert_eq!(spec.dims(), &[2, 3]);
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        dims: &[usize],
+        lower_strides: &[isize],
+        lower_offset: isize,
+        upper_strides: &[isize],
+        upper_offset: isize,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<Self> {
+        if dims.len() < 2 {
+            return Err(Error::InvalidArgument(
+                "triangular merge requires rank >= 2".into(),
+            ));
+        }
+        if dims.len() != lower_strides.len()
+            || dims.len() != upper_strides.len()
+            || dims.len() != dst_strides.len()
+        {
+            return Err(Error::InvalidArgument(format!(
+                "triangular merge rank mismatch: dims={} lower_strides={} upper_strides={} dst_strides={}",
+                dims.len(),
+                lower_strides.len(),
+                upper_strides.len(),
+                dst_strides.len()
+            )));
+        }
+
+        Ok(Self {
+            dims: dims.to_vec(),
+            lower_strides: lower_strides.to_vec(),
+            lower_offset,
+            upper_strides: upper_strides.to_vec(),
+            upper_offset,
+            dst_strides: dst_strides.to_vec(),
+            dst_offset,
+        })
+    }
+
+    /// Returns the logical output dimensions.
+    pub fn dims(&self) -> &[usize] {
+        &self.dims
+    }
+
+    /// Returns the strict-lower source strides.
+    pub fn lower_strides(&self) -> &[isize] {
+        &self.lower_strides
+    }
+
+    /// Returns the strict-lower source offset.
+    pub fn lower_offset(&self) -> isize {
+        self.lower_offset
+    }
+
+    /// Returns the upper-with-diagonal source strides.
+    pub fn upper_strides(&self) -> &[isize] {
+        &self.upper_strides
+    }
+
+    /// Returns the upper-with-diagonal source offset.
+    pub fn upper_offset(&self) -> isize {
+        self.upper_offset
+    }
+
+    /// Returns the destination strides.
+    pub fn dst_strides(&self) -> &[isize] {
+        &self.dst_strides
+    }
+
+    /// Returns the destination offset.
     pub fn dst_offset(&self) -> isize {
         self.dst_offset
     }
@@ -2006,6 +2197,106 @@ impl CudaRuntime {
                 .launch(config)
                 .map_err(|err| cuda_error("CUDA triangular-part kernel launch", err))?;
         }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    /// Launches the triangular-merge kernel on raw device allocations.
+    ///
+    /// # Safety
+    ///
+    /// `lower_src`, `upper_src`, and `dst` must point to live device allocations
+    /// compatible with `spec`.
+    pub unsafe fn triangular_merge_raw<T>(
+        &self,
+        lower_src: *const T,
+        upper_src: *const T,
+        dst: *mut T,
+        spec: &TriangularMergeSpec,
+    ) -> Result<()> {
+        if spec.dims.len() != spec.lower_strides.len()
+            || spec.dims.len() != spec.upper_strides.len()
+            || spec.dims.len() != spec.dst_strides.len()
+        {
+            return Err(Error::InvalidArgument(format!(
+                "triangular merge rank mismatch: dims={} lower_strides={} upper_strides={} dst_strides={}",
+                spec.dims.len(),
+                spec.lower_strides.len(),
+                spec.upper_strides.len(),
+                spec.dst_strides.len()
+            )));
+        }
+
+        let numel = checked_numel(&spec.dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        self.bind_context()?;
+        let ctx = self.context();
+        let stream = ctx.default_stream();
+        let module = ctx
+            .load_module(triangular_merge_ptx()?)
+            .map_err(|err| cuda_error("CUDA module load", err))?;
+        let kernel = module
+            .load_function(TRIANGULAR_MERGE_KERNEL_NAME)
+            .map_err(|err| cuda_error("CUDA load function", err))?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(&spec.dims)?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dims", err))?;
+        let lower_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.lower_strides, "lower stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD lower strides", err))?;
+        let upper_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.upper_strides, "upper stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD upper strides", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.dst_strides, "dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dst strides", err))?;
+        let ndim = i32::try_from(spec.dims.len()).map_err(|_| {
+            Error::InvalidArgument("triangular merge rank exceeds i32 range".into())
+        })?;
+        let lower_offset = i64::try_from(spec.lower_offset)
+            .map_err(|_| Error::InvalidArgument("lower offset exceeds i64 range".into()))?;
+        let upper_offset = i64::try_from(spec.upper_offset)
+            .map_err(|_| Error::InvalidArgument("upper offset exceeds i64 range".into()))?;
+        let dst_offset = i64::try_from(spec.dst_offset)
+            .map_err(|_| Error::InvalidArgument("destination offset exceeds i64 range".into()))?;
+        let elem_size = u64::try_from(std::mem::size_of::<T>())
+            .map_err(|_| Error::InvalidArgument("element size exceeds u64 range".into()))?;
+        let numel_u64 = u64::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("triangular merge numel exceeds u64 range".into())
+        })?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("triangular merge currently requires len <= u32::MAX".into())
+        })?;
+        let lower_src_ptr = lower_src as u64;
+        let upper_src_ptr = upper_src as u64;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        stream
+            .launch_builder(&kernel)
+            .arg(&lower_src_ptr)
+            .arg(&upper_src_ptr)
+            .arg(&dst_ptr)
+            .arg(&dims_dev)
+            .arg(&lower_strides_dev)
+            .arg(&lower_offset)
+            .arg(&upper_strides_dev)
+            .arg(&upper_offset)
+            .arg(&dst_strides_dev)
+            .arg(&dst_offset)
+            .arg(&ndim)
+            .arg(&elem_size)
+            .arg(&numel_u64)
+            .launch(config)
+            .map_err(|err| cuda_error("CUDA triangular-merge kernel launch", err))?;
         stream
             .synchronize()
             .map_err(|err| cuda_error("CUDA stream synchronize", err))
@@ -2865,6 +3156,48 @@ impl CudaRuntime {
         self.ensure_same_device(src.device_id())?;
         self.ensure_same_device(dst.device_id())?;
         unsafe { self.triangular_part_raw(src.ptr.cast::<T>(), dst.ptr.cast::<T>(), spec) }
+    }
+
+    /// Launches the triangular-merge kernel from two device buffers into a destination buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, TriangularMergeSpec};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let lower = runtime.alloc::<f32>(24).unwrap();
+    /// let upper = runtime.alloc::<f32>(24).unwrap();
+    /// let dst = runtime.alloc::<f32>(24).unwrap();
+    /// let spec = TriangularMergeSpec::new(
+    ///     &[3, 2, 4],
+    ///     &[1, 3, 6],
+    ///     0,
+    ///     &[1, 3, 6],
+    ///     0,
+    ///     &[1, 3, 6],
+    ///     0,
+    /// ).unwrap();
+    /// runtime.triangular_merge(&lower, &upper, &dst, &spec).unwrap();
+    /// ```
+    pub fn triangular_merge<T>(
+        &self,
+        lower_src: &CudaBuffer<T>,
+        upper_src: &CudaBuffer<T>,
+        dst: &CudaBuffer<T>,
+        spec: &TriangularMergeSpec,
+    ) -> Result<()> {
+        self.ensure_same_device(lower_src.device_id())?;
+        self.ensure_same_device(upper_src.device_id())?;
+        self.ensure_same_device(dst.device_id())?;
+        unsafe {
+            self.triangular_merge_raw(
+                lower_src.ptr.cast::<T>(),
+                upper_src.ptr.cast::<T>(),
+                dst.ptr.cast::<T>(),
+                spec,
+            )
+        }
     }
 
     fn ensure_same_device(&self, device_id: usize) -> Result<()> {

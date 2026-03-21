@@ -165,6 +165,21 @@ fn lu_factor_ex_section_does_not_extract_cpu_slices() {
 }
 
 #[test]
+fn lu_factor_section_does_not_extract_cpu_slices() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let lu_factor = file_section(&decompositions, "pub fn lu_factor", "pub fn lu_factor_ex");
+
+    assert!(
+        !lu_factor.contains("extract_slice("),
+        "lu_factor should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !lu_factor.contains("backend::slice_bridge::"),
+        "lu_factor should stay tensor-native and avoid slice_bridge helpers"
+    );
+}
+
+#[test]
 fn svd_max_rank_path_uses_tensor_views_before_cutoff_logic() {
     let decompositions = repo_file("src/primal/decompositions.rs");
     let svd = file_section(&decompositions, "pub fn svd", "pub fn svdvals");

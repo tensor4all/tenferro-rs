@@ -266,6 +266,53 @@ fn host_triangular_part_reference<T: Copy + Default>(
     dst
 }
 
+fn host_triangular_merge_reference<T: Copy + Default>(
+    lower_src: &[T],
+    upper_src: &[T],
+    dims: &[usize],
+    lower_strides: &[isize],
+    lower_offset: isize,
+    upper_strides: &[isize],
+    upper_offset: isize,
+    dst_strides: &[isize],
+) -> Vec<T> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![T::default(); numel];
+    if numel == 0 {
+        return dst;
+    }
+
+    for linear_idx in 0..numel {
+        let mut remainder = linear_idx;
+        let mut lower_index = lower_offset;
+        let mut upper_index = upper_offset;
+        let mut dst_index = 0isize;
+        let mut row = 0usize;
+        let mut col = 0usize;
+
+        for axis in 0..dims.len() {
+            let coord = remainder % dims[axis];
+            remainder /= dims[axis];
+            lower_index += (coord as isize) * lower_strides[axis];
+            upper_index += (coord as isize) * upper_strides[axis];
+            dst_index += (coord as isize) * dst_strides[axis];
+            if axis == 0 {
+                row = coord;
+            } else if axis == 1 {
+                col = coord;
+            }
+        }
+
+        dst[dst_index as usize] = if row > col {
+            lower_src[lower_index as usize]
+        } else {
+            upper_src[upper_index as usize]
+        };
+    }
+
+    dst
+}
+
 #[test]
 fn cuda_runtime_can_get_or_create_device_zero_handle() {
     if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
@@ -775,6 +822,96 @@ fn cuda_runtime_triangular_part_complex64_matches_host_reference() {
         &[1isize, 3, 9],
         1,
         TriangularHalf::Upper,
+    );
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_triangular_merge_f64_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::TriangularMergeSpec;
+
+    let runtime = tenferro_device::cuda::runtime::get_or_init(0).unwrap();
+    let lower_host: Vec<f64> = (1..=18).map(|value| value as f64).collect();
+    let upper_host: Vec<f64> = (101..=124).map(|value| value as f64).collect();
+    let lower = runtime.alloc::<f64>(lower_host.len()).unwrap();
+    let upper = runtime.alloc::<f64>(upper_host.len()).unwrap();
+    let dst = runtime.alloc::<f64>(24).unwrap();
+    runtime.copy_htod(&lower_host, &lower).unwrap();
+    runtime.copy_htod(&upper_host, &upper).unwrap();
+
+    let dims = [3usize, 4, 2];
+    let lower_strides = [1isize, 3, 9];
+    let upper_strides = [1isize, 3, 12];
+    let dst_strides = [1isize, 3, 12];
+    let spec =
+        TriangularMergeSpec::new(&dims, &lower_strides, 0, &upper_strides, 0, &dst_strides, 0)
+            .unwrap();
+
+    runtime
+        .triangular_merge(&lower, &upper, &dst, &spec)
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_triangular_merge_reference(
+        &lower_host,
+        &upper_host,
+        &dims,
+        &lower_strides,
+        0,
+        &upper_strides,
+        0,
+        &dst_strides,
+    );
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_triangular_merge_complex64_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::TriangularMergeSpec;
+
+    let runtime = tenferro_device::cuda::runtime::get_or_init(0).unwrap();
+    let lower_host: Vec<Complex64> = (1..=8)
+        .map(|value| Complex64::new(value as f64, value as f64 + 0.5))
+        .collect();
+    let upper_host: Vec<Complex64> = (21..=24)
+        .map(|value| Complex64::new(value as f64, -(value as f64)))
+        .collect();
+    let lower = runtime.alloc::<Complex64>(lower_host.len()).unwrap();
+    let upper = runtime.alloc::<Complex64>(upper_host.len()).unwrap();
+    let dst = runtime.alloc::<Complex64>(8).unwrap();
+    runtime.copy_htod(&lower_host, &lower).unwrap();
+    runtime.copy_htod(&upper_host, &upper).unwrap();
+
+    let dims = [4usize, 2];
+    let lower_strides = [1isize, 4];
+    let upper_strides = [1isize, 2];
+    let dst_strides = [1isize, 4];
+    let spec =
+        TriangularMergeSpec::new(&dims, &lower_strides, 0, &upper_strides, 0, &dst_strides, 0)
+            .unwrap();
+
+    runtime
+        .triangular_merge(&lower, &upper, &dst, &spec)
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_triangular_merge_reference(
+        &lower_host,
+        &upper_host,
+        &dims,
+        &lower_strides,
+        0,
+        &upper_strides,
+        0,
+        &dst_strides,
     );
     assert_eq!(got, expected);
 }

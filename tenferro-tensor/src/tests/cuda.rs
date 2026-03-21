@@ -164,6 +164,80 @@ fn gpu_zero_trailing_by_counts_matches_cpu_for_complex_payload_when_cuda_is_avai
 }
 
 #[test]
+fn gpu_merge_strict_lower_and_upper_matches_cpu_for_real_payload_when_cuda_is_available() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let lower = Tensor::from_slice(
+        &[10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0],
+        &[3, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let upper =
+        Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let expected = Tensor::merge_strict_lower_and_upper(&lower, &upper).unwrap();
+
+    let gpu_lower = lower
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let gpu_upper = upper
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = Tensor::merge_strict_lower_and_upper(&gpu_lower, &gpu_upper)
+        .unwrap()
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+
+    assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+}
+
+#[test]
+fn gpu_merge_strict_lower_and_upper_matches_cpu_for_complex_payload_when_cuda_is_available() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let lower = Tensor::from_slice(
+        &[
+            Complex64::new(10.0, 1.0),
+            Complex64::new(20.0, 2.0),
+            Complex64::new(30.0, 3.0),
+            Complex64::new(40.0, 4.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let upper = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(4.0, -4.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let expected = Tensor::merge_strict_lower_and_upper(&lower, &upper).unwrap();
+
+    let gpu_lower = lower
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let gpu_upper = upper
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = Tensor::merge_strict_lower_and_upper(&gpu_lower, &gpu_upper)
+        .unwrap()
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+
+    assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+}
+
+#[test]
 fn gpu_tril_matches_cpu_for_batched_view_when_cuda_is_available() {
     if !cuda_device_zero_is_available() {
         return;
