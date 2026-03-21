@@ -42,6 +42,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
         matches!(
             op,
             LinalgCapabilityOp::Solve
+                | LinalgCapabilityOp::SolveEx
                 | LinalgCapabilityOp::SolveTriangular
                 | LinalgCapabilityOp::Qr
                 | LinalgCapabilityOp::ThinSvd
@@ -51,6 +52,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
                 | LinalgCapabilityOp::CholeskyEx
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
+            LinalgCapabilityOp::SolveEx => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::SolveTriangular => {
                 solve_triangular::has_solve_triangular_support::<T>()
             }
@@ -67,11 +69,11 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     }
 
     fn solve_ex(
-        _ctx: &mut Self::Context,
-        _a: &Tensor<T>,
-        _b: &Tensor<T>,
+        ctx: &mut Self::Context,
+        a: &Tensor<T>,
+        b: &Tensor<T>,
     ) -> Result<SolveTensorExResult<T>> {
-        unsupported::<SolveTensorExResult<T>, T>("solve_ex")
+        solve::solve_ex(ctx, a, b)
     }
 
     fn solve(ctx: &mut Self::Context, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>> {

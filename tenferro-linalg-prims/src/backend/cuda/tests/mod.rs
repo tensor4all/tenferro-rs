@@ -895,10 +895,10 @@ fn cuda_backend_reports_only_wired_capabilities() {
 fn cuda_backend_reports_ex_capabilities_only_when_wired() {
     let has_native_cuda = cfg!(feature = "cuda");
     assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
             LinalgCapabilityOp::SolveEx
-        ),
-        "CUDA should not report SolveEx before the native EX solve kernel exists",
+        ) == has_native_cuda,
+        "CUDA SolveEx capability should match whether native CUDA kernels are compiled in",
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
@@ -907,10 +907,22 @@ fn cuda_backend_reports_ex_capabilities_only_when_wired() {
         "CUDA CholeskyEx capability should match whether native CUDA kernels are compiled in",
     );
     assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f32>>::has_linalg_support(
+            LinalgCapabilityOp::SolveEx
+        ) == has_native_cuda,
+        "CUDA SolveEx capability should match whether native CUDA kernels are compiled in for f32",
+    );
+    assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::CholeskyEx
         ),
         "CUDA should not report complex CholeskyEx capability",
+    );
+    assert!(
+        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+            LinalgCapabilityOp::SolveEx
+        ),
+        "CUDA should not report complex SolveEx capability",
     );
 }
 
@@ -985,6 +997,171 @@ fn cuda_solve_matches_cpu_for_small_real_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_solve_matches_cpu_for_small_real_matrix_f64() {
     cuda_solve_matches_cpu_for_small_real_matrix_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_matches_cpu_for_mixed_batch_f32() {
+    cuda_solve_ex_matches_cpu_for_mixed_batch_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_matches_cpu_for_mixed_batch_f64() {
+    cuda_solve_ex_matches_cpu_for_mixed_batch_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_does_not_treat_small_nonzero_pivot_as_zero_f32() {
+    cuda_solve_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_does_not_treat_small_nonzero_pivot_as_zero_f64() {
+    cuda_solve_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f64>();
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_matches_cpu_for_mixed_batch_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(1.0), //
+            cast::<T>(1.0),
+            cast::<T>(2.0),
+            cast::<T>(2.0),
+            cast::<T>(4.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(3.0),
+            cast::<T>(-1.0),
+            cast::<T>(1.0),
+            cast::<T>(1.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_ex(
+            &mut cpu_ctx,
+            &a_cpu,
+            &b_cpu,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+        &b_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        got.solution.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_slice(
+        "cuda solve_ex mixed batch",
+        &tensor_data_on_cpu(&got.solution),
+        &tensor_data_on_cpu(&expected.solution),
+        cast::<T>(256.0) * T::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_does_not_treat_small_nonzero_pivot_as_zero_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0e-20),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(1.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b_cpu = Tensor::from_slice(
+        &[cast::<T>(1.0), cast::<T>(2.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_ex(
+            &mut cpu_ctx,
+            &a_cpu,
+            &b_cpu,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+        &b_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_close_slice(
+        "cuda solve_ex small pivot",
+        &tensor_data_on_cpu(&got.solution),
+        &tensor_data_on_cpu(&expected.solution),
+        cast::<T>(256.0) * T::epsilon(),
+    );
 }
 
 #[test]

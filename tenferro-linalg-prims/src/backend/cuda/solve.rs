@@ -5,6 +5,8 @@ use std::ffi::c_void;
 use tenferro_device::Result;
 #[cfg(feature = "cuda")]
 use tenferro_device::{Error, Result};
+#[cfg(feature = "cuda")]
+use tenferro_tensor::MemoryOrder;
 use tenferro_tensor::Tensor;
 
 #[cfg(feature = "cuda")]
@@ -59,6 +61,174 @@ fn check_info(op: &str, info: i32) -> Result<()> {
     Err(Error::InvalidArgument(format!(
         "{op} failed because factorization became singular at pivot {info}"
     )))
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn solve_ex<T>(
+    ctx: &mut tenferro_prims::CudaContext,
+    a: &Tensor<T>,
+    b: &Tensor<T>,
+) -> Result<crate::SolveTensorExResult<T>>
+where
+    T: CudaLinalgScalar,
+{
+    let (n, batch_dims) = validate_square(a)?;
+    let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
+    let bc = batch_count(batch_dims);
+
+    if n == 0 || bc == 0 {
+        return Ok(crate::SolveTensorExResult {
+            solution: clone_batched_column_major(ctx, b)?,
+            info: vec![0; bc],
+        });
+    }
+
+    if !solve_supported::<T>() {
+        return Err(Error::DeviceError(format!(
+            "CUDA solve_ex currently supports only f32/f64, got {:?}",
+            T::cuda_data_type()
+        )));
+    }
+
+    let dtype = T::cuda_data_type();
+    let a_stride = checked_mul(n, n, "solve_ex a_stride")?;
+    let x_stride = checked_mul(n, rhs.nrhs, "solve_ex x_stride")?;
+    let lda = as_i32(n, "solve_ex lda")?;
+    let n_i32 = as_i32(n, "solve_ex n")?;
+    let nrhs_i32 = as_i32(rhs.nrhs, "solve_ex nrhs")?;
+
+    let a_work = clone_batched_column_major(ctx, a)?;
+    let x_work = clone_batched_column_major(ctx, b)?;
+    let x_out = Tensor::zeros(
+        &rhs.output_dims,
+        a.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let runtime = load_runtime(ctx)?;
+
+    let a_base = context_device_ptr(ctx, &a_work, "solve_ex a")?.cast::<T>();
+    let x_base = context_device_ptr(ctx, &x_work, "solve_ex x")?.cast::<T>();
+    let x_out_base = context_device_ptr(ctx, &x_out, "solve_ex solution")?.cast::<T>();
+    let a_offset = a_work.offset() as usize;
+    let x_offset = x_work.offset() as usize;
+    let x_out_offset = x_out.offset() as usize;
+
+    let lwork = runtime.cusolver_api().getrf_buffer_size(
+        dtype,
+        runtime.cusolver_handle.raw,
+        n_i32,
+        n_i32,
+        a_base.cast::<c_void>(),
+        lda,
+    )?;
+    let workspace_bytes = checked_mul(
+        usize::try_from(lwork).map_err(|_| {
+            Error::DeviceError(format!(
+                "solve_ex getrf workspace size was negative: {lwork}"
+            ))
+        })?,
+        std::mem::size_of::<T>(),
+        "solve_ex workspace bytes",
+    )?;
+
+    let workspace =
+        DeviceAllocation::alloc(ctx, workspace_bytes, "cudaMalloc(solve_ex workspace)")?;
+    let pivots = DeviceAllocation::alloc(
+        ctx,
+        checked_mul(n, std::mem::size_of::<i32>(), "solve_ex pivots bytes")?,
+        "cudaMalloc(solve_ex pivots)",
+    )?;
+    let info =
+        DeviceAllocation::alloc(ctx, std::mem::size_of::<i32>(), "cudaMalloc(solve_ex info)")?;
+    let mut host_info = [0_i32; 1];
+    let mut info_out = vec![0_i32; bc];
+
+    for batch in 0..bc {
+        let a_ptr = unsafe { a_base.add(a_offset + batch * a_stride) }.cast::<c_void>();
+        let x_ptr = unsafe { x_base.add(x_offset + batch * x_stride) }.cast::<c_void>();
+        let x_out_ptr = unsafe { x_out_base.add(x_out_offset + batch * x_stride) };
+
+        runtime.cusolver_api().getrf(
+            dtype,
+            runtime.cusolver_handle.raw,
+            n_i32,
+            n_i32,
+            a_ptr,
+            lda,
+            workspace.as_mut_ptr(),
+            pivots.as_mut_ptr().cast::<i32>(),
+            info.as_mut_ptr().cast::<i32>(),
+        )?;
+        copy_device_to_host(
+            ctx,
+            info.as_mut_ptr().cast::<c_void>(),
+            &mut host_info,
+            "cudaMemcpyDtoH(solve_ex getrf info)",
+        )?;
+        let batch_info = host_info[0];
+        info_out[batch] = batch_info;
+        if batch_info < 0 {
+            return Err(Error::DeviceError(format!(
+                "solve_ex reported an invalid parameter at position {}",
+                -batch_info
+            )));
+        }
+        if batch_info > 0 {
+            continue;
+        }
+
+        runtime.cusolver_api().getrs(
+            dtype,
+            runtime.cusolver_handle.raw,
+            n_i32,
+            nrhs_i32,
+            a_ptr.cast::<c_void>(),
+            lda,
+            pivots.as_mut_ptr().cast::<i32>(),
+            x_ptr,
+            lda,
+            info.as_mut_ptr().cast::<i32>(),
+        )?;
+        copy_device_to_host(
+            ctx,
+            info.as_mut_ptr().cast::<c_void>(),
+            &mut host_info,
+            "cudaMemcpyDtoH(solve_ex getrs info)",
+        )?;
+        let batch_info = host_info[0];
+        if batch_info < 0 {
+            return Err(Error::DeviceError(format!(
+                "solve_ex reported an invalid parameter at position {}",
+                -batch_info
+            )));
+        }
+        if batch_info > 0 {
+            info_out[batch] = batch_info;
+            continue;
+        }
+
+        unsafe {
+            ctx.shared_runtime()
+                .copy_dtod_raw(x_ptr.cast::<T>(), x_out_ptr, x_stride)?;
+        }
+    }
+
+    Ok(crate::SolveTensorExResult {
+        solution: x_out,
+        info: info_out,
+    })
+}
+
+#[cfg(not(feature = "cuda"))]
+pub(super) fn solve_ex<T>(
+    _ctx: &mut tenferro_prims::CudaContext,
+    _a: &Tensor<T>,
+    _b: &Tensor<T>,
+) -> Result<crate::SolveTensorExResult<T>>
+where
+    T: CudaLinalgScalar,
+{
+    super::runtime::unsupported("solve_ex")
 }
 
 #[cfg(feature = "cuda")]
