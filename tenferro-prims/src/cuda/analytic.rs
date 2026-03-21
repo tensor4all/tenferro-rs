@@ -123,12 +123,13 @@ fn validate_pointwise_shapes(shapes: &[&[usize]], arity: usize, op_name: &str) -
 }
 
 fn supports_analytic_unary(op: AnalyticUnaryOp) -> bool {
-    matches!(op, AnalyticUnaryOp::Log)
+    matches!(op, AnalyticUnaryOp::Log | AnalyticUnaryOp::Sqrt)
 }
 
 fn to_runtime_unary(op: AnalyticUnaryOp) -> Result<RealUnaryOp> {
     match op {
         AnalyticUnaryOp::Log => Ok(RealUnaryOp::Log),
+        AnalyticUnaryOp::Sqrt => Ok(RealUnaryOp::Sqrt),
         _ => Err(Error::InvalidArgument(format!(
             "analytic unary operation {op:?} is not implemented on CudaBackend"
         ))),
@@ -289,7 +290,7 @@ macro_rules! impl_cuda_analytic_prims_real {
                 matches!(
                     desc,
                     AnalyticPrimsDescriptor::PointwiseUnary {
-                        op: AnalyticUnaryOp::Log
+                        op: AnalyticUnaryOp::Log | AnalyticUnaryOp::Sqrt
                     }
                 )
             }

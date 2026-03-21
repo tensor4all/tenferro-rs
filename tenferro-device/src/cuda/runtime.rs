@@ -434,6 +434,8 @@ extern "C" __global__ void pointwise_unary_real_f32(
         mapped = 1.0f / value;
     } else if (op_code == 3) {
         mapped = logf(value);
+    } else if (op_code == 4) {
+        mapped = sqrtf(value);
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
@@ -468,6 +470,8 @@ extern "C" __global__ void pointwise_unary_real_f64(
         mapped = 1.0 / value;
     } else if (op_code == 3) {
         mapped = log(value);
+    } else if (op_code == 4) {
+        mapped = sqrt(value);
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
@@ -851,6 +855,7 @@ fn unary_opcode(op: RealUnaryOp) -> i32 {
         RealUnaryOp::Abs => 1,
         RealUnaryOp::Reciprocal => 2,
         RealUnaryOp::Log => 3,
+        RealUnaryOp::Sqrt => 4,
     }
 }
 
@@ -1395,6 +1400,7 @@ pub enum RealUnaryOp {
     Abs,
     Reciprocal,
     Log,
+    Sqrt,
 }
 
 /// Real binary operations exposed by the Layer 0 CUDA runtime.

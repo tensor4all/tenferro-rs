@@ -94,6 +94,22 @@ fn host_unary_log_reference(
     dst
 }
 
+fn host_unary_sqrt_reference(
+    src: &[f64],
+    dims: &[usize],
+    src_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<f64> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0.0; numel];
+    for linear_idx in 0..numel {
+        let src_idx = linear_offset(linear_idx, dims, src_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = src[src_idx].sqrt();
+    }
+    dst
+}
+
 fn host_sum_reduction_reference(
     input: &[f64],
     input_dims: &[usize],
@@ -512,6 +528,50 @@ fn cuda_runtime_real_unary_log_matches_host_reference() {
 
     let got = runtime.copy_dtoh(&dst).unwrap();
     let expected = host_unary_log_reference(&src_data, &dims, &src_strides, spec.dst_strides());
+    assert_eq!(got.len(), expected.len());
+    for (lhs, rhs) in got.iter().zip(expected.iter()) {
+        assert!((lhs - rhs).abs() < 1.0e-12, "got {lhs}, expected {rhs}");
+    }
+}
+
+#[test]
+fn cuda_runtime_real_unary_sqrt_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{self, ContiguousOrder, RealUnaryOp, StridedCopySpec};
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let src_data = vec![1.0_f64, 4.0, 9.0, 16.0, 0.25, 2.25];
+    let src = runtime.alloc::<f64>(src_data.len()).unwrap();
+    let dst = runtime.alloc::<f64>(src_data.len()).unwrap();
+    runtime.copy_htod(&src_data, &src).unwrap();
+
+    let dims = [3usize, 2];
+    let src_strides = [2isize, 1];
+    let spec = StridedCopySpec::to_contiguous(&dims, &src_strides, 0, ContiguousOrder::ColumnMajor)
+        .unwrap();
+
+    unsafe {
+        runtime
+            .pointwise_unary_real_f64_raw(
+                RealUnaryOp::Sqrt,
+                1.0,
+                src.device_ptr().cast_const(),
+                &dims,
+                &src_strides,
+                0,
+                0.0,
+                dst.device_ptr(),
+                spec.dst_strides(),
+                0,
+            )
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_unary_sqrt_reference(&src_data, &dims, &src_strides, spec.dst_strides());
     assert_eq!(got.len(), expected.len());
     for (lhs, rhs) in got.iter().zip(expected.iter()) {
         assert!((lhs - rhs).abs() < 1.0e-12, "got {lhs}, expected {rhs}");
