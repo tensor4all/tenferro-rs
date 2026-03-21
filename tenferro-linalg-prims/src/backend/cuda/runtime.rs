@@ -94,6 +94,7 @@ pub(super) fn default_library_candidates() -> CudaLibraryCandidates {
     CudaLibraryCandidates { cublas, cusolver }
 }
 
+#[cfg(feature = "cuda")]
 #[allow(dead_code)]
 pub(super) fn load_runtime(ctx: &tenferro_prims::CudaContext) -> Result<CudaLinalgRuntime> {
     ctx.bind_to_device()?;
@@ -111,6 +112,12 @@ pub(super) fn load_runtime(ctx: &tenferro_prims::CudaContext) -> Result<CudaLina
         _cublas_api: cublas_api,
         _cusolver_api: cusolver_api,
     })
+}
+
+#[cfg(not(feature = "cuda"))]
+#[allow(dead_code)]
+pub(super) fn load_runtime(_ctx: &tenferro_prims::CudaContext) -> Result<CudaLinalgRuntime> {
+    unsupported("load_runtime")
 }
 
 impl CudaLinalgRuntime {
