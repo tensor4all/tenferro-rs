@@ -72,6 +72,42 @@ type FnCusolverDnDgetrs = unsafe extern "C" fn(
     i32,
     *mut i32,
 ) -> CusolverStatus;
+type FnCusolverDnSpotrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut f32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnDpotrfBufferSize = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut f64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnSpotrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut f32,
+    i32,
+    *mut f32,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
+type FnCusolverDnDpotrf = unsafe extern "C" fn(
+    CusolverDnHandle,
+    CublasOperation,
+    i32,
+    *mut f64,
+    i32,
+    *mut f64,
+    i32,
+    *mut i32,
+) -> CusolverStatus;
 
 pub(super) struct CublasApi {
     _lib: Arc<Library>,
@@ -91,6 +127,10 @@ pub(super) struct CusolverDnApi {
     dgetrf: FnCusolverDnDgetrf,
     sgetrs: FnCusolverDnSgetrs,
     dgetrs: FnCusolverDnDgetrs,
+    spotrf_buffer_size: FnCusolverDnSpotrfBufferSize,
+    dpotrf_buffer_size: FnCusolverDnDpotrfBufferSize,
+    spotrf: FnCusolverDnSpotrf,
+    dpotrf: FnCusolverDnDpotrf,
 }
 
 #[allow(dead_code)]
@@ -144,6 +184,10 @@ impl CusolverDnApi {
             dgetrf: load_symbol(&lib, "cusolverDnDgetrf")?,
             sgetrs: load_symbol(&lib, "cusolverDnSgetrs")?,
             dgetrs: load_symbol(&lib, "cusolverDnDgetrs")?,
+            spotrf_buffer_size: load_symbol(&lib, "cusolverDnSpotrf_bufferSize")?,
+            dpotrf_buffer_size: load_symbol(&lib, "cusolverDnDpotrf_bufferSize")?,
+            spotrf: load_symbol(&lib, "cusolverDnSpotrf")?,
+            dpotrf: load_symbol(&lib, "cusolverDnDpotrf")?,
             _lib: lib,
         })
     }
@@ -293,6 +337,87 @@ impl CusolverDnApi {
             ),
             _ => Err(Error::DeviceError(format!(
                 "CUDA solve currently supports only f32/f64, got {dtype:?}"
+            ))),
+        }
+    }
+
+    pub(super) fn potrf_buffer_size(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        uplo: CublasOperation,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+    ) -> Result<i32> {
+        let mut lwork = 0;
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe {
+                    (self.spotrf_buffer_size)(handle, uplo, n, a.cast::<f32>(), lda, &mut lwork)
+                },
+                "cusolverDnSpotrf_bufferSize",
+            )?,
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe {
+                    (self.dpotrf_buffer_size)(handle, uplo, n, a.cast::<f64>(), lda, &mut lwork)
+                },
+                "cusolverDnDpotrf_bufferSize",
+            )?,
+            _ => {
+                return Err(Error::DeviceError(format!(
+                    "CUDA cholesky currently supports only f32/f64, got {dtype:?}"
+                )));
+            }
+        }
+        Ok(lwork)
+    }
+
+    pub(super) fn potrf(
+        &self,
+        dtype: CudaDataType,
+        handle: CusolverDnHandle,
+        uplo: CublasOperation,
+        n: i32,
+        a: *mut c_void,
+        lda: i32,
+        workspace: *mut c_void,
+        lwork: i32,
+        info: *mut i32,
+    ) -> Result<()> {
+        match dtype {
+            CudaDataType::F32 => check_cusolver_status(
+                unsafe {
+                    (self.spotrf)(
+                        handle,
+                        uplo,
+                        n,
+                        a.cast::<f32>(),
+                        lda,
+                        workspace.cast::<f32>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnSpotrf",
+            ),
+            CudaDataType::F64 => check_cusolver_status(
+                unsafe {
+                    (self.dpotrf)(
+                        handle,
+                        uplo,
+                        n,
+                        a.cast::<f64>(),
+                        lda,
+                        workspace.cast::<f64>(),
+                        lwork,
+                        info,
+                    )
+                },
+                "cusolverDnDpotrf",
+            ),
+            _ => Err(Error::DeviceError(format!(
+                "CUDA cholesky currently supports only f32/f64, got {dtype:?}"
             ))),
         }
     }

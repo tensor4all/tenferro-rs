@@ -1,3 +1,4 @@
+mod cholesky;
 mod lu;
 mod runtime;
 mod scalar_type;
@@ -39,10 +40,15 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
             LinalgCapabilityOp::Solve
                 | LinalgCapabilityOp::LuFactor
                 | LinalgCapabilityOp::LuFactorEx
+                | LinalgCapabilityOp::Cholesky
+                | LinalgCapabilityOp::CholeskyEx
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::LuFactor | LinalgCapabilityOp::LuFactorEx => {
                 lu::has_lu_support::<T>()
+            }
+            LinalgCapabilityOp::Cholesky | LinalgCapabilityOp::CholeskyEx => {
+                cholesky::has_cholesky_support::<T>()
             }
             _ => false,
         }
@@ -90,11 +96,11 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
     }
 
     fn cholesky_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {
-        unsupported::<CholeskyTensorExResult<T>, T>("cholesky_ex")
+        cholesky::cholesky_ex(_ctx, _a)
     }
 
-    fn cholesky(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<Tensor<T>> {
-        unsupported::<Tensor<T>, T>("cholesky")
+    fn cholesky(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<Tensor<T>> {
+        cholesky::cholesky(ctx, a)
     }
 
     fn eigen_sym(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<EigenTensorResult<T>> {
