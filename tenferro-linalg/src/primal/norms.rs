@@ -24,6 +24,8 @@ where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm")?;
@@ -66,7 +68,26 @@ where
             NormKind::Nuclear | NormKind::Spectral => {
                 return Err(matrix_only_norm_kind_error(kind));
             }
-            NormKind::Fro | NormKind::Lp(_) => {}
+            NormKind::Fro => {
+                let squared = crate::prims_bridge::scalar_binary_same_shape(
+                    ctx,
+                    tensor,
+                    tensor,
+                    tenferro_prims::ScalarBinaryOp::Mul,
+                )?;
+                let squared_sum = crate::prims_bridge::scalar_reduce_keep_axes(
+                    ctx,
+                    &squared,
+                    &[],
+                    tenferro_prims::ScalarReductionOp::Sum,
+                )?;
+                return crate::prims_bridge::analytic_unary_same_shape(
+                    ctx,
+                    &squared_sum,
+                    tenferro_prims::AnalyticUnaryOp::Sqrt,
+                );
+            }
+            NormKind::Lp(_) => {}
         }
 
         let input = ensure_col_major(tensor);
@@ -183,22 +204,24 @@ where
             )
         }
         NormKind::Fro => {
-            let bc = batch_count(batch_dims);
-            let mat_size = m * n;
-            let input = ensure_col_major(tensor);
-            let data = extract_slice(&input)?;
-            let offset = input.offset() as usize;
-            let mut out = vec![T::zero(); bc];
-            for (batch, out_slot) in out.iter_mut().enumerate().take(bc) {
-                let start = offset + batch * mat_size;
-                let mut sum = T::zero();
-                for i in 0..mat_size {
-                    let v = data[start + i];
-                    sum = sum + v * v;
-                }
-                *out_slot = sum.sqrt();
-            }
-            tensor_from_data(out, &out_dims)
+            let squared = crate::prims_bridge::scalar_binary_same_shape(
+                ctx,
+                tensor,
+                tensor,
+                tenferro_prims::ScalarBinaryOp::Mul,
+            )?;
+            let kept_axes: Vec<usize> = (2..squared.ndim()).collect();
+            let squared_sum = crate::prims_bridge::scalar_reduce_keep_axes(
+                ctx,
+                &squared,
+                &kept_axes,
+                tenferro_prims::ScalarReductionOp::Sum,
+            )?;
+            crate::prims_bridge::analytic_unary_same_shape(
+                ctx,
+                &squared_sum,
+                tenferro_prims::AnalyticUnaryOp::Sqrt,
+            )
         }
         _ => Err(Error::InvalidArgument(format!(
             "norm kind {kind:?} not yet implemented"
@@ -216,6 +239,8 @@ where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
     C::Backend: 'static,
 {
     match kind {

@@ -16,6 +16,22 @@ fn file_section<'a>(contents: &'a str, start: &str, end: &str) -> &'a str {
     &contents[start_idx..end_idx]
 }
 
+fn file_section_after<'a>(contents: &'a str, anchor: &str, start: &str, end: &str) -> &'a str {
+    let anchor_idx = contents
+        .find(anchor)
+        .unwrap_or_else(|| panic!("missing anchor marker: {anchor}"));
+    let anchored = &contents[anchor_idx..];
+    let start_idx = anchored
+        .find(start)
+        .map(|idx| anchor_idx + idx)
+        .unwrap_or_else(|| panic!("missing section start marker after anchor: {start}"));
+    let end_idx = contents[start_idx..]
+        .find(end)
+        .map(|idx| start_idx + idx)
+        .unwrap_or(contents.len());
+    &contents[start_idx..end_idx]
+}
+
 // IMPORTANT: Do not delete or weaken these tests.
 // They are the regression guard that keeps linalg on capability-based runtime
 // checks instead of slipping back to CPU/backend-name special cases.
@@ -294,6 +310,39 @@ fn matrix_l1_inf_norms_use_scalar_bridge() {
     assert!(
         matrix_inf.contains("scalar_unary_same_shape"),
         "matrix Inf norm should route through the scalar unary bridge"
+    );
+}
+
+#[test]
+fn fro_norm_path_is_tensor_native_and_uses_sqrt_bridge() {
+    let norms = repo_file("src/primal/norms.rs");
+    let vector_fro = file_section(
+        &norms,
+        "            NormKind::Fro => {",
+        "            NormKind::Lp(_) => {}",
+    );
+    let matrix_fro = file_section_after(
+        &norms,
+        "    let (m, n, batch_dims) = validate_2d(tensor)?;",
+        "        NormKind::Fro => {",
+        "        _ => Err(",
+    );
+
+    assert!(
+        !vector_fro.contains("extract_slice("),
+        "vector Fro norm should avoid extract_slice(...)"
+    );
+    assert!(
+        !matrix_fro.contains("extract_slice("),
+        "matrix Fro norm should avoid extract_slice(...)"
+    );
+    assert!(
+        vector_fro.contains("AnalyticUnaryOp::Sqrt"),
+        "vector Fro norm should route through the analytic sqrt bridge"
+    );
+    assert!(
+        matrix_fro.contains("AnalyticUnaryOp::Sqrt"),
+        "matrix Fro norm should route through the analytic sqrt bridge"
     );
 }
 

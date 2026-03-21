@@ -47,7 +47,7 @@ fn tensor_device_ptr_any<T: tenferro_algebra::Scalar>(
 }
 
 #[cfg(feature = "cuda")]
-fn svdvals_supported<T: CudaLinalgScalar>() -> bool {
+pub(super) fn svdvals_supported<T: CudaLinalgScalar>() -> bool {
     matches!(
         T::cuda_data_type(),
         CudaDataType::F32 | CudaDataType::F64 | CudaDataType::Complex32 | CudaDataType::Complex64

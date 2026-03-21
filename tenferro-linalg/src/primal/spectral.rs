@@ -55,7 +55,10 @@ where
 /// let ap = pinv(&mut ctx, &a, None).unwrap();
 /// assert_eq!(ap.logical_memory_space(), LogicalMemorySpace::MainMemory);
 /// ```
-pub fn pinv<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn pinv<
+    T: KernelLinalgScalar<Real = T> + num_traits::Float + tenferro_tensor::KeepCountScalar,
+    C,
+>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     rcond: Option<f64>,
@@ -111,14 +114,41 @@ where
         &cutoff,
         tenferro_prims::ScalarBinaryOp::Greater,
     )?;
-    let keep_counts = crate::prims_bridge::scalar_sum_keep_axes(ctx, &keep_mask, &s_max_axes)?;
-
-    let mut sinv = crate::prims_bridge::scalar_unary_same_shape(
+    let one_mask = crate::prims_bridge::full_like_constant(
+        T::one(),
+        keep_mask.dims(),
+        keep_mask.logical_memory_space(),
+    )?;
+    let drop_mask = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &one_mask,
+        &keep_mask,
+        tenferro_prims::ScalarBinaryOp::Sub,
+    )?;
+    let kept_s = crate::prims_bridge::scalar_binary_same_shape(
         ctx,
         &s_input,
+        &keep_mask,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+    let safe_s = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &kept_s,
+        &drop_mask,
+        tenferro_prims::ScalarBinaryOp::Add,
+    )?;
+
+    let sinv = crate::prims_bridge::scalar_unary_same_shape(
+        ctx,
+        &safe_s,
         tenferro_prims::ScalarUnaryOp::Reciprocal,
     )?;
-    sinv = backend::tensor_helpers::zero_trailing_by_counts(&sinv, &keep_counts, 0, 1)?;
+    let sinv = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &sinv,
+        &keep_mask,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
 
     let sinv_for_vt = sinv.unsqueeze(1)?.broadcast(vt_input.dims())?;
     let vt_scaled = crate::prims_bridge::scalar_binary_same_shape(
