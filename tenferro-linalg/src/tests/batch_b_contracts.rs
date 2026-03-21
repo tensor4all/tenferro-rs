@@ -20,6 +20,268 @@ fn with_cuda_ctx<T>(f: impl FnOnce(&mut tenferro_prims::CudaContext) -> T) -> Op
     Some(f(&mut ctx))
 }
 
+#[cfg(feature = "cuda")]
+fn tensor_data_on_cpu(tensor: &Tensor<f64>) -> Vec<f64> {
+    let cpu = tensor
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let contiguous = cpu.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.dims().iter().product::<usize>().max(1);
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
+}
+
+#[cfg(feature = "cuda")]
+fn assert_close_slice(label: &str, got: &[f64], expected: &[f64], atol: f64) {
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "{label}: length mismatch {} vs {}",
+        got.len(),
+        expected.len()
+    );
+    for (idx, (&got_v, &exp_v)) in got.iter().zip(expected.iter()).enumerate() {
+        let diff = (got_v - exp_v).abs();
+        assert!(
+            diff <= atol,
+            "{label}[{idx}] diff {diff} exceeded tolerance {atol}; got {got_v}, expected {exp_v}"
+        );
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn matmul_col_major(lhs: &[f64], m: usize, k: usize, rhs: &[f64], n: usize) -> Vec<f64> {
+    let mut out = vec![0.0; m * n];
+    for col in 0..n {
+        for row in 0..m {
+            let mut acc = 0.0;
+            for inner in 0..k {
+                acc += lhs[row + inner * m] * rhs[inner + col * k];
+            }
+            out[row + col * m] = acc;
+        }
+    }
+    out
+}
+
+#[cfg(feature = "cuda")]
+fn reconstruct_thin_svd_col_major(
+    u: &[f64],
+    m: usize,
+    k: usize,
+    s: &[f64],
+    vt: &[f64],
+    n: usize,
+) -> Vec<f64> {
+    let mut scaled_u = u.to_vec();
+    for col in 0..k {
+        for row in 0..m {
+            scaled_u[row + col * m] *= s[col];
+        }
+    }
+    matmul_col_major(&scaled_u, m, k, vt, n)
+}
+
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_matrix(wide: bool) -> Tensor<f64> {
+    if wide {
+        Tensor::from_slice(
+            &[3.0_f64, 1.0, 1.0, 2.0, 0.0, 1.0],
+            &[2, 3],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap()
+    } else {
+        Tensor::from_slice(
+            &[3.0_f64, 1.0, 0.0, 1.0, 2.0, 1.0],
+            &[3, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap()
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_svdvals_matches_cpu_generic(wide: bool) {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = public_cuda_svd_matrix(wide);
+        let expected = svdvals(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = svdvals(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_slice(
+            if wide {
+                "cuda public svdvals wide"
+            } else {
+                "cuda public svdvals tall"
+            },
+            &tensor_data_on_cpu(&got),
+            &tensor_data(&expected),
+            2048.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_svd_reconstructs_generic(wide: bool) {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = public_cuda_svd_matrix(wide);
+        let expected = svd(&mut cpu_ctx, &a_cpu, None).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = svd(ctx, &a_gpu, None).unwrap();
+        assert_eq!(
+            got.u.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.s.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.vt.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.u.dims(), expected.u.dims());
+        assert_eq!(got.s.dims(), expected.s.dims());
+        assert_eq!(got.vt.dims(), expected.vt.dims());
+        assert_close_slice(
+            if wide {
+                "cuda public svd singular values wide"
+            } else {
+                "cuda public svd singular values tall"
+            },
+            &tensor_data_on_cpu(&got.s),
+            &tensor_data(&expected.s),
+            2048.0 * f64::EPSILON,
+        );
+
+        let reconstructed = reconstruct_thin_svd_col_major(
+            &tensor_data_on_cpu(&got.u),
+            a_cpu.dims()[0],
+            got.s.dims()[0],
+            &tensor_data_on_cpu(&got.s),
+            &tensor_data_on_cpu(&got.vt),
+            a_cpu.dims()[1],
+        );
+        assert_close_slice(
+            if wide {
+                "cuda public svd reconstruction wide"
+            } else {
+                "cuda public svd reconstruction tall"
+            },
+            &reconstructed,
+            &tensor_data(&a_cpu),
+            4096.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_svd_cutoff_preserves_zero_fill_semantics() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let a_cpu = Tensor::from_slice(
+            &[3.0_f64, 0.0, 0.0, 0.25],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let opts = SvdOptions {
+            max_rank: Some(2),
+            cutoff: Some(0.5),
+        };
+
+        let result = svd(ctx, &a_gpu, Some(&opts)).unwrap();
+        assert_eq!(
+            result.u.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            result.s.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            result.vt.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(result.u.dims(), &[2, 2]);
+        assert_eq!(result.s.dims(), &[2]);
+        assert_eq!(result.vt.dims(), &[2, 2]);
+        assert_eq!(tensor_data_on_cpu(&result.s), vec![3.0, 0.0]);
+
+        let u = tensor_data_on_cpu(&result.u);
+        let vt = tensor_data_on_cpu(&result.vt);
+        assert_eq!(u[2], 0.0);
+        assert_eq!(u[3], 0.0);
+        assert_eq!(vt[1], 0.0);
+        assert_eq!(vt[3], 0.0);
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_solve_ex_matches_cpu_generic() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                1.0_f64, 0.0, 0.0, 1.0, //
+                1.0, 2.0, 2.0, 4.0,
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b_cpu = Tensor::from_slice(
+            &[3.0_f64, -1.0, 1.0, 1.0],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = solve_ex(&mut cpu_ctx, &a_cpu, &b_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let b_gpu = b_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = solve_ex(ctx, &a_gpu, &b_gpu).unwrap();
+        assert_eq!(
+            got.solution.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.info, expected.info);
+        assert_close_slice(
+            "cuda public solve_ex",
+            &tensor_data_on_cpu(&got.solution),
+            &tensor_data(&expected.solution),
+            256.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
 #[test]
 fn cross_matches_right_hand_rule_with_trailing_batches() {
     let mut ctx = CpuContext::new(1);
@@ -257,6 +519,42 @@ fn tensorinv_inverts_tensorized_identity() {
     let inverse = tensorinv(&mut ctx, &tensor, 2).unwrap();
     assert_eq!(inverse.dims(), &[2, 2, 2, 2]);
     assert_eq!(tensor_data(&inverse), tensor_data(&tensor));
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svdvals_matches_cpu_for_tall_matrix() {
+    cuda_public_svdvals_matches_cpu_generic(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svdvals_matches_cpu_for_wide_matrix() {
+    cuda_public_svdvals_matches_cpu_generic(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_reconstructs_tall_matrix() {
+    cuda_public_svd_reconstructs_generic(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_reconstructs_wide_matrix() {
+    cuda_public_svd_reconstructs_generic(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_svd_cutoff_preserves_zero_fill_semantics() {
+    cuda_public_svd_cutoff_preserves_zero_fill_semantics();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_solve_ex_matches_cpu_for_mixed_batch() {
+    cuda_public_solve_ex_matches_cpu_generic();
 }
 
 #[test]
