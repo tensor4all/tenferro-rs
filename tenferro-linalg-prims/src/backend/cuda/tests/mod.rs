@@ -294,6 +294,113 @@ where
     assert_eq!(got.pivots, expected.pivots);
 }
 
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_matches_cpu_for_small_real_spd_matrix_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(4.0),
+            cast::<T>(2.0),
+            cast::<T>(2.0),
+            cast::<T>(3.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::cholesky(
+            &mut cpu_ctx,
+            &a_cpu,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::cholesky(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(
+        tensor_data_on_cpu(&got),
+        tensor_data_on_cpu(&expected),
+        "cuda cholesky factor mismatch"
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_ex_matches_cpu_for_mixed_batch_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(4.0),
+            cast::<T>(2.0),
+            cast::<T>(2.0),
+            cast::<T>(3.0), //
+            cast::<T>(1.0),
+            cast::<T>(2.0),
+            cast::<T>(2.0),
+            cast::<T>(1.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::cholesky_ex(
+            &mut cpu_ctx,
+            &a_cpu,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::cholesky_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.l),
+        tensor_data_on_cpu(&expected.l),
+        "cuda cholesky_ex factor mismatch"
+    );
+}
+
 #[test]
 fn cuda_linalg_scalar_maps_supported_standard_dtypes() {
     assert_eq!(
@@ -333,6 +440,16 @@ fn cuda_backend_reports_only_wired_capabilities() {
         ) == has_native_cuda
     );
     assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+            LinalgCapabilityOp::Cholesky
+        ) == has_native_cuda
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
+            LinalgCapabilityOp::CholeskyEx
+        ) == has_native_cuda
+    );
+    assert!(
         !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::LuFactor
         )
@@ -356,7 +473,7 @@ fn cuda_backend_reports_only_wired_capabilities() {
 
 #[test]
 fn cuda_backend_reports_ex_capabilities_only_when_wired() {
-    for op in [LinalgCapabilityOp::SolveEx, LinalgCapabilityOp::CholeskyEx] {
+    for op in [LinalgCapabilityOp::SolveEx] {
         assert!(
             !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(
                 op
@@ -473,4 +590,28 @@ fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_f64() {
     cuda_lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_matches_cpu_for_small_real_spd_matrix_f32() {
+    cuda_cholesky_matches_cpu_for_small_real_spd_matrix_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_matches_cpu_for_small_real_spd_matrix_f64() {
+    cuda_cholesky_matches_cpu_for_small_real_spd_matrix_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_ex_matches_cpu_for_mixed_batch_f32() {
+    cuda_cholesky_ex_matches_cpu_for_mixed_batch_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_ex_matches_cpu_for_mixed_batch_f64() {
+    cuda_cholesky_ex_matches_cpu_for_mixed_batch_generic::<f64>();
 }
