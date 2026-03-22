@@ -56,7 +56,7 @@ pub struct SvdAdBuilder<'a, T: Scalar> {
 impl<'a, T> SvdAdBuilder<'a, T>
 where
     T: LinalgRuntimeValue,
-    T::Real: DynTensorTyped,
+    T::Real: DynTensorTyped + tenferro_tensor::KeepCountScalar,
 {
     /// Sets optional SVD options.
     /// # Examples

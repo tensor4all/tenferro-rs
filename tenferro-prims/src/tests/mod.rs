@@ -109,6 +109,8 @@ fn scalar_prims_family_support_matches_phase1_inventory() {
         ScalarBinaryOp::Div,
         ScalarBinaryOp::Maximum,
         ScalarBinaryOp::Minimum,
+        ScalarBinaryOp::Greater,
+        ScalarBinaryOp::GreaterEqual,
         ScalarBinaryOp::ClampMin,
         ScalarBinaryOp::ClampMax,
     ] {

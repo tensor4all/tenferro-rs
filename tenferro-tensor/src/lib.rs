@@ -91,7 +91,7 @@ mod tensor;
 pub use buffer::DataBuffer;
 pub use completion_event::CompletionEvent;
 pub use layout::MemoryOrder;
-pub use tensor::Tensor;
+pub use tensor::{KeepCountScalar, Tensor};
 
 #[cfg(test)]
 mod tests;

@@ -8,6 +8,7 @@ mod completion_event;
 #[cfg(feature = "cuda")]
 mod cuda;
 mod organization;
+mod structural;
 mod views;
 
 #[test]

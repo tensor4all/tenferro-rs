@@ -19,6 +19,9 @@
 
 use std::fmt;
 
+#[cfg(feature = "cuda")]
+pub mod cuda;
+
 /// Logical memory space where tensor data resides.
 ///
 /// Separates the concept of "where data lives" from "which hardware

@@ -43,6 +43,32 @@ impl CudaContext {
             _plan_cache: PlanCache::new(),
         }
     }
+
+    /// Return the stub CUDA device ordinal.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let ctx = tenferro_prims::CudaContext::new();
+    /// assert_eq!(ctx.device_id(), 0);
+    /// ```
+    pub fn device_id(&self) -> usize {
+        0
+    }
+
+    /// Bind the stub CUDA context to the current device.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let ctx = tenferro_prims::CudaContext::new();
+    /// assert!(ctx.bind_to_device().is_err());
+    /// ```
+    pub fn bind_to_device(&self) -> Result<()> {
+        Err(Error::DeviceError(
+            "CUDA feature is not enabled for this build".into(),
+        ))
+    }
 }
 
 #[cfg(not(feature = "cuda"))]

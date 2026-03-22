@@ -25,7 +25,10 @@ pub fn norm_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm_frule")

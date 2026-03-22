@@ -13,15 +13,9 @@ fn line_count(path: &str) -> usize {
 fn cuda_backend_is_split_into_focused_modules() {
     let root = fs::read_to_string(format!("{ROOT}/mod.rs")).unwrap();
     for needle in [
-        "mod analytic_family;",
-        "mod custom;",
-        "mod diagonal;",
+        "mod analytic;",
         "mod execution;",
-        "mod family_common;",
         "mod planning;",
-        "mod pointwise_ops;",
-        "mod runtime;",
-        "mod scalar_family;",
         "mod scalar_type;",
         "mod wrappers;",
     ] {
@@ -36,17 +30,10 @@ fn cuda_backend_is_split_into_focused_modules() {
 #[test]
 fn split_cuda_modules_stay_under_size_guideline() {
     for path in [
-        format!("{ROOT}/analytic_family.rs"),
-        format!("{ROOT}/custom/cache.rs"),
-        format!("{ROOT}/custom/mod.rs"),
-        format!("{ROOT}/diagonal.rs"),
         format!("{ROOT}/mod.rs"),
+        format!("{ROOT}/analytic.rs"),
         format!("{ROOT}/execution.rs"),
-        format!("{ROOT}/family_common.rs"),
         format!("{ROOT}/planning.rs"),
-        format!("{ROOT}/pointwise_ops.rs"),
-        format!("{ROOT}/runtime.rs"),
-        format!("{ROOT}/scalar_family.rs"),
         format!("{ROOT}/scalar_type.rs"),
         format!("{ROOT}/wrappers.rs"),
     ] {
@@ -58,6 +45,39 @@ fn split_cuda_modules_stay_under_size_guideline() {
         assert!(
             lines <= MAX_LINES,
             "expected {path} to stay under {MAX_LINES} lines, got {lines}"
+        );
+    }
+}
+
+#[test]
+fn cuda_analytic_module_delegates_low_level_launches_to_layer0_runtime() {
+    let analytic = fs::read_to_string(format!("{ROOT}/analytic.rs")).unwrap();
+    for forbidden in ["compile_ptx(", ".load_module(", ".launch_builder("] {
+        assert!(
+            !analytic.contains(forbidden),
+            "expected cuda/analytic.rs to delegate low-level CUDA launch work to Layer 0, found `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn cuda_scalar_module_delegates_low_level_launches_to_layer0_runtime() {
+    let scalar = fs::read_to_string(format!("{ROOT}/scalar.rs")).unwrap();
+    for forbidden in ["compile_ptx(", ".load_module(", ".launch_builder("] {
+        assert!(
+            !scalar.contains(forbidden),
+            "expected cuda/scalar.rs to delegate low-level CUDA launch work to Layer 0, found `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn cuda_scalar_module_does_not_embed_unused_complex_kernels() {
+    let scalar = fs::read_to_string(format!("{ROOT}/scalar.rs")).unwrap();
+    for forbidden in ["complex32_t", "complex64_t"] {
+        assert!(
+            !scalar.contains(forbidden),
+            "expected cuda/scalar.rs to stay real-only for the wired subset, found `{forbidden}`"
         );
     }
 }

@@ -1,4 +1,6 @@
 use tenferro_algebra::{Conjugate, Scalar};
+#[cfg(feature = "cuda")]
+use tenferro_device::LogicalMemorySpace;
 
 use super::Tensor;
 use crate::layout::{compute_contiguous_strides, copy_strided, is_contiguous_in_order};
@@ -37,6 +39,15 @@ impl<T: Scalar> Tensor<T> {
                 self.conjugated,
                 self.fw_grad.clone(),
             );
+        }
+
+        #[cfg(feature = "cuda")]
+        if matches!(
+            self.logical_memory_space,
+            LogicalMemorySpace::GpuMemory { .. }
+        ) {
+            return crate::cuda_runtime::contiguous_tensor(self, order)
+                .unwrap_or_else(|err| panic!("contiguous: GPU materialization failed: {err}"));
         }
 
         let mut data = vec![T::zero(); self.len()];
@@ -192,6 +203,19 @@ impl<T: Scalar> Tensor<T> {
         self.wait();
         if self.ndim() <= 1 {
             return self.contiguous(MemoryOrder::ColumnMajor);
+        }
+
+        #[cfg(feature = "cuda")]
+        if matches!(
+            self.logical_memory_space,
+            LogicalMemorySpace::GpuMemory { .. }
+        ) {
+            return crate::cuda_runtime::triangular_part_tensor(
+                self,
+                diagonal,
+                matches!(half, TriangularHalf::Lower),
+            )
+            .unwrap_or_else(|err| panic!("triangular_part: GPU materialization failed: {err}"));
         }
 
         let m = self.dims[0];
