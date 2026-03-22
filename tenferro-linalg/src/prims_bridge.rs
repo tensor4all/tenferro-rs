@@ -1,13 +1,14 @@
-use num_complex::ComplexFloat;
+use num_complex::{Complex32, Complex64, ComplexFloat};
 use num_traits::{One, Zero};
 use tenferro_algebra::Standard;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{
     AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticUnaryOp, ComplexRealPrimsDescriptor,
-    ComplexRealUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarTernaryOp,
-    ScalarUnaryOp, SemiringCoreDescriptor, TensorAnalyticPrims, TensorComplexRealContextFor,
-    TensorComplexRealPrims, TensorScalarContextFor, TensorScalarPrims, TensorSemiringContextFor,
-    TensorSemiringCore,
+    ComplexRealUnaryOp, ComplexScalePrimsDescriptor, ScalarBinaryOp, ScalarPrimsDescriptor,
+    ScalarReductionOp, ScalarTernaryOp, ScalarUnaryOp, SemiringCoreDescriptor, TensorAnalyticPrims,
+    TensorComplexRealContextFor, TensorComplexRealPrims, TensorComplexScaleContextFor,
+    TensorComplexScalePrims, TensorResolveConjContextFor, TensorScalarContextFor,
+    TensorScalarPrims, TensorSemiringContextFor, TensorSemiringCore,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -181,6 +182,14 @@ pub(crate) fn full_like_constant<T: LinalgScalar>(
     }
 }
 
+pub(crate) fn resolve_conj<T, C>(ctx: &mut C, input: &Tensor<T>) -> Tensor<T>
+where
+    T: LinalgScalar + tenferro_algebra::Conjugate,
+    C: TensorResolveConjContextFor<T>,
+{
+    <C as TensorResolveConjContextFor<T>>::resolve_conj(ctx, input)
+}
+
 pub(crate) fn scalar_binary_same_shape<T, C>(
     ctx: &mut C,
     lhs: &Tensor<T>,
@@ -308,6 +317,119 @@ where
         &mut output,
     )?;
     Ok(output)
+}
+
+pub(crate) trait ScaleTensorByRealSameShape<C>: LinalgScalar {
+    fn scale_tensor_by_real_same_shape(
+        ctx: &mut C,
+        lhs: &Tensor<Self>,
+        rhs: &Tensor<Self::Real>,
+    ) -> Result<Tensor<Self>>;
+}
+
+impl<C> ScaleTensorByRealSameShape<C> for f32
+where
+    C: TensorScalarContextFor<Standard<f32>>,
+{
+    fn scale_tensor_by_real_same_shape(
+        ctx: &mut C,
+        lhs: &Tensor<Self>,
+        rhs: &Tensor<Self::Real>,
+    ) -> Result<Tensor<Self>> {
+        scalar_binary_same_shape(ctx, lhs, rhs, ScalarBinaryOp::Mul)
+    }
+}
+
+impl<C> ScaleTensorByRealSameShape<C> for f64
+where
+    C: TensorScalarContextFor<Standard<f64>>,
+{
+    fn scale_tensor_by_real_same_shape(
+        ctx: &mut C,
+        lhs: &Tensor<Self>,
+        rhs: &Tensor<Self::Real>,
+    ) -> Result<Tensor<Self>> {
+        scalar_binary_same_shape(ctx, lhs, rhs, ScalarBinaryOp::Mul)
+    }
+}
+
+impl<C> ScaleTensorByRealSameShape<C> for Complex32
+where
+    C: TensorComplexScaleContextFor<Complex32>,
+    C::ComplexScaleBackend: TensorComplexScalePrims<Complex32, Context = C>,
+{
+    fn scale_tensor_by_real_same_shape(
+        ctx: &mut C,
+        lhs: &Tensor<Self>,
+        rhs: &Tensor<Self::Real>,
+    ) -> Result<Tensor<Self>> {
+        let desc = ComplexScalePrimsDescriptor::PointwiseMul;
+        let mut output = Tensor::zeros(
+            lhs.dims(),
+            lhs.logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        );
+        let plan = <C::ComplexScaleBackend as TensorComplexScalePrims<Complex32>>::plan(
+            ctx,
+            &desc,
+            &[lhs.dims(), rhs.dims(), output.dims()],
+        )?;
+        <C::ComplexScaleBackend as TensorComplexScalePrims<Complex32>>::execute(
+            ctx,
+            &plan,
+            Complex32::new(1.0, 0.0),
+            lhs,
+            rhs,
+            Complex32::new(0.0, 0.0),
+            &mut output,
+        )?;
+        Ok(output)
+    }
+}
+
+impl<C> ScaleTensorByRealSameShape<C> for Complex64
+where
+    C: TensorComplexScaleContextFor<Complex64>,
+    C::ComplexScaleBackend: TensorComplexScalePrims<Complex64, Context = C>,
+{
+    fn scale_tensor_by_real_same_shape(
+        ctx: &mut C,
+        lhs: &Tensor<Self>,
+        rhs: &Tensor<Self::Real>,
+    ) -> Result<Tensor<Self>> {
+        let desc = ComplexScalePrimsDescriptor::PointwiseMul;
+        let mut output = Tensor::zeros(
+            lhs.dims(),
+            lhs.logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        );
+        let plan = <C::ComplexScaleBackend as TensorComplexScalePrims<Complex64>>::plan(
+            ctx,
+            &desc,
+            &[lhs.dims(), rhs.dims(), output.dims()],
+        )?;
+        <C::ComplexScaleBackend as TensorComplexScalePrims<Complex64>>::execute(
+            ctx,
+            &plan,
+            Complex64::new(1.0, 0.0),
+            lhs,
+            rhs,
+            Complex64::new(0.0, 0.0),
+            &mut output,
+        )?;
+        Ok(output)
+    }
+}
+
+pub(crate) fn complex_scale_same_shape<T, C>(
+    ctx: &mut C,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T::Real>,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar + ScaleTensorByRealSameShape<C>,
+{
+    T::scale_tensor_by_real_same_shape(ctx, lhs, rhs)
 }
 
 pub(crate) fn analytic_unary_same_shape<T, C>(

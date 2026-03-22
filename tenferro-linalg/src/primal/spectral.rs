@@ -56,7 +56,9 @@ where
 /// assert_eq!(ap.logical_memory_space(), LogicalMemorySpace::MainMemory);
 /// ```
 pub fn pinv<
-    T: KernelLinalgScalar<Real = T> + num_traits::Float + tenferro_tensor::KeepCountScalar,
+    T: KernelLinalgScalar
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>
+        + tenferro_algebra::Conjugate,
     C,
 >(
     ctx: &mut C,
@@ -64,12 +66,12 @@ pub fn pinv<
     rcond: Option<f64>,
 ) -> Result<Tensor<T>>
 where
-    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>
         + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
-    T::Real: tenferro_tensor::KeepCountScalar,
+    T::Real: num_traits::Float + tenferro_tensor::KeepCountScalar,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Pinv, "pinv")?;
 
@@ -95,7 +97,7 @@ where
         &s_max_axes,
         tenferro_prims::ScalarReductionOp::Max,
     )?;
-    let threshold: T = scalar_from(rcond.unwrap_or(1e-15))?;
+    let threshold: T::Real = scalar_from(rcond.unwrap_or(1e-15))?;
     let threshold_tensor = crate::prims_bridge::full_like_constant(
         threshold,
         s_max.dims(),
@@ -115,7 +117,7 @@ where
         tenferro_prims::ScalarBinaryOp::Greater,
     )?;
     let one_mask = crate::prims_bridge::full_like_constant(
-        T::one(),
+        <T::Real as num_traits::One>::one(),
         keep_mask.dims(),
         keep_mask.logical_memory_space(),
     )?;
@@ -151,17 +153,12 @@ where
     )?;
 
     let sinv_for_vt = sinv.unsqueeze(1)?.broadcast(vt_input.dims())?;
-    let vt_scaled = crate::prims_bridge::scalar_binary_same_shape(
-        ctx,
-        &vt_input,
-        &sinv_for_vt,
-        tenferro_prims::ScalarBinaryOp::Mul,
-    )?;
+    let vt_scaled = crate::prims_bridge::complex_scale_same_shape(ctx, &vt_input, &sinv_for_vt)?;
 
     let mut perm = vec![1, 0];
     perm.extend(2..u_input.ndim());
-    let u_t = u_input.permute(&perm)?;
-    let vt_t = vt_scaled.permute(&perm)?;
+    let u_t = crate::prims_bridge::resolve_conj(ctx, &u_input.conj().permute(&perm)?);
+    let vt_t = crate::prims_bridge::resolve_conj(ctx, &vt_scaled.conj().permute(&perm)?);
 
     crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &vt_t, &u_t, n, k, m)
 }

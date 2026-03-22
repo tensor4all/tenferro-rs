@@ -131,8 +131,11 @@ pub fn pinv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     rcond: Option<f64>,
 ) -> AdResult<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>
+        + tenferro_algebra::Conjugate,
     C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
     T::Real: tenferro_tensor::KeepCountScalar,

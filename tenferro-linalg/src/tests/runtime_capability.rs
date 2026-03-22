@@ -351,6 +351,14 @@ fn pinv_path_stays_tensor_native() {
         !pinv.contains("backend::slice_bridge::"),
         "pinv should avoid slice_bridge helpers"
     );
+    assert!(
+        pinv.contains("complex_scale_same_shape"),
+        "pinv should route complex scaling through the complex-scale bridge"
+    );
+    assert!(
+        pinv.contains("resolve_conj(ctx"),
+        "pinv should resolve lazy conjugation before semiring GEMM"
+    );
 }
 
 #[test]

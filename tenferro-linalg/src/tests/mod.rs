@@ -15,6 +15,13 @@ fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
     contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
+fn tensor_data_complex64(tensor: &Tensor<Complex64>) -> Vec<Complex64> {
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.dims().iter().product::<usize>().max(1);
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
+}
+
 #[test]
 fn vector_norm_primal_rrule_and_frule_match_expected_values() {
     let mut ctx = CpuContext::new(1);
@@ -190,4 +197,37 @@ fn svd_cutoff_fixed_shape_zero_fill_semantics_hold() {
     assert_eq!(tensor_data(&result.s), vec![3.0, 0.0]);
     assert_eq!(tensor_data(&result.u), vec![1.0, 0.0, 0.0, 0.0]);
     assert_eq!(tensor_data(&result.vt), vec![1.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn complex_pinv_diagonal_matrix_matches_expected_inverse() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, -1.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let ap = pinv(&mut ctx, &a, None).unwrap();
+    let data = tensor_data_complex64(&ap);
+    let expected = [
+        Complex64::new(0.5, -0.5),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.4, 0.2),
+    ];
+
+    assert_eq!(ap.dims(), &[2, 2]);
+    for (got, want) in data.iter().zip(expected.iter()) {
+        assert!(
+            (*got - *want).norm() < 1.0e-10,
+            "got {got:?}, want {want:?}"
+        );
+    }
 }
