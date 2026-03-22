@@ -165,8 +165,8 @@ fn cat_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
 }
 
 #[test]
-fn cat_rejects_mixed_conjugation_flags() {
-    let a = complex_col_tensor(
+fn cat_over_mixed_conjugation_resolves_logical_values_and_clears_preferred_device_hint() {
+    let mut a = complex_col_tensor(
         &[
             Complex64::new(1.0, 1.0),
             Complex64::new(2.0, 2.0),
@@ -176,20 +176,27 @@ fn cat_rejects_mixed_conjugation_flags() {
         &[2, 2],
     )
     .conj();
+    a.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 7 }));
     let b = complex_col_tensor(
-        &[
-            Complex64::new(5.0, -1.0),
-            Complex64::new(6.0, -2.0),
-            Complex64::new(7.0, -3.0),
-            Complex64::new(8.0, -4.0),
-        ],
-        &[2, 2],
+        &[Complex64::new(5.0, 5.0), Complex64::new(6.0, 6.0)],
+        &[2, 1],
     );
 
-    let err = Tensor::cat(&[&a, &b], 1).unwrap_err();
-    assert!(
-        matches!(err, Error::InvalidArgument(ref msg) if msg.contains("conjugation")),
-        "expected mixed-conjugation rejection, got {err:?}"
+    let got = Tensor::cat(&[&a, &b], 1)
+        .expect("mixed conjugation should materialize into logical cat values");
+    assert!(!got.is_conjugated());
+    assert_eq!(got.preferred_compute_device(), None);
+    assert_eq!(got.dims(), &[2, 3]);
+    assert_eq!(
+        got.buffer().as_slice().unwrap(),
+        &[
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(4.0, -4.0),
+            Complex64::new(5.0, 5.0),
+            Complex64::new(6.0, 6.0),
+        ]
     );
 }
 
@@ -221,6 +228,49 @@ fn stack_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
     assert!(got.is_conjugated());
     assert_eq!(got.preferred_compute_device(), None);
     assert_eq!(got.dims(), &[2, 2, 2]);
+}
+
+#[test]
+fn stack_over_mixed_conjugation_resolves_logical_values_and_clears_preferred_device_hint() {
+    let mut a = complex_col_tensor(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+    a.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 7 }));
+    let b = complex_col_tensor(
+        &[
+            Complex64::new(5.0, 5.0),
+            Complex64::new(6.0, 6.0),
+            Complex64::new(7.0, 7.0),
+            Complex64::new(8.0, 8.0),
+        ],
+        &[2, 2],
+    );
+
+    let got = Tensor::stack(&[&a, &b], 0)
+        .expect("mixed conjugation should materialize into logical stack values");
+    assert!(!got.is_conjugated());
+    assert_eq!(got.preferred_compute_device(), None);
+    assert_eq!(got.dims(), &[2, 2, 2]);
+    assert_eq!(
+        got.buffer().as_slice().unwrap(),
+        &[
+            Complex64::new(1.0, -1.0),
+            Complex64::new(5.0, 5.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(6.0, 6.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(7.0, 7.0),
+            Complex64::new(4.0, -4.0),
+            Complex64::new(8.0, 8.0),
+        ]
+    );
 }
 
 #[cfg(feature = "cuda")]
