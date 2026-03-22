@@ -94,6 +94,39 @@ fn tensor_c64(data: &[Complex64], dims: &[usize]) -> Tensor<Complex64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn tensor_f64_from_col_major_fn<F>(dims: &[usize], mut f: F) -> Tensor<f64>
+where
+    F: FnMut(&[usize]) -> f64,
+{
+    let len = dims.iter().copied().product::<usize>();
+    let mut data = Vec::with_capacity(len);
+    let mut idx = vec![0usize; dims.len()];
+
+    if dims.is_empty() {
+        data.push(f(&idx));
+    } else {
+        loop {
+            data.push(f(&idx));
+
+            let mut axis = 0usize;
+            while axis < dims.len() {
+                idx[axis] += 1;
+                if idx[axis] < dims[axis] {
+                    break;
+                }
+                idx[axis] = 0;
+                axis += 1;
+            }
+
+            if axis == dims.len() {
+                break;
+            }
+        }
+    }
+
+    Tensor::from_slice(&data, dims, MemoryOrder::ColumnMajor).unwrap()
+}
+
 fn load_cuda_backend() -> Option<(CudaBackend, CudaContext)> {
     let path = available_cutensor_library_path()?;
     if !cuda_device_zero_is_available() {
@@ -174,6 +207,96 @@ fn cuda_complex_scale_phase1_pointwise_mul_matches_cpu_when_runtime_is_available
             ][..]
         )
     );
+}
+
+#[test]
+fn cuda_batched_gemm_matches_cpu_for_small_real_batched_case() {
+    let Some((_backend, mut cuda_ctx)) = load_cuda_backend() else {
+        return;
+    };
+
+    let mut cpu_ctx = CpuContext::new(1);
+    let desc = SemiringCoreDescriptor::BatchedGemm {
+        batch_dims: vec![2],
+        m: 2,
+        n: 2,
+        k: 3,
+    };
+
+    let a = tensor_f64_from_col_major_fn(&[2, 3, 2], |idx| {
+        let m = idx[0] as f64;
+        let k = idx[1] as f64;
+        let batch = idx[2] as f64;
+        1.0 + m + 10.0 * k + 100.0 * batch
+    });
+    let b = tensor_f64_from_col_major_fn(&[3, 2, 2], |idx| {
+        let k = idx[0] as f64;
+        let n = idx[1] as f64;
+        let batch = idx[2] as f64;
+        2.0 + n + 10.0 * k + 100.0 * batch
+    });
+
+    let cpu_plan = <CpuBackend as TensorSemiringCore<Standard<f64>>>::plan(
+        &mut cpu_ctx,
+        &desc,
+        &[a.dims(), b.dims(), &[2, 2, 2]],
+    )
+    .unwrap();
+    let cuda_plan = <CudaBackend as TensorSemiringCore<Standard<f64>>>::plan(
+        &mut cuda_ctx,
+        &desc,
+        &[a.dims(), b.dims(), &[2, 2, 2]],
+    )
+    .unwrap();
+
+    let mut c_cpu = Tensor::<f64>::zeros(
+        &[2, 2, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    <CpuBackend as TensorSemiringCore<Standard<f64>>>::execute(
+        &mut cpu_ctx,
+        &cpu_plan,
+        1.0,
+        &[&a, &b],
+        0.0,
+        &mut c_cpu,
+    )
+    .unwrap();
+
+    let a_gpu = a
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut c_gpu = Tensor::<f64>::zeros(
+        &[2, 2, 2],
+        LogicalMemorySpace::GpuMemory { device_id: 0 },
+        MemoryOrder::ColumnMajor,
+    );
+    <CudaBackend as TensorSemiringCore<Standard<f64>>>::execute(
+        &mut cuda_ctx,
+        &cuda_plan,
+        1.0,
+        &[&a_gpu, &b_gpu],
+        0.0,
+        &mut c_gpu,
+    )
+    .unwrap();
+
+    let c_cuda = c_gpu
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let cpu_slice = c_cpu.buffer().as_slice().unwrap();
+    let cuda_slice = c_cuda.buffer().as_slice().unwrap();
+    assert_eq!(cpu_slice.len(), cuda_slice.len());
+    for (i, (lhs, rhs)) in cpu_slice.iter().zip(cuda_slice.iter()).enumerate() {
+        assert!(
+            (lhs - rhs).abs() <= 1.0e-9,
+            "batched GEMM mismatch at flat index {i}: cpu={lhs:?}, cuda={rhs:?}"
+        );
+    }
 }
 
 #[test]

@@ -39,20 +39,19 @@ pub(super) fn plan_core_descriptor<S: Scalar>(
         } => {
             validate_shape_count(shapes, 3, "BatchedGemm")?;
             let nb = batch_dims.len() as u32;
-            let mut modes_a = Vec::new();
-            let mut modes_b = Vec::new();
-            let mut modes_c = Vec::new();
-            for i in 0..nb {
-                modes_a.push(i as i32);
-                modes_b.push(i as i32);
-                modes_c.push(i as i32);
-            }
-            let m_mode = nb as i32;
-            let k_mode = (nb + 1) as i32;
-            let n_mode = (nb + 2) as i32;
+            let m_mode = 0i32;
+            let k_mode = 1i32;
+            let n_mode = 2i32;
+            let batch_modes: Vec<i32> = (0..nb).map(|i| (i + 3) as i32).collect();
+            let mut modes_a = Vec::with_capacity(2 + batch_modes.len());
+            let mut modes_b = Vec::with_capacity(2 + batch_modes.len());
+            let mut modes_c = Vec::with_capacity(2 + batch_modes.len());
             modes_a.extend([m_mode, k_mode]);
             modes_b.extend([k_mode, n_mode]);
             modes_c.extend([m_mode, n_mode]);
+            modes_a.extend(batch_modes.iter().copied());
+            modes_b.extend(batch_modes.iter().copied());
+            modes_c.extend(batch_modes.iter().copied());
             let strides_a = default_col_major_strides(shapes[0]);
             let strides_b = default_col_major_strides(shapes[1]);
             let strides_c = default_col_major_strides(shapes[2]);
