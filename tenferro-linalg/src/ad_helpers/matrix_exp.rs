@@ -83,8 +83,8 @@ where
     }
 }
 
-/// Compute the matrix 1-norm as a scalar tensor using tensor-native reductions.
-pub(crate) fn matrix_exp_global_1_norm_tensor<T, C>(
+/// Compute the matrix 1-norm for each batch using tensor-native reductions.
+pub(crate) fn matrix_exp_batch_1_norms_tensor<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
 ) -> Result<Tensor<T::Real>>
@@ -100,7 +100,38 @@ where
         &kept_axes,
         ScalarReductionOp::Sum,
     )?;
-    prims_bridge::scalar_reduce_keep_axes(ctx, &col_sums, &[], ScalarReductionOp::Max)
+    let batch_axes: Vec<usize> = (1..col_sums.ndim()).collect();
+    prims_bridge::scalar_reduce_keep_axes(ctx, &col_sums, &batch_axes, ScalarReductionOp::Max)
+}
+
+/// Blend two same-shape tensors with a real-valued numeric mask.
+///
+/// `mask == 1` selects `on_true`, and `mask == 0` selects `on_false`.
+pub(crate) fn blend_tensor_by_real_mask_same_shape<T, C>(
+    ctx: &mut C,
+    on_true: &Tensor<T>,
+    on_false: &Tensor<T>,
+    mask: &Tensor<T::Real>,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar + prims_bridge::ScaleTensorByRealSameShape<C>,
+    C: TensorScalarContextFor<Standard<T>> + TensorScalarContextFor<Standard<T::Real>>,
+{
+    let one = prims_bridge::full_like_constant(
+        scalar_from::<T::Real>(1.0)?,
+        mask.dims(),
+        mask.logical_memory_space(),
+    )?;
+    let inv_mask = prims_bridge::scalar_binary_same_shape(ctx, &one, mask, ScalarBinaryOp::Sub)?;
+    let true_part =
+        <T as prims_bridge::ScaleTensorByRealSameShape<C>>::scale_tensor_by_real_same_shape(
+            ctx, on_true, mask,
+        )?;
+    let false_part =
+        <T as prims_bridge::ScaleTensorByRealSameShape<C>>::scale_tensor_by_real_same_shape(
+            ctx, on_false, &inv_mask,
+        )?;
+    prims_bridge::scalar_binary_same_shape(ctx, &true_part, &false_part, ScalarBinaryOp::Add)
 }
 
 fn batched_identity<T: KernelLinalgScalar>(

@@ -176,6 +176,83 @@ fn slogdet_matches_expected_sign_and_logabsdet() {
 }
 
 #[test]
+fn matrix_exp_batch_1_norms_keep_batches_separate() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            6.0_f64, 0.0, 0.0, 6.0, // batch 0
+            2.0, 0.5, -1.0, 1.5, // batch 1
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let norms = crate::ad_helpers::matrix_exp_batch_1_norms_tensor(&mut ctx, &a).unwrap();
+    assert_eq!(norms.dims(), &[2]);
+    assert_eq!(tensor_data(&norms), vec![6.0, 2.5]);
+}
+
+#[test]
+fn blend_tensor_by_real_mask_same_shape_selects_complex_batches() {
+    let mut ctx = CpuContext::new(1);
+    let on_true = Tensor::from_slice(
+        &[
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(3.0, -1.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let on_false = Tensor::from_slice(
+        &[
+            Complex64::new(5.0, 0.5),
+            Complex64::new(5.0, 0.5),
+            Complex64::new(5.0, 0.5),
+            Complex64::new(5.0, 0.5),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let mask = Tensor::from_slice(&[1.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor)
+        .unwrap()
+        .reshape(&[1, 1, 2])
+        .unwrap()
+        .broadcast(&[2, 2, 2])
+        .unwrap();
+
+    let blended = crate::ad_helpers::blend_tensor_by_real_mask_same_shape(
+        &mut ctx, &on_true, &on_false, &mask,
+    )
+    .unwrap();
+    assert_eq!(
+        tensor_data_complex64(&blended),
+        vec![
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+        ]
+    );
+}
+
+#[test]
 fn svd_cutoff_fixed_shape_zero_fill_semantics_hold() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::from_slice(

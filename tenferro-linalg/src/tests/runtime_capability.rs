@@ -537,13 +537,13 @@ fn matrix_power_path_is_tensor_native_and_uses_tensor_power_logic() {
 }
 
 #[test]
-fn matrix_exp_path_is_tensor_native_with_one_scalar_host_sync() {
+fn matrix_exp_path_is_tensor_native_with_batchwise_host_control_vector_sync() {
     let spectral = repo_file("src/primal/spectral.rs");
     let matrix_exp = file_section(&spectral, "pub fn matrix_exp", "#[cfg(test)]");
     let matrix_exp_helper = repo_file("src/ad_helpers/matrix_exp.rs");
     let tensor_native_helper = file_section(
         &matrix_exp_helper,
-        "pub(crate) fn matrix_exp_global_1_norm_tensor",
+        "pub(crate) fn matrix_exp_batch_1_norms_tensor",
         "pub(crate) fn matrix_1_norm",
     );
 
@@ -560,25 +560,32 @@ fn matrix_exp_path_is_tensor_native_with_one_scalar_host_sync() {
         "matrix_exp should avoid the old host-slice helper"
     );
     assert!(
-        matrix_exp
-            .contains("to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)"),
-        "matrix_exp should sync exactly one scalar to host for the shared scaling factor"
+        matrix_exp.contains("batch_norms.to_memory_space_async("),
+        "matrix_exp should sync only the batch-wise control vector to host"
     );
     assert!(
-        matrix_exp.contains("matrix_exp_global_1_norm_tensor"),
-        "matrix_exp should build the global norm through tensor-native helper logic"
+        !matrix_exp.contains("missing scalar norm value"),
+        "matrix_exp should not extract a single global scalar norm anymore"
     );
     assert!(
         matrix_exp.contains("matrix_exp_tensor_native"),
         "matrix_exp should hand off Padé evaluation to the tensor-native helper"
     );
     assert!(
+        matrix_exp.contains("matrix_exp_batch_1_norms_tensor"),
+        "matrix_exp should build batch-wise norms through tensor-native helper logic"
+    );
+    assert!(
         tensor_native_helper.contains("ScalarReductionOp::Sum"),
-        "matrix_exp helper should build the global norm through tensor-native reductions"
+        "matrix_exp helper should build the batch-wise norm through tensor-native reductions"
     );
     assert!(
         tensor_native_helper.contains("ScalarReductionOp::Max"),
-        "matrix_exp helper should reduce to one batch-global scalar norm"
+        "matrix_exp helper should reduce each batch independently"
+    );
+    assert!(
+        tensor_native_helper.contains("blend_tensor_by_real_mask_same_shape"),
+        "matrix_exp helper should blend squared batches through a reusable mask helper"
     );
     assert!(
         tensor_native_helper.contains("batched_gemm_with_semiring_tensors"),
