@@ -5,6 +5,8 @@ use tenferro_device::{Error, Result};
 use tenferro_prims::TensorResolveConjContextFor;
 use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor};
 
+pub use tenferro_device::{broadcast_batch_dims, BroadcastBatchIndexer};
+
 use crate::LinalgScalar;
 
 #[doc(hidden)]
@@ -14,132 +16,6 @@ pub struct SolveRhsLayout {
     pub output_batch_dims: Vec<usize>,
     pub structural_rank: usize,
     pub rhs_batch_indexer: BroadcastBatchIndexer,
-}
-
-#[allow(dead_code)]
-#[doc(hidden)]
-pub struct BroadcastBatchIndexer {
-    output_batch_dims: Vec<usize>,
-    normalized_source_batch_dims: Vec<usize>,
-    source_strides: Vec<usize>,
-    identity: bool,
-}
-
-impl BroadcastBatchIndexer {
-    pub fn new(
-        source_batch_dims: &[usize],
-        output_batch_dims: &[usize],
-        op_name: &str,
-        arg_name: &str,
-    ) -> Result<Self> {
-        if source_batch_dims.len() > output_batch_dims.len() {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} {arg_name} batch rank {} exceeds target batch rank {}",
-                source_batch_dims.len(),
-                output_batch_dims.len()
-            )));
-        }
-
-        let missing = output_batch_dims.len() - source_batch_dims.len();
-        let mut normalized_source_batch_dims = vec![1; output_batch_dims.len()];
-        normalized_source_batch_dims[missing..].copy_from_slice(source_batch_dims);
-
-        for (axis, (&source_dim, &output_dim)) in normalized_source_batch_dims
-            .iter()
-            .zip(output_batch_dims.iter())
-            .enumerate()
-        {
-            if source_dim != 1 && source_dim != output_dim {
-                return Err(Error::InvalidArgument(format!(
-                    "{op_name} {arg_name} batch dims are not broadcastable to {:?}: source axis {axis} has {source_dim}, target has {output_dim}",
-                    output_batch_dims
-                )));
-            }
-        }
-
-        let identity = normalized_source_batch_dims == output_batch_dims;
-        Ok(Self {
-            output_batch_dims: output_batch_dims.to_vec(),
-            source_strides: col_major_batch_strides(&normalized_source_batch_dims),
-            normalized_source_batch_dims,
-            identity,
-        })
-    }
-
-    pub fn output_batch_dims(&self) -> &[usize] {
-        &self.output_batch_dims
-    }
-
-    pub fn is_identity(&self) -> bool {
-        self.identity
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn source_linear_batch_index(&self, mut output_linear_batch_index: usize) -> usize {
-        if self.output_batch_dims.is_empty() {
-            return 0;
-        }
-
-        let mut source_linear_batch_index = 0usize;
-        for axis in 0..self.output_batch_dims.len() {
-            let output_dim = self.output_batch_dims[axis];
-            let coord = output_linear_batch_index % output_dim;
-            output_linear_batch_index /= output_dim;
-            if self.normalized_source_batch_dims[axis] != 1 {
-                source_linear_batch_index += coord * self.source_strides[axis];
-            }
-        }
-        source_linear_batch_index
-    }
-}
-
-fn col_major_batch_strides(dims: &[usize]) -> Vec<usize> {
-    let mut strides = vec![0usize; dims.len()];
-    if dims.is_empty() {
-        return strides;
-    }
-    strides[0] = 1;
-    for axis in 1..dims.len() {
-        strides[axis] = strides[axis - 1] * dims[axis - 1];
-    }
-    strides
-}
-
-#[doc(hidden)]
-pub fn broadcast_batch_dims(
-    lhs_batch_dims: &[usize],
-    rhs_batch_dims: &[usize],
-    op_name: &str,
-    lhs_name: &str,
-    rhs_name: &str,
-) -> Result<Vec<usize>> {
-    let rank = lhs_batch_dims.len().max(rhs_batch_dims.len());
-    let lhs_pad = rank - lhs_batch_dims.len();
-    let rhs_pad = rank - rhs_batch_dims.len();
-    let mut output_batch_dims = Vec::with_capacity(rank);
-
-    for axis in 0..rank {
-        let lhs_dim = if axis < lhs_pad {
-            1
-        } else {
-            lhs_batch_dims[axis - lhs_pad]
-        };
-        let rhs_dim = if axis < rhs_pad {
-            1
-        } else {
-            rhs_batch_dims[axis - rhs_pad]
-        };
-        if lhs_dim == rhs_dim || lhs_dim == 1 || rhs_dim == 1 {
-            output_batch_dims.push(lhs_dim.max(rhs_dim));
-        } else {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} batch dims are not broadcastable: {lhs_name} has {:?}, {rhs_name} has {:?}",
-                lhs_batch_dims, rhs_batch_dims
-            )));
-        }
-    }
-
-    Ok(output_batch_dims)
 }
 
 #[doc(hidden)]

@@ -1,9 +1,8 @@
 use num_traits::ToPrimitive;
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_device::{flatten_col_major_index, Error, LogicalMemorySpace, Result};
 
 use super::Tensor;
-use crate::layout::compute_contiguous_strides;
 use crate::MemoryOrder;
 
 /// Scalar types accepted as `keep_counts` in [`Tensor::zero_trailing_by_counts`].
@@ -233,31 +232,11 @@ impl<T: Scalar> Tensor<T> {
             return Ok(self.materialized_from_vec(out, MemoryOrder::ColumnMajor));
         }
 
-        let batch_strides =
-            compute_contiguous_strides(expected_batch_dims, MemoryOrder::ColumnMajor);
         let out_len = out.len();
         let mut index = vec![0usize; self.ndim()];
         for (dst_pos, dst) in out.iter_mut().enumerate() {
-            let batch_pos = if expected_batch_dims.is_empty() {
-                0usize
-            } else {
-                index[structural_rank..]
-                    .iter()
-                    .zip(batch_strides.iter())
-                    .try_fold(0usize, |acc, (&coord, &stride)| {
-                        let stride = usize::try_from(stride).ok()?;
-                        coord
-                            .checked_mul(stride)
-                            .and_then(|term| acc.checked_add(term))
-                    })
-                    .ok_or_else(|| {
-                        Error::StrideError(format!(
-                            "batch offset overflow for index {:?} and batch strides {:?}",
-                            &index[structural_rank..],
-                            batch_strides
-                        ))
-                    })?
-            };
+            let batch_pos =
+                flatten_col_major_index(expected_batch_dims, &index[structural_rank..])?;
             let keep = parsed_counts.get(batch_pos).copied().ok_or_else(|| {
                 Error::StrideError(format!("batch position {batch_pos} out of bounds"))
             })?;

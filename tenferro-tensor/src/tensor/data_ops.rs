@@ -1,6 +1,7 @@
 use tenferro_algebra::{Conjugate, Scalar};
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
+use tenferro_device::{checked_batch_count, unflatten_col_major_index_into};
 
 use super::Tensor;
 use crate::layout::{compute_contiguous_strides, copy_strided, is_contiguous_in_order};
@@ -231,10 +232,24 @@ impl<T: Scalar> Tensor<T> {
             TriangularHalf::Upper => "triu",
         });
         let batch_dims = &self.dims[2..];
+        let n_batch = checked_batch_count(batch_dims).unwrap_or_else(|err| {
+            panic!(
+                "triangular_part: invalid batch dims {:?}: {err}",
+                batch_dims
+            )
+        });
         let mut batch_index = vec![0usize; batch_dims.len()];
-        let n_batch = batch_dims.iter().product::<usize>().max(1);
 
-        for _ in 0..n_batch {
+        for batch in 0..n_batch {
+            if !batch_dims.is_empty() {
+                unflatten_col_major_index_into(batch, batch_dims, &mut batch_index)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "triangular_part: failed to unflatten batch index {batch} for dims {:?}: {err}",
+                            batch_dims
+                        )
+                    });
+            }
             let src_batch_off: isize = batch_index
                 .iter()
                 .enumerate()
@@ -295,14 +310,6 @@ impl<T: Scalar> Tensor<T> {
                         });
                     data[dst_pos] = src[src_pos];
                 }
-            }
-
-            for axis in 0..batch_dims.len() {
-                batch_index[axis] += 1;
-                if batch_index[axis] < batch_dims[axis] {
-                    break;
-                }
-                batch_index[axis] = 0;
             }
         }
 

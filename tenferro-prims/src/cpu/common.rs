@@ -5,7 +5,7 @@ use num_traits::Zero;
 use strided_kernel::{map_into, zip_map2_into, zip_map3_into};
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, Result};
+use tenferro_device::{unflatten_col_major_index_into, Error, Result};
 
 use crate::infra::typed_dispatch::{dispatch_real_scalar_type, dispatch_standard_scalar_type};
 use crate::{for_each_index, validate_rank, validate_shape_count, validate_shape_eq};
@@ -203,15 +203,13 @@ where
 }
 
 /// Unflatten a linear index into a pre-allocated buffer (column-major).
-pub(super) fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
+pub(super) fn unflatten_index_into(flat: usize, dims: &[usize], out: &mut [usize]) {
     debug_assert!(
         flat < dims.iter().product::<usize>(),
         "flat index {flat} out of range for dims {dims:?}"
     );
-    for d in 0..dims.len() {
-        out[d] = flat % dims[d];
-        flat /= dims[d];
-    }
+    unflatten_col_major_index_into(flat, dims, out)
+        .expect("cpu reduction index buffers must match dims and stay in range");
 }
 
 pub(crate) fn is_supported_scalar_type<T: Scalar + 'static>() -> bool {
