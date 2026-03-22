@@ -9,11 +9,13 @@ mod svdvals;
 mod thin_svd;
 mod wrappers;
 
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Standard;
 use tenferro_device::Result;
 use tenferro_prims::{
-    AnalyticPrimsDescriptor, AnalyticUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor,
-    ScalarReductionOp, ScalarUnaryOp, TensorAnalyticPrims, TensorScalarPrims,
+    AnalyticPrimsDescriptor, AnalyticUnaryOp, ComplexScalePrimsDescriptor, ScalarBinaryOp,
+    ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp, TensorAnalyticPrims,
+    TensorComplexScalePrims, TensorScalarPrims,
 };
 use tenferro_tensor::Tensor;
 
@@ -68,11 +70,40 @@ fn has_real_det_support_f64() -> bool {
     )
 }
 
+fn has_complex_det_support_c32() -> bool {
+    <tenferro_prims::CudaBackend as TensorComplexScalePrims<Complex32>>::has_complex_scale_support(
+        ComplexScalePrimsDescriptor::PointwiseMul,
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<Complex32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Prod,
+        },
+    )
+}
+
+fn has_complex_det_support_c64() -> bool {
+    <tenferro_prims::CudaBackend as TensorComplexScalePrims<Complex64>>::has_complex_scale_support(
+        ComplexScalePrimsDescriptor::PointwiseMul,
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<Complex64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Prod,
+        },
+    )
+}
+
 fn has_det_support<T: CudaLinalgScalar>() -> bool {
     match T::cuda_data_type() {
         scalar_type::CudaDataType::F32 => lu::has_lu_support::<T>() && has_real_det_support_f32(),
         scalar_type::CudaDataType::F64 => lu::has_lu_support::<T>() && has_real_det_support_f64(),
-        _ => false,
+        scalar_type::CudaDataType::Complex32 => {
+            lu::has_lu_support::<T>() && has_complex_det_support_c32()
+        }
+        scalar_type::CudaDataType::Complex64 => {
+            lu::has_lu_support::<T>() && has_complex_det_support_c64()
+        }
     }
 }
 

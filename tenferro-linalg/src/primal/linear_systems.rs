@@ -1,4 +1,5 @@
 use super::*;
+use num_traits::One;
 
 fn permutation_sign_from_forward_pivots(pivots: &[usize], n: usize) -> Result<i32> {
     if pivots.len() != n {
@@ -130,14 +131,11 @@ where
 }
 
 /// Compute the determinant of a square matrix.
-pub fn det<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
-    ctx: &mut C,
-    tensor: &Tensor<T>,
-) -> Result<Tensor<T>>
+pub fn det<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
-    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    T: crate::prims_bridge::ScaleTensorByRealSameShape<C>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det")?;
@@ -161,11 +159,11 @@ where
     let pivots = backend_pivots_to_usize(&lu.pivots)?;
 
     let sign_len = if dims.is_empty() { 1 } else { bc };
-    let mut sign_data = vec![T::one(); sign_len];
+    let mut sign_data = vec![T::Real::one(); sign_len];
     for batch in 0..bc {
         let sign = permutation_sign_from_forward_pivots(&pivots[batch * n..(batch + 1) * n], n)?;
         if sign < 0 {
-            sign_data[batch] = T::zero() - T::one();
+            sign_data[batch] = T::Real::zero() - T::Real::one();
         }
     }
 
@@ -177,11 +175,10 @@ where
             sign_host.to_memory_space_async(tensor.logical_memory_space())?
         };
 
-    crate::prims_bridge::scalar_binary_same_shape(
+    <T as crate::prims_bridge::ScaleTensorByRealSameShape<C>>::scale_tensor_by_real_same_shape(
         ctx,
         &diagonal_prod,
         &sign_tensor,
-        tenferro_prims::ScalarBinaryOp::Mul,
     )
 }
 

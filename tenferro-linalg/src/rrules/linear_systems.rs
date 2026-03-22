@@ -236,7 +236,7 @@ pub fn det_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + crate::prims_bridge::ScaleTensorByRealSameShape<C>,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,

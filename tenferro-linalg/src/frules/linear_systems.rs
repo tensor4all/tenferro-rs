@@ -246,7 +246,7 @@ pub fn det_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + crate::prims_bridge::ScaleTensorByRealSameShape<C>,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,

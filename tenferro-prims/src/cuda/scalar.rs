@@ -1,3 +1,4 @@
+use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -9,13 +10,19 @@ use tenferro_device::{
 };
 use tenferro_tensor::Tensor;
 
+use crate::cuda_ffi::{CUTENSOR_OP_ADD, CUTENSOR_OP_IDENTITY, CUTENSOR_OP_MUL};
 use crate::{
     validate_execute_inputs, validate_rank, validate_shape_count, validate_shape_eq, CudaBackend,
     ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarTernaryOp, ScalarUnaryOp,
     TensorScalarPrims,
 };
 
-use super::CudaContext;
+use super::{
+    planning::{check_status, plan_elementwise_trinary, plan_reduction, TrinaryPlanSpec},
+    runtime::{allocate_workspace, null_stream, tensor_device_ptr_with_offset},
+    scalar_type::{scalar_compute_descriptor, scalar_data_type},
+    CudaContext,
+};
 
 /// CUDA execution plan for the scalar protocol family.
 ///
@@ -480,6 +487,18 @@ fn supports_scalar_reduction(op: ScalarReductionOp) -> bool {
     )
 }
 
+fn supports_complex_scalar_unary(_op: ScalarUnaryOp) -> bool {
+    false
+}
+
+fn supports_complex_scalar_binary(op: ScalarBinaryOp) -> bool {
+    matches!(op, ScalarBinaryOp::Mul)
+}
+
+fn supports_complex_scalar_reduction(op: ScalarReductionOp) -> bool {
+    matches!(op, ScalarReductionOp::Prod)
+}
+
 fn to_runtime_unary(op: ScalarUnaryOp) -> Result<RealUnaryOp> {
     match op {
         ScalarUnaryOp::Conj => Ok(RealUnaryOp::Conj),
@@ -794,6 +813,234 @@ where
     }
 }
 
+fn execute_complex_binary_mul<S>(
+    ctx: &mut CudaContext,
+    alpha: S,
+    lhs: &Tensor<S>,
+    rhs: &Tensor<S>,
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()>
+where
+    S: Scalar + Conjugate + 'static,
+{
+    let data_type = scalar_data_type::<S>()?;
+    let compute = scalar_compute_descriptor::<S>(&ctx.vtable)?;
+    let modes: Vec<i32> = (0..lhs.ndim() as i32).collect();
+    let native = plan_elementwise_trinary(
+        ctx,
+        data_type,
+        compute,
+        TrinaryPlanSpec {
+            modes_a: &modes,
+            shape_a: lhs.dims(),
+            strides_a: lhs.strides(),
+            op_a: CUTENSOR_OP_IDENTITY,
+            modes_b: &modes,
+            shape_b: rhs.dims(),
+            strides_b: rhs.strides(),
+            op_b: CUTENSOR_OP_IDENTITY,
+            modes_c: &modes,
+            shape_c: output.dims(),
+            strides_c: output.strides(),
+            op_c: CUTENSOR_OP_IDENTITY,
+            shape_d: output.dims(),
+            strides_d: output.strides(),
+            op_ab: CUTENSOR_OP_MUL,
+            op_abc: CUTENSOR_OP_ADD,
+        },
+    )?;
+    let lhs_ptr = tensor_device_ptr_with_offset("CUDA scalar binary lhs", lhs)? as *const c_void;
+    let rhs_ptr = tensor_device_ptr_with_offset("CUDA scalar binary rhs", rhs)? as *const c_void;
+    let output_ptr = tensor_device_ptr_with_offset("CUDA scalar binary output", output)?;
+    let rhs_scale = S::one();
+    let status = unsafe {
+        (ctx.vtable.elementwise_trinary_execute)(
+            ctx.handle.raw,
+            native.plan.raw,
+            &alpha as *const S as *const c_void,
+            lhs_ptr,
+            &rhs_scale as *const S as *const c_void,
+            rhs_ptr,
+            &beta as *const S as *const c_void,
+            output_ptr as *const c_void,
+            output_ptr,
+            null_stream(),
+        )
+    };
+    check_status(status, "cutensorElementwiseTrinaryExecute")
+}
+
+fn plan_complex_scalar<S>(
+    desc: &ScalarPrimsDescriptor,
+    shapes: &[&[usize]],
+) -> Result<CudaScalarPlan<S>>
+where
+    S: Scalar + 'static,
+{
+    let kind = match desc {
+        ScalarPrimsDescriptor::PointwiseUnary { op } => {
+            validate_pointwise_shapes(shapes, 1, "CudaScalarPointwiseUnary")?;
+            if !supports_complex_scalar_unary(*op) {
+                return Err(Error::InvalidArgument(format!(
+                    "scalar unary operation {op:?} is not supported on CudaBackend for {}",
+                    std::any::type_name::<S>()
+                )));
+            }
+            CudaScalarPlanKind::PointwiseUnary { op: *op }
+        }
+        ScalarPrimsDescriptor::PointwiseBinary { op } => {
+            validate_pointwise_shapes(shapes, 2, "CudaScalarPointwiseBinary")?;
+            if !supports_complex_scalar_binary(*op) {
+                return Err(Error::InvalidArgument(format!(
+                    "scalar binary operation {op:?} is not supported on CudaBackend for {}",
+                    std::any::type_name::<S>()
+                )));
+            }
+            CudaScalarPlanKind::PointwiseBinary { op: *op }
+        }
+        ScalarPrimsDescriptor::PointwiseTernary { op } => {
+            validate_pointwise_shapes(shapes, 3, "CudaScalarPointwiseTernary")?;
+            return Err(Error::InvalidArgument(format!(
+                "scalar ternary operation {op:?} is not supported on CudaBackend for {}",
+                std::any::type_name::<S>()
+            )));
+        }
+        ScalarPrimsDescriptor::Reduction {
+            modes_a,
+            modes_c,
+            op,
+        } => {
+            if !supports_complex_scalar_reduction(*op) {
+                return Err(Error::InvalidArgument(format!(
+                    "scalar reduction {op:?} is not supported on CudaBackend for {}",
+                    std::any::type_name::<S>()
+                )));
+            }
+            let reduced_axes =
+                plan_reduction_axes(modes_a, modes_c, shapes, "CudaScalarReduction")?;
+            let kept_axes: Vec<usize> = modes_c
+                .iter()
+                .map(|mode| {
+                    modes_a.iter().position(|candidate| candidate == mode).ok_or_else(|| {
+                        Error::InvalidArgument(format!(
+                            "CudaScalarReduction output mode {mode} not found in input modes {modes_a:?}"
+                        ))
+                    })
+                })
+                .collect::<Result<_>>()?;
+            CudaScalarPlanKind::Reduction {
+                kept_axes,
+                reduced_axes,
+                op: *op,
+            }
+        }
+    };
+
+    Ok(CudaScalarPlan {
+        kind,
+        _marker: PhantomData,
+    })
+}
+
+fn execute_complex_scalar<S>(
+    ctx: &mut CudaContext,
+    plan: &CudaScalarPlan<S>,
+    alpha: S,
+    inputs: &[&Tensor<S>],
+    beta: S,
+    output: &mut Tensor<S>,
+) -> Result<()>
+where
+    S: Scalar + Conjugate + 'static,
+{
+    if output.is_conjugated() {
+        return Err(Error::InvalidArgument(
+            "CUDA scalar family does not support conjugated outputs".into(),
+        ));
+    }
+
+    ensure_cuda_tensor(output, ctx.device_id(), "CUDA scalar output")?;
+    match &plan.kind {
+        CudaScalarPlanKind::PointwiseUnary { op } => {
+            validate_execute_inputs(inputs, 1, "CudaScalarPointwiseUnary")?;
+            Err(Error::InvalidArgument(format!(
+                "scalar unary operation {op:?} is not supported on CudaBackend for complex scalars"
+            )))
+        }
+        CudaScalarPlanKind::PointwiseBinary { op } => {
+            validate_execute_inputs(inputs, 2, "CudaScalarPointwiseBinary")?;
+            let lhs = resolved_input(ctx, inputs[0]);
+            let rhs = resolved_input(ctx, inputs[1]);
+            ensure_cuda_tensor(&lhs, ctx.device_id(), "CUDA scalar binary lhs")?;
+            ensure_cuda_tensor(&rhs, ctx.device_id(), "CUDA scalar binary rhs")?;
+            match op {
+                ScalarBinaryOp::Mul => {
+                    execute_complex_binary_mul(ctx, alpha, &lhs, &rhs, beta, output)
+                }
+                _ => Err(Error::InvalidArgument(format!(
+                    "scalar binary operation {op:?} is not supported on CudaBackend for complex scalars"
+                ))),
+            }
+        }
+        CudaScalarPlanKind::PointwiseTernary { op } => Err(Error::InvalidArgument(format!(
+            "scalar ternary operation {op:?} is not supported on CudaBackend for complex scalars"
+        ))),
+        CudaScalarPlanKind::Reduction {
+            kept_axes,
+            reduced_axes: _reduced_axes,
+            op,
+        } => {
+            validate_execute_inputs(inputs, 1, "CudaScalarReduction")?;
+            let input = resolved_input(ctx, inputs[0]);
+            ensure_cuda_tensor(&input, ctx.device_id(), "CUDA scalar reduction input")?;
+            if !matches!(op, ScalarReductionOp::Prod) {
+                return Err(Error::InvalidArgument(format!(
+                    "scalar reduction {op:?} is not supported on CudaBackend for complex scalars"
+                )));
+            }
+
+            let data_type = scalar_data_type::<S>()?;
+            let compute = scalar_compute_descriptor::<S>(&ctx.vtable)?;
+            let output_ptr = tensor_device_mut_ptr(output, "CUDA scalar reduction output")?;
+            let input_ptr = tensor_device_ptr_with_offset("CUDA scalar reduction input", &input)?;
+            let scaled_alpha = alpha;
+            let reduce_op = crate::cuda_ffi::CUTENSOR_OP_MUL;
+            let modes_a: Vec<i32> = (0..input.ndim()).map(|axis| axis as i32).collect();
+            let modes_c: Vec<i32> = kept_axes.iter().map(|&axis| axis as i32).collect();
+            let native = plan_reduction(
+                ctx,
+                data_type,
+                compute,
+                &modes_a,
+                input.dims(),
+                input.strides(),
+                &modes_c,
+                output.dims(),
+                output.strides(),
+                reduce_op,
+            )?;
+            let workspace = allocate_workspace(native.workspace_size)?;
+            let ws_ptr = workspace.as_ref().map_or(std::ptr::null_mut(), |ws| ws.ptr);
+            let status = unsafe {
+                (ctx.vtable.reduce)(
+                    ctx.handle.raw,
+                    native.plan.raw,
+                    &scaled_alpha as *const S as *const c_void,
+                    input_ptr as *const c_void,
+                    &beta as *const S as *const c_void,
+                    output_ptr as *const c_void,
+                    output_ptr as *mut c_void,
+                    ws_ptr,
+                    native.workspace_size,
+                    null_stream(),
+                )
+            };
+            check_status(status, "cutensorReduce")
+        }
+    }
+}
+
 fn unsupported_complex_scalar<S>(desc: &ScalarPrimsDescriptor) -> Result<CudaScalarPlan<S>>
 where
     S: Scalar,
@@ -841,7 +1088,7 @@ macro_rules! impl_cuda_scalar_prims_real {
     };
 }
 
-macro_rules! impl_cuda_scalar_prims_unsupported {
+macro_rules! impl_cuda_scalar_prims_complex {
     ($scalar:ty) => {
         impl TensorScalarPrims<Standard<$scalar>> for CudaBackend {
             type Plan = CudaScalarPlan<$scalar>;
@@ -850,27 +1097,35 @@ macro_rules! impl_cuda_scalar_prims_unsupported {
             fn plan(
                 _ctx: &mut Self::Context,
                 desc: &ScalarPrimsDescriptor,
-                _shapes: &[&[usize]],
+                shapes: &[&[usize]],
             ) -> Result<Self::Plan> {
-                unsupported_complex_scalar::<$scalar>(desc)
+                plan_complex_scalar::<$scalar>(desc, shapes)
             }
 
             fn execute(
-                _ctx: &mut Self::Context,
-                _plan: &Self::Plan,
-                _alpha: $scalar,
-                _inputs: &[&Tensor<$scalar>],
-                _beta: $scalar,
-                _output: &mut Tensor<$scalar>,
+                ctx: &mut Self::Context,
+                plan: &Self::Plan,
+                alpha: $scalar,
+                inputs: &[&Tensor<$scalar>],
+                beta: $scalar,
+                output: &mut Tensor<$scalar>,
             ) -> Result<()> {
-                Err(Error::InvalidArgument(format!(
-                    "CUDA scalar family is not implemented for {}",
-                    std::any::type_name::<$scalar>()
-                )))
+                execute_complex_scalar(ctx, plan, alpha, inputs, beta, output)
             }
 
-            fn has_scalar_support(_desc: ScalarPrimsDescriptor) -> bool {
-                false
+            fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool {
+                match desc {
+                    ScalarPrimsDescriptor::PointwiseUnary { op } => {
+                        supports_complex_scalar_unary(op)
+                    }
+                    ScalarPrimsDescriptor::PointwiseBinary { op } => {
+                        supports_complex_scalar_binary(op)
+                    }
+                    ScalarPrimsDescriptor::PointwiseTernary { .. } => false,
+                    ScalarPrimsDescriptor::Reduction { op, .. } => {
+                        supports_complex_scalar_reduction(op)
+                    }
+                }
             }
         }
     };
@@ -878,5 +1133,5 @@ macro_rules! impl_cuda_scalar_prims_unsupported {
 
 impl_cuda_scalar_prims_real!(f32);
 impl_cuda_scalar_prims_real!(f64);
-impl_cuda_scalar_prims_unsupported!(Complex32);
-impl_cuda_scalar_prims_unsupported!(Complex64);
+impl_cuda_scalar_prims_complex!(Complex32);
+impl_cuda_scalar_prims_complex!(Complex64);
