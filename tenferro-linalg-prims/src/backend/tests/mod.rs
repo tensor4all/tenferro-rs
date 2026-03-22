@@ -323,6 +323,15 @@ fn tensor_data(tensor: &tenferro_tensor::Tensor<f64>) -> Vec<f64> {
     contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
+fn tensor_data_c64(
+    tensor: &tenferro_tensor::Tensor<num_complex::Complex64>,
+) -> Vec<num_complex::Complex64> {
+    let contiguous = tensor.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.len();
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
+}
+
 #[test]
 fn linalg_utils_matrix_stride_uses_leading_matrix_dims() {
     assert_eq!(
@@ -358,4 +367,60 @@ fn linalg_utils_clone_batched_column_major_repackages_permuted_batches() {
         permuted.logical_memory_space()
     );
     assert_eq!(tensor_data(&cloned), tensor_data(&permuted));
+}
+
+#[test]
+fn linalg_utils_prepare_matrix_operand_resolves_lazy_conjugation() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, 2.0),
+            num_complex::Complex64::new(-3.0, 4.0),
+            num_complex::Complex64::new(5.0, -6.0),
+            num_complex::Complex64::new(-7.0, -8.0),
+        ],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let conjugated = base.conj();
+
+    let prepared = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &conjugated,
+        crate::backend::linalg_utils::MatrixOperandTransform::None,
+    )
+    .unwrap();
+    let expected = tenferro_prims::CpuBackend::resolve_conj(&mut ctx, &conjugated);
+
+    assert_eq!(prepared.dims(), conjugated.dims());
+    assert!(prepared.is_col_major_contiguous());
+    assert!(!prepared.is_conjugated());
+    assert_eq!(tensor_data_c64(&prepared), tensor_data_c64(&expected));
+}
+
+#[test]
+fn linalg_utils_prepare_matrix_operand_transposes_first_two_axes_before_repacking() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, //
+            10.0, 20.0, 30.0, 40.0, 50.0, 60.0,
+        ],
+        &[2, 3, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let prepared = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &base,
+        crate::backend::linalg_utils::MatrixOperandTransform::TransposeFirstTwoAxes,
+    )
+    .unwrap();
+    let expected = base.permute(&[1, 0, 2]).unwrap();
+
+    assert_eq!(prepared.dims(), expected.dims());
+    assert!(prepared.is_col_major_contiguous());
+    assert_eq!(tensor_data(&prepared), tensor_data(&expected));
 }

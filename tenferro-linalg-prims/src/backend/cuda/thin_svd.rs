@@ -18,7 +18,9 @@ use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime, Devi
 use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
-use crate::backend::linalg_utils::{clone_batched_column_major, copy_batched_column_major};
+use crate::backend::linalg_utils::{
+    copy_batched_column_major, prepare_matrix_operand, MatrixOperandTransform,
+};
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{batch_count, validate_matrix_shape};
 use crate::SvdTensorResult;
@@ -95,19 +97,6 @@ fn tensor_device_ptr_any<T: tenferro_algebra::Scalar>(
 }
 
 #[cfg(feature = "cuda")]
-fn transpose_first_two_axes<T: tenferro_algebra::Scalar>(tensor: &Tensor<T>) -> Result<Tensor<T>> {
-    if tensor.ndim() < 2 {
-        return Err(Error::InvalidArgument(format!(
-            "transpose_first_two_axes expects at least 2D tensor, got {}D",
-            tensor.ndim()
-        )));
-    }
-    let mut perm: Vec<usize> = (0..tensor.ndim()).collect();
-    perm.swap(0, 1);
-    tensor.permute(&perm)
-}
-
-#[cfg(feature = "cuda")]
 pub(super) fn thin_svd<T>(
     ctx: &mut tenferro_prims::CudaContext,
     a: &Tensor<T>,
@@ -136,12 +125,15 @@ where
         return Ok(SvdTensorResult { u, s, vt });
     }
 
-    let a_input = if wide {
-        transpose_first_two_axes(a)?
-    } else {
-        a.clone()
-    };
-    let a_work = clone_batched_column_major(ctx, &a_input)?;
+    let a_work = prepare_matrix_operand(
+        ctx,
+        a,
+        if wide {
+            MatrixOperandTransform::TransposeFirstTwoAxes
+        } else {
+            MatrixOperandTransform::None
+        },
+    )?;
     let (m_work, n_work) = if wide { (n, m) } else { (m, n) };
     let runtime = load_runtime(ctx)?;
 
@@ -249,9 +241,11 @@ where
     }
 
     if wide {
-        let u_src = transpose_first_two_axes(&vt_work)?;
+        let u_src =
+            prepare_matrix_operand(ctx, &vt_work, MatrixOperandTransform::TransposeFirstTwoAxes)?;
         copy_batched_column_major(ctx, &u_src, &mut u)?;
-        let vt_src = transpose_first_two_axes(&u_work)?;
+        let vt_src =
+            prepare_matrix_operand(ctx, &u_work, MatrixOperandTransform::TransposeFirstTwoAxes)?;
         copy_batched_column_major(ctx, &vt_src, &mut vt)?;
     } else {
         copy_batched_column_major(ctx, &u_work, &mut u)?;

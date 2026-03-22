@@ -1,5 +1,6 @@
 use num_complex::ComplexFloat;
-use tenferro_algebra::{Algebra, Scalar, Semiring};
+use tenferro_algebra::{Algebra, Conjugate, Scalar, Semiring};
+use tenferro_tensor::Tensor;
 
 use crate::{
     CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
@@ -83,6 +84,38 @@ pub trait TensorComplexRealContextFor<Input: ComplexFloat + Scalar> {
     type ComplexRealBackend: TensorComplexRealPrims<Input, Context = Self, Real = Input::Real>;
 }
 
+/// Bridge trait for backend-specific lazy-conjugation resolution.
+///
+/// High-level crates use this trait to stay generic over runtime context types
+/// while still materializing unresolved conjugation through the correct backend
+/// utility.
+///
+/// # Examples
+///
+/// ```ignore
+/// use num_complex::Complex64;
+/// use tenferro_prims::{CpuContext, TensorResolveConjContextFor};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let base = Tensor::from_slice(
+///     &[Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)],
+///     &[2],
+///     MemoryOrder::ColumnMajor,
+/// )
+/// .unwrap();
+/// let lazy = base.conj();
+/// let resolved = <CpuContext as TensorResolveConjContextFor<Complex64>>::resolve_conj(
+///     &mut ctx,
+///     &lazy,
+/// );
+/// assert!(!resolved.is_conjugated());
+/// ```
+pub trait TensorResolveConjContextFor<T: Scalar + Conjugate> {
+    /// Materialize a lazily-conjugated tensor using the backend tied to `Self`.
+    fn resolve_conj(ctx: &mut Self, src: &Tensor<T>) -> Tensor<T>;
+}
+
 impl<Alg> TensorSemiringContextFor<Alg> for CpuContext
 where
     Alg: Semiring,
@@ -106,6 +139,15 @@ where
     CpuBackend: TensorComplexRealPrims<Input, Context = CpuContext, Real = Input::Real>,
 {
     type ComplexRealBackend = CpuBackend;
+}
+
+impl<T> TensorResolveConjContextFor<T> for CpuContext
+where
+    T: Scalar + Conjugate,
+{
+    fn resolve_conj(ctx: &mut Self, src: &Tensor<T>) -> Tensor<T> {
+        CpuBackend::resolve_conj(ctx, src)
+    }
 }
 
 impl<Alg> TensorSemiringContextFor<Alg> for CudaContext
@@ -133,6 +175,15 @@ where
     type ComplexRealBackend = CudaBackend;
 }
 
+impl<T> TensorResolveConjContextFor<T> for CudaContext
+where
+    T: Scalar + Conjugate + 'static,
+{
+    fn resolve_conj(ctx: &mut Self, src: &Tensor<T>) -> Tensor<T> {
+        CudaBackend::resolve_conj(ctx, src)
+    }
+}
+
 impl<Alg> TensorSemiringContextFor<Alg> for RocmContext
 where
     Alg: Semiring,
@@ -156,4 +207,13 @@ where
     RocmBackend: TensorComplexRealPrims<Input, Context = RocmContext, Real = Input::Real>,
 {
     type ComplexRealBackend = RocmBackend;
+}
+
+impl<T> TensorResolveConjContextFor<T> for RocmContext
+where
+    T: Scalar + Conjugate,
+{
+    fn resolve_conj(ctx: &mut Self, src: &Tensor<T>) -> Tensor<T> {
+        RocmBackend::resolve_conj(ctx, src)
+    }
 }
