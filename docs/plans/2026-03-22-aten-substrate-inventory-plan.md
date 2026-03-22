@@ -89,6 +89,7 @@ This plan should produce five concrete artifacts:
    - examples: batched column-major copy, triangular cleanup, `abs`/`sum`/`max`, `real`/`imag`, alias-safe copy, `info` handling
 3. **tenferro gap matrix**
    - for each substrate item, record:
+     - current tenferro analogue(s), if any
      - analogous tenferro layer
      - existing implementation status
      - current blockers
@@ -123,14 +124,17 @@ For each ATen low-level helper found, classify it into one of these buckets:
   - example: complex `abs -> real`, `real`, `imag`, real reductions over complex-derived tensors
 - **Status / control**
   - example: `info` tensors, convergence checks, fallback decisions
+- **Handle / resource management**
+  - example: cuSOLVER/cuBLAS handle lifecycle, thread/device handle pooling, stream binding
 - **Linalg working-copy / wrapper**
-  - example: `cloneBatchedColumnMajor`, transposed wide-matrix handling, workspace sizing
+  - example: `cloneBatchedColumnMajor`, broadcast-aware batch iteration, transpose dispatch, transposed wide-matrix handling, workspace sizing
 
 For every helper that is not in the Tier A closure but still looks valuable, also answer:
 
 - Is it adjacent to a traced Tier A path, or is it just generally interesting?
 - Which likely next tranche would consume it?
 - Would adding it now simplify layering, or merely broaden scope?
+- Does tenferro already have the same capability under a different name or abstraction?
 
 ## Execution phases
 
@@ -151,7 +155,10 @@ Expected files include:
 - `../pytorch/aten/src/ATen/native/LinearAlgebra.cpp`
 - `../pytorch/aten/src/ATen/native/cuda/linalg/BatchLinearAlgebraLib.cpp`
 - `../pytorch/aten/src/ATen/native/cuda/linalg/CUDASolver.cpp`
+- `../pytorch/aten/src/ATen/native/cuda/linalg/CusolverDnHandlePool.cpp`
+- `../pytorch/aten/src/ATen/native/cuda/linalg/CudssHandlePool.cpp`
 - `../pytorch/aten/src/ATen/native/LinearAlgebraUtils.h`
+- `../pytorch/aten/src/ATen/native/TransposeType.h`
 - `../pytorch/aten/src/ATen/native/cuda/TriangularOps.cu`
 - any directly referenced helper headers / source files needed for substrate identification
 
@@ -171,10 +178,13 @@ Important rule:
 Examples:
 
 - batched column-major working copy
+- broadcast-aware batch iteration / linear-index helpers
 - structural triangular cleanup
 - same-dtype pointwise/reduction family
 - cross-dtype complex-to-real family
 - `info`/status tensor handling
+- transpose dispatch (`TransposeType` / `to_transpose_type`)
+- cuSOLVER/cuBLAS handle/resource management
 - conjugation/view resolution
 - alias-safe out/in-place copy semantics
 
@@ -210,15 +220,14 @@ Examples likely to appear:
 - tensor-level structural helpers such as triangular cleanup / trailing zero-fill
 - same-dtype CUDA scalar family in `tenferro-prims`
 - missing cross-dtype complex->real substrate in `tenferro-prims`
-- working-copy and `info` plumbing in `tenferro-linalg-prims`
+- working-copy, transpose dispatch, and `info` plumbing in `tenferro-linalg-prims`
+- handle/resource lifecycle in `tenferro-linalg-prims`
 
 Deliverable:
 
 - a gap matrix table
 
-### Phase 4: tenferro crosswalk
-
-### Phase 5: Execution order
+### Phase 4: Execution order
 
 Convert the gap matrix into an ordered backlog.
 
@@ -234,8 +243,11 @@ Expected early candidates:
 
 - cross-dtype complex->real unary substrate
 - cross-dtype real reduction over complex-derived tensors
-- `real` / `imag` / `abs_real` style helpers
+- `real` / `imag` / `abs_real` style helpers, with explicit verification of whether existing same-dtype `Real`/`Imag`/`Abs` surface can be reused
+- broadcast-aware batch iteration / linear-index helpers
+- transpose dispatch (`TransposeType` / `to_transpose_type`) for cuBLAS/cuSOLVER-facing calls
 - linalg `info`-bearing contracts where still missing
+- cuSOLVER/cuBLAS handle/resource management where still missing or structurally different from ATen
 - remaining structural tensor helpers needed for fixed-shape postprocessing
 
 Deliverable:
