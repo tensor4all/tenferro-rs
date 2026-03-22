@@ -4,8 +4,8 @@ use tenferro_algebra::Standard;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{
     AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticUnaryOp, ComplexRealPrimsDescriptor,
-    ComplexRealUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp,
-    SemiringCoreDescriptor, TensorAnalyticPrims, TensorComplexRealContextFor,
+    ComplexRealUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarTernaryOp,
+    ScalarUnaryOp, SemiringCoreDescriptor, TensorAnalyticPrims, TensorComplexRealContextFor,
     TensorComplexRealPrims, TensorScalarContextFor, TensorScalarPrims, TensorSemiringContextFor,
     TensorSemiringCore,
 };
@@ -207,6 +207,40 @@ where
         &plan,
         T::one(),
         &[lhs, rhs],
+        T::zero(),
+        &mut output,
+    )?;
+    Ok(output)
+}
+
+pub(crate) fn scalar_where_same_shape<T, C>(
+    ctx: &mut C,
+    cond: &Tensor<T>,
+    on_true: &Tensor<T>,
+    on_false: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar<Real = T> + num_traits::Float,
+    C: TensorScalarContextFor<Standard<T>>,
+{
+    let desc = ScalarPrimsDescriptor::PointwiseTernary {
+        op: ScalarTernaryOp::Where,
+    };
+    let mut output = Tensor::zeros(
+        cond.dims(),
+        cond.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
+        ctx,
+        &desc,
+        &[cond.dims(), on_true.dims(), on_false.dims(), output.dims()],
+    )?;
+    <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::execute(
+        ctx,
+        &plan,
+        T::one(),
+        &[cond, on_true, on_false],
         T::zero(),
         &mut output,
     )?;

@@ -385,6 +385,8 @@ const REAL_UNARY_KERNEL_NAME_F32: &str = "pointwise_unary_real_f32";
 const REAL_UNARY_KERNEL_NAME_F64: &str = "pointwise_unary_real_f64";
 const REAL_BINARY_KERNEL_NAME_F32: &str = "pointwise_binary_real_f32";
 const REAL_BINARY_KERNEL_NAME_F64: &str = "pointwise_binary_real_f64";
+const REAL_TERNARY_KERNEL_NAME_F32: &str = "pointwise_ternary_real_f32";
+const REAL_TERNARY_KERNEL_NAME_F64: &str = "pointwise_ternary_real_f64";
 const REAL_REDUCTION_KERNEL_NAME_F32: &str = "reduce_real_f32";
 const REAL_REDUCTION_KERNEL_NAME_F64: &str = "reduce_real_f64";
 const REAL_SCALAR_CUDA_SRC: &str = r#"
@@ -573,6 +575,78 @@ extern "C" __global__ void pointwise_binary_real_f64(
         mapped = pow(x, y);
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
+}
+
+extern "C" __global__ void pointwise_ternary_real_f32(
+    const float* cond,
+    const float* on_true,
+    const float* on_false,
+    float* dst,
+    const long long* dims,
+    const long long* cond_strides,
+    long long cond_offset,
+    const long long* true_strides,
+    long long true_offset,
+    const long long* false_strides,
+    long long false_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    int op_code,
+    float alpha,
+    float beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long cond_idx = linear_offset(idx, dims, cond_strides, cond_offset, ndim);
+    long long true_idx = linear_offset(idx, dims, true_strides, true_offset, ndim);
+    long long false_idx = linear_offset(idx, dims, false_strides, false_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    float mapped = cond[cond_idx] != 0.0f ? on_true[true_idx] : on_false[false_idx];
+    if (op_code == 0) {
+        dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
+    }
+}
+
+extern "C" __global__ void pointwise_ternary_real_f64(
+    const double* cond,
+    const double* on_true,
+    const double* on_false,
+    double* dst,
+    const long long* dims,
+    const long long* cond_strides,
+    long long cond_offset,
+    const long long* true_strides,
+    long long true_offset,
+    const long long* false_strides,
+    long long false_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    int op_code,
+    double alpha,
+    double beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long cond_idx = linear_offset(idx, dims, cond_strides, cond_offset, ndim);
+    long long true_idx = linear_offset(idx, dims, true_strides, true_offset, ndim);
+    long long false_idx = linear_offset(idx, dims, false_strides, false_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    double mapped = cond[cond_idx] != 0.0 ? on_true[true_idx] : on_false[false_idx];
+    if (op_code == 0) {
+        dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
+    }
 }
 
 extern "C" __global__ void reduce_real_f32(
@@ -976,6 +1050,12 @@ fn binary_opcode(op: RealBinaryOp) -> i32 {
     }
 }
 
+fn ternary_opcode(op: RealTernaryOp) -> i32 {
+    match op {
+        RealTernaryOp::Where => 0,
+    }
+}
+
 fn reduction_opcode(op: RealReductionOp) -> i32 {
     match op {
         RealReductionOp::Sum => 0,
@@ -1052,6 +1132,30 @@ fn validate_pointwise_rank(
                 rhs_strides.len()
             )));
         }
+    }
+    Ok(())
+}
+
+fn validate_ternary_pointwise_rank(
+    dims: &[usize],
+    cond_strides: &[isize],
+    true_strides: &[isize],
+    false_strides: &[isize],
+    dst_strides: &[isize],
+) -> Result<()> {
+    if dims.len() != cond_strides.len()
+        || dims.len() != true_strides.len()
+        || dims.len() != false_strides.len()
+        || dims.len() != dst_strides.len()
+    {
+        return Err(Error::InvalidArgument(format!(
+            "pointwise ternary rank mismatch: dims={} cond={} true={} false={} dst={}",
+            dims.len(),
+            cond_strides.len(),
+            true_strides.len(),
+            false_strides.len(),
+            dst_strides.len()
+        )));
     }
     Ok(())
 }
@@ -1560,6 +1664,21 @@ pub enum RealBinaryOp {
     Pow,
 }
 
+/// Real ternary operations exposed by the Layer 0 CUDA runtime.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::cuda::runtime::RealTernaryOp;
+///
+/// let op = RealTernaryOp::Where;
+/// assert_eq!(op, RealTernaryOp::Where);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealTernaryOp {
+    Where,
+}
+
 /// Real reduction operations exposed by the Layer 0 CUDA runtime.
 ///
 /// # Examples
@@ -1726,6 +1845,7 @@ impl ZeroTrailingByCountsSpec {
 trait RuntimeRealScalar: cudarc::driver::DeviceRepr + Copy + 'static {
     const UNARY_KERNEL_NAME: &'static str;
     const BINARY_KERNEL_NAME: &'static str;
+    const TERNARY_KERNEL_NAME: &'static str;
     const REDUCTION_KERNEL_NAME: &'static str;
 }
 
@@ -1750,12 +1870,14 @@ pub trait RuntimeKeepCountScalar: cudarc::driver::DeviceRepr + Copy + 'static {
 impl RuntimeRealScalar for f32 {
     const UNARY_KERNEL_NAME: &'static str = REAL_UNARY_KERNEL_NAME_F32;
     const BINARY_KERNEL_NAME: &'static str = REAL_BINARY_KERNEL_NAME_F32;
+    const TERNARY_KERNEL_NAME: &'static str = REAL_TERNARY_KERNEL_NAME_F32;
     const REDUCTION_KERNEL_NAME: &'static str = REAL_REDUCTION_KERNEL_NAME_F32;
 }
 
 impl RuntimeRealScalar for f64 {
     const UNARY_KERNEL_NAME: &'static str = REAL_UNARY_KERNEL_NAME_F64;
     const BINARY_KERNEL_NAME: &'static str = REAL_BINARY_KERNEL_NAME_F64;
+    const TERNARY_KERNEL_NAME: &'static str = REAL_TERNARY_KERNEL_NAME_F64;
     const REDUCTION_KERNEL_NAME: &'static str = REAL_REDUCTION_KERNEL_NAME_F64;
 }
 
@@ -2607,6 +2729,114 @@ impl CudaRuntime {
             .map_err(|err| cuda_error("CUDA stream synchronize", err))
     }
 
+    fn pointwise_ternary_real_raw_impl<T: RuntimeRealScalar>(
+        &self,
+        op: RealTernaryOp,
+        alpha: T,
+        cond: *const T,
+        dims: &[usize],
+        cond_strides: &[isize],
+        cond_offset: isize,
+        on_true: *const T,
+        true_strides: &[isize],
+        true_offset: isize,
+        on_false: *const T,
+        false_strides: &[isize],
+        false_offset: isize,
+        beta: T,
+        dst: *mut T,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        validate_ternary_pointwise_rank(
+            dims,
+            cond_strides,
+            true_strides,
+            false_strides,
+            dst_strides,
+        )?;
+        let numel = checked_numel(dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let (kernel, stream) = load_real_scalar_kernel(self, T::TERNARY_KERNEL_NAME)?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(dims)?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dims", err))?;
+        let cond_strides_dev = stream
+            .clone_htod(&to_i64_vec(cond_strides, "cond stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD cond strides", err))?;
+        let true_strides_dev = stream
+            .clone_htod(&to_i64_vec(true_strides, "true stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD true strides", err))?;
+        let false_strides_dev = stream
+            .clone_htod(&to_i64_vec(false_strides, "false stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD false strides", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(dst_strides, "dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dst strides", err))?;
+        let ndim = i32::try_from(dims.len()).map_err(|_| {
+            Error::InvalidArgument("pointwise ternary rank exceeds i32 range".into())
+        })?;
+        let cond_offset = i64::try_from(cond_offset).map_err(|_| {
+            Error::InvalidArgument("pointwise ternary condition offset exceeds i64 range".into())
+        })?;
+        let true_offset = i64::try_from(true_offset).map_err(|_| {
+            Error::InvalidArgument("pointwise ternary true offset exceeds i64 range".into())
+        })?;
+        let false_offset = i64::try_from(false_offset).map_err(|_| {
+            Error::InvalidArgument("pointwise ternary false offset exceeds i64 range".into())
+        })?;
+        let dst_offset = i64::try_from(dst_offset).map_err(|_| {
+            Error::InvalidArgument("pointwise ternary destination offset exceeds i64 range".into())
+        })?;
+        let numel_u64 = u64::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("pointwise ternary numel exceeds u64 range".into())
+        })?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("pointwise ternary currently requires len <= u32::MAX".into())
+        })?;
+        let opcode = ternary_opcode(op);
+        let cond_ptr = cond as u64;
+        let true_ptr = on_true as u64;
+        let false_ptr = on_false as u64;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            stream
+                .launch_builder(&kernel)
+                .arg(&cond_ptr)
+                .arg(&true_ptr)
+                .arg(&false_ptr)
+                .arg(&dst_ptr)
+                .arg(&dims_dev)
+                .arg(&cond_strides_dev)
+                .arg(&cond_offset)
+                .arg(&true_strides_dev)
+                .arg(&true_offset)
+                .arg(&false_strides_dev)
+                .arg(&false_offset)
+                .arg(&dst_strides_dev)
+                .arg(&dst_offset)
+                .arg(&ndim)
+                .arg(&numel_u64)
+                .arg(&opcode)
+                .arg(&alpha)
+                .arg(&beta)
+                .launch(config)
+                .map_err(|err| cuda_error("CUDA real ternary kernel launch", err))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
     fn reduce_real_raw_impl<T: RuntimeRealScalar>(
         &self,
         op: RealReductionOp,
@@ -3186,6 +3416,158 @@ impl CudaRuntime {
             rhs,
             rhs_strides,
             rhs_offset,
+            beta,
+            dst,
+            dst_strides,
+            dst_offset,
+        )
+    }
+
+    /// Launches the Layer 0 real ternary kernel for `f32` data.
+    ///
+    /// # Safety
+    ///
+    /// `cond`, `on_true`, `on_false`, and `dst` must point to live device allocations compatible with the provided layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, RealTernaryOp};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let cond = runtime.alloc::<f32>(4).unwrap();
+    /// let on_true = runtime.alloc::<f32>(4).unwrap();
+    /// let on_false = runtime.alloc::<f32>(4).unwrap();
+    /// let dst = runtime.alloc::<f32>(4).unwrap();
+    /// unsafe {
+    ///     runtime.pointwise_ternary_real_f32_raw(
+    ///         RealTernaryOp::Where,
+    ///         1.0,
+    ///         cond.device_ptr().cast_const(),
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         on_true.device_ptr().cast_const(),
+    ///         &[1],
+    ///         0,
+    ///         on_false.device_ptr().cast_const(),
+    ///         &[1],
+    ///         0,
+    ///         0.0,
+    ///         dst.device_ptr(),
+    ///         &[1],
+    ///         0,
+    ///     ).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn pointwise_ternary_real_f32_raw(
+        &self,
+        op: RealTernaryOp,
+        alpha: f32,
+        cond: *const f32,
+        dims: &[usize],
+        cond_strides: &[isize],
+        cond_offset: isize,
+        on_true: *const f32,
+        true_strides: &[isize],
+        true_offset: isize,
+        on_false: *const f32,
+        false_strides: &[isize],
+        false_offset: isize,
+        beta: f32,
+        dst: *mut f32,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        self.pointwise_ternary_real_raw_impl(
+            op,
+            alpha,
+            cond,
+            dims,
+            cond_strides,
+            cond_offset,
+            on_true,
+            true_strides,
+            true_offset,
+            on_false,
+            false_strides,
+            false_offset,
+            beta,
+            dst,
+            dst_strides,
+            dst_offset,
+        )
+    }
+
+    /// Launches the Layer 0 real ternary kernel for `f64` data.
+    ///
+    /// # Safety
+    ///
+    /// `cond`, `on_true`, `on_false`, and `dst` must point to live device allocations compatible with the provided layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, RealTernaryOp};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let cond = runtime.alloc::<f64>(4).unwrap();
+    /// let on_true = runtime.alloc::<f64>(4).unwrap();
+    /// let on_false = runtime.alloc::<f64>(4).unwrap();
+    /// let dst = runtime.alloc::<f64>(4).unwrap();
+    /// unsafe {
+    ///     runtime.pointwise_ternary_real_f64_raw(
+    ///         RealTernaryOp::Where,
+    ///         1.0,
+    ///         cond.device_ptr().cast_const(),
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         on_true.device_ptr().cast_const(),
+    ///         &[1],
+    ///         0,
+    ///         on_false.device_ptr().cast_const(),
+    ///         &[1],
+    ///         0,
+    ///         0.0,
+    ///         dst.device_ptr(),
+    ///         &[1],
+    ///         0,
+    ///     ).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn pointwise_ternary_real_f64_raw(
+        &self,
+        op: RealTernaryOp,
+        alpha: f64,
+        cond: *const f64,
+        dims: &[usize],
+        cond_strides: &[isize],
+        cond_offset: isize,
+        on_true: *const f64,
+        true_strides: &[isize],
+        true_offset: isize,
+        on_false: *const f64,
+        false_strides: &[isize],
+        false_offset: isize,
+        beta: f64,
+        dst: *mut f64,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        self.pointwise_ternary_real_raw_impl(
+            op,
+            alpha,
+            cond,
+            dims,
+            cond_strides,
+            cond_offset,
+            on_true,
+            true_strides,
+            true_offset,
+            on_false,
+            false_strides,
+            false_offset,
             beta,
             dst,
             dst_strides,

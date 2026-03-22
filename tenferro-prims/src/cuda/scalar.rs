@@ -4,14 +4,15 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{
-    cuda::runtime::{CudaRuntime, RealBinaryOp, RealReductionOp, RealUnaryOp},
+    cuda::runtime::{CudaRuntime, RealBinaryOp, RealReductionOp, RealTernaryOp, RealUnaryOp},
     Error, LogicalMemorySpace, Result,
 };
 use tenferro_tensor::Tensor;
 
 use crate::{
     validate_execute_inputs, validate_rank, validate_shape_count, validate_shape_eq, CudaBackend,
-    ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp, TensorScalarPrims,
+    ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarTernaryOp, ScalarUnaryOp,
+    TensorScalarPrims,
 };
 
 use super::CudaContext;
@@ -37,6 +38,9 @@ enum CudaScalarPlanKind {
     },
     PointwiseBinary {
         op: ScalarBinaryOp,
+    },
+    PointwiseTernary {
+        op: ScalarTernaryOp,
     },
     Reduction {
         kept_axes: Vec<usize>,
@@ -71,6 +75,26 @@ trait RuntimeRealScalarOps: Scalar + 'static {
         rhs: *const Self,
         rhs_strides: &[isize],
         rhs_offset: isize,
+        beta: Self,
+        dst: *mut Self,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()>;
+
+    unsafe fn pointwise_ternary_raw(
+        runtime: &CudaRuntime,
+        op: RealTernaryOp,
+        alpha: Self,
+        cond: *const Self,
+        dims: &[usize],
+        cond_strides: &[isize],
+        cond_offset: isize,
+        on_true: *const Self,
+        true_strides: &[isize],
+        true_offset: isize,
+        on_false: *const Self,
+        false_strides: &[isize],
+        false_offset: isize,
         beta: Self,
         dst: *mut Self,
         dst_strides: &[isize],
@@ -165,6 +189,47 @@ impl RuntimeRealScalarOps for f32 {
         }
     }
 
+    unsafe fn pointwise_ternary_raw(
+        runtime: &CudaRuntime,
+        op: RealTernaryOp,
+        alpha: Self,
+        cond: *const Self,
+        dims: &[usize],
+        cond_strides: &[isize],
+        cond_offset: isize,
+        on_true: *const Self,
+        true_strides: &[isize],
+        true_offset: isize,
+        on_false: *const Self,
+        false_strides: &[isize],
+        false_offset: isize,
+        beta: Self,
+        dst: *mut Self,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        unsafe {
+            runtime.pointwise_ternary_real_f32_raw(
+                op,
+                alpha,
+                cond,
+                dims,
+                cond_strides,
+                cond_offset,
+                on_true,
+                true_strides,
+                true_offset,
+                on_false,
+                false_strides,
+                false_offset,
+                beta,
+                dst,
+                dst_strides,
+                dst_offset,
+            )
+        }
+    }
+
     unsafe fn reduce_raw(
         runtime: &CudaRuntime,
         op: RealReductionOp,
@@ -200,7 +265,6 @@ impl RuntimeRealScalarOps for f32 {
         }
     }
 }
-
 impl RuntimeRealScalarOps for f64 {
     unsafe fn pointwise_unary_raw(
         runtime: &CudaRuntime,
@@ -258,6 +322,47 @@ impl RuntimeRealScalarOps for f64 {
                 rhs,
                 rhs_strides,
                 rhs_offset,
+                beta,
+                dst,
+                dst_strides,
+                dst_offset,
+            )
+        }
+    }
+
+    unsafe fn pointwise_ternary_raw(
+        runtime: &CudaRuntime,
+        op: RealTernaryOp,
+        alpha: Self,
+        cond: *const Self,
+        dims: &[usize],
+        cond_strides: &[isize],
+        cond_offset: isize,
+        on_true: *const Self,
+        true_strides: &[isize],
+        true_offset: isize,
+        on_false: *const Self,
+        false_strides: &[isize],
+        false_offset: isize,
+        beta: Self,
+        dst: *mut Self,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        unsafe {
+            runtime.pointwise_ternary_real_f64_raw(
+                op,
+                alpha,
+                cond,
+                dims,
+                cond_strides,
+                cond_offset,
+                on_true,
+                true_strides,
+                true_offset,
+                on_false,
+                false_strides,
+                false_offset,
                 beta,
                 dst,
                 dst_strides,
@@ -361,6 +466,10 @@ fn supports_scalar_binary(op: ScalarBinaryOp) -> bool {
     )
 }
 
+fn supports_scalar_ternary(op: ScalarTernaryOp) -> bool {
+    matches!(op, ScalarTernaryOp::Where)
+}
+
 fn supports_scalar_reduction(op: ScalarReductionOp) -> bool {
     matches!(
         op,
@@ -395,6 +504,12 @@ fn to_runtime_binary(op: ScalarBinaryOp) -> Result<RealBinaryOp> {
         _ => Err(Error::InvalidArgument(format!(
             "scalar binary operation {op:?} is not implemented on CudaBackend"
         ))),
+    }
+}
+
+fn to_runtime_ternary(op: ScalarTernaryOp) -> Result<RealTernaryOp> {
+    match op {
+        ScalarTernaryOp::Where => Ok(RealTernaryOp::Where),
     }
 }
 
@@ -479,6 +594,16 @@ where
                 )));
             }
             CudaScalarPlanKind::PointwiseBinary { op: *op }
+        }
+        ScalarPrimsDescriptor::PointwiseTernary { op } => {
+            validate_pointwise_shapes(shapes, 3, "CudaScalarPointwiseTernary")?;
+            if !supports_scalar_ternary(*op) {
+                return Err(Error::InvalidArgument(format!(
+                    "scalar ternary operation {op:?} is not supported on CudaBackend for {}",
+                    std::any::type_name::<S>()
+                )));
+            }
+            CudaScalarPlanKind::PointwiseTernary { op: *op }
         }
         ScalarPrimsDescriptor::Reduction {
             modes_a,
@@ -593,6 +718,46 @@ where
                 )
             }
         }
+        CudaScalarPlanKind::PointwiseTernary { op } => {
+            validate_execute_inputs(inputs, 3, "CudaScalarPointwiseTernary")?;
+            let cond = resolved_input(ctx, inputs[0]);
+            let on_true = resolved_input(ctx, inputs[1]);
+            let on_false = resolved_input(ctx, inputs[2]);
+            ensure_cuda_tensor(&cond, ctx.device_id(), "CUDA scalar ternary condition")?;
+            ensure_cuda_tensor(&on_true, ctx.device_id(), "CUDA scalar ternary true branch")?;
+            ensure_cuda_tensor(
+                &on_false,
+                ctx.device_id(),
+                "CUDA scalar ternary false branch",
+            )?;
+            let runtime = Arc::clone(ctx.shared_runtime());
+            let runtime_op = to_runtime_ternary(*op)?;
+            let output_dims = output.dims().to_vec();
+            let output_strides = output.strides().to_vec();
+            let output_offset = output.offset();
+            let output_ptr = tensor_device_mut_ptr(output, "CUDA scalar ternary output")?;
+            unsafe {
+                S::pointwise_ternary_raw(
+                    runtime.as_ref(),
+                    runtime_op,
+                    alpha,
+                    tensor_device_ptr(&cond, "CUDA scalar ternary condition")?,
+                    &output_dims,
+                    cond.strides(),
+                    cond.offset(),
+                    tensor_device_ptr(&on_true, "CUDA scalar ternary true branch")?,
+                    on_true.strides(),
+                    on_true.offset(),
+                    tensor_device_ptr(&on_false, "CUDA scalar ternary false branch")?,
+                    on_false.strides(),
+                    on_false.offset(),
+                    beta,
+                    output_ptr,
+                    &output_strides,
+                    output_offset,
+                )
+            }
+        }
         CudaScalarPlanKind::Reduction {
             kept_axes,
             reduced_axes,
@@ -668,6 +833,7 @@ macro_rules! impl_cuda_scalar_prims_real {
                 match desc {
                     ScalarPrimsDescriptor::PointwiseUnary { op } => supports_scalar_unary(op),
                     ScalarPrimsDescriptor::PointwiseBinary { op } => supports_scalar_binary(op),
+                    ScalarPrimsDescriptor::PointwiseTernary { op } => supports_scalar_ternary(op),
                     ScalarPrimsDescriptor::Reduction { op, .. } => supports_scalar_reduction(op),
                 }
             }

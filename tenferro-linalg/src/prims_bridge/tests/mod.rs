@@ -5,7 +5,7 @@ use num_complex::{Complex32, Complex64};
 
 use super::{
     batched_gemm_with_semiring_context, batched_gemm_with_semiring_core,
-    complex_real_reduce_keep_axes, complex_real_unary_same_shape,
+    complex_real_reduce_keep_axes, complex_real_unary_same_shape, scalar_where_same_shape,
 };
 
 struct SemiringCoreOnlyCpuBackend;
@@ -183,4 +183,34 @@ fn complex_real_reduce_keep_axes_sums_and_maxes_abs_values_on_cpu() {
 
     assert_eq!(column_sums.buffer().as_slice().unwrap(), &[22.0, 38.0]);
     assert_eq!(global_max.buffer().as_slice().unwrap(), &[25.0]);
+}
+
+#[test]
+fn scalar_where_same_shape_selects_by_numeric_mask_on_cpu() {
+    let mut ctx = CpuContext::new(1);
+    let mask = tenferro_tensor::Tensor::from_slice(
+        &[1.0_f64, 0.0, -2.0, 0.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let on_true = tenferro_tensor::Tensor::from_slice(
+        &[10.0_f64, 20.0, 30.0, 40.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let on_false = tenferro_tensor::Tensor::from_slice(
+        &[-1.0_f64, -2.0, -3.0, -4.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let output = scalar_where_same_shape(&mut ctx, &mask, &on_true, &on_false).unwrap();
+
+    assert_eq!(
+        output.buffer().as_slice().unwrap(),
+        &[10.0, -2.0, 30.0, -4.0]
+    );
 }

@@ -81,6 +81,32 @@ fn host_binary_pow_reference(
     dst
 }
 
+fn host_where_reference(
+    mask: &[f64],
+    on_true: &[f64],
+    on_false: &[f64],
+    dims: &[usize],
+    mask_strides: &[isize],
+    true_strides: &[isize],
+    false_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<f64> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0.0; numel];
+    for linear_idx in 0..numel {
+        let mask_idx = linear_offset(linear_idx, dims, mask_strides, 0) as usize;
+        let true_idx = linear_offset(linear_idx, dims, true_strides, 0) as usize;
+        let false_idx = linear_offset(linear_idx, dims, false_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = if mask[mask_idx] != 0.0 {
+            on_true[true_idx]
+        } else {
+            on_false[false_idx]
+        };
+    }
+    dst
+}
+
 fn host_unary_abs_reference(
     src: &[f64],
     dims: &[usize],
@@ -613,6 +639,66 @@ fn cuda_runtime_complex64_abs_real_matches_host_reference() {
     let got = runtime.copy_dtoh(&dst).unwrap();
     let expected =
         host_unary_abs_real_complex64_reference(&src_data, &dims, &src_strides, &dst_strides);
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_real_where_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    let runtime = tenferro_device::cuda::runtime::get_or_init(0).unwrap();
+    let mask_host = vec![1.0_f64, 0.0, -2.0, 0.0, 3.0, 4.0];
+    let on_true_host = vec![10.0_f64, 20.0, 30.0, 40.0, 50.0, 60.0];
+    let on_false_host = vec![-1.0_f64, -2.0, -3.0, -4.0, -5.0, -6.0];
+    let dims = [3usize, 2usize];
+    let mask_strides = [1isize, 3isize];
+    let true_strides = [2isize, 1isize];
+    let false_strides = [1isize, 3isize];
+    let dst_strides = [1isize, 3isize];
+    let expected = host_where_reference(
+        &mask_host,
+        &on_true_host,
+        &on_false_host,
+        &dims,
+        &mask_strides,
+        &true_strides,
+        &false_strides,
+        &dst_strides,
+    );
+
+    let mask = runtime.alloc::<f64>(mask_host.len()).unwrap();
+    let on_true = runtime.alloc::<f64>(on_true_host.len()).unwrap();
+    let on_false = runtime.alloc::<f64>(on_false_host.len()).unwrap();
+    let dst = runtime.alloc::<f64>(dims.iter().product()).unwrap();
+    runtime.copy_htod(&mask_host, &mask).unwrap();
+    runtime.copy_htod(&on_true_host, &on_true).unwrap();
+    runtime.copy_htod(&on_false_host, &on_false).unwrap();
+    unsafe {
+        runtime
+            .pointwise_ternary_real_f64_raw(
+                tenferro_device::cuda::runtime::RealTernaryOp::Where,
+                1.0,
+                mask.device_ptr().cast_const(),
+                &dims,
+                &mask_strides,
+                0,
+                on_true.device_ptr().cast_const(),
+                &true_strides,
+                0,
+                on_false.device_ptr().cast_const(),
+                &false_strides,
+                0,
+                0.0,
+                dst.device_ptr(),
+                &dst_strides,
+                0,
+            )
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
     assert_eq!(got, expected);
 }
 

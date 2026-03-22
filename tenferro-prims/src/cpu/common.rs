@@ -2,7 +2,7 @@ use std::ops::{Add, Div, Mul};
 
 use num_complex::{Complex32, Complex64, ComplexFloat};
 use num_traits::Zero;
-use strided_kernel::{map_into, zip_map2_into};
+use strided_kernel::{map_into, zip_map2_into, zip_map3_into};
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
@@ -167,6 +167,36 @@ where
     let dims = output.dims().to_vec();
     for_each_index(&dims, |idx| {
         let value = alpha * f(lhs.get(idx), rhs.get(idx));
+        output.set(idx, value + beta * output.get(idx));
+    });
+    Ok(())
+}
+
+pub(crate) fn execute_ternary_map<S, F>(
+    alpha: S,
+    cond: &StridedView<S>,
+    on_true: &StridedView<S>,
+    on_false: &StridedView<S>,
+    beta: S,
+    output: &mut StridedViewMut<S>,
+    f: F,
+) -> Result<()>
+where
+    S: CpuScalarValue,
+    F: Fn(S, S, S) -> S + Copy,
+{
+    if beta == S::zero() {
+        let alpha_value = alpha;
+        zip_map3_into(output, cond, on_true, on_false, move |c, t, f_value| {
+            alpha_value * f(c, t, f_value)
+        })
+        .map_err(|err| Error::DeviceError(err.to_string()))?;
+        return Ok(());
+    }
+
+    let dims = output.dims().to_vec();
+    for_each_index(&dims, |idx| {
+        let value = alpha * f(cond.get(idx), on_true.get(idx), on_false.get(idx));
         output.set(idx, value + beta * output.get(idx));
     });
     Ok(())

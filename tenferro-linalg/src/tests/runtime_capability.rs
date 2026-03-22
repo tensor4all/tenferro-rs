@@ -135,6 +135,33 @@ fn complex_real_bridge_stays_context_driven_and_avoids_host_extraction() {
 }
 
 #[test]
+fn scalar_where_bridge_stays_context_driven_and_avoids_host_extraction() {
+    let prims_bridge = repo_file("src/prims_bridge.rs");
+    let scalar_where = file_section(
+        &prims_bridge,
+        "pub(crate) fn scalar_where_same_shape",
+        "pub(crate) fn scalar_unary_same_shape",
+    );
+
+    assert!(
+        scalar_where.contains("TensorScalarContextFor"),
+        "scalar_where_same_shape should route through the shared scalar context bridge"
+    );
+    assert!(
+        scalar_where.contains("ScalarTernaryOp::Where"),
+        "scalar_where_same_shape should lower through the ternary scalar family rather than open-coded branch logic"
+    );
+    assert!(
+        !scalar_where.contains("extract_slice("),
+        "scalar_where_same_shape should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !scalar_where.contains("CpuContext::"),
+        "scalar_where_same_shape should not allocate ad hoc CpuContext state"
+    );
+}
+
+#[test]
 fn public_and_ad_linalg_layers_do_not_fall_back_to_cpu_slice_helpers() {
     let layers = [
         "src/primal/mod.rs",
