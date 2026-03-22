@@ -1,4 +1,5 @@
 mod analytic_phase1;
+mod backend_stubs;
 mod organization;
 mod scalar_phase1;
 
@@ -108,6 +109,8 @@ fn scalar_prims_family_support_matches_phase1_inventory() {
         ScalarBinaryOp::Div,
         ScalarBinaryOp::Maximum,
         ScalarBinaryOp::Minimum,
+        ScalarBinaryOp::Greater,
+        ScalarBinaryOp::GreaterEqual,
         ScalarBinaryOp::ClampMin,
         ScalarBinaryOp::ClampMax,
     ] {

@@ -7,8 +7,9 @@
 
 #[doc(inline)]
 pub use tenferro_linalg_prims::{
-    EigTensorResult, EigenTensorResult, KernelLinalgScalar, LinalgCapabilityOp, LinalgScalar,
-    LuTensorResult, QrTensorResult, SvdTensorResult, TensorLinalgPrims as TensorLinalgBackend,
+    CholeskyTensorExResult, EigTensorResult, EigenTensorResult, KernelLinalgScalar,
+    LinalgCapabilityOp, LinalgScalar, LuTensorExResult, LuTensorResult, QrTensorResult,
+    SolveTensorExResult, SvdTensorResult, TensorLinalgPrims as TensorLinalgBackend,
 };
 
 #[cfg(test)]

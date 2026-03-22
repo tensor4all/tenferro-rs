@@ -281,4 +281,162 @@ impl<T: Scalar> Tensor<T> {
         new_dims[dim] = length;
         Ok(self.shared_view_with(Arc::from(new_dims), self.strides.clone(), offset))
     }
+
+    /// Insert a size-1 dimension at the specified position.
+    ///
+    /// This is a zero-copy view operation. Negative dimensions are supported
+    /// and count from the end.
+    ///
+    /// # Arguments
+    ///
+    /// * `dim` - Position to insert the new dimension. Must be in range `[-ndim-1, ndim]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dimension is out of range.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let u = t.unsqueeze(0).unwrap();
+    /// assert_eq!(u.dims(), &[1, 2, 3]);
+    ///
+    /// let u2 = t.unsqueeze(-1).unwrap();
+    /// assert_eq!(u2.dims(), &[2, 3, 1]);
+    /// ```
+    pub fn unsqueeze(&self, dim: isize) -> Result<Tensor<T>> {
+        self.wait();
+        let ndim = self.ndim();
+
+        let dim = if dim < 0 {
+            let wrapped = dim + (ndim as isize) + 1;
+            if wrapped < 0 {
+                return Err(Error::InvalidArgument(format!(
+                    "unsqueeze dim {dim} out of range for tensor with {ndim} dimensions (valid: [{}, {}])",
+                    -(ndim as isize) - 1,
+                    ndim
+                )));
+            }
+            wrapped as usize
+        } else if dim as usize > ndim {
+            return Err(Error::InvalidArgument(format!(
+                "unsqueeze dim {dim} out of range for tensor with {ndim} dimensions (valid: [{}, {}])",
+                -(ndim as isize) - 1,
+                ndim
+            )));
+        } else {
+            dim as usize
+        };
+
+        let mut new_dims: Vec<usize> = self.dims.to_vec();
+        new_dims.insert(dim, 1);
+
+        let mut new_strides: Vec<isize> = self.strides.to_vec();
+        let new_stride = if dim < ndim {
+            self.strides[dim]
+        } else {
+            let last_stride = if ndim > 0 { self.strides[ndim - 1] } else { 1 };
+            last_stride
+        };
+        new_strides.insert(dim, new_stride);
+
+        Ok(self.shared_view_with(Arc::from(new_dims), Arc::from(new_strides), self.offset))
+    }
+
+    /// Remove all size-1 dimensions from the tensor.
+    ///
+    /// This is a zero-copy view operation.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[1, 2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let s = t.squeeze().unwrap();
+    /// assert_eq!(s.dims(), &[2, 3]);
+    /// ```
+    pub fn squeeze(&self) -> Result<Tensor<T>> {
+        self.wait();
+        let new_dims: Vec<usize> = self.dims.iter().filter(|&&d| d != 1).copied().collect();
+        let new_strides: Vec<isize> = self
+            .dims
+            .iter()
+            .zip(self.strides.iter())
+            .filter(|(&d, _)| d != 1)
+            .map(|(_, &s)| s)
+            .collect();
+
+        Ok(self.shared_view_with(Arc::from(new_dims), Arc::from(new_strides), self.offset))
+    }
+
+    /// Remove a specific size-1 dimension from the tensor.
+    ///
+    /// This is a zero-copy view operation. Negative dimensions are supported
+    /// and count from the end.
+    ///
+    /// # Arguments
+    ///
+    /// * `dim` - Dimension to remove. Must be in range `[-ndim, ndim-1]` and have size 1.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The dimension is out of range
+    /// - The dimension does not have size 1
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let s = t.squeeze_dim(1).unwrap();
+    /// assert_eq!(s.dims(), &[2, 3]);
+    ///
+    /// let s2 = t.squeeze_dim(-2).unwrap();
+    /// assert_eq!(s2.dims(), &[2, 3]);
+    /// ```
+    pub fn squeeze_dim(&self, dim: isize) -> Result<Tensor<T>> {
+        self.wait();
+        let ndim = self.ndim();
+
+        if ndim == 0 {
+            return Err(Error::InvalidArgument(
+                "squeeze_dim: cannot squeeze a rank-0 tensor".to_string(),
+            ));
+        }
+
+        let dim = if dim < 0 {
+            let wrapped = dim + (ndim as isize);
+            if wrapped < 0 {
+                return Err(Error::InvalidArgument(format!(
+                    "squeeze_dim dim {dim} out of range for tensor with {ndim} dimensions (valid: [{}, {}])",
+                    -(ndim as isize),
+                    ndim - 1
+                )));
+            }
+            wrapped as usize
+        } else if dim as usize >= ndim {
+            return Err(Error::InvalidArgument(format!(
+                "squeeze_dim dim {dim} out of range for tensor with {ndim} dimensions (valid: [{}, {}])",
+                -(ndim as isize),
+                ndim - 1
+            )));
+        } else {
+            dim as usize
+        };
+
+        if self.dims[dim] != 1 {
+            return Err(Error::InvalidArgument(format!(
+                "squeeze_dim: dimension {dim} has size {} (expected 1)",
+                self.dims[dim]
+            )));
+        }
+
+        let mut new_dims = self.dims.to_vec();
+        new_dims.remove(dim);
+
+        let mut new_strides = self.strides.to_vec();
+        new_strides.remove(dim);
+
+        Ok(self.shared_view_with(Arc::from(new_dims), Arc::from(new_strides), self.offset))
+    }
 }

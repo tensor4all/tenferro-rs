@@ -9,7 +9,6 @@ use num_complex::{Complex32, Complex64};
 use tenferro_linalg_prims::{KernelLinalgScalar, LapackEigScalar};
 
 use super::tensor_api::TensorLinalgBackend;
-use super::tensor_context::TensorLinalgContextFor;
 use super::LinalgBackend;
 use tenferro_device::Result;
 
@@ -389,6 +388,14 @@ where
         true
     }
 
+    fn solve_ex(
+        ctx: &mut Self::Context,
+        a: &tenferro_tensor::Tensor<T>,
+        b: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_device::Result<super::tensor_api::SolveTensorExResult<T>> {
+        super::cpu_tensor_impl::solve_ex(ctx, a, b)
+    }
+
     fn solve(
         ctx: &mut Self::Context,
         a: &tenferro_tensor::Tensor<T>,
@@ -420,11 +427,32 @@ where
         cpu_impl::thin_svd(ctx, a)
     }
 
+    fn svdvals(
+        ctx: &mut Self::Context,
+        a: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_device::Result<tenferro_tensor::Tensor<T::Real>> {
+        Ok(cpu_impl::thin_svd(ctx, a)?.s)
+    }
+
+    fn lu_factor_ex(
+        ctx: &mut Self::Context,
+        a: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_device::Result<super::tensor_api::LuTensorExResult<T>> {
+        super::cpu_tensor_impl::lu_factor_ex(ctx, a)
+    }
+
     fn lu_factor(
         ctx: &mut Self::Context,
         a: &tenferro_tensor::Tensor<T>,
     ) -> tenferro_device::Result<super::tensor_api::LuTensorResult<T>> {
         cpu_impl::lu_factor(ctx, a)
+    }
+
+    fn cholesky_ex(
+        ctx: &mut Self::Context,
+        a: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_device::Result<super::tensor_api::CholeskyTensorExResult<T>> {
+        super::cpu_tensor_impl::cholesky_ex(ctx, a)
     }
 
     fn cholesky(
@@ -447,13 +475,6 @@ where
     ) -> tenferro_device::Result<super::tensor_api::EigTensorResult<T>> {
         cpu_impl::eig(ctx, a)
     }
-}
-
-impl<T> TensorLinalgContextFor<T> for tenferro_prims::CpuContext
-where
-    T: KernelLinalgScalar,
-{
-    type Backend = CpuTensorLinalgBackend;
 }
 
 #[cfg(all(test, feature = "linalg-faer"))]

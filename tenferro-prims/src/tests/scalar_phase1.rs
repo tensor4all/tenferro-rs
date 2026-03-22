@@ -29,6 +29,13 @@ fn cpu_scalar_phase1_supports_add_div_and_mean() {
     );
     assert!(
         <CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::PointwiseBinary {
+                op: ScalarBinaryOp::GreaterEqual,
+            }
+        )
+    );
+    assert!(
+        <CpuBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
             ScalarPrimsDescriptor::Reduction {
                 modes_a: vec![0, 1],
                 modes_c: vec![1],
@@ -138,14 +145,35 @@ fn cpu_scalar_phase1_mean_reduction_handles_non_contiguous_input() {
 }
 
 #[test]
-fn cuda_scalar_phase1_does_not_advertise_unimplemented_ops() {
-    assert!(
-        !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+fn cuda_scalar_phase1_advertises_only_the_wired_subset() {
+    let add_supported =
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
             ScalarPrimsDescriptor::PointwiseBinary {
                 op: ScalarBinaryOp::Add,
-            }
-        )
+            },
+        );
+    let ge_supported = <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::GreaterEqual,
+        },
     );
+    let prod_supported =
+        <crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+            ScalarPrimsDescriptor::Reduction {
+                modes_a: vec![0, 1],
+                modes_c: vec![1],
+                op: ScalarReductionOp::Prod,
+            },
+        );
+    if cfg!(feature = "cuda") {
+        assert!(add_supported);
+        assert!(ge_supported);
+        assert!(prod_supported);
+    } else {
+        assert!(!add_supported);
+        assert!(!ge_supported);
+        assert!(!prod_supported);
+    }
     assert!(
         !<crate::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
             ScalarPrimsDescriptor::Reduction {

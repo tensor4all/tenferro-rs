@@ -9,40 +9,75 @@ description = "Batched matrix linear algebra decompositions (SVD, QR, LU, eigen)
 
 [features]
 default = ["linalg-faer"]
-linalg-faer = ["dep:faer"]
-linalg-lapack = ["dep:lapack", "dep:cblas-sys"]
-provider-src = ["linalg-lapack", "dep:blas-src", "dep:cblas-src", "dep:lapack-src"]
-provider-inject = ["linalg-lapack", "dep:cblas-inject", "dep:lapack-inject"]
-src-openblas = ["provider-src", "blas-src/openblas", "lapack-src/openblas"]
-src-netlib = ["provider-src", "blas-src/netlib", "lapack-src/netlib"]
-src-accelerate = ["provider-src", "blas-src/accelerate", "lapack-src/accelerate"]
-src-r = ["provider-src", "blas-src/r", "lapack-src/r"]
+cuda = ["tenferro-linalg-prims/cuda"]
+linalg-faer = ["dep:faer", "tenferro-linalg-prims/linalg-faer"]
+linalg-lapack = [
+    "dep:lapack",
+    "dep:cblas-sys",
+    "tenferro-linalg-prims/linalg-lapack",
+]
+provider-src = [
+    "linalg-lapack",
+    "dep:blas-src",
+    "dep:cblas-src",
+    "dep:lapack-src",
+    "tenferro-linalg-prims/provider-src",
+]
+provider-inject = [
+    "linalg-lapack",
+    "dep:cblas-inject",
+    "dep:lapack-inject",
+    "tenferro-linalg-prims/provider-inject",
+]
+src-openblas = [
+    "provider-src",
+    "blas-src/openblas",
+    "lapack-src/openblas",
+    "tenferro-linalg-prims/src-openblas",
+]
+src-netlib = [
+    "provider-src",
+    "blas-src/netlib",
+    "lapack-src/netlib",
+    "tenferro-linalg-prims/src-netlib",
+]
+src-accelerate = [
+    "provider-src",
+    "blas-src/accelerate",
+    "lapack-src/accelerate",
+    "tenferro-linalg-prims/src-accelerate",
+]
+src-r = ["provider-src", "blas-src/r", "lapack-src/r", "tenferro-linalg-prims/src-r"]
 src-intel-mkl-dynamic-sequential = [
     "provider-src",
     "blas-src/intel-mkl-dynamic-sequential",
     "lapack-src/intel-mkl-dynamic-sequential",
+    "tenferro-linalg-prims/src-intel-mkl-dynamic-sequential",
 ]
 src-intel-mkl-dynamic-parallel = [
     "provider-src",
     "blas-src/intel-mkl-dynamic-parallel",
     "lapack-src/intel-mkl-dynamic-parallel",
+    "tenferro-linalg-prims/src-intel-mkl-dynamic-parallel",
 ]
 src-intel-mkl-static-sequential = [
     "provider-src",
     "blas-src/intel-mkl-static-sequential",
     "lapack-src/intel-mkl-static-sequential",
+    "tenferro-linalg-prims/src-intel-mkl-static-sequential",
 ]
 src-intel-mkl-static-parallel = [
     "provider-src",
     "blas-src/intel-mkl-static-parallel",
     "lapack-src/intel-mkl-static-parallel",
+    "tenferro-linalg-prims/src-intel-mkl-static-parallel",
 ]
 
 [dependencies]
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
-tenferro-linalg-prims = { path = "../tenferro-linalg-prims" }
+tenferro-linalg-prims = { path = "../tenferro-linalg-prims", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor" }
 chainrules-core.workspace = true
 faer = { workspace = true, optional = true }

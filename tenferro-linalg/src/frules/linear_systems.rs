@@ -27,8 +27,11 @@ pub fn solve_frule<T: KernelLinalgScalar, C>(
     tangent_b: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
 {
     // dx = A^{-1} (db - dA x)
     let x = solve(ctx, a, b)
@@ -86,8 +89,11 @@ pub fn solve_triangular_frule<T: KernelLinalgScalar, C>(
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
 {
     if tangent_a.dims() != a.dims() {
         return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
@@ -180,8 +186,11 @@ pub fn inv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv_frule")
         .map_err(to_ad_err)?;
@@ -238,7 +247,8 @@ pub fn det_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det_frule")
@@ -300,8 +310,11 @@ pub fn slogdet_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<(SlogdetResult<T>, SlogdetResult<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet_frule")
         .map_err(to_ad_err)?;

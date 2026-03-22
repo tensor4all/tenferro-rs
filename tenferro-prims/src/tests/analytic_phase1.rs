@@ -6,9 +6,42 @@ use crate::{
     AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp, CpuBackend,
     CpuContext, TensorAnalyticPrims,
 };
+#[cfg(feature = "cuda")]
+use crate::{CudaBackend, CudaContext};
 
 fn tensor_f64(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
+}
+
+#[cfg(feature = "cuda")]
+fn available_cutensor_library_path() -> Option<&'static str> {
+    [
+        "/usr/lib/x86_64-linux-gnu/libcutensor.so",
+        "/usr/lib/x86_64-linux-gnu/libcutensor.so.2",
+        "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so",
+        "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so.2",
+    ]
+    .into_iter()
+    .find(|path| std::path::Path::new(path).exists())
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_device_zero_is_available() -> bool {
+    std::panic::catch_unwind(|| {
+        cudarc::runtime::result::device::get_count()
+            .map(|count| count > 0)
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
+#[cfg(feature = "cuda")]
+fn load_cuda_backend() -> Option<(CudaBackend, CudaContext)> {
+    let path = available_cutensor_library_path()?;
+    if !cuda_device_zero_is_available() {
+        return None;
+    }
+    Some(CudaBackend::load(path).unwrap())
 }
 
 fn run_unary_f64(ctx: &mut CpuContext, op: AnalyticUnaryOp, input: &Tensor<f64>) -> Tensor<f64> {
@@ -346,21 +379,159 @@ fn cpu_analytic_phase2_executes_remaining_unary_and_binary_inventory() {
     assert_eq!(xlogy.buffer().as_slice().unwrap(), &[0.0, 2.0]);
 }
 
+#[cfg(feature = "cuda")]
 #[test]
-fn cuda_analytic_phase1_does_not_advertise_unimplemented_ops() {
-    for desc in [
-        AnalyticPrimsDescriptor::PointwiseUnary {
-            op: AnalyticUnaryOp::Exp,
-        },
-        AnalyticPrimsDescriptor::PointwiseUnary {
-            op: AnalyticUnaryOp::Log,
-        },
-        AnalyticPrimsDescriptor::PointwiseBinary {
-            op: AnalyticBinaryOp::Pow,
-        },
-    ] {
-        assert!(!<crate::CudaBackend as TensorAnalyticPrims<
-            Standard<f64>,
-        >>::has_analytic_support(desc));
+fn cuda_analytic_phase1_supports_and_executes_sqrt_when_runtime_available() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+
+    let desc = AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Sqrt,
+    };
+    assert!(
+        <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            desc.clone()
+        )
+    );
+
+    let plan = <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &desc,
+        &[&[2, 2], &[2, 2]],
+    )
+    .unwrap();
+
+    let input = tensor_f64(&[1.0, 4.0, 9.0, 16.0], &[2, 2])
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        &[2, 2],
+        tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    );
+
+    <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+
+    let round_trip = output
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let got = round_trip.buffer().as_slice().unwrap();
+    let expected = [1.0, 2.0, 3.0, 4.0];
+    for (lhs, rhs) in got.iter().zip(expected.iter()) {
+        assert!((lhs - rhs).abs() < 1.0e-12, "got {lhs}, expected {rhs}");
     }
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_analytic_phase1_supports_and_executes_log_when_runtime_available() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+
+    let desc = AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Log,
+    };
+    assert!(
+        <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            desc.clone()
+        )
+    );
+
+    let plan = <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &desc,
+        &[&[2, 2], &[2, 2]],
+    )
+    .unwrap();
+
+    let input = tensor_f64(&[1.0, std::f64::consts::E, 4.0, 16.0], &[2, 2])
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        &[2, 2],
+        tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    );
+
+    <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+
+    let round_trip = output
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let got = round_trip.buffer().as_slice().unwrap();
+    let expected = [0.0, 1.0, 4.0_f64.ln(), 16.0_f64.ln()];
+    for (lhs, rhs) in got.iter().zip(expected.iter()) {
+        assert!((lhs - rhs).abs() < 1.0e-12, "got {lhs}, expected {rhs}");
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_analytic_phase1_supports_and_executes_pow_when_runtime_available() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+
+    let desc = AnalyticPrimsDescriptor::PointwiseBinary {
+        op: AnalyticBinaryOp::Pow,
+    };
+    assert!(
+        <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            desc.clone()
+        )
+    );
+
+    let plan = <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &desc,
+        &[&[2], &[2], &[2]],
+    )
+    .unwrap();
+
+    let bases = tensor_f64(&[2.0, 9.0], &[2])
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let exponents = tensor_f64(&[3.0, 0.5], &[2])
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        &[2],
+        tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    );
+
+    <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&bases, &exponents],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+
+    let round_trip = output
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let got = round_trip.buffer().as_slice().unwrap();
+    assert!((got[0] - 8.0).abs() < 1.0e-12, "got {}", got[0]);
+    assert!((got[1] - 3.0).abs() < 1.0e-12, "got {}", got[1]);
 }

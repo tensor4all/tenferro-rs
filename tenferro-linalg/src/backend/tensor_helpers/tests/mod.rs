@@ -85,3 +85,19 @@ fn validate_solve_rhs_shape_scalar_fails() {
     let b = make(&[1.0], &[]);
     assert!(validate_solve_rhs_shape(&b, 2, &[], "solve").is_err());
 }
+
+#[test]
+fn zero_trailing_by_counts_linalg_wrapper_matches_tensor_helper() {
+    let payload = make(&[1.0, 2.0, 3.0, 4.0, 10.0, 20.0, 30.0, 40.0], &[2, 2, 2]);
+    let keep_counts = make(&[1.0, 2.0], &[2]);
+
+    let got = zero_trailing_by_counts(&payload, &keep_counts, 1, 2).unwrap();
+    let expected = payload.zero_trailing_by_counts(&keep_counts, 1, 2).unwrap();
+
+    assert_eq!(got.dims(), expected.dims());
+    assert_eq!(got.strides(), expected.strides());
+    assert_eq!(
+        extract_contiguous_slice(&got).unwrap(),
+        extract_contiguous_slice(&expected).unwrap()
+    );
+}

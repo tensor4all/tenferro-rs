@@ -1,86 +1,63 @@
 use std::sync::Arc;
 
-use cudarc::driver::{result as cuda_result, CudaContext};
 use tenferro_algebra::Scalar;
+use tenferro_device::cuda::runtime::{
+    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, TriangularHalf,
+    TriangularMergeSpec, TriangularPartSpec, ZeroTrailingByCountsSpec,
+};
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
-use crate::{DataBuffer, Tensor};
+use crate::{layout::compute_contiguous_strides, DataBuffer, MemoryOrder, Tensor};
 
-fn cuda_error(operation: &str, err: impl std::fmt::Debug) -> Error {
-    Error::DeviceError(format!("{operation} failed: {err:?}"))
+fn gpu_runtime(space: LogicalMemorySpace) -> Result<Arc<device_cuda::CudaRuntime>> {
+    let LogicalMemorySpace::GpuMemory { device_id } = space else {
+        return Err(Error::DeviceError(format!(
+            "unsupported CUDA memory space: {space:?}"
+        )));
+    };
+    device_cuda::get_or_init(device_id)
 }
 
-fn init_cuda_context(device_id: usize) -> Result<Arc<CudaContext>> {
-    std::panic::catch_unwind(|| CudaContext::new(device_id))
-        .map_err(|_| Error::DeviceError("CUDA driver initialization panicked".into()))?
-        .map_err(|err| cuda_error("CUDA device init", err))
+fn buffer_from_cuda_allocation<T: Scalar>(
+    allocation: CudaBuffer<T>,
+    target: LogicalMemorySpace,
+) -> DataBuffer<T> {
+    let device_ptr = allocation.device_ptr();
+    let len = allocation.len();
+    unsafe { DataBuffer::from_gpu_parts(device_ptr, len, target, move || drop(allocation)) }
+}
+
+fn alloc_gpu_buffer<T: Scalar>(len: usize, target: LogicalMemorySpace) -> Result<DataBuffer<T>> {
+    let runtime = gpu_runtime(target)?;
+    let allocation = runtime.alloc::<T>(len)?;
+    Ok(buffer_from_cuda_allocation(allocation, target))
 }
 
 fn copy_host_buffer_to_gpu<T: Scalar>(
     host_data: &[T],
     target: LogicalMemorySpace,
 ) -> Result<DataBuffer<T>> {
-    let LogicalMemorySpace::GpuMemory { device_id } = target else {
-        return Err(Error::DeviceError(format!(
-            "unsupported CUDA allocation target: {target:?}"
-        )));
-    };
-
-    let ctx = init_cuda_context(device_id)?;
-    ctx.bind_to_thread()
-        .map_err(|err| cuda_error("CUDA context bind", err))?;
-
-    let num_bytes = std::mem::size_of_val(host_data);
-    let device_ptr = unsafe { cuda_result::malloc_sync(num_bytes) }
-        .map_err(|err| cuda_error("cudaMalloc", err))?;
-
+    let runtime = gpu_runtime(target)?;
+    let allocation = runtime.alloc::<T>(host_data.len())?;
     if !host_data.is_empty() {
-        if let Err(err) = unsafe { cuda_result::memcpy_htod_sync(device_ptr, host_data) } {
-            let _ = unsafe { cuda_result::free_sync(device_ptr) };
-            return Err(cuda_error("cudaMemcpyHtoD", err));
+        unsafe {
+            runtime.copy_htod_raw(host_data, allocation.device_ptr(), allocation.len())?;
         }
     }
 
-    let release_ctx = Arc::clone(&ctx);
-    let release = move || {
-        let _ = release_ctx.bind_to_thread();
-        let _ = unsafe { cuda_result::free_sync(device_ptr) };
-    };
-
-    Ok(unsafe {
-        DataBuffer::from_gpu_parts(device_ptr as *mut T, host_data.len(), target, release)
-    })
+    Ok(buffer_from_cuda_allocation(allocation, target))
 }
 
 fn copy_gpu_buffer_to_host<T: Scalar>(
     buffer: &DataBuffer<T>,
     source: LogicalMemorySpace,
 ) -> Result<Vec<T>> {
-    let LogicalMemorySpace::GpuMemory { device_id } = source else {
-        return Err(Error::DeviceError(format!(
-            "unsupported CUDA transfer source: {source:?}"
-        )));
-    };
-
-    let ctx = init_cuda_context(device_id)?;
-    ctx.bind_to_thread()
-        .map_err(|err| cuda_error("CUDA context bind", err))?;
-
-    let mut host_data = vec![T::zero(); buffer.len()];
-    if host_data.is_empty() {
-        return Ok(host_data);
-    }
-
+    let runtime = gpu_runtime(source)?;
     let device_ptr = buffer
         .as_device_ptr()
         .ok_or_else(|| Error::DeviceError("tensor buffer is not resident on GPU".into()))?;
 
-    unsafe {
-        cuda_result::memcpy_dtoh_sync(&mut host_data, device_ptr as usize as _)
-            .map_err(|err| cuda_error("cudaMemcpyDtoH", err))?;
-    }
-
-    Ok(host_data)
+    unsafe { runtime.copy_dtoh_raw(device_ptr, buffer.len()) }
 }
 
 fn transferred_fw_grad<T: Scalar>(
@@ -110,11 +87,233 @@ fn rebuild_tensor_in_space<T: Scalar>(
     ))
 }
 
+fn contiguous_order(order: MemoryOrder) -> ContiguousOrder {
+    match order {
+        MemoryOrder::ColumnMajor => ContiguousOrder::ColumnMajor,
+        MemoryOrder::RowMajor => ContiguousOrder::RowMajor,
+    }
+}
+
+pub(super) fn contiguous_tensor<T: Scalar>(
+    source: &Tensor<T>,
+    order: MemoryOrder,
+) -> Result<Tensor<T>> {
+    let space = source.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let out_strides = compute_contiguous_strides(source.dims(), order);
+    let output = Tensor::from_parts(
+        alloc_gpu_buffer(source.len(), space)?,
+        Arc::from(source.dims()),
+        Arc::from(out_strides),
+        0,
+        space,
+        source.preferred_compute_device(),
+        None,
+        source.is_conjugated(),
+        None,
+    );
+    if source.is_empty() {
+        return Ok(output);
+    }
+
+    let src_ptr = source
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("source tensor buffer is not on GPU".into()))?;
+    let dst_ptr = output
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("output tensor buffer is not on GPU".into()))?
+        as *mut T;
+    let spec = StridedCopySpec::to_contiguous(
+        source.dims(),
+        source.strides(),
+        source.offset(),
+        contiguous_order(order),
+    )?;
+
+    unsafe {
+        runtime.copy_strided_raw(src_ptr, dst_ptr, &spec)?;
+    }
+
+    Ok(output)
+}
+
+pub(super) fn zero_trailing_by_counts_tensor<T, R>(
+    source: &Tensor<T>,
+    keep_counts: &Tensor<R>,
+    axis: usize,
+    structural_rank: usize,
+) -> Result<Tensor<T>>
+where
+    T: Scalar,
+    R: Scalar + device_cuda::RuntimeKeepCountScalar,
+{
+    let space = source.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let out_strides = compute_contiguous_strides(source.dims(), MemoryOrder::ColumnMajor);
+    let output = Tensor::from_parts(
+        alloc_gpu_buffer(source.len(), space)?,
+        Arc::from(source.dims()),
+        Arc::from(out_strides),
+        0,
+        space,
+        source.preferred_compute_device(),
+        None,
+        source.is_conjugated(),
+        None,
+    );
+    if source.is_empty() {
+        return Ok(output);
+    }
+
+    let src_ptr = source
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("source tensor buffer is not on GPU".into()))?;
+    let dst_ptr = output
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("output tensor buffer is not on GPU".into()))?
+        as *mut T;
+    let keep_counts_ptr = keep_counts
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("keep_counts tensor buffer is not on GPU".into()))?;
+    let spec = ZeroTrailingByCountsSpec::new(
+        source.dims(),
+        source.strides(),
+        source.offset(),
+        output.strides(),
+        output.offset(),
+        keep_counts.strides(),
+        keep_counts.offset(),
+        axis,
+        structural_rank,
+    )?;
+
+    unsafe {
+        runtime.zero_trailing_by_counts_raw(src_ptr, dst_ptr, keep_counts_ptr, &spec)?;
+    }
+
+    Ok(output)
+}
+
+pub(super) fn triangular_part_tensor<T: Scalar>(
+    source: &Tensor<T>,
+    diagonal: isize,
+    lower: bool,
+) -> Result<Tensor<T>> {
+    let space = source.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let out_strides = compute_contiguous_strides(source.dims(), MemoryOrder::ColumnMajor);
+    let output = Tensor::from_parts(
+        alloc_gpu_buffer(source.len(), space)?,
+        Arc::from(source.dims()),
+        Arc::from(out_strides),
+        0,
+        space,
+        source.preferred_compute_device(),
+        None,
+        source.is_conjugated(),
+        None,
+    );
+    if source.is_empty() {
+        return Ok(output);
+    }
+
+    let src_ptr = source
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("source tensor buffer is not on GPU".into()))?;
+    let dst_ptr = output
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("output tensor buffer is not on GPU".into()))?
+        as *mut T;
+    let spec = TriangularPartSpec::new(
+        source.dims(),
+        source.strides(),
+        source.offset(),
+        output.strides(),
+        output.offset(),
+        diagonal,
+        if lower {
+            TriangularHalf::Lower
+        } else {
+            TriangularHalf::Upper
+        },
+    )?;
+
+    unsafe {
+        runtime.triangular_part_raw(src_ptr, dst_ptr, &spec)?;
+    }
+
+    Ok(output)
+}
+
+pub(super) fn merge_strict_lower_and_upper_tensor<T: Scalar>(
+    lower: &Tensor<T>,
+    upper: &Tensor<T>,
+) -> Result<Tensor<T>> {
+    let space = lower.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let batch_dims = &lower.dims()[2..];
+    let output_dims: Vec<usize> = std::iter::once(lower.dims()[0])
+        .chain(std::iter::once(upper.dims()[1]))
+        .chain(batch_dims.iter().copied())
+        .collect();
+    let out_strides = compute_contiguous_strides(&output_dims, MemoryOrder::ColumnMajor);
+    let output = Tensor::from_parts(
+        alloc_gpu_buffer(output_dims.iter().product(), space)?,
+        Arc::from(output_dims),
+        Arc::from(out_strides),
+        0,
+        space,
+        lower.preferred_compute_device(),
+        None,
+        lower.is_conjugated(),
+        None,
+    );
+    if output.is_empty() {
+        return Ok(output);
+    }
+
+    let lower_ptr = lower
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("lower tensor buffer is not on GPU".into()))?;
+    let upper_ptr = upper
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("upper tensor buffer is not on GPU".into()))?;
+    let dst_ptr = output
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("output tensor buffer is not on GPU".into()))?
+        as *mut T;
+    let spec = TriangularMergeSpec::new(
+        output.dims(),
+        lower.strides(),
+        lower.offset(),
+        upper.strides(),
+        upper.offset(),
+        output.strides(),
+        output.offset(),
+    )?;
+
+    unsafe {
+        runtime.triangular_merge_raw(lower_ptr, upper_ptr, dst_ptr, &spec)?;
+    }
+
+    Ok(output)
+}
+
 pub(super) fn transfer_tensor<T: Scalar>(
     source: &Tensor<T>,
     target: LogicalMemorySpace,
 ) -> Result<Tensor<T>> {
-    match (source.logical_memory_space, target) {
+    match (source.logical_memory_space(), target) {
         (LogicalMemorySpace::MainMemory, LogicalMemorySpace::GpuMemory { .. }) => {
             let host_data = source
                 .buffer()

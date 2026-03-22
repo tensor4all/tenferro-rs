@@ -36,6 +36,18 @@ fn vector_norm_primal_rrule_and_frule_match_expected_values() {
 }
 
 #[test]
+fn vector_lp_norm_matches_manual_formula_and_rejects_invalid_p() {
+    let mut ctx = CpuContext::new(1);
+    let x = Tensor::from_slice(&[2.0_f64, -3.0, 4.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+
+    let lp = norm(&mut ctx, &x, NormKind::Lp(3.0)).unwrap();
+    let expected = (2.0_f64.powi(3) + 3.0_f64.powi(3) + 4.0_f64.powi(3)).powf(1.0 / 3.0);
+    assert!((tensor_data(&lp)[0] - expected).abs() < 1e-12);
+
+    assert!(norm(&mut ctx, &x, NormKind::Lp(0.5)).is_err());
+}
+
+#[test]
 fn linalg_scalar_helpers_and_validation_accept_valid_inputs() {
     assert_eq!(<f64 as LinalgScalar>::abs_real(&black_box(-1.5_f64)), 1.5);
     assert_eq!(<f32 as LinalgScalar>::abs_real(&black_box(-1.5_f32)), 1.5);
@@ -128,4 +140,54 @@ fn validation_helpers_reject_invalid_shapes_and_axes() {
     assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("must be unique")));
 
     assert_eq!(validate_tensor_solve_axes(4, 2, None).unwrap(), vec![2, 3]);
+}
+
+#[test]
+fn svdvals_matches_svd_singular_values() {
+    let mut ctx = CpuContext::new(1);
+    let a =
+        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 2.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+
+    let svd_s = svd(&mut ctx, &a, None).unwrap().s;
+    let values = svdvals(&mut ctx, &a).unwrap();
+
+    assert_eq!(tensor_data(&values), tensor_data(&svd_s));
+}
+
+#[test]
+fn slogdet_matches_expected_sign_and_logabsdet() {
+    let mut ctx = CpuContext::new(1);
+    let a =
+        Tensor::from_slice(&[1.0_f64, 3.0, 2.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+
+    let result = slogdet(&mut ctx, &a).unwrap();
+    let sign = tensor_data(&result.sign);
+    let logabsdet = tensor_data(&result.logabsdet);
+
+    assert!((sign[0] - (-1.0)).abs() < 1e-12);
+    assert!((logabsdet[0] - (2.0_f64).ln()).abs() < 1e-12);
+}
+
+#[test]
+fn svd_cutoff_fixed_shape_zero_fill_semantics_hold() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[3.0_f64, 0.0, 0.0, 0.25],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let opts = SvdOptions {
+        max_rank: Some(2),
+        cutoff: Some(0.5),
+    };
+
+    let result = svd(&mut ctx, &a, Some(&opts)).unwrap();
+
+    assert_eq!(result.u.dims(), &[2, 2]);
+    assert_eq!(result.s.dims(), &[2]);
+    assert_eq!(result.vt.dims(), &[2, 2]);
+    assert_eq!(tensor_data(&result.s), vec![3.0, 0.0]);
+    assert_eq!(tensor_data(&result.u), vec![1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(tensor_data(&result.vt), vec![1.0, 0.0, 0.0, 0.0]);
 }

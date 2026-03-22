@@ -2,7 +2,9 @@ use tenferro_algebra::{Algebra, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
+#[cfg(not(feature = "cuda"))]
+use crate::{CudaBackend, CudaContext};
+use crate::{RocmBackend, RocmContext};
 
 /// Analytic unary operations.
 ///
@@ -158,6 +160,7 @@ pub trait TensorAnalyticPrims<Alg: Algebra> {
     fn has_analytic_support(desc: AnalyticPrimsDescriptor) -> bool;
 }
 
+#[cfg(not(feature = "cuda"))]
 impl<S: Scalar> TensorAnalyticPrims<Standard<S>> for CudaBackend {
     type Plan = ();
     type Context = CudaContext;

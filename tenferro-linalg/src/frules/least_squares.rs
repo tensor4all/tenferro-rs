@@ -19,7 +19,10 @@ use super::*;
 /// let db = Tensor::<f64>::ones(&[3], mem, col);
 /// let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
-pub fn lstsq_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lstsq_frule<
+    T: KernelLinalgScalar<Real = T> + num_traits::Float + tenferro_algebra::Conjugate,
+    C,
+>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -28,7 +31,9 @@ pub fn lstsq_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<(LstsqResult<T>, LstsqResult<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Lstsq, "lstsq_frule")
