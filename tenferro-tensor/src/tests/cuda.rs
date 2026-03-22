@@ -1,5 +1,6 @@
 use super::*;
 use num_complex::Complex64;
+use tenferro_device::ComputeDevice;
 
 fn cuda_device_zero_is_available() -> bool {
     std::panic::catch_unwind(|| cudarc::driver::CudaContext::new(0).is_ok()).unwrap_or(false)
@@ -87,6 +88,56 @@ fn gpu_contiguous_matches_cpu_for_strided_views_when_cuda_is_available() {
         .unwrap();
     let expected = view.contiguous(MemoryOrder::ColumnMajor);
 
+    assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+}
+
+#[test]
+fn gpu_logical_materialize_contiguous_resolves_lazy_conjugation_without_cuda_context() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let mut payload = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap()
+    .conj();
+    payload.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 7 }));
+    let expected = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(4.0, -4.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let gpu_payload = payload
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = gpu_payload.materialize_logical_contiguous(MemoryOrder::ColumnMajor);
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert!(!got.is_conjugated());
+    assert_eq!(got.preferred_compute_device(), None);
+    assert!(got.is_col_major_contiguous());
+    let got = got
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+
+    assert_eq!(got.dims(), expected.dims());
     assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
 }
 

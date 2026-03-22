@@ -352,3 +352,52 @@ impl<T: Scalar> Tensor<T> {
         self.triangular_part(diagonal, TriangularHalf::Upper)
     }
 }
+
+impl<T: Scalar + Conjugate> Tensor<T> {
+    /// Materialize the logical tensor values into a fresh contiguous tensor.
+    ///
+    /// The returned tensor is resolved (`conjugated = false`) and clears any
+    /// preferred compute-device hint. GPU tensors use the Layer 0 logical-copy
+    /// substrate when available.
+    pub(crate) fn materialize_logical_contiguous(&self, order: MemoryOrder) -> Tensor<T> {
+        self.wait();
+
+        #[cfg(feature = "cuda")]
+        if matches!(
+            self.logical_memory_space,
+            LogicalMemorySpace::GpuMemory { .. }
+        ) {
+            return crate::cuda_runtime::materialize_logical_contiguous_tensor(self, order)
+                .unwrap_or_else(|err| {
+                    panic!("materialize_logical_contiguous: GPU materialization failed: {err}")
+                });
+        }
+
+        let mut data = vec![T::zero(); self.len()];
+        if !data.is_empty() {
+            let dst_strides = compute_contiguous_strides(&self.dims, order);
+            copy_strided(
+                self.cpu_backed_slice_or_panic("materialize_logical_contiguous"),
+                &self.dims,
+                &self.strides,
+                self.offset,
+                &mut data,
+                &dst_strides,
+            );
+            if self.conjugated {
+                for value in &mut data {
+                    *value = value.conj();
+                }
+            }
+        }
+
+        Tensor::from_owned_contiguous_data(
+            data,
+            self.dims.clone(),
+            order,
+            self.logical_memory_space,
+            None,
+            false,
+        )
+    }
+}
