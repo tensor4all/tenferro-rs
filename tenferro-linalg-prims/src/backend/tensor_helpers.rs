@@ -8,6 +8,7 @@ use crate::LinalgScalar;
 pub(crate) struct SolveRhsLayout {
     pub nrhs: usize,
     pub output_dims: Vec<usize>,
+    pub output_batch_dims: Vec<usize>,
     pub structural_rank: usize,
     pub rhs_batch_indexer: BroadcastBatchIndexer,
 }
@@ -98,6 +99,42 @@ fn col_major_batch_strides(dims: &[usize]) -> Vec<usize> {
         strides[axis] = strides[axis - 1] * dims[axis - 1];
     }
     strides
+}
+
+pub(crate) fn broadcast_batch_dims(
+    lhs_batch_dims: &[usize],
+    rhs_batch_dims: &[usize],
+    op_name: &str,
+    lhs_name: &str,
+    rhs_name: &str,
+) -> Result<Vec<usize>> {
+    let rank = lhs_batch_dims.len().max(rhs_batch_dims.len());
+    let lhs_pad = rank - lhs_batch_dims.len();
+    let rhs_pad = rank - rhs_batch_dims.len();
+    let mut output_batch_dims = Vec::with_capacity(rank);
+
+    for axis in 0..rank {
+        let lhs_dim = if axis < lhs_pad {
+            1
+        } else {
+            lhs_batch_dims[axis - lhs_pad]
+        };
+        let rhs_dim = if axis < rhs_pad {
+            1
+        } else {
+            rhs_batch_dims[axis - rhs_pad]
+        };
+        if lhs_dim == rhs_dim || lhs_dim == 1 || rhs_dim == 1 {
+            output_batch_dims.push(lhs_dim.max(rhs_dim));
+        } else {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} batch dims are not broadcastable: {lhs_name} has {:?}, {rhs_name} has {:?}",
+                lhs_batch_dims, rhs_batch_dims
+            )));
+        }
+    }
+
+    Ok(output_batch_dims)
 }
 
 pub(crate) fn materialize_broadcasted_batches<T: LinalgScalar>(
@@ -207,12 +244,15 @@ pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
                 dims[0]
             )));
         }
-        let rhs_batch_indexer = BroadcastBatchIndexer::new(&dims[1..], batch_dims, op_name, "b")?;
+        let output_batch_dims = broadcast_batch_dims(batch_dims, &dims[1..], op_name, "a", "b")?;
+        let rhs_batch_indexer =
+            BroadcastBatchIndexer::new(&dims[1..], &output_batch_dims, op_name, "b")?;
         let mut output_dims = vec![n];
-        output_dims.extend_from_slice(rhs_batch_indexer.output_batch_dims());
+        output_dims.extend_from_slice(&output_batch_dims);
         return Ok(SolveRhsLayout {
             nrhs: 1,
             output_dims,
+            output_batch_dims,
             structural_rank: 1,
             rhs_batch_indexer,
         });
@@ -230,12 +270,15 @@ pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
                 "{op_name} requires b dim[1] (nrhs) > 0"
             )));
         }
-        let rhs_batch_indexer = BroadcastBatchIndexer::new(&dims[2..], batch_dims, op_name, "b")?;
+        let output_batch_dims = broadcast_batch_dims(batch_dims, &dims[2..], op_name, "a", "b")?;
+        let rhs_batch_indexer =
+            BroadcastBatchIndexer::new(&dims[2..], &output_batch_dims, op_name, "b")?;
         let mut output_dims = vec![n, dims[1]];
-        output_dims.extend_from_slice(rhs_batch_indexer.output_batch_dims());
+        output_dims.extend_from_slice(&output_batch_dims);
         return Ok(SolveRhsLayout {
             nrhs: dims[1],
             output_dims,
+            output_batch_dims,
             structural_rank: 2,
             rhs_batch_indexer,
         });

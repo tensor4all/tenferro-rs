@@ -15,7 +15,7 @@ use super::tensor_api::{
 };
 use super::tensor_helpers::{
     batch_count, ensure_col_major, extract_contiguous_slice, materialize_broadcasted_batches,
-    validate_matrix_shape, validate_solve_rhs_shape, validate_square,
+    validate_matrix_shape, validate_solve_rhs_shape, validate_square, BroadcastBatchIndexer,
 };
 use crate::KernelLinalgScalar;
 
@@ -84,9 +84,11 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
     let nrhs = rhs.nrhs;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
 
-    let a_contig = ensure_col_major(a);
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_ex", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -143,9 +145,11 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
     let nrhs = rhs.nrhs;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
 
-    let a_contig = ensure_col_major(a);
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
@@ -185,9 +189,12 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
     let nrhs = rhs.nrhs;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_triangular", "a")?;
 
-    let a_contig = ensure_col_major(a);
+    let a_contig =
+        materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_triangular", "a")?;
     let b_contig = materialize_broadcasted_batches(
         b,
         rhs.structural_rank,
