@@ -15,7 +15,5 @@ tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 chainrules-core.workspace = true
 num-traits.workspace = true
-cudarc = { workspace = true, optional = true }
-
-[dev-dependencies]
 num-complex.workspace = true
+cudarc = { workspace = true, optional = true }
