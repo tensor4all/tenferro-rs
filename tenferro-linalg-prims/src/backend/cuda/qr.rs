@@ -16,7 +16,9 @@ use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime, Devi
 use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
-use crate::backend::linalg_utils::{clone_batched_column_major, copy_batched_column_major};
+use crate::backend::linalg_utils::{
+    copy_batched_column_major, prepare_matrix_operand, MatrixOperandTransposeType,
+};
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{batch_count, validate_matrix_shape};
 use crate::QrTensorResult;
@@ -105,7 +107,7 @@ where
         return Ok(QrTensorResult { q, r });
     }
 
-    let a_work = clone_batched_column_major(ctx, a)?;
+    let a_work = prepare_matrix_operand(ctx, a, MatrixOperandTransposeType::None)?;
     let runtime = load_runtime(ctx)?;
     let a_base = context_device_ptr(ctx, &a_work, "qr a")?.cast::<T>();
     let a_offset = a_work.offset() as usize;

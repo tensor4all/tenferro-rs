@@ -3097,6 +3097,67 @@ fn cuda_qr_reconstructs_small_complex64_matrix() {
 
 #[cfg(feature = "cuda")]
 #[test]
+fn cuda_qr_handles_lazily_conjugated_complex64_input() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let base = Tensor::from_slice(
+        &[
+            Complex64::new(cast::<f64>(1.0), cast::<f64>(0.5)),
+            Complex64::new(cast::<f64>(2.0), cast::<f64>(-1.0)),
+            Complex64::new(cast::<f64>(3.0), cast::<f64>(0.25)),
+            Complex64::new(cast::<f64>(4.0), cast::<f64>(1.5)),
+            Complex64::new(cast::<f64>(5.0), cast::<f64>(-0.75)),
+            Complex64::new(cast::<f64>(6.0), cast::<f64>(0.0)),
+        ],
+        &[3, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let lazy_conjugated = base.conj();
+    let expected_input = tenferro_prims::CpuBackend::resolve_conj(&mut cpu_ctx, &lazy_conjugated);
+    let a_gpu = lazy_conjugated
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::qr(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.q.dims(), &[3, 2]);
+    assert_eq!(got.r.dims(), &[2, 2]);
+
+    let q = tensor_data_on_cpu(&got.q);
+    let r = tensor_data_on_cpu(&got.r);
+    let reconstructed = matmul_col_major_complex(&q, 3, 2, &r, 2);
+    assert_close_complex_slice(
+        "cuda complex qr lazy conjugation reconstruction",
+        &reconstructed,
+        expected_input.buffer().as_slice().unwrap(),
+        cast::<f64>(2048.0) * f64::epsilon(),
+    );
+
+    let gram = gram_col_major_complex(&q, 3, 2);
+    let mut identity = vec![Complex64::new(0.0, 0.0); 4];
+    identity[0] = Complex64::new(1.0, 0.0);
+    identity[3] = Complex64::new(1.0, 0.0);
+    assert_close_complex_slice(
+        "cuda complex qr lazy conjugation orthogonality",
+        &gram,
+        &identity,
+        cast::<f64>(2048.0) * f64::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
 fn cuda_qr_reconstructs_wide_complex32_matrix() {
     if !cuda_runtime_available() {
         return;
