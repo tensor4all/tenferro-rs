@@ -1,10 +1,16 @@
 use std::sync::Arc;
 
 use tenferro_algebra::Scalar;
+#[cfg(feature = "cuda")]
+use tenferro_device::cuda::runtime::{
+    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec,
+};
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
 use super::Tensor;
 use crate::layout::compute_contiguous_strides;
+#[cfg(feature = "cuda")]
+use crate::DataBuffer;
 use crate::MemoryOrder;
 
 impl<T: Scalar> Tensor<T> {
@@ -15,7 +21,8 @@ impl<T: Scalar> Tensor<T> {
     /// supported and count from the end.
     ///
     /// This is a dense materialization operation that allocates a new buffer.
-    /// Phase 1 only supports main-memory tensors.
+    /// Main-memory tensors are always supported; with the `cuda` feature
+    /// enabled, GPU-resident tensors on one device are also supported.
     ///
     /// # Arguments
     ///
@@ -29,7 +36,7 @@ impl<T: Scalar> Tensor<T> {
     /// - Tensors have different shapes
     /// - Tensors have different memory spaces
     /// - The dimension is out of range
-    /// - Non-main-memory tensors are provided (Phase 1 limitation)
+    /// - Non-main-memory tensors are provided without `cuda` support
     ///
     /// # Examples
     ///
@@ -245,12 +252,6 @@ impl<T: Scalar> Tensor<T> {
         };
 
         let memory_space = first.logical_memory_space();
-        if memory_space != LogicalMemorySpace::MainMemory {
-            return Err(Error::InvalidArgument(
-                "cat only supports main-memory tensors in Phase 1".to_string(),
-            ));
-        }
-
         let mut total_cat_dim = 0usize;
         for (i, t) in tensors.iter().enumerate() {
             if t.ndim() != ndim {
@@ -284,6 +285,18 @@ impl<T: Scalar> Tensor<T> {
         result_dims[dim] = total_cat_dim;
 
         let result_strides = compute_contiguous_strides(&result_dims, MemoryOrder::ColumnMajor);
+
+        #[cfg(feature = "cuda")]
+        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+            return cat_gpu(tensors, dim, memory_space, &result_dims, &result_strides);
+        }
+
+        if memory_space != LogicalMemorySpace::MainMemory {
+            return Err(Error::InvalidArgument(
+                "cat only supports main-memory tensors in Phase 1".to_string(),
+            ));
+        }
+
         let result_len: usize = result_dims.iter().product();
         let mut result_data = vec![T::zero(); result_len];
 
@@ -341,4 +354,100 @@ impl<T: Scalar> Tensor<T> {
             None,
         ))
     }
+}
+
+#[cfg(feature = "cuda")]
+fn materialize_cuda_contiguous_buffer<T: Scalar>(
+    tensor: &Tensor<T>,
+    runtime: &Arc<device_cuda::CudaRuntime>,
+) -> Result<CudaBuffer<T>> {
+    let src_ptr = tensor.buffer().as_device_ptr().ok_or_else(|| {
+        Error::DeviceError("cat: GPU tensor buffer is not resident on device".into())
+    })?;
+    let spec = StridedCopySpec::to_contiguous(
+        tensor.dims(),
+        tensor.strides(),
+        tensor.offset(),
+        ContiguousOrder::ColumnMajor,
+    )?;
+    let dst = runtime.alloc::<T>(tensor.len())?;
+    if tensor.is_empty() {
+        return Ok(dst);
+    }
+
+    unsafe {
+        runtime.copy_strided_raw(src_ptr, dst.device_ptr(), &spec)?;
+    }
+    Ok(dst)
+}
+
+#[cfg(feature = "cuda")]
+fn cat_gpu<T: Scalar>(
+    tensors: &[&Tensor<T>],
+    dim: usize,
+    memory_space: LogicalMemorySpace,
+    result_dims: &[usize],
+    result_strides: &[isize],
+) -> Result<Tensor<T>> {
+    let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+        return Err(Error::DeviceError(format!(
+            "cat: unsupported CUDA memory space {memory_space:?}"
+        )));
+    };
+    let runtime = device_cuda::get_or_init(device_id)?;
+
+    // Stage each source into a contiguous GPU buffer so we can reuse the
+    // concat-pack substrate without falling back to host materialization.
+    let mut current_dims = tensors[0].dims().to_vec();
+    let mut current_buf = materialize_cuda_contiguous_buffer(tensors[0], &runtime)?;
+    for next in tensors.iter().skip(1) {
+        let next_buf = materialize_cuda_contiguous_buffer(next, &runtime)?;
+        let current_strides = compute_contiguous_strides(&current_dims, MemoryOrder::ColumnMajor);
+        let next_strides = compute_contiguous_strides(next.dims(), MemoryOrder::ColumnMajor);
+        let current_spec = StridedCopySpec::to_contiguous(
+            &current_dims,
+            &current_strides,
+            0,
+            ContiguousOrder::ColumnMajor,
+        )?;
+        let next_spec = StridedCopySpec::to_contiguous(
+            next.dims(),
+            &next_strides,
+            0,
+            ContiguousOrder::ColumnMajor,
+        )?;
+
+        current_buf = runtime.pack_concat_sources(
+            &current_buf,
+            &current_spec,
+            &next_buf,
+            &next_spec,
+            dim,
+            ContiguousOrder::ColumnMajor,
+        )?;
+        current_dims[dim] = current_dims[dim]
+            .checked_add(next.dims()[dim])
+            .ok_or_else(|| Error::InvalidArgument("cat: dimension size overflow".to_string()))?;
+    }
+
+    debug_assert_eq!(current_dims.as_slice(), result_dims);
+
+    let current_len = current_buf.len();
+    let current_ptr = current_buf.device_ptr();
+    let buffer = unsafe {
+        DataBuffer::from_gpu_parts(current_ptr, current_len, memory_space, move || {
+            drop(current_buf)
+        })
+    };
+    Ok(Tensor::from_parts(
+        buffer,
+        Arc::from(result_dims.to_vec()),
+        Arc::from(result_strides.to_vec()),
+        0,
+        memory_space,
+        tensors[0].preferred_compute_device,
+        None,
+        false,
+        None,
+    ))
 }
