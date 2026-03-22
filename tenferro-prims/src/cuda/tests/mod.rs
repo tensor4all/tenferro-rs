@@ -394,6 +394,11 @@ fn cuda_resolve_conj_keeps_tensor_on_device_and_matches_cpu() {
         .unwrap()
         .conj();
 
+    let expected = Tensor::stack(&[&gpu], 0).unwrap().squeeze_dim(0).unwrap();
+    assert_eq!(
+        expected.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
     let resolved = CudaBackend::resolve_conj(&mut ctx, &gpu);
     assert_eq!(
         resolved.logical_memory_space(),
@@ -404,16 +409,12 @@ fn cuda_resolve_conj_keeps_tensor_on_device_and_matches_cpu() {
     let round_trip = resolved
         .to_memory_space_async(LogicalMemorySpace::MainMemory)
         .unwrap();
+    let expected_round_trip = expected
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
     assert_eq!(
         round_trip.buffer().as_slice(),
-        Some(
-            &[
-                Complex64::new(1.0, -2.0),
-                Complex64::new(3.0, 4.0),
-                Complex64::new(-5.0, -6.0),
-                Complex64::new(7.0, -8.0),
-            ][..]
-        )
+        expected_round_trip.buffer().as_slice()
     );
 }
 

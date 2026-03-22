@@ -23,6 +23,12 @@ fn cpu_backend_resolve_conj_covers_both_fast_and_materializing_paths() {
 
     let plain = Tensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let resolved_plain = CpuBackend::resolve_conj(&mut ctx, &plain);
+    let expected_plain = Tensor::stack(&[&plain], 0).unwrap().squeeze_dim(0).unwrap();
+    assert!(!resolved_plain.is_conjugated());
+    assert_eq!(
+        resolved_plain.buffer().as_slice().unwrap(),
+        expected_plain.buffer().as_slice().unwrap()
+    );
     assert_eq!(resolved_plain.buffer().as_slice().unwrap(), &[1.0, 2.0]);
 
     let complex = Tensor::from_slice(
@@ -33,7 +39,15 @@ fn cpu_backend_resolve_conj_covers_both_fast_and_materializing_paths() {
     .unwrap()
     .into_conj();
     let resolved_complex = CpuBackend::resolve_conj(&mut ctx, &complex);
+    let expected_complex = Tensor::stack(&[&complex], 0)
+        .unwrap()
+        .squeeze_dim(0)
+        .unwrap();
     assert!(!resolved_complex.is_conjugated());
+    assert_eq!(
+        resolved_complex.buffer().as_slice().unwrap(),
+        expected_complex.buffer().as_slice().unwrap()
+    );
     assert_eq!(
         resolved_complex.buffer().as_slice().unwrap(),
         &[Complex64::new(1.0, -2.0), Complex64::new(-3.0, -4.0)]

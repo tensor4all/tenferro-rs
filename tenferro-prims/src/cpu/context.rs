@@ -1,6 +1,6 @@
 use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_device::{Error, Result};
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::Tensor;
 
 use crate::infra::plan_cache::PlanCache;
 
@@ -167,10 +167,9 @@ impl CpuBackend {
     /// Materialize a lazily-conjugated tensor.
     ///
     /// If `src.is_conjugated()` is `false`, returns a shallow clone.
-    /// If `true`, applies element-wise conjugation directly and returns a new
-    /// tensor with `conjugated = false`.
-    ///
-    /// This is the equivalent of PyTorch's `torch.resolve_conj()`.
+    /// If `true`, routes through the tensor-layer logical combine substrate so
+    /// the result is resolved (`conjugated = false`) without reimplementing the
+    /// copy logic here.
     ///
     /// # Examples
     ///
@@ -189,12 +188,9 @@ impl CpuBackend {
         if !src.is_conjugated() {
             return src.clone();
         }
-        let contiguous = src.contiguous(MemoryOrder::ColumnMajor);
-        let Some(data) = contiguous.buffer().as_slice() else {
-            return src.clone();
-        };
-        let conjugated_data: Vec<T> = data.iter().map(|&v| v.conj()).collect();
-        Tensor::from_slice(&conjugated_data, src.dims(), MemoryOrder::ColumnMajor)
+
+        Tensor::stack(&[src], 0)
+            .and_then(|tensor| tensor.squeeze_dim(0))
             .unwrap_or_else(|_| src.clone())
     }
 }
