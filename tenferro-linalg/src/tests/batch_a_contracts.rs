@@ -262,6 +262,10 @@ fn cond_accepts_supported_norm_kinds() {
     let cond_l1 = cond(&mut ctx, &a, NormKind::L1).unwrap();
     assert!(cond_l1.dims().is_empty());
     assert!((tensor_data(&cond_l1)[0] - 4.0).abs() < 1e-12);
+
+    let cond_nuclear = cond(&mut ctx, &a, NormKind::Nuclear).unwrap();
+    assert!(cond_nuclear.dims().is_empty());
+    assert!((tensor_data(&cond_nuclear)[0] - 6.25).abs() < 1e-12);
 }
 
 #[test]
@@ -277,7 +281,7 @@ fn cond_rejects_unsupported_shapes_and_norms() {
 
     let square =
         Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
-    assert!(cond(&mut ctx, &square, NormKind::Nuclear).is_err());
+    assert!(cond(&mut ctx, &square, NormKind::Lp(3.0)).is_err());
 }
 
 #[test]

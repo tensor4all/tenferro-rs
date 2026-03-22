@@ -116,15 +116,43 @@ where
     C::Backend: 'static,
 {
     match kind {
-        NormKind::Fro | NormKind::L1 | NormKind::Inf | NormKind::Spectral => {}
+        NormKind::Fro | NormKind::L1 | NormKind::Inf | NormKind::Spectral | NormKind::Nuclear => {}
         _ => {
             return Err(Error::InvalidArgument(format!(
-                "cond only supports Fro, L1, Inf, and Spectral norms, got {kind:?}"
+                "cond only supports Fro, L1, Inf, Spectral, and Nuclear norms, got {kind:?}"
             )));
         }
     }
 
     validate_square(tensor)?;
+    if matches!(kind, NormKind::Nuclear) {
+        let singular_values = svdvals(ctx, tensor)?;
+        let kept_axes: Vec<usize> = (1..singular_values.ndim()).collect();
+        let nuclear_norm = crate::prims_bridge::scalar_reduce_keep_axes(
+            ctx,
+            &singular_values,
+            &kept_axes,
+            tenferro_prims::ScalarReductionOp::Sum,
+        )?;
+        let reciprocal = crate::prims_bridge::scalar_unary_same_shape(
+            ctx,
+            &singular_values,
+            tenferro_prims::ScalarUnaryOp::Reciprocal,
+        )?;
+        let reciprocal_norm = crate::prims_bridge::scalar_reduce_keep_axes(
+            ctx,
+            &reciprocal,
+            &kept_axes,
+            tenferro_prims::ScalarReductionOp::Sum,
+        )?;
+        return crate::prims_bridge::scalar_binary_same_shape(
+            ctx,
+            &nuclear_norm,
+            &reciprocal_norm,
+            tenferro_prims::ScalarBinaryOp::Mul,
+        );
+    }
+
     let lhs = norm(ctx, tensor, kind)?;
     let inverse = inv(ctx, tensor)?;
     let rhs = norm(ctx, &inverse, kind)?;
