@@ -19,7 +19,7 @@ use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
 use crate::backend::linalg_utils::{
-    copy_batched_column_major, prepare_matrix_operand, MatrixOperandTransform,
+    copy_batched_column_major, prepare_matrix_operand, to_matrix_operand_transpose_type,
 };
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{batch_count, validate_matrix_shape};
@@ -125,15 +125,7 @@ where
         return Ok(SvdTensorResult { u, s, vt });
     }
 
-    let a_work = prepare_matrix_operand(
-        ctx,
-        a,
-        if wide {
-            MatrixOperandTransform::TransposeFirstTwoAxes
-        } else {
-            MatrixOperandTransform::None
-        },
-    )?;
+    let a_work = prepare_matrix_operand(ctx, a, to_matrix_operand_transpose_type(wide, false))?;
     let (m_work, n_work) = if wide { (n, m) } else { (m, n) };
     let runtime = load_runtime(ctx)?;
 
@@ -242,10 +234,10 @@ where
 
     if wide {
         let u_src =
-            prepare_matrix_operand(ctx, &vt_work, MatrixOperandTransform::TransposeFirstTwoAxes)?;
+            prepare_matrix_operand(ctx, &vt_work, to_matrix_operand_transpose_type(true, false))?;
         copy_batched_column_major(ctx, &u_src, &mut u)?;
         let vt_src =
-            prepare_matrix_operand(ctx, &u_work, MatrixOperandTransform::TransposeFirstTwoAxes)?;
+            prepare_matrix_operand(ctx, &u_work, to_matrix_operand_transpose_type(true, false))?;
         copy_batched_column_major(ctx, &vt_src, &mut vt)?;
     } else {
         copy_batched_column_major(ctx, &u_work, &mut u)?;

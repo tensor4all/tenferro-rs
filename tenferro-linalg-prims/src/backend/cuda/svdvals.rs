@@ -18,7 +18,7 @@ use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime, Devi
 use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
-use crate::backend::linalg_utils::{prepare_matrix_operand, MatrixOperandTransform};
+use crate::backend::linalg_utils::{prepare_matrix_operand, to_matrix_operand_transpose_type};
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{batch_count, validate_matrix_shape};
 
@@ -103,15 +103,7 @@ where
         return Ok(s);
     }
 
-    let a_work = prepare_matrix_operand(
-        ctx,
-        a,
-        if m < n {
-            MatrixOperandTransform::TransposeFirstTwoAxes
-        } else {
-            MatrixOperandTransform::None
-        },
-    )?;
+    let a_work = prepare_matrix_operand(ctx, a, to_matrix_operand_transpose_type(m < n, false))?;
     let (m_work, n_work) = if m < n { (n, m) } else { (m, n) };
 
     let runtime = load_runtime(ctx)?;

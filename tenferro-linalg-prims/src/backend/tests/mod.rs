@@ -345,6 +345,30 @@ fn linalg_utils_matrix_stride_uses_leading_matrix_dims() {
 }
 
 #[test]
+fn linalg_utils_to_matrix_operand_transpose_type_maps_flags_to_dispatch() {
+    use crate::backend::linalg_utils::MatrixOperandTransposeType::{
+        ConjugateTranspose, None, Transpose,
+    };
+
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(false, false),
+        None
+    );
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(true, false),
+        Transpose
+    );
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(true, true),
+        ConjugateTranspose
+    );
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(false, true),
+        None
+    );
+}
+
+#[test]
 fn linalg_utils_clone_batched_column_major_repackages_permuted_batches() {
     let mut ctx = tenferro_prims::CpuContext::new(1);
     let base = tenferro_tensor::Tensor::from_slice(
@@ -388,7 +412,7 @@ fn linalg_utils_prepare_matrix_operand_resolves_lazy_conjugation() {
     let prepared = crate::backend::linalg_utils::prepare_matrix_operand(
         &mut ctx,
         &conjugated,
-        crate::backend::linalg_utils::MatrixOperandTransform::None,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::None,
     )
     .unwrap();
     let expected = tenferro_prims::CpuBackend::resolve_conj(&mut ctx, &conjugated);
@@ -415,7 +439,7 @@ fn linalg_utils_prepare_matrix_operand_transposes_first_two_axes_before_repackin
     let prepared = crate::backend::linalg_utils::prepare_matrix_operand(
         &mut ctx,
         &base,
-        crate::backend::linalg_utils::MatrixOperandTransform::TransposeFirstTwoAxes,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::Transpose,
     )
     .unwrap();
     let expected = base.permute(&[1, 0, 2]).unwrap();
@@ -423,6 +447,61 @@ fn linalg_utils_prepare_matrix_operand_transposes_first_two_axes_before_repackin
     assert_eq!(prepared.dims(), expected.dims());
     assert!(prepared.is_col_major_contiguous());
     assert_eq!(tensor_data(&prepared), tensor_data(&expected));
+}
+
+#[test]
+fn linalg_utils_prepare_matrix_operand_conjugate_transpose_handles_plain_and_lazily_conjugated_inputs(
+) {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, 2.0),
+            num_complex::Complex64::new(-3.0, 4.0),
+            num_complex::Complex64::new(5.0, -6.0),
+            num_complex::Complex64::new(-7.0, -8.0),
+        ],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let lazy_conjugated = base.conj();
+
+    let prepared_plain = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &base,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::ConjugateTranspose,
+    )
+    .unwrap();
+    let prepared_lazy = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &lazy_conjugated,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::ConjugateTranspose,
+    )
+    .unwrap();
+
+    let expected_plain = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, -2.0),
+            num_complex::Complex64::new(5.0, 6.0),
+            num_complex::Complex64::new(-3.0, -4.0),
+            num_complex::Complex64::new(-7.0, 8.0),
+        ],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let expected_lazy = base.permute(&[1, 0]).unwrap();
+
+    assert_eq!(prepared_plain.dims(), expected_plain.dims());
+    assert_eq!(
+        tensor_data_c64(&prepared_plain),
+        tensor_data_c64(&expected_plain)
+    );
+    assert_eq!(prepared_lazy.dims(), expected_lazy.dims());
+    assert_eq!(
+        tensor_data_c64(&prepared_lazy),
+        tensor_data_c64(&expected_lazy)
+    );
 }
 
 #[test]

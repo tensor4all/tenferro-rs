@@ -319,7 +319,11 @@ where
     Ok(output)
 }
 
-pub(crate) trait ScaleTensorByRealSameShape<C>: LinalgScalar {
+/// Internal bridge for scaling a tensor by a same-shape real tensor.
+///
+/// This keeps public linalg entrypoints generic across real and complex scalar
+/// families while routing to the appropriate backend family underneath.
+pub trait ScaleTensorByRealSameShape<C>: LinalgScalar {
     fn scale_tensor_by_real_same_shape(
         ctx: &mut C,
         lhs: &Tensor<Self>,

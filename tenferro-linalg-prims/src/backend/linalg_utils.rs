@@ -11,9 +11,23 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 use crate::LinalgScalar;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum MatrixOperandTransform {
+pub(crate) enum MatrixOperandTransposeType {
     None,
-    TransposeFirstTwoAxes,
+    Transpose,
+    ConjugateTranspose,
+}
+
+pub(crate) fn to_matrix_operand_transpose_type(
+    transpose: bool,
+    conjugate: bool,
+) -> MatrixOperandTransposeType {
+    if !transpose {
+        MatrixOperandTransposeType::None
+    } else if conjugate {
+        MatrixOperandTransposeType::ConjugateTranspose
+    } else {
+        MatrixOperandTransposeType::Transpose
+    }
 }
 
 fn transpose_first_two_axes<T>(tensor: &Tensor<T>) -> Result<Tensor<T>>
@@ -22,7 +36,7 @@ where
 {
     if tensor.ndim() < 2 {
         return Err(Error::InvalidArgument(format!(
-            "TransposeFirstTwoAxes expects at least 2D tensor, got {}D",
+            "matrix operand transpose expects at least 2D tensor, got {}D",
             tensor.ndim()
         )));
     }
@@ -34,15 +48,16 @@ where
 pub(crate) fn prepare_matrix_operand<T, C>(
     ctx: &mut C,
     src: &Tensor<T>,
-    transform: MatrixOperandTransform,
+    transform: MatrixOperandTransposeType,
 ) -> Result<Tensor<T>>
 where
     T: LinalgScalar + Conjugate,
     C: TensorSemiringContextFor<Standard<T>> + TensorResolveConjContextFor<T>,
 {
     let transformed = match transform {
-        MatrixOperandTransform::None => src.clone(),
-        MatrixOperandTransform::TransposeFirstTwoAxes => transpose_first_two_axes(src)?,
+        MatrixOperandTransposeType::None => src.clone(),
+        MatrixOperandTransposeType::Transpose => transpose_first_two_axes(src)?,
+        MatrixOperandTransposeType::ConjugateTranspose => transpose_first_two_axes(&src.conj())?,
     };
     let resolved = <C as TensorResolveConjContextFor<T>>::resolve_conj(ctx, &transformed);
     clone_batched_column_major(ctx, &resolved)
