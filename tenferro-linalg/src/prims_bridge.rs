@@ -1,9 +1,12 @@
+use num_complex::ComplexFloat;
+use num_traits::{One, Zero};
 use tenferro_algebra::Standard;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::{
-    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticUnaryOp, ScalarBinaryOp,
-    ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp, SemiringCoreDescriptor,
-    TensorAnalyticPrims, TensorScalarContextFor, TensorScalarPrims, TensorSemiringContextFor,
+    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticUnaryOp, ComplexRealPrimsDescriptor,
+    ComplexRealUnaryOp, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp,
+    SemiringCoreDescriptor, TensorAnalyticPrims, TensorComplexRealContextFor,
+    TensorComplexRealPrims, TensorScalarContextFor, TensorScalarPrims, TensorSemiringContextFor,
     TensorSemiringCore,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -241,6 +244,38 @@ where
     Ok(output)
 }
 
+pub(crate) fn complex_real_unary_same_shape<T, C>(
+    ctx: &mut C,
+    input: &Tensor<T>,
+    op: ComplexRealUnaryOp,
+) -> Result<Tensor<<T as LinalgScalar>::Real>>
+where
+    T: LinalgScalar + ComplexFloat<Real = <T as LinalgScalar>::Real>,
+    C: TensorComplexRealContextFor<T>,
+    C::ComplexRealBackend: TensorComplexRealPrims<T, Context = C, Real = <T as LinalgScalar>::Real>,
+{
+    let desc = ComplexRealPrimsDescriptor::PointwiseUnary { op };
+    let mut output = Tensor::zeros(
+        input.dims(),
+        input.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <C::ComplexRealBackend as TensorComplexRealPrims<T>>::plan(
+        ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )?;
+    <C::ComplexRealBackend as TensorComplexRealPrims<T>>::execute(
+        ctx,
+        &plan,
+        <T as LinalgScalar>::Real::one(),
+        &[input],
+        <T as LinalgScalar>::Real::zero(),
+        &mut output,
+    )?;
+    Ok(output)
+}
+
 pub(crate) fn analytic_unary_same_shape<T, C>(
     ctx: &mut C,
     input: &Tensor<T>,
@@ -356,6 +391,22 @@ where
     C: TensorScalarContextFor<Standard<T>>,
 {
     scalar_reduce_keep_axes(ctx, input, kept_axes, ScalarReductionOp::Sum)
+}
+
+pub(crate) fn complex_real_reduce_keep_axes<T, C>(
+    ctx: &mut C,
+    input: &Tensor<T>,
+    unary_op: ComplexRealUnaryOp,
+    kept_axes: &[usize],
+    reduction_op: ScalarReductionOp,
+) -> Result<Tensor<<T as LinalgScalar>::Real>>
+where
+    T: LinalgScalar + ComplexFloat<Real = <T as LinalgScalar>::Real>,
+    C: TensorComplexRealContextFor<T> + TensorScalarContextFor<Standard<<T as LinalgScalar>::Real>>,
+    C::ComplexRealBackend: TensorComplexRealPrims<T, Context = C, Real = <T as LinalgScalar>::Real>,
+{
+    let unary = complex_real_unary_same_shape(ctx, input, unary_op)?;
+    scalar_reduce_keep_axes(ctx, &unary, kept_axes, reduction_op)
 }
 
 #[cfg(test)]

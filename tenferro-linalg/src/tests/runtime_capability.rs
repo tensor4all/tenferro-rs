@@ -102,6 +102,39 @@ fn semiring_bridge_stays_context_driven_and_avoids_thread_local_cpu_state() {
 }
 
 #[test]
+fn complex_real_bridge_stays_context_driven_and_avoids_host_extraction() {
+    let prims_bridge = repo_file("src/prims_bridge.rs");
+    let complex_real_unary = file_section(
+        &prims_bridge,
+        "pub(crate) fn complex_real_unary_same_shape",
+        "pub(crate) fn analytic_unary_same_shape",
+    );
+    let complex_real_reduce = file_section(
+        &prims_bridge,
+        "pub(crate) fn complex_real_reduce_keep_axes",
+        "#[cfg(test)]",
+    );
+
+    for (name, section) in [
+        ("complex_real_unary_same_shape", complex_real_unary),
+        ("complex_real_reduce_keep_axes", complex_real_reduce),
+    ] {
+        assert!(
+            section.contains("TensorComplexRealContextFor"),
+            "{name} should route through the shared complex-real context bridge"
+        );
+        assert!(
+            !section.contains("extract_slice("),
+            "{name} should stay tensor-native and avoid extract_slice(...)"
+        );
+        assert!(
+            !section.contains("CpuContext::"),
+            "{name} should not allocate ad hoc CpuContext state"
+        );
+    }
+}
+
+#[test]
 fn public_and_ad_linalg_layers_do_not_fall_back_to_cpu_slice_helpers() {
     let layers = [
         "src/primal/mod.rs",

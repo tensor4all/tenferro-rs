@@ -1,8 +1,9 @@
-use tenferro_algebra::{Algebra, Semiring};
+use num_complex::ComplexFloat;
+use tenferro_algebra::{Algebra, Scalar, Semiring};
 
 use crate::{
-    CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext, TensorScalarPrims,
-    TensorSemiringCore,
+    CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
+    TensorComplexRealPrims, TensorScalarPrims, TensorSemiringCore,
 };
 
 /// Bridge trait that binds a semiring execution context to its backend.
@@ -56,6 +57,32 @@ pub trait TensorScalarContextFor<Alg: Algebra> {
     type ScalarBackend: TensorScalarPrims<Alg, Context = Self>;
 }
 
+/// Bridge trait that binds a complex-to-real execution context to its backend.
+///
+/// High-level crates use this trait to stay generic over runtime context types
+/// while dispatching cross-dtype complex-to-real families through the correct
+/// backend marker type.
+///
+/// # Examples
+///
+/// ```ignore
+/// use num_complex::Complex64;
+/// use tenferro_prims::{CpuContext, TensorComplexRealContextFor};
+///
+/// fn accepts_context<C>(_: &mut C)
+/// where
+///     C: TensorComplexRealContextFor<Complex64>,
+/// {
+/// }
+///
+/// let mut ctx = CpuContext::new(1);
+/// accepts_context(&mut ctx);
+/// ```
+pub trait TensorComplexRealContextFor<Input: ComplexFloat + Scalar> {
+    /// Backend associated with this context for the complex-to-real family.
+    type ComplexRealBackend: TensorComplexRealPrims<Input, Context = Self, Real = Input::Real>;
+}
+
 impl<Alg> TensorSemiringContextFor<Alg> for CpuContext
 where
     Alg: Semiring,
@@ -70,6 +97,15 @@ where
     CpuBackend: TensorScalarPrims<Alg, Context = CpuContext>,
 {
     type ScalarBackend = CpuBackend;
+}
+
+impl<Input> TensorComplexRealContextFor<Input> for CpuContext
+where
+    Input: ComplexFloat + Scalar,
+    Input::Real: Scalar,
+    CpuBackend: TensorComplexRealPrims<Input, Context = CpuContext, Real = Input::Real>,
+{
+    type ComplexRealBackend = CpuBackend;
 }
 
 impl<Alg> TensorSemiringContextFor<Alg> for CudaContext
@@ -88,6 +124,15 @@ where
     type ScalarBackend = CudaBackend;
 }
 
+impl<Input> TensorComplexRealContextFor<Input> for CudaContext
+where
+    Input: ComplexFloat + Scalar,
+    Input::Real: Scalar,
+    CudaBackend: TensorComplexRealPrims<Input, Context = CudaContext, Real = Input::Real>,
+{
+    type ComplexRealBackend = CudaBackend;
+}
+
 impl<Alg> TensorSemiringContextFor<Alg> for RocmContext
 where
     Alg: Semiring,
@@ -102,4 +147,13 @@ where
     RocmBackend: TensorScalarPrims<Alg, Context = RocmContext>,
 {
     type ScalarBackend = RocmBackend;
+}
+
+impl<Input> TensorComplexRealContextFor<Input> for RocmContext
+where
+    Input: ComplexFloat + Scalar,
+    Input::Real: Scalar,
+    RocmBackend: TensorComplexRealPrims<Input, Context = RocmContext, Real = Input::Real>,
+{
+    type ComplexRealBackend = RocmBackend;
 }
