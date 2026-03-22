@@ -23,7 +23,8 @@ impl<T: Scalar> Tensor<T> {
     /// This is a dense materialization operation that allocates a new buffer.
     /// It is implemented by inserting a size-1 axis with
     /// [`Tensor::unsqueeze`] and then delegating to [`Tensor::cat`], so it
-    /// supports the same CPU and same-device CUDA paths as concatenation.
+    /// preserves the common lazy-conjugation flag and supports the same CPU
+    /// and same-device CUDA paths as concatenation.
     ///
     /// # Arguments
     ///
@@ -36,6 +37,7 @@ impl<T: Scalar> Tensor<T> {
     /// - The input list is empty
     /// - Tensors have different shapes
     /// - Tensors have different memory spaces or devices
+    /// - Tensors do not all share the same conjugation flag
     /// - The dimension is out of range
     ///
     /// # Examples
@@ -117,7 +119,9 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// This is a dense materialization operation that allocates a new buffer.
     /// Main-memory tensors are always supported; with the `cuda` feature
-    /// enabled, same-device GPU tensors are also supported.
+    /// enabled, same-device GPU tensors are also supported. The output
+    /// preserves a uniform lazy-conjugation flag, and mixed conjugation flags
+    /// are rejected.
     ///
     /// # Arguments
     ///
@@ -132,6 +136,7 @@ impl<T: Scalar> Tensor<T> {
     /// - Tensors have different ranks
     /// - Tensors have mismatched sizes on non-concatenated dimensions
     /// - Tensors have different memory spaces
+    /// - Tensors do not all share the same conjugation flag
     /// - The dimension is out of range
     /// - Non-main-memory tensors are provided without `cuda` support
     ///
@@ -217,6 +222,7 @@ impl<T: Scalar> Tensor<T> {
             })?;
         }
 
+        let conjugated = uniform_conjugation_flag(tensors)?;
         let mut result_dims: Vec<usize> = first.dims.to_vec();
         result_dims[dim] = total_cat_dim;
 
@@ -224,7 +230,14 @@ impl<T: Scalar> Tensor<T> {
 
         #[cfg(feature = "cuda")]
         if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
-            return cat_gpu(tensors, dim, memory_space, &result_dims, &result_strides);
+            return cat_gpu(
+                tensors,
+                dim,
+                memory_space,
+                &result_dims,
+                &result_strides,
+                conjugated,
+            );
         }
 
         if memory_space != LogicalMemorySpace::MainMemory {
@@ -284,12 +297,27 @@ impl<T: Scalar> Tensor<T> {
             Arc::from(result_strides),
             0,
             memory_space,
-            first.preferred_compute_device,
             None,
-            false,
+            None,
+            conjugated,
             None,
         ))
     }
+}
+
+fn uniform_conjugation_flag<T: Scalar>(tensors: &[&Tensor<T>]) -> Result<bool> {
+    let conjugated = tensors[0].is_conjugated();
+    for (i, tensor) in tensors.iter().enumerate().skip(1) {
+        if tensor.is_conjugated() != conjugated {
+            return Err(Error::InvalidArgument(format!(
+                "combine requires all tensors to share the same conjugation flag: tensor {i} has {}, expected {}",
+                tensor.is_conjugated(),
+                conjugated
+            )));
+        }
+    }
+
+    Ok(conjugated)
 }
 
 #[cfg(feature = "cuda")]
@@ -324,6 +352,7 @@ fn cat_gpu<T: Scalar>(
     memory_space: LogicalMemorySpace,
     result_dims: &[usize],
     result_strides: &[isize],
+    conjugated: bool,
 ) -> Result<Tensor<T>> {
     let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
         return Err(Error::DeviceError(format!(
@@ -381,9 +410,9 @@ fn cat_gpu<T: Scalar>(
         Arc::from(result_strides.to_vec()),
         0,
         memory_space,
-        tensors[0].preferred_compute_device,
         None,
-        false,
+        None,
+        conjugated,
         None,
     ))
 }

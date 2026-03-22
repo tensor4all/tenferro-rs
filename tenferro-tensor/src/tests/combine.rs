@@ -1,9 +1,14 @@
 use super::*;
-use tenferro_device::Error;
+use num_complex::Complex64;
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
+use tenferro_device::{ComputeDevice, Error};
 
 fn col_tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
+    Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn complex_col_tensor(data: &[Complex64], dims: &[usize]) -> Tensor<Complex64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
@@ -115,6 +120,107 @@ fn cat_validates_rank_shape_and_dimension_range() {
         matches!(dim_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
         "expected out-of-range error, got {dim_err:?}"
     );
+}
+
+#[test]
+fn cat_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
+    let mut a = complex_col_tensor(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+    a.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 7 }));
+    let b = complex_col_tensor(
+        &[
+            Complex64::new(5.0, -1.0),
+            Complex64::new(6.0, -2.0),
+            Complex64::new(7.0, -3.0),
+            Complex64::new(8.0, -4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+
+    let got = Tensor::cat(&[&a, &b], 1).unwrap();
+    assert!(got.is_conjugated());
+    assert_eq!(got.preferred_compute_device(), None);
+    assert_eq!(
+        got.buffer().as_slice().unwrap(),
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+            Complex64::new(5.0, -1.0),
+            Complex64::new(6.0, -2.0),
+            Complex64::new(7.0, -3.0),
+            Complex64::new(8.0, -4.0),
+        ]
+    );
+}
+
+#[test]
+fn cat_rejects_mixed_conjugation_flags() {
+    let a = complex_col_tensor(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+    let b = complex_col_tensor(
+        &[
+            Complex64::new(5.0, -1.0),
+            Complex64::new(6.0, -2.0),
+            Complex64::new(7.0, -3.0),
+            Complex64::new(8.0, -4.0),
+        ],
+        &[2, 2],
+    );
+
+    let err = Tensor::cat(&[&a, &b], 1).unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(ref msg) if msg.contains("conjugation")),
+        "expected mixed-conjugation rejection, got {err:?}"
+    );
+}
+
+#[test]
+fn stack_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
+    let mut a = complex_col_tensor(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+    a.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 7 }));
+    let b = complex_col_tensor(
+        &[
+            Complex64::new(5.0, -1.0),
+            Complex64::new(6.0, -2.0),
+            Complex64::new(7.0, -3.0),
+            Complex64::new(8.0, -4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+
+    let got = Tensor::stack(&[&a, &b], 0).unwrap();
+    assert!(got.is_conjugated());
+    assert_eq!(got.preferred_compute_device(), None);
+    assert_eq!(got.dims(), &[2, 2, 2]);
 }
 
 #[cfg(feature = "cuda")]
