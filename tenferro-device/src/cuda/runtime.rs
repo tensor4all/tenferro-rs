@@ -4492,6 +4492,107 @@ impl CudaRuntime {
         unsafe { self.copy_strided_raw(src.ptr.cast::<T>(), dst.ptr.cast::<T>(), spec) }
     }
 
+    /// Packs two source views into a freshly allocated contiguous destination buffer.
+    ///
+    /// The source views must live on the same device, have the same rank, and match on every
+    /// dimension except `axis`. The destination is allocated on the same device and is laid out
+    /// contiguously in the requested order.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let left = runtime.alloc::<f32>(2).unwrap();
+    /// let right = runtime.alloc::<f32>(4).unwrap();
+    /// let left_spec = StridedCopySpec::to_contiguous(&[1, 2], &[1, 1], 0, ContiguousOrder::ColumnMajor).unwrap();
+    /// let right_spec = StridedCopySpec::to_contiguous(&[2, 2], &[1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
+    /// let packed = runtime.pack_concat_sources(&left, &left_spec, &right, &right_spec, 0, ContiguousOrder::ColumnMajor).unwrap();
+    /// assert_eq!(packed.len(), 6);
+    /// ```
+    pub fn pack_concat_sources<T>(
+        &self,
+        left: &CudaBuffer<T>,
+        left_spec: &StridedCopySpec,
+        right: &CudaBuffer<T>,
+        right_spec: &StridedCopySpec,
+        axis: usize,
+        order: ContiguousOrder,
+    ) -> Result<CudaBuffer<T>> {
+        self.ensure_same_device(left.device_id())?;
+        self.ensure_same_device(right.device_id())?;
+        if left_spec.dims.len() != left_spec.src_strides.len()
+            || right_spec.dims.len() != right_spec.src_strides.len()
+        {
+            return Err(Error::InvalidArgument(format!(
+                "concat pack rank mismatch: left dims={} left src_strides={} right dims={} right src_strides={}",
+                left_spec.dims.len(),
+                left_spec.src_strides.len(),
+                right_spec.dims.len(),
+                right_spec.src_strides.len()
+            )));
+        }
+        if left_spec.dims.len() != right_spec.dims.len() {
+            return Err(Error::InvalidArgument(format!(
+                "concat pack rank mismatch: left={} right={}",
+                left_spec.dims.len(),
+                right_spec.dims.len()
+            )));
+        }
+        if axis >= left_spec.dims.len() {
+            return Err(Error::InvalidArgument(format!(
+                "concat axis {axis} out of range for rank {}",
+                left_spec.dims.len()
+            )));
+        }
+        for dim_axis in 0..left_spec.dims.len() {
+            if dim_axis != axis && left_spec.dims[dim_axis] != right_spec.dims[dim_axis] {
+                return Err(Error::InvalidArgument(format!(
+                    "concat dimension mismatch at axis {dim_axis}: left={} right={}",
+                    left_spec.dims[dim_axis], right_spec.dims[dim_axis]
+                )));
+            }
+        }
+
+        let mut dst_dims = left_spec.dims.clone();
+        dst_dims[axis] = dst_dims[axis]
+            .checked_add(right_spec.dims[axis])
+            .ok_or_else(|| Error::InvalidArgument("concat dimension overflow".into()))?;
+        let dst_len = checked_numel(&dst_dims)?;
+        let dst = self.alloc::<T>(dst_len)?;
+        let dst_strides = contiguous_strides(&dst_dims, order)?;
+        let axis_stride = dst_strides[axis];
+        let right_axis_len = isize::try_from(left_spec.dims[axis]).map_err(|_| {
+            Error::InvalidArgument(format!(
+                "concat axis length {} exceeds isize range",
+                left_spec.dims[axis]
+            ))
+        })?;
+        let right_dst_offset = right_axis_len
+            .checked_mul(axis_stride)
+            .ok_or_else(|| Error::InvalidArgument("concat destination offset overflow".into()))?;
+
+        let left_dst_spec = StridedCopySpec {
+            dims: left_spec.dims.clone(),
+            src_strides: left_spec.src_strides.clone(),
+            src_offset: left_spec.src_offset,
+            dst_strides: dst_strides.clone(),
+            dst_offset: 0,
+        };
+        let right_dst_spec = StridedCopySpec {
+            dims: right_spec.dims.clone(),
+            src_strides: right_spec.src_strides.clone(),
+            src_offset: right_spec.src_offset,
+            dst_strides,
+            dst_offset: right_dst_offset,
+        };
+
+        self.copy_strided(left, &dst, &left_dst_spec)?;
+        self.copy_strided(right, &dst, &right_dst_spec)?;
+        Ok(dst)
+    }
+
     /// Launches the keep-count-driven trailing zero-fill kernel from one device buffer to another.
     ///
     /// # Examples

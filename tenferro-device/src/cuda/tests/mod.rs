@@ -769,6 +769,46 @@ fn cuda_runtime_complex64_imag_matches_host_reference() {
 }
 
 #[test]
+fn cuda_runtime_can_pack_concat_sources() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec};
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let left_host = vec![1.0_f32, 2.0];
+    let right_host = vec![3.0_f32, 5.0, 4.0, 6.0];
+    let left = runtime.alloc::<f32>(left_host.len()).unwrap();
+    let right = runtime.alloc::<f32>(right_host.len()).unwrap();
+    runtime.copy_htod(&left_host, &left).unwrap();
+    runtime.copy_htod(&right_host, &right).unwrap();
+
+    let left_dims = [1usize, 2];
+    let right_dims = [2usize, 2];
+    let left_spec =
+        StridedCopySpec::to_contiguous(&left_dims, &[1isize, 1], 0, ContiguousOrder::ColumnMajor)
+            .unwrap();
+    let right_spec =
+        StridedCopySpec::to_contiguous(&right_dims, &[1isize, 2], 0, ContiguousOrder::ColumnMajor)
+            .unwrap();
+
+    let packed = runtime
+        .pack_concat_sources(
+            &left,
+            &left_spec,
+            &right,
+            &right_spec,
+            0,
+            ContiguousOrder::ColumnMajor,
+        )
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&packed).unwrap();
+    assert_eq!(got, vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+}
+
+#[test]
 fn cuda_runtime_real_where_matches_host_reference() {
     if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
         return;
