@@ -77,7 +77,7 @@ src-intel-mkl-static-parallel = [
 tenferro-device = { path = "../tenferro-device" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-prims = { path = "../tenferro-prims" }
-tenferro-linalg-prims = { path = "../tenferro-linalg-prims" }
+tenferro-linalg-prims = { path = "../tenferro-linalg-prims", default-features = false }
 tenferro-tensor = { path = "../tenferro-tensor" }
 chainrules-core.workspace = true
 faer = { workspace = true, optional = true }
