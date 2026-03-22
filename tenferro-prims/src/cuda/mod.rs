@@ -45,6 +45,7 @@ mod analytic;
 mod complex_real;
 mod execution;
 mod planning;
+mod runtime;
 mod scalar;
 mod scalar_type;
 mod wrappers;
@@ -52,9 +53,9 @@ mod wrappers;
 pub use analytic::CudaAnalyticPlan;
 pub use complex_real::CudaComplexRealPlan;
 use execution::{execute_plan, has_fast_path, plan_core_descriptor, plan_fast_descriptor};
-use planning::check_status;
+use planning::{check_status, NativeCutensorPlan};
 pub use scalar::CudaScalarPlan;
-use wrappers::{HandleWrapper, PlanWrapper};
+use wrappers::HandleWrapper;
 
 const RESOLVE_CONJ_KERNEL_NAME_C32: &str = "resolve_conj_complex32";
 const RESOLVE_CONJ_KERNEL_NAME_C64: &str = "resolve_conj_complex64";
@@ -116,7 +117,7 @@ fn resolve_conj_ptx() -> Result<Ptx> {
 /// ```
 pub struct CudaContext {
     /// cuTENSOR library handle (RAII — Drop calls cutensorDestroy).
-    pub(super) handle: HandleWrapper,
+    pub(in crate::cuda) handle: HandleWrapper,
     /// CUDA device ordinal used for runtime API calls.
     pub(super) device_id: usize,
     /// cuTENSOR function pointer vtable loaded via libloading.
@@ -194,7 +195,7 @@ enum CudaPlanDescriptor {
 
 #[derive(Clone, Debug)]
 enum CudaPlanStorage {
-    Compiled(PlanWrapper),
+    Compiled(NativeCutensorPlan),
     DeferredMakeContiguous,
 }
 

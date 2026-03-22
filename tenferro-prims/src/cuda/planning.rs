@@ -8,9 +8,20 @@ use crate::cuda_ffi::*;
 use super::wrappers::{OpDescWrapper, PlanPrefWrapper, PlanWrapper, TensorDescWrapper};
 use super::CudaContext;
 
+#[derive(Clone, Debug)]
 pub(super) struct NativeCutensorPlan {
     pub(super) plan: PlanWrapper,
     pub(super) workspace_size: u64,
+}
+
+pub(super) fn default_col_major_strides(shape: &[usize]) -> Vec<isize> {
+    let mut strides = Vec::with_capacity(shape.len());
+    let mut stride = 1isize;
+    for &dim in shape {
+        strides.push(stride);
+        stride = stride.saturating_mul(dim as isize);
+    }
+    strides
 }
 
 /// Check a cuTENSOR status code, converting non-success to Error.
