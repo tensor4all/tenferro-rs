@@ -27,6 +27,8 @@
     "tenferro/src/ops/scalar/ad/reduction.rs",
     "tenferro/src/runtime/mod.rs",
     "tenferro/src/structured/meta/types.rs",
+    "tenferro-linalg/src/backend/cpu_tensor_impl.rs",
+    "tenferro-linalg-prims/src/backend/faer_backend/../../../../tenferro-linalg/src/backend/faer_backend/complex.rs",
     "extension/tenferro-mdarray/src/lib.rs",
     "extension/tenferro-tropical-capi/src/lib.rs"
   ],
