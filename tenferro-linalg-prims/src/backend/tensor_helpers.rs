@@ -3,11 +3,12 @@
 use tenferro_algebra::Conjugate;
 use tenferro_device::{Error, Result};
 use tenferro_prims::TensorResolveConjContextFor;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor};
 
 use crate::LinalgScalar;
 
-pub(crate) struct SolveRhsLayout {
+#[doc(hidden)]
+pub struct SolveRhsLayout {
     pub nrhs: usize,
     pub output_dims: Vec<usize>,
     pub output_batch_dims: Vec<usize>,
@@ -16,7 +17,8 @@ pub(crate) struct SolveRhsLayout {
 }
 
 #[allow(dead_code)]
-pub(crate) struct BroadcastBatchIndexer {
+#[doc(hidden)]
+pub struct BroadcastBatchIndexer {
     output_batch_dims: Vec<usize>,
     normalized_source_batch_dims: Vec<usize>,
     source_strides: Vec<usize>,
@@ -24,7 +26,7 @@ pub(crate) struct BroadcastBatchIndexer {
 }
 
 impl BroadcastBatchIndexer {
-    pub(crate) fn new(
+    pub fn new(
         source_batch_dims: &[usize],
         output_batch_dims: &[usize],
         op_name: &str,
@@ -64,11 +66,11 @@ impl BroadcastBatchIndexer {
         })
     }
 
-    pub(crate) fn output_batch_dims(&self) -> &[usize] {
+    pub fn output_batch_dims(&self) -> &[usize] {
         &self.output_batch_dims
     }
 
-    pub(crate) fn is_identity(&self) -> bool {
+    pub fn is_identity(&self) -> bool {
         self.identity
     }
 
@@ -103,7 +105,8 @@ fn col_major_batch_strides(dims: &[usize]) -> Vec<usize> {
     strides
 }
 
-pub(crate) fn broadcast_batch_dims(
+#[doc(hidden)]
+pub fn broadcast_batch_dims(
     lhs_batch_dims: &[usize],
     rhs_batch_dims: &[usize],
     op_name: &str,
@@ -139,7 +142,8 @@ pub(crate) fn broadcast_batch_dims(
     Ok(output_batch_dims)
 }
 
-pub(crate) fn materialize_broadcasted_batches<T: LinalgScalar>(
+#[doc(hidden)]
+pub fn materialize_broadcasted_batches<T: LinalgScalar>(
     src: &Tensor<T>,
     structural_rank: usize,
     batch_indexer: &BroadcastBatchIndexer,
@@ -216,9 +220,8 @@ fn materialize_broadcasted_batches_impl<T: LinalgScalar>(
     Ok(broadcasted.contiguous(MemoryOrder::ColumnMajor))
 }
 
-pub(crate) fn validate_matrix_shape<T: LinalgScalar>(
-    a: &Tensor<T>,
-) -> Result<(usize, usize, &[usize])> {
+#[doc(hidden)]
+pub fn validate_matrix_shape<T: LinalgScalar>(a: &Tensor<T>) -> Result<(usize, usize, &[usize])> {
     let dims = a.dims();
     if dims.len() < 2 {
         return Err(Error::InvalidArgument(format!(
@@ -232,7 +235,8 @@ pub(crate) fn validate_matrix_shape<T: LinalgScalar>(
     Ok((m, n, batch_dims))
 }
 
-pub(crate) fn validate_square<T: LinalgScalar>(a: &Tensor<T>) -> Result<(usize, &[usize])> {
+#[doc(hidden)]
+pub fn validate_square<T: LinalgScalar>(a: &Tensor<T>) -> Result<(usize, &[usize])> {
     let (m, n, batch_dims) = validate_matrix_shape(a)?;
     if m != n {
         return Err(Error::InvalidArgument(format!(
@@ -243,11 +247,13 @@ pub(crate) fn validate_square<T: LinalgScalar>(a: &Tensor<T>) -> Result<(usize, 
     Ok((n, batch_dims))
 }
 
-pub(crate) fn ensure_col_major<T: LinalgScalar>(a: &Tensor<T>) -> Tensor<T> {
+#[doc(hidden)]
+pub fn ensure_col_major<T: LinalgScalar>(a: &Tensor<T>) -> Tensor<T> {
     a.contiguous(MemoryOrder::ColumnMajor)
 }
 
-pub(crate) fn batch_count(batch_dims: &[usize]) -> usize {
+#[doc(hidden)]
+pub fn batch_count(batch_dims: &[usize]) -> usize {
     if batch_dims.is_empty() {
         1
     } else {
@@ -255,13 +261,15 @@ pub(crate) fn batch_count(batch_dims: &[usize]) -> usize {
     }
 }
 
-pub(crate) fn extract_contiguous_slice<T: LinalgScalar>(a: &Tensor<T>) -> Result<&[T]> {
+#[doc(hidden)]
+pub fn extract_contiguous_slice<T: LinalgScalar>(a: &Tensor<T>) -> Result<&[T]> {
     a.buffer()
         .as_slice()
         .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))
 }
 
-pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
+#[doc(hidden)]
+pub fn validate_solve_rhs_shape<T: LinalgScalar>(
     b: &Tensor<T>,
     n: usize,
     batch_dims: &[usize],
@@ -326,4 +334,17 @@ pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
         "{op_name} expects b shape (n, *) or (n, k, *), got {:?}",
         dims
     )))
+}
+#[doc(hidden)]
+pub fn zero_trailing_by_counts<T, R>(
+    input: &Tensor<T>,
+    keep_counts: &Tensor<R>,
+    axis: usize,
+    structural_rank: usize,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    R: KeepCountScalar,
+{
+    input.zero_trailing_by_counts(keep_counts, axis, structural_rank)
 }

@@ -37,6 +37,13 @@ pub use cuda::{CudaDataType, CudaLinalgScalar, CudaTensorLinalgBackend};
 pub use faer_backend::FaerBackend;
 pub use hip::HipTensorLinalgBackend;
 
+#[doc(hidden)]
+pub use tensor_helpers::{
+    batch_count, broadcast_batch_dims, ensure_col_major, extract_contiguous_slice,
+    materialize_broadcasted_batches, validate_matrix_shape, validate_solve_rhs_shape,
+    validate_square, zero_trailing_by_counts, BroadcastBatchIndexer, SolveRhsLayout,
+};
+
 /// Slice-level backend interface for matrix linear algebra operations.
 #[allow(dead_code)]
 pub(crate) trait LinalgBackend<T: Copy + 'static> {
@@ -105,7 +112,9 @@ pub(crate) trait LinalgBackend<T: Copy + 'static> {
     ) -> Result<()>;
 }
 
-pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
+/// Compute column-major strides for the provided dimensions.
+#[doc(hidden)]
+pub fn col_major_strides(dims: &[usize]) -> Vec<isize> {
     let mut strides = vec![0isize; dims.len()];
     if dims.is_empty() {
         return strides;
