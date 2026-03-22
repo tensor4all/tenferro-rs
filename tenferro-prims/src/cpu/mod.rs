@@ -7,6 +7,7 @@ mod analytic;
 mod batched_gemm;
 mod common;
 mod complex_real;
+mod complex_scale;
 mod context;
 mod contract;
 mod execution;
@@ -22,6 +23,7 @@ mod scratch;
 
 pub use analytic::CpuAnalyticPlan;
 pub use complex_real::CpuComplexRealPlan;
+pub use complex_scale::CpuComplexScalePlan;
 pub use context::{CpuBackend, CpuContext};
 pub use plan::CpuPlan;
 pub use scalar::CpuScalarPlan;

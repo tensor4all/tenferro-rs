@@ -10,8 +10,8 @@ use tenferro_tensor::Tensor;
 
 use super::*;
 use crate::{
-    CpuBackend, CpuContext, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp,
-    ScalarUnaryOp, TensorScalarPrims,
+    ComplexScalePrimsDescriptor, CpuBackend, CpuContext, ScalarBinaryOp, ScalarPrimsDescriptor,
+    ScalarReductionOp, ScalarUnaryOp, TensorComplexScalePrims, TensorScalarPrims,
 };
 
 #[test]
@@ -81,12 +81,90 @@ fn tensor_f32(data: &[f32], dims: &[usize]) -> Tensor<f32> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn tensor_c64(data: &[Complex64], dims: &[usize]) -> Tensor<Complex64> {
+    Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
+}
+
 fn load_cuda_backend() -> Option<(CudaBackend, CudaContext)> {
     let path = available_cutensor_library_path()?;
     if !cuda_device_zero_is_available() {
         return None;
     }
     Some(CudaBackend::load(path).unwrap())
+}
+
+#[test]
+fn cuda_complex_scale_phase1_advertises_pointwise_mul_only_when_runtime_is_wired() {
+    let desc = ComplexScalePrimsDescriptor::PointwiseMul;
+    let supported =
+        <CudaBackend as TensorComplexScalePrims<Complex64>>::has_complex_scale_support(desc);
+
+    if cfg!(feature = "cuda") {
+        assert!(supported);
+    } else {
+        assert!(!supported);
+    }
+}
+
+#[test]
+fn cuda_complex_scale_phase1_pointwise_mul_matches_cpu_when_runtime_is_available() {
+    let Some((_backend, mut cuda_ctx)) = load_cuda_backend() else {
+        return;
+    };
+
+    let desc = ComplexScalePrimsDescriptor::PointwiseMul;
+    let lhs = tensor_c64(
+        &[
+            Complex64::new(1.0, -2.0),
+            Complex64::new(-3.0, 4.0),
+            Complex64::new(5.0, 0.5),
+            Complex64::new(-7.0, -1.5),
+        ],
+        &[2, 2],
+    );
+    let rhs = tensor_f64(&[2.0_f64, -0.5, 3.0, 4.0], &[2, 2]);
+    let plan = <CudaBackend as TensorComplexScalePrims<Complex64>>::plan(
+        &mut cuda_ctx,
+        &desc,
+        &[lhs.dims(), rhs.dims(), lhs.dims()],
+    )
+    .unwrap();
+    let lhs_gpu = lhs
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let rhs_gpu = rhs
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut output_gpu = Tensor::<Complex64>::zeros(
+        lhs.dims(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 },
+        MemoryOrder::ColumnMajor,
+    );
+    <CudaBackend as TensorComplexScalePrims<Complex64>>::execute(
+        &mut cuda_ctx,
+        &plan,
+        Complex64::new(1.0, 0.0),
+        &lhs_gpu,
+        &rhs_gpu,
+        Complex64::new(0.0, 0.0),
+        &mut output_gpu,
+    )
+    .unwrap();
+
+    let output = output_gpu
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+    assert_eq!(
+        output.buffer().as_slice(),
+        Some(
+            &[
+                Complex64::new(2.0, -4.0),
+                Complex64::new(1.5, -2.0),
+                Complex64::new(15.0, 1.5),
+                Complex64::new(-28.0, -6.0),
+            ][..]
+        )
+    );
 }
 
 #[test]

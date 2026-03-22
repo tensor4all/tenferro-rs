@@ -43,6 +43,7 @@ use crate::{
 
 mod analytic;
 mod complex_real;
+mod complex_scale;
 mod execution;
 mod planning;
 mod runtime;
@@ -52,6 +53,7 @@ mod wrappers;
 
 pub use analytic::CudaAnalyticPlan;
 pub use complex_real::CudaComplexRealPlan;
+pub use complex_scale::CudaComplexScalePlan;
 use execution::{execute_plan, has_fast_path, plan_core_descriptor, plan_fast_descriptor};
 use planning::{check_status, NativeCutensorPlan};
 pub use scalar::CudaScalarPlan;

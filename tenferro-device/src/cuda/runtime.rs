@@ -776,6 +776,58 @@ extern "C" __global__ void reduce_real_f64(
 
 const COMPLEX_REAL_UNARY_KERNEL_NAME_F32: &str = "pointwise_unary_complex32_to_real_f32";
 const COMPLEX_REAL_UNARY_KERNEL_NAME_F64: &str = "pointwise_unary_complex64_to_real_f64";
+const COMPLEX_SCALE_KERNEL_NAME_F32: &str = "pointwise_mul_complex32_real_f32";
+const COMPLEX_SCALE_KERNEL_NAME_F64: &str = "pointwise_mul_complex64_real_f64";
+
+#[doc(hidden)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct KernelComplex32 {
+    re: f32,
+    im: f32,
+}
+
+#[doc(hidden)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct KernelComplex64 {
+    re: f64,
+    im: f64,
+}
+
+unsafe impl cudarc::driver::DeviceRepr for KernelComplex32 {}
+unsafe impl cudarc::driver::DeviceRepr for KernelComplex64 {}
+
+impl From<Complex32> for KernelComplex32 {
+    fn from(value: Complex32) -> Self {
+        Self {
+            re: value.re,
+            im: value.im,
+        }
+    }
+}
+
+impl From<Complex64> for KernelComplex64 {
+    fn from(value: Complex64) -> Self {
+        Self {
+            re: value.re,
+            im: value.im,
+        }
+    }
+}
+
+trait ComplexScaleSrc {
+    type Real;
+}
+
+impl ComplexScaleSrc for Complex32 {
+    type Real = f32;
+}
+
+impl ComplexScaleSrc for Complex64 {
+    type Real = f64;
+}
+
 const COMPLEX_REAL_CUDA_SRC: &str = r#"
 typedef struct { float re; float im; } complex32_t;
 typedef struct { double re; double im; } complex64_t;
@@ -864,6 +916,208 @@ extern "C" __global__ void pointwise_unary_complex64_to_real_f64(
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
+
+__device__ inline complex32_t complex32_add(complex32_t x, complex32_t y) {
+    complex32_t out;
+    out.re = x.re + y.re;
+    out.im = x.im + y.im;
+    return out;
+}
+
+__device__ inline complex64_t complex64_add(complex64_t x, complex64_t y) {
+    complex64_t out;
+    out.re = x.re + y.re;
+    out.im = x.im + y.im;
+    return out;
+}
+
+__device__ inline complex32_t complex32_mul(complex32_t x, complex32_t y) {
+    complex32_t out;
+    out.re = x.re * y.re - x.im * y.im;
+    out.im = x.re * y.im + x.im * y.re;
+    return out;
+}
+
+__device__ inline complex64_t complex64_mul(complex64_t x, complex64_t y) {
+    complex64_t out;
+    out.re = x.re * y.re - x.im * y.im;
+    out.im = x.re * y.im + x.im * y.re;
+    return out;
+}
+
+extern "C" __global__ void pointwise_scale_complex32_real_f32(
+    const complex32_t* lhs,
+    const float* rhs,
+    complex32_t* dst,
+    const long long* dims,
+    const long long* lhs_strides,
+    long long lhs_offset,
+    const long long* rhs_strides,
+    long long rhs_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    complex32_t alpha,
+    complex32_t beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long lhs_idx = linear_offset(idx, dims, lhs_strides, lhs_offset, ndim);
+    long long rhs_idx = linear_offset(idx, dims, rhs_strides, rhs_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    complex32_t scaled;
+    scaled.re = lhs[lhs_idx].re * rhs[rhs_idx];
+    scaled.im = lhs[lhs_idx].im * rhs[rhs_idx];
+    dst[dst_idx] = complex32_add(complex32_mul(alpha, scaled), complex32_mul(beta, dst[dst_idx]));
+}
+
+extern "C" __global__ void pointwise_scale_complex64_real_f64(
+    const complex64_t* lhs,
+    const double* rhs,
+    complex64_t* dst,
+    const long long* dims,
+    const long long* lhs_strides,
+    long long lhs_offset,
+    const long long* rhs_strides,
+    long long rhs_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    complex64_t alpha,
+    complex64_t beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long lhs_idx = linear_offset(idx, dims, lhs_strides, lhs_offset, ndim);
+    long long rhs_idx = linear_offset(idx, dims, rhs_strides, rhs_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    complex64_t scaled;
+    scaled.re = lhs[lhs_idx].re * rhs[rhs_idx];
+    scaled.im = lhs[lhs_idx].im * rhs[rhs_idx];
+    dst[dst_idx] = complex64_add(complex64_mul(alpha, scaled), complex64_mul(beta, dst[dst_idx]));
+}
+"#;
+
+const COMPLEX_SCALE_CUDA_SRC: &str = r#"
+typedef struct { float re; float im; } complex32_t;
+typedef struct { double re; double im; } complex64_t;
+
+__device__ long long linear_offset(
+    unsigned long long linear_idx,
+    const long long* dims,
+    const long long* strides,
+    long long base_offset,
+    int ndim
+) {
+    long long offset = base_offset;
+    unsigned long long remainder = linear_idx;
+    for (int axis = 0; axis < ndim; ++axis) {
+        long long coord = (long long)(remainder % (unsigned long long)dims[axis]);
+        remainder /= (unsigned long long)dims[axis];
+        offset += coord * strides[axis];
+    }
+    return offset;
+}
+
+__device__ complex32_t complex32_mul(complex32_t lhs, complex32_t rhs) {
+    complex32_t out;
+    out.re = lhs.re * rhs.re - lhs.im * rhs.im;
+    out.im = lhs.re * rhs.im + lhs.im * rhs.re;
+    return out;
+}
+
+__device__ complex32_t complex32_add(complex32_t lhs, complex32_t rhs) {
+    complex32_t out;
+    out.re = lhs.re + rhs.re;
+    out.im = lhs.im + rhs.im;
+    return out;
+}
+
+__device__ complex64_t complex64_mul(complex64_t lhs, complex64_t rhs) {
+    complex64_t out;
+    out.re = lhs.re * rhs.re - lhs.im * rhs.im;
+    out.im = lhs.re * rhs.im + lhs.im * rhs.re;
+    return out;
+}
+
+__device__ complex64_t complex64_add(complex64_t lhs, complex64_t rhs) {
+    complex64_t out;
+    out.re = lhs.re + rhs.re;
+    out.im = lhs.im + rhs.im;
+    return out;
+}
+
+extern "C" __global__ void pointwise_mul_complex32_real_f32(
+    const complex32_t* lhs,
+    const float* rhs,
+    complex32_t* dst,
+    const long long* dims,
+    const long long* lhs_strides,
+    long long lhs_offset,
+    const long long* rhs_strides,
+    long long rhs_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    complex32_t alpha,
+    complex32_t beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long lhs_idx = linear_offset(idx, dims, lhs_strides, lhs_offset, ndim);
+    long long rhs_idx = linear_offset(idx, dims, rhs_strides, rhs_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    complex32_t lhs_value = lhs[lhs_idx];
+    float rhs_value = rhs[rhs_idx];
+    complex32_t scaled = {lhs_value.re * rhs_value, lhs_value.im * rhs_value};
+    dst[dst_idx] = complex32_add(complex32_mul(alpha, scaled), complex32_mul(beta, dst[dst_idx]));
+}
+
+extern "C" __global__ void pointwise_mul_complex64_real_f64(
+    const complex64_t* lhs,
+    const double* rhs,
+    complex64_t* dst,
+    const long long* dims,
+    const long long* lhs_strides,
+    long long lhs_offset,
+    const long long* rhs_strides,
+    long long rhs_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    complex64_t alpha,
+    complex64_t beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long lhs_idx = linear_offset(idx, dims, lhs_strides, lhs_offset, ndim);
+    long long rhs_idx = linear_offset(idx, dims, rhs_strides, rhs_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    complex64_t lhs_value = lhs[lhs_idx];
+    double rhs_value = rhs[rhs_idx];
+    complex64_t scaled = {lhs_value.re * rhs_value, lhs_value.im * rhs_value};
+    dst[dst_idx] = complex64_add(complex64_mul(alpha, scaled), complex64_mul(beta, dst[dst_idx]));
+}
 "#;
 
 fn cuda_error(operation: &str, err: impl std::fmt::Debug) -> Error {
@@ -900,6 +1154,16 @@ fn complex_real_ptx() -> Result<Ptx> {
     PTX.get_or_init(|| {
         compile_ptx(COMPLEX_REAL_CUDA_SRC)
             .map_err(|err| format!("NVRTC compile failed for complex-real kernel: {err:?}"))
+    })
+    .clone()
+    .map_err(Error::DeviceError)
+}
+
+fn complex_scale_ptx() -> Result<Ptx> {
+    static PTX: OnceLock<std::result::Result<Ptx, String>> = OnceLock::new();
+    PTX.get_or_init(|| {
+        compile_ptx(COMPLEX_SCALE_CUDA_SRC)
+            .map_err(|err| format!("NVRTC compile failed for complex-scale kernel: {err:?}"))
     })
     .clone()
     .map_err(Error::DeviceError)
@@ -1100,6 +1364,21 @@ fn load_complex_real_kernel(
     let ctx = runtime.context();
     let module = ctx
         .load_module(complex_real_ptx()?)
+        .map_err(|err| cuda_error("CUDA module load", err))?;
+    let kernel = module
+        .load_function(kernel_name)
+        .map_err(|err| cuda_error("CUDA load function", err))?;
+    Ok((kernel, ctx.default_stream()))
+}
+
+fn load_complex_scale_kernel(
+    runtime: &CudaRuntime,
+    kernel_name: &str,
+) -> Result<(cudarc::driver::CudaFunction, Arc<CudaStream>)> {
+    runtime.bind_context()?;
+    let ctx = runtime.context();
+    let module = ctx
+        .load_module(complex_scale_ptx()?)
         .map_err(|err| cuda_error("CUDA module load", err))?;
     let kernel = module
         .load_function(kernel_name)
@@ -3113,6 +3392,229 @@ impl CudaRuntime {
         )
     }
 
+    /// Launches the Layer 0 complex-by-real pointwise multiply kernel for `Complex32 * f32` data.
+    ///
+    /// # Safety
+    ///
+    /// `lhs`, `rhs`, and `dst` must point to live device allocations compatible with the provided layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex32;
+    /// use tenferro_device::cuda::runtime::{self, KernelComplex32};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let lhs = runtime.alloc::<Complex32>(4).unwrap();
+    /// let rhs = runtime.alloc::<f32>(4).unwrap();
+    /// let dst = runtime.alloc::<Complex32>(4).unwrap();
+    /// let alpha = KernelComplex32 { re: 1.0, im: 0.0 };
+    /// let beta = KernelComplex32 { re: 0.0, im: 0.0 };
+    /// unsafe {
+    ///     runtime.pointwise_scale_complex32_real_f32_raw(
+    ///         alpha,
+    ///         lhs.device_ptr().cast_const(),
+    ///         rhs.device_ptr().cast_const(),
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         &[1],
+    ///         0,
+    ///         dst.device_ptr(),
+    ///         &[1],
+    ///         0,
+    ///         beta,
+    ///     ).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn pointwise_scale_complex32_real_f32_raw(
+        &self,
+        alpha: KernelComplex32,
+        lhs: *const Complex32,
+        rhs: *const f32,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        dst: *mut Complex32,
+        dst_strides: &[isize],
+        dst_offset: isize,
+        beta: KernelComplex32,
+    ) -> Result<()> {
+        self.pointwise_scale_complex_real_raw_impl(
+            COMPLEX_SCALE_KERNEL_NAME_F32,
+            alpha,
+            lhs,
+            rhs,
+            dims,
+            lhs_strides,
+            lhs_offset,
+            rhs_strides,
+            rhs_offset,
+            dst,
+            dst_strides,
+            dst_offset,
+            beta,
+        )
+    }
+
+    /// Launches the Layer 0 complex-by-real pointwise multiply kernel for `Complex64 * f64` data.
+    ///
+    /// # Safety
+    ///
+    /// `lhs`, `rhs`, and `dst` must point to live device allocations compatible with the provided layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    /// use tenferro_device::cuda::runtime::{self, KernelComplex64};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let lhs = runtime.alloc::<Complex64>(4).unwrap();
+    /// let rhs = runtime.alloc::<f64>(4).unwrap();
+    /// let dst = runtime.alloc::<Complex64>(4).unwrap();
+    /// let alpha = KernelComplex64 { re: 1.0, im: 0.0 };
+    /// let beta = KernelComplex64 { re: 0.0, im: 0.0 };
+    /// unsafe {
+    ///     runtime.pointwise_scale_complex64_real_f64_raw(
+    ///         alpha,
+    ///         lhs.device_ptr().cast_const(),
+    ///         rhs.device_ptr().cast_const(),
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         &[1],
+    ///         0,
+    ///         dst.device_ptr(),
+    ///         &[1],
+    ///         0,
+    ///         beta,
+    ///     ).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn pointwise_scale_complex64_real_f64_raw(
+        &self,
+        alpha: KernelComplex64,
+        lhs: *const Complex64,
+        rhs: *const f64,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        dst: *mut Complex64,
+        dst_strides: &[isize],
+        dst_offset: isize,
+        beta: KernelComplex64,
+    ) -> Result<()> {
+        self.pointwise_scale_complex_real_raw_impl(
+            COMPLEX_SCALE_KERNEL_NAME_F64,
+            alpha,
+            lhs,
+            rhs,
+            dims,
+            lhs_strides,
+            lhs_offset,
+            rhs_strides,
+            rhs_offset,
+            dst,
+            dst_strides,
+            dst_offset,
+            beta,
+        )
+    }
+
+    fn pointwise_scale_complex_real_raw_impl<Dst, Src>(
+        &self,
+        kernel_name: &str,
+        alpha: Dst,
+        lhs: *const Src,
+        rhs: *const <Src as ComplexScaleSrc>::Real,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        dst: *mut Src,
+        dst_strides: &[isize],
+        dst_offset: isize,
+        beta: Dst,
+    ) -> Result<()>
+    where
+        Dst: cudarc::driver::DeviceRepr,
+        Src: ComplexScaleSrc,
+    {
+        validate_pointwise_rank(dims, lhs_strides, Some(rhs_strides), dst_strides)?;
+        let numel = checked_numel(dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let (kernel, stream) = load_complex_real_kernel(self, kernel_name)?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(dims)?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dims", err))?;
+        let lhs_strides_dev = stream
+            .clone_htod(&to_i64_vec(lhs_strides, "lhs stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD lhs strides", err))?;
+        let rhs_strides_dev = stream
+            .clone_htod(&to_i64_vec(rhs_strides, "rhs stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD rhs strides", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(dst_strides, "dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dst strides", err))?;
+        let ndim = i32::try_from(dims.len())
+            .map_err(|_| Error::InvalidArgument("complex scale rank exceeds i32 range".into()))?;
+        let lhs_offset = i64::try_from(lhs_offset).map_err(|_| {
+            Error::InvalidArgument("complex scale lhs offset exceeds i64 range".into())
+        })?;
+        let rhs_offset = i64::try_from(rhs_offset).map_err(|_| {
+            Error::InvalidArgument("complex scale rhs offset exceeds i64 range".into())
+        })?;
+        let dst_offset = i64::try_from(dst_offset).map_err(|_| {
+            Error::InvalidArgument("complex scale destination offset exceeds i64 range".into())
+        })?;
+        let numel_u64 = u64::try_from(numel)
+            .map_err(|_| Error::InvalidArgument("complex scale numel exceeds u64 range".into()))?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("complex scale currently requires len <= u32::MAX".into())
+        })?;
+        let lhs_ptr = lhs as u64;
+        let rhs_ptr = rhs as u64;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            stream
+                .launch_builder(&kernel)
+                .arg(&lhs_ptr)
+                .arg(&rhs_ptr)
+                .arg(&dst_ptr)
+                .arg(&dims_dev)
+                .arg(&lhs_strides_dev)
+                .arg(&lhs_offset)
+                .arg(&rhs_strides_dev)
+                .arg(&rhs_offset)
+                .arg(&dst_strides_dev)
+                .arg(&dst_offset)
+                .arg(&ndim)
+                .arg(&numel_u64)
+                .arg(&alpha)
+                .arg(&beta)
+                .launch(config)
+                .map_err(|err| cuda_error("CUDA complex scale kernel launch", err))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
     fn pointwise_unary_complex_real_raw_impl<Dst, Src>(
         &self,
         kernel_name: &str,
@@ -3187,6 +3689,92 @@ impl CudaRuntime {
                 .arg(&beta)
                 .launch(config)
                 .map_err(|err| cuda_error("CUDA complex-real unary kernel launch", err))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    fn pointwise_complex_scale_raw_impl<KernelComplex, Complex>(
+        &self,
+        kernel_name: &str,
+        alpha: KernelComplex,
+        lhs: *const Complex,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs: *const <Complex as ComplexScaleSrc>::Real,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        beta: KernelComplex,
+        dst: *mut Complex,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()>
+    where
+        KernelComplex: Copy + cudarc::driver::DeviceRepr + 'static,
+        Complex: ComplexScaleSrc + Copy + 'static,
+    {
+        validate_pointwise_rank(dims, lhs_strides, Some(rhs_strides), dst_strides)?;
+        let numel = checked_numel(dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let (kernel, stream) = load_complex_scale_kernel(self, kernel_name)?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(dims)?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dims", err))?;
+        let lhs_strides_dev = stream
+            .clone_htod(&to_i64_vec(lhs_strides, "lhs stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD lhs strides", err))?;
+        let rhs_strides_dev = stream
+            .clone_htod(&to_i64_vec(rhs_strides, "rhs stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD rhs strides", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(dst_strides, "dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dst strides", err))?;
+        let ndim = i32::try_from(dims.len())
+            .map_err(|_| Error::InvalidArgument("pointwise rank exceeds i32 range".into()))?;
+        let lhs_offset = i64::try_from(lhs_offset)
+            .map_err(|_| Error::InvalidArgument("pointwise lhs offset exceeds i64 range".into()))?;
+        let rhs_offset = i64::try_from(rhs_offset)
+            .map_err(|_| Error::InvalidArgument("pointwise rhs offset exceeds i64 range".into()))?;
+        let dst_offset = i64::try_from(dst_offset)
+            .map_err(|_| Error::InvalidArgument("pointwise dst offset exceeds i64 range".into()))?;
+        let numel_u64 = u64::try_from(numel)
+            .map_err(|_| Error::InvalidArgument("pointwise numel exceeds u64 range".into()))?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("pointwise currently requires len <= u32::MAX".into())
+        })?;
+        let lhs_ptr = lhs as u64;
+        let rhs_ptr = rhs as u64;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            stream
+                .launch_builder(&kernel)
+                .arg(&lhs_ptr)
+                .arg(&rhs_ptr)
+                .arg(&dst_ptr)
+                .arg(&dims_dev)
+                .arg(&lhs_strides_dev)
+                .arg(&lhs_offset)
+                .arg(&rhs_strides_dev)
+                .arg(&rhs_offset)
+                .arg(&dst_strides_dev)
+                .arg(&dst_offset)
+                .arg(&ndim)
+                .arg(&numel_u64)
+                .arg(&alpha)
+                .arg(&beta)
+                .launch(config)
+                .map_err(|err| cuda_error("CUDA complex-scale kernel launch", err))?;
         }
         stream
             .synchronize()
@@ -3303,6 +3891,84 @@ impl CudaRuntime {
             src_strides,
             src_offset,
             beta,
+            dst,
+            dst_strides,
+            dst_offset,
+        )
+    }
+
+    /// Launches the Layer 0 complex-scale kernel for `Complex32 × f32 -> Complex32` data.
+    ///
+    /// # Safety
+    ///
+    /// `lhs`, `rhs`, and `dst` must point to live device allocations compatible
+    /// with the provided layout metadata.
+    #[allow(private_interfaces)]
+    pub unsafe fn pointwise_mul_complex32_real_f32_raw(
+        &self,
+        alpha: Complex32,
+        lhs: *const Complex32,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs: *const f32,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        beta: Complex32,
+        dst: *mut Complex32,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        self.pointwise_complex_scale_raw_impl::<KernelComplex32, Complex32>(
+            COMPLEX_SCALE_KERNEL_NAME_F32,
+            alpha.into(),
+            lhs,
+            dims,
+            lhs_strides,
+            lhs_offset,
+            rhs,
+            rhs_strides,
+            rhs_offset,
+            beta.into(),
+            dst,
+            dst_strides,
+            dst_offset,
+        )
+    }
+
+    /// Launches the Layer 0 complex-scale kernel for `Complex64 × f64 -> Complex64` data.
+    ///
+    /// # Safety
+    ///
+    /// `lhs`, `rhs`, and `dst` must point to live device allocations compatible
+    /// with the provided layout metadata.
+    #[allow(private_interfaces)]
+    pub unsafe fn pointwise_mul_complex64_real_f64_raw(
+        &self,
+        alpha: Complex64,
+        lhs: *const Complex64,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs: *const f64,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        beta: Complex64,
+        dst: *mut Complex64,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        self.pointwise_complex_scale_raw_impl::<KernelComplex64, Complex64>(
+            COMPLEX_SCALE_KERNEL_NAME_F64,
+            alpha.into(),
+            lhs,
+            dims,
+            lhs_strides,
+            lhs_offset,
+            rhs,
+            rhs_strides,
+            rhs_offset,
+            beta.into(),
             dst,
             dst_strides,
             dst_offset,
