@@ -368,6 +368,77 @@ fn cuda_solve_matches_cpu_for_small_complex64_matrix() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_solve_broadcasted_rhs_matches_cpu_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(2.0), //
+            cast::<T>(3.0),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(4.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b_cpu = Tensor::from_slice(
+        &[cast::<T>(6.0), cast::<T>(8.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve(
+        &mut cpu_ctx,
+        &a_cpu,
+        &b_cpu,
+    )
+    .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve(
+        &mut cuda_ctx,
+        &a_gpu,
+        &b_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.dims(), &[2, 2]);
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_slice(
+        "cuda solve broadcast rhs",
+        &tensor_data_on_cpu(&got),
+        &tensor_data_on_cpu(&expected),
+        cast::<T>(256.0) * T::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_solve_triangular_matches_cpu_for_small_real_matrix_generic<T>(upper: bool)
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -474,6 +545,80 @@ where
     );
     assert_close_slice(
         "cuda solve_triangular",
+        &tensor_data_on_cpu(&got),
+        &tensor_data_on_cpu(&expected),
+        cast::<T>(256.0) * T::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_broadcasted_rhs_matches_cpu_generic<T>(upper: bool)
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(2.0), //
+            cast::<T>(3.0),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(4.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b_cpu = Tensor::from_slice(
+        &[cast::<T>(6.0), cast::<T>(8.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_triangular(
+            &mut cpu_ctx,
+            &a_cpu,
+            &b_cpu,
+            upper,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_triangular(
+        &mut cuda_ctx,
+        &a_gpu,
+        &b_gpu,
+        upper,
+    )
+    .unwrap();
+
+    assert_eq!(got.dims(), &[2, 2]);
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_slice(
+        "cuda solve_triangular broadcast rhs",
         &tensor_data_on_cpu(&got),
         &tensor_data_on_cpu(&expected),
         cast::<T>(256.0) * T::epsilon(),
@@ -1917,6 +2062,18 @@ fn cuda_solve_matches_cpu_for_small_real_matrix_f64() {
 
 #[test]
 #[cfg(feature = "cuda")]
+fn cuda_solve_broadcasted_rhs_matches_cpu_f32() {
+    cuda_solve_broadcasted_rhs_matches_cpu_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_broadcasted_rhs_matches_cpu_f64() {
+    cuda_solve_broadcasted_rhs_matches_cpu_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
 fn cuda_solve_ex_matches_cpu_for_mixed_batch_f32() {
     cuda_solve_ex_matches_cpu_for_mixed_batch_generic::<f32>();
 }
@@ -1925,6 +2082,18 @@ fn cuda_solve_ex_matches_cpu_for_mixed_batch_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_solve_ex_matches_cpu_for_mixed_batch_f64() {
     cuda_solve_ex_matches_cpu_for_mixed_batch_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_broadcasted_rhs_matches_cpu_f32() {
+    cuda_solve_ex_broadcasted_rhs_matches_cpu_generic::<f32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_broadcasted_rhs_matches_cpu_f64() {
+    cuda_solve_ex_broadcasted_rhs_matches_cpu_generic::<f64>();
 }
 
 #[test]
@@ -2010,6 +2179,79 @@ where
     );
     assert_close_slice(
         "cuda solve_ex mixed batch",
+        &tensor_data_on_cpu(&got.solution),
+        &tensor_data_on_cpu(&expected.solution),
+        cast::<T>(256.0) * T::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_broadcasted_rhs_matches_cpu_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(1.0),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(1.0), //
+            cast::<T>(1.0),
+            cast::<T>(2.0),
+            cast::<T>(2.0),
+            cast::<T>(4.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b_cpu = Tensor::from_slice(
+        &[cast::<T>(3.0), cast::<T>(-1.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_ex(
+            &mut cpu_ctx,
+            &a_cpu,
+            &b_cpu,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+        &b_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_eq!(got.solution.dims(), &[2, 2]);
+    assert_eq!(
+        got.solution.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_slice(
+        "cuda solve_ex broadcast rhs",
         &tensor_data_on_cpu(&got.solution),
         &tensor_data_on_cpu(&expected.solution),
         cast::<T>(256.0) * T::epsilon(),
@@ -2368,6 +2610,30 @@ fn cuda_solve_triangular_matches_cpu_for_small_lower_real_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_solve_triangular_matches_cpu_for_small_lower_real_matrix_f64() {
     cuda_solve_triangular_matches_cpu_for_small_real_matrix_generic::<f64>(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_broadcasted_rhs_matches_cpu_upper_f32() {
+    cuda_solve_triangular_broadcasted_rhs_matches_cpu_generic::<f32>(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_broadcasted_rhs_matches_cpu_upper_f64() {
+    cuda_solve_triangular_broadcasted_rhs_matches_cpu_generic::<f64>(true);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_broadcasted_rhs_matches_cpu_lower_f32() {
+    cuda_solve_triangular_broadcasted_rhs_matches_cpu_generic::<f32>(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_broadcasted_rhs_matches_cpu_lower_f64() {
+    cuda_solve_triangular_broadcasted_rhs_matches_cpu_generic::<f64>(false);
 }
 
 #[test]

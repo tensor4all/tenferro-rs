@@ -17,7 +17,9 @@ use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
 use crate::backend::linalg_utils::clone_batched_column_major;
 #[cfg(feature = "cuda")]
-use crate::backend::tensor_helpers::{batch_count, validate_solve_rhs_shape, validate_square};
+use crate::backend::tensor_helpers::{
+    batch_count, materialize_broadcasted_batches, validate_solve_rhs_shape, validate_square,
+};
 
 #[cfg(feature = "cuda")]
 fn checked_mul(lhs: usize, rhs: usize, label: &str) -> Result<usize> {
@@ -78,10 +80,17 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
     let bc = batch_count(batch_dims);
+    let x_work = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve_ex",
+        "b",
+    )?;
 
     if n == 0 || bc == 0 {
         return Ok(crate::SolveTensorExResult {
-            solution: clone_batched_column_major(ctx, b)?,
+            solution: x_work,
             info: vec![0; bc],
         });
     }
@@ -101,7 +110,6 @@ where
     let nrhs_i32 = as_i32(rhs.nrhs, "solve_ex nrhs")?;
 
     let a_work = clone_batched_column_major(ctx, a)?;
-    let x_work = clone_batched_column_major(ctx, b)?;
     let x_out = Tensor::zeros(
         &rhs.output_dims,
         a.logical_memory_space(),
@@ -246,9 +254,16 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
     let bc = batch_count(batch_dims);
+    let x_work = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve",
+        "b",
+    )?;
 
     if n == 0 || bc == 0 {
-        return clone_batched_column_major(ctx, b);
+        return Ok(x_work);
     }
 
     if !solve_supported::<T>() {
@@ -266,7 +281,6 @@ where
     let nrhs_i32 = as_i32(rhs.nrhs, "solve nrhs")?;
 
     let a_work = clone_batched_column_major(ctx, a)?;
-    let x_work = clone_batched_column_major(ctx, b)?;
     let runtime = load_runtime(ctx)?;
 
     let a_base = context_device_ptr(ctx, &a_work, "solve a")?.cast::<T>();

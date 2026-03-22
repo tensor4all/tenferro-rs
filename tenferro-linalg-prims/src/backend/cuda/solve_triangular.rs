@@ -23,7 +23,9 @@ use super::wrappers::{
 #[cfg(feature = "cuda")]
 use crate::backend::linalg_utils::clone_batched_column_major;
 #[cfg(feature = "cuda")]
-use crate::backend::tensor_helpers::{batch_count, validate_solve_rhs_shape, validate_square};
+use crate::backend::tensor_helpers::{
+    batch_count, materialize_broadcasted_batches, validate_solve_rhs_shape, validate_square,
+};
 #[cfg(feature = "cuda")]
 use tenferro_device::cuda::runtime::{RealBinaryOp, RealReductionOp, RealUnaryOp};
 
@@ -231,9 +233,16 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
     let bc = batch_count(batch_dims);
+    let x_work = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve_triangular",
+        "b",
+    )?;
 
     if n == 0 || bc == 0 {
-        return clone_batched_column_major(ctx, b);
+        return Ok(x_work);
     }
 
     if !solve_triangular_supported::<T>() {
@@ -252,7 +261,6 @@ where
     let b_stride = checked_mul(n, rhs.nrhs, "solve_triangular b_stride")?;
 
     let a_work = clone_batched_column_major(ctx, a)?;
-    let x_work = clone_batched_column_major(ctx, b)?;
     validate_nonzero_diagonal(ctx, &a_work)?;
 
     let runtime = load_runtime(ctx)?;

@@ -15,6 +15,98 @@ pub(crate) struct SolveRhsLayout {
     pub nrhs: usize,
     /// Output shape to preserve the original vector-vs-matrix rank.
     pub output_dims: Vec<usize>,
+    /// Number of leading structural dimensions in the RHS tensor.
+    pub structural_rank: usize,
+    /// Broadcast mapping from output batches back to the source RHS batches.
+    pub rhs_batch_indexer: BroadcastBatchIndexer,
+}
+
+#[allow(dead_code)]
+pub(crate) struct BroadcastBatchIndexer {
+    output_batch_dims: Vec<usize>,
+    normalized_source_batch_dims: Vec<usize>,
+    source_strides: Vec<usize>,
+    identity: bool,
+}
+
+impl BroadcastBatchIndexer {
+    pub(crate) fn new(
+        source_batch_dims: &[usize],
+        output_batch_dims: &[usize],
+        op_name: &str,
+        arg_name: &str,
+    ) -> Result<Self> {
+        if source_batch_dims.len() > output_batch_dims.len() {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name} {arg_name} batch rank {} exceeds target batch rank {}",
+                source_batch_dims.len(),
+                output_batch_dims.len()
+            )));
+        }
+
+        let missing = output_batch_dims.len() - source_batch_dims.len();
+        let mut normalized_source_batch_dims = vec![1; output_batch_dims.len()];
+        normalized_source_batch_dims[missing..].copy_from_slice(source_batch_dims);
+
+        for (axis, (&source_dim, &output_dim)) in normalized_source_batch_dims
+            .iter()
+            .zip(output_batch_dims.iter())
+            .enumerate()
+        {
+            if source_dim != 1 && source_dim != output_dim {
+                return Err(Error::InvalidArgument(format!(
+                    "{op_name} {arg_name} batch dims are not broadcastable to {:?}: source axis {axis} has {source_dim}, target has {output_dim}",
+                    output_batch_dims
+                )));
+            }
+        }
+
+        let identity = normalized_source_batch_dims == output_batch_dims;
+        Ok(Self {
+            output_batch_dims: output_batch_dims.to_vec(),
+            source_strides: col_major_batch_strides(&normalized_source_batch_dims),
+            normalized_source_batch_dims,
+            identity,
+        })
+    }
+
+    pub(crate) fn output_batch_dims(&self) -> &[usize] {
+        &self.output_batch_dims
+    }
+
+    pub(crate) fn is_identity(&self) -> bool {
+        self.identity
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn source_linear_batch_index(&self, mut output_linear_batch_index: usize) -> usize {
+        if self.output_batch_dims.is_empty() {
+            return 0;
+        }
+
+        let mut source_linear_batch_index = 0usize;
+        for axis in 0..self.output_batch_dims.len() {
+            let output_dim = self.output_batch_dims[axis];
+            let coord = output_linear_batch_index % output_dim;
+            output_linear_batch_index /= output_dim;
+            if self.normalized_source_batch_dims[axis] != 1 {
+                source_linear_batch_index += coord * self.source_strides[axis];
+            }
+        }
+        source_linear_batch_index
+    }
+}
+
+fn col_major_batch_strides(dims: &[usize]) -> Vec<usize> {
+    let mut strides = vec![0usize; dims.len()];
+    if dims.is_empty() {
+        return strides;
+    }
+    strides[0] = 1;
+    for axis in 1..dims.len() {
+        strides[axis] = strides[axis - 1] * dims[axis - 1];
+    }
+    strides
 }
 
 /// Validate that a tensor has at least 2 dimensions and return `(m, n, batch_dims)`.
@@ -82,6 +174,47 @@ where
     input.zero_trailing_by_counts(keep_counts, axis, structural_rank)
 }
 
+pub(crate) fn materialize_broadcasted_batches<T: LinalgScalar>(
+    src: &Tensor<T>,
+    structural_rank: usize,
+    batch_indexer: &BroadcastBatchIndexer,
+    op_name: &str,
+    arg_name: &str,
+) -> Result<Tensor<T>> {
+    if src.is_conjugated() {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} requires resolved (non-conjugated) {arg_name}"
+        )));
+    }
+    if structural_rank > src.ndim() {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} structural rank {structural_rank} exceeds {arg_name} ndim {}",
+            src.ndim()
+        )));
+    }
+    if batch_indexer.is_identity() {
+        return Ok(ensure_col_major(src));
+    }
+
+    let source_batch_rank = src.ndim() - structural_rank;
+    if source_batch_rank > batch_indexer.output_batch_dims().len() {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} {arg_name} batch rank {source_batch_rank} exceeds target batch rank {}",
+            batch_indexer.output_batch_dims().len()
+        )));
+    }
+
+    let mut expanded = src.clone();
+    for _ in 0..(batch_indexer.output_batch_dims().len() - source_batch_rank) {
+        expanded = expanded.unsqueeze(structural_rank as isize)?;
+    }
+
+    let mut target_dims = expanded.dims()[..structural_rank].to_vec();
+    target_dims.extend_from_slice(batch_indexer.output_batch_dims());
+    let broadcasted = expanded.broadcast(&target_dims)?;
+    Ok(broadcasted.contiguous(MemoryOrder::ColumnMajor))
+}
+
 /// Validate solve RHS shape against a square matrix `(n, n, batch...)`.
 ///
 /// Accepted RHS shapes:
@@ -94,27 +227,32 @@ pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
     op_name: &str,
 ) -> Result<SolveRhsLayout> {
     let dims = b.dims();
-    if dims.len() == 1 + batch_dims.len() {
+    if dims.is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} expects b shape (n, *) or (n, k, *), got {:?}",
+            dims
+        )));
+    }
+
+    if dims.len() <= 1 + batch_dims.len() {
         if dims[0] != n {
             return Err(Error::InvalidArgument(format!(
                 "{op_name} expects b dim[0] == n ({n}), got {}",
                 dims[0]
             )));
         }
-        if &dims[1..] != batch_dims {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
-                batch_dims,
-                &dims[1..]
-            )));
-        }
+        let rhs_batch_indexer = BroadcastBatchIndexer::new(&dims[1..], batch_dims, op_name, "b")?;
+        let mut output_dims = vec![n];
+        output_dims.extend_from_slice(rhs_batch_indexer.output_batch_dims());
         return Ok(SolveRhsLayout {
             nrhs: 1,
-            output_dims: dims.to_vec(),
+            output_dims,
+            structural_rank: 1,
+            rhs_batch_indexer,
         });
     }
 
-    if dims.len() == 2 + batch_dims.len() {
+    if dims.len() <= 2 + batch_dims.len() {
         if dims[0] != n {
             return Err(Error::InvalidArgument(format!(
                 "{op_name} expects b dim[0] == n ({n}), got {}",
@@ -126,16 +264,14 @@ pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
                 "{op_name} requires b dim[1] (nrhs) > 0"
             )));
         }
-        if &dims[2..] != batch_dims {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
-                batch_dims,
-                &dims[2..]
-            )));
-        }
+        let rhs_batch_indexer = BroadcastBatchIndexer::new(&dims[2..], batch_dims, op_name, "b")?;
+        let mut output_dims = vec![n, dims[1]];
+        output_dims.extend_from_slice(rhs_batch_indexer.output_batch_dims());
         return Ok(SolveRhsLayout {
             nrhs: dims[1],
-            output_dims: dims.to_vec(),
+            output_dims,
+            structural_rank: 2,
+            rhs_batch_indexer,
         });
     }
 

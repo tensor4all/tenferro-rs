@@ -424,3 +424,106 @@ fn linalg_utils_prepare_matrix_operand_transposes_first_two_axes_before_repackin
     assert!(prepared.is_col_major_contiguous());
     assert_eq!(tensor_data(&prepared), tensor_data(&expected));
 }
+
+#[test]
+fn tensor_helpers_broadcast_batch_indexer_maps_column_major_output_indices() {
+    let indexer =
+        crate::backend::tensor_helpers::BroadcastBatchIndexer::new(&[1, 3], &[2, 3], "solve", "b")
+            .unwrap();
+
+    assert_eq!(indexer.output_batch_dims(), &[2, 3]);
+    assert!(!indexer.is_identity());
+    assert_eq!(
+        (0..6)
+            .map(|index| indexer.source_linear_batch_index(index))
+            .collect::<Vec<_>>(),
+        vec![0, 0, 1, 1, 2, 2]
+    );
+}
+
+#[test]
+fn cpu_backend_solve_broadcasts_rhs_batches() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 2.0, //
+            3.0, 0.0, 0.0, 4.0,
+        ],
+        &[2, 2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[6.0_f64, 8.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let x = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve(
+        &mut ctx, &a, &b,
+    )
+    .unwrap();
+
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(tensor_data(&x), vec![6.0, 4.0, 2.0, 2.0]);
+}
+
+#[test]
+fn cpu_backend_solve_ex_broadcasts_rhs_batches_and_preserves_info() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 1.0, //
+            1.0, 2.0, 2.0, 4.0,
+        ],
+        &[2, 2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[3.0_f64, -1.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_ex(
+            &mut ctx, &a, &b,
+        )
+        .unwrap();
+
+    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(result.solution.dims(), &[2, 2]);
+    assert_eq!(tensor_data(&result.solution), vec![3.0, -1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn cpu_backend_solve_triangular_broadcasts_rhs_batches() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 2.0, //
+            3.0, 0.0, 0.0, 4.0,
+        ],
+        &[2, 2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[6.0_f64, 8.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let x =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_triangular(
+            &mut ctx, &a, &b, true,
+        )
+        .unwrap();
+
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(tensor_data(&x), vec![6.0, 4.0, 2.0, 2.0]);
+}

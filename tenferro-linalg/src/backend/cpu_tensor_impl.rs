@@ -14,8 +14,8 @@ use super::tensor_api::{
     QrTensorResult, SolveTensorExResult, SvdTensorResult,
 };
 use super::tensor_helpers::{
-    batch_count, ensure_col_major, extract_contiguous_slice, validate_matrix_shape,
-    validate_solve_rhs_shape, validate_square,
+    batch_count, ensure_col_major, extract_contiguous_slice, materialize_broadcasted_batches,
+    validate_matrix_shape, validate_solve_rhs_shape, validate_square,
 };
 use crate::KernelLinalgScalar;
 
@@ -87,7 +87,13 @@ where
     let bc = batch_count(batch_dims);
 
     let a_contig = ensure_col_major(a);
-    let b_contig = ensure_col_major(b);
+    let b_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve_ex",
+        "b",
+    )?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -140,7 +146,13 @@ where
     let bc = batch_count(batch_dims);
 
     let a_contig = ensure_col_major(a);
-    let b_contig = ensure_col_major(b);
+    let b_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve",
+        "b",
+    )?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -176,7 +188,13 @@ where
     let bc = batch_count(batch_dims);
 
     let a_contig = ensure_col_major(a);
-    let b_contig = ensure_col_major(b);
+    let b_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve_triangular",
+        "b",
+    )?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
