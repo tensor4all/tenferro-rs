@@ -43,6 +43,37 @@ fn host_strided_copy_reference<T: Copy + Default>(
     dst
 }
 
+fn host_strided_copy_conj_complex64_reference(
+    src: &[Complex64],
+    dims: &[usize],
+    src_strides: &[isize],
+    src_offset: isize,
+    dst_strides: &[isize],
+) -> Vec<Complex64> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![Complex64::default(); numel];
+    if numel == 0 {
+        return dst;
+    }
+
+    for linear_idx in 0..numel {
+        let mut remainder = linear_idx;
+        let mut src_index = src_offset;
+        let mut dst_index = 0isize;
+
+        for axis in 0..dims.len() {
+            let coord = remainder % dims[axis];
+            remainder /= dims[axis];
+            src_index += (coord as isize) * src_strides[axis];
+            dst_index += (coord as isize) * dst_strides[axis];
+        }
+
+        dst[dst_index as usize] = src[src_index as usize].conj();
+    }
+
+    dst
+}
+
 fn host_binary_add_reference(
     lhs: &[f64],
     rhs: &[f64],
@@ -474,6 +505,99 @@ fn cuda_runtime_strided_copy_matches_host_reference() {
     let expected =
         host_strided_copy_reference(&src_data, &dims, &src_strides, 0, spec.dst_strides());
     assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_copy_strided_with_conj_transform_matches_host() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, ContiguousOrder, StridedCopySpec, StridedCopyTransform,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [2usize, 2];
+    let src_strides = [3isize, 1];
+    let src_offset = 1isize;
+    let src_data = vec![
+        Complex64::new(100.0, -100.0),
+        Complex64::new(1.0, 2.0),
+        Complex64::new(3.0, 4.0),
+        Complex64::new(200.0, -200.0),
+        Complex64::new(5.0, 6.0),
+        Complex64::new(7.0, 8.0),
+    ];
+    let src = runtime.alloc::<Complex64>(src_data.len()).unwrap();
+    let dst = runtime.alloc::<Complex64>(dims.iter().product()).unwrap();
+    runtime.copy_htod(&src_data, &src).unwrap();
+
+    let spec = StridedCopySpec::to_contiguous(
+        &dims,
+        &src_strides,
+        src_offset,
+        ContiguousOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    unsafe {
+        runtime
+            .copy_strided_raw_with_transform(
+                src.device_ptr().cast_const(),
+                dst.device_ptr(),
+                &spec,
+                StridedCopyTransform::Conj,
+            )
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_strided_copy_conj_complex64_reference(
+        &src_data,
+        &dims,
+        &src_strides,
+        src_offset,
+        spec.dst_strides(),
+    );
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_copy_strided_with_conj_transform_rejects_non_complex_types() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, ContiguousOrder, StridedCopySpec, StridedCopyTransform,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let src_data = vec![1.0_f64, 2.0, 3.0, 4.0];
+    let src = runtime.alloc::<f64>(src_data.len()).unwrap();
+    let dst = runtime.alloc::<f64>(src_data.len()).unwrap();
+    runtime.copy_htod(&src_data, &src).unwrap();
+
+    let spec =
+        StridedCopySpec::to_contiguous(&[2usize, 2], &[1isize, 2], 0, ContiguousOrder::ColumnMajor)
+            .unwrap();
+
+    let err = unsafe {
+        runtime
+            .copy_strided_raw_with_transform(
+                src.device_ptr().cast_const(),
+                dst.device_ptr(),
+                &spec,
+                StridedCopyTransform::Conj,
+            )
+            .unwrap_err()
+    };
+
+    assert!(
+        err.to_string().contains("conj transform requires"),
+        "expected conj transform rejection for non-complex element type, got {err}"
+    );
 }
 
 #[test]

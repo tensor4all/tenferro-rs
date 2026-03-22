@@ -1,4 +1,5 @@
 use std::{
+    any::TypeId,
     collections::HashMap,
     ffi::c_void,
     marker::PhantomData,
@@ -16,6 +17,8 @@ use num_complex::{Complex32, Complex64};
 use crate::{Error, Result};
 
 const STRIDED_COPY_KERNEL_NAME: &str = "strided_copy_kernel";
+const STRIDED_COPY_TRANSFORM_NONE: i32 = 0;
+const STRIDED_COPY_TRANSFORM_CONJ: i32 = 1;
 const STRIDED_COPY_CUDA_SRC: &str = r#"
 extern "C" __global__ void strided_copy_kernel(
     const unsigned char* src,
@@ -25,6 +28,7 @@ extern "C" __global__ void strided_copy_kernel(
     long long src_offset,
     const long long* dst_strides,
     long long dst_offset,
+    int source_transform,
     int ndim,
     unsigned long long elem_size,
     unsigned long long numel
@@ -49,8 +53,24 @@ extern "C" __global__ void strided_copy_kernel(
 
     unsigned long long src_byte = (unsigned long long)src_index * elem_size;
     unsigned long long dst_byte = (unsigned long long)dst_index * elem_size;
-    for (unsigned long long byte_idx = 0; byte_idx < elem_size; ++byte_idx) {
-        dst[dst_byte + byte_idx] = src[src_byte + byte_idx];
+    if (source_transform == 0) {
+        for (unsigned long long byte_idx = 0; byte_idx < elem_size; ++byte_idx) {
+            dst[dst_byte + byte_idx] = src[src_byte + byte_idx];
+        }
+    } else if (elem_size == 8ull) {
+        const float* src_elem = reinterpret_cast<const float*>(src + src_byte);
+        float* dst_elem = reinterpret_cast<float*>(dst + dst_byte);
+        dst_elem[0] = src_elem[0];
+        dst_elem[1] = -src_elem[1];
+    } else if (elem_size == 16ull) {
+        const double* src_elem = reinterpret_cast<const double*>(src + src_byte);
+        double* dst_elem = reinterpret_cast<double*>(dst + dst_byte);
+        dst_elem[0] = src_elem[0];
+        dst_elem[1] = -src_elem[1];
+    } else {
+        for (unsigned long long byte_idx = 0; byte_idx < elem_size; ++byte_idx) {
+            dst[dst_byte + byte_idx] = src[src_byte + byte_idx];
+        }
     }
 }
 "#;
@@ -1294,6 +1314,17 @@ fn axes_to_i32(axes: &[usize], label: &str) -> Result<Vec<i32>> {
         .collect()
 }
 
+fn supports_conj_strided_copy<T: 'static>() -> bool {
+    TypeId::of::<T>() == TypeId::of::<Complex32>() || TypeId::of::<T>() == TypeId::of::<Complex64>()
+}
+
+fn strided_copy_transform_code(transform: StridedCopyTransform) -> i32 {
+    match transform {
+        StridedCopyTransform::None => STRIDED_COPY_TRANSFORM_NONE,
+        StridedCopyTransform::Conj => STRIDED_COPY_TRANSFORM_CONJ,
+    }
+}
+
 fn unary_opcode(op: RealUnaryOp) -> i32 {
     match op {
         RealUnaryOp::Conj => 0,
@@ -1583,6 +1614,24 @@ impl StridedCopySpec {
     pub fn dst_strides(&self) -> &[isize] {
         &self.dst_strides
     }
+}
+
+/// Source-side transforms supported by the Layer 0 strided-copy helper.
+///
+/// Phase 1 supports plain copy and complex conjugation only.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::cuda::runtime::StridedCopyTransform;
+///
+/// assert_eq!(StridedCopyTransform::None, StridedCopyTransform::None);
+/// assert_eq!(StridedCopyTransform::Conj, StridedCopyTransform::Conj);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StridedCopyTransform {
+    None,
+    Conj,
 }
 
 /// Low-level specification for materializing a triangular matrix view on the GPU.
@@ -2442,17 +2491,58 @@ impl CudaRuntime {
             return Ok(());
         }
 
-        let stream = self.launch_strided_copy_raw(src, dst, spec)?;
+        let stream =
+            self.launch_strided_copy_raw_impl(src, dst, spec, STRIDED_COPY_TRANSFORM_NONE)?;
         stream
             .synchronize()
             .map_err(|err| cuda_error("CUDA stream synchronize", err))
     }
 
-    unsafe fn launch_strided_copy_raw<T>(
+    /// Launches the generic strided-copy kernel with a source-side transform from a raw device source to a raw device destination.
+    ///
+    /// # Safety
+    ///
+    /// `src` and `dst` must point to live device allocations compatible with `spec`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec, StridedCopyTransform};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let src = runtime.alloc_raw::<num_complex::Complex64>(24).unwrap();
+    /// let dst = runtime.alloc_raw::<num_complex::Complex64>(24).unwrap();
+    /// let spec = StridedCopySpec::to_contiguous(&[4, 2, 3], &[6, 1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
+    /// unsafe {
+    ///     runtime.copy_strided_raw_with_transform(src, dst, &spec, StridedCopyTransform::Conj).unwrap();
+    ///     runtime.free_raw(src).unwrap();
+    ///     runtime.free_raw(dst).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn copy_strided_raw_with_transform<T: 'static>(
         &self,
         src: *const T,
         dst: *mut T,
         spec: &StridedCopySpec,
+        transform: StridedCopyTransform,
+    ) -> Result<()> {
+        let numel = checked_numel(&spec.dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let stream = self.launch_strided_copy_raw_with_transform(src, dst, spec, transform)?;
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    unsafe fn launch_strided_copy_raw_impl<T>(
+        &self,
+        src: *const T,
+        dst: *mut T,
+        spec: &StridedCopySpec,
+        source_transform: i32,
     ) -> Result<Arc<CudaStream>> {
         if spec.dims.len() != spec.src_strides.len() || spec.dims.len() != spec.dst_strides.len() {
             return Err(Error::InvalidArgument(format!(
@@ -2514,6 +2604,7 @@ impl CudaRuntime {
                 .arg(&src_offset)
                 .arg(&dst_strides_dev)
                 .arg(&dst_offset)
+                .arg(&source_transform)
                 .arg(&ndim)
                 .arg(&elem_size)
                 .arg(&numel_u64)
@@ -2522,6 +2613,31 @@ impl CudaRuntime {
         }
 
         Ok(stream)
+    }
+
+    unsafe fn launch_strided_copy_raw<T>(
+        &self,
+        src: *const T,
+        dst: *mut T,
+        spec: &StridedCopySpec,
+    ) -> Result<Arc<CudaStream>> {
+        self.launch_strided_copy_raw_impl(src, dst, spec, STRIDED_COPY_TRANSFORM_NONE)
+    }
+
+    unsafe fn launch_strided_copy_raw_with_transform<T: 'static>(
+        &self,
+        src: *const T,
+        dst: *mut T,
+        spec: &StridedCopySpec,
+        transform: StridedCopyTransform,
+    ) -> Result<Arc<CudaStream>> {
+        if matches!(transform, StridedCopyTransform::Conj) && !supports_conj_strided_copy::<T>() {
+            return Err(Error::InvalidArgument(
+                "strided copy conj transform requires Complex32 or Complex64 element type".into(),
+            ));
+        }
+
+        self.launch_strided_copy_raw_impl(src, dst, spec, strided_copy_transform_code(transform))
     }
 
     /// Launches the keep-count-driven trailing zero-fill kernel on raw device allocations.
@@ -4503,6 +4619,38 @@ impl CudaRuntime {
         self.ensure_same_device(src.device_id())?;
         self.ensure_same_device(dst.device_id())?;
         unsafe { self.copy_strided_raw(src.ptr.cast::<T>(), dst.ptr.cast::<T>(), spec) }
+    }
+
+    /// Launches the generic strided-copy kernel while applying a source-side transform.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec, StridedCopyTransform};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let src = runtime.alloc::<num_complex::Complex64>(24).unwrap();
+    /// let dst = runtime.alloc::<num_complex::Complex64>(24).unwrap();
+    /// let spec = StridedCopySpec::to_contiguous(&[4, 2, 3], &[6, 1, 2], 0, ContiguousOrder::ColumnMajor).unwrap();
+    /// runtime.copy_strided_with_transform(&src, &dst, &spec, StridedCopyTransform::Conj).unwrap();
+    /// ```
+    pub fn copy_strided_with_transform<T: 'static>(
+        &self,
+        src: &CudaBuffer<T>,
+        dst: &CudaBuffer<T>,
+        spec: &StridedCopySpec,
+        transform: StridedCopyTransform,
+    ) -> Result<()> {
+        self.ensure_same_device(src.device_id())?;
+        self.ensure_same_device(dst.device_id())?;
+        unsafe {
+            self.copy_strided_raw_with_transform(
+                src.ptr.cast::<T>(),
+                dst.ptr.cast::<T>(),
+                spec,
+                transform,
+            )
+        }
     }
 
     /// Packs two source views into a freshly allocated contiguous destination buffer.
