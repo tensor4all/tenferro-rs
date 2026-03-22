@@ -534,6 +534,22 @@ fn matrix_power_path_is_tensor_native_and_uses_tensor_power_logic() {
         matrix_power.contains("inv(ctx, tensor)?"),
         "matrix_power should use tensor-native inverse logic for negative exponents"
     );
+    assert!(
+        matrix_power.contains("if exponent == 1"),
+        "matrix_power should fast-path exponent == 1"
+    );
+    assert!(
+        matrix_power.contains("if exponent == -1"),
+        "matrix_power should fast-path exponent == -1"
+    );
+    assert!(
+        matrix_power.contains("positive_exponent == 2"),
+        "matrix_power should fast-path exponent == 2 after normalizing negatives"
+    );
+    assert!(
+        matrix_power.contains("positive_exponent == 3"),
+        "matrix_power should fast-path exponent == 3 after normalizing negatives"
+    );
 }
 
 #[test]

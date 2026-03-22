@@ -31,19 +31,43 @@ where
     if exponent == 0 {
         return batched_identity::<T>(n, batch_dims, tensor.logical_memory_space());
     }
+    if exponent == 1 {
+        return Ok(tensor.clone());
+    }
+    if exponent == -1 {
+        return inv(ctx, tensor);
+    }
 
     let mut positive_exponent = if exponent < 0 {
-        let abs = exponent.checked_abs().ok_or_else(|| {
+        exponent.checked_abs().ok_or_else(|| {
             Error::InvalidArgument("matrix_power does not support i64::MIN exponent".into())
-        })?;
-        let inverse = inv(ctx, tensor)?;
-        return matrix_power(ctx, &inverse, abs);
+        })? as u64
     } else {
         exponent as u64
     };
+    let mut base = if exponent < 0 {
+        inv(ctx, tensor)?
+    } else {
+        tensor.clone()
+    };
+
+    if positive_exponent == 2 {
+        return crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &base, &base, n, n, n);
+    }
+    if positive_exponent == 3 {
+        let base_squared =
+            crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &base, &base, n, n, n)?;
+        return crate::prims_bridge::batched_gemm_with_semiring_tensors(
+            ctx,
+            &base_squared,
+            &base,
+            n,
+            n,
+            n,
+        );
+    }
 
     let mut result = batched_identity::<T>(n, batch_dims, tensor.logical_memory_space())?;
-    let mut base = tensor.clone();
 
     while positive_exponent > 0 {
         if positive_exponent & 1 == 1 {
