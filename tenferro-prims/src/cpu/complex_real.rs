@@ -24,7 +24,10 @@ pub enum CpuComplexRealPlan {
 }
 
 fn supports_complex_real_unary(op: ComplexRealUnaryOp) -> bool {
-    matches!(op, ComplexRealUnaryOp::Abs)
+    matches!(
+        op,
+        ComplexRealUnaryOp::Abs | ComplexRealUnaryOp::Real | ComplexRealUnaryOp::Imag
+    )
 }
 
 fn execute_complex_real_unary_typed<Input>(
@@ -43,6 +46,32 @@ where
             let dims = output.dims().to_vec();
             crate::for_each_index(&dims, |idx| {
                 let mapped = input.get(idx).abs();
+                let value = alpha * mapped;
+                if beta == Input::Real::zero() {
+                    output.set(idx, value);
+                } else {
+                    output.set(idx, value + beta * output.get(idx));
+                }
+            });
+            Ok(())
+        }
+        ComplexRealUnaryOp::Real => {
+            let dims = output.dims().to_vec();
+            crate::for_each_index(&dims, |idx| {
+                let mapped = input.get(idx).re();
+                let value = alpha * mapped;
+                if beta == Input::Real::zero() {
+                    output.set(idx, value);
+                } else {
+                    output.set(idx, value + beta * output.get(idx));
+                }
+            });
+            Ok(())
+        }
+        ComplexRealUnaryOp::Imag => {
+            let dims = output.dims().to_vec();
+            crate::for_each_index(&dims, |idx| {
+                let mapped = input.get(idx).im();
                 let value = alpha * mapped;
                 if beta == Input::Real::zero() {
                     output.set(idx, value);
@@ -132,7 +161,7 @@ where
         matches!(
             desc,
             ComplexRealPrimsDescriptor::PointwiseUnary {
-                op: ComplexRealUnaryOp::Abs
+                op: ComplexRealUnaryOp::Abs | ComplexRealUnaryOp::Real | ComplexRealUnaryOp::Imag
             }
         )
     }

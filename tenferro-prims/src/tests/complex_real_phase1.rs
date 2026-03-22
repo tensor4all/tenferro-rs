@@ -69,6 +69,29 @@ fn cpu_complex_real_phase1_supports_abs_for_complex32_and_complex64() {
 }
 
 #[test]
+fn cpu_complex_real_phase1_supports_real_and_imag_for_complex32_and_complex64() {
+    let real_desc = ComplexRealPrimsDescriptor::PointwiseUnary {
+        op: ComplexRealUnaryOp::Real,
+    };
+    let imag_desc = ComplexRealPrimsDescriptor::PointwiseUnary {
+        op: ComplexRealUnaryOp::Imag,
+    };
+
+    assert!(
+        <CpuBackend as TensorComplexRealPrims<Complex32>>::has_complex_real_support(
+            real_desc.clone()
+        )
+    );
+    assert!(
+        <CpuBackend as TensorComplexRealPrims<Complex32>>::has_complex_real_support(
+            imag_desc.clone()
+        )
+    );
+    assert!(<CpuBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(real_desc));
+    assert!(<CpuBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(imag_desc));
+}
+
+#[test]
 fn cpu_complex_real_phase1_executes_abs_for_complex64() {
     let output = execute_abs_real_cpu::<Complex64>(
         &[
@@ -96,4 +119,92 @@ fn cpu_complex_real_phase1_executes_abs_for_complex32() {
     );
     let actual = output.buffer().as_slice().unwrap();
     assert_close_slice_f32(actual, &[5.0, 13.0, 17.0, 25.0], 1.0e-5);
+}
+
+#[test]
+fn cpu_complex_real_phase1_executes_real_for_complex64() {
+    let mut ctx = CpuContext::new(1);
+    let input = Tensor::from_slice(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(5.0, 12.0),
+            Complex64::new(8.0, 15.0),
+            Complex64::new(7.0, 24.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let desc = ComplexRealPrimsDescriptor::PointwiseUnary {
+        op: ComplexRealUnaryOp::Real,
+    };
+    let mut output = Tensor::<f64>::zeros(
+        &[2, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <CpuBackend as TensorComplexRealPrims<Complex64>>::plan(
+        &mut ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )
+    .unwrap();
+    <CpuBackend as TensorComplexRealPrims<Complex64>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+    assert_close_slice_f64(
+        output.buffer().as_slice().unwrap(),
+        &[3.0, 5.0, 8.0, 7.0],
+        1.0e-12,
+    );
+}
+
+#[test]
+fn cpu_complex_real_phase1_executes_imag_for_complex32() {
+    let mut ctx = CpuContext::new(1);
+    let input = Tensor::from_slice(
+        &[
+            Complex32::new(3.0, 4.0),
+            Complex32::new(5.0, 12.0),
+            Complex32::new(8.0, 15.0),
+            Complex32::new(7.0, 24.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let desc = ComplexRealPrimsDescriptor::PointwiseUnary {
+        op: ComplexRealUnaryOp::Imag,
+    };
+    let mut output = Tensor::<f32>::zeros(
+        &[2, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <CpuBackend as TensorComplexRealPrims<Complex32>>::plan(
+        &mut ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )
+    .unwrap();
+    <CpuBackend as TensorComplexRealPrims<Complex32>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+    assert_close_slice_f32(
+        output.buffer().as_slice().unwrap(),
+        &[4.0, 12.0, 15.0, 24.0],
+        1.0e-5,
+    );
 }

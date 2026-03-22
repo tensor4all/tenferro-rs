@@ -139,6 +139,38 @@ fn host_unary_abs_real_complex64_reference(
     dst
 }
 
+fn host_unary_real_complex64_reference(
+    src: &[Complex64],
+    dims: &[usize],
+    src_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<f64> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0.0; numel];
+    for linear_idx in 0..numel {
+        let src_idx = linear_offset(linear_idx, dims, src_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = src[src_idx].re;
+    }
+    dst
+}
+
+fn host_unary_imag_complex64_reference(
+    src: &[Complex64],
+    dims: &[usize],
+    src_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<f64> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0.0; numel];
+    for linear_idx in 0..numel {
+        let src_idx = linear_offset(linear_idx, dims, src_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = src[src_idx].im;
+    }
+    dst
+}
+
 fn host_unary_log_reference(
     src: &[f64],
     dims: &[usize],
@@ -639,6 +671,100 @@ fn cuda_runtime_complex64_abs_real_matches_host_reference() {
     let got = runtime.copy_dtoh(&dst).unwrap();
     let expected =
         host_unary_abs_real_complex64_reference(&src_data, &dims, &src_strides, &dst_strides);
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_complex64_real_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{self, ComplexRealUnaryOp};
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [3usize, 2];
+    let src_strides = [2isize, 1];
+    let dst_strides = [1isize, 3];
+    let src_data = vec![
+        Complex64::new(3.0, 4.0),
+        Complex64::new(5.0, 12.0),
+        Complex64::new(8.0, 15.0),
+        Complex64::new(7.0, 24.0),
+        Complex64::new(9.0, 40.0),
+        Complex64::new(12.0, 35.0),
+    ];
+    let src = runtime.alloc::<Complex64>(src_data.len()).unwrap();
+    let dst = runtime.alloc::<f64>(src_data.len()).unwrap();
+    runtime.copy_htod(&src_data, &src).unwrap();
+
+    unsafe {
+        runtime
+            .pointwise_unary_complex64_to_real_f64_raw(
+                ComplexRealUnaryOp::Real,
+                1.0,
+                src.device_ptr().cast_const(),
+                &dims,
+                &src_strides,
+                0,
+                0.0,
+                dst.device_ptr(),
+                &dst_strides,
+                0,
+            )
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected =
+        host_unary_real_complex64_reference(&src_data, &dims, &src_strides, &dst_strides);
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_complex64_imag_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{self, ComplexRealUnaryOp};
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [3usize, 2];
+    let src_strides = [2isize, 1];
+    let dst_strides = [1isize, 3];
+    let src_data = vec![
+        Complex64::new(3.0, 4.0),
+        Complex64::new(5.0, 12.0),
+        Complex64::new(8.0, 15.0),
+        Complex64::new(7.0, 24.0),
+        Complex64::new(9.0, 40.0),
+        Complex64::new(12.0, 35.0),
+    ];
+    let src = runtime.alloc::<Complex64>(src_data.len()).unwrap();
+    let dst = runtime.alloc::<f64>(src_data.len()).unwrap();
+    runtime.copy_htod(&src_data, &src).unwrap();
+
+    unsafe {
+        runtime
+            .pointwise_unary_complex64_to_real_f64_raw(
+                ComplexRealUnaryOp::Imag,
+                1.0,
+                src.device_ptr().cast_const(),
+                &dims,
+                &src_strides,
+                0,
+                0.0,
+                dst.device_ptr(),
+                &dst_strides,
+                0,
+            )
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected =
+        host_unary_imag_complex64_reference(&src_data, &dims, &src_strides, &dst_strides);
     assert_eq!(got, expected);
 }
 

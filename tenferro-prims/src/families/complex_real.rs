@@ -16,10 +16,16 @@ use crate::{RocmBackend, RocmContext};
 ///
 /// let op = ComplexRealUnaryOp::Abs;
 /// assert_eq!(op, ComplexRealUnaryOp::Abs);
+/// let op = ComplexRealUnaryOp::Real;
+/// assert_eq!(op, ComplexRealUnaryOp::Real);
+/// let op = ComplexRealUnaryOp::Imag;
+/// assert_eq!(op, ComplexRealUnaryOp::Imag);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ComplexRealUnaryOp {
     Abs,
+    Real,
+    Imag,
 }
 
 /// Descriptor for complex-to-real unary planning.

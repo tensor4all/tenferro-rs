@@ -31,8 +31,9 @@ pub struct CudaComplexRealPlan<T: Scalar> {
 }
 
 trait RuntimeComplexRealScalar: Scalar + ComplexFloat + 'static {
-    unsafe fn pointwise_unary_abs_real_raw(
+    unsafe fn pointwise_unary_complex_real_raw(
         runtime: &CudaRuntime,
+        op: RuntimeComplexRealUnaryOp,
         alpha: Self::Real,
         src: *const Self,
         dims: &[usize],
@@ -46,8 +47,9 @@ trait RuntimeComplexRealScalar: Scalar + ComplexFloat + 'static {
 }
 
 impl RuntimeComplexRealScalar for Complex32 {
-    unsafe fn pointwise_unary_abs_real_raw(
+    unsafe fn pointwise_unary_complex_real_raw(
         runtime: &CudaRuntime,
+        op: RuntimeComplexRealUnaryOp,
         alpha: Self::Real,
         src: *const Self,
         dims: &[usize],
@@ -60,7 +62,7 @@ impl RuntimeComplexRealScalar for Complex32 {
     ) -> Result<()> {
         unsafe {
             runtime.pointwise_unary_complex32_to_real_f32_raw(
-                RuntimeComplexRealUnaryOp::Abs,
+                op,
                 alpha,
                 src,
                 dims,
@@ -76,8 +78,9 @@ impl RuntimeComplexRealScalar for Complex32 {
 }
 
 impl RuntimeComplexRealScalar for Complex64 {
-    unsafe fn pointwise_unary_abs_real_raw(
+    unsafe fn pointwise_unary_complex_real_raw(
         runtime: &CudaRuntime,
+        op: RuntimeComplexRealUnaryOp,
         alpha: Self::Real,
         src: *const Self,
         dims: &[usize],
@@ -90,7 +93,7 @@ impl RuntimeComplexRealScalar for Complex64 {
     ) -> Result<()> {
         unsafe {
             runtime.pointwise_unary_complex64_to_real_f64_raw(
-                RuntimeComplexRealUnaryOp::Abs,
+                op,
                 alpha,
                 src,
                 dims,
@@ -137,7 +140,10 @@ fn tensor_device_mut_ptr<T: Scalar>(tensor: &Tensor<T>, label: &str) -> Result<*
 }
 
 fn supports_complex_real_unary(op: ComplexRealUnaryOp) -> bool {
-    matches!(op, ComplexRealUnaryOp::Abs)
+    matches!(
+        op,
+        ComplexRealUnaryOp::Abs | ComplexRealUnaryOp::Real | ComplexRealUnaryOp::Imag
+    )
 }
 
 fn plan_complex_real_unary<T>(
@@ -188,22 +194,26 @@ where
     let output_strides = output.strides().to_vec();
     let input_ptr = tensor_device_ptr(input, "CUDA complex-real input")?;
     let output_ptr = tensor_device_mut_ptr(output, "CUDA complex-real output")?;
+    let runtime_op = match plan.kind {
+        ComplexRealUnaryOp::Abs => RuntimeComplexRealUnaryOp::Abs,
+        ComplexRealUnaryOp::Real => RuntimeComplexRealUnaryOp::Real,
+        ComplexRealUnaryOp::Imag => RuntimeComplexRealUnaryOp::Imag,
+    };
 
-    match plan.kind {
-        ComplexRealUnaryOp::Abs => unsafe {
-            T::pointwise_unary_abs_real_raw(
-                runtime.as_ref(),
-                alpha,
-                input_ptr,
-                &output_dims,
-                input.strides(),
-                input.offset(),
-                beta,
-                output_ptr,
-                &output_strides,
-                output.offset(),
-            )
-        },
+    unsafe {
+        T::pointwise_unary_complex_real_raw(
+            runtime.as_ref(),
+            runtime_op,
+            alpha,
+            input_ptr,
+            &output_dims,
+            input.strides(),
+            input.offset(),
+            beta,
+            output_ptr,
+            &output_strides,
+            output.offset(),
+        )
     }
 }
 
@@ -238,6 +248,8 @@ macro_rules! impl_cuda_complex_real_prims {
                     desc,
                     ComplexRealPrimsDescriptor::PointwiseUnary {
                         op: ComplexRealUnaryOp::Abs
+                            | ComplexRealUnaryOp::Real
+                            | ComplexRealUnaryOp::Imag
                     }
                 )
             }

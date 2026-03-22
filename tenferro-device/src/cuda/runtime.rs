@@ -820,10 +820,15 @@ extern "C" __global__ void pointwise_unary_complex32_to_real_f32(
     long long src_idx = linear_offset(idx, dims, src_strides, src_offset, ndim);
     long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
     complex32_t value = src[src_idx];
-    float mapped = sqrtf(value.re * value.re + value.im * value.im);
+    float mapped;
     if (op_code == 0) {
-        dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
+        mapped = sqrtf(value.re * value.re + value.im * value.im);
+    } else if (op_code == 1) {
+        mapped = value.re;
+    } else {
+        mapped = value.im;
     }
+    dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
 
 extern "C" __global__ void pointwise_unary_complex64_to_real_f64(
@@ -849,10 +854,15 @@ extern "C" __global__ void pointwise_unary_complex64_to_real_f64(
     long long src_idx = linear_offset(idx, dims, src_strides, src_offset, ndim);
     long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
     complex64_t value = src[src_idx];
-    double mapped = sqrt(value.re * value.re + value.im * value.im);
+    double mapped;
     if (op_code == 0) {
-        dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
+        mapped = sqrt(value.re * value.re + value.im * value.im);
+    } else if (op_code == 1) {
+        mapped = value.re;
+    } else {
+        mapped = value.im;
     }
+    dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
 "#;
 
@@ -1033,6 +1043,8 @@ fn unary_opcode(op: RealUnaryOp) -> i32 {
 fn complex_real_opcode(op: ComplexRealUnaryOp) -> i32 {
     match op {
         ComplexRealUnaryOp::Abs => 0,
+        ComplexRealUnaryOp::Real => 1,
+        ComplexRealUnaryOp::Imag => 2,
     }
 }
 
@@ -1635,10 +1647,16 @@ pub enum RealUnaryOp {
 ///
 /// let op = ComplexRealUnaryOp::Abs;
 /// assert_eq!(op, ComplexRealUnaryOp::Abs);
+/// let op = ComplexRealUnaryOp::Real;
+/// assert_eq!(op, ComplexRealUnaryOp::Real);
+/// let op = ComplexRealUnaryOp::Imag;
+/// assert_eq!(op, ComplexRealUnaryOp::Imag);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComplexRealUnaryOp {
     Abs,
+    Real,
+    Imag,
 }
 
 /// Real binary operations exposed by the Layer 0 CUDA runtime.
