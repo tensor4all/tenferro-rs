@@ -654,24 +654,75 @@ fn cuda_public_matrix_power_matches_cpu_small_complex_matrix_c64() {
 }
 
 #[cfg(feature = "cuda")]
-fn cpu_context_matrix_exp_reject_gpu_tensors_before_host_slice_fallback_impl() {
-    let Some(()) = with_cuda_ctx(|_| {
+fn cuda_public_matrix_exp_matches_cpu_small_real_batched_f64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
-        let a_gpu =
-            Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-                .unwrap()
-                .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory {
-                    device_id: 0,
-                })
-                .unwrap();
+        let a_cpu = Tensor::from_slice(
+            &[
+                6.0_f64, 0.0, 0.0, 6.0, // batch 0
+                2.0, 0.5, -1.0, 1.5, // batch 1
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = matrix_exp(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
 
-        let exp_err = matrix_exp(&mut cpu_ctx, &a_gpu).unwrap_err();
-        assert!(matches!(exp_err, tenferro_device::Error::DeviceError(_)));
-        assert!(
-            exp_err
-                .to_string()
-                .contains("matrix_exp is only implemented for main-memory tensors"),
-            "matrix_exp should fail before host-slice extraction, got: {exp_err}"
+        let got = matrix_exp(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            "cuda public matrix exp f64 batched",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            8192.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_matrix_exp_matches_cpu_small_complex_batched_c64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(3.0, 1.0),
+                Complex::new(0.5, -0.25),
+                Complex::new(-1.0, 0.75),
+                Complex::new(2.0, -0.5),
+                Complex::new(1.5, 0.25),
+                Complex::new(-0.75, 1.25),
+                Complex::new(0.5, 0.5),
+                Complex::new(4.0, -1.0),
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = matrix_exp(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = matrix_exp(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public matrix exp c64 batched",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            8192.0_f64 * f64::EPSILON,
         );
     }) else {
         return;
@@ -2210,8 +2261,14 @@ fn public_cuda_matrix_power_matches_cpu_for_small_complex_matrix_c64() {
 
 #[test]
 #[cfg(feature = "cuda")]
-fn cpu_context_matrix_exp_reject_gpu_tensors_before_host_slice_fallback() {
-    cpu_context_matrix_exp_reject_gpu_tensors_before_host_slice_fallback_impl();
+fn public_cuda_matrix_exp_matches_cpu_for_small_real_batched_f64() {
+    cuda_public_matrix_exp_matches_cpu_small_real_batched_f64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_matrix_exp_matches_cpu_for_small_complex_batched_c64() {
+    cuda_public_matrix_exp_matches_cpu_small_complex_batched_c64_impl();
 }
 
 #[test]

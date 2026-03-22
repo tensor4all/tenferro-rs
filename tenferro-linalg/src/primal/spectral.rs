@@ -164,31 +164,67 @@ where
 }
 
 /// Compute the matrix exponential `exp(A)` of a square matrix.
-pub fn matrix_exp<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
+#[allow(private_bounds)]
+pub fn matrix_exp<T, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>
+        + MatrixExpAbsTensor<C>,
     C: backend::TensorLinalgContextFor<T>,
+    C: tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    C: tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
+    C: tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixExp, "matrix_exp")?;
-    require_main_memory_tensor(tensor, "matrix_exp")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
-    let mut result_data = vec![T::zero(); mat_size * bc];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let a_slice = &data[start..start + mat_size];
-        let exp_a = matrix_exp_single(ctx, a_slice, n)?;
-        result_data[b * mat_size..(b + 1) * mat_size].copy_from_slice(&exp_a);
+    if n == 0 {
+        let dims = output_dims(&[n, n], batch_dims);
+        return Ok(Tensor::zeros(
+            &dims,
+            input.logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        ));
     }
 
-    let dims = output_dims(&[n, n], batch_dims);
-    tensor_from_data(result_data, &dims)
+    let global_norm = crate::ad_helpers::matrix_exp_global_1_norm_tensor(ctx, &input)?;
+    let global_norm_cpu =
+        global_norm.to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)?;
+    let global_norm_slice = global_norm_cpu.buffer().as_slice().ok_or_else(|| {
+        Error::InvalidArgument(
+            "matrix_exp: expected scalar norm tensor to materialize on host".into(),
+        )
+    })?;
+    let norm_value = *global_norm_slice
+        .first()
+        .ok_or_else(|| Error::InvalidArgument("matrix_exp: missing scalar norm value".into()))?;
+    let norm_f64: f64 = num_traits::NumCast::from(norm_value)
+        .ok_or_else(|| Error::InvalidArgument("matrix_exp: cannot convert 1-norm to f64".into()))?;
+
+    let s: usize = if norm_f64 <= crate::ad_helpers::THETA_13 {
+        0
+    } else {
+        (norm_f64 / crate::ad_helpers::THETA_13)
+            .log2()
+            .ceil()
+            .max(0.0) as usize
+    };
+
+    let scale_denom = (1u64 << s.min(63)) as f64;
+    let scale_inv = crate::ad_helpers::scalar_from::<T::Real>(1.0 / scale_denom)?;
+    let scale_tensor = crate::prims_bridge::full_like_constant(
+        scale_inv,
+        input.dims(),
+        input.logical_memory_space(),
+    )?;
+    let scaled_input =
+        <T as crate::prims_bridge::ScaleTensorByRealSameShape<C>>::scale_tensor_by_real_same_shape(
+            ctx,
+            &input,
+            &scale_tensor,
+        )?;
+
+    crate::ad_helpers::matrix_exp_tensor_native(ctx, &scaled_input, n, batch_dims, s)
 }

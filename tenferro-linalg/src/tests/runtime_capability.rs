@@ -537,13 +537,60 @@ fn matrix_power_path_is_tensor_native_and_uses_tensor_power_logic() {
 }
 
 #[test]
-fn matrix_exp_requires_main_memory_before_host_slice_path() {
+fn matrix_exp_path_is_tensor_native_with_one_scalar_host_sync() {
     let spectral = repo_file("src/primal/spectral.rs");
     let matrix_exp = file_section(&spectral, "pub fn matrix_exp", "#[cfg(test)]");
+    let matrix_exp_helper = repo_file("src/ad_helpers/matrix_exp.rs");
+    let tensor_native_helper = file_section(
+        &matrix_exp_helper,
+        "pub(crate) fn matrix_exp_global_1_norm_tensor",
+        "pub(crate) fn matrix_1_norm",
+    );
 
     assert!(
-        matrix_exp.contains("require_main_memory_tensor(tensor, \"matrix_exp\")?"),
-        "matrix_exp should reject non-main-memory tensors before host-slice logic"
+        !matrix_exp.contains("require_main_memory_tensor(tensor, \"matrix_exp\")?"),
+        "matrix_exp should not reject non-main-memory tensors before tensor-native logic"
+    );
+    assert!(
+        !matrix_exp.contains("extract_slice("),
+        "matrix_exp should avoid extract_slice(...)"
+    );
+    assert!(
+        !matrix_exp.contains("matrix_exp_single("),
+        "matrix_exp should avoid the old host-slice helper"
+    );
+    assert!(
+        matrix_exp
+            .contains("to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)"),
+        "matrix_exp should sync exactly one scalar to host for the shared scaling factor"
+    );
+    assert!(
+        matrix_exp.contains("matrix_exp_global_1_norm_tensor"),
+        "matrix_exp should build the global norm through tensor-native helper logic"
+    );
+    assert!(
+        matrix_exp.contains("matrix_exp_tensor_native"),
+        "matrix_exp should hand off Padé evaluation to the tensor-native helper"
+    );
+    assert!(
+        tensor_native_helper.contains("ScalarReductionOp::Sum"),
+        "matrix_exp helper should build the global norm through tensor-native reductions"
+    );
+    assert!(
+        tensor_native_helper.contains("ScalarReductionOp::Max"),
+        "matrix_exp helper should reduce to one batch-global scalar norm"
+    );
+    assert!(
+        tensor_native_helper.contains("batched_gemm_with_semiring_tensors"),
+        "matrix_exp helper should use tensor-native batched GEMM for Padé evaluation"
+    );
+    assert!(
+        tensor_native_helper.contains("crate::solve(ctx, &lhs, &rhs)?"),
+        "matrix_exp helper should use tensor-native solve for the Padé denominator"
+    );
+    assert!(
+        !tensor_native_helper.contains("backend::slice_bridge::"),
+        "matrix_exp helper should avoid slice_bridge helpers"
     );
 }
 
