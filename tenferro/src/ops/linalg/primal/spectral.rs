@@ -9,7 +9,7 @@ unary_linalg_builder!(
     returns = Tensor<T>,
     capability = tenferro_linalg::backend::LinalgCapabilityOp::MatrixExp,
     op = "matrix_exp",
-    bounds = (T: LinalgRuntimeValue),
+    bounds = (T: crate::runtime::dispatch::MatrixExpLinalgDispatchValue),
     call = |ctx, builder| tenferro_linalg::matrix_exp::<T, _>(ctx, builder.tensor).map_err(Error::from)
 );
 
@@ -84,7 +84,7 @@ pub struct CondBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> CondBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::NormLinalgDispatchValue,
 {
     /// Sets the norm kind used in the condition number.
     /// # Examples

@@ -18,6 +18,8 @@ pub(crate) use backend_ops::*;
 pub(crate) use complex_ops::*;
 pub(crate) use layout::*;
 pub(crate) use lu::*;
+#[doc(hidden)]
+pub use matrix_exp::MatrixExpAbsTensor;
 pub(crate) use matrix_exp::*;
 pub(crate) use matrix_ops::*;
 pub(crate) use svd::*;

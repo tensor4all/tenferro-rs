@@ -546,6 +546,43 @@ fn cuda_public_fro_norm_matches_cpu_small_real_matrix() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_fro_norm_matches_cpu_small_complex_matrix() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(3.0_f64, 4.0),
+                Complex::new(0.0, -1.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(0.0, 2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = norm(&mut cpu_ctx, &a_cpu, NormKind::Fro).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = norm(ctx, &a_gpu, NormKind::Fro).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            "cuda public fro norm small complex matrix",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_lp_norm_matches_cpu_vector() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -2276,6 +2313,12 @@ fn public_cuda_inv_ex_matches_cpu_for_mixed_batch_real_matrix() {
 #[cfg(feature = "cuda")]
 fn public_cuda_fro_norm_matches_cpu_for_small_real_matrix() {
     cuda_public_fro_norm_matches_cpu_small_real_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_fro_norm_matches_cpu_for_small_complex_matrix() {
+    cuda_public_fro_norm_matches_cpu_small_complex_matrix();
 }
 
 #[test]

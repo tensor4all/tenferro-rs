@@ -44,7 +44,8 @@ where
 
         match kind {
             NormKind::Fro => {
-                let nrm = norm(ctx, tensor, NormKind::Fro).map_err(to_ad_err)?;
+                let nrm =
+                    crate::primal::norm_real_impl(ctx, tensor, NormKind::Fro).map_err(to_ad_err)?;
                 let (nrm_data, _) = extract_data(&nrm)?;
                 let nv = nrm_data[0];
                 let scale = if nv > T::zero() { dn / nv } else { T::zero() };
@@ -105,7 +106,8 @@ where
                         grad_a[i] = dn * sign;
                     }
                 } else {
-                    let nrm = norm(ctx, tensor, kind).map_err(to_ad_err)?;
+                    let nrm =
+                        crate::primal::norm_real_impl(ctx, tensor, kind).map_err(to_ad_err)?;
                     let (nrm_data, _) = extract_data(&nrm)?;
                     let nv = nrm_data[0];
                     if nv > T::zero() {
@@ -147,7 +149,7 @@ where
     match kind {
         NormKind::Fro => {
             // dA = dn * A / ||A||_F
-            let nrm = norm(ctx, tensor, NormKind::Fro)
+            let nrm = crate::primal::norm_real_impl(ctx, tensor, NormKind::Fro)
                 .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
             let (nrm_data, _) = extract_data(&nrm)?;
             for batch in 0..bc {

@@ -281,6 +281,52 @@ fn cond_rejects_unsupported_shapes_and_norms() {
 }
 
 #[test]
+fn complex_fro_norm_returns_real_tensor() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(3.0, 4.0),
+            num_complex::Complex64::new(0.0, -1.0),
+            num_complex::Complex64::new(0.0, 0.0),
+            num_complex::Complex64::new(0.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let got = norm(&mut ctx, &a, NormKind::Fro).unwrap();
+
+    assert!(got.dims().is_empty());
+    let data = tensor_data(&got);
+    assert_eq!(data.len(), 1);
+    assert!((data[0] - 30.0_f64.sqrt()).abs() < 1.0e-12);
+}
+
+#[test]
+fn complex_cond_returns_real_tensor() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(2.0, 0.0),
+            num_complex::Complex64::new(0.0, 0.0),
+            num_complex::Complex64::new(0.0, 0.0),
+            num_complex::Complex64::new(0.5, 0.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let got = cond(&mut ctx, &a, NormKind::Fro).unwrap();
+
+    assert!(got.dims().is_empty());
+    let data = tensor_data(&got);
+    assert_eq!(data.len(), 1);
+    assert!((data[0] - 4.25).abs() < 1.0e-12);
+}
+
+#[test]
 fn matrix_power_supports_zero_positive_and_negative_exponents() {
     let mut ctx = CpuContext::new(1);
     let diag =

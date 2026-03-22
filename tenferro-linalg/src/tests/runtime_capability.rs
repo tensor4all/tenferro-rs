@@ -378,7 +378,7 @@ fn pinv_path_stays_tensor_native() {
 
 #[test]
 fn nuclear_norm_branch_stays_tensor_native_after_svdvals() {
-    let norms = repo_file("src/primal/norms.rs");
+    let norms = repo_file("src/primal/norms/norm_impl.rs");
     let nuclear = file_section(
         &norms,
         "        NormKind::Nuclear => {\n            let singular_values = svdvals(ctx, tensor)?;",
@@ -397,7 +397,7 @@ fn nuclear_norm_branch_stays_tensor_native_after_svdvals() {
 
 #[test]
 fn spectral_norm_branch_stays_tensor_native_after_svdvals() {
-    let norms = repo_file("src/primal/norms.rs");
+    let norms = repo_file("src/primal/norms/norm_impl.rs");
     let spectral = file_section(
         &norms,
         "        NormKind::Spectral => {\n            let singular_values = svdvals(ctx, tensor)?;",
@@ -416,7 +416,7 @@ fn spectral_norm_branch_stays_tensor_native_after_svdvals() {
 
 #[test]
 fn vector_l1_inf_norms_use_scalar_bridge() {
-    let norms = repo_file("src/primal/norms.rs");
+    let norms = repo_file("src/primal/norms/norm_impl.rs");
     let vector_match = file_section(
         &norms,
         "    if tensor.ndim() == 1 {",
@@ -431,7 +431,7 @@ fn vector_l1_inf_norms_use_scalar_bridge() {
 
 #[test]
 fn matrix_l1_inf_norms_use_scalar_bridge() {
-    let norms = repo_file("src/primal/norms.rs");
+    let norms = repo_file("src/primal/norms/norm_impl.rs");
     let matrix_l1 = file_section(
         &norms,
         "        NormKind::L1 => {\n            if m == 0 || n == 0 {",
@@ -455,7 +455,7 @@ fn matrix_l1_inf_norms_use_scalar_bridge() {
 
 #[test]
 fn fro_norm_path_is_tensor_native_and_uses_sqrt_bridge() {
-    let norms = repo_file("src/primal/norms.rs");
+    let norms = repo_file("src/primal/norms/norm_impl.rs");
     let vector_fro = file_section(
         &norms,
         "            NormKind::Fro => {",
@@ -488,7 +488,7 @@ fn fro_norm_path_is_tensor_native_and_uses_sqrt_bridge() {
 
 #[test]
 fn vector_lp_norm_path_is_tensor_native_and_uses_pow_bridge() {
-    let norms = repo_file("src/primal/norms.rs");
+    let norms = repo_file("src/primal/norms/norm_impl.rs");
     let vector_lp = file_section(
         &norms,
         "        let NormKind::Lp(p) = kind else {",
@@ -691,5 +691,29 @@ fn complex_slogdet_path_uses_complex_real_and_complex_scale_without_slice_bridge
     assert!(
         !slogdet.contains("backend::slice_bridge::"),
         "complex slogdet should avoid slice_bridge helpers"
+    );
+}
+
+#[test]
+fn complex_norm_branch_uses_complex_real_bridge_and_avoids_host_slicing() {
+    let norm_impl = repo_file("src/primal/norms/norm_impl.rs");
+    let complex_norm = file_section(
+        &norm_impl,
+        "fn norm_complex_impl",
+        "macro_rules! impl_norm_primal_real",
+    );
+
+    assert!(
+        complex_norm.contains("complex_real_unary_same_shape")
+            || complex_norm.contains("complex_real_reduce_keep_axes"),
+        "complex norm path should use complex-real bridge helpers"
+    );
+    assert!(
+        !complex_norm.contains("extract_slice("),
+        "norm should avoid extract_slice(...)"
+    );
+    assert!(
+        !complex_norm.contains("backend::slice_bridge::"),
+        "norm should avoid slice_bridge helpers"
     );
 }

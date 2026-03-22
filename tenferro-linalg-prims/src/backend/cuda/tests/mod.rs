@@ -2459,14 +2459,14 @@ fn cuda_backend_reports_only_wired_capabilities() {
         )
     );
     assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex32>>::has_linalg_support(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex32>>::has_linalg_support(
             LinalgCapabilityOp::Norm
-        )
+        ) == has_native_cuda
     );
     assert!(
-        !<super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::Norm
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex32>>::has_linalg_support(

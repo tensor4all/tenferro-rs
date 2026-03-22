@@ -27,7 +27,19 @@ pub(crate) const PADE13_COEFFS: [f64; 14] = [
 /// Theta threshold for order-13 Padé (f64).
 pub(crate) const THETA_13: f64 = 5.371920351148152;
 
-pub(crate) trait MatrixExpAbsTensor<C>: KernelLinalgScalar {
+#[doc(hidden)]
+/// Hidden dispatch trait for `matrix_exp` absolute-value preparation.
+///
+/// # Examples
+///
+/// ```ignore
+/// fn require_matrix_exp_abs<T, C>()
+/// where
+///     T: tenferro_linalg::MatrixExpAbsTensor<C>,
+/// {
+/// }
+/// ```
+pub trait MatrixExpAbsTensor<C>: KernelLinalgScalar {
     fn matrix_exp_abs_tensor(ctx: &mut C, input: &Tensor<Self>) -> Result<Tensor<Self::Real>>;
 }
 

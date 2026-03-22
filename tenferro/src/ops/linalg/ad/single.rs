@@ -163,7 +163,7 @@ pub struct DetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> DetAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::ScaledRealLinalgDispatchValue,
 {
     /// Executes AD determinant.
     /// # Examples
@@ -212,7 +212,7 @@ pub struct PinvAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> PinvAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::ScaledRealLinalgDispatchValue,
 {
     /// Sets rcond.
     /// # Examples
@@ -279,7 +279,7 @@ pub struct MatrixExpAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> MatrixExpAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::RealMatrixExpLinalgDispatchValue,
 {
     /// Executes AD matrix exponential.
     /// # Examples
@@ -408,7 +408,7 @@ pub struct NormAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> NormAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::NormLinalgDispatchValue,
 {
     /// Sets norm kind.
     /// # Examples

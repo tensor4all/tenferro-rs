@@ -216,9 +216,13 @@ mod rrules;
 
 pub(crate) use ad_helpers::*;
 
+#[doc(hidden)]
+pub use ad_helpers::MatrixExpAbsTensor;
 pub use frules::*;
 pub(crate) use primal::require_linalg_support;
 pub use primal::*;
+#[doc(hidden)]
+pub use prims_bridge::ScaleTensorByRealSameShape;
 pub use result_types::*;
 pub use rrules::*;
 #[doc(inline)]

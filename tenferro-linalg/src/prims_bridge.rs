@@ -319,10 +319,21 @@ where
     Ok(output)
 }
 
-/// Internal bridge for scaling a tensor by a same-shape real tensor.
+#[doc(hidden)]
+/// Hidden dispatch trait for scaling a tensor by a same-shape real tensor.
 ///
 /// This keeps public linalg entrypoints generic across real and complex scalar
 /// families while routing to the appropriate backend family underneath.
+///
+/// # Examples
+///
+/// ```ignore
+/// fn require_scale_by_real<T, C>()
+/// where
+///     T: tenferro_linalg::ScaleTensorByRealSameShape<C>,
+/// {
+/// }
+/// ```
 pub trait ScaleTensorByRealSameShape<C>: LinalgScalar {
     fn scale_tensor_by_real_same_shape(
         ctx: &mut C,

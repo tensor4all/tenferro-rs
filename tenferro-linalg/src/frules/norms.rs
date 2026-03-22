@@ -34,7 +34,7 @@ where
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm_frule")
         .map_err(to_ad_err)?;
 
-    let nrm = norm(ctx, tensor, kind)
+    let nrm = crate::primal::norm_real_impl(ctx, tensor, kind)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
 
     if tensor.ndim() == 1 {

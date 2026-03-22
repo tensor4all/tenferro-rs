@@ -168,7 +168,7 @@ eager_unary!(
     /// ```
     fn det -> AdTensor<T> => det_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: crate::runtime::dispatch::ScaledRealLinalgDispatchValue,
     }
 );
 
@@ -184,7 +184,7 @@ eager_unary!(
     /// ```
     fn slogdet -> TypedSlogdetResult<T> => slogdet_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: crate::runtime::dispatch::SlogdetLinalgDispatchValue,
     }
 );
 
@@ -217,7 +217,7 @@ eager_unary!(
     /// ```
     fn pinv -> AdTensor<T> => pinv_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: crate::runtime::dispatch::ScaledRealLinalgDispatchValue,
     }
 );
 
@@ -233,7 +233,7 @@ eager_unary!(
     /// ```
     fn matrix_exp -> AdTensor<T> => matrix_exp_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: crate::runtime::dispatch::RealMatrixExpLinalgDispatchValue,
     }
 );
 
@@ -264,7 +264,7 @@ eager_binary!(
 /// ```
 pub fn norm<T: Scalar>(tensor: &AdTensor<T>) -> Result<AdTensor<T>>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::NormLinalgDispatchValue,
 {
     super::norm_ad(tensor).kind(NormKind::Fro).run()
 }

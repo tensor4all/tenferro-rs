@@ -16,4 +16,5 @@ pub use norms::*;
 pub use spectral::*;
 pub use tensor_ops::*;
 
+pub(crate) use norms::norm_real_impl;
 pub(crate) use spectral::require_linalg_support;

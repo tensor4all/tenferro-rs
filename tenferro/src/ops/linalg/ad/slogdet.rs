@@ -13,7 +13,7 @@ pub struct SlogdetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SlogdetAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::SlogdetLinalgDispatchValue,
 {
     /// Executes AD slogdet.
     /// # Examples
