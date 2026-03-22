@@ -5,7 +5,8 @@ use tenferro_device::LogicalMemorySpace;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
-    ComplexRealPrimsDescriptor, ComplexRealUnaryOp, CpuBackend, CpuContext, TensorComplexRealPrims,
+    ComplexRealPrimsDescriptor, ComplexRealUnaryOp, CpuBackend, CpuContext, ScalarReductionOp,
+    TensorComplexRealPrims,
 };
 
 fn assert_close_slice_f64(actual: &[f64], expected: &[f64], tol: f64) {
@@ -35,6 +36,43 @@ where
     };
     let mut output = Tensor::<C::Real>::zeros(
         dims,
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <CpuBackend as TensorComplexRealPrims<C>>::plan(
+        &mut ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )
+    .unwrap();
+    <CpuBackend as TensorComplexRealPrims<C>>::execute(
+        &mut ctx,
+        &plan,
+        <C::Real as One>::one(),
+        &[&input],
+        <C::Real as Zero>::zero(),
+        &mut output,
+    )
+    .unwrap();
+    output
+}
+
+fn execute_abs_reduce_real_cpu<C>(values: &[C], dims: &[usize]) -> Tensor<C::Real>
+where
+    C: Scalar + num_complex::ComplexFloat,
+    C::Real: Scalar + Zero + One,
+    CpuBackend: TensorComplexRealPrims<C, Real = C::Real, Context = CpuContext>,
+{
+    let mut ctx = CpuContext::new(1);
+    let input = Tensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap();
+    let desc = ComplexRealPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1],
+        unary_op: ComplexRealUnaryOp::Abs,
+        reduction_op: ScalarReductionOp::Sum,
+    };
+    let mut output = Tensor::<C::Real>::zeros(
+        &[dims[1]],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
     );
@@ -89,6 +127,21 @@ fn cpu_complex_real_phase1_supports_real_and_imag_for_complex32_and_complex64() 
     );
     assert!(<CpuBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(real_desc));
     assert!(<CpuBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(imag_desc));
+}
+
+#[test]
+fn cpu_complex_real_phase1_supports_reduction_for_complex32_and_complex64() {
+    let desc = ComplexRealPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1],
+        unary_op: ComplexRealUnaryOp::Abs,
+        reduction_op: ScalarReductionOp::Sum,
+    };
+
+    assert!(
+        <CpuBackend as TensorComplexRealPrims<Complex32>>::has_complex_real_support(desc.clone())
+    );
+    assert!(<CpuBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(desc));
 }
 
 #[test]
@@ -207,4 +260,18 @@ fn cpu_complex_real_phase1_executes_imag_for_complex32() {
         &[4.0, 12.0, 15.0, 24.0],
         1.0e-5,
     );
+}
+
+#[test]
+fn cpu_complex_real_phase1_executes_abs_sum_reduction_for_complex64() {
+    let output = execute_abs_reduce_real_cpu::<Complex64>(
+        &[
+            Complex64::new(3.0, 4.0),
+            Complex64::new(5.0, 12.0),
+            Complex64::new(8.0, 15.0),
+            Complex64::new(7.0, 24.0),
+        ],
+        &[2, 2],
+    );
+    assert_close_slice_f64(output.buffer().as_slice().unwrap(), &[18.0, 42.0], 1.0e-12);
 }

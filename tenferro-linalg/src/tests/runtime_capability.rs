@@ -135,6 +135,25 @@ fn complex_real_bridge_stays_context_driven_and_avoids_host_extraction() {
 }
 
 #[test]
+fn complex_real_reduce_bridge_uses_family_level_reduction_descriptor() {
+    let prims_bridge = repo_file("src/prims_bridge.rs");
+    let complex_real_reduce = file_section(
+        &prims_bridge,
+        "pub(crate) fn complex_real_reduce_keep_axes",
+        "#[cfg(test)]",
+    );
+
+    assert!(
+        complex_real_reduce.contains("ComplexRealPrimsDescriptor::Reduction"),
+        "complex_real_reduce_keep_axes should lower through a family-level complex-real reduction descriptor"
+    );
+    assert!(
+        !complex_real_reduce.contains("scalar_reduce_keep_axes(ctx, &unary"),
+        "complex_real_reduce_keep_axes should not expand reduction through a separate scalar_reduce_keep_axes(...) bridge"
+    );
+}
+
+#[test]
 fn scalar_where_bridge_stays_context_driven_and_avoids_host_extraction() {
     let prims_bridge = repo_file("src/prims_bridge.rs");
     let scalar_where = file_section(

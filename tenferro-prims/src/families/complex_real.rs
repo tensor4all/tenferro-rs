@@ -5,7 +5,7 @@ use tenferro_tensor::Tensor;
 
 #[cfg(not(feature = "cuda"))]
 use crate::{CudaBackend, CudaContext};
-use crate::{RocmBackend, RocmContext};
+use crate::{RocmBackend, RocmContext, ScalarReductionOp};
 
 /// Cross-dtype complex-to-real unary operations.
 ///
@@ -28,7 +28,7 @@ pub enum ComplexRealUnaryOp {
     Imag,
 }
 
-/// Descriptor for complex-to-real unary planning.
+/// Descriptor for complex-to-real planning.
 ///
 /// # Examples
 ///
@@ -39,6 +39,14 @@ pub enum ComplexRealUnaryOp {
 ///     op: ComplexRealUnaryOp::Abs,
 /// };
 /// assert!(matches!(desc, ComplexRealPrimsDescriptor::PointwiseUnary { .. }));
+///
+/// let desc = ComplexRealPrimsDescriptor::Reduction {
+///     modes_a: vec![0, 1],
+///     modes_c: vec![1],
+///     unary_op: ComplexRealUnaryOp::Abs,
+///     reduction_op: tenferro_prims::ScalarReductionOp::Sum,
+/// };
+/// assert!(matches!(desc, ComplexRealPrimsDescriptor::Reduction { .. }));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ComplexRealPrimsDescriptor {
@@ -46,6 +54,17 @@ pub enum ComplexRealPrimsDescriptor {
     PointwiseUnary {
         /// The unary operation to apply.
         op: ComplexRealUnaryOp,
+    },
+    /// Apply a complex-to-real unary map and then reduce over selected axes.
+    Reduction {
+        /// Input modes associated with the source tensor.
+        modes_a: Vec<u32>,
+        /// Output modes that remain after reduction.
+        modes_c: Vec<u32>,
+        /// The unary operation to apply before reduction.
+        unary_op: ComplexRealUnaryOp,
+        /// The reduction operator to apply to the real-valued result.
+        reduction_op: ScalarReductionOp,
     },
 }
 

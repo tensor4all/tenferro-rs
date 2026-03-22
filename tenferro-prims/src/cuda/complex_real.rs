@@ -2,17 +2,19 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64, ComplexFloat};
-use tenferro_algebra::Scalar;
+use num_traits::{One, Zero};
+use tenferro_algebra::{Scalar, Standard};
 use tenferro_device::{
     cuda::runtime::{ComplexRealUnaryOp as RuntimeComplexRealUnaryOp, CudaRuntime},
     Error, LogicalMemorySpace, Result,
 };
-use tenferro_tensor::Tensor;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::cuda::CudaContext;
 use crate::{
-    validate_execute_inputs, validate_shape_count, validate_shape_eq, ComplexRealPrimsDescriptor,
-    ComplexRealUnaryOp, CudaBackend, TensorComplexRealPrims,
+    validate_execute_inputs, validate_rank, validate_shape_count, validate_shape_eq,
+    ComplexRealPrimsDescriptor, ComplexRealUnaryOp, CudaBackend, ScalarPrimsDescriptor,
+    ScalarReductionOp, TensorComplexRealPrims, TensorScalarPrims,
 };
 
 /// CUDA execution plan for the complex-to-real unary protocol family.
@@ -26,8 +28,20 @@ use crate::{
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CudaComplexRealPlan<T: Scalar> {
-    kind: ComplexRealUnaryOp,
+    kind: CudaComplexRealPlanKind,
     _marker: PhantomData<T>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CudaComplexRealPlanKind {
+    PointwiseUnary {
+        op: ComplexRealUnaryOp,
+    },
+    Reduction {
+        unary_op: ComplexRealUnaryOp,
+        reduction_op: ScalarReductionOp,
+        reduced_axes: Vec<usize>,
+    },
 }
 
 trait RuntimeComplexRealScalar: Scalar + ComplexFloat + 'static {
@@ -165,11 +179,81 @@ where
                 )));
             }
             Ok(CudaComplexRealPlan {
-                kind: *op,
+                kind: CudaComplexRealPlanKind::PointwiseUnary { op: *op },
                 _marker: PhantomData,
             })
         }
+        _ => Err(Error::InvalidArgument(
+            "expected complex-real unary descriptor".into(),
+        )),
     }
+}
+
+fn plan_complex_real_reduction<T>(
+    desc: &ComplexRealPrimsDescriptor,
+    shapes: &[&[usize]],
+) -> Result<CudaComplexRealPlan<T>>
+where
+    T: RuntimeComplexRealScalar,
+    T::Real: Scalar + Send + Sync,
+{
+    match desc {
+        ComplexRealPrimsDescriptor::Reduction {
+            modes_a,
+            modes_c,
+            unary_op,
+            reduction_op,
+        } => {
+            if !supports_complex_real_unary(*unary_op) {
+                return Err(Error::InvalidArgument(format!(
+                    "complex-real unary operation {unary_op:?} is not supported on CudaBackend for {}",
+                    std::any::type_name::<T>()
+                )));
+            }
+            let reduced_axes =
+                plan_reduction_axes(modes_a, modes_c, shapes, "CudaComplexRealReduction")?;
+            Ok(CudaComplexRealPlan {
+                kind: CudaComplexRealPlanKind::Reduction {
+                    unary_op: *unary_op,
+                    reduction_op: *reduction_op,
+                    reduced_axes,
+                },
+                _marker: PhantomData,
+            })
+        }
+        _ => Err(Error::InvalidArgument(
+            "expected complex-real reduction descriptor".into(),
+        )),
+    }
+}
+
+fn plan_reduction_axes(
+    modes_a: &[u32],
+    modes_c: &[u32],
+    shapes: &[&[usize]],
+    op_name: &str,
+) -> Result<Vec<usize>> {
+    validate_shape_count(shapes, 2, op_name)?;
+    validate_rank(shapes[0], modes_a.len(), &format!("{op_name} input"))?;
+    validate_rank(shapes[1], modes_c.len(), &format!("{op_name} output"))?;
+
+    let mut expected_output = Vec::with_capacity(modes_c.len());
+    for &mode in modes_c {
+        let Some(axis) = modes_a.iter().position(|&candidate| candidate == mode) else {
+            return Err(Error::InvalidArgument(format!(
+                "{op_name}: output mode {mode} not found in input modes {modes_a:?}"
+            )));
+        };
+        expected_output.push(shapes[0][axis]);
+    }
+    validate_shape_eq(shapes[1], &expected_output, &format!("{op_name} output"))?;
+
+    Ok(modes_a
+        .iter()
+        .enumerate()
+        .filter(|(_, mode)| !modes_c.contains(mode))
+        .map(|(axis, _)| axis)
+        .collect())
 }
 
 fn execute_complex_real_unary<T>(
@@ -183,6 +267,7 @@ fn execute_complex_real_unary<T>(
 where
     T: RuntimeComplexRealScalar,
     T::Real: Scalar + Send + Sync,
+    CudaBackend: TensorScalarPrims<Standard<T::Real>, Context = CudaContext>,
 {
     validate_execute_inputs(inputs, 1, "CudaComplexRealPointwiseUnary")?;
     ensure_cuda_tensor(inputs[0], ctx.device_id(), "CUDA complex-real input")?;
@@ -194,26 +279,97 @@ where
     let output_strides = output.strides().to_vec();
     let input_ptr = tensor_device_ptr(input, "CUDA complex-real input")?;
     let output_ptr = tensor_device_mut_ptr(output, "CUDA complex-real output")?;
-    let runtime_op = match plan.kind {
-        ComplexRealUnaryOp::Abs => RuntimeComplexRealUnaryOp::Abs,
-        ComplexRealUnaryOp::Real => RuntimeComplexRealUnaryOp::Real,
-        ComplexRealUnaryOp::Imag => RuntimeComplexRealUnaryOp::Imag,
-    };
+    match &plan.kind {
+        CudaComplexRealPlanKind::PointwiseUnary { op } => {
+            let runtime_op = match op {
+                ComplexRealUnaryOp::Abs => RuntimeComplexRealUnaryOp::Abs,
+                ComplexRealUnaryOp::Real => RuntimeComplexRealUnaryOp::Real,
+                ComplexRealUnaryOp::Imag => RuntimeComplexRealUnaryOp::Imag,
+            };
 
-    unsafe {
-        T::pointwise_unary_complex_real_raw(
-            runtime.as_ref(),
-            runtime_op,
-            alpha,
-            input_ptr,
-            &output_dims,
-            input.strides(),
-            input.offset(),
-            beta,
-            output_ptr,
-            &output_strides,
-            output.offset(),
-        )
+            unsafe {
+                T::pointwise_unary_complex_real_raw(
+                    runtime.as_ref(),
+                    runtime_op,
+                    alpha,
+                    input_ptr,
+                    &output_dims,
+                    input.strides(),
+                    input.offset(),
+                    beta,
+                    output_ptr,
+                    &output_strides,
+                    output.offset(),
+                )
+            }
+        }
+        CudaComplexRealPlanKind::Reduction {
+            unary_op,
+            reduction_op,
+            reduced_axes,
+        } => {
+            let temp = Tensor::<T::Real>::zeros(
+                input.dims(),
+                output.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let temp_strides = temp.strides().to_vec();
+            let temp_ptr = tensor_device_mut_ptr(&temp, "CUDA complex-real temporary")?;
+            let runtime_op = match unary_op {
+                ComplexRealUnaryOp::Abs => RuntimeComplexRealUnaryOp::Abs,
+                ComplexRealUnaryOp::Real => RuntimeComplexRealUnaryOp::Real,
+                ComplexRealUnaryOp::Imag => RuntimeComplexRealUnaryOp::Imag,
+            };
+            unsafe {
+                T::pointwise_unary_complex_real_raw(
+                    runtime.as_ref(),
+                    runtime_op,
+                    T::Real::one(),
+                    input_ptr,
+                    input.dims(),
+                    input.strides(),
+                    input.offset(),
+                    T::Real::zero(),
+                    temp_ptr,
+                    &temp_strides,
+                    temp.offset(),
+                )?;
+            }
+
+            let modes_a: Vec<u32> = (0..temp.ndim())
+                .map(|axis| {
+                    u32::try_from(axis).map_err(|_| {
+                        Error::InvalidArgument(format!("axis {axis} exceeds u32 range"))
+                    })
+                })
+                .collect::<Result<_>>()?;
+            let modes_c: Vec<u32> = modes_a
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(axis, _)| !reduced_axes.contains(axis))
+                .map(|(_, mode)| mode)
+                .collect();
+            let desc = ScalarPrimsDescriptor::Reduction {
+                modes_a,
+                modes_c,
+                op: *reduction_op,
+            };
+            let plan = <CudaBackend as TensorScalarPrims<Standard<T::Real>>>::plan(
+                ctx,
+                &desc,
+                &[temp.dims(), output.dims()],
+            )?;
+            <CudaBackend as TensorScalarPrims<Standard<T::Real>>>::execute(
+                ctx,
+                &plan,
+                alpha,
+                &[&temp],
+                beta,
+                output,
+            )?;
+            Ok(())
+        }
     }
 }
 
@@ -229,7 +385,14 @@ macro_rules! impl_cuda_complex_real_prims {
                 desc: &ComplexRealPrimsDescriptor,
                 shapes: &[&[usize]],
             ) -> Result<Self::Plan> {
-                plan_complex_real_unary::<$scalar>(desc, shapes)
+                match desc {
+                    ComplexRealPrimsDescriptor::PointwiseUnary { .. } => {
+                        plan_complex_real_unary::<$scalar>(desc, shapes)
+                    }
+                    ComplexRealPrimsDescriptor::Reduction { .. } => {
+                        plan_complex_real_reduction::<$scalar>(desc, shapes)
+                    }
+                }
             }
 
             fn execute(
@@ -250,6 +413,16 @@ macro_rules! impl_cuda_complex_real_prims {
                         op: ComplexRealUnaryOp::Abs
                             | ComplexRealUnaryOp::Real
                             | ComplexRealUnaryOp::Imag
+                    } | ComplexRealPrimsDescriptor::Reduction {
+                        unary_op: ComplexRealUnaryOp::Abs
+                            | ComplexRealUnaryOp::Real
+                            | ComplexRealUnaryOp::Imag,
+                        reduction_op: ScalarReductionOp::Sum
+                            | ScalarReductionOp::Prod
+                            | ScalarReductionOp::Mean
+                            | ScalarReductionOp::Max
+                            | ScalarReductionOp::Min,
+                        ..
                     }
                 )
             }

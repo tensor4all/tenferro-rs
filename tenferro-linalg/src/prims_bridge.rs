@@ -436,11 +436,48 @@ pub(crate) fn complex_real_reduce_keep_axes<T, C>(
 ) -> Result<Tensor<<T as LinalgScalar>::Real>>
 where
     T: LinalgScalar + ComplexFloat<Real = <T as LinalgScalar>::Real>,
-    C: TensorComplexRealContextFor<T> + TensorScalarContextFor<Standard<<T as LinalgScalar>::Real>>,
+    C: TensorComplexRealContextFor<T>,
     C::ComplexRealBackend: TensorComplexRealPrims<T, Context = C, Real = <T as LinalgScalar>::Real>,
 {
-    let unary = complex_real_unary_same_shape(ctx, input, unary_op)?;
-    scalar_reduce_keep_axes(ctx, &unary, kept_axes, reduction_op)
+    let modes_a: Vec<u32> = (0..input.ndim())
+        .map(|axis| {
+            u32::try_from(axis)
+                .map_err(|_| Error::InvalidArgument(format!("axis {axis} exceeds u32 range")))
+        })
+        .collect::<Result<_>>()?;
+    let modes_c: Vec<u32> = kept_axes
+        .iter()
+        .map(|&axis| {
+            u32::try_from(axis)
+                .map_err(|_| Error::InvalidArgument(format!("axis {axis} exceeds u32 range")))
+        })
+        .collect::<Result<_>>()?;
+    let desc = ComplexRealPrimsDescriptor::Reduction {
+        modes_a,
+        modes_c,
+        unary_op,
+        reduction_op,
+    };
+    let output_dims: Vec<usize> = kept_axes.iter().map(|&axis| input.dims()[axis]).collect();
+    let mut output = Tensor::zeros(
+        &output_dims,
+        input.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    );
+    let plan = <C::ComplexRealBackend as TensorComplexRealPrims<T>>::plan(
+        ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )?;
+    <C::ComplexRealBackend as TensorComplexRealPrims<T>>::execute(
+        ctx,
+        &plan,
+        <T as LinalgScalar>::Real::one(),
+        &[input],
+        <T as LinalgScalar>::Real::zero(),
+        &mut output,
+    )?;
+    Ok(output)
 }
 
 #[cfg(test)]
