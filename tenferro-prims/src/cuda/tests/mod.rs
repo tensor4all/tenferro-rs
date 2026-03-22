@@ -1,3 +1,4 @@
+mod complex;
 mod organization;
 
 use crate::SemiringBinaryOp;
@@ -62,6 +63,14 @@ fn available_cutensor_library_path() -> Option<&'static str> {
     ]
     .into_iter()
     .find(|path| std::path::Path::new(path).exists())
+}
+
+fn cuda_runtime_is_available() -> Option<&'static str> {
+    let path = available_cutensor_library_path()?;
+    if !cuda_device_zero_is_available() {
+        return None;
+    }
+    Some(path)
 }
 
 fn cuda_device_zero_is_available() -> bool {

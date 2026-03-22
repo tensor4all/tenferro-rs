@@ -24,10 +24,9 @@
 
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use cudarc::driver::{LaunchConfig, PushKernelArg};
-use cudarc::nvrtc::{compile_ptx, Ptx};
 #[cfg(unix)]
 use libloading::os::unix::{Library as UnixLibrary, RTLD_GLOBAL, RTLD_NOW};
 use num_complex::{Complex32, Complex64};
@@ -44,8 +43,12 @@ use crate::{
 mod analytic;
 mod complex_real;
 mod complex_scale;
+mod custom;
 mod execution;
+mod family_common;
 mod planning;
+mod pointwise_ops;
+mod resolve_conj;
 mod runtime;
 mod scalar;
 mod scalar_type;
@@ -54,57 +57,12 @@ mod wrappers;
 pub use analytic::CudaAnalyticPlan;
 pub use complex_real::CudaComplexRealPlan;
 pub use complex_scale::CudaComplexScalePlan;
+use custom::CustomCudaRuntime;
 use execution::{execute_plan, has_fast_path, plan_core_descriptor, plan_fast_descriptor};
 use planning::{check_status, NativeCutensorPlan};
+use resolve_conj::{resolve_conj_ptx, RESOLVE_CONJ_KERNEL_NAME_C32, RESOLVE_CONJ_KERNEL_NAME_C64};
 pub use scalar::CudaScalarPlan;
 use wrappers::HandleWrapper;
-
-const RESOLVE_CONJ_KERNEL_NAME_C32: &str = "resolve_conj_complex32";
-const RESOLVE_CONJ_KERNEL_NAME_C64: &str = "resolve_conj_complex64";
-const RESOLVE_CONJ_CUDA_SRC: &str = r#"
-typedef struct { float re; float im; } complex32_t;
-typedef struct { double re; double im; } complex64_t;
-
-extern "C" __global__ void resolve_conj_complex32(
-    const complex32_t* src,
-    complex32_t* dst,
-    unsigned long long len
-) {
-    unsigned long long idx =
-        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
-        (unsigned long long)threadIdx.x;
-    if (idx >= len) {
-        return;
-    }
-    dst[idx].re = src[idx].re;
-    dst[idx].im = -src[idx].im;
-}
-
-extern "C" __global__ void resolve_conj_complex64(
-    const complex64_t* src,
-    complex64_t* dst,
-    unsigned long long len
-) {
-    unsigned long long idx =
-        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
-        (unsigned long long)threadIdx.x;
-    if (idx >= len) {
-        return;
-    }
-    dst[idx].re = src[idx].re;
-    dst[idx].im = -src[idx].im;
-}
-"#;
-
-fn resolve_conj_ptx() -> Result<Ptx> {
-    static PTX: OnceLock<std::result::Result<Ptx, String>> = OnceLock::new();
-    PTX.get_or_init(|| {
-        compile_ptx(RESOLVE_CONJ_CUDA_SRC)
-            .map_err(|err| format!("NVRTC compile failed for resolve_conj kernel: {err:?}"))
-    })
-    .clone()
-    .map_err(Error::DeviceError)
-}
 
 /// CUDA execution context backed by cudarc + cuTENSOR vtable.
 ///
@@ -126,6 +84,8 @@ pub struct CudaContext {
     pub(super) vtable: Arc<CutensorVtable>,
     /// Shared Layer 0 CUDA runtime handle reused across crates.
     pub(super) shared_runtime: Arc<device_cuda::CudaRuntime>,
+    /// Helper runtime for custom pointwise complex kernels.
+    custom: Arc<CustomCudaRuntime>,
 }
 
 impl CudaContext {
@@ -276,6 +236,7 @@ impl CudaBackend {
             .context()
             .bind_to_thread()
             .map_err(|e| Error::DeviceError(format!("CUDA runtime init failed: {e:?}")))?;
+        let custom = Arc::new(CustomCudaRuntime::new(0)?);
 
         let mut handle_raw: cutensorHandle_t = ptr::null_mut();
         let status = unsafe { (vtable.create)(&mut handle_raw) };
@@ -290,6 +251,7 @@ impl CudaBackend {
             device_id: 0,
             vtable: Arc::clone(&vtable),
             shared_runtime,
+            custom,
         };
 
         Ok((

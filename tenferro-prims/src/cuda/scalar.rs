@@ -18,7 +18,12 @@ use crate::{
 };
 
 use super::{
+    custom::{ComplexBinaryKernelOp, ComplexUnaryKernelOp},
+    family_common::scale_standard_alpha,
     planning::{check_status, plan_elementwise_trinary, plan_reduction, TrinaryPlanSpec},
+    pointwise_ops::{
+        execute_binary_trinary, execute_custom_complex_binary, execute_custom_complex_unary,
+    },
     runtime::{allocate_workspace, null_stream, tensor_device_ptr_with_offset},
     scalar_type::{scalar_compute_descriptor, scalar_data_type},
     CudaContext,
@@ -488,15 +493,30 @@ fn supports_scalar_reduction(op: ScalarReductionOp) -> bool {
 }
 
 fn supports_complex_scalar_unary(_op: ScalarUnaryOp) -> bool {
-    false
+    matches!(
+        _op,
+        ScalarUnaryOp::Neg
+            | ScalarUnaryOp::Conj
+            | ScalarUnaryOp::Abs
+            | ScalarUnaryOp::Reciprocal
+            | ScalarUnaryOp::Real
+            | ScalarUnaryOp::Imag
+            | ScalarUnaryOp::Square
+    )
 }
 
 fn supports_complex_scalar_binary(op: ScalarBinaryOp) -> bool {
-    matches!(op, ScalarBinaryOp::Mul)
+    matches!(
+        op,
+        ScalarBinaryOp::Add | ScalarBinaryOp::Sub | ScalarBinaryOp::Mul | ScalarBinaryOp::Div
+    )
 }
 
 fn supports_complex_scalar_reduction(op: ScalarReductionOp) -> bool {
-    matches!(op, ScalarReductionOp::Prod)
+    matches!(
+        op,
+        ScalarReductionOp::Sum | ScalarReductionOp::Prod | ScalarReductionOp::Mean
+    )
 }
 
 fn to_runtime_unary(op: ScalarUnaryOp) -> Result<RealUnaryOp> {
@@ -964,9 +984,69 @@ where
     match &plan.kind {
         CudaScalarPlanKind::PointwiseUnary { op } => {
             validate_execute_inputs(inputs, 1, "CudaScalarPointwiseUnary")?;
-            Err(Error::InvalidArgument(format!(
-                "scalar unary operation {op:?} is not supported on CudaBackend for complex scalars"
-            )))
+            let input = resolved_input(ctx, inputs[0]);
+            ensure_cuda_tensor(&input, ctx.device_id(), "CUDA scalar unary input")?;
+            match op {
+                ScalarUnaryOp::Neg => execute_custom_complex_unary(
+                    ctx,
+                    ComplexUnaryKernelOp::Neg,
+                    alpha,
+                    &input,
+                    beta,
+                    output,
+                ),
+                ScalarUnaryOp::Conj => execute_custom_complex_unary(
+                    ctx,
+                    ComplexUnaryKernelOp::Conj,
+                    alpha,
+                    &input,
+                    beta,
+                    output,
+                ),
+                ScalarUnaryOp::Abs => execute_custom_complex_unary(
+                    ctx,
+                    ComplexUnaryKernelOp::Abs,
+                    alpha,
+                    &input,
+                    beta,
+                    output,
+                ),
+                ScalarUnaryOp::Reciprocal => execute_custom_complex_unary(
+                    ctx,
+                    ComplexUnaryKernelOp::Reciprocal,
+                    alpha,
+                    &input,
+                    beta,
+                    output,
+                ),
+                ScalarUnaryOp::Real => execute_custom_complex_unary(
+                    ctx,
+                    ComplexUnaryKernelOp::Real,
+                    alpha,
+                    &input,
+                    beta,
+                    output,
+                ),
+                ScalarUnaryOp::Imag => execute_custom_complex_unary(
+                    ctx,
+                    ComplexUnaryKernelOp::Imag,
+                    alpha,
+                    &input,
+                    beta,
+                    output,
+                ),
+                ScalarUnaryOp::Square => execute_binary_trinary(
+                    ctx,
+                    &input,
+                    &input,
+                    output,
+                    crate::cuda_ffi::CUTENSOR_OP_IDENTITY,
+                    crate::cuda_ffi::CUTENSOR_OP_MUL,
+                    alpha,
+                    S::one(),
+                    beta,
+                ),
+            }
         }
         CudaScalarPlanKind::PointwiseBinary { op } => {
             validate_execute_inputs(inputs, 2, "CudaScalarPointwiseBinary")?;
@@ -975,9 +1055,38 @@ where
             ensure_cuda_tensor(&lhs, ctx.device_id(), "CUDA scalar binary lhs")?;
             ensure_cuda_tensor(&rhs, ctx.device_id(), "CUDA scalar binary rhs")?;
             match op {
+                ScalarBinaryOp::Add => execute_binary_trinary(
+                    ctx,
+                    &lhs,
+                    &rhs,
+                    output,
+                    crate::cuda_ffi::CUTENSOR_OP_IDENTITY,
+                    crate::cuda_ffi::CUTENSOR_OP_ADD,
+                    alpha,
+                    S::one(),
+                    beta,
+                ),
                 ScalarBinaryOp::Mul => {
                     execute_complex_binary_mul(ctx, alpha, &lhs, &rhs, beta, output)
                 }
+                ScalarBinaryOp::Sub => execute_custom_complex_binary(
+                    ctx,
+                    ComplexBinaryKernelOp::Sub,
+                    alpha,
+                    &lhs,
+                    &rhs,
+                    beta,
+                    output,
+                ),
+                ScalarBinaryOp::Div => execute_custom_complex_binary(
+                    ctx,
+                    ComplexBinaryKernelOp::Div,
+                    alpha,
+                    &lhs,
+                    &rhs,
+                    beta,
+                    output,
+                ),
                 _ => Err(Error::InvalidArgument(format!(
                     "scalar binary operation {op:?} is not supported on CudaBackend for complex scalars"
                 ))),
@@ -988,13 +1097,16 @@ where
         ))),
         CudaScalarPlanKind::Reduction {
             kept_axes,
-            reduced_axes: _reduced_axes,
+            reduced_axes,
             op,
         } => {
             validate_execute_inputs(inputs, 1, "CudaScalarReduction")?;
             let input = resolved_input(ctx, inputs[0]);
             ensure_cuda_tensor(&input, ctx.device_id(), "CUDA scalar reduction input")?;
-            if !matches!(op, ScalarReductionOp::Prod) {
+            if !matches!(
+                op,
+                ScalarReductionOp::Sum | ScalarReductionOp::Prod | ScalarReductionOp::Mean
+            ) {
                 return Err(Error::InvalidArgument(format!(
                     "scalar reduction {op:?} is not supported on CudaBackend for complex scalars"
                 )));
@@ -1004,8 +1116,20 @@ where
             let compute = scalar_compute_descriptor::<S>(&ctx.vtable)?;
             let output_ptr = tensor_device_mut_ptr(output, "CUDA scalar reduction output")?;
             let input_ptr = tensor_device_ptr_with_offset("CUDA scalar reduction input", &input)?;
-            let scaled_alpha = alpha;
-            let reduce_op = crate::cuda_ffi::CUTENSOR_OP_MUL;
+            let reduced_total = reduced_axes
+                .iter()
+                .map(|&axis| input.dims()[axis])
+                .product::<usize>();
+            let scaled_alpha = if matches!(op, ScalarReductionOp::Mean) {
+                scale_standard_alpha(alpha, reduced_total)?
+            } else {
+                alpha
+            };
+            let reduce_op = if matches!(op, ScalarReductionOp::Prod) {
+                crate::cuda_ffi::CUTENSOR_OP_MUL
+            } else {
+                crate::cuda_ffi::CUTENSOR_OP_ADD
+            };
             let modes_a: Vec<i32> = (0..input.ndim()).map(|axis| axis as i32).collect();
             let modes_c: Vec<i32> = kept_axes.iter().map(|&axis| axis as i32).collect();
             let native = plan_reduction(
