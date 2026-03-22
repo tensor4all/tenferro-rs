@@ -21,8 +21,7 @@ impl<T: Scalar> Tensor<T> {
     /// supported and count from the end.
     ///
     /// This is a dense materialization operation that allocates a new buffer.
-    /// Main-memory tensors are always supported; with the `cuda` feature
-    /// enabled, GPU-resident tensors on one device are also supported.
+    /// Phase 1 only supports main-memory tensors.
     ///
     /// # Arguments
     ///
@@ -36,7 +35,7 @@ impl<T: Scalar> Tensor<T> {
     /// - Tensors have different shapes
     /// - Tensors have different memory spaces
     /// - The dimension is out of range
-    /// - Non-main-memory tensors are provided without `cuda` support
+    /// - Non-main-memory tensors are provided (Phase 1 limitation)
     ///
     /// # Examples
     ///
@@ -181,7 +180,8 @@ impl<T: Scalar> Tensor<T> {
     /// Negative dimensions are supported and count from the end.
     ///
     /// This is a dense materialization operation that allocates a new buffer.
-    /// Phase 1 only supports main-memory tensors.
+    /// Main-memory tensors are always supported; with the `cuda` feature
+    /// enabled, same-device GPU tensors are also supported.
     ///
     /// # Arguments
     ///
@@ -197,7 +197,7 @@ impl<T: Scalar> Tensor<T> {
     /// - Tensors have mismatched sizes on non-concatenated dimensions
     /// - Tensors have different memory spaces
     /// - The dimension is out of range
-    /// - Non-main-memory tensors are provided (Phase 1 limitation)
+    /// - Non-main-memory tensors are provided without `cuda` support
     ///
     /// # Examples
     ///
