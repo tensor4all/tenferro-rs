@@ -123,7 +123,7 @@ fn cat_validates_rank_shape_and_dimension_range() {
 }
 
 #[test]
-fn cat_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
+fn cat_resolves_uniform_conjugation_and_clears_preferred_device_hint() {
     let mut a = complex_col_tensor(
         &[
             Complex64::new(1.0, 1.0),
@@ -147,19 +147,19 @@ fn cat_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
     .conj();
 
     let got = Tensor::cat(&[&a, &b], 1).unwrap();
-    assert!(got.is_conjugated());
+    assert!(!got.is_conjugated());
     assert_eq!(got.preferred_compute_device(), None);
     assert_eq!(
         got.buffer().as_slice().unwrap(),
         &[
-            Complex64::new(1.0, 1.0),
-            Complex64::new(2.0, 2.0),
-            Complex64::new(3.0, 3.0),
-            Complex64::new(4.0, 4.0),
-            Complex64::new(5.0, -1.0),
-            Complex64::new(6.0, -2.0),
-            Complex64::new(7.0, -3.0),
-            Complex64::new(8.0, -4.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(4.0, -4.0),
+            Complex64::new(5.0, 1.0),
+            Complex64::new(6.0, 2.0),
+            Complex64::new(7.0, 3.0),
+            Complex64::new(8.0, 4.0),
         ]
     );
 }
@@ -201,7 +201,42 @@ fn cat_over_mixed_conjugation_resolves_logical_values_and_clears_preferred_devic
 }
 
 #[test]
-fn stack_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
+fn cat_over_mixed_conjugation_is_order_independent() {
+    let plain = complex_col_tensor(
+        &[Complex64::new(5.0, 5.0), Complex64::new(6.0, 6.0)],
+        &[2, 1],
+    );
+    let conjugated = complex_col_tensor(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+
+    let got = Tensor::cat(&[&plain, &conjugated], 1)
+        .expect("cat should resolve logical values regardless of conjugated input order");
+    assert!(!got.is_conjugated());
+    assert_eq!(got.preferred_compute_device(), None);
+    assert_eq!(got.dims(), &[2, 3]);
+    assert_eq!(
+        got.buffer().as_slice().unwrap(),
+        &[
+            Complex64::new(5.0, 5.0),
+            Complex64::new(6.0, 6.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(4.0, -4.0),
+        ]
+    );
+}
+
+#[test]
+fn stack_resolves_uniform_conjugation_and_clears_preferred_device_hint() {
     let mut a = complex_col_tensor(
         &[
             Complex64::new(1.0, 1.0),
@@ -225,9 +260,22 @@ fn stack_preserves_uniform_conjugation_flag_and_clears_preferred_device_hint() {
     .conj();
 
     let got = Tensor::stack(&[&a, &b], 0).unwrap();
-    assert!(got.is_conjugated());
+    assert!(!got.is_conjugated());
     assert_eq!(got.preferred_compute_device(), None);
     assert_eq!(got.dims(), &[2, 2, 2]);
+    assert_eq!(
+        got.buffer().as_slice().unwrap(),
+        &[
+            Complex64::new(1.0, -1.0),
+            Complex64::new(5.0, 1.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(6.0, 2.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(7.0, 3.0),
+            Complex64::new(4.0, -4.0),
+            Complex64::new(8.0, 4.0),
+        ]
+    );
 }
 
 #[test]
@@ -269,6 +317,48 @@ fn stack_over_mixed_conjugation_resolves_logical_values_and_clears_preferred_dev
             Complex64::new(7.0, 7.0),
             Complex64::new(4.0, -4.0),
             Complex64::new(8.0, 8.0),
+        ]
+    );
+}
+
+#[test]
+fn stack_over_mixed_conjugation_is_order_independent() {
+    let plain = complex_col_tensor(
+        &[
+            Complex64::new(5.0, 5.0),
+            Complex64::new(6.0, 6.0),
+            Complex64::new(7.0, 7.0),
+            Complex64::new(8.0, 8.0),
+        ],
+        &[2, 2],
+    );
+    let conjugated = complex_col_tensor(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(2.0, 2.0),
+            Complex64::new(3.0, 3.0),
+            Complex64::new(4.0, 4.0),
+        ],
+        &[2, 2],
+    )
+    .conj();
+
+    let got = Tensor::stack(&[&plain, &conjugated], 0)
+        .expect("stack should resolve logical values regardless of conjugated input order");
+    assert!(!got.is_conjugated());
+    assert_eq!(got.preferred_compute_device(), None);
+    assert_eq!(got.dims(), &[2, 2, 2]);
+    assert_eq!(
+        got.buffer().as_slice().unwrap(),
+        &[
+            Complex64::new(5.0, 5.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(6.0, 6.0),
+            Complex64::new(2.0, -2.0),
+            Complex64::new(7.0, 7.0),
+            Complex64::new(3.0, -3.0),
+            Complex64::new(8.0, 8.0),
+            Complex64::new(4.0, -4.0),
         ]
     );
 }
@@ -339,5 +429,98 @@ mod cuda {
 
         assert_eq!(got.dims(), expected.dims());
         assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+    }
+
+    #[test]
+    fn gpu_cat_over_mixed_conjugation_resolves_logical_values_when_cuda_is_available() {
+        if !cuda_device_zero_is_available() {
+            return;
+        }
+
+        let a = complex_col_tensor(
+            &[
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, 2.0),
+                Complex64::new(3.0, 3.0),
+                Complex64::new(4.0, 4.0),
+            ],
+            &[2, 2],
+        )
+        .conj();
+        let b = complex_col_tensor(
+            &[Complex64::new(5.0, 5.0), Complex64::new(6.0, 6.0)],
+            &[2, 1],
+        );
+        let expected = Tensor::cat(&[&a, &b], 1).unwrap();
+
+        let gpu_a = a
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let gpu_b = b
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let got = Tensor::cat(&[&gpu_a, &gpu_b], 1)
+            .expect("GPU cat should resolve mixed lazy-conjugation into logical values");
+        assert_eq!(
+            got.logical_memory_space(),
+            LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.preferred_compute_device(), None);
+        let got = got
+            .to_memory_space_async(LogicalMemorySpace::MainMemory)
+            .unwrap();
+
+        assert_eq!(got.dims(), expected.dims());
+        assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+        assert!(!got.is_conjugated());
+    }
+
+    #[test]
+    fn gpu_stack_over_mixed_conjugation_resolves_logical_values_when_cuda_is_available() {
+        if !cuda_device_zero_is_available() {
+            return;
+        }
+
+        let a = complex_col_tensor(
+            &[
+                Complex64::new(1.0, 1.0),
+                Complex64::new(2.0, 2.0),
+                Complex64::new(3.0, 3.0),
+                Complex64::new(4.0, 4.0),
+            ],
+            &[2, 2],
+        )
+        .conj();
+        let b = complex_col_tensor(
+            &[
+                Complex64::new(5.0, 5.0),
+                Complex64::new(6.0, 6.0),
+                Complex64::new(7.0, 7.0),
+                Complex64::new(8.0, 8.0),
+            ],
+            &[2, 2],
+        );
+        let expected = Tensor::stack(&[&a, &b], 0).unwrap();
+
+        let gpu_a = a
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let gpu_b = b
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let got = Tensor::stack(&[&gpu_a, &gpu_b], 0)
+            .expect("GPU stack should resolve mixed lazy-conjugation into logical values");
+        assert_eq!(
+            got.logical_memory_space(),
+            LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.preferred_compute_device(), None);
+        let got = got
+            .to_memory_space_async(LogicalMemorySpace::MainMemory)
+            .unwrap();
+
+        assert_eq!(got.dims(), expected.dims());
+        assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+        assert!(!got.is_conjugated());
     }
 }
