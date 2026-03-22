@@ -12,7 +12,7 @@ use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime, Devi
 use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
-use crate::backend::linalg_utils::clone_batched_column_major;
+use crate::backend::linalg_utils::{prepare_matrix_operand, MatrixOperandTransposeType};
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{batch_count, validate_square};
 use crate::CholeskyTensorExResult;
@@ -60,7 +60,7 @@ where
     let dtype = cholesky_dtype::<T>()?;
     let (n, batch_dims) = validate_square(a)?;
     let bc = batch_count(batch_dims);
-    let l = clone_batched_column_major(ctx, a)?;
+    let l = prepare_matrix_operand(ctx, a, MatrixOperandTransposeType::None)?;
     if n == 0 || bc == 0 {
         return Ok(l.tril(0));
     }
@@ -167,7 +167,7 @@ where
         });
     }
 
-    let a_work = clone_batched_column_major(ctx, a)?;
+    let a_work = prepare_matrix_operand(ctx, a, MatrixOperandTransposeType::None)?;
     let runtime = load_runtime(ctx)?;
     let a_base = context_device_ptr(ctx, &a_work, "cholesky a")?.cast::<T>();
     let l_base = context_device_ptr(ctx, &l, "cholesky l")?.cast::<T>();

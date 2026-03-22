@@ -1182,6 +1182,58 @@ fn cuda_lu_factor_matches_cpu_for_small_complex64_matrix() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_lu_factor_handles_lazily_conjugated_complex64_input() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(2.0, 1.0),
+            Complex64::new(1.0, -1.0),
+            Complex64::new(3.0, 0.5),
+            Complex64::new(4.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let lazy_conjugated = a_cpu.conj();
+    let expected_input = tenferro_prims::CpuBackend::resolve_conj(&mut cpu_ctx, &lazy_conjugated);
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex64,
+    >>::lu_factor(&mut cpu_ctx, &expected_input)
+    .unwrap();
+
+    let a_gpu = lazy_conjugated
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::lu_factor(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_close_complex_slice(
+        "cuda lu_factor lazy conjugation lower factor",
+        &tensor_data_on_cpu(&got.l),
+        &tensor_data_on_cpu(&expected.l),
+        256.0_f64 * f64::epsilon(),
+    );
+    assert_close_complex_slice(
+        "cuda lu_factor lazy conjugation upper factor",
+        &tensor_data_on_cpu(&got.u),
+        &tensor_data_on_cpu(&expected.u),
+        256.0_f64 * f64::epsilon(),
+    );
+    assert_eq!(got.pivots, expected.pivots);
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex32() {
     if !cuda_runtime_available() {
         return;
@@ -1713,6 +1765,55 @@ fn cuda_cholesky_matches_cpu_for_small_complex64_matrix() {
     );
     assert_close_complex_slice(
         "cuda cholesky complex64",
+        &tensor_data_on_cpu(&got),
+        &tensor_data_on_cpu(&expected),
+        256.0_f64 * f64::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_cholesky_handles_lazily_conjugated_complex64_input() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(4.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(1.0, 0.0),
+            Complex64::new(3.0, 0.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let lazy_conjugated = a_cpu.conj();
+    let expected_input = tenferro_prims::CpuBackend::resolve_conj(&mut cpu_ctx, &lazy_conjugated);
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex64,
+    >>::cholesky(&mut cpu_ctx, &expected_input)
+    .unwrap();
+
+    let a_gpu = lazy_conjugated
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::cholesky(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_complex_slice(
+        "cuda cholesky lazy conjugation",
         &tensor_data_on_cpu(&got),
         &tensor_data_on_cpu(&expected),
         256.0_f64 * f64::epsilon(),
@@ -3498,6 +3599,12 @@ fn cuda_lu_factor_matches_cpu_for_small_complex_matrix_c64() {
     cuda_lu_factor_matches_cpu_for_small_complex64_matrix();
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_lu_factor_handles_lazily_conjugated_complex_matrix_c64() {
+    cuda_lu_factor_handles_lazily_conjugated_complex64_input();
+}
+
 #[test]
 #[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_c32() {
@@ -3604,6 +3711,12 @@ fn cuda_cholesky_matches_cpu_for_small_complex_matrix_c32() {
 #[cfg(feature = "cuda")]
 fn cuda_cholesky_matches_cpu_for_small_complex_matrix_c64() {
     cuda_cholesky_matches_cpu_for_small_complex64_matrix();
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_cholesky_handles_lazily_conjugated_complex_matrix_c64() {
+    cuda_cholesky_handles_lazily_conjugated_complex64_input();
 }
 
 #[test]
