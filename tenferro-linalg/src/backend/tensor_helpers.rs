@@ -5,7 +5,7 @@
 //! tensor allocation.
 
 use tenferro_device::{Error, Result};
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor};
 
 use crate::LinalgScalar;
 
@@ -66,6 +66,20 @@ pub(crate) fn extract_contiguous_slice<T: LinalgScalar>(a: &Tensor<T>) -> Result
     a.buffer()
         .as_slice()
         .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))
+}
+
+/// Thin wrapper over the tensor-level keep-count trailing zero-fill helper.
+pub(crate) fn zero_trailing_by_counts<T, R>(
+    input: &Tensor<T>,
+    keep_counts: &Tensor<R>,
+    axis: usize,
+    structural_rank: usize,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    R: KeepCountScalar,
+{
+    input.zero_trailing_by_counts(keep_counts, axis, structural_rank)
 }
 
 /// Validate solve RHS shape against a square matrix `(n, n, batch...)`.

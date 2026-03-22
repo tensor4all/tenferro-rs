@@ -63,6 +63,8 @@ fn supports_scalar_binary<S: Scalar + 'static>(op: ScalarBinaryOp) -> bool {
         }
         ScalarBinaryOp::Maximum
         | ScalarBinaryOp::Minimum
+        | ScalarBinaryOp::Greater
+        | ScalarBinaryOp::GreaterEqual
         | ScalarBinaryOp::ClampMin
         | ScalarBinaryOp::ClampMax => is_supported_ordered_real_type::<S>(),
     }
@@ -133,6 +135,22 @@ fn execute_scalar_binary_real<S: num_traits::Float + CpuScalarValue>(
                 output,
                 |x, y| if x <= y { x } else { y },
             )
+        }
+        ScalarBinaryOp::Greater => execute_binary_map(alpha, lhs, rhs, beta, output, |x, y| {
+            if x > y {
+                S::one()
+            } else {
+                S::zero()
+            }
+        }),
+        ScalarBinaryOp::GreaterEqual => {
+            execute_binary_map(alpha, lhs, rhs, beta, output, |x, y| {
+                if x >= y {
+                    S::one()
+                } else {
+                    S::zero()
+                }
+            })
         }
         ScalarBinaryOp::ClampMin => {
             execute_binary_map(

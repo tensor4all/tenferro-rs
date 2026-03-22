@@ -1,9 +1,6 @@
 use super::*;
 use tenferro_device::{Error, LogicalMemorySpace};
 
-const MEM: LogicalMemorySpace = LogicalMemorySpace::MainMemory;
-const COL: MemoryOrder = MemoryOrder::ColumnMajor;
-
 #[test]
 fn diagonal_reports_stride_overflow_for_zero_extent_view() {
     let base = Tensor::<f64>::zeros(
@@ -22,173 +19,241 @@ fn diagonal_reports_stride_overflow_for_zero_extent_view() {
     );
 }
 
-#[test]
-fn unsqueeze_basic() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let u = t.unsqueeze(0).unwrap();
-    assert_eq!(u.dims(), &[1, 2, 3]);
-    assert_eq!(u.ndim(), 3);
+fn col_tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
+    Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
 
 #[test]
-fn unsqueeze_at_end() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let u = t.unsqueeze(2).unwrap();
-    assert_eq!(u.dims(), &[2, 3, 1]);
+fn unsqueeze_inserts_unit_axes_without_copying_data() {
+    let base = col_tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let base_ptr = base.buffer().as_slice().unwrap().as_ptr();
+
+    let leading = base.unsqueeze(0).unwrap();
+    assert_eq!(leading.dims(), &[1, 2, 3]);
+    assert_eq!(leading.strides(), &[1, 1, 2]);
+    assert_eq!(leading.buffer().as_slice().unwrap().as_ptr(), base_ptr);
+    assert_eq!(
+        leading
+            .contiguous(MemoryOrder::ColumnMajor)
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    );
+
+    let middle = base.unsqueeze(1).unwrap();
+    assert_eq!(middle.dims(), &[2, 1, 3]);
+    assert_eq!(middle.strides(), &[1, 2, 2]);
+    assert_eq!(middle.buffer().as_slice().unwrap().as_ptr(), base_ptr);
+
+    let trailing = base.unsqueeze(-1).unwrap();
+    assert_eq!(trailing.dims(), &[2, 3, 1]);
+    assert_eq!(trailing.strides(), &[1, 2, 2]);
+    assert_eq!(trailing.buffer().as_slice().unwrap().as_ptr(), base_ptr);
 }
 
 #[test]
-fn unsqueeze_negative_dim() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let u = t.unsqueeze(-1).unwrap();
-    assert_eq!(u.dims(), &[2, 3, 1]);
+fn unsqueeze_rejects_out_of_range_dimensions() {
+    let base = Tensor::<f64>::zeros(
+        &[2, 3],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
 
-    let u2 = t.unsqueeze(-3).unwrap();
-    assert_eq!(u2.dims(), &[1, 2, 3]);
+    let pos_err = base.unsqueeze(3).unwrap_err();
+    assert!(
+        matches!(pos_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
+        "expected out-of-range error, got {pos_err:?}"
+    );
+
+    let neg_err = base.unsqueeze(-4).unwrap_err();
+    assert!(
+        matches!(neg_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
+        "expected out-of-range error, got {neg_err:?}"
+    );
 }
 
 #[test]
-fn unsqueeze_middle() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let u = t.unsqueeze(1).unwrap();
-    assert_eq!(u.dims(), &[2, 1, 3]);
+fn unsqueeze_supports_scalar_inputs() {
+    let scalar = col_tensor(&[7.0], &[]);
+    let expanded = scalar.unsqueeze(0).unwrap();
+    assert_eq!(expanded.dims(), &[1]);
+    assert_eq!(expanded.strides(), &[1]);
+    assert_eq!(
+        expanded.buffer().as_slice().unwrap().as_ptr(),
+        scalar.buffer().as_slice().unwrap().as_ptr()
+    );
 }
 
 #[test]
-fn unsqueeze_rank0() {
-    let t = Tensor::<f64>::zeros(&[], MEM, COL);
-    let u = t.unsqueeze(0).unwrap();
-    assert_eq!(u.dims(), &[1]);
+fn squeeze_removes_all_unit_axes_and_can_collapse_to_scalar() {
+    let with_units = col_tensor(&[1.0, 2.0, 3.0, 4.0], &[1, 2, 1, 2, 1]);
+    let squeezed = with_units.squeeze().unwrap();
+    assert_eq!(squeezed.dims(), &[2, 2]);
+    assert_eq!(squeezed.strides(), &[1, 2]);
+    assert_eq!(
+        squeezed.buffer().as_slice().unwrap().as_ptr(),
+        with_units.buffer().as_slice().unwrap().as_ptr()
+    );
 
-    let u2 = t.unsqueeze(-1).unwrap();
-    assert_eq!(u2.dims(), &[1]);
+    let scalar_like = col_tensor(&[7.0], &[1, 1, 1]);
+    let scalar = scalar_like.squeeze().unwrap();
+    assert_eq!(scalar.dims(), &[] as &[usize]);
+    assert_eq!(scalar.strides(), &[] as &[isize]);
+    assert_eq!(
+        scalar.buffer().as_slice().unwrap().as_ptr(),
+        scalar_like.buffer().as_slice().unwrap().as_ptr()
+    );
 }
 
 #[test]
-fn unsqueeze_out_of_range() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let result = t.unsqueeze(3);
-    assert!(result.is_err());
+fn squeeze_dim_supports_negative_dims_and_rejects_invalid_cases() {
+    let base = col_tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 1, 2]);
+    let squeezed = base.squeeze_dim(-2).unwrap();
+    assert_eq!(squeezed.dims(), &[2, 2]);
+    assert_eq!(squeezed.strides(), &[1, 2]);
+    assert_eq!(
+        squeezed.buffer().as_slice().unwrap().as_ptr(),
+        base.buffer().as_slice().unwrap().as_ptr()
+    );
+
+    let non_unit_err = base.squeeze_dim(0).unwrap_err();
+    assert!(
+        matches!(non_unit_err, Error::InvalidArgument(ref msg) if msg.contains("expected 1")),
+        "expected non-unit-dimension error, got {non_unit_err:?}"
+    );
+
+    let range_err = base.squeeze_dim(3).unwrap_err();
+    assert!(
+        matches!(range_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
+        "expected out-of-range error, got {range_err:?}"
+    );
+
+    let negative_range_err = base.squeeze_dim(-4).unwrap_err();
+    assert!(
+        matches!(negative_range_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
+        "expected negative out-of-range error, got {negative_range_err:?}"
+    );
+
+    let scalar = col_tensor(&[1.0], &[]);
+    let scalar_err = scalar.squeeze_dim(0).unwrap_err();
+    assert!(
+        matches!(scalar_err, Error::InvalidArgument(ref msg) if msg.contains("rank-0 tensor")),
+        "expected rank-0 error, got {scalar_err:?}"
+    );
 }
 
 #[test]
-fn unsqueeze_negative_out_of_range() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let result = t.unsqueeze(-4);
-    assert!(result.is_err());
+fn broadcast_rejects_target_rank_mismatch() {
+    let base = Tensor::<f64>::ones(
+        &[1, 3],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    );
+
+    let err = base.broadcast(&[4, 3, 1]).unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(ref msg) if msg.contains("target dims length")),
+        "expected target rank mismatch, got {err:?}"
+    );
 }
 
 #[test]
-fn unsqueeze_is_zero_copy() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let u = t.unsqueeze(0).unwrap();
-    assert_eq!(t.buffer().as_ptr(), u.buffer().as_ptr());
+fn diagonal_preserves_unpaired_axes_and_validates_pairs() {
+    let base = col_tensor(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 2, 2],
+    );
+    let diagonal = base.diagonal(&[(1, 2)]).unwrap();
+    assert_eq!(diagonal.dims(), &[3, 2]);
+    assert_eq!(diagonal.strides(), &[1, 9]);
+    assert_eq!(
+        diagonal
+            .contiguous(MemoryOrder::ColumnMajor)
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[1.0, 2.0, 3.0, 10.0, 11.0, 12.0]
+    );
+
+    let pair_base = col_tensor(&[1.0; 8], &[2, 2, 2]);
+    let reused_axis_err = pair_base.diagonal(&[(0, 1), (1, 2)]).unwrap_err();
+    assert!(
+        matches!(reused_axis_err, Error::InvalidArgument(ref msg) if msg.contains("used in multiple diagonal pairs")),
+        "expected reused-axis error, got {reused_axis_err:?}"
+    );
+
+    let out_of_range_err = base.diagonal(&[(0, 3)]).unwrap_err();
+    assert!(
+        matches!(out_of_range_err, Error::InvalidArgument(ref msg) if msg.contains("axis out of range")),
+        "expected out-of-range error, got {out_of_range_err:?}"
+    );
 }
 
 #[test]
-fn squeeze_all_unit_dims() {
-    let t = Tensor::<f64>::zeros(&[1, 2, 1, 3, 1], MEM, COL);
-    let s = t.squeeze().unwrap();
-    assert_eq!(s.dims(), &[2, 3]);
+fn view_as_strided_validates_layout_bounds() {
+    let base = col_tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+
+    let err = base.view_as_strided(vec![2, 2], vec![10, 1]).unwrap_err();
+    assert!(
+        matches!(err, Error::StrideError(ref msg) if msg.contains("layout accesses buffer positions")),
+        "expected layout bounds error, got {err:?}"
+    );
 }
 
 #[test]
-fn squeeze_no_unit_dims() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let s = t.squeeze().unwrap();
-    assert_eq!(s.dims(), &[2, 3]);
-}
+fn select_and_narrow_cover_success_and_bounds_checks() {
+    let base = col_tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
 
-#[test]
-fn squeeze_all_dims_are_unit() {
-    let t = Tensor::<f64>::zeros(&[1, 1, 1], MEM, COL);
-    let s = t.squeeze().unwrap();
-    assert_eq!(s.dims(), &[]);
-    assert_eq!(s.ndim(), 0);
-}
+    let selected = base.select(1, 1).unwrap();
+    assert_eq!(selected.dims(), &[2]);
+    assert_eq!(selected.strides(), &[1]);
+    assert_eq!(selected.offset(), 2);
+    assert_eq!(
+        selected
+            .contiguous(MemoryOrder::ColumnMajor)
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[3.0, 4.0]
+    );
 
-#[test]
-fn squeeze_rank0() {
-    let t = Tensor::<f64>::zeros(&[], MEM, COL);
-    let s = t.squeeze().unwrap();
-    assert_eq!(s.dims(), &[]);
-}
+    let select_dim_err = base.select(2, 0).unwrap_err();
+    assert!(
+        matches!(select_dim_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
+        "expected select dim error, got {select_dim_err:?}"
+    );
 
-#[test]
-fn squeeze_is_zero_copy() {
-    let t = Tensor::<f64>::zeros(&[1, 2, 1, 3], MEM, COL);
-    let s = t.squeeze().unwrap();
-    assert_eq!(t.buffer().as_ptr(), s.buffer().as_ptr());
-}
+    let select_index_err = base.select(1, 3).unwrap_err();
+    assert!(
+        matches!(select_index_err, Error::InvalidArgument(ref msg) if msg.contains("index 3 out of range")),
+        "expected select index error, got {select_index_err:?}"
+    );
 
-#[test]
-fn squeeze_dim_basic() {
-    let t = Tensor::<f64>::zeros(&[2, 1, 3], MEM, COL);
-    let s = t.squeeze_dim(1).unwrap();
-    assert_eq!(s.dims(), &[2, 3]);
-}
+    let narrowed = base.narrow(1, 1, 2).unwrap();
+    assert_eq!(narrowed.dims(), &[2, 2]);
+    assert_eq!(narrowed.strides(), &[1, 2]);
+    assert_eq!(narrowed.offset(), 2);
+    assert_eq!(
+        narrowed
+            .contiguous(MemoryOrder::ColumnMajor)
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[3.0, 4.0, 5.0, 6.0]
+    );
 
-#[test]
-fn squeeze_dim_negative() {
-    let t = Tensor::<f64>::zeros(&[2, 1, 3], MEM, COL);
-    let s = t.squeeze_dim(-2).unwrap();
-    assert_eq!(s.dims(), &[2, 3]);
-}
+    let narrow_dim_err = base.narrow(2, 0, 1).unwrap_err();
+    assert!(
+        matches!(narrow_dim_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
+        "expected narrow dim error, got {narrow_dim_err:?}"
+    );
 
-#[test]
-fn squeeze_dim_first() {
-    let t = Tensor::<f64>::zeros(&[1, 2, 3], MEM, COL);
-    let s = t.squeeze_dim(0).unwrap();
-    assert_eq!(s.dims(), &[2, 3]);
-}
-
-#[test]
-fn squeeze_dim_last() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 1], MEM, COL);
-    let s = t.squeeze_dim(2).unwrap();
-    assert_eq!(s.dims(), &[2, 3]);
-}
-
-#[test]
-fn squeeze_dim_not_size_1_error() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
-    let result = t.squeeze_dim(1);
-    assert!(result.is_err());
-}
-
-#[test]
-fn squeeze_dim_out_of_range() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let result = t.squeeze_dim(2);
-    assert!(result.is_err());
-}
-
-#[test]
-fn squeeze_dim_negative_out_of_range() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let result = t.squeeze_dim(-3);
-    assert!(result.is_err());
-}
-
-#[test]
-fn squeeze_dim_rank0_error() {
-    let t = Tensor::<f64>::zeros(&[], MEM, COL);
-    let result = t.squeeze_dim(0);
-    assert!(result.is_err());
-}
-
-#[test]
-fn squeeze_dim_is_zero_copy() {
-    let t = Tensor::<f64>::zeros(&[2, 1, 3], MEM, COL);
-    let s = t.squeeze_dim(1).unwrap();
-    assert_eq!(t.buffer().as_ptr(), s.buffer().as_ptr());
-}
-
-#[test]
-fn unsqueeze_squeeze_roundtrip() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let u = t.unsqueeze(1).unwrap();
-    let s = u.squeeze_dim(1).unwrap();
-    assert_eq!(s.dims(), &[2, 3]);
-    assert_eq!(s.buffer().as_ptr(), t.buffer().as_ptr());
+    let narrow_range_err = base.narrow(1, 2, 2).unwrap_err();
+    assert!(
+        matches!(narrow_range_err, Error::InvalidArgument(ref msg) if msg.contains("range out of bounds")),
+        "expected narrow range error, got {narrow_range_err:?}"
+    );
 }

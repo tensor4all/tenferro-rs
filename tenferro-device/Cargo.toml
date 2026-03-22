@@ -7,9 +7,12 @@ authors.workspace = true
 publish.workspace = true
 description = "Device abstraction and shared error types for the tenferro workspace."
 
-[features]
-cuda = ["cudarc"]
-
 [dependencies]
 thiserror.workspace = true
 cudarc = { workspace = true, optional = true }
+
+[features]
+cuda = ["dep:cudarc"]
+
+[dev-dependencies]
+num-complex.workspace = true

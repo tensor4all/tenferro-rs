@@ -4,7 +4,9 @@ use chainrules::ScalarAd;
 use num_complex::Complex;
 use num_traits::Float;
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Standard};
+use tenferro_linalg::backend::CudaLinalgScalar;
 use tenferro_linalg::{KernelLinalgScalar, LinalgScalar};
+use tenferro_tensor::KeepCountScalar;
 
 use crate::core::DynTensorTyped;
 
@@ -120,9 +122,15 @@ impl<T> RealAdRuntimeValue for T where T: GenericAdRuntimeValue + ScalarAd<Real 
 /// fn require_linalg<T: tenferro::runtime::contracts::LinalgRuntimeValue>() {}
 /// require_linalg::<f64>();
 /// ```
-pub trait LinalgRuntimeValue: EinsumRuntimeValue + KernelLinalgScalar + 'static {}
+pub trait LinalgRuntimeValue:
+    EinsumRuntimeValue + KernelLinalgScalar + CudaLinalgScalar + 'static
+{
+}
 
-impl<T> LinalgRuntimeValue for T where T: EinsumRuntimeValue + KernelLinalgScalar + 'static {}
+impl<T> LinalgRuntimeValue for T where
+    T: EinsumRuntimeValue + KernelLinalgScalar + CudaLinalgScalar + 'static
+{
+}
 
 #[doc(hidden)]
 /// Hidden shorthand for real-valued linalg runtime values.
@@ -134,12 +142,20 @@ impl<T> LinalgRuntimeValue for T where T: EinsumRuntimeValue + KernelLinalgScala
 /// require_real_linalg::<f64>();
 /// ```
 pub trait RealLinalgRuntimeValue:
-    LinalgRuntimeValue + HasAlgebra<Algebra = Standard<Self>> + LinalgScalar<Real = Self> + Float
+    LinalgRuntimeValue
+    + HasAlgebra<Algebra = Standard<Self>>
+    + LinalgScalar<Real = Self>
+    + Float
+    + KeepCountScalar
 {
 }
 
 impl<T> RealLinalgRuntimeValue for T where
-    T: LinalgRuntimeValue + HasAlgebra<Algebra = Standard<T>> + LinalgScalar<Real = T> + Float
+    T: LinalgRuntimeValue
+        + HasAlgebra<Algebra = Standard<T>>
+        + LinalgScalar<Real = T>
+        + Float
+        + KeepCountScalar
 {
 }
 

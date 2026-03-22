@@ -21,7 +21,10 @@ use super::*;
 /// let grad = lstsq_rrule(&mut ctx, &a, &b, &dx).unwrap();
 /// // grad.a: cotangent for A, grad.b: cotangent for b
 /// ```
-pub fn lstsq_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lstsq_rrule<
+    T: KernelLinalgScalar<Real = T> + num_traits::Float + tenferro_algebra::Conjugate,
+    C,
+>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -29,7 +32,9 @@ pub fn lstsq_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<LstsqGrad<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Lstsq, "lstsq_rrule")

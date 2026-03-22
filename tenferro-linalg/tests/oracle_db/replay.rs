@@ -3390,7 +3390,7 @@ where
 fn replay_svd_typed<T>(record: &CaseRecord) -> Result<bool, String>
 where
     T: OracleDbScalar + KernelLinalgScalar,
-    T::Real: OracleDbScalar + Float,
+    T::Real: OracleDbScalar + Float + tenferro_tensor::KeepCountScalar,
 {
     let input = decode_svd_input_tensor::<T>(&record.inputs)?;
     let probe = probe(record)?;

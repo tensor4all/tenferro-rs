@@ -14,11 +14,79 @@
 //! let _: Option<Tensor<f64>> = None;
 //! ```
 
+#[cfg(all(feature = "provider-src", not(feature = "linalg-lapack")))]
+compile_error!("provider-src requires linalg-lapack");
+#[cfg(all(feature = "provider-inject", not(feature = "linalg-lapack")))]
+compile_error!("provider-inject requires linalg-lapack");
+#[cfg(all(feature = "linalg-faer", feature = "linalg-lapack"))]
+compile_error!(
+    "Features `linalg-faer` and `linalg-lapack` are mutually exclusive. Enable exactly one."
+);
+#[cfg(not(any(feature = "linalg-faer", feature = "linalg-lapack")))]
+compile_error!("No CPU linalg provider selected. Enable `linalg-faer` or `linalg-lapack`.");
+#[cfg(all(
+    any(
+        feature = "src-openblas",
+        feature = "src-netlib",
+        feature = "src-accelerate",
+        feature = "src-r",
+        feature = "src-intel-mkl-dynamic-sequential",
+        feature = "src-intel-mkl-dynamic-parallel",
+        feature = "src-intel-mkl-static-sequential",
+        feature = "src-intel-mkl-static-parallel"
+    ),
+    not(feature = "linalg-lapack")
+))]
+compile_error!("src-* features require linalg-lapack and provider-src");
+
+#[cfg(feature = "linalg-lapack")]
+const _: () = {
+    let provider_count =
+        (cfg!(feature = "provider-src") as usize) + (cfg!(feature = "provider-inject") as usize);
+    assert!(
+        provider_count == 1,
+        "linalg-lapack requires exactly one provider: provider-src or provider-inject"
+    );
+
+    let src_count = (cfg!(feature = "src-openblas") as usize)
+        + (cfg!(feature = "src-netlib") as usize)
+        + (cfg!(feature = "src-accelerate") as usize)
+        + (cfg!(feature = "src-r") as usize)
+        + (cfg!(feature = "src-intel-mkl-dynamic-sequential") as usize)
+        + (cfg!(feature = "src-intel-mkl-dynamic-parallel") as usize)
+        + (cfg!(feature = "src-intel-mkl-static-sequential") as usize)
+        + (cfg!(feature = "src-intel-mkl-static-parallel") as usize);
+
+    if cfg!(feature = "provider-src") {
+        assert!(
+            src_count == 1,
+            "provider-src requires exactly one src-* feature"
+        );
+    }
+    if cfg!(feature = "provider-inject") {
+        assert!(src_count == 0, "provider-inject forbids src-* features");
+    }
+};
+
+#[cfg(feature = "provider-src")]
+extern crate blas_src as _;
+#[cfg(feature = "provider-src")]
+extern crate cblas_src as _;
+#[cfg(feature = "provider-src")]
+extern crate lapack_src as _;
+
+#[cfg(feature = "provider-inject")]
+extern crate cblas_inject as _;
+#[cfg(feature = "provider-inject")]
+extern crate lapack_inject as _;
+
 use num_complex::{Complex32, Complex64};
 use num_traits::Zero;
 use tenferro_algebra::Scalar;
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
+
+pub mod backend;
 
 /// Scalar types supported by linalg kernel contracts.
 ///
@@ -261,6 +329,58 @@ pub struct LuTensorResult<T: LinalgScalar> {
     pub pivots: Vec<i32>,
 }
 
+/// Result of a tensor-level LU factorization with numerical status.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg_prims::LuTensorExResult;
+/// let _result: Option<LuTensorExResult<f64>> = None;
+/// ```
+#[derive(Clone)]
+pub struct LuTensorExResult<T: LinalgScalar> {
+    /// Unit-lower-triangular factor.
+    pub l: Tensor<T>,
+    /// Upper-triangular factor.
+    pub u: Tensor<T>,
+    /// Backend pivot vector.
+    pub pivots: Vec<i32>,
+    /// Per-batch numerical status.
+    pub info: Vec<i32>,
+}
+
+/// Result of a tensor-level linear solve with numerical status.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg_prims::SolveTensorExResult;
+/// let _result: Option<SolveTensorExResult<f64>> = None;
+/// ```
+#[derive(Clone)]
+pub struct SolveTensorExResult<T: LinalgScalar> {
+    /// Solution tensor.
+    pub solution: Tensor<T>,
+    /// Per-batch numerical status.
+    pub info: Vec<i32>,
+}
+
+/// Result of a tensor-level Cholesky factorization with numerical status.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_linalg_prims::CholeskyTensorExResult;
+/// let _result: Option<CholeskyTensorExResult<f64>> = None;
+/// ```
+#[derive(Clone)]
+pub struct CholeskyTensorExResult<T: LinalgScalar> {
+    /// Lower-triangular Cholesky factor.
+    pub l: Tensor<T>,
+    /// Per-batch numerical status.
+    pub info: Vec<i32>,
+}
+
 /// Result of a tensor-level Hermitian eigendecomposition.
 ///
 /// # Examples
@@ -311,6 +431,7 @@ pub enum LinalgCapabilityOp {
     Eig,
     LuSolve,
     Lstsq,
+    LuFactorEx,
     CholeskyEx,
     SolveEx,
     Inv,
@@ -332,6 +453,22 @@ pub trait TensorLinalgPrims<T: KernelLinalgScalar> {
 
     fn has_linalg_support(op: LinalgCapabilityOp) -> bool;
 
+    /// Solve a square linear system while returning per-batch numerical status.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_linalg_prims::TensorLinalgPrims;
+    ///
+    /// fn accepts_backend<B: TensorLinalgPrims<f64>>() {}
+    /// let _ = accepts_backend::<todo!()>;
+    /// ```
+    fn solve_ex(
+        ctx: &mut Self::Context,
+        a: &Tensor<T>,
+        b: &Tensor<T>,
+    ) -> Result<SolveTensorExResult<T>>;
+
     fn solve(ctx: &mut Self::Context, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>;
     fn solve_triangular(
         ctx: &mut Self::Context,
@@ -341,7 +478,30 @@ pub trait TensorLinalgPrims<T: KernelLinalgScalar> {
     ) -> Result<Tensor<T>>;
     fn qr(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<QrTensorResult<T>>;
     fn thin_svd(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<SvdTensorResult<T>>;
+    fn svdvals(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<Tensor<T::Real>>;
+    /// Compute an LU factorization while returning per-batch numerical status.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_linalg_prims::TensorLinalgPrims;
+    ///
+    /// fn accepts_backend<B: TensorLinalgPrims<f64>>() {}
+    /// let _ = accepts_backend::<todo!()>;
+    /// ```
+    fn lu_factor_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorExResult<T>>;
     fn lu_factor(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>>;
+    /// Compute a Cholesky factorization while returning per-batch numerical status.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_linalg_prims::TensorLinalgPrims;
+    ///
+    /// fn accepts_backend<B: TensorLinalgPrims<f64>>() {}
+    /// let _ = accepts_backend::<todo!()>;
+    /// ```
+    fn cholesky_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>>;
     fn cholesky(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<Tensor<T>>;
     fn eigen_sym(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<EigenTensorResult<T>>;
     fn eig(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<EigTensorResult<T>>;

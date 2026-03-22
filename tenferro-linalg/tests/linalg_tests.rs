@@ -7,6 +7,25 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 
+#[cfg(feature = "cuda")]
+fn with_cuda_ctx<T>(f: impl FnOnce(&mut tenferro_prims::CudaContext) -> T) -> Option<T> {
+    let path = [
+        "/usr/lib/x86_64-linux-gnu/libcutensor/12/libcutensor.so",
+        "/usr/lib/x86_64-linux-gnu/libcutensor.so",
+        "/usr/lib/libcutensor.so",
+    ]
+    .into_iter()
+    .find(|path| std::path::Path::new(path).exists())?;
+    let (_backend, mut ctx) = tenferro_prims::CudaBackend::load(path).ok()?;
+    Some(f(&mut ctx))
+}
+
+#[cfg(not(feature = "cuda"))]
+fn with_cuda_ctx<T>(f: impl FnOnce(&mut tenferro_prims::CudaContext) -> T) -> Option<T> {
+    let mut ctx = tenferro_prims::CudaContext::new();
+    Some(f(&mut ctx))
+}
+
 /// Create a column-major tensor from a flat vec and shape.
 fn make_tensor(data: Vec<f64>, dims: &[usize]) -> Tensor<f64> {
     let ndim = dims.len();
@@ -6433,14 +6452,14 @@ fn lstsq_rrule_rejects_cotangent_shape_mismatch() {
 
 #[test]
 fn lstsq_rrule_cuda_context_reports_missing_linalg_capability() {
-    let mut ctx = tenferro_prims::CudaContext::new();
     let a = make_tensor(vec![1.0, 0.0, 0.5, 0.0, 1.0, 0.5], &[3, 2]);
     let b = make_tensor(vec![1.0, 2.0, 3.0], &[3]);
     let dx = make_tensor(vec![1.0, 1.0], &[2]);
-    let msg = match lstsq_rrule(&mut ctx, &a, &b, &dx) {
+    let msg = with_cuda_ctx(|ctx| match lstsq_rrule(ctx, &a, &b, &dx) {
         Ok(_) => panic!("expected capability error"),
         Err(err) => format!("{err}"),
-    };
+    })
+    .expect("expected CUDA context");
     assert!(
         msg.contains("not supported on the current linalg backend"),
         "unexpected error message: {msg}"

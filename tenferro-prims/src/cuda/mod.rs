@@ -24,39 +24,82 @@
 
 use std::marker::PhantomData;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
+use cudarc::driver::{LaunchConfig, PushKernelArg};
+use cudarc::nvrtc::{compile_ptx, Ptx};
 #[cfg(unix)]
 use libloading::os::unix::{Library as UnixLibrary, RTLD_GLOBAL, RTLD_NOW};
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar, Standard};
-use tenferro_device::{Error, Result};
+use tenferro_device::{cuda::runtime as device_cuda, Error, LogicalMemorySpace, Result};
+use tenferro_tensor::MemoryOrder;
 use tenferro_tensor::Tensor;
 
 use crate::cuda_ffi::*;
 use crate::{
-    AnalyticBinaryOp, AnalyticPrimsDescriptor, AnalyticReductionOp, AnalyticUnaryOp,
-    ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp,
-    SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorAnalyticPrims, TensorScalarPrims,
-    TensorSemiringCore, TensorSemiringFastPath,
+    SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
 };
 
-mod analytic_family;
-mod custom;
-mod diagonal;
+mod analytic;
 mod execution;
-mod family_common;
 mod planning;
-mod pointwise_ops;
-mod runtime;
-mod scalar_family;
+mod scalar;
 mod scalar_type;
 mod wrappers;
 
-use analytic_family::{execute_analytic_plan, has_analytic_support, plan_analytic_descriptor};
+pub use analytic::CudaAnalyticPlan;
 use execution::{execute_plan, has_fast_path, plan_core_descriptor, plan_fast_descriptor};
 use planning::check_status;
-use scalar_family::{execute_scalar_plan, has_scalar_support, plan_scalar_descriptor};
-use wrappers::HandleWrapper;
+pub use scalar::CudaScalarPlan;
+use wrappers::{HandleWrapper, PlanWrapper};
+
+const RESOLVE_CONJ_KERNEL_NAME_C32: &str = "resolve_conj_complex32";
+const RESOLVE_CONJ_KERNEL_NAME_C64: &str = "resolve_conj_complex64";
+const RESOLVE_CONJ_CUDA_SRC: &str = r#"
+typedef struct { float re; float im; } complex32_t;
+typedef struct { double re; double im; } complex64_t;
+
+extern "C" __global__ void resolve_conj_complex32(
+    const complex32_t* src,
+    complex32_t* dst,
+    unsigned long long len
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= len) {
+        return;
+    }
+    dst[idx].re = src[idx].re;
+    dst[idx].im = -src[idx].im;
+}
+
+extern "C" __global__ void resolve_conj_complex64(
+    const complex64_t* src,
+    complex64_t* dst,
+    unsigned long long len
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= len) {
+        return;
+    }
+    dst[idx].re = src[idx].re;
+    dst[idx].im = -src[idx].im;
+}
+"#;
+
+fn resolve_conj_ptx() -> Result<Ptx> {
+    static PTX: OnceLock<std::result::Result<Ptx, String>> = OnceLock::new();
+    PTX.get_or_init(|| {
+        compile_ptx(RESOLVE_CONJ_CUDA_SRC)
+            .map_err(|err| format!("NVRTC compile failed for resolve_conj kernel: {err:?}"))
+    })
+    .clone()
+    .map_err(Error::DeviceError)
+}
 
 /// CUDA execution context backed by cudarc + cuTENSOR vtable.
 ///
@@ -71,13 +114,58 @@ use wrappers::HandleWrapper;
 /// ```
 pub struct CudaContext {
     /// cuTENSOR library handle (RAII — Drop calls cutensorDestroy).
-    handle: HandleWrapper,
+    pub(super) handle: HandleWrapper,
     /// CUDA device ordinal used for runtime API calls.
-    device_id: usize,
+    pub(super) device_id: usize,
     /// cuTENSOR function pointer vtable loaded via libloading.
-    vtable: Arc<CutensorVtable>,
-    /// Custom CUDA kernel runtime and cache.
-    custom: custom::CustomCudaRuntime,
+    pub(super) vtable: Arc<CutensorVtable>,
+    /// Shared Layer 0 CUDA runtime handle reused across crates.
+    pub(super) shared_runtime: Arc<device_cuda::CudaRuntime>,
+}
+
+impl CudaContext {
+    /// Return the CUDA device ordinal associated with this context.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_prims::CudaBackend;
+    ///
+    /// let (_backend, ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
+    /// assert_eq!(ctx.device_id(), 0);
+    /// ```
+    pub fn device_id(&self) -> usize {
+        self.device_id
+    }
+
+    /// Bind this context's CUDA device as the current runtime device.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_prims::CudaBackend;
+    ///
+    /// let (_backend, ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
+    /// ctx.bind_to_device().unwrap();
+    /// ```
+    pub fn bind_to_device(&self) -> Result<()> {
+        cudarc::runtime::result::device::set(self.device_id as i32)
+            .map_err(|e| Error::DeviceError(format!("CUDA runtime set-device failed: {e:?}")))
+    }
+
+    /// Returns the shared Layer 0 runtime handle used by this context.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_prims::CudaBackend;
+    ///
+    /// let (_backend, ctx) = CudaBackend::load("/usr/lib/libcutensor.so").unwrap();
+    /// assert_eq!(ctx.shared_runtime().device_id(), 0);
+    /// ```
+    pub fn shared_runtime(&self) -> &Arc<device_cuda::CudaRuntime> {
+        &self.shared_runtime
+    }
 }
 
 /// CUDA plan — wraps a cuTENSOR operation plan handle.
@@ -100,47 +188,19 @@ pub struct CudaContext {
 enum CudaPlanDescriptor {
     Core(SemiringCoreDescriptor),
     Fast(SemiringFastPathDescriptor),
-    Scalar(CudaScalarPlan),
-    Analytic(CudaAnalyticPlan),
 }
 
 #[derive(Clone, Debug)]
-enum CudaScalarPlan {
-    PointwiseUnary {
-        op: ScalarUnaryOp,
-    },
-    PointwiseBinary {
-        op: ScalarBinaryOp,
-    },
-    Reduction {
-        modes_a: Vec<u32>,
-        modes_c: Vec<u32>,
-        op: ScalarReductionOp,
-        reduced_total: usize,
-    },
-}
-
-#[derive(Clone, Debug)]
-enum CudaAnalyticPlan {
-    PointwiseUnary {
-        op: AnalyticUnaryOp,
-    },
-    PointwiseBinary {
-        op: AnalyticBinaryOp,
-    },
-    Reduction {
-        modes_a: Vec<u32>,
-        modes_c: Vec<u32>,
-        op: AnalyticReductionOp,
-        reduced_total: usize,
-    },
+enum CudaPlanStorage {
+    Compiled(PlanWrapper),
+    DeferredMakeContiguous,
 }
 
 pub struct CudaPlan<T: Scalar> {
+    /// Compiled cuTENSOR plan (RAII — Drop calls cutensorDestroyPlan).
+    plan: CudaPlanStorage,
     /// Family descriptor (for execute dispatch).
     desc: CudaPlanDescriptor,
-    /// Planned input/output shapes used to validate runtime tensors.
-    shapes: Vec<Vec<usize>>,
     _marker: PhantomData<T>,
 }
 
@@ -206,7 +266,10 @@ impl CudaBackend {
             .map_err(|e| Error::DeviceError(format!("Failed to load cuTENSOR symbols: {e}")))?;
         let vtable = Arc::new(vtable);
 
-        cudarc::runtime::result::device::set(0)
+        let shared_runtime = device_cuda::get_or_init(0)?;
+        shared_runtime
+            .context()
+            .bind_to_thread()
             .map_err(|e| Error::DeviceError(format!("CUDA runtime init failed: {e:?}")))?;
 
         let mut handle_raw: cutensorHandle_t = ptr::null_mut();
@@ -221,7 +284,7 @@ impl CudaBackend {
             handle,
             device_id: 0,
             vtable: Arc::clone(&vtable),
-            custom: custom::CustomCudaRuntime::new(0)?,
+            shared_runtime,
         };
 
         Ok((
@@ -236,26 +299,142 @@ impl CudaBackend {
     }
 
     /// Materialize a lazily-conjugated tensor on GPU.
-    pub fn resolve_conj<T: Scalar + Conjugate>(
-        _ctx: &mut CudaContext,
-        src: &Tensor<T>,
-    ) -> Tensor<T> {
+    pub fn resolve_conj<T: Scalar + Conjugate>(ctx: &mut CudaContext, src: &Tensor<T>) -> Tensor<T>
+    where
+        T: 'static,
+    {
         if !src.is_conjugated() {
             return src.clone();
         }
 
-        let contiguous = src.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
-        let Some(data) = contiguous.buffer().as_slice() else {
-            return src.clone();
-        };
-        let conjugated_data: Vec<T> = data.iter().map(|&v| v.conj()).collect();
-        Tensor::from_slice(
-            &conjugated_data,
-            src.dims(),
-            tenferro_tensor::MemoryOrder::ColumnMajor,
-        )
-        .unwrap_or_else(|_| src.clone())
+        let contiguous = src.contiguous(MemoryOrder::ColumnMajor);
+        match contiguous.logical_memory_space() {
+            LogicalMemorySpace::GpuMemory { device_id } => {
+                let resolved = Tensor::<T>::zeros(
+                    src.dims(),
+                    LogicalMemorySpace::GpuMemory { device_id },
+                    MemoryOrder::ColumnMajor,
+                );
+                let Some(src_ptr) = contiguous.buffer().as_device_ptr() else {
+                    return src.clone();
+                };
+                let Some(dst_ptr) = resolved.buffer().as_device_ptr() else {
+                    return src.clone();
+                };
+
+                let copy_result =
+                    if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Complex32>() {
+                        unsafe {
+                            launch_resolve_conj_kernel::<Complex32>(
+                                ctx,
+                                RESOLVE_CONJ_KERNEL_NAME_C32,
+                                src_ptr.cast::<Complex32>(),
+                                dst_ptr.cast::<Complex32>() as *mut Complex32,
+                                src.len(),
+                            )
+                        }
+                    } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<Complex64>() {
+                        unsafe {
+                            launch_resolve_conj_kernel::<Complex64>(
+                                ctx,
+                                RESOLVE_CONJ_KERNEL_NAME_C64,
+                                src_ptr.cast::<Complex64>(),
+                                dst_ptr.cast::<Complex64>() as *mut Complex64,
+                                src.len(),
+                            )
+                        }
+                    } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f32>() {
+                        unsafe {
+                            ctx.shared_runtime.copy_dtod_raw(
+                                src_ptr.cast::<f32>(),
+                                dst_ptr.cast::<f32>() as *mut f32,
+                                src.len(),
+                            )
+                        }
+                    } else if std::any::TypeId::of::<T>() == std::any::TypeId::of::<f64>() {
+                        unsafe {
+                            ctx.shared_runtime.copy_dtod_raw(
+                                src_ptr.cast::<f64>(),
+                                dst_ptr.cast::<f64>() as *mut f64,
+                                src.len(),
+                            )
+                        }
+                    } else {
+                        Err(Error::DeviceError(format!(
+                            "CUDA resolve_conj does not support scalar type {}",
+                            std::any::type_name::<T>()
+                        )))
+                    };
+
+                if copy_result.is_ok() {
+                    resolved
+                } else {
+                    src.clone()
+                }
+            }
+            _ => {
+                let Some(data) = contiguous.buffer().as_slice() else {
+                    return src.clone();
+                };
+                let conjugated_data: Vec<T> = data.iter().map(|&v| v.conj()).collect();
+                Tensor::from_slice(&conjugated_data, src.dims(), MemoryOrder::ColumnMajor)
+                    .unwrap_or_else(|_| src.clone())
+            }
+        }
     }
+}
+
+unsafe fn launch_resolve_conj_kernel<T>(
+    ctx: &CudaContext,
+    kernel_name: &str,
+    src: *const T,
+    dst: *mut T,
+    len: usize,
+) -> Result<()> {
+    if len == 0 {
+        return Ok(());
+    }
+
+    let runtime = ctx.shared_runtime();
+    let cuda_ctx = runtime.context();
+    cuda_ctx
+        .bind_to_thread()
+        .map_err(|err| Error::DeviceError(format!("CUDA context bind failed: {err:?}")))?;
+    let stream = cuda_ctx.default_stream();
+    let module = cuda_ctx
+        .load_module(resolve_conj_ptx()?)
+        .map_err(|err| Error::DeviceError(format!("CUDA module load failed: {err:?}")))?;
+    let kernel = module
+        .load_function(kernel_name)
+        .map_err(|err| Error::DeviceError(format!("CUDA load function failed: {err:?}")))?;
+
+    let len_u64 = u64::try_from(len)
+        .map_err(|_| Error::DeviceError("resolve_conj length exceeds u64 range".into()))?;
+    let len_u32 = u32::try_from(len).map_err(|_| {
+        Error::DeviceError("resolve_conj currently requires len <= u32::MAX".into())
+    })?;
+    let src_ptr = src as u64;
+    let dst_ptr = dst as u64;
+    let config = LaunchConfig {
+        grid_dim: (len_u32.div_ceil(256), 1, 1),
+        block_dim: (256, 1, 1),
+        shared_mem_bytes: 0,
+    };
+
+    unsafe {
+        stream
+            .launch_builder(&kernel)
+            .arg(&src_ptr)
+            .arg(&dst_ptr)
+            .arg(&len_u64)
+            .launch(config)
+            .map_err(|err| {
+                Error::DeviceError(format!("CUDA resolve_conj launch failed: {err:?}"))
+            })?;
+    }
+    stream
+        .synchronize()
+        .map_err(|err| Error::DeviceError(format!("CUDA stream synchronize failed: {err:?}")))
 }
 
 impl<S: Scalar> TensorSemiringCore<Standard<S>> for CudaBackend {
@@ -307,62 +486,6 @@ impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for CudaBackend {
 
     fn has_fast_path(desc: SemiringFastPathDescriptor) -> bool {
         has_fast_path(desc)
-    }
-}
-
-impl<S: Scalar + 'static> TensorScalarPrims<Standard<S>> for CudaBackend {
-    type Plan = CudaPlan<S>;
-    type Context = CudaContext;
-
-    fn plan(
-        ctx: &mut CudaContext,
-        desc: &ScalarPrimsDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<CudaPlan<S>> {
-        plan_scalar_descriptor::<S>(ctx, desc, shapes)
-    }
-
-    fn execute(
-        ctx: &mut CudaContext,
-        plan: &CudaPlan<S>,
-        alpha: S,
-        inputs: &[&Tensor<S>],
-        beta: S,
-        output: &mut Tensor<S>,
-    ) -> Result<()> {
-        execute_scalar_plan(ctx, plan, alpha, inputs, beta, output)
-    }
-
-    fn has_scalar_support(desc: ScalarPrimsDescriptor) -> bool {
-        has_scalar_support::<S>(desc)
-    }
-}
-
-impl<S: Scalar + 'static> TensorAnalyticPrims<Standard<S>> for CudaBackend {
-    type Plan = CudaPlan<S>;
-    type Context = CudaContext;
-
-    fn plan(
-        ctx: &mut CudaContext,
-        desc: &AnalyticPrimsDescriptor,
-        shapes: &[&[usize]],
-    ) -> Result<CudaPlan<S>> {
-        plan_analytic_descriptor::<S>(ctx, desc, shapes)
-    }
-
-    fn execute(
-        ctx: &mut CudaContext,
-        plan: &CudaPlan<S>,
-        alpha: S,
-        inputs: &[&Tensor<S>],
-        beta: S,
-        output: &mut Tensor<S>,
-    ) -> Result<()> {
-        execute_analytic_plan(ctx, plan, alpha, inputs, beta, output)
-    }
-
-    fn has_analytic_support(desc: AnalyticPrimsDescriptor) -> bool {
-        has_analytic_support::<S>(desc)
     }
 }
 

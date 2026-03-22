@@ -29,6 +29,9 @@ pub enum ScalarUnaryOp {
 
 /// Pointwise scalar binary operations.
 ///
+/// Ordered-real comparison operators return numeric masks in the same scalar
+/// dtype as their inputs: `1` where the predicate holds and `0` otherwise.
+///
 /// # Examples
 ///
 /// ```
@@ -45,6 +48,8 @@ pub enum ScalarBinaryOp {
     Div,
     Maximum,
     Minimum,
+    Greater,
+    GreaterEqual,
     ClampMin,
     ClampMax,
 }

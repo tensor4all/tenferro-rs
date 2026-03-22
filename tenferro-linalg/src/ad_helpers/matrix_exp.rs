@@ -174,34 +174,3 @@ where
 
     Ok(result)
 }
-
-pub(crate) fn matrix_power_single<T: KernelLinalgScalar, C>(
-    ctx: &mut C,
-    a: &[T],
-    n: usize,
-    exponent: u64,
-) -> Result<Vec<T>>
-where
-    T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
-{
-    if exponent == 1 {
-        return Ok(a.to_vec());
-    }
-
-    let mut result = identity_matrix::<T>(n);
-    let mut base = a.to_vec();
-    let mut power = exponent;
-
-    while power > 0 {
-        if power & 1 == 1 {
-            result = backend_mat_mul_nn(ctx, &result, &base, n)?;
-        }
-        power >>= 1;
-        if power > 0 {
-            base = backend_mat_mul_nn(ctx, &base, &base, n)?;
-        }
-    }
-
-    Ok(result)
-}

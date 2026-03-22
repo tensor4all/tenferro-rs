@@ -3,6 +3,7 @@ mod combine;
 mod constructors;
 mod data_ops;
 mod metadata;
+mod structural;
 mod transfer;
 mod views;
 
@@ -12,6 +13,8 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 
 use crate::{layout::compute_contiguous_strides, CompletionEvent, DataBuffer, MemoryOrder};
+
+pub use structural::KeepCountScalar;
 
 /// Multi-dimensional dense tensor.
 ///

@@ -237,7 +237,8 @@ pub fn det_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det_rrule")

@@ -5,6 +5,33 @@ fn repo_file(path: &str) -> String {
     std::fs::read_to_string(root.join(path)).unwrap()
 }
 
+fn file_section<'a>(contents: &'a str, start: &str, end: &str) -> &'a str {
+    let start_idx = contents
+        .find(start)
+        .unwrap_or_else(|| panic!("missing section start marker: {start}"));
+    let end_idx = contents[start_idx..]
+        .find(end)
+        .map(|idx| start_idx + idx)
+        .unwrap_or(contents.len());
+    &contents[start_idx..end_idx]
+}
+
+fn file_section_after<'a>(contents: &'a str, anchor: &str, start: &str, end: &str) -> &'a str {
+    let anchor_idx = contents
+        .find(anchor)
+        .unwrap_or_else(|| panic!("missing anchor marker: {anchor}"));
+    let anchored = &contents[anchor_idx..];
+    let start_idx = anchored
+        .find(start)
+        .map(|idx| anchor_idx + idx)
+        .unwrap_or_else(|| panic!("missing section start marker after anchor: {start}"));
+    let end_idx = contents[start_idx..]
+        .find(end)
+        .map(|idx| start_idx + idx)
+        .unwrap_or(contents.len());
+    &contents[start_idx..end_idx]
+}
+
 // IMPORTANT: Do not delete or weaken these tests.
 // They are the regression guard that keeps linalg on capability-based runtime
 // checks instead of slipping back to CPU/backend-name special cases.
@@ -91,5 +118,394 @@ fn public_and_ad_linalg_layers_do_not_fall_back_to_cpu_slice_helpers() {
     assert!(
         !layers.contains("backend::cpu::"),
         "public/composite linalg layers should stay generic over runtime contexts instead of calling CPU slice helpers directly"
+    );
+}
+
+#[test]
+fn solve_ex_and_inv_ex_sections_do_not_extract_cpu_slices() {
+    let linear_systems = repo_file("src/primal/linear_systems.rs");
+    let solve_ex = file_section(&linear_systems, "pub fn solve_ex", "pub fn inv");
+    let inv_ex = file_section(&linear_systems, "pub fn inv_ex", "pub fn det");
+
+    for (name, section) in [("solve_ex", solve_ex), ("inv_ex", inv_ex)] {
+        assert!(
+            !section.contains("extract_slice("),
+            "{name} should stay tensor-native and avoid extract_slice(...)"
+        );
+        assert!(
+            !section.contains("backend::slice_bridge::"),
+            "{name} should stay tensor-native and avoid slice_bridge helpers"
+        );
+    }
+}
+
+#[test]
+fn inv_ex_section_requires_inverse_capability() {
+    let linear_systems = repo_file("src/primal/linear_systems.rs");
+    let inv_ex = file_section(&linear_systems, "pub fn inv_ex", "pub fn det");
+
+    assert!(
+        inv_ex.contains("LinalgCapabilityOp::Inv"),
+        "inv_ex should remain gated by inverse capability rather than inheriting solve_ex exposure"
+    );
+}
+
+#[test]
+fn eigen_section_requires_capability_before_hermitian_validation() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let eigen = file_section(&decompositions, "pub fn eigen", "#[cfg(test)]");
+    let capability_gate =
+        "require_linalg_support::<T, C>(backend::LinalgCapabilityOp::EigenSym, \"eigen\")?";
+    let extract_slice = "extract_slice(&input)?";
+    let validation = "validate_hermitian_batches(data, offset, n, bc, \"eigen\")?";
+
+    assert!(
+        eigen.contains(capability_gate),
+        "eigen should gate through capability checks rather than direct backend-name or host-slice heuristics"
+    );
+    assert!(
+        eigen.find(capability_gate) < eigen.find(validation),
+        "eigen should require capability before validating Hermitian batches from host slices"
+    );
+    assert!(
+        eigen.find(capability_gate) < eigen.find(extract_slice),
+        "eigen should require capability before any host-slice extraction"
+    );
+}
+
+#[test]
+fn cholesky_ex_section_does_not_extract_cpu_slices() {
+    let least_squares = repo_file("src/primal/least_squares.rs");
+    let cholesky_ex = file_section(&least_squares, "pub fn cholesky_ex", "#[cfg(test)]");
+
+    assert!(
+        !cholesky_ex.contains("extract_slice("),
+        "cholesky_ex should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !cholesky_ex.contains("backend::slice_bridge::"),
+        "cholesky_ex should stay tensor-native and avoid slice_bridge helpers"
+    );
+}
+
+#[test]
+fn lstsq_section_does_not_extract_cpu_slices() {
+    let least_squares = repo_file("src/primal/least_squares.rs");
+    let lstsq = file_section(&least_squares, "pub fn lstsq", "pub fn cholesky");
+
+    assert!(
+        !lstsq.contains("extract_slice("),
+        "lstsq should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !lstsq.contains("backend::slice_bridge::"),
+        "lstsq should stay tensor-native and avoid slice_bridge helpers"
+    );
+}
+
+#[test]
+fn lu_factor_ex_section_does_not_extract_cpu_slices() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let lu_factor_ex = file_section(&decompositions, "pub fn lu_factor_ex", "pub fn lu_solve");
+
+    assert!(
+        !lu_factor_ex.contains("extract_slice("),
+        "lu_factor_ex should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !lu_factor_ex.contains("backend::slice_bridge::"),
+        "lu_factor_ex should stay tensor-native and avoid slice_bridge helpers"
+    );
+}
+
+#[test]
+fn lu_factor_section_does_not_extract_cpu_slices() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let lu_factor = file_section(&decompositions, "pub fn lu_factor", "pub fn lu_factor_ex");
+
+    assert!(
+        !lu_factor.contains("extract_slice("),
+        "lu_factor should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !lu_factor.contains("backend::slice_bridge::"),
+        "lu_factor should stay tensor-native and avoid slice_bridge helpers"
+    );
+}
+
+#[test]
+fn svd_max_rank_path_uses_tensor_views_before_cutoff_logic() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let svd = file_section(&decompositions, "pub fn svd", "pub fn svdvals");
+
+    assert!(
+        svd.contains(".narrow("),
+        "svd max_rank-only truncation should use Tensor::narrow(...) views"
+    );
+}
+
+#[test]
+fn svd_cutoff_path_stays_tensor_native() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let svd = file_section(&decompositions, "pub fn svd", "pub fn svdvals");
+
+    assert!(
+        !svd.contains("extract_slice("),
+        "svd cutoff truncation should avoid extract_slice(...)"
+    );
+    assert!(
+        svd.contains("zero_trailing_by_counts"),
+        "svd cutoff truncation should route through zero_trailing_by_counts"
+    );
+}
+
+#[test]
+fn pinv_path_stays_tensor_native() {
+    let spectral = repo_file("src/primal/spectral.rs");
+    let pinv = file_section(&spectral, "pub fn pinv", "pub fn matrix_exp");
+
+    assert!(
+        !pinv.contains("extract_slice("),
+        "pinv should avoid extract_slice(...)"
+    );
+    assert!(
+        !pinv.contains("backend::slice_bridge::"),
+        "pinv should avoid slice_bridge helpers"
+    );
+}
+
+#[test]
+fn nuclear_norm_branch_stays_tensor_native_after_svdvals() {
+    let norms = repo_file("src/primal/norms.rs");
+    let nuclear = file_section(
+        &norms,
+        "        NormKind::Nuclear => {\n            let singular_values = svdvals(ctx, tensor)?;",
+        "        NormKind::Spectral => {",
+    );
+
+    assert!(
+        nuclear.contains("svdvals(ctx, tensor)?"),
+        "nuclear norm should still derive from svdvals(...)"
+    );
+    assert!(
+        !nuclear.contains("extract_slice("),
+        "nuclear norm should avoid extract_slice(...) after svdvals"
+    );
+}
+
+#[test]
+fn spectral_norm_branch_stays_tensor_native_after_svdvals() {
+    let norms = repo_file("src/primal/norms.rs");
+    let spectral = file_section(
+        &norms,
+        "        NormKind::Spectral => {\n            let singular_values = svdvals(ctx, tensor)?;",
+        "        NormKind::L1 => {",
+    );
+
+    assert!(
+        spectral.contains("svdvals(ctx, tensor)?"),
+        "spectral norm should still derive from svdvals(...)"
+    );
+    assert!(
+        !spectral.contains("extract_slice("),
+        "spectral norm should avoid extract_slice(...) after svdvals"
+    );
+}
+
+#[test]
+fn vector_l1_inf_norms_use_scalar_bridge() {
+    let norms = repo_file("src/primal/norms.rs");
+    let vector_match = file_section(
+        &norms,
+        "    if tensor.ndim() == 1 {",
+        "        let input = ensure_col_major(tensor);",
+    );
+
+    assert!(
+        vector_match.contains("scalar_unary_same_shape"),
+        "vector L1/Inf norms should route through the scalar unary bridge"
+    );
+}
+
+#[test]
+fn matrix_l1_inf_norms_use_scalar_bridge() {
+    let norms = repo_file("src/primal/norms.rs");
+    let matrix_l1 = file_section(
+        &norms,
+        "        NormKind::L1 => {\n            if m == 0 || n == 0 {",
+        "        NormKind::Inf => {",
+    );
+    let matrix_inf = file_section(
+        &norms,
+        "        NormKind::Inf => {\n            if m == 0 || n == 0 {",
+        "        NormKind::Fro => {",
+    );
+
+    assert!(
+        matrix_l1.contains("scalar_unary_same_shape"),
+        "matrix L1 norm should route through the scalar unary bridge"
+    );
+    assert!(
+        matrix_inf.contains("scalar_unary_same_shape"),
+        "matrix Inf norm should route through the scalar unary bridge"
+    );
+}
+
+#[test]
+fn fro_norm_path_is_tensor_native_and_uses_sqrt_bridge() {
+    let norms = repo_file("src/primal/norms.rs");
+    let vector_fro = file_section(
+        &norms,
+        "            NormKind::Fro => {",
+        "            NormKind::Lp(_) => {}",
+    );
+    let matrix_fro = file_section_after(
+        &norms,
+        "    let (m, n, batch_dims) = validate_2d(tensor)?;",
+        "        NormKind::Fro => {",
+        "        _ => Err(",
+    );
+
+    assert!(
+        !vector_fro.contains("extract_slice("),
+        "vector Fro norm should avoid extract_slice(...)"
+    );
+    assert!(
+        !matrix_fro.contains("extract_slice("),
+        "matrix Fro norm should avoid extract_slice(...)"
+    );
+    assert!(
+        vector_fro.contains("AnalyticUnaryOp::Sqrt"),
+        "vector Fro norm should route through the analytic sqrt bridge"
+    );
+    assert!(
+        matrix_fro.contains("AnalyticUnaryOp::Sqrt"),
+        "matrix Fro norm should route through the analytic sqrt bridge"
+    );
+}
+
+#[test]
+fn vector_lp_norm_path_is_tensor_native_and_uses_pow_bridge() {
+    let norms = repo_file("src/primal/norms.rs");
+    let vector_lp = file_section(
+        &norms,
+        "        let NormKind::Lp(p) = kind else {",
+        "    let (m, n, batch_dims) = validate_2d(tensor)?;",
+    );
+
+    assert!(
+        !vector_lp.contains("extract_slice("),
+        "vector Lp norm should avoid host slice extraction"
+    );
+    assert!(
+        vector_lp.contains("analytic_binary_same_shape"),
+        "vector Lp norm should route through the analytic binary Pow bridge"
+    );
+}
+
+#[test]
+fn matrix_power_path_is_tensor_native_and_uses_tensor_power_logic() {
+    let matrix_functions = repo_file("src/primal/matrix_functions.rs");
+    let matrix_power = file_section(&matrix_functions, "pub fn matrix_power", "#[cfg(test)]");
+
+    assert!(
+        !matrix_power.contains("require_main_memory_tensor(tensor, \"matrix_power\")?"),
+        "matrix_power should not reject non-main-memory tensors before tensor-native power logic"
+    );
+    assert!(
+        !matrix_power.contains("extract_slice("),
+        "matrix_power should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !matrix_power.contains("backend::slice_bridge::"),
+        "matrix_power should stay tensor-native and avoid slice_bridge helpers"
+    );
+    assert!(
+        matrix_power.contains("batched_gemm_with_semiring_tensors"),
+        "matrix_power should use tensor-native batched GEMM for exponentiation by squaring"
+    );
+    assert!(
+        matrix_power.contains("batched_identity"),
+        "matrix_power should build the identity tensor natively"
+    );
+    assert!(
+        matrix_power.contains("inv(ctx, tensor)?"),
+        "matrix_power should use tensor-native inverse logic for negative exponents"
+    );
+}
+
+#[test]
+fn matrix_exp_requires_main_memory_before_host_slice_path() {
+    let spectral = repo_file("src/primal/spectral.rs");
+    let matrix_exp = file_section(&spectral, "pub fn matrix_exp", "#[cfg(test)]");
+
+    assert!(
+        matrix_exp.contains("require_main_memory_tensor(tensor, \"matrix_exp\")?"),
+        "matrix_exp should reject non-main-memory tensors before host-slice logic"
+    );
+}
+
+#[test]
+fn cond_path_multiplies_norms_tensor_natively() {
+    let norms = repo_file("src/primal/norms.rs");
+    let cond = file_section(&norms, "pub fn cond", "#[cfg(test)]");
+
+    assert!(
+        !cond.contains("extract_slice("),
+        "cond should avoid extract_slice(...) when combining norm outputs"
+    );
+    assert!(
+        cond.contains("scalar_binary_same_shape"),
+        "cond should combine norm outputs through the scalar bridge"
+    );
+}
+
+#[test]
+fn det_path_uses_tensor_lu_and_prod_reduction() {
+    let linear_systems = repo_file("src/primal/linear_systems.rs");
+    let det = file_section(&linear_systems, "pub fn det", "pub fn slogdet");
+
+    assert!(
+        !det.contains("extract_slice("),
+        "det should avoid extract_slice(...)"
+    );
+    assert!(
+        !det.contains("backend::slice_bridge::"),
+        "det should avoid slice_bridge helpers"
+    );
+    assert!(
+        det.contains("ScalarReductionOp::Prod"),
+        "det should derive its diagonal product through scalar reduction"
+    );
+}
+
+#[test]
+fn slogdet_path_uses_tensor_lu_and_log_without_slice_bridge() {
+    let linear_systems = repo_file("src/primal/linear_systems.rs");
+    let slogdet = file_section(&linear_systems, "pub fn slogdet", "#[cfg(test)]");
+
+    assert!(
+        slogdet.contains("TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;"),
+        "slogdet should derive from backend tensor LU without packed host cleanup"
+    );
+    assert!(
+        slogdet.contains("scalar_unary_same_shape"),
+        "slogdet should use tensor-native unary helpers for abs/sign work"
+    );
+    assert!(
+        slogdet.contains("AnalyticUnaryOp::Log"),
+        "slogdet should use the analytic log substrate"
+    );
+    assert!(
+        slogdet.contains("ScalarReductionOp::Sum"),
+        "slogdet should reduce log singular values by summation"
+    );
+    assert!(
+        !slogdet.contains("extract_slice("),
+        "slogdet should avoid extract_slice(...)"
+    );
+    assert!(
+        !slogdet.contains("backend::slice_bridge::"),
+        "slogdet should avoid slice_bridge helpers"
     );
 }
