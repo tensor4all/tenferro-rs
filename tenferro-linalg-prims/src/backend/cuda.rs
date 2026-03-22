@@ -459,13 +459,14 @@ fn has_matrix_power_support<T: CudaLinalgScalar>() -> bool {
 }
 
 fn has_matrix_exp_support<T: CudaLinalgScalar>() -> bool {
-    matches!(
-        T::cuda_data_type(),
-        scalar_type::CudaDataType::F32
-            | scalar_type::CudaDataType::F64
-            | scalar_type::CudaDataType::Complex32
-            | scalar_type::CudaDataType::Complex64
-    )
+    solve::has_solve_support::<T>()
+        && matches!(
+            T::cuda_data_type(),
+            scalar_type::CudaDataType::F32
+                | scalar_type::CudaDataType::F64
+                | scalar_type::CudaDataType::Complex32
+                | scalar_type::CudaDataType::Complex64
+        )
 }
 
 impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
