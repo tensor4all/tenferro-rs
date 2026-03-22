@@ -777,20 +777,20 @@ fn cuda_runtime_can_pack_concat_sources() {
     use tenferro_device::cuda::runtime::{self, ContiguousOrder, StridedCopySpec};
 
     let runtime = runtime::get_or_init(0).unwrap();
-    let left_host = vec![1.0_f32, 2.0];
-    let right_host = vec![3.0_f32, 5.0, 4.0, 6.0];
+    let left_host = vec![0.0_f32, 11.0, 13.0, 0.0, 12.0, 14.0];
+    let right_host = vec![0.0_f32, 0.0, 31.0, 0.0, 0.0, 32.0];
     let left = runtime.alloc::<f32>(left_host.len()).unwrap();
     let right = runtime.alloc::<f32>(right_host.len()).unwrap();
     runtime.copy_htod(&left_host, &left).unwrap();
     runtime.copy_htod(&right_host, &right).unwrap();
 
-    let left_dims = [1usize, 2];
-    let right_dims = [2usize, 2];
+    let left_dims = [2usize, 2];
+    let right_dims = [2usize, 1];
     let left_spec =
-        StridedCopySpec::to_contiguous(&left_dims, &[1isize, 1], 0, ContiguousOrder::ColumnMajor)
+        StridedCopySpec::to_contiguous(&left_dims, &[3isize, 1], 1, ContiguousOrder::ColumnMajor)
             .unwrap();
     let right_spec =
-        StridedCopySpec::to_contiguous(&right_dims, &[1isize, 2], 0, ContiguousOrder::ColumnMajor)
+        StridedCopySpec::to_contiguous(&right_dims, &[3isize, 1], 2, ContiguousOrder::ColumnMajor)
             .unwrap();
 
     let packed = runtime
@@ -799,13 +799,13 @@ fn cuda_runtime_can_pack_concat_sources() {
             &left_spec,
             &right,
             &right_spec,
-            0,
+            1,
             ContiguousOrder::ColumnMajor,
         )
         .unwrap();
 
     let got = runtime.copy_dtoh(&packed).unwrap();
-    assert_eq!(got, vec![1.0, 3.0, 5.0, 2.0, 4.0, 6.0]);
+    assert_eq!(got, vec![11.0, 12.0, 13.0, 14.0, 31.0, 32.0]);
 }
 
 #[test]

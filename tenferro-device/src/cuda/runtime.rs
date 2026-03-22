@@ -2437,6 +2437,23 @@ impl CudaRuntime {
         dst: *mut T,
         spec: &StridedCopySpec,
     ) -> Result<()> {
+        let numel = checked_numel(&spec.dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let stream = self.launch_strided_copy_raw(src, dst, spec)?;
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    unsafe fn launch_strided_copy_raw<T>(
+        &self,
+        src: *const T,
+        dst: *mut T,
+        spec: &StridedCopySpec,
+    ) -> Result<Arc<CudaStream>> {
         if spec.dims.len() != spec.src_strides.len() || spec.dims.len() != spec.dst_strides.len() {
             return Err(Error::InvalidArgument(format!(
                 "strided copy rank mismatch: dims={} src_strides={} dst_strides={}",
@@ -2447,9 +2464,6 @@ impl CudaRuntime {
         }
 
         let numel = checked_numel(&spec.dims)?;
-        if numel == 0 {
-            return Ok(());
-        }
 
         self.bind_context()?;
         let ctx = self.context();
@@ -2506,9 +2520,8 @@ impl CudaRuntime {
                 .launch(config)
                 .map_err(|err| cuda_error("CUDA strided-copy kernel launch", err))?;
         }
-        stream
-            .synchronize()
-            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+
+        Ok(stream)
     }
 
     /// Launches the keep-count-driven trailing zero-fill kernel on raw device allocations.
@@ -4525,17 +4538,22 @@ impl CudaRuntime {
         if left_spec.dims.len() != left_spec.src_strides.len()
             || right_spec.dims.len() != right_spec.src_strides.len()
         {
+            if left_spec.dims.len() != left_spec.src_strides.len() {
+                return Err(Error::InvalidArgument(format!(
+                    "concat pack left spec rank mismatch: dims={} src_strides={}",
+                    left_spec.dims.len(),
+                    left_spec.src_strides.len()
+                )));
+            }
             return Err(Error::InvalidArgument(format!(
-                "concat pack rank mismatch: left dims={} left src_strides={} right dims={} right src_strides={}",
-                left_spec.dims.len(),
-                left_spec.src_strides.len(),
+                "concat pack right spec rank mismatch: dims={} src_strides={}",
                 right_spec.dims.len(),
                 right_spec.src_strides.len()
             )));
         }
         if left_spec.dims.len() != right_spec.dims.len() {
             return Err(Error::InvalidArgument(format!(
-                "concat pack rank mismatch: left={} right={}",
+                "concat pack source rank mismatch: left={} right={}",
                 left_spec.dims.len(),
                 right_spec.dims.len()
             )));
@@ -4561,6 +4579,9 @@ impl CudaRuntime {
             .ok_or_else(|| Error::InvalidArgument("concat dimension overflow".into()))?;
         let dst_len = checked_numel(&dst_dims)?;
         let dst = self.alloc::<T>(dst_len)?;
+        if dst_len == 0 {
+            return Ok(dst);
+        }
         let dst_strides = contiguous_strides(&dst_dims, order)?;
         let axis_stride = dst_strides[axis];
         let right_axis_len = isize::try_from(left_spec.dims[axis]).map_err(|_| {
@@ -4588,8 +4609,19 @@ impl CudaRuntime {
             dst_offset: right_dst_offset,
         };
 
-        self.copy_strided(left, &dst, &left_dst_spec)?;
-        self.copy_strided(right, &dst, &right_dst_spec)?;
+        let stream = unsafe {
+            self.launch_strided_copy_raw(left.ptr.cast::<T>(), dst.ptr.cast::<T>(), &left_dst_spec)?
+        };
+        unsafe {
+            self.launch_strided_copy_raw(
+                right.ptr.cast::<T>(),
+                dst.ptr.cast::<T>(),
+                &right_dst_spec,
+            )?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))?;
         Ok(dst)
     }
 
