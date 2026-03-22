@@ -1,5 +1,6 @@
 use super::*;
 use tenferro_device::Error;
+use tenferro_device::LogicalMemorySpace;
 
 fn col_tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
@@ -113,4 +114,63 @@ fn cat_validates_rank_shape_and_dimension_range() {
         matches!(dim_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
         "expected out-of-range error, got {dim_err:?}"
     );
+}
+
+#[cfg(feature = "cuda")]
+mod cuda {
+    use super::*;
+
+    fn cuda_device_zero_is_available() -> bool {
+        std::panic::catch_unwind(|| cudarc::driver::CudaContext::new(0).is_ok()).unwrap_or(false)
+    }
+
+    #[test]
+    fn gpu_cat_materializes_along_nonzero_axis_when_cuda_is_available() {
+        if !cuda_device_zero_is_available() {
+            return;
+        }
+
+        let a = col_tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = col_tensor(&[10.0, 20.0], &[2, 1]);
+        let expected = Tensor::cat(&[&a, &b], 1).unwrap();
+
+        let gpu_a = a
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let gpu_b = b
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let got = Tensor::cat(&[&gpu_a, &gpu_b], 1)
+            .expect("GPU cat should not reject main-memory-only tensors")
+            .to_memory_space_async(LogicalMemorySpace::MainMemory)
+            .unwrap();
+
+        assert_eq!(got.dims(), expected.dims());
+        assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+    }
+
+    #[test]
+    fn gpu_stack_materializes_on_device_when_cuda_is_available() {
+        if !cuda_device_zero_is_available() {
+            return;
+        }
+
+        let a = col_tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+        let b = col_tensor(&[10.0, 20.0, 30.0, 40.0], &[2, 2]);
+        let expected = Tensor::stack(&[&a, &b], 0).unwrap();
+
+        let gpu_a = a
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let gpu_b = b
+            .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let got = Tensor::stack(&[&gpu_a, &gpu_b], 0)
+            .expect("GPU stack should not reject main-memory-only tensors")
+            .to_memory_space_async(LogicalMemorySpace::MainMemory)
+            .unwrap();
+
+        assert_eq!(got.dims(), expected.dims());
+        assert_eq!(got.buffer().as_slice(), expected.buffer().as_slice());
+    }
 }
