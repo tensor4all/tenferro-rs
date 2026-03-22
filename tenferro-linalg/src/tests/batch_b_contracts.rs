@@ -1062,6 +1062,98 @@ fn cuda_public_solve_ex_matches_cpu_complex64_impl() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_solve_triangular_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f32, 1.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(1.0, -2.0),
+                Complex::new(3.0, 4.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b_cpu = Tensor::from_slice(
+            &[Complex::new(5.0_f32, -1.0), Complex::new(2.0, 3.0)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = solve_triangular(&mut cpu_ctx, &a_cpu, &b_cpu, true).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let b_gpu = b_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = solve_triangular(ctx, &a_gpu, &b_gpu, true).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public solve_triangular complex32",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_solve_triangular_matches_cpu_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f64, 1.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(1.0, -2.0),
+                Complex::new(3.0, 4.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b_cpu = Tensor::from_slice(
+            &[Complex::new(5.0_f64, -1.0), Complex::new(2.0, 3.0)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = solve_triangular(&mut cpu_ctx, &a_cpu, &b_cpu, true).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let b_gpu = b_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = solve_triangular(ctx, &a_gpu, &b_gpu, true).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public solve_triangular complex64",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_cholesky_ex_matches_cpu_complex32_impl() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -2004,6 +2096,18 @@ fn public_cuda_solve_ex_matches_cpu_for_mixed_batch_complex32() {
 #[cfg(feature = "cuda")]
 fn public_cuda_solve_ex_matches_cpu_for_mixed_batch_complex64() {
     cuda_public_solve_ex_matches_cpu_complex64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_solve_triangular_matches_cpu_for_small_complex32_matrix() {
+    cuda_public_solve_triangular_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_solve_triangular_matches_cpu_for_small_complex64_matrix() {
+    cuda_public_solve_triangular_matches_cpu_complex64_impl();
 }
 
 #[test]

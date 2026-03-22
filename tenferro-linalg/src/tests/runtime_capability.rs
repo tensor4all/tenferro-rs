@@ -219,6 +219,21 @@ fn solve_ex_and_inv_ex_sections_do_not_extract_cpu_slices() {
 }
 
 #[test]
+fn solve_triangular_section_does_not_extract_cpu_slices() {
+    let norms = repo_file("src/primal/norms.rs");
+    let solve_triangular = file_section(&norms, "pub fn solve_triangular", "pub fn norm");
+
+    assert!(
+        !solve_triangular.contains("extract_slice("),
+        "solve_triangular should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !solve_triangular.contains("backend::slice_bridge::"),
+        "solve_triangular should stay tensor-native and avoid slice_bridge helpers"
+    );
+}
+
+#[test]
 fn inv_ex_section_requires_inverse_capability() {
     let linear_systems = repo_file("src/primal/linear_systems.rs");
     let inv_ex = file_section(&linear_systems, "pub fn inv_ex", "pub fn det");
