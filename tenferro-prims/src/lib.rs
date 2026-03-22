@@ -9,6 +9,7 @@
 //!   contraction fast paths
 //! - [`TensorScalarPrims`] for standard scalar pointwise and reduction families
 //! - [`TensorAnalyticPrims`] for analytic pointwise and reduction families
+//! - [`TensorComplexRealPrims`] for cross-dtype complex-to-real unary families
 //!
 //! Every family follows the same plan/execute pattern:
 //!
@@ -187,6 +188,8 @@ mod gpu_stubs;
 
 #[doc(hidden)]
 pub use cpu::CpuAnalyticPlan;
+#[doc(hidden)]
+pub use cpu::CpuComplexRealPlan;
 #[doc(hidden)]
 pub use cpu::CpuScalarPlan;
 pub use cpu::*;

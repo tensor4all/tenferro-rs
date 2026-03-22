@@ -11,6 +11,7 @@ use cudarc::{
     nvrtc::{compile_ptx, Ptx},
     runtime::result as cuda_result,
 };
+use num_complex::{Complex32, Complex64};
 
 use crate::{Error, Result};
 
@@ -699,6 +700,88 @@ extern "C" __global__ void reduce_real_f64(
 }
 "#;
 
+const COMPLEX_REAL_UNARY_KERNEL_NAME_F32: &str = "pointwise_unary_complex32_to_real_f32";
+const COMPLEX_REAL_UNARY_KERNEL_NAME_F64: &str = "pointwise_unary_complex64_to_real_f64";
+const COMPLEX_REAL_CUDA_SRC: &str = r#"
+typedef struct { float re; float im; } complex32_t;
+typedef struct { double re; double im; } complex64_t;
+
+__device__ long long linear_offset(
+    unsigned long long linear_idx,
+    const long long* dims,
+    const long long* strides,
+    long long base_offset,
+    int ndim
+) {
+    long long offset = base_offset;
+    unsigned long long remainder = linear_idx;
+    for (int axis = 0; axis < ndim; ++axis) {
+        long long coord = (long long)(remainder % (unsigned long long)dims[axis]);
+        remainder /= (unsigned long long)dims[axis];
+        offset += coord * strides[axis];
+    }
+    return offset;
+}
+
+extern "C" __global__ void pointwise_unary_complex32_to_real_f32(
+    const complex32_t* src,
+    float* dst,
+    const long long* dims,
+    const long long* src_strides,
+    long long src_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    int op_code,
+    float alpha,
+    float beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long src_idx = linear_offset(idx, dims, src_strides, src_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    complex32_t value = src[src_idx];
+    float mapped = sqrtf(value.re * value.re + value.im * value.im);
+    if (op_code == 0) {
+        dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
+    }
+}
+
+extern "C" __global__ void pointwise_unary_complex64_to_real_f64(
+    const complex64_t* src,
+    double* dst,
+    const long long* dims,
+    const long long* src_strides,
+    long long src_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    int op_code,
+    double alpha,
+    double beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+    long long src_idx = linear_offset(idx, dims, src_strides, src_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    complex64_t value = src[src_idx];
+    double mapped = sqrt(value.re * value.re + value.im * value.im);
+    if (op_code == 0) {
+        dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
+    }
+}
+"#;
+
 fn cuda_error(operation: &str, err: impl std::fmt::Debug) -> Error {
     Error::DeviceError(format!("{operation} failed: {err:?}"))
 }
@@ -723,6 +806,16 @@ fn real_scalar_ptx() -> Result<Ptx> {
     PTX.get_or_init(|| {
         compile_ptx(REAL_SCALAR_CUDA_SRC)
             .map_err(|err| format!("NVRTC compile failed for real-scalar kernel: {err:?}"))
+    })
+    .clone()
+    .map_err(Error::DeviceError)
+}
+
+fn complex_real_ptx() -> Result<Ptx> {
+    static PTX: OnceLock<std::result::Result<Ptx, String>> = OnceLock::new();
+    PTX.get_or_init(|| {
+        compile_ptx(COMPLEX_REAL_CUDA_SRC)
+            .map_err(|err| format!("NVRTC compile failed for complex-real kernel: {err:?}"))
     })
     .clone()
     .map_err(Error::DeviceError)
@@ -863,6 +956,12 @@ fn unary_opcode(op: RealUnaryOp) -> i32 {
     }
 }
 
+fn complex_real_opcode(op: ComplexRealUnaryOp) -> i32 {
+    match op {
+        ComplexRealUnaryOp::Abs => 0,
+    }
+}
+
 fn binary_opcode(op: RealBinaryOp) -> i32 {
     match op {
         RealBinaryOp::Add => 0,
@@ -894,6 +993,21 @@ fn load_real_scalar_kernel(
     let ctx = runtime.context();
     let module = ctx
         .load_module(real_scalar_ptx()?)
+        .map_err(|err| cuda_error("CUDA module load", err))?;
+    let kernel = module
+        .load_function(kernel_name)
+        .map_err(|err| cuda_error("CUDA load function", err))?;
+    Ok((kernel, ctx.default_stream()))
+}
+
+fn load_complex_real_kernel(
+    runtime: &CudaRuntime,
+    kernel_name: &str,
+) -> Result<(cudarc::driver::CudaFunction, Arc<CudaStream>)> {
+    runtime.bind_context()?;
+    let ctx = runtime.context();
+    let module = ctx
+        .load_module(complex_real_ptx()?)
         .map_err(|err| cuda_error("CUDA module load", err))?;
     let kernel = module
         .load_function(kernel_name)
@@ -1406,6 +1520,21 @@ pub enum RealUnaryOp {
     Reciprocal,
     Log,
     Sqrt,
+}
+
+/// Complex-to-real unary operations exposed by the Layer 0 CUDA runtime.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::cuda::runtime::ComplexRealUnaryOp;
+///
+/// let op = ComplexRealUnaryOp::Abs;
+/// assert_eq!(op, ComplexRealUnaryOp::Abs);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComplexRealUnaryOp {
+    Abs,
 }
 
 /// Real binary operations exposed by the Layer 0 CUDA runtime.
@@ -2723,6 +2852,202 @@ impl CudaRuntime {
         dst_offset: isize,
     ) -> Result<()> {
         self.pointwise_unary_real_raw_impl(
+            op,
+            alpha,
+            src,
+            dims,
+            src_strides,
+            src_offset,
+            beta,
+            dst,
+            dst_strides,
+            dst_offset,
+        )
+    }
+
+    fn pointwise_unary_complex_real_raw_impl<Dst, Src>(
+        &self,
+        kernel_name: &str,
+        op: ComplexRealUnaryOp,
+        alpha: Dst,
+        src: *const Src,
+        dims: &[usize],
+        src_strides: &[isize],
+        src_offset: isize,
+        beta: Dst,
+        dst: *mut Dst,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()>
+    where
+        Dst: RuntimeRealScalar,
+        Src: Copy + 'static,
+    {
+        validate_pointwise_rank(dims, src_strides, None, dst_strides)?;
+        let numel = checked_numel(dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let (kernel, stream) = load_complex_real_kernel(self, kernel_name)?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(dims)?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dims", err))?;
+        let src_strides_dev = stream
+            .clone_htod(&to_i64_vec(src_strides, "src stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD src strides", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(dst_strides, "dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD dst strides", err))?;
+        let ndim = i32::try_from(dims.len())
+            .map_err(|_| Error::InvalidArgument("pointwise unary rank exceeds i32 range".into()))?;
+        let src_offset = i64::try_from(src_offset).map_err(|_| {
+            Error::InvalidArgument("pointwise unary source offset exceeds i64 range".into())
+        })?;
+        let dst_offset = i64::try_from(dst_offset).map_err(|_| {
+            Error::InvalidArgument("pointwise unary destination offset exceeds i64 range".into())
+        })?;
+        let numel_u64 = u64::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("pointwise unary numel exceeds u64 range".into())
+        })?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("pointwise unary currently requires len <= u32::MAX".into())
+        })?;
+        let opcode = complex_real_opcode(op);
+        let src_ptr = src as u64;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            stream
+                .launch_builder(&kernel)
+                .arg(&src_ptr)
+                .arg(&dst_ptr)
+                .arg(&dims_dev)
+                .arg(&src_strides_dev)
+                .arg(&src_offset)
+                .arg(&dst_strides_dev)
+                .arg(&dst_offset)
+                .arg(&ndim)
+                .arg(&numel_u64)
+                .arg(&opcode)
+                .arg(&alpha)
+                .arg(&beta)
+                .launch(config)
+                .map_err(|err| cuda_error("CUDA complex-real unary kernel launch", err))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    /// Launches the Layer 0 complex-to-real unary kernel for `Complex32 -> f32` data.
+    ///
+    /// # Safety
+    ///
+    /// `src` and `dst` must point to live device allocations compatible with the provided layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex32;
+    /// use tenferro_device::cuda::runtime::{self, ComplexRealUnaryOp};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let src = runtime.alloc::<Complex32>(4).unwrap();
+    /// let dst = runtime.alloc::<f32>(4).unwrap();
+    /// unsafe {
+    ///     runtime.pointwise_unary_complex32_to_real_f32_raw(
+    ///         ComplexRealUnaryOp::Abs,
+    ///         1.0,
+    ///         src.device_ptr().cast_const(),
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         0.0,
+    ///         dst.device_ptr(),
+    ///         &[1],
+    ///         0,
+    ///     ).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn pointwise_unary_complex32_to_real_f32_raw(
+        &self,
+        op: ComplexRealUnaryOp,
+        alpha: f32,
+        src: *const Complex32,
+        dims: &[usize],
+        src_strides: &[isize],
+        src_offset: isize,
+        beta: f32,
+        dst: *mut f32,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        self.pointwise_unary_complex_real_raw_impl(
+            COMPLEX_REAL_UNARY_KERNEL_NAME_F32,
+            op,
+            alpha,
+            src,
+            dims,
+            src_strides,
+            src_offset,
+            beta,
+            dst,
+            dst_strides,
+            dst_offset,
+        )
+    }
+
+    /// Launches the Layer 0 complex-to-real unary kernel for `Complex64 -> f64` data.
+    ///
+    /// # Safety
+    ///
+    /// `src` and `dst` must point to live device allocations compatible with the provided layout metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    /// use tenferro_device::cuda::runtime::{self, ComplexRealUnaryOp};
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let src = runtime.alloc::<Complex64>(4).unwrap();
+    /// let dst = runtime.alloc::<f64>(4).unwrap();
+    /// unsafe {
+    ///     runtime.pointwise_unary_complex64_to_real_f64_raw(
+    ///         ComplexRealUnaryOp::Abs,
+    ///         1.0,
+    ///         src.device_ptr().cast_const(),
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         0.0,
+    ///         dst.device_ptr(),
+    ///         &[1],
+    ///         0,
+    ///     ).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn pointwise_unary_complex64_to_real_f64_raw(
+        &self,
+        op: ComplexRealUnaryOp,
+        alpha: f64,
+        src: *const Complex64,
+        dims: &[usize],
+        src_strides: &[isize],
+        src_offset: isize,
+        beta: f64,
+        dst: *mut f64,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        self.pointwise_unary_complex_real_raw_impl(
+            COMPLEX_REAL_UNARY_KERNEL_NAME_F64,
             op,
             alpha,
             src,

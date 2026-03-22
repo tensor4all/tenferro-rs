@@ -42,6 +42,7 @@ use crate::{
 };
 
 mod analytic;
+mod complex_real;
 mod execution;
 mod planning;
 mod scalar;
@@ -49,6 +50,7 @@ mod scalar_type;
 mod wrappers;
 
 pub use analytic::CudaAnalyticPlan;
+pub use complex_real::CudaComplexRealPlan;
 use execution::{execute_plan, has_fast_path, plan_core_descriptor, plan_fast_descriptor};
 use planning::check_status;
 pub use scalar::CudaScalarPlan;
