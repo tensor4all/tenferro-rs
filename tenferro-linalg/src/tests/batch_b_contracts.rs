@@ -412,6 +412,43 @@ fn cuda_public_pinv_matches_cpu_rank_deficient_real_matrix() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_pinv_matches_cpu_small_complex_matrix() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                num_complex::Complex64::new(1.0, 1.0),
+                num_complex::Complex64::new(0.5, -0.25),
+                num_complex::Complex64::new(-2.0, 0.75),
+                num_complex::Complex64::new(3.0, -1.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = pinv(&mut cpu_ctx, &a_cpu, None).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = pinv(ctx, &a_gpu, None).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public pinv small complex matrix",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_inv_matches_cpu_small_real_matrix() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -2215,6 +2252,12 @@ fn public_cuda_pinv_matches_cpu_for_small_real_matrix() {
 #[cfg(feature = "cuda")]
 fn public_cuda_pinv_matches_cpu_for_rank_deficient_real_matrix() {
     cuda_public_pinv_matches_cpu_rank_deficient_real_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_pinv_matches_cpu_for_small_complex_matrix() {
+    cuda_public_pinv_matches_cpu_small_complex_matrix();
 }
 
 #[test]
