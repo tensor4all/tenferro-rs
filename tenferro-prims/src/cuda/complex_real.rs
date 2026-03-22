@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64, ComplexFloat};
-use num_traits::{One, Zero};
+use num_traits::{NumCast, One, Zero};
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_device::{
     cuda::runtime::{ComplexRealUnaryOp as RuntimeComplexRealUnaryOp, CudaRuntime},
@@ -41,7 +41,14 @@ enum CudaComplexRealPlanKind {
         unary_op: ComplexRealUnaryOp,
         reduction_op: ScalarReductionOp,
         reduced_axes: Vec<usize>,
+        reduced_total: usize,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReductionPlanSpec {
+    reduced_axes: Vec<usize>,
+    reduced_total: usize,
 }
 
 trait RuntimeComplexRealScalar: Scalar + ComplexFloat + 'static {
@@ -210,13 +217,14 @@ where
                     std::any::type_name::<T>()
                 )));
             }
-            let reduced_axes =
+            let reduction =
                 plan_reduction_axes(modes_a, modes_c, shapes, "CudaComplexRealReduction")?;
             Ok(CudaComplexRealPlan {
                 kind: CudaComplexRealPlanKind::Reduction {
                     unary_op: *unary_op,
                     reduction_op: *reduction_op,
-                    reduced_axes,
+                    reduced_axes: reduction.reduced_axes,
+                    reduced_total: reduction.reduced_total,
                 },
                 _marker: PhantomData,
             })
@@ -232,7 +240,7 @@ fn plan_reduction_axes(
     modes_c: &[u32],
     shapes: &[&[usize]],
     op_name: &str,
-) -> Result<Vec<usize>> {
+) -> Result<ReductionPlanSpec> {
     validate_shape_count(shapes, 2, op_name)?;
     validate_rank(shapes[0], modes_a.len(), &format!("{op_name} input"))?;
     validate_rank(shapes[1], modes_c.len(), &format!("{op_name} output"))?;
@@ -248,12 +256,21 @@ fn plan_reduction_axes(
     }
     validate_shape_eq(shapes[1], &expected_output, &format!("{op_name} output"))?;
 
-    Ok(modes_a
+    let reduced_axes: Vec<usize> = modes_a
         .iter()
         .enumerate()
         .filter(|(_, mode)| !modes_c.contains(mode))
         .map(|(axis, _)| axis)
-        .collect())
+        .collect();
+    let reduced_total = reduced_axes
+        .iter()
+        .map(|&axis| shapes[0][axis])
+        .product::<usize>();
+
+    Ok(ReductionPlanSpec {
+        reduced_axes,
+        reduced_total,
+    })
 }
 
 fn execute_complex_real_unary<T>(
@@ -266,7 +283,7 @@ fn execute_complex_real_unary<T>(
 ) -> Result<()>
 where
     T: RuntimeComplexRealScalar,
-    T::Real: Scalar + Send + Sync,
+    T::Real: Scalar + Send + Sync + NumCast,
     CudaBackend: TensorScalarPrims<Standard<T::Real>, Context = CudaContext>,
 {
     validate_execute_inputs(inputs, 1, "CudaComplexRealPointwiseUnary")?;
@@ -307,6 +324,7 @@ where
             unary_op,
             reduction_op,
             reduced_axes,
+            reduced_total,
         } => {
             let temp = Tensor::<T::Real>::zeros(
                 input.dims(),
@@ -353,7 +371,23 @@ where
             let desc = ScalarPrimsDescriptor::Reduction {
                 modes_a,
                 modes_c,
-                op: *reduction_op,
+                op: if matches!(reduction_op, ScalarReductionOp::Mean) {
+                    ScalarReductionOp::Sum
+                } else {
+                    *reduction_op
+                },
+            };
+            let reduction_alpha = if matches!(reduction_op, ScalarReductionOp::Mean) {
+                let Some(scale) = <T::Real as NumCast>::from(*reduced_total) else {
+                    return Err(Error::InvalidArgument(format!(
+                        "cannot represent CUDA mean reduction size {} in {}",
+                        reduced_total,
+                        std::any::type_name::<T::Real>()
+                    )));
+                };
+                alpha / scale
+            } else {
+                alpha
             };
             let plan = <CudaBackend as TensorScalarPrims<Standard<T::Real>>>::plan(
                 ctx,
@@ -363,7 +397,7 @@ where
             <CudaBackend as TensorScalarPrims<Standard<T::Real>>>::execute(
                 ctx,
                 &plan,
-                alpha,
+                reduction_alpha,
                 &[&temp],
                 beta,
                 output,
