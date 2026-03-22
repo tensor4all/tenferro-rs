@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use tenferro_algebra::Scalar;
+#[cfg(feature = "cuda")]
+use num_complex::{Complex32, Complex64};
+#[cfg(feature = "cuda")]
+use std::any::TypeId;
+use tenferro_algebra::{Conjugate, Scalar};
 #[cfg(feature = "cuda")]
 use tenferro_device::cuda::runtime::{
-    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec,
+    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, StridedCopyTransform,
 };
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
@@ -13,7 +17,7 @@ use crate::layout::compute_contiguous_strides;
 use crate::DataBuffer;
 use crate::MemoryOrder;
 
-impl<T: Scalar> Tensor<T> {
+impl<T: Scalar + Conjugate> Tensor<T> {
     /// Stack tensors along a new dimension.
     ///
     /// Creates a new dimension and concatenates the input tensors along it.
@@ -23,8 +27,8 @@ impl<T: Scalar> Tensor<T> {
     /// This is a dense materialization operation that allocates a new buffer.
     /// It is implemented by inserting a size-1 axis with
     /// [`Tensor::unsqueeze`] and then delegating to [`Tensor::cat`], so it
-    /// preserves the common lazy-conjugation flag and supports the same CPU
-    /// and same-device CUDA paths as concatenation.
+    /// materializes logical values, resolves conjugation, and supports the same
+    /// CPU and same-device CUDA paths as concatenation.
     ///
     /// # Arguments
     ///
@@ -37,7 +41,6 @@ impl<T: Scalar> Tensor<T> {
     /// - The input list is empty
     /// - Tensors have different shapes
     /// - Tensors have different memory spaces or devices
-    /// - Tensors do not all share the same conjugation flag
     /// - The dimension is out of range
     ///
     /// # Examples
@@ -118,10 +121,10 @@ impl<T: Scalar> Tensor<T> {
     /// Negative dimensions are supported and count from the end.
     ///
     /// This is a dense materialization operation that allocates a new buffer.
-    /// Main-memory tensors are always supported; with the `cuda` feature
-    /// enabled, same-device GPU tensors are also supported. The output
-    /// preserves a uniform lazy-conjugation flag, and mixed conjugation flags
-    /// are rejected.
+    /// Logical conjugation is materialized per input, the output is resolved
+    /// (`conjugated = false`), and any preferred compute-device hint is cleared.
+    /// Main-memory tensors are always supported; with `cuda` enabled, same-device
+    /// GPU tensors are also supported.
     ///
     /// # Arguments
     ///
@@ -136,7 +139,6 @@ impl<T: Scalar> Tensor<T> {
     /// - Tensors have different ranks
     /// - Tensors have mismatched sizes on non-concatenated dimensions
     /// - Tensors have different memory spaces
-    /// - Tensors do not all share the same conjugation flag
     /// - The dimension is out of range
     /// - Non-main-memory tensors are provided without `cuda` support
     ///
@@ -222,7 +224,6 @@ impl<T: Scalar> Tensor<T> {
             })?;
         }
 
-        let conjugated = uniform_conjugation_flag(tensors)?;
         let mut result_dims: Vec<usize> = first.dims.to_vec();
         result_dims[dim] = total_cat_dim;
 
@@ -230,20 +231,20 @@ impl<T: Scalar> Tensor<T> {
 
         #[cfg(feature = "cuda")]
         if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
-            return cat_gpu(
-                tensors,
-                dim,
-                memory_space,
-                &result_dims,
-                &result_strides,
-                conjugated,
-            );
+            return cat_gpu(tensors, dim, memory_space, &result_dims, &result_strides);
         }
 
+        #[cfg(not(feature = "cuda"))]
         if memory_space != LogicalMemorySpace::MainMemory {
             return Err(Error::InvalidArgument(
                 "cat only supports main-memory tensors in Phase 1".to_string(),
             ));
+        }
+        #[cfg(feature = "cuda")]
+        if memory_space != LogicalMemorySpace::MainMemory {
+            return Err(Error::InvalidArgument(format!(
+                "cat only supports main-memory or same-device GPU tensors, got {memory_space:?}"
+            )));
         }
 
         let result_len: usize = result_dims.iter().product();
@@ -251,7 +252,7 @@ impl<T: Scalar> Tensor<T> {
 
         let mut cat_offset: usize = 0;
         for tensor in tensors {
-            let contiguous_tensor = tensor.contiguous(MemoryOrder::ColumnMajor);
+            let contiguous_tensor = tensor.materialize_logical_contiguous(MemoryOrder::ColumnMajor);
             let src = contiguous_tensor.buffer().as_slice().unwrap();
             let src_strides = compute_contiguous_strides(&tensor.dims, MemoryOrder::ColumnMajor);
 
@@ -299,29 +300,14 @@ impl<T: Scalar> Tensor<T> {
             memory_space,
             None,
             None,
-            conjugated,
+            false,
             None,
         ))
     }
 }
 
-fn uniform_conjugation_flag<T: Scalar>(tensors: &[&Tensor<T>]) -> Result<bool> {
-    let conjugated = tensors[0].is_conjugated();
-    for (i, tensor) in tensors.iter().enumerate().skip(1) {
-        if tensor.is_conjugated() != conjugated {
-            return Err(Error::InvalidArgument(format!(
-                "combine requires all tensors to share the same conjugation flag: tensor {i} has {}, expected {}",
-                tensor.is_conjugated(),
-                conjugated
-            )));
-        }
-    }
-
-    Ok(conjugated)
-}
-
 #[cfg(feature = "cuda")]
-fn materialize_cuda_contiguous_buffer<T: Scalar>(
+fn materialize_cuda_contiguous_buffer<T: Scalar + Conjugate + 'static>(
     tensor: &Tensor<T>,
     runtime: &Arc<device_cuda::CudaRuntime>,
 ) -> Result<CudaBuffer<T>> {
@@ -340,19 +326,27 @@ fn materialize_cuda_contiguous_buffer<T: Scalar>(
     }
 
     unsafe {
-        runtime.copy_strided_raw(src_ptr, dst.device_ptr(), &spec)?;
+        if tensor.is_conjugated() && supports_conj_strided_copy::<T>() {
+            runtime.copy_strided_raw_with_transform(
+                src_ptr,
+                dst.device_ptr(),
+                &spec,
+                StridedCopyTransform::Conj,
+            )?;
+        } else {
+            runtime.copy_strided_raw(src_ptr, dst.device_ptr(), &spec)?;
+        }
     }
     Ok(dst)
 }
 
 #[cfg(feature = "cuda")]
-fn cat_gpu<T: Scalar>(
+fn cat_gpu<T: Scalar + Conjugate + 'static>(
     tensors: &[&Tensor<T>],
     dim: usize,
     memory_space: LogicalMemorySpace,
     result_dims: &[usize],
     result_strides: &[isize],
-    conjugated: bool,
 ) -> Result<Tensor<T>> {
     let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
         return Err(Error::DeviceError(format!(
@@ -412,7 +406,12 @@ fn cat_gpu<T: Scalar>(
         memory_space,
         None,
         None,
-        conjugated,
+        false,
         None,
     ))
+}
+
+#[cfg(feature = "cuda")]
+fn supports_conj_strided_copy<T: 'static>() -> bool {
+    TypeId::of::<T>() == TypeId::of::<Complex32>() || TypeId::of::<T>() == TypeId::of::<Complex64>()
 }
