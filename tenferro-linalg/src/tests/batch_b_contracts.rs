@@ -891,6 +891,102 @@ fn cuda_public_slogdet_matches_cpu_f64_impl() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_slogdet_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f32, 1.0),
+                Complex::new(1.0, -1.0),
+                Complex::new(3.0, 0.5),
+                Complex::new(4.0, -2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = slogdet(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = slogdet(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.sign.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.logabsdet.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.sign.dims(), expected.sign.dims());
+        assert_eq!(got.logabsdet.dims(), expected.logabsdet.dims());
+        assert_close_complex_slice(
+            "cuda public slogdet sign complex32",
+            &tensor_data_on_cpu(&got.sign),
+            &tensor_data_on_cpu(&expected.sign),
+            2048.0_f32 * f32::EPSILON,
+        );
+        assert_close_real_slice(
+            "cuda public slogdet logabsdet complex32",
+            &tensor_data_on_cpu(&got.logabsdet),
+            &tensor_data_on_cpu(&expected.logabsdet),
+            2048.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_slogdet_matches_cpu_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f64, 1.0),
+                Complex::new(1.0, -1.0),
+                Complex::new(3.0, 0.5),
+                Complex::new(4.0, -2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = slogdet(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = slogdet(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.sign.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.logabsdet.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.sign.dims(), expected.sign.dims());
+        assert_eq!(got.logabsdet.dims(), expected.logabsdet.dims());
+        assert_close_complex_slice(
+            "cuda public slogdet sign complex64",
+            &tensor_data_on_cpu(&got.sign),
+            &tensor_data_on_cpu(&expected.sign),
+            2048.0_f64 * f64::EPSILON,
+        );
+        assert_close_real_slice(
+            "cuda public slogdet logabsdet complex64",
+            &tensor_data_on_cpu(&got.logabsdet),
+            &tensor_data_on_cpu(&expected.logabsdet),
+            2048.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_lu_factor_matches_cpu_complex32_impl() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -2152,6 +2248,18 @@ fn public_cuda_slogdet_matches_cpu_for_small_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn public_cuda_slogdet_matches_cpu_for_small_matrix_f64() {
     cuda_public_slogdet_matches_cpu_f64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_slogdet_matches_cpu_for_small_complex_matrix_c32() {
+    cuda_public_slogdet_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_slogdet_matches_cpu_for_small_complex_matrix_c64() {
+    cuda_public_slogdet_matches_cpu_complex64_impl();
 }
 
 #[test]

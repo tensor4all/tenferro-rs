@@ -584,7 +584,11 @@ fn det_path_uses_tensor_lu_and_prod_reduction() {
 #[test]
 fn slogdet_path_uses_tensor_lu_and_log_without_slice_bridge() {
     let linear_systems = repo_file("src/primal/linear_systems.rs");
-    let slogdet = file_section(&linear_systems, "pub fn slogdet", "#[cfg(test)]");
+    let slogdet = file_section(
+        &linear_systems,
+        "fn slogdet_real_impl",
+        "fn slogdet_complex_impl",
+    );
 
     assert!(
         slogdet.contains("TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;"),
@@ -609,5 +613,36 @@ fn slogdet_path_uses_tensor_lu_and_log_without_slice_bridge() {
     assert!(
         !slogdet.contains("backend::slice_bridge::"),
         "slogdet should avoid slice_bridge helpers"
+    );
+}
+
+#[test]
+fn complex_slogdet_path_uses_complex_real_and_complex_scale_without_slice_bridge() {
+    let linear_systems = repo_file("src/primal/linear_systems.rs");
+    let slogdet = file_section(
+        &linear_systems,
+        "fn slogdet_complex_impl",
+        "impl<C> SlogdetDispatch<C> for f32",
+    );
+
+    assert!(
+        slogdet.contains("complex_real_unary_same_shape"),
+        "complex slogdet should derive abs(diag) through the complex-real unary bridge"
+    );
+    assert!(
+        slogdet.contains("scalar_where_same_shape"),
+        "complex slogdet should use tensor-native where to keep reciprocal(abs) safe"
+    );
+    assert!(
+        slogdet.contains("complex_scale_same_shape"),
+        "complex slogdet should scale phases and permutation signs through the complex-scale bridge"
+    );
+    assert!(
+        !slogdet.contains("extract_slice("),
+        "complex slogdet should avoid extract_slice(...)"
+    );
+    assert!(
+        !slogdet.contains("backend::slice_bridge::"),
+        "complex slogdet should avoid slice_bridge helpers"
     );
 }

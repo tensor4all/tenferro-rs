@@ -297,7 +297,10 @@ where
 /// };
 /// let grad_a = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn slogdet_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn slogdet_rrule<
+    T: KernelLinalgScalar<Real = T> + num_traits::Float + crate::SlogdetDispatch<C>,
+    C,
+>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &SlogdetCotangent<T>,

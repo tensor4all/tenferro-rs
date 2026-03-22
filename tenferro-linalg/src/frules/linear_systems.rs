@@ -303,7 +303,10 @@ where
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
 /// let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn slogdet_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn slogdet_frule<
+    T: KernelLinalgScalar<Real = T> + num_traits::Float + crate::SlogdetDispatch<C>,
+    C,
+>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,

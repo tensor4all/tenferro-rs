@@ -13,9 +13,10 @@ use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Standard;
 use tenferro_device::Result;
 use tenferro_prims::{
-    AnalyticPrimsDescriptor, AnalyticUnaryOp, ComplexScalePrimsDescriptor, ScalarBinaryOp,
-    ScalarPrimsDescriptor, ScalarReductionOp, ScalarUnaryOp, TensorAnalyticPrims,
-    TensorComplexScalePrims, TensorScalarPrims,
+    AnalyticPrimsDescriptor, AnalyticUnaryOp, ComplexRealPrimsDescriptor, ComplexRealUnaryOp,
+    ComplexScalePrimsDescriptor, ScalarBinaryOp, ScalarPrimsDescriptor, ScalarReductionOp,
+    ScalarUnaryOp, TensorAnalyticPrims, TensorComplexRealPrims, TensorComplexScalePrims,
+    TensorScalarPrims,
 };
 use tenferro_tensor::Tensor;
 
@@ -84,6 +85,82 @@ fn has_complex_det_support_c32() -> bool {
 
 fn has_complex_det_support_c64() -> bool {
     <tenferro_prims::CudaBackend as TensorComplexScalePrims<Complex64>>::has_complex_scale_support(
+        ComplexScalePrimsDescriptor::PointwiseMul,
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<Complex64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Prod,
+        },
+    )
+}
+
+fn has_complex_slogdet_support_c32() -> bool {
+    <tenferro_prims::CudaBackend as TensorComplexRealPrims<Complex32>>::has_complex_real_support(
+        ComplexRealPrimsDescriptor::PointwiseUnary {
+            op: ComplexRealUnaryOp::Abs,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Reciprocal,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Greater,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseTernary {
+            op: tenferro_prims::ScalarTernaryOp::Where,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Sum,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorAnalyticPrims<Standard<f32>>>::has_analytic_support(
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Log,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorComplexScalePrims<Complex32>>::has_complex_scale_support(
+        ComplexScalePrimsDescriptor::PointwiseMul,
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<Complex32>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Prod,
+        },
+    )
+}
+
+fn has_complex_slogdet_support_c64() -> bool {
+    <tenferro_prims::CudaBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(
+        ComplexRealPrimsDescriptor::PointwiseUnary {
+            op: ComplexRealUnaryOp::Abs,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseUnary {
+            op: ScalarUnaryOp::Reciprocal,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseBinary {
+            op: ScalarBinaryOp::Greater,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::PointwiseTernary {
+            op: tenferro_prims::ScalarTernaryOp::Where,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<f64>>>::has_scalar_support(
+        ScalarPrimsDescriptor::Reduction {
+            modes_a: vec![0],
+            modes_c: vec![],
+            op: ScalarReductionOp::Sum,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Log,
+        },
+    ) && <tenferro_prims::CudaBackend as TensorComplexScalePrims<Complex64>>::has_complex_scale_support(
         ComplexScalePrimsDescriptor::PointwiseMul,
     ) && <tenferro_prims::CudaBackend as TensorScalarPrims<Standard<Complex64>>>::has_scalar_support(
         ScalarPrimsDescriptor::Reduction {
@@ -197,7 +274,12 @@ fn has_slogdet_support<T: CudaLinalgScalar>() -> bool {
         scalar_type::CudaDataType::F64 => {
             lu::has_lu_support::<T>() && has_real_slogdet_support_f64()
         }
-        _ => false,
+        scalar_type::CudaDataType::Complex32 => {
+            lu::has_lu_support::<T>() && has_complex_slogdet_support_c32()
+        }
+        scalar_type::CudaDataType::Complex64 => {
+            lu::has_lu_support::<T>() && has_complex_slogdet_support_c64()
+        }
     }
 }
 
