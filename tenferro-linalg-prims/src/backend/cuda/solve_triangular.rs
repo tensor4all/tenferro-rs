@@ -26,6 +26,8 @@ use crate::backend::tensor_helpers::{
     validate_square, BroadcastBatchIndexer,
 };
 #[cfg(feature = "cuda")]
+use tenferro_device::cuda::runtime::ComplexRealUnaryOp;
+#[cfg(feature = "cuda")]
 use tenferro_device::cuda::runtime::{RealBinaryOp, RealReductionOp, RealUnaryOp};
 
 #[cfg(feature = "cuda")]
@@ -42,7 +44,10 @@ fn as_i32(value: usize, label: &str) -> Result<i32> {
 
 #[cfg(feature = "cuda")]
 fn solve_triangular_supported<T: CudaLinalgScalar>() -> bool {
-    matches!(T::cuda_data_type(), CudaDataType::F32 | CudaDataType::F64)
+    matches!(
+        T::cuda_data_type(),
+        CudaDataType::F32 | CudaDataType::F64 | CudaDataType::Complex32 | CudaDataType::Complex64
+    )
 }
 
 #[cfg(feature = "cuda")]
@@ -65,80 +70,71 @@ where
     T: CudaLinalgScalar,
 {
     let diagonal = tensor.diagonal(&[(0, 1)])?;
-    let abs_diagonal: Tensor<T> = Tensor::zeros(
-        diagonal.dims(),
-        diagonal.logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    );
-    let zero: Tensor<T> = Tensor::zeros(
-        abs_diagonal.dims(),
-        abs_diagonal.logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    );
-    let nonzero_mask: Tensor<T> = Tensor::zeros(
-        abs_diagonal.dims(),
-        abs_diagonal.logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    );
-    let reduced: Tensor<T> = Tensor::zeros(
-        &[],
-        nonzero_mask.logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    );
     let runtime = ctx.shared_runtime();
     let dtype = T::cuda_data_type();
     let dims = diagonal.dims();
     let strides = diagonal.strides();
     let offset = diagonal.offset();
-    let abs_strides = abs_diagonal.strides();
-    let abs_offset = abs_diagonal.offset();
-    let zero_strides = zero.strides();
-    let zero_offset = zero.offset();
-    let mask_strides = nonzero_mask.strides();
-    let mask_offset = nonzero_mask.offset();
-    let abs_src = context_device_ptr(ctx, &diagonal, "solve_triangular diagonal")?.cast::<T>();
-    let abs_dst =
-        context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?.cast::<T>();
-    let zero_src = context_device_ptr(ctx, &zero, "solve_triangular zero buffer")?.cast::<T>();
-    let mask_dst =
-        context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?.cast::<T>();
-
     let kept_axes: [usize; 0] = [];
-    let reduced_axes: Vec<usize> = (0..nonzero_mask.ndim()).collect();
+    let reduced_axes: Vec<usize> = (0..diagonal.ndim()).collect();
 
     match dtype {
         CudaDataType::F32 => unsafe {
+            let abs_diagonal: Tensor<f32> = Tensor::zeros(
+                diagonal.dims(),
+                diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let zero: Tensor<f32> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let nonzero_mask: Tensor<f32> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let reduced: Tensor<f32> = Tensor::zeros(
+                &[],
+                nonzero_mask.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
             runtime.pointwise_unary_real_f32_raw(
                 RealUnaryOp::Abs,
                 1.0,
-                abs_src.cast::<f32>(),
+                context_device_ptr(ctx, &diagonal, "solve_triangular diagonal")?.cast::<f32>(),
                 dims,
                 strides,
                 offset,
                 0.0,
-                abs_dst.cast::<f32>(),
-                abs_strides,
-                abs_offset,
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f32>(),
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
             )?;
             runtime.pointwise_binary_real_f32_raw(
                 RealBinaryOp::Greater,
                 1.0,
-                abs_dst.cast::<f32>(),
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f32>(),
                 dims,
-                abs_strides,
-                abs_offset,
-                zero_src.cast::<f32>(),
-                zero_strides,
-                zero_offset,
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
+                context_device_ptr(ctx, &zero, "solve_triangular zero buffer")?.cast::<f32>(),
+                zero.strides(),
+                zero.offset(),
                 0.0,
-                mask_dst.cast::<f32>(),
-                mask_strides,
-                mask_offset,
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f32>(),
+                nonzero_mask.strides(),
+                nonzero_mask.offset(),
             )?;
             runtime.reduce_real_f32_raw(
                 RealReductionOp::Prod,
                 1.0,
-                mask_dst.cast::<f32>(),
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f32>(),
                 nonzero_mask.dims(),
                 nonzero_mask.strides(),
                 nonzero_mask.offset(),
@@ -150,39 +146,76 @@ where
                 &kept_axes,
                 &reduced_axes,
             )?;
+            let mut host = [0.0f32; 1];
+            copy_device_to_host(
+                ctx,
+                context_device_ptr(ctx, &reduced, "solve_triangular diagonal validation")?
+                    .cast::<c_void>(),
+                &mut host,
+                "cudaMemcpyDtoH(solve_triangular diagonal validation)",
+            )?;
+            if host[0] != 1.0 {
+                return Err(Error::InvalidArgument(
+                    "solve_triangular: zero diagonal".into(),
+                ));
+            }
         },
         CudaDataType::F64 => unsafe {
+            let abs_diagonal: Tensor<f64> = Tensor::zeros(
+                diagonal.dims(),
+                diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let zero: Tensor<f64> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let nonzero_mask: Tensor<f64> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let reduced: Tensor<f64> = Tensor::zeros(
+                &[],
+                nonzero_mask.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
             runtime.pointwise_unary_real_f64_raw(
                 RealUnaryOp::Abs,
                 1.0,
-                abs_src.cast::<f64>(),
+                context_device_ptr(ctx, &diagonal, "solve_triangular diagonal")?.cast::<f64>(),
                 dims,
                 strides,
                 offset,
                 0.0,
-                abs_dst.cast::<f64>(),
-                abs_strides,
-                abs_offset,
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f64>(),
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
             )?;
             runtime.pointwise_binary_real_f64_raw(
                 RealBinaryOp::Greater,
                 1.0,
-                abs_dst.cast::<f64>(),
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f64>(),
                 dims,
-                abs_strides,
-                abs_offset,
-                zero_src.cast::<f64>(),
-                zero_strides,
-                zero_offset,
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
+                context_device_ptr(ctx, &zero, "solve_triangular zero buffer")?.cast::<f64>(),
+                zero.strides(),
+                zero.offset(),
                 0.0,
-                mask_dst.cast::<f64>(),
-                mask_strides,
-                mask_offset,
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f64>(),
+                nonzero_mask.strides(),
+                nonzero_mask.offset(),
             )?;
             runtime.reduce_real_f64_raw(
                 RealReductionOp::Prod,
                 1.0,
-                mask_dst.cast::<f64>(),
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f64>(),
                 nonzero_mask.dims(),
                 nonzero_mask.strides(),
                 nonzero_mask.offset(),
@@ -194,26 +227,184 @@ where
                 &kept_axes,
                 &reduced_axes,
             )?;
+            let mut host = [0.0f64; 1];
+            copy_device_to_host(
+                ctx,
+                context_device_ptr(ctx, &reduced, "solve_triangular diagonal validation")?
+                    .cast::<c_void>(),
+                &mut host,
+                "cudaMemcpyDtoH(solve_triangular diagonal validation)",
+            )?;
+            if host[0] != 1.0 {
+                return Err(Error::InvalidArgument(
+                    "solve_triangular: zero diagonal".into(),
+                ));
+            }
         },
-        _ => {
-            return Err(Error::DeviceError(format!(
-                "CUDA solve_triangular currently supports only f32/f64, got {:?}",
-                dtype
-            )));
-        }
-    }
-
-    let mut host = [T::zero(); 1];
-    copy_device_to_host(
-        ctx,
-        context_device_ptr(ctx, &reduced, "solve_triangular diagonal validation")?.cast::<c_void>(),
-        &mut host,
-        "cudaMemcpyDtoH(solve_triangular diagonal validation)",
-    )?;
-    if host[0] != T::one() {
-        return Err(Error::InvalidArgument(
-            "solve_triangular: zero diagonal".into(),
-        ));
+        CudaDataType::Complex32 => unsafe {
+            let abs_diagonal: Tensor<f32> = Tensor::zeros(
+                diagonal.dims(),
+                diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let zero: Tensor<f32> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let nonzero_mask: Tensor<f32> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let reduced: Tensor<f32> = Tensor::zeros(
+                &[],
+                nonzero_mask.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            runtime.pointwise_unary_complex32_to_real_f32_raw(
+                ComplexRealUnaryOp::Abs,
+                1.0,
+                context_device_ptr(ctx, &diagonal, "solve_triangular diagonal")?
+                    .cast::<num_complex::Complex32>(),
+                dims,
+                strides,
+                offset,
+                0.0,
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f32>(),
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
+            )?;
+            runtime.pointwise_binary_real_f32_raw(
+                RealBinaryOp::Greater,
+                1.0,
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f32>(),
+                dims,
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
+                context_device_ptr(ctx, &zero, "solve_triangular zero buffer")?.cast::<f32>(),
+                zero.strides(),
+                zero.offset(),
+                0.0,
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f32>(),
+                nonzero_mask.strides(),
+                nonzero_mask.offset(),
+            )?;
+            runtime.reduce_real_f32_raw(
+                RealReductionOp::Prod,
+                1.0,
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f32>(),
+                nonzero_mask.dims(),
+                nonzero_mask.strides(),
+                nonzero_mask.offset(),
+                0.0,
+                context_device_ptr(ctx, &reduced, "solve_triangular reduced mask")?.cast::<f32>(),
+                reduced.dims(),
+                reduced.strides(),
+                reduced.offset(),
+                &kept_axes,
+                &reduced_axes,
+            )?;
+            let mut host = [0.0f32; 1];
+            copy_device_to_host(
+                ctx,
+                context_device_ptr(ctx, &reduced, "solve_triangular diagonal validation")?
+                    .cast::<c_void>(),
+                &mut host,
+                "cudaMemcpyDtoH(solve_triangular diagonal validation)",
+            )?;
+            if host[0] != 1.0 {
+                return Err(Error::InvalidArgument(
+                    "solve_triangular: zero diagonal".into(),
+                ));
+            }
+        },
+        CudaDataType::Complex64 => unsafe {
+            let abs_diagonal: Tensor<f64> = Tensor::zeros(
+                diagonal.dims(),
+                diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let zero: Tensor<f64> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let nonzero_mask: Tensor<f64> = Tensor::zeros(
+                abs_diagonal.dims(),
+                abs_diagonal.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            let reduced: Tensor<f64> = Tensor::zeros(
+                &[],
+                nonzero_mask.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            );
+            runtime.pointwise_unary_complex64_to_real_f64_raw(
+                ComplexRealUnaryOp::Abs,
+                1.0,
+                context_device_ptr(ctx, &diagonal, "solve_triangular diagonal")?
+                    .cast::<num_complex::Complex64>(),
+                dims,
+                strides,
+                offset,
+                0.0,
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f64>(),
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
+            )?;
+            runtime.pointwise_binary_real_f64_raw(
+                RealBinaryOp::Greater,
+                1.0,
+                context_device_ptr(ctx, &abs_diagonal, "solve_triangular abs diagonal")?
+                    .cast::<f64>(),
+                dims,
+                abs_diagonal.strides(),
+                abs_diagonal.offset(),
+                context_device_ptr(ctx, &zero, "solve_triangular zero buffer")?.cast::<f64>(),
+                zero.strides(),
+                zero.offset(),
+                0.0,
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f64>(),
+                nonzero_mask.strides(),
+                nonzero_mask.offset(),
+            )?;
+            runtime.reduce_real_f64_raw(
+                RealReductionOp::Prod,
+                1.0,
+                context_device_ptr(ctx, &nonzero_mask, "solve_triangular diagonal mask")?
+                    .cast::<f64>(),
+                nonzero_mask.dims(),
+                nonzero_mask.strides(),
+                nonzero_mask.offset(),
+                0.0,
+                context_device_ptr(ctx, &reduced, "solve_triangular reduced mask")?.cast::<f64>(),
+                reduced.dims(),
+                reduced.strides(),
+                reduced.offset(),
+                &kept_axes,
+                &reduced_axes,
+            )?;
+            let mut host = [0.0f64; 1];
+            copy_device_to_host(
+                ctx,
+                context_device_ptr(ctx, &reduced, "solve_triangular diagonal validation")?
+                    .cast::<c_void>(),
+                &mut host,
+                "cudaMemcpyDtoH(solve_triangular diagonal validation)",
+            )?;
+            if host[0] != 1.0 {
+                return Err(Error::InvalidArgument(
+                    "solve_triangular: zero diagonal".into(),
+                ));
+            }
+        },
     }
 
     Ok(())
@@ -247,7 +438,7 @@ where
 
     if !solve_triangular_supported::<T>() {
         return Err(Error::DeviceError(format!(
-            "CUDA solve_triangular currently supports only f32/f64, got {:?}",
+            "CUDA solve_triangular currently supports only f32/f64/complex32/complex64, got {:?}",
             T::cuda_data_type()
         )));
     }

@@ -72,6 +72,37 @@ fn assert_close_complex_slice<T: Float + std::fmt::Debug>(
     }
 }
 
+#[cfg(feature = "cuda")]
+fn assert_close_complex_values<T, R>(label: &str, got: &[T], expected: &[T], atol: R)
+where
+    T: num_complex::ComplexFloat<Real = R> + std::fmt::Debug,
+    R: Float + std::fmt::Debug,
+{
+    assert_eq!(
+        got.len(),
+        expected.len(),
+        "{label}: length mismatch {} vs {}",
+        got.len(),
+        expected.len()
+    );
+    for (index, (got_value, expected_value)) in got.iter().zip(expected.iter()).enumerate() {
+        let re_diff = (got_value.re() - expected_value.re()).abs();
+        let im_diff = (got_value.im() - expected_value.im()).abs();
+        assert!(
+            re_diff <= atol,
+            "{label}[{index}].re diff {re_diff:?} exceeded tolerance {atol:?}; got {:?}, expected {:?}",
+            got_value,
+            expected_value
+        );
+        assert!(
+            im_diff <= atol,
+            "{label}[{index}].im diff {im_diff:?} exceeded tolerance {atol:?}; got {:?}, expected {:?}",
+            got_value,
+            expected_value
+        );
+    }
+}
+
 fn tensor_data_on_cpu<T: crate::KernelLinalgScalar>(tensor: &Tensor<T>) -> Vec<T> {
     let cpu = tensor
         .to_memory_space_async(LogicalMemorySpace::MainMemory)
@@ -926,6 +957,99 @@ where
         &tensor_data_on_cpu(&got),
         &tensor_data_on_cpu(&expected),
         cast::<T>(256.0) * T::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_matches_cpu_for_small_complex_matrix_generic<T>()
+where
+    T: crate::KernelLinalgScalar
+        + super::scalar_type::CudaLinalgScalar
+        + num_complex::ComplexFloat<Real = <T as crate::LinalgScalar>::Real>
+        + std::fmt::Debug,
+    <T as crate::LinalgScalar>::Real: Float + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            T::from_parts(
+                cast::<<T as crate::LinalgScalar>::Real>(2.0),
+                cast::<<T as crate::LinalgScalar>::Real>(0.0),
+            ),
+            T::from_parts(
+                cast::<<T as crate::LinalgScalar>::Real>(0.0),
+                cast::<<T as crate::LinalgScalar>::Real>(0.0),
+            ),
+            T::from_parts(
+                cast::<<T as crate::LinalgScalar>::Real>(1.0),
+                cast::<<T as crate::LinalgScalar>::Real>(-1.0),
+            ),
+            T::from_parts(
+                cast::<<T as crate::LinalgScalar>::Real>(3.0),
+                cast::<<T as crate::LinalgScalar>::Real>(2.0),
+            ),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b_cpu = Tensor::from_slice(
+        &[
+            T::from_parts(
+                cast::<<T as crate::LinalgScalar>::Real>(5.0),
+                cast::<<T as crate::LinalgScalar>::Real>(1.0),
+            ),
+            T::from_parts(
+                cast::<<T as crate::LinalgScalar>::Real>(4.0),
+                cast::<<T as crate::LinalgScalar>::Real>(-2.0),
+            ),
+        ],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_triangular(
+            &mut cpu_ctx,
+            &a_cpu,
+            &b_cpu,
+            true,
+        )
+        .unwrap();
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::solve_triangular(
+        &mut cuda_ctx,
+        &a_gpu,
+        &b_gpu,
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(got.dims(), &[2]);
+    assert_eq!(
+        got.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_complex_values(
+        "cuda solve_triangular complex",
+        &tensor_data_on_cpu(&got),
+        &tensor_data_on_cpu(&expected),
+        cast::<<T as crate::LinalgScalar>::Real>(256.0)
+            * <T as crate::LinalgScalar>::Real::epsilon(),
     );
 }
 
@@ -3039,6 +3163,18 @@ fn cuda_solve_triangular_matches_cpu_for_small_lower_real_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_solve_triangular_matches_cpu_for_small_lower_real_matrix_f64() {
     cuda_solve_triangular_matches_cpu_for_small_real_matrix_generic::<f64>(false);
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_matches_cpu_for_small_upper_complex32() {
+    cuda_solve_triangular_matches_cpu_for_small_complex_matrix_generic::<Complex32>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_triangular_matches_cpu_for_small_upper_complex64() {
+    cuda_solve_triangular_matches_cpu_for_small_complex_matrix_generic::<Complex64>();
 }
 
 #[test]
