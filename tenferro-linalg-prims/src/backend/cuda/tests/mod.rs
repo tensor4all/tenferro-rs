@@ -593,6 +593,79 @@ where
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_solve_ex_handles_lazily_conjugated_broadcasted_complex64_input() {
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(2.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(3.0, -1.0), //
+            Complex64::new(4.0, 0.5),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(5.0, 2.0),
+        ],
+        &[2, 2, 2, 1],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b_cpu = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, -0.5),
+            Complex64::new(2.0, 0.25), //
+            Complex64::new(3.0, 1.0),
+            Complex64::new(4.0, -1.0), //
+            Complex64::new(5.0, -2.0),
+            Complex64::new(6.0, 0.5),
+        ],
+        &[2, 1, 3],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let a_lazy = a_cpu.conj();
+    let b_lazy = b_cpu.conj();
+    let expected_a = tenferro_prims::CpuBackend::resolve_conj(&mut cpu_ctx, &a_lazy);
+    let expected_b = tenferro_prims::CpuBackend::resolve_conj(&mut cpu_ctx, &b_lazy);
+    let expected = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<
+        Complex64,
+    >>::solve_ex(&mut cpu_ctx, &expected_a, &expected_b)
+    .unwrap();
+
+    let a_gpu = a_lazy
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let b_gpu = b_lazy
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<Complex64>>::solve_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+        &b_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        got.solution.logical_memory_space(),
+        LogicalMemorySpace::GpuMemory { device_id: 0 }
+    );
+    assert_close_complex_slice(
+        "cuda solve_ex lazy conjugated broadcasted complex64",
+        &tensor_data_on_cpu(&got.solution),
+        &tensor_data_on_cpu(&expected.solution),
+        256.0_f64 * f64::epsilon(),
+    );
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_solve_triangular_matches_cpu_for_small_real_matrix_generic<T>(upper: bool)
 where
     T: crate::KernelLinalgScalar<Real = T>
@@ -3651,6 +3724,12 @@ fn cuda_solve_ex_preserves_complex_mixed_batch_c32() {
 #[cfg(feature = "cuda")]
 fn cuda_solve_ex_preserves_complex_mixed_batch_c64() {
     cuda_solve_ex_preserves_complex_mixed_batch_complex64();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_solve_ex_handles_lazily_conjugated_broadcasted_complex64_input_c64() {
+    cuda_solve_ex_handles_lazily_conjugated_broadcasted_complex64_input();
 }
 
 #[test]

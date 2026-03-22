@@ -22,8 +22,8 @@ use super::wrappers::{
 };
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{
-    batch_count, materialize_broadcasted_batches, validate_solve_rhs_shape, validate_square,
-    BroadcastBatchIndexer,
+    batch_count, materialize_broadcasted_batches_resolving_conj, validate_solve_rhs_shape,
+    validate_square, BroadcastBatchIndexer,
 };
 #[cfg(feature = "cuda")]
 use tenferro_device::cuda::runtime::{RealBinaryOp, RealReductionOp, RealUnaryOp};
@@ -232,7 +232,8 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
     let bc = batch_count(&rhs.output_batch_dims);
-    let x_work = materialize_broadcasted_batches(
+    let x_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
         b,
         rhs.structural_rank,
         &rhs.rhs_batch_indexer,
@@ -261,7 +262,14 @@ where
 
     let a_batch_indexer =
         BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_triangular", "a")?;
-    let a_work = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_triangular", "a")?;
+    let a_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
+        a,
+        2,
+        &a_batch_indexer,
+        "solve_triangular",
+        "a",
+    )?;
     validate_nonzero_diagonal(ctx, &a_work)?;
 
     let runtime = load_runtime(ctx)?;

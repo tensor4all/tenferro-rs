@@ -505,6 +505,50 @@ fn linalg_utils_prepare_matrix_operand_conjugate_transpose_handles_plain_and_laz
 }
 
 #[test]
+fn tensor_helpers_materialize_broadcasted_batches_resolving_conj_handles_lazy_conjugated_input() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, 2.0),
+            num_complex::Complex64::new(-3.0, 4.0),
+            num_complex::Complex64::new(5.0, -6.0),
+            num_complex::Complex64::new(-7.0, -8.0),
+        ],
+        &[2, 2, 1],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let lazy_conjugated = base.conj();
+    let batch_indexer =
+        crate::backend::tensor_helpers::BroadcastBatchIndexer::new(&[1], &[2, 3], "solve", "b")
+            .unwrap();
+
+    let got = crate::backend::tensor_helpers::materialize_broadcasted_batches_resolving_conj(
+        &mut ctx,
+        &lazy_conjugated,
+        2,
+        &batch_indexer,
+        "solve",
+        "b",
+    )
+    .unwrap();
+    let resolved = tenferro_prims::CpuBackend::resolve_conj(&mut ctx, &lazy_conjugated);
+    let expected = crate::backend::tensor_helpers::materialize_broadcasted_batches(
+        &resolved,
+        2,
+        &batch_indexer,
+        "solve",
+        "b",
+    )
+    .unwrap();
+
+    assert_eq!(got.dims(), expected.dims());
+    assert!(!got.is_conjugated());
+    assert!(got.is_col_major_contiguous());
+    assert_eq!(tensor_data_c64(&got), tensor_data_c64(&expected));
+}
+
+#[test]
 fn tensor_helpers_broadcast_batch_indexer_maps_column_major_output_indices() {
     let indexer =
         crate::backend::tensor_helpers::BroadcastBatchIndexer::new(&[1, 3], &[2, 3], "solve", "b")

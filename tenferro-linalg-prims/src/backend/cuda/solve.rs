@@ -16,8 +16,8 @@ use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{
-    batch_count, materialize_broadcasted_batches, validate_solve_rhs_shape, validate_square,
-    BroadcastBatchIndexer,
+    batch_count, materialize_broadcasted_batches_resolving_conj, validate_solve_rhs_shape,
+    validate_square, BroadcastBatchIndexer,
 };
 
 #[cfg(feature = "cuda")]
@@ -79,7 +79,8 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
     let bc = batch_count(&rhs.output_batch_dims);
-    let x_work = materialize_broadcasted_batches(
+    let x_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
         b,
         rhs.structural_rank,
         &rhs.rhs_batch_indexer,
@@ -110,7 +111,14 @@ where
 
     let a_batch_indexer =
         BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
-    let a_work = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_ex", "a")?;
+    let a_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
+        a,
+        2,
+        &a_batch_indexer,
+        "solve_ex",
+        "a",
+    )?;
     let x_out = Tensor::zeros(
         &rhs.output_dims,
         a.logical_memory_space(),
@@ -255,7 +263,8 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
     let bc = batch_count(&rhs.output_batch_dims);
-    let x_work = materialize_broadcasted_batches(
+    let x_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
         b,
         rhs.structural_rank,
         &rhs.rhs_batch_indexer,
@@ -283,7 +292,8 @@ where
 
     let a_batch_indexer =
         BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
-    let a_work = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve", "a")?;
+    let a_work =
+        materialize_broadcasted_batches_resolving_conj(ctx, a, 2, &a_batch_indexer, "solve", "a")?;
     let runtime = load_runtime(ctx)?;
 
     let a_base = context_device_ptr(ctx, &a_work, "solve a")?.cast::<T>();

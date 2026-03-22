@@ -1,6 +1,8 @@
 //! Shared tensor validation and helper utilities for backend implementations.
 
+use tenferro_algebra::Conjugate;
 use tenferro_device::{Error, Result};
+use tenferro_prims::TensorResolveConjContextFor;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::LinalgScalar;
@@ -155,6 +157,42 @@ pub(crate) fn materialize_broadcasted_batches<T: LinalgScalar>(
             src.ndim()
         )));
     }
+    materialize_broadcasted_batches_impl(src, structural_rank, batch_indexer, op_name, arg_name)
+}
+
+pub(crate) fn materialize_broadcasted_batches_resolving_conj<T, C>(
+    ctx: &mut C,
+    src: &Tensor<T>,
+    structural_rank: usize,
+    batch_indexer: &BroadcastBatchIndexer,
+    op_name: &str,
+    arg_name: &str,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar + Conjugate,
+    C: TensorResolveConjContextFor<T>,
+{
+    let resolved = if src.is_conjugated() {
+        <C as TensorResolveConjContextFor<T>>::resolve_conj(ctx, src)
+    } else {
+        src.clone()
+    };
+    materialize_broadcasted_batches_impl(
+        &resolved,
+        structural_rank,
+        batch_indexer,
+        op_name,
+        arg_name,
+    )
+}
+
+fn materialize_broadcasted_batches_impl<T: LinalgScalar>(
+    src: &Tensor<T>,
+    structural_rank: usize,
+    batch_indexer: &BroadcastBatchIndexer,
+    op_name: &str,
+    arg_name: &str,
+) -> Result<Tensor<T>> {
     if batch_indexer.is_identity() {
         return Ok(ensure_col_major(src));
     }
