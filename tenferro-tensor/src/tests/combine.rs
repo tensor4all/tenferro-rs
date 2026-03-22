@@ -1,5 +1,6 @@
 use super::*;
 use tenferro_device::Error;
+#[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
 
 fn col_tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
