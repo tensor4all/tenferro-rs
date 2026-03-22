@@ -21,7 +21,9 @@ impl<T: Scalar> Tensor<T> {
     /// supported and count from the end.
     ///
     /// This is a dense materialization operation that allocates a new buffer.
-    /// Phase 1 only supports main-memory tensors.
+    /// It is implemented by inserting a size-1 axis with
+    /// [`Tensor::unsqueeze`] and then delegating to [`Tensor::cat`], so it
+    /// supports the same CPU and same-device CUDA paths as concatenation.
     ///
     /// # Arguments
     ///
@@ -33,9 +35,8 @@ impl<T: Scalar> Tensor<T> {
     /// Returns an error if:
     /// - The input list is empty
     /// - Tensors have different shapes
-    /// - Tensors have different memory spaces
+    /// - Tensors have different memory spaces or devices
     /// - The dimension is out of range
-    /// - Non-main-memory tensors are provided (Phase 1 limitation)
     ///
     /// # Examples
     ///
@@ -84,12 +85,6 @@ impl<T: Scalar> Tensor<T> {
         };
 
         let memory_space = first.logical_memory_space();
-        if memory_space != LogicalMemorySpace::MainMemory {
-            return Err(Error::InvalidArgument(
-                "stack only supports main-memory tensors in Phase 1".to_string(),
-            ));
-        }
-
         for (i, t) in tensors.iter().enumerate() {
             if t.dims() != first.dims() {
                 return Err(Error::ShapeMismatch {
@@ -105,72 +100,13 @@ impl<T: Scalar> Tensor<T> {
             }
         }
 
-        let n = tensors.len();
-        let mut result_dims: Vec<usize> = first.dims.to_vec();
-        result_dims.insert(dim, n);
+        let unsqueezed: Vec<Tensor<T>> = tensors
+            .iter()
+            .map(|tensor| tensor.unsqueeze(dim as isize))
+            .collect::<Result<_>>()?;
+        let unsqueezed_refs: Vec<&Tensor<T>> = unsqueezed.iter().collect();
 
-        let result_strides = compute_contiguous_strides(&result_dims, MemoryOrder::ColumnMajor);
-        let result_len: usize = result_dims.iter().product();
-        let mut result_data = vec![T::zero(); result_len];
-
-        let src_strides = compute_contiguous_strides(&first.dims, MemoryOrder::ColumnMajor);
-
-        for (stack_idx, tensor) in tensors.iter().enumerate() {
-            let contiguous_tensor = tensor.contiguous(MemoryOrder::ColumnMajor);
-            let src = contiguous_tensor.buffer().as_slice().unwrap();
-
-            let mut index = vec![0usize; ndim];
-            let n_elements: usize = first.dims.iter().product();
-
-            if n_elements > 0 {
-                for _ in 0..n_elements {
-                    let src_pos: isize = index
-                        .iter()
-                        .zip(src_strides.iter())
-                        .map(|(&i, &s)| (i as isize) * s)
-                        .sum();
-
-                    let mut result_index = Vec::with_capacity(ndim + 1);
-                    for (axis, &idx) in index.iter().enumerate() {
-                        if axis == dim {
-                            result_index.push(stack_idx);
-                        }
-                        result_index.push(idx);
-                    }
-                    if dim == ndim {
-                        result_index.push(stack_idx);
-                    }
-
-                    let dst_pos: isize = result_index
-                        .iter()
-                        .zip(result_strides.iter())
-                        .map(|(&i, &s)| (i as isize) * s)
-                        .sum();
-
-                    result_data[dst_pos as usize] = src[src_pos as usize];
-
-                    for axis in (0..ndim).rev() {
-                        index[axis] += 1;
-                        if index[axis] < first.dims[axis] {
-                            break;
-                        }
-                        index[axis] = 0;
-                    }
-                }
-            }
-        }
-
-        Ok(Tensor::from_parts(
-            crate::DataBuffer::from_vec(result_data),
-            Arc::from(result_dims),
-            Arc::from(result_strides),
-            0,
-            memory_space,
-            first.preferred_compute_device,
-            None,
-            false,
-            None,
-        ))
+        Tensor::cat(&unsqueezed_refs, dim as isize)
     }
 
     /// Concatenate tensors along an existing dimension.

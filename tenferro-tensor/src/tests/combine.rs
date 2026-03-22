@@ -142,7 +142,12 @@ mod cuda {
             .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
             .unwrap();
         let got = Tensor::cat(&[&gpu_a, &gpu_b], 1)
-            .expect("GPU cat should accept GPU tensors on the requested axis")
+            .expect("GPU cat should accept GPU tensors on the requested axis");
+        assert_eq!(
+            got.logical_memory_space(),
+            LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        let got = got
             .to_memory_space_async(LogicalMemorySpace::MainMemory)
             .unwrap();
 
@@ -167,7 +172,12 @@ mod cuda {
             .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
             .unwrap();
         let got = Tensor::stack(&[&gpu_a, &gpu_b], 0)
-            .expect("GPU stack should accept GPU tensors on the requested axis")
+            .expect("GPU stack should accept GPU tensors on the requested axis");
+        assert_eq!(
+            got.logical_memory_space(),
+            LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        let got = got
             .to_memory_space_async(LogicalMemorySpace::MainMemory)
             .unwrap();
 
