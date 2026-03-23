@@ -510,9 +510,10 @@ impl Tensor<Complex32> {
         let offset = self.offset().checked_mul(2).ok_or_else(|| {
             Error::StrideError("view_as_real: offset overflow when reinterpreting tensor".into())
         })?;
-        let buffer_len = self.buffer().len().checked_mul(2).ok_or_else(|| {
-            Error::StrideError("view_as_real: storage length overflow".into())
-        })?;
+        let buffer_len =
+            self.buffer().len().checked_mul(2).ok_or_else(|| {
+                Error::StrideError("view_as_real: storage length overflow".into())
+            })?;
         let buffer = self.buffer().reinterpret_as::<f32>(buffer_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
         Ok(Tensor::from_parts(
@@ -563,9 +564,10 @@ impl Tensor<Complex64> {
         let offset = self.offset().checked_mul(2).ok_or_else(|| {
             Error::StrideError("view_as_real: offset overflow when reinterpreting tensor".into())
         })?;
-        let buffer_len = self.buffer().len().checked_mul(2).ok_or_else(|| {
-            Error::StrideError("view_as_real: storage length overflow".into())
-        })?;
+        let buffer_len =
+            self.buffer().len().checked_mul(2).ok_or_else(|| {
+                Error::StrideError("view_as_real: storage length overflow".into())
+            })?;
         let buffer = self.buffer().reinterpret_as::<f64>(buffer_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
         Ok(Tensor::from_parts(

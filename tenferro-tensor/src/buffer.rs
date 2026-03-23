@@ -324,7 +324,9 @@ impl<T> DataBuffer<T> {
             .ok_or_else(|| Error::InvalidArgument("buffer byte-size overflow".into()))?;
         let dst_bytes = new_len
             .checked_mul(std::mem::size_of::<U>())
-            .ok_or_else(|| Error::InvalidArgument("reinterpreted buffer byte-size overflow".into()))?;
+            .ok_or_else(|| {
+                Error::InvalidArgument("reinterpreted buffer byte-size overflow".into())
+            })?;
         if src_bytes != dst_bytes {
             return Err(Error::InvalidArgument(format!(
                 "buffer reinterpretation changes byte size: src_bytes={src_bytes} dst_bytes={dst_bytes}"
@@ -356,9 +358,7 @@ impl<T> DataBuffer<T> {
                 Ok(unsafe { DataBuffer::from_external(ptr, new_len, move || drop(owner)) })
             }
             BufferInner::Gpu {
-                device_ptr,
-                space,
-                ..
+                device_ptr, space, ..
             } => {
                 let ptr = *device_ptr as *mut U;
                 if new_len != 0 && (ptr as usize) % align != 0 {
@@ -368,7 +368,11 @@ impl<T> DataBuffer<T> {
                     )));
                 }
                 let owner = self.clone();
-                Ok(unsafe { DataBuffer::from_gpu_parts(ptr, new_len, *space, move || drop(owner)) })
+                Ok(
+                    unsafe {
+                        DataBuffer::from_gpu_parts(ptr, new_len, *space, move || drop(owner))
+                    },
+                )
             }
         }
     }
