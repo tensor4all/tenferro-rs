@@ -3,6 +3,7 @@ use crate::{Error, Result};
 use std::ffi::c_void;
 
 mod pointwise_complex;
+mod pointwise_metadata;
 mod pointwise_real;
 
 impl CudaRuntime {

@@ -453,6 +453,204 @@ fn host_triangular_merge_reference<T: Copy + Default>(
     dst
 }
 
+fn host_metadata_iota_reference(
+    dims: &[usize],
+    dst_strides: &[isize],
+    dst_offset: isize,
+) -> Vec<i32> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0i32; numel];
+    for linear_idx in 0..numel {
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, dst_offset) as usize;
+        dst[dst_idx] = linear_idx as i32;
+    }
+    dst
+}
+
+fn host_metadata_not_equal_reference(
+    lhs: &[i32],
+    rhs: &[i32],
+    dims: &[usize],
+    lhs_strides: &[isize],
+    rhs_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<u8> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0u8; numel];
+    for linear_idx in 0..numel {
+        let lhs_idx = linear_offset(linear_idx, dims, lhs_strides, 0) as usize;
+        let rhs_idx = linear_offset(linear_idx, dims, rhs_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = u8::from(lhs[lhs_idx] != rhs[rhs_idx]);
+    }
+    dst
+}
+
+fn host_metadata_equal_reference(
+    lhs: &[i32],
+    rhs: &[i32],
+    dims: &[usize],
+    lhs_strides: &[isize],
+    rhs_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<u8> {
+    host_metadata_not_equal_reference(lhs, rhs, dims, lhs_strides, rhs_strides, dst_strides)
+        .into_iter()
+        .map(|value| u8::from(value == 0))
+        .collect()
+}
+
+fn host_metadata_where_i32_reference(
+    cond: &[u8],
+    on_true: &[i32],
+    on_false: &[i32],
+    dims: &[usize],
+    cond_strides: &[isize],
+    true_strides: &[isize],
+    false_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<i32> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0i32; numel];
+    for linear_idx in 0..numel {
+        let cond_idx = linear_offset(linear_idx, dims, cond_strides, 0) as usize;
+        let true_idx = linear_offset(linear_idx, dims, true_strides, 0) as usize;
+        let false_idx = linear_offset(linear_idx, dims, false_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = if cond[cond_idx] != 0 {
+            on_true[true_idx]
+        } else {
+            on_false[false_idx]
+        };
+    }
+    dst
+}
+
+fn host_metadata_sum_bool_reference(
+    input: &[u8],
+    input_dims: &[usize],
+    input_strides: &[isize],
+    kept_axes: &[usize],
+    reduced_axes: &[usize],
+) -> Vec<i32> {
+    let output_dims: Vec<usize> = kept_axes.iter().map(|&axis| input_dims[axis]).collect();
+    let output_numel = output_dims.iter().product::<usize>();
+    let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&axis| input_dims[axis]).collect();
+    let reduced_numel = reduced_dims.iter().product::<usize>();
+    let mut out = vec![0i32; output_numel];
+
+    for out_linear_idx in 0..output_numel {
+        let mut base = 0isize;
+        let mut remainder = out_linear_idx;
+        for &axis in kept_axes {
+            let coord = remainder % input_dims[axis];
+            remainder /= input_dims[axis];
+            base += (coord as isize) * input_strides[axis];
+        }
+
+        let mut acc = 0i32;
+        for red_linear_idx in 0..reduced_numel {
+            let mut input_idx = base;
+            let mut red_remainder = red_linear_idx;
+            for &axis in reduced_axes {
+                let coord = red_remainder % input_dims[axis];
+                red_remainder /= input_dims[axis];
+                input_idx += (coord as isize) * input_strides[axis];
+            }
+            acc += i32::from(input[input_idx as usize] != 0);
+        }
+        out[out_linear_idx] = acc;
+    }
+
+    out
+}
+
+fn host_metadata_all_bool_reference(
+    input: &[u8],
+    input_dims: &[usize],
+    input_strides: &[isize],
+    kept_axes: &[usize],
+    reduced_axes: &[usize],
+) -> Vec<u8> {
+    let output_dims: Vec<usize> = kept_axes.iter().map(|&axis| input_dims[axis]).collect();
+    let output_numel = output_dims.iter().product::<usize>();
+    let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&axis| input_dims[axis]).collect();
+    let reduced_numel = reduced_dims.iter().product::<usize>();
+    let mut out = vec![1u8; output_numel];
+
+    for out_linear_idx in 0..output_numel {
+        let mut base = 0isize;
+        let mut remainder = out_linear_idx;
+        for &axis in kept_axes {
+            let coord = remainder % input_dims[axis];
+            remainder /= input_dims[axis];
+            base += (coord as isize) * input_strides[axis];
+        }
+
+        let mut acc = 1u8;
+        for red_linear_idx in 0..reduced_numel {
+            let mut input_idx = base;
+            let mut red_remainder = red_linear_idx;
+            for &axis in reduced_axes {
+                let coord = red_remainder % input_dims[axis];
+                red_remainder /= input_dims[axis];
+                input_idx += (coord as isize) * input_strides[axis];
+            }
+            acc = if input[input_idx as usize] != 0 {
+                acc
+            } else {
+                0
+            };
+        }
+        out[out_linear_idx] = acc;
+    }
+
+    out
+}
+
+fn host_metadata_any_bool_reference(
+    input: &[u8],
+    input_dims: &[usize],
+    input_strides: &[isize],
+    kept_axes: &[usize],
+    reduced_axes: &[usize],
+) -> Vec<u8> {
+    let output_dims: Vec<usize> = kept_axes.iter().map(|&axis| input_dims[axis]).collect();
+    let output_numel = output_dims.iter().product::<usize>();
+    let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&axis| input_dims[axis]).collect();
+    let reduced_numel = reduced_dims.iter().product::<usize>();
+    let mut out = vec![0u8; output_numel];
+
+    for out_linear_idx in 0..output_numel {
+        let mut base = 0isize;
+        let mut remainder = out_linear_idx;
+        for &axis in kept_axes {
+            let coord = remainder % input_dims[axis];
+            remainder /= input_dims[axis];
+            base += (coord as isize) * input_strides[axis];
+        }
+
+        let mut acc = 0u8;
+        for red_linear_idx in 0..reduced_numel {
+            let mut input_idx = base;
+            let mut red_remainder = red_linear_idx;
+            for &axis in reduced_axes {
+                let coord = red_remainder % input_dims[axis];
+                red_remainder /= input_dims[axis];
+                input_idx += (coord as isize) * input_strides[axis];
+            }
+            acc = if input[input_idx as usize] != 0 {
+                1
+            } else {
+                acc
+            };
+        }
+        out[out_linear_idx] = acc;
+    }
+
+    out
+}
+
 #[test]
 fn cuda_runtime_can_get_or_create_device_zero_handle() {
     if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
@@ -989,6 +1187,180 @@ fn cuda_runtime_real_where_matches_host_reference() {
     }
 
     let got = runtime.copy_dtoh(&dst).unwrap();
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_metadata_iota_i32_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataGenerateOp, MetadataGenerateSpec, MetadataTensorMut,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [8usize];
+    let dst_strides = [1isize];
+    let spec = MetadataGenerateSpec::new(&dims, &dst_strides, 0).unwrap();
+    let mut dst = runtime.alloc::<i32>(dims.iter().product()).unwrap();
+
+    runtime
+        .metadata_generate(
+            MetadataGenerateOp::IotaStartZero,
+            MetadataTensorMut::I32(&mut dst),
+            &spec,
+        )
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_metadata_iota_reference(&dims, &dst_strides, 0);
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_metadata_not_equal_and_sum_match_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataBinaryOp, MetadataBinarySpec, MetadataReductionOp, MetadataReductionSpec,
+        MetadataTensorMut, MetadataTensorRef,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [6usize];
+    let strides = [1isize];
+    let lhs_data = [0i32, 1, 2, 3, 4, 5];
+    let rhs_data = [0i32, 0, 2, 9, 4, 8];
+    let lhs = runtime.alloc::<i32>(lhs_data.len()).unwrap();
+    let rhs = runtime.alloc::<i32>(rhs_data.len()).unwrap();
+    let mut mask = runtime.alloc::<u8>(lhs_data.len()).unwrap();
+    let mut eq_mask = runtime.alloc::<u8>(lhs_data.len()).unwrap();
+    let mut sum = runtime.alloc::<i32>(1).unwrap();
+    let mut all = runtime.alloc::<u8>(1).unwrap();
+    let mut any = runtime.alloc::<u8>(1).unwrap();
+    runtime.copy_htod(&lhs_data, &lhs).unwrap();
+    runtime.copy_htod(&rhs_data, &rhs).unwrap();
+
+    let binary_spec =
+        MetadataBinarySpec::new(&dims, &strides, 0, &strides, 0, &strides, 0).unwrap();
+    runtime
+        .metadata_binary(
+            MetadataBinaryOp::NotEqual,
+            MetadataTensorRef::I32(&lhs),
+            MetadataTensorRef::I32(&rhs),
+            MetadataTensorMut::Bool(&mut mask),
+            &binary_spec,
+        )
+        .unwrap();
+    runtime
+        .metadata_binary(
+            MetadataBinaryOp::Equal,
+            MetadataTensorRef::I32(&lhs),
+            MetadataTensorRef::I32(&rhs),
+            MetadataTensorMut::Bool(&mut eq_mask),
+            &binary_spec,
+        )
+        .unwrap();
+
+    let reduction_spec =
+        MetadataReductionSpec::new(&dims, &strides, 0, &[], &[], 0, &[], &[0]).unwrap();
+    runtime
+        .metadata_reduction(
+            MetadataReductionOp::Sum,
+            MetadataTensorRef::Bool(&mask),
+            MetadataTensorMut::I32(&mut sum),
+            &reduction_spec,
+        )
+        .unwrap();
+    runtime
+        .metadata_reduction(
+            MetadataReductionOp::All,
+            MetadataTensorRef::Bool(&mask),
+            MetadataTensorMut::Bool(&mut all),
+            &reduction_spec,
+        )
+        .unwrap();
+    runtime
+        .metadata_reduction(
+            MetadataReductionOp::Any,
+            MetadataTensorRef::Bool(&mask),
+            MetadataTensorMut::Bool(&mut any),
+            &reduction_spec,
+        )
+        .unwrap();
+
+    let got_mask = runtime.copy_dtoh(&mask).unwrap();
+    let got_eq_mask = runtime.copy_dtoh(&eq_mask).unwrap();
+    let got_sum = runtime.copy_dtoh(&sum).unwrap();
+    let got_all = runtime.copy_dtoh(&all).unwrap();
+    let got_any = runtime.copy_dtoh(&any).unwrap();
+    let expected_mask = host_metadata_not_equal_reference(
+        &lhs_data, &rhs_data, &dims, &strides, &strides, &strides,
+    );
+    let expected_eq_mask =
+        host_metadata_equal_reference(&lhs_data, &rhs_data, &dims, &strides, &strides, &strides);
+    let expected_sum = host_metadata_sum_bool_reference(&expected_mask, &dims, &strides, &[], &[0]);
+    let expected_all = host_metadata_all_bool_reference(&expected_mask, &dims, &strides, &[], &[0]);
+    let expected_any = host_metadata_any_bool_reference(&expected_mask, &dims, &strides, &[], &[0]);
+    assert_eq!(got_mask, expected_mask);
+    assert_eq!(got_eq_mask, expected_eq_mask);
+    assert_eq!(got_sum, expected_sum);
+    assert_eq!(got_all, expected_all);
+    assert_eq!(got_any, expected_any);
+}
+
+#[test]
+fn cuda_runtime_metadata_where_selects_integer_values() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataTensorMut, MetadataTensorRef, MetadataTernaryOp, MetadataTernarySpec,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [6usize];
+    let strides = [1isize];
+    let cond_data = [1u8, 0, 1, 0, 0, 1];
+    let true_data = [10i32, 20, 30, 40, 50, 60];
+    let false_data = [-1i32, -2, -3, -4, -5, -6];
+    let cond = runtime.alloc::<u8>(cond_data.len()).unwrap();
+    let on_true = runtime.alloc::<i32>(true_data.len()).unwrap();
+    let on_false = runtime.alloc::<i32>(false_data.len()).unwrap();
+    let mut dst = runtime.alloc::<i32>(true_data.len()).unwrap();
+    runtime.copy_htod(&cond_data, &cond).unwrap();
+    runtime.copy_htod(&true_data, &on_true).unwrap();
+    runtime.copy_htod(&false_data, &on_false).unwrap();
+
+    let spec = MetadataTernarySpec::new(&dims, &strides, 0, &strides, 0, &strides, 0, &strides, 0)
+        .unwrap();
+    runtime
+        .metadata_ternary(
+            MetadataTernaryOp::Where,
+            MetadataTensorRef::Bool(&cond),
+            MetadataTensorRef::I32(&on_true),
+            MetadataTensorRef::I32(&on_false),
+            MetadataTensorMut::I32(&mut dst),
+            &spec,
+        )
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_metadata_where_i32_reference(
+        &cond_data,
+        &true_data,
+        &false_data,
+        &dims,
+        &strides,
+        &strides,
+        &strides,
+        &strides,
+    );
     assert_eq!(got, expected);
 }
 
