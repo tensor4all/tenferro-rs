@@ -2,16 +2,15 @@ use super::*;
 
 /// Compute the cross product along the leading vector axis.
 pub fn cross<T: KernelLinalgScalar, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
-    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Cross, "cross")?;
-
     if a.ndim() != b.ndim() {
         return Err(Error::InvalidArgument(format!(
             "cross expects matching ranks, got {:?} and {:?}",
@@ -46,53 +45,71 @@ where
 
     let a_input = ensure_col_major(a);
     let b_input = ensure_col_major(b);
-    let a_data = extract_slice(&a_input)?;
-    let b_data = extract_slice(&b_input)?;
-    let a_offset = a_input.offset() as usize;
-    let b_offset = b_input.offset() as usize;
-    let lanes = out_dims[1..].iter().product::<usize>().max(1);
-    let out_strides = backend::col_major_strides(&out_dims);
-    let a_strides = backend::col_major_strides(a.dims());
-    let b_strides = backend::col_major_strides(b.dims());
-    let mut out = vec![T::zero(); out_dims.iter().product()];
-    let mut index = vec![0usize; out_dims.len().saturating_sub(1)];
+    let out_tail_dims = &out_dims[1..];
+    let ax = a_input.select(0, 0)?.broadcast(out_tail_dims)?;
+    let ay = a_input.select(0, 1)?.broadcast(out_tail_dims)?;
+    let az = a_input.select(0, 2)?.broadcast(out_tail_dims)?;
+    let bx = b_input.select(0, 0)?.broadcast(out_tail_dims)?;
+    let by = b_input.select(0, 1)?.broadcast(out_tail_dims)?;
+    let bz = b_input.select(0, 2)?.broadcast(out_tail_dims)?;
 
-    for _lane in 0..lanes {
-        let mut a_tail_offset = 0isize;
-        let mut b_tail_offset = 0isize;
-        let mut out_tail_offset = 0isize;
-        for axis in 1..out_dims.len() {
-            let coord = index[axis - 1];
-            out_tail_offset += coord as isize * out_strides[axis];
-            let a_coord = if a.dims()[axis] == 1 { 0 } else { coord };
-            let b_coord = if b.dims()[axis] == 1 { 0 } else { coord };
-            a_tail_offset += a_coord as isize * a_strides[axis];
-            b_tail_offset += b_coord as isize * b_strides[axis];
-        }
+    let ay_bz = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &ay,
+        &bz,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+    let az_by = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &az,
+        &by,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+    let az_bx = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &az,
+        &bx,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+    let ax_bz = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &ax,
+        &bz,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+    let ax_by = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &ax,
+        &by,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
+    let ay_bx = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &ay,
+        &bx,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )?;
 
-        let a_base = (a_offset as isize + a_tail_offset) as usize;
-        let b_base = (b_offset as isize + b_tail_offset) as usize;
-        let o_base = out_tail_offset as usize;
-        let ax = a_data[a_base];
-        let ay = a_data[a_base + 1];
-        let az = a_data[a_base + 2];
-        let bx = b_data[b_base];
-        let by = b_data[b_base + 1];
-        let bz = b_data[b_base + 2];
-        out[o_base] = ay * bz - az * by;
-        out[o_base + 1] = az * bx - ax * bz;
-        out[o_base + 2] = ax * by - ay * bx;
+    let out_x = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &ay_bz,
+        &az_by,
+        tenferro_prims::ScalarBinaryOp::Sub,
+    )?;
+    let out_y = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &az_bx,
+        &ax_bz,
+        tenferro_prims::ScalarBinaryOp::Sub,
+    )?;
+    let out_z = crate::prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &ax_by,
+        &ay_bx,
+        tenferro_prims::ScalarBinaryOp::Sub,
+    )?;
 
-        for axis in 0..index.len() {
-            index[axis] += 1;
-            if index[axis] < out_dims[axis + 1] {
-                break;
-            }
-            index[axis] = 0;
-        }
-    }
-
-    tensor_from_data(out, &out_dims)
+    Tensor::stack(&[&out_x, &out_y, &out_z], 0)
 }
 
 /// Form the explicit product of Householder reflectors.
