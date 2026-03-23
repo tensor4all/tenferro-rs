@@ -18,69 +18,56 @@ fn constructors_source() -> String {
 
 #[test]
 fn cpu_empty_strided_rejects_invalid_layouts_without_panicking() {
-    let result = std::panic::catch_unwind(|| {
-        Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], -1, CPU)
-    });
-
-    let err = match result {
-        Ok(err) => err,
-        Err(_) => panic!("empty_strided should return an Error, not panic"),
-    };
+    let err = Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], -1, CPU)
+        .expect_err("empty_strided should return an Error, not panic");
 
     assert!(
-        matches!(err, Err(Error::StrideError(_)) | Err(Error::InvalidArgument(_))),
+        matches!(err, Error::StrideError(_) | Error::InvalidArgument(_)),
         "expected invalid empty_strided layout to return an error, got {err:?}"
     );
 }
 
 #[test]
 fn cpu_arange_rejects_invalid_inputs_without_panicking() {
-    let result = std::panic::catch_unwind(|| {
-        Tensor::<f64>::arange(0.0, 5.0, 0.0, CPU, MemoryOrder::ColumnMajor)
-    });
-
-    let err = match result {
-        Ok(err) => err,
-        Err(_) => panic!("arange should return an Error, not panic"),
-    };
+    let err = Tensor::<f64>::arange(0.0, 5.0, 0.0, CPU, MemoryOrder::ColumnMajor)
+        .expect_err("arange should return an Error, not panic");
 
     assert!(
-        matches!(err, Err(Error::InvalidArgument(_))),
+        matches!(err, Error::InvalidArgument(_)),
         "expected invalid arange input to return an error, got {err:?}"
     );
 }
 
 #[test]
 fn cpu_linspace_rejects_invalid_inputs_without_panicking() {
-    let result = std::panic::catch_unwind(|| {
-        Tensor::<f64>::linspace(0.0, 1.0, -3, CPU, MemoryOrder::ColumnMajor)
-    });
-
-    let err = match result {
-        Ok(err) => err,
-        Err(_) => panic!("linspace should return an Error, not panic"),
-    };
+    let err = Tensor::<f64>::linspace(0.0, 1.0, -3, CPU, MemoryOrder::ColumnMajor)
+        .expect_err("linspace should return an Error, not panic");
 
     assert!(
-        matches!(err, Err(Error::InvalidArgument(_))),
+        matches!(err, Error::InvalidArgument(_)),
         "expected invalid linspace input to return an error, got {err:?}"
+    );
+}
+
+#[test]
+fn cpu_eye_rejects_overflow_without_panicking() {
+    let err = Tensor::<f64>::eye(usize::MAX, CPU, MemoryOrder::ColumnMajor)
+        .expect_err("eye should return an Error on overflow, not panic");
+
+    assert!(
+        matches!(err, Error::StrideError(_)),
+        "expected eye overflow to return a stride error, got {err:?}"
     );
 }
 
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_empty_strided_rejects_invalid_layouts_without_panicking() {
-    let result = std::panic::catch_unwind(|| {
-        Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], -1, GPU0)
-    });
-
-    let err = match result {
-        Ok(err) => err,
-        Err(_) => panic!("empty_strided should return an Error, not panic"),
-    };
+    let err = Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], -1, GPU0)
+        .expect_err("empty_strided should return an Error, not panic");
 
     assert!(
-        matches!(err, Err(Error::StrideError(_)) | Err(Error::InvalidArgument(_))),
+        matches!(err, Error::StrideError(_) | Error::InvalidArgument(_)),
         "expected invalid empty_strided layout to return an error, got {err:?}"
     );
 }
@@ -88,17 +75,11 @@ fn cuda_empty_strided_rejects_invalid_layouts_without_panicking() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_arange_rejects_invalid_inputs_without_panicking() {
-    let result = std::panic::catch_unwind(|| {
-        Tensor::<f64>::arange(0.0, 5.0, 0.0, GPU0, MemoryOrder::ColumnMajor)
-    });
-
-    let err = match result {
-        Ok(err) => err,
-        Err(_) => panic!("arange should return an Error, not panic"),
-    };
+    let err = Tensor::<f64>::arange(0.0, 5.0, 0.0, GPU0, MemoryOrder::ColumnMajor)
+        .expect_err("arange should return an Error, not panic");
 
     assert!(
-        matches!(err, Err(Error::InvalidArgument(_))),
+        matches!(err, Error::InvalidArgument(_)),
         "expected invalid arange input to return an error, got {err:?}"
     );
 }
@@ -106,18 +87,24 @@ fn cuda_arange_rejects_invalid_inputs_without_panicking() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_linspace_rejects_invalid_inputs_without_panicking() {
-    let result = std::panic::catch_unwind(|| {
-        Tensor::<f64>::linspace(0.0, 1.0, -3, GPU0, MemoryOrder::ColumnMajor)
-    });
-
-    let err = match result {
-        Ok(err) => err,
-        Err(_) => panic!("linspace should return an Error, not panic"),
-    };
+    let err = Tensor::<f64>::linspace(0.0, 1.0, -3, GPU0, MemoryOrder::ColumnMajor)
+        .expect_err("linspace should return an Error, not panic");
 
     assert!(
-        matches!(err, Err(Error::InvalidArgument(_))),
+        matches!(err, Error::InvalidArgument(_)),
         "expected invalid linspace input to return an error, got {err:?}"
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_eye_rejects_overflow_without_panicking() {
+    let err = Tensor::<f64>::eye(usize::MAX, GPU0, MemoryOrder::ColumnMajor)
+        .expect_err("eye should return an Error on overflow, not panic");
+
+    assert!(
+        matches!(err, Error::StrideError(_)),
+        "expected eye overflow to return a stride error, got {err:?}"
     );
 }
 

@@ -16,7 +16,8 @@ fn gpu_zeros_allocates_device_buffer_when_cuda_is_available() {
         &[2, 3],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     assert_eq!(
         tensor.logical_memory_space(),

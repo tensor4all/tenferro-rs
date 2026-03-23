@@ -72,7 +72,8 @@ fn zero_trailing_by_counts_cpu_rejects_invalid_keep_counts() {
         &[2, 3, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     let shape_mismatch = col_tensor(&[1.0, 2.0, 3.0], &[3]);
     let err = payload

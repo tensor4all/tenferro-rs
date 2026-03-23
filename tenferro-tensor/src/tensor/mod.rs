@@ -1,6 +1,7 @@
 mod autodiff;
 mod combine;
 mod constructors;
+mod constructors_special;
 mod data_ops;
 mod metadata;
 mod structural;
@@ -48,7 +49,7 @@ pub use structural::KeepCountScalar;
 ///     &[2, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// assert_eq!(t.dims(), &[2, 3]);
 /// assert_eq!(t.len(), 6);
 /// ```

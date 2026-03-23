@@ -46,12 +46,12 @@
 //!     &[3, 4],
 //!     LogicalMemorySpace::MainMemory,
 //!     MemoryOrder::ColumnMajor,
-//! );
+//! ).unwrap();
 //! let b = Tensor::<f64>::ones(
 //!     &[3, 4],
 //!     LogicalMemorySpace::MainMemory,
 //!     MemoryOrder::RowMajor,
-//! );
+//! ).unwrap();
 //!
 //! let data = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
 //! let m = Tensor::<f64>::from_slice(&data, &[2, 3], MemoryOrder::ColumnMajor).unwrap();
@@ -74,7 +74,7 @@
 //!     &[3, 1],
 //!     LogicalMemorySpace::MainMemory,
 //!     MemoryOrder::ColumnMajor,
-//! );
+//! ).unwrap();
 //! let expanded = col.broadcast(&[3, 4]).unwrap();
 //! let owned = expanded.contiguous(MemoryOrder::ColumnMajor);
 //! assert_eq!(owned.dims(), &[3, 4]);

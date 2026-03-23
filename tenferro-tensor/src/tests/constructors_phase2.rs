@@ -22,7 +22,7 @@ fn assert_dense_f64_sequence(
 
 #[test]
 fn cpu_empty_reports_shape_layout_and_device_semantics() {
-    let got = Tensor::<f64>::empty(&[2, 3], CPU, MemoryOrder::ColumnMajor);
+    let got = Tensor::<f64>::empty(&[2, 3], CPU, MemoryOrder::ColumnMajor).unwrap();
 
     assert_eq!(got.dims(), &[2, 3]);
     assert_eq!(got.strides(), &[1, 2]);
@@ -46,41 +46,41 @@ fn cpu_empty_strided_validates_layout_and_reports_invalid_layouts() {
 
 #[test]
 fn cpu_full_and_like_constructors_fill_expected_values() {
-    let base = Tensor::<f64>::zeros(&[2, 3], CPU, MemoryOrder::ColumnMajor);
-    let row_major_base = Tensor::<f64>::zeros(&[2, 3], CPU, MemoryOrder::RowMajor);
+    let base = Tensor::<f64>::zeros(&[2, 3], CPU, MemoryOrder::ColumnMajor).unwrap();
+    let row_major_base = Tensor::<f64>::zeros(&[2, 3], CPU, MemoryOrder::RowMajor).unwrap();
 
-    let full = Tensor::<f64>::full(&[2, 3], 7.5, CPU, MemoryOrder::ColumnMajor);
+    let full = Tensor::<f64>::full(&[2, 3], 7.5, CPU, MemoryOrder::ColumnMajor).unwrap();
     assert_dense_f64_sequence(&full, &[2, 3], CPU, &[7.5; 6]);
 
-    let empty_like = Tensor::<f64>::empty_like(&base);
+    let empty_like = Tensor::<f64>::empty_like(&base).unwrap();
     assert_eq!(empty_like.dims(), base.dims());
     assert_eq!(
         empty_like.logical_memory_space(),
         base.logical_memory_space()
     );
 
-    let zeros_like = Tensor::<f64>::zeros_like(&base);
+    let zeros_like = Tensor::<f64>::zeros_like(&base).unwrap();
     assert_dense_f64_sequence(&zeros_like, &[2, 3], CPU, &[0.0; 6]);
 
-    let ones_like = Tensor::<f64>::ones_like(&base);
+    let ones_like = Tensor::<f64>::ones_like(&base).unwrap();
     assert_dense_f64_sequence(&ones_like, &[2, 3], CPU, &[1.0; 6]);
 
-    let full_like = Tensor::<f64>::full_like(&base, 3.25);
+    let full_like = Tensor::<f64>::full_like(&base, 3.25).unwrap();
     assert_dense_f64_sequence(&full_like, &[2, 3], CPU, &[3.25; 6]);
 
-    let row_major_empty_like = Tensor::<f64>::empty_like(&row_major_base);
+    let row_major_empty_like = Tensor::<f64>::empty_like(&row_major_base).unwrap();
     assert_eq!(row_major_empty_like.strides(), row_major_base.strides());
     assert!(row_major_empty_like.is_row_major_contiguous());
 
-    let row_major_zeros_like = Tensor::<f64>::zeros_like(&row_major_base);
+    let row_major_zeros_like = Tensor::<f64>::zeros_like(&row_major_base).unwrap();
     assert_eq!(row_major_zeros_like.strides(), row_major_base.strides());
     assert!(row_major_zeros_like.is_row_major_contiguous());
 
-    let row_major_ones_like = Tensor::<f64>::ones_like(&row_major_base);
+    let row_major_ones_like = Tensor::<f64>::ones_like(&row_major_base).unwrap();
     assert_eq!(row_major_ones_like.strides(), row_major_base.strides());
     assert!(row_major_ones_like.is_row_major_contiguous());
 
-    let row_major_full_like = Tensor::<f64>::full_like(&row_major_base, 3.25);
+    let row_major_full_like = Tensor::<f64>::full_like(&row_major_base, 3.25).unwrap();
     assert_eq!(row_major_full_like.strides(), row_major_base.strides());
     assert!(row_major_full_like.is_row_major_contiguous());
 }
@@ -112,7 +112,7 @@ fn cpu_arange_and_linspace_reject_invalid_inputs() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_empty_reports_shape_layout_and_device_semantics() {
-    let got = Tensor::<f64>::empty(&[2, 3], GPU0, MemoryOrder::ColumnMajor);
+    let got = Tensor::<f64>::empty(&[2, 3], GPU0, MemoryOrder::ColumnMajor).unwrap();
 
     assert_eq!(got.dims(), &[2, 3]);
     assert_eq!(got.strides(), &[1, 2]);
@@ -138,41 +138,41 @@ fn cuda_empty_strided_validates_layout_and_reports_invalid_layouts() {
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_full_and_like_constructors_fill_expected_values() {
-    let base = Tensor::<f64>::zeros(&[2, 3], GPU0, MemoryOrder::ColumnMajor);
-    let row_major_base = Tensor::<f64>::zeros(&[2, 3], GPU0, MemoryOrder::RowMajor);
+    let base = Tensor::<f64>::zeros(&[2, 3], GPU0, MemoryOrder::ColumnMajor).unwrap();
+    let row_major_base = Tensor::<f64>::zeros(&[2, 3], GPU0, MemoryOrder::RowMajor).unwrap();
 
-    let full = Tensor::<f64>::full(&[2, 3], 7.5, GPU0, MemoryOrder::ColumnMajor);
+    let full = Tensor::<f64>::full(&[2, 3], 7.5, GPU0, MemoryOrder::ColumnMajor).unwrap();
     assert_dense_f64_sequence(&full, &[2, 3], GPU0, &[7.5; 6]);
 
-    let empty_like = Tensor::<f64>::empty_like(&base);
+    let empty_like = Tensor::<f64>::empty_like(&base).unwrap();
     assert_eq!(empty_like.dims(), base.dims());
     assert_eq!(
         empty_like.logical_memory_space(),
         base.logical_memory_space()
     );
 
-    let zeros_like = Tensor::<f64>::zeros_like(&base);
+    let zeros_like = Tensor::<f64>::zeros_like(&base).unwrap();
     assert_dense_f64_sequence(&zeros_like, &[2, 3], GPU0, &[0.0; 6]);
 
-    let ones_like = Tensor::<f64>::ones_like(&base);
+    let ones_like = Tensor::<f64>::ones_like(&base).unwrap();
     assert_dense_f64_sequence(&ones_like, &[2, 3], GPU0, &[1.0; 6]);
 
-    let full_like = Tensor::<f64>::full_like(&base, 3.25);
+    let full_like = Tensor::<f64>::full_like(&base, 3.25).unwrap();
     assert_dense_f64_sequence(&full_like, &[2, 3], GPU0, &[3.25; 6]);
 
-    let row_major_empty_like = Tensor::<f64>::empty_like(&row_major_base);
+    let row_major_empty_like = Tensor::<f64>::empty_like(&row_major_base).unwrap();
     assert_eq!(row_major_empty_like.strides(), row_major_base.strides());
     assert!(row_major_empty_like.is_row_major_contiguous());
 
-    let row_major_zeros_like = Tensor::<f64>::zeros_like(&row_major_base);
+    let row_major_zeros_like = Tensor::<f64>::zeros_like(&row_major_base).unwrap();
     assert_eq!(row_major_zeros_like.strides(), row_major_base.strides());
     assert!(row_major_zeros_like.is_row_major_contiguous());
 
-    let row_major_ones_like = Tensor::<f64>::ones_like(&row_major_base);
+    let row_major_ones_like = Tensor::<f64>::ones_like(&row_major_base).unwrap();
     assert_eq!(row_major_ones_like.strides(), row_major_base.strides());
     assert!(row_major_ones_like.is_row_major_contiguous());
 
-    let row_major_full_like = Tensor::<f64>::full_like(&row_major_base, 3.25);
+    let row_major_full_like = Tensor::<f64>::full_like(&row_major_base, 3.25).unwrap();
     assert_eq!(row_major_full_like.strides(), row_major_base.strides());
     assert!(row_major_full_like.is_row_major_contiguous());
 }

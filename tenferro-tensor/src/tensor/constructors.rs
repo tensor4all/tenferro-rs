@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
-use num_traits::{Float, NumCast};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
 use super::Tensor;
-use crate::layout::{compute_contiguous_strides, validate_layout_against_len};
+use crate::layout::validate_layout_against_len;
 use crate::{DataBuffer, MemoryOrder};
 
 impl<T: Scalar> Tensor<T> {
-    fn finish_allocation_result(tensor: Self, memory_space: LogicalMemorySpace) -> Result<Self> {
+    pub(crate) fn finish_allocation(
+        tensor: Self,
+        memory_space: LogicalMemorySpace,
+    ) -> Result<Self> {
         if memory_space == LogicalMemorySpace::MainMemory {
             Ok(tensor)
         } else {
@@ -17,12 +19,7 @@ impl<T: Scalar> Tensor<T> {
         }
     }
 
-    fn finish_allocation(tensor: Self, memory_space: LogicalMemorySpace) -> Self {
-        Self::finish_allocation_result(tensor, memory_space)
-            .unwrap_or_else(|err| panic!("tensor allocation for {memory_space:?} failed: {err}"))
-    }
-
-    fn main_memory_contiguous(data: Vec<T>, dims: &[usize], order: MemoryOrder) -> Self {
+    pub(crate) fn main_memory_contiguous(data: Vec<T>, dims: &[usize], order: MemoryOrder) -> Self {
         Self::from_owned_contiguous_data(
             data,
             Arc::from(dims),
@@ -109,9 +106,13 @@ impl<T: Scalar> Tensor<T> {
     ///     &[3, 4],
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
+    /// ).unwrap();
     /// ```
-    pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
+    pub fn zeros(
+        dims: &[usize],
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+    ) -> Result<Self> {
         let n_elements: usize = dims.iter().product();
         Self::finish_allocation(
             Self::main_memory_contiguous(vec![T::zero(); n_elements], dims, order),
@@ -138,9 +139,13 @@ impl<T: Scalar> Tensor<T> {
     ///     &[3, 4],
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
+    /// ).unwrap();
     /// ```
-    pub fn empty(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
+    pub fn empty(
+        dims: &[usize],
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+    ) -> Result<Self> {
         Self::zeros(dims, memory_space, order)
     }
 
@@ -156,9 +161,13 @@ impl<T: Scalar> Tensor<T> {
     ///     &[2, 3],
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
+    /// ).unwrap();
     /// ```
-    pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
+    pub fn ones(
+        dims: &[usize],
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+    ) -> Result<Self> {
         let n_elements: usize = dims.iter().product();
         Self::finish_allocation(
             Self::main_memory_contiguous(vec![T::one(); n_elements], dims, order),
@@ -190,7 +199,7 @@ impl<T: Scalar> Tensor<T> {
     ) -> Result<Self> {
         let storage_len = Self::required_storage_len(dims, strides, offset)?;
         let tensor = Self::from_vec(vec![T::zero(); storage_len], dims, strides, offset)?;
-        Self::finish_allocation_result(tensor, memory_space)
+        Self::finish_allocation(tensor, memory_space)
     }
 
     /// Create a tensor filled with `value`.
@@ -206,14 +215,14 @@ impl<T: Scalar> Tensor<T> {
     ///     7.5,
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
+    /// ).unwrap();
     /// ```
     pub fn full(
         dims: &[usize],
         value: T,
         memory_space: LogicalMemorySpace,
         order: MemoryOrder,
-    ) -> Self {
+    ) -> Result<Self> {
         let n_elements: usize = dims.iter().product();
         Self::finish_allocation(
             Self::main_memory_contiguous(vec![value; n_elements], dims, order),
@@ -348,11 +357,11 @@ impl<T: Scalar> Tensor<T> {
     ///     &[2, 3],
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
-    /// let like = base.empty_like();
+    /// ).unwrap();
+    /// let like = base.empty_like().unwrap();
     /// assert_eq!(like.dims(), base.dims());
     /// ```
-    pub fn empty_like(&self) -> Self {
+    pub fn empty_like(&self) -> Result<Self> {
         Self::empty(
             self.dims(),
             self.logical_memory_space(),
@@ -375,11 +384,11 @@ impl<T: Scalar> Tensor<T> {
     ///     &[2, 3],
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
-    /// let like = base.zeros_like();
+    /// ).unwrap();
+    /// let like = base.zeros_like().unwrap();
     /// assert_eq!(like.dims(), base.dims());
     /// ```
-    pub fn zeros_like(&self) -> Self {
+    pub fn zeros_like(&self) -> Result<Self> {
         Self::zeros(
             self.dims(),
             self.logical_memory_space(),
@@ -402,11 +411,11 @@ impl<T: Scalar> Tensor<T> {
     ///     &[2, 3],
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
-    /// let like = base.ones_like();
+    /// ).unwrap();
+    /// let like = base.ones_like().unwrap();
     /// assert_eq!(like.dims(), base.dims());
     /// ```
-    pub fn ones_like(&self) -> Self {
+    pub fn ones_like(&self) -> Result<Self> {
         Self::ones(
             self.dims(),
             self.logical_memory_space(),
@@ -429,179 +438,16 @@ impl<T: Scalar> Tensor<T> {
     ///     &[2, 3],
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    /// );
-    /// let like = base.full_like(3.25);
+    /// ).unwrap();
+    /// let like = base.full_like(3.25).unwrap();
     /// assert_eq!(like.dims(), base.dims());
     /// ```
-    pub fn full_like(&self, value: T) -> Self {
+    pub fn full_like(&self, value: T) -> Result<Self> {
         Self::full(
             self.dims(),
             value,
             self.logical_memory_space(),
             Self::like_order(self),
         )
-    }
-
-    /// Create an identity matrix.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let id = Tensor::<f64>::eye(
-    ///     3,
-    ///     LogicalMemorySpace::MainMemory,
-    ///     MemoryOrder::ColumnMajor,
-    /// );
-    /// assert_eq!(id.dims(), &[3, 3]);
-    /// ```
-    pub fn eye(n: usize, memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
-        let dims = [n, n];
-        let strides = compute_contiguous_strides(&dims, order);
-        let mut data = vec![T::zero(); n * n];
-        for i in 0..n {
-            let pos = (i as isize)
-                .checked_mul(strides[0])
-                .and_then(|a| {
-                    (i as isize)
-                        .checked_mul(strides[1])
-                        .and_then(|b| a.checked_add(b))
-                })
-                .and_then(|pos| usize::try_from(pos).ok())
-                .unwrap_or_else(|| {
-                    panic!(
-                        "eye: position overflow for index {} with strides {:?}",
-                        i, strides
-                    )
-                });
-            data[pos] = T::one();
-        }
-        Self::finish_allocation(
-            Self::main_memory_contiguous(data, &dims, order),
-            memory_space,
-        )
-    }
-}
-
-impl<T> Tensor<T>
-where
-    T: Scalar + Float + NumCast,
-{
-    /// Create a regularly spaced 1-D tensor from `start` toward `end`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let xs = Tensor::<f64>::arange(
-    ///     0.0,
-    ///     5.0,
-    ///     1.0,
-    ///     LogicalMemorySpace::MainMemory,
-    ///     MemoryOrder::ColumnMajor,
-    /// );
-    /// assert_eq!(xs.dims(), &[5]);
-    /// ```
-    pub fn arange(
-        start: T,
-        end: T,
-        step: T,
-        memory_space: LogicalMemorySpace,
-        order: MemoryOrder,
-    ) -> Result<Self> {
-        if step.is_zero() {
-            return Err(Error::InvalidArgument(
-                "arange: step must be non-zero".into(),
-            ));
-        }
-
-        let mut data = Vec::new();
-        let zero = T::zero();
-        if step > zero {
-            let mut current = start;
-            while current < end {
-                data.push(current);
-                current = current + step;
-            }
-        } else {
-            let mut current = start;
-            while current > end {
-                data.push(current);
-                current = current + step;
-            }
-        }
-
-        let dims = [data.len()];
-        let tensor = Self::main_memory_contiguous(data, &dims, order);
-        Self::finish_allocation_result(tensor, memory_space)
-    }
-
-    /// Create a 1-D tensor containing `n_samples` evenly spaced values.
-    ///
-    /// Returns an error if `n_samples` is negative.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
-    /// use tenferro_device::LogicalMemorySpace;
-    ///
-    /// let xs = Tensor::<f64>::linspace(
-    ///     0.0,
-    ///     1.0,
-    ///     5,
-    ///     LogicalMemorySpace::MainMemory,
-    ///     MemoryOrder::ColumnMajor,
-    /// );
-    /// assert_eq!(xs.dims(), &[5]);
-    /// ```
-    pub fn linspace(
-        start: T,
-        end: T,
-        n_samples: isize,
-        memory_space: LogicalMemorySpace,
-        order: MemoryOrder,
-    ) -> Result<Self> {
-        if n_samples < 0 {
-            return Err(Error::InvalidArgument(format!(
-                "linspace: steps must be non-negative, got {n_samples}"
-            )));
-        }
-
-        let n_samples = usize::try_from(n_samples).map_err(|_| {
-            Error::InvalidArgument(format!(
-                "linspace: steps {n_samples} cannot be represented as usize"
-            ))
-        })?;
-        let mut data = Vec::with_capacity(n_samples);
-        match n_samples {
-            0 => {}
-            1 => data.push(start),
-            _ => {
-                let Some(denom) = <T as NumCast>::from(n_samples - 1) else {
-                    return Err(Error::InvalidArgument(format!(
-                        "linspace: sample count {} cannot be represented in target scalar type",
-                        n_samples
-                    )));
-                };
-                let step = (end - start) / denom;
-                let mut current = start;
-                for _ in 0..n_samples {
-                    data.push(current);
-                    current = current + step;
-                }
-                if let Some(last) = data.last_mut() {
-                    *last = end;
-                }
-            }
-        }
-
-        let dims = [data.len()];
-        let tensor = Self::main_memory_contiguous(data, &dims, order);
-        Self::finish_allocation_result(tensor, memory_space)
     }
 }

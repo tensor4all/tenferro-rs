@@ -2,9 +2,9 @@ use super::*;
 use tenferro_device::LogicalMemorySpace;
 
 mod buffer;
-mod constructor_fallibility;
 mod combine;
 mod completion_event;
+mod constructor_fallibility;
 mod constructors_phase2;
 
 #[cfg(feature = "cuda")]
@@ -19,7 +19,8 @@ fn tensor_debug_is_summary_style() {
         &[2, 3],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     let dbg = format!("{:?}", tensor);
     assert!(dbg.contains("Tensor"));
