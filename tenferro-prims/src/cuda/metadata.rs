@@ -4,6 +4,7 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
+use crate::shape_helpers::{broadcast_tensor_to_shape, validate_shape_broadcastable};
 use crate::{
     validate_rank, validate_shape_eq, CudaBackend, CudaContext, MetadataBinaryOp,
     MetadataConstantValue, MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor,
@@ -367,15 +368,15 @@ impl TensorMetadataPrims for CudaBackend {
             } => {
                 validate_supported_binary(*op, *lhs_dtype, *rhs_dtype, *output_dtype)?;
                 validate_metadata_handle_count(inputs, 2, "CudaMetadataBinary")?;
-                validate_shape_eq(
-                    tensor_dims_ref(&inputs[0]),
-                    tensor_dims_ref(&inputs[1]),
-                    "CudaMetadataBinary input",
-                )?;
-                validate_shape_eq(
+                validate_shape_broadcastable(
                     tensor_dims_ref(&inputs[0]),
                     tensor_dims_mut(&output),
-                    "CudaMetadataBinary output",
+                    "CudaMetadataBinary lhs",
+                )?;
+                validate_shape_broadcastable(
+                    tensor_dims_ref(&inputs[1]),
+                    tensor_dims_mut(&output),
+                    "CudaMetadataBinary rhs",
                 )?;
                 match (inputs[0], inputs[1], output) {
                     (
@@ -491,20 +492,20 @@ impl TensorMetadataPrims for CudaBackend {
                     *output_dtype,
                 )?;
                 validate_metadata_handle_count(inputs, 3, "CudaMetadataTernary")?;
-                validate_shape_eq(
-                    tensor_dims_ref(&inputs[0]),
-                    tensor_dims_ref(&inputs[1]),
-                    "CudaMetadataTernary input",
-                )?;
-                validate_shape_eq(
-                    tensor_dims_ref(&inputs[0]),
-                    tensor_dims_ref(&inputs[2]),
-                    "CudaMetadataTernary input",
-                )?;
-                validate_shape_eq(
+                validate_shape_broadcastable(
                     tensor_dims_ref(&inputs[0]),
                     tensor_dims_mut(&output),
-                    "CudaMetadataTernary output",
+                    "CudaMetadataTernary cond",
+                )?;
+                validate_shape_broadcastable(
+                    tensor_dims_ref(&inputs[1]),
+                    tensor_dims_mut(&output),
+                    "CudaMetadataTernary true",
+                )?;
+                validate_shape_broadcastable(
+                    tensor_dims_ref(&inputs[2]),
+                    tensor_dims_mut(&output),
+                    "CudaMetadataTernary false",
                 )?;
                 match (inputs[0], inputs[1], inputs[2], output) {
                     (
@@ -768,11 +769,15 @@ impl TensorMetadataPrims for CudaBackend {
                         MetadataTensorRef::I32(rhs),
                         MetadataTensorMut::Bool(dst),
                     ) => {
+                        let lhs =
+                            broadcast_tensor_to_shape(lhs, dst.dims(), "CudaMetadataBinary lhs")?;
+                        let rhs =
+                            broadcast_tensor_to_shape(rhs, dst.dims(), "CudaMetadataBinary rhs")?;
                         let lhs_len = lhs.buffer().len();
                         let rhs_len = rhs.buffer().len();
                         let dst_len = dst.buffer().len();
-                        let lhs_ptr = tensor_device_ptr_ref(lhs, "CudaMetadataBinary lhs")?;
-                        let rhs_ptr = tensor_device_ptr_ref(rhs, "CudaMetadataBinary rhs")?;
+                        let lhs_ptr = tensor_device_ptr_ref(&lhs, "CudaMetadataBinary lhs")?;
+                        let rhs_ptr = tensor_device_ptr_ref(&rhs, "CudaMetadataBinary rhs")?;
                         let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
                         unsafe {
                             runtime.metadata_binary_i32_bool(
@@ -802,11 +807,15 @@ impl TensorMetadataPrims for CudaBackend {
                         MetadataTensorRef::I32(rhs),
                         MetadataTensorMut::I32(dst),
                     ) => {
+                        let lhs =
+                            broadcast_tensor_to_shape(lhs, dst.dims(), "CudaMetadataBinary lhs")?;
+                        let rhs =
+                            broadcast_tensor_to_shape(rhs, dst.dims(), "CudaMetadataBinary rhs")?;
                         let lhs_len = lhs.buffer().len();
                         let rhs_len = rhs.buffer().len();
                         let dst_len = dst.buffer().len();
-                        let lhs_ptr = tensor_device_ptr_ref(lhs, "CudaMetadataBinary lhs")?;
-                        let rhs_ptr = tensor_device_ptr_ref(rhs, "CudaMetadataBinary rhs")?;
+                        let lhs_ptr = tensor_device_ptr_ref(&lhs, "CudaMetadataBinary lhs")?;
+                        let rhs_ptr = tensor_device_ptr_ref(&rhs, "CudaMetadataBinary rhs")?;
                         let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
                         unsafe {
                             runtime.metadata_binary_i32_i32(
@@ -836,11 +845,15 @@ impl TensorMetadataPrims for CudaBackend {
                         MetadataTensorRef::Bool(rhs),
                         MetadataTensorMut::Bool(dst),
                     ) => {
+                        let lhs =
+                            broadcast_tensor_to_shape(lhs, dst.dims(), "CudaMetadataBinary lhs")?;
+                        let rhs =
+                            broadcast_tensor_to_shape(rhs, dst.dims(), "CudaMetadataBinary rhs")?;
                         let lhs_len = lhs.buffer().len();
                         let rhs_len = rhs.buffer().len();
                         let dst_len = dst.buffer().len();
-                        let lhs_ptr = tensor_device_ptr_ref(lhs, "CudaMetadataBinary lhs")?;
-                        let rhs_ptr = tensor_device_ptr_ref(rhs, "CudaMetadataBinary rhs")?;
+                        let lhs_ptr = tensor_device_ptr_ref(&lhs, "CudaMetadataBinary lhs")?;
+                        let rhs_ptr = tensor_device_ptr_ref(&rhs, "CudaMetadataBinary rhs")?;
                         let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
                         unsafe {
                             runtime.metadata_binary_bool_bool(
@@ -893,13 +906,22 @@ impl TensorMetadataPrims for CudaBackend {
                     MetadataTensorRef::I32(on_false),
                     MetadataTensorMut::I32(dst),
                 ) => {
+                    let cond =
+                        broadcast_tensor_to_shape(cond, dst.dims(), "CudaMetadataTernary cond")?;
+                    let on_true =
+                        broadcast_tensor_to_shape(on_true, dst.dims(), "CudaMetadataTernary true")?;
+                    let on_false = broadcast_tensor_to_shape(
+                        on_false,
+                        dst.dims(),
+                        "CudaMetadataTernary false",
+                    )?;
                     let cond_len = cond.buffer().len();
                     let true_len = on_true.buffer().len();
                     let false_len = on_false.buffer().len();
                     let dst_len = dst.buffer().len();
-                    let cond_ptr = tensor_device_ptr_ref(cond, "CudaMetadataTernary cond")?;
-                    let true_ptr = tensor_device_ptr_ref(on_true, "CudaMetadataTernary true")?;
-                    let false_ptr = tensor_device_ptr_ref(on_false, "CudaMetadataTernary false")?;
+                    let cond_ptr = tensor_device_ptr_ref(&cond, "CudaMetadataTernary cond")?;
+                    let true_ptr = tensor_device_ptr_ref(&on_true, "CudaMetadataTernary true")?;
+                    let false_ptr = tensor_device_ptr_ref(&on_false, "CudaMetadataTernary false")?;
                     let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataTernary dst")?;
                     unsafe {
                         runtime.metadata_where_i32(
@@ -934,13 +956,22 @@ impl TensorMetadataPrims for CudaBackend {
                     MetadataTensorRef::Bool(on_false),
                     MetadataTensorMut::Bool(dst),
                 ) => {
+                    let cond =
+                        broadcast_tensor_to_shape(cond, dst.dims(), "CudaMetadataTernary cond")?;
+                    let on_true =
+                        broadcast_tensor_to_shape(on_true, dst.dims(), "CudaMetadataTernary true")?;
+                    let on_false = broadcast_tensor_to_shape(
+                        on_false,
+                        dst.dims(),
+                        "CudaMetadataTernary false",
+                    )?;
                     let cond_len = cond.buffer().len();
                     let true_len = on_true.buffer().len();
                     let false_len = on_false.buffer().len();
                     let dst_len = dst.buffer().len();
-                    let cond_ptr = tensor_device_ptr_ref(cond, "CudaMetadataTernary cond")?;
-                    let true_ptr = tensor_device_ptr_ref(on_true, "CudaMetadataTernary true")?;
-                    let false_ptr = tensor_device_ptr_ref(on_false, "CudaMetadataTernary false")?;
+                    let cond_ptr = tensor_device_ptr_ref(&cond, "CudaMetadataTernary cond")?;
+                    let true_ptr = tensor_device_ptr_ref(&on_true, "CudaMetadataTernary true")?;
+                    let false_ptr = tensor_device_ptr_ref(&on_false, "CudaMetadataTernary false")?;
                     let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataTernary dst")?;
                     unsafe {
                         runtime.metadata_where_bool(

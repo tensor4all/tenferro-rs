@@ -5,10 +5,11 @@ use tenferro_device::{Error, Result};
 
 use crate::cpu::common::plan_reduction;
 use crate::cpu::{tensor_to_view, tensor_to_view_mut};
+use crate::shape_helpers::{broadcast_tensor_to_shape, validate_shape_broadcastable};
 use crate::{
-    validate_shape_eq, CpuBackend, CpuContext, MetadataBinaryOp, MetadataConstantValue,
-    MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor, MetadataReductionOp,
-    MetadataTensorMut, MetadataTensorRef, MetadataTernaryOp, TensorMetadataPrims,
+    CpuBackend, CpuContext, MetadataBinaryOp, MetadataConstantValue, MetadataDType,
+    MetadataGenerateOp, MetadataPrimsDescriptor, MetadataReductionOp, MetadataTensorMut,
+    MetadataTensorRef, MetadataTernaryOp, TensorMetadataPrims,
 };
 
 fn tensor_dims_ref<'a>(tensor: &'a MetadataTensorRef<'a>) -> &'a [usize] {
@@ -463,15 +464,15 @@ impl TensorMetadataPrims for CpuBackend {
             } => {
                 validate_supported_binary(*op, *lhs_dtype, *rhs_dtype, *output_dtype)?;
                 validate_metadata_handle_count(inputs, 2, "CpuMetadataBinary")?;
-                validate_shape_eq(
-                    tensor_dims_ref(&inputs[0]),
-                    tensor_dims_ref(&inputs[1]),
-                    "CpuMetadataBinary input",
-                )?;
-                validate_shape_eq(
+                validate_shape_broadcastable(
                     tensor_dims_ref(&inputs[0]),
                     tensor_dims_mut(&output),
-                    "CpuMetadataBinary output",
+                    "CpuMetadataBinary lhs",
+                )?;
+                validate_shape_broadcastable(
+                    tensor_dims_ref(&inputs[1]),
+                    tensor_dims_mut(&output),
+                    "CpuMetadataBinary rhs",
                 )?;
                 Ok(desc.clone())
             }
@@ -495,20 +496,20 @@ impl TensorMetadataPrims for CpuBackend {
                         "unsupported metadata ternary output dtype".into(),
                     ));
                 }
-                validate_shape_eq(
-                    tensor_dims_ref(&inputs[0]),
-                    tensor_dims_ref(&inputs[1]),
-                    "CpuMetadataTernary input",
-                )?;
-                validate_shape_eq(
-                    tensor_dims_ref(&inputs[0]),
-                    tensor_dims_ref(&inputs[2]),
-                    "CpuMetadataTernary input",
-                )?;
-                validate_shape_eq(
+                validate_shape_broadcastable(
                     tensor_dims_ref(&inputs[0]),
                     tensor_dims_mut(&output),
-                    "CpuMetadataTernary output",
+                    "CpuMetadataTernary cond",
+                )?;
+                validate_shape_broadcastable(
+                    tensor_dims_ref(&inputs[1]),
+                    tensor_dims_mut(&output),
+                    "CpuMetadataTernary true",
+                )?;
+                validate_shape_broadcastable(
+                    tensor_dims_ref(&inputs[2]),
+                    tensor_dims_mut(&output),
+                    "CpuMetadataTernary false",
                 )?;
                 Ok(desc.clone())
             }
@@ -599,8 +600,12 @@ impl TensorMetadataPrims for CpuBackend {
                         MetadataTensorRef::I32(rhs),
                         MetadataTensorMut::I32(dst),
                     ) => {
-                        let lhs = tensor_to_view(lhs)?;
-                        let rhs = tensor_to_view(rhs)?;
+                        let lhs =
+                            broadcast_tensor_to_shape(lhs, dst.dims(), "CpuMetadataBinary lhs")?;
+                        let rhs =
+                            broadcast_tensor_to_shape(rhs, dst.dims(), "CpuMetadataBinary rhs")?;
+                        let lhs = tensor_to_view(&lhs)?;
+                        let rhs = tensor_to_view(&rhs)?;
                         let mut dst = tensor_to_view_mut(dst)?;
                         execute_metadata_binary_map(&lhs, &rhs, &mut dst, |x, y| match *op {
                             MetadataBinaryOp::Add => x + y,
@@ -618,8 +623,12 @@ impl TensorMetadataPrims for CpuBackend {
                         MetadataTensorRef::I32(rhs),
                         MetadataTensorMut::Bool(dst),
                     ) => {
-                        let lhs = tensor_to_view(lhs)?;
-                        let rhs = tensor_to_view(rhs)?;
+                        let lhs =
+                            broadcast_tensor_to_shape(lhs, dst.dims(), "CpuMetadataBinary lhs")?;
+                        let rhs =
+                            broadcast_tensor_to_shape(rhs, dst.dims(), "CpuMetadataBinary rhs")?;
+                        let lhs = tensor_to_view(&lhs)?;
+                        let rhs = tensor_to_view(&rhs)?;
                         let mut dst = tensor_to_view_mut(dst)?;
                         execute_metadata_binary_map(&lhs, &rhs, &mut dst, |x, y| {
                             let mapped = match *op {
@@ -642,8 +651,12 @@ impl TensorMetadataPrims for CpuBackend {
                         MetadataTensorRef::Bool(rhs),
                         MetadataTensorMut::Bool(dst),
                     ) => {
-                        let lhs = tensor_to_view(lhs)?;
-                        let rhs = tensor_to_view(rhs)?;
+                        let lhs =
+                            broadcast_tensor_to_shape(lhs, dst.dims(), "CpuMetadataBinary lhs")?;
+                        let rhs =
+                            broadcast_tensor_to_shape(rhs, dst.dims(), "CpuMetadataBinary rhs")?;
+                        let lhs = tensor_to_view(&lhs)?;
+                        let rhs = tensor_to_view(&rhs)?;
                         let mut dst = tensor_to_view_mut(dst)?;
                         execute_metadata_binary_map(&lhs, &rhs, &mut dst, |x, y| {
                             let mapped = match *op {
@@ -692,9 +705,21 @@ impl TensorMetadataPrims for CpuBackend {
                         MetadataTensorRef::I32(on_false),
                         MetadataTensorMut::I32(dst),
                     ) => {
-                        let cond = tensor_to_view(cond)?;
-                        let on_true = tensor_to_view(on_true)?;
-                        let on_false = tensor_to_view(on_false)?;
+                        let cond =
+                            broadcast_tensor_to_shape(cond, dst.dims(), "CpuMetadataTernary cond")?;
+                        let on_true = broadcast_tensor_to_shape(
+                            on_true,
+                            dst.dims(),
+                            "CpuMetadataTernary true",
+                        )?;
+                        let on_false = broadcast_tensor_to_shape(
+                            on_false,
+                            dst.dims(),
+                            "CpuMetadataTernary false",
+                        )?;
+                        let cond = tensor_to_view(&cond)?;
+                        let on_true = tensor_to_view(&on_true)?;
+                        let on_false = tensor_to_view(&on_false)?;
                         let mut dst = tensor_to_view_mut(dst)?;
                         execute_metadata_ternary_map(
                             &cond,
@@ -720,9 +745,21 @@ impl TensorMetadataPrims for CpuBackend {
                         MetadataTensorRef::Bool(on_false),
                         MetadataTensorMut::Bool(dst),
                     ) => {
-                        let cond = tensor_to_view(cond)?;
-                        let on_true = tensor_to_view(on_true)?;
-                        let on_false = tensor_to_view(on_false)?;
+                        let cond =
+                            broadcast_tensor_to_shape(cond, dst.dims(), "CpuMetadataTernary cond")?;
+                        let on_true = broadcast_tensor_to_shape(
+                            on_true,
+                            dst.dims(),
+                            "CpuMetadataTernary true",
+                        )?;
+                        let on_false = broadcast_tensor_to_shape(
+                            on_false,
+                            dst.dims(),
+                            "CpuMetadataTernary false",
+                        )?;
+                        let cond = tensor_to_view(&cond)?;
+                        let on_true = tensor_to_view(&on_true)?;
+                        let on_false = tensor_to_view(&on_false)?;
                         let mut dst = tensor_to_view_mut(dst)?;
                         execute_metadata_ternary_map(
                             &cond,
