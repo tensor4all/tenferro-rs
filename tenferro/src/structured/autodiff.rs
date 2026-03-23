@@ -19,12 +19,12 @@ where
     }
 
     fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent {
-        debug_assert_eq!(
+        assert_eq!(
             a.logical_dims(),
             b.logical_dims(),
             "StructuredTensor::accumulate_tangent requires matching logical dims"
         );
-        debug_assert_eq!(
+        assert_eq!(
             a.axis_classes(),
             b.axis_classes(),
             "StructuredTensor::accumulate_tangent requires matching axis classes"
