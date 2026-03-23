@@ -713,6 +713,51 @@ fn matrix_exp_path_is_tensor_native_with_scalar_host_loop_bound_sync() {
 }
 
 #[test]
+fn matrix_exp_ad_rules_stay_tensor_native() {
+    let frules = repo_file("src/frules/matrix_functions.rs");
+    let frule = file_section(&frules, "pub fn matrix_exp_frule", "#[cfg(test)]");
+    let rrules = repo_file("src/rrules/matrix_functions.rs");
+    let rrule = file_section(&rrules, "pub fn matrix_exp_rrule", "#[cfg(test)]");
+
+    assert!(
+        !frule.contains("extract_data("),
+        "matrix_exp_frule should avoid host data extraction"
+    );
+    assert!(
+        !frule.contains("matrix_exp_single("),
+        "matrix_exp_frule should avoid the legacy host-slice helper"
+    );
+    assert!(
+        frule.contains("Tensor::cat"),
+        "matrix_exp_frule should build the auxiliary block matrix tensor-natively"
+    );
+    assert!(
+        frule.contains("matrix_exp(ctx, &m)"),
+        "matrix_exp_frule should call the public tensor-native matrix_exp"
+    );
+    assert!(
+        !rrule.contains("extract_data("),
+        "matrix_exp_rrule should avoid host data extraction"
+    );
+    assert!(
+        !rrule.contains("matrix_exp_single("),
+        "matrix_exp_rrule should avoid the legacy host-slice helper"
+    );
+    assert!(
+        rrule.contains("permute(&perm)"),
+        "matrix_exp_rrule should form A^T through a tensor view"
+    );
+    assert!(
+        rrule.contains("Tensor::cat"),
+        "matrix_exp_rrule should build the auxiliary block matrix tensor-natively"
+    );
+    assert!(
+        rrule.contains("matrix_exp(ctx, &m)"),
+        "matrix_exp_rrule should call the public tensor-native matrix_exp"
+    );
+}
+
+#[test]
 fn cond_path_multiplies_norms_tensor_natively() {
     let norms = repo_file("src/primal/norms.rs");
     let cond = file_section(&norms, "pub fn cond", "#[cfg(test)]");
