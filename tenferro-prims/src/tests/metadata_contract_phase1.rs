@@ -28,7 +28,7 @@ fn metadata_family_exposes_dtype_aware_generate_binary_ternary_and_reduction_con
         modes_a: vec![0, 1],
         modes_c: vec![1],
         input_dtype: MetadataDType::Bool,
-        output_dtype: MetadataDType::Bool,
+        output_dtype: MetadataDType::I32,
         op: MetadataReductionOp::Sum,
     };
 
@@ -64,7 +64,7 @@ fn metadata_family_exposes_dtype_aware_generate_binary_ternary_and_reduction_con
             modes_a,
             modes_c,
             input_dtype: MetadataDType::Bool,
-            output_dtype: MetadataDType::Bool,
+            output_dtype: MetadataDType::I32,
             op: MetadataReductionOp::Sum,
         } if modes_a == vec![0, 1] && modes_c == vec![1]
     ));

@@ -4,8 +4,8 @@ use tenferro_tensor::Tensor;
 /// Metadata tensor dtypes.
 ///
 /// Metadata tensors currently use logical `I32` and `Bool` dtypes. `Bool` is
-/// backed by `u8` storage for now, but that storage detail stays hidden from
-/// the public contract.
+/// backed by `u8` storage for now; that storage detail is provisional and may
+/// change once native bool tensor support exists.
 ///
 /// # Examples
 ///
@@ -108,7 +108,8 @@ pub enum MetadataReductionOp {
 /// Erased immutable metadata tensor reference.
 ///
 /// The contract is intentionally narrow and only admits integer metadata and
-/// logical bool metadata stored as `u8`.
+/// logical bool metadata. The bool handle is currently backed by `u8`
+/// storage, but that is a provisional implementation detail.
 ///
 /// # Examples
 ///
@@ -129,7 +130,7 @@ pub enum MetadataReductionOp {
 pub enum MetadataTensorRef<'a> {
     /// A metadata tensor stored as `i32`.
     I32(&'a Tensor<i32>),
-    /// A logical bool/mask metadata tensor backed by `u8`.
+    /// A logical bool/mask metadata tensor backed by `u8` for now.
     Bool(&'a Tensor<u8>),
 }
 
@@ -180,7 +181,7 @@ impl<'a> MetadataTensorRef<'a> {
 pub enum MetadataTensorMut<'a> {
     /// A metadata tensor stored as `i32`.
     I32(&'a mut Tensor<i32>),
-    /// A logical bool/mask metadata tensor backed by `u8`.
+    /// A logical bool/mask metadata tensor backed by `u8` for now.
     Bool(&'a mut Tensor<u8>),
 }
 
@@ -311,6 +312,7 @@ pub trait TensorMetadataContextFor {
 ///
 /// let _ = MetadataPrimsDescriptor::Generate {
 ///     op: MetadataGenerateOp::IotaStartZero,
+///     output_dtype: tenferro_prims::MetadataDType::I32,
 /// };
 /// ```
 pub trait TensorMetadataPrims {
