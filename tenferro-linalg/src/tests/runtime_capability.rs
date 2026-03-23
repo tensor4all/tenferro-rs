@@ -255,6 +255,37 @@ fn cross_stays_tensor_native_and_avoids_host_extraction() {
 }
 
 #[test]
+fn householder_product_stays_tensor_native_and_avoids_host_extraction() {
+    let tensor_ops = repo_file("src/primal/tensor_ops.rs");
+    let householder = file_section(&tensor_ops, "pub fn householder_product", "pub fn vander");
+
+    assert!(
+        householder.contains("batched_gemm_with_semiring_tensors("),
+        "householder_product should use semiring GEMM substrate rather than host loops"
+    );
+    assert!(
+        householder.contains("resolve_conj("),
+        "householder_product should resolve lazy conjugation before adjoint GEMM operands"
+    );
+    assert!(
+        householder.contains("Tensor::cat("),
+        "householder_product should rebuild updated row blocks with tensor combine helpers"
+    );
+    assert!(
+        !householder.contains("extract_slice("),
+        "householder_product should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !householder.contains("tensor_from_data("),
+        "householder_product should stay tensor-native and avoid tensor_from_data(...)"
+    );
+    assert!(
+        !householder.contains("require_linalg_support("),
+        "householder_product should not gate tensor-native composition behind backend linalg capability checks"
+    );
+}
+
+#[test]
 fn solve_ex_and_inv_ex_sections_do_not_extract_cpu_slices() {
     let linear_systems = repo_file("src/primal/linear_systems.rs");
     let solve_ex = file_section(&linear_systems, "pub fn solve_ex", "pub fn inv");

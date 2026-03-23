@@ -113,20 +113,18 @@ where
 }
 
 /// Form the explicit product of Householder reflectors.
-pub fn householder_product<T: KernelLinalgScalar, C>(
-    _ctx: &mut C,
+pub fn householder_product<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
+    ctx: &mut C,
     a: &Tensor<T>,
     tau: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
-    require_linalg_support::<T, C>(
-        backend::LinalgCapabilityOp::HouseholderProduct,
-        "householder_product",
-    )?;
-
     let (m, n, batch_dims) = validate_2d(a)?;
     if tau.ndim() != 1 + batch_dims.len() {
         return Err(Error::InvalidArgument(format!(
@@ -153,48 +151,72 @@ where
 
     let a_input = ensure_col_major(a);
     let tau_input = ensure_col_major(tau);
-    let a_data = extract_slice(&a_input)?;
-    let tau_data = extract_slice(&tau_input)?;
-    let a_offset = a_input.offset() as usize;
-    let tau_offset = tau_input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    let mat_size = m * n;
-    let mut out = vec![T::zero(); mat_size * bc];
+    let memory_space = a_input.logical_memory_space();
+    let mut q = Tensor::eye(m, memory_space, MemoryOrder::ColumnMajor).narrow(1, 0, n)?;
+    for _ in batch_dims {
+        q = q.unsqueeze(-1)?;
+    }
+    let q_target_dims = output_dims(&[m, n], batch_dims);
+    q = q.broadcast(&q_target_dims)?;
 
-    for batch in 0..bc {
-        let a_start = a_offset + batch * mat_size;
-        let tau_start = tau_offset + batch * k;
-        let a_batch = &a_data[a_start..a_start + mat_size];
-        let tau_batch = &tau_data[tau_start..tau_start + k];
-        let q_batch = &mut out[batch * mat_size..(batch + 1) * mat_size];
+    let vector_tail_dims = {
+        let mut dims = Vec::with_capacity(1 + batch_dims.len());
+        dims.push(1);
+        dims.extend_from_slice(batch_dims);
+        dims
+    };
 
-        for col in 0..n {
-            if col < m {
-                q_batch[col * m + col] = T::one();
-            }
-        }
+    for reflector in (0..k).rev() {
+        let tail_rows = m - reflector;
+        let tail = if tail_rows == 1 {
+            Tensor::ones(&vector_tail_dims, memory_space, MemoryOrder::ColumnMajor)
+        } else {
+            let head = Tensor::ones(&vector_tail_dims, memory_space, MemoryOrder::ColumnMajor);
+            let lower = a_input
+                .narrow(0, reflector + 1, tail_rows - 1)?
+                .select(1, reflector)?;
+            Tensor::cat(&[&head, &lower], 0)?
+        };
 
-        for reflector in (0..k).rev() {
-            let tau_i = tau_batch[reflector];
-            if tau_i == T::zero() {
-                continue;
-            }
-            for col in 0..n {
-                let mut proj = q_batch[reflector + col * m];
-                for row in (reflector + 1)..m {
-                    proj = proj + a_batch[row + reflector * m].conj() * q_batch[row + col * m];
-                }
-                proj = tau_i * proj;
-                q_batch[reflector + col * m] = q_batch[reflector + col * m] - proj;
-                for row in (reflector + 1)..m {
-                    q_batch[row + col * m] =
-                        q_batch[row + col * m] - a_batch[row + reflector * m] * proj;
-                }
-            }
-        }
+        let q_tail = q.narrow(0, reflector, tail_rows)?;
+        let v_col = tail.unsqueeze(1)?;
+        let mut adj_perm: Vec<usize> = (0..v_col.ndim()).collect();
+        adj_perm.swap(0, 1);
+        let v_adj_view = v_col.conj().permute(&adj_perm)?;
+        let v_adj = crate::prims_bridge::resolve_conj(ctx, &v_adj_view);
+        let reflected = crate::prims_bridge::batched_gemm_with_semiring_tensors(
+            ctx, &v_adj, &q_tail, 1, tail_rows, n,
+        )?;
+
+        let mut tau_scale = tau_input.select(0, reflector)?;
+        tau_scale = tau_scale.unsqueeze(0)?;
+        tau_scale = tau_scale.unsqueeze(0)?;
+        let tau_scale = tau_scale.broadcast(reflected.dims())?;
+        let scaled = crate::prims_bridge::scalar_binary_same_shape(
+            ctx,
+            &tau_scale,
+            &reflected,
+            tenferro_prims::ScalarBinaryOp::Mul,
+        )?;
+        let update = crate::prims_bridge::batched_gemm_with_semiring_tensors(
+            ctx, &v_col, &scaled, tail_rows, 1, n,
+        )?;
+        let updated_tail = crate::prims_bridge::scalar_binary_same_shape(
+            ctx,
+            &q_tail,
+            &update,
+            tenferro_prims::ScalarBinaryOp::Sub,
+        )?;
+
+        q = if reflector == 0 {
+            updated_tail
+        } else {
+            let prefix = q.narrow(0, 0, reflector)?;
+            Tensor::cat(&[&prefix, &updated_tail], 0)?
+        };
     }
 
-    tensor_from_data(out, &output_dims(&[m, n], batch_dims))
+    Ok(q)
 }
 
 /// Build a Vandermonde matrix from leading-dimension vectors.

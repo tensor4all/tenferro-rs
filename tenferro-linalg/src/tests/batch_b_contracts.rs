@@ -2133,6 +2133,41 @@ fn householder_product_supports_batches_and_rejects_batch_mismatch() {
     assert!(matches!(err, tenferro_device::Error::InvalidArgument(_)));
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_householder_product_matches_cpu_generic() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let reflectors_cpu =
+            Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let tau_cpu = Tensor::from_slice(&[2.0_f64], &[1], MemoryOrder::ColumnMajor).unwrap();
+        let expected = householder_product(&mut cpu_ctx, &reflectors_cpu, &tau_cpu).unwrap();
+
+        let reflectors_gpu = reflectors_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let tau_gpu = tau_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let got = householder_product(ctx, &reflectors_gpu, &tau_gpu).unwrap();
+
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_slice(
+            "cuda householder_product generic",
+            &tensor_data_on_cpu(&got),
+            &tensor_data(&expected),
+            2048.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
 #[test]
 fn vander_supports_default_and_custom_column_counts() {
     let mut ctx = CpuContext::new(1);
@@ -2623,24 +2658,6 @@ fn tensorsolve_rejects_rank_and_shape_contract_violations() {
 #[test]
 fn batch_b_ops_reject_cuda_context() {
     with_cuda_ctx(|ctx| {
-        let a_vec =
-            Tensor::from_slice(&[1.0_f64, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-        let b_vec =
-            Tensor::from_slice(&[0.0_f64, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-        assert!(matches!(
-            cross(ctx, &a_vec, &b_vec),
-            Err(tenferro_device::Error::DeviceError(_))
-        ));
-
-        let reflectors =
-            Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
-                .unwrap();
-        let tau = Tensor::from_slice(&[0.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-        assert!(matches!(
-            householder_product(ctx, &reflectors, &tau),
-            Err(tenferro_device::Error::DeviceError(_))
-        ));
-
         let eye = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
         assert!(matches!(
