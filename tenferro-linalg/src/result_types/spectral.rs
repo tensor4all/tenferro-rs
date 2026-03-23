@@ -17,7 +17,7 @@ use super::*;
 ///     &[3, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let result = eigen(&mut ctx, &a).unwrap();
 /// assert_eq!(result.values.dims(), &[3]);
 /// ```
@@ -44,7 +44,7 @@ pub struct EigenResult<T: Scalar, R: Scalar = T> {
 ///     &[3, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let result: EigResult<f64> = eig(&mut ctx, &a).unwrap();
 /// assert_eq!(result.vectors.dims(), &[3, 3]);
 /// ```

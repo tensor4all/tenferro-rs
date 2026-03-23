@@ -135,7 +135,7 @@ pub struct LuFactorExResult<T: Scalar> {
 ///     &[3, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let result = slogdet(&mut ctx, &a).unwrap();
 /// assert_eq!(result.sign.ndim(), 0);
 /// ```

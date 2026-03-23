@@ -15,8 +15,8 @@ use super::*;
 /// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::from_slice(&[1.0, 0.0, 1.0, 0.0, 1.0, 1.0], &[3, 2], col).unwrap();
 /// let b = Tensor::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
-/// let da = Tensor::<f64>::ones(&[3, 2], mem, col);
-/// let db = Tensor::<f64>::ones(&[3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 2], mem, col).unwrap();
+/// let db = Tensor::<f64>::ones(&[3], mem, col).unwrap();
 /// let (result, dresult) = lstsq_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
 pub fn lstsq_frule<
@@ -102,8 +102,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (l, dl) = cholesky_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn cholesky_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

@@ -13,8 +13,8 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 4], mem, col).unwrap();
 /// let (n, dn) = norm_frule(&mut ctx, &a, &da, NormKind::Fro).unwrap();
 /// ```
 pub fn norm_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

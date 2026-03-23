@@ -16,11 +16,11 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
 ///
 /// let cotangent = SvdCotangent {
 ///     u: None,
-///     s: Some(Tensor::ones(&[3], mem, col)),
+///     s: Some(Tensor::ones(&[3], mem, col).unwrap()),
 ///     vt: None,
 /// };
 /// let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
@@ -200,7 +200,7 @@ where
 ///     col,
 /// ).unwrap();
 /// let cotangent = QrCotangent {
-///     q: Some(Tensor::ones(&[4, 3], mem, col)),
+///     q: Some(Tensor::ones(&[4, 3], mem, col).unwrap()),
 ///     r: None,
 /// };
 /// let grad_a = qr_rrule(&mut ctx, &a, &cotangent).unwrap();

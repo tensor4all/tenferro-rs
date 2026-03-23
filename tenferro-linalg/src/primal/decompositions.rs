@@ -23,7 +23,7 @@ use super::*;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 ///
 /// let _full = svd(&mut ctx, &a, None).unwrap();
 /// let opts = SvdOptions {
@@ -108,7 +108,7 @@ where
 ///     &[3, 4],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let _values = svdvals(&mut ctx, &a).unwrap();
 /// ```
 pub fn svdvals<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T::Real>>
@@ -139,7 +139,7 @@ where
 ///     &[4, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let _result = qr(&mut ctx, &a).unwrap();
 /// ```
 ///

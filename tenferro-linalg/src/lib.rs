@@ -56,7 +56,7 @@
 //! let mut ctx = CpuContext::new(1);
 //!
 //! // 2D matrix: shape [3, 4]
-//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
 //! let result = svd(&mut ctx, &a, None).unwrap();
 //! // result.u:  shape [3, 3]  (m × k, k = min(m,n) = 3)
 //! // result.s:  shape [3]     (singular values)
@@ -76,7 +76,7 @@
 //! let mut ctx = CpuContext::new(1);
 //!
 //! // Batched: shape [m, n, batch] = [3, 4, 10]
-//! let a = Tensor::<f64>::zeros(&[3, 4, 10], mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4, 10], mem, col).unwrap();
 //! let result = svd(&mut ctx, &a, None).unwrap();
 //! // result.u:  shape [3, 3, 10]
 //! // result.s:  shape [3, 10]
@@ -96,7 +96,7 @@
 //! let mut ctx = CpuContext::new(1);
 //!
 //! // 4D tensor [2, 3, 4, 5] — want SVD with left=[0,1], right=[2,3]
-//! let t = Tensor::<f64>::zeros(&[2, 3, 4, 5], mem, col);
+//! let t = Tensor::<f64>::zeros(&[2, 3, 4, 5], mem, col).unwrap();
 //!
 //! // permute + reshape (contiguous is handled internally, but can be called explicitly)
 //! let mat = t.permute(&[0, 1, 2, 3]).unwrap()  // already in order
@@ -117,14 +117,14 @@
 //! let mem = LogicalMemorySpace::MainMemory;
 //! let mut ctx = CpuContext::new(1);
 //!
-//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
 //! let result = svd(&mut ctx, &a, None).unwrap();
 //!
 //! // Full cotangent: gradient through U, S, and Vt
 //! let cotangent = SvdCotangent {
-//!     u: Some(Tensor::ones(&[3, 3], mem, col)),
-//!     s: Some(Tensor::ones(&[3], mem, col)),
-//!     vt: Some(Tensor::ones(&[3, 4], mem, col)),
+//!     u: Some(Tensor::ones(&[3, 3], mem, col).unwrap()),
+//!     s: Some(Tensor::ones(&[3], mem, col).unwrap()),
+//!     vt: Some(Tensor::ones(&[3, 4], mem, col).unwrap()),
 //! };
 //! let grad_a = svd_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 //! // grad_a has same shape as a: [3, 4]
@@ -132,7 +132,7 @@
 //! // Partial cotangent: gradient only through singular values (always stable)
 //! let cotangent_s_only = SvdCotangent {
 //!     u: None,
-//!     s: Some(Tensor::ones(&[3], mem, col)),
+//!     s: Some(Tensor::ones(&[3], mem, col).unwrap()),
 //!     vt: None,
 //! };
 //! let grad_a2 = svd_rrule(&mut ctx, &a, &cotangent_s_only, None).unwrap();

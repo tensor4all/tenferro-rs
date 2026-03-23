@@ -21,7 +21,7 @@ use super::*;
 ///     &[3, 4],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let result = svd(&mut ctx, &a, None).unwrap();
 /// assert_eq!(result.s.ndim(), 1);
 /// ```
@@ -78,7 +78,7 @@ pub struct SvdOptions {
 ///     &[4, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let result = qr(&mut ctx, &a).unwrap();
 /// assert_eq!(result.q.dims(), &[4, 3]);
 /// assert_eq!(result.r.dims(), &[3, 3]);
@@ -155,9 +155,9 @@ pub struct LuResult<T: Scalar> {
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let b = Tensor::<f64>::ones(&[3], mem, col);
-/// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let b = Tensor::<f64>::ones(&[3], mem, col).unwrap();
+/// let cotangent = Tensor::<f64>::ones(&[3], mem, col).unwrap();
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// assert_eq!(grad.a.dims(), &[3, 3]);
 /// assert_eq!(grad.b.dims(), &[3]);
@@ -203,8 +203,8 @@ pub struct LstsqResult<T: Scalar> {
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let grad = LstsqGrad {
-///     a: Tensor::<f64>::zeros(&[2, 2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
-///     b: Tensor::<f64>::zeros(&[2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor),
+///     a: Tensor::<f64>::zeros(&[2, 2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap(),
+///     b: Tensor::<f64>::zeros(&[2], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap(),
 /// };
 /// assert_eq!(grad.a.ndim(), 2);
 /// assert_eq!(grad.b.ndim(), 1);

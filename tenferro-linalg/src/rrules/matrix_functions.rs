@@ -21,8 +21,8 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
+/// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let grad_a = matrix_exp_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn matrix_exp_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

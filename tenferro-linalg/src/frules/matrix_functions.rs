@@ -22,8 +22,8 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (exp_a, dexp_a) = matrix_exp_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn matrix_exp_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

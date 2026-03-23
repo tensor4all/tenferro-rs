@@ -17,7 +17,7 @@ use super::*;
 /// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::from_slice(&[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0], &[3, 3], col)
 ///     .unwrap();
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
 pub fn lu_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -159,8 +159,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn eigen_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

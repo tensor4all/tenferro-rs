@@ -13,10 +13,10 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let b = Tensor::<f64>::ones(&[3], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let db = Tensor::<f64>::ones(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let b = Tensor::<f64>::ones(&[3], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
+/// let db = Tensor::<f64>::ones(&[3], mem, col).unwrap();
 /// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
 pub fn solve_frule<T: KernelLinalgScalar, C>(
@@ -179,8 +179,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (a_inv, da_inv) = inv_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn inv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -240,8 +240,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (d, dd) = det_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn det_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -307,8 +307,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn slogdet_frule<

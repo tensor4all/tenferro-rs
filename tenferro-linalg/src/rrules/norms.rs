@@ -13,8 +13,8 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-/// let cotangent = Tensor::<f64>::ones(&[], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+/// let cotangent = Tensor::<f64>::ones(&[], mem, col).unwrap();
 /// let grad_a = norm_rrule(&mut ctx, &a, &cotangent, NormKind::Fro).unwrap();
 /// ```
 pub fn norm_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

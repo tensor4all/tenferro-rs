@@ -136,7 +136,7 @@ fn cuda_eye_rejects_overflow_without_panicking() {
 
 #[test]
 fn constructors_source_no_longer_contains_panic_based_public_paths() {
-    let regular = constructors_source("src/tensor/constructors.rs");
+    let regular = constructors_source("src/tensor/constructors/deterministic.rs");
     for name in [
         "empty",
         "zeros",
@@ -148,6 +148,18 @@ fn constructors_source_no_longer_contains_panic_based_public_paths() {
         "full_like",
     ] {
         assert_constructor_body_is_fallible(&regular, name);
+    }
+
+    let rng = constructors_source("src/tensor/constructors/rng.rs");
+    for name in [
+        "rand",
+        "randn",
+        "rand_like",
+        "randn_like",
+        "randint",
+        "randint_like",
+    ] {
+        assert_constructor_body_is_fallible(&rng, name);
     }
 
     let special = constructors_source("src/tensor/constructors_special.rs");

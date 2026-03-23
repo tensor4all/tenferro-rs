@@ -18,7 +18,7 @@ use super::*;
 /// let a = Tensor::from_slice(&[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0], &[3, 3], col)
 ///     .unwrap();
 /// let cotangent = LuCotangent {
-///     l: Some(Tensor::ones(&[3, 3], mem, col)),
+///     l: Some(Tensor::ones(&[3, 3], mem, col).unwrap()),
 ///     u: None,
 /// };
 /// let grad_a = lu_rrule(&mut ctx, &a, &cotangent, LuPivot::Partial).unwrap();
@@ -243,9 +243,9 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
 /// let cotangent = EigenCotangent {
-///     values: Some(Tensor::ones(&[3], mem, col)),
+///     values: Some(Tensor::ones(&[3], mem, col).unwrap()),
 ///     vectors: None,
 /// };
 /// let grad_a = eigen_rrule(&mut ctx, &a, &cotangent).unwrap();
