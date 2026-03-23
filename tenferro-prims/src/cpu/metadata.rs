@@ -158,11 +158,14 @@ where
 fn execute_metadata_reduce_sum_i32(
     input: &StridedView<i32>,
     output: &mut StridedViewMut<i32>,
+    kept_axes: &[usize],
     reduced_axes: &[usize],
 ) -> Result<()> {
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
     let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
+    let (kept_axis_positions, reduced_axis_positions) =
+        build_metadata_reduction_axis_positions(in_dims.len(), kept_axes, reduced_axes);
     let reduced_total: usize = reduced_dims.iter().product();
     let mut red_idx = vec![0usize; reduced_dims.len()];
     let mut in_idx = vec![0usize; in_dims.len()];
@@ -171,17 +174,13 @@ fn execute_metadata_reduce_sum_i32(
         let mut sum = 0i32;
         for red_flat in 0..reduced_total {
             crate::cpu::common::unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
-            let mut out_pos = 0;
-            let mut red_pos = 0;
-            for (ax, in_slot) in in_idx.iter_mut().enumerate().take(in_dims.len()) {
-                if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    *in_slot = red_idx[red_pos];
-                    red_pos += 1;
-                } else {
-                    *in_slot = out_idx[out_pos];
-                    out_pos += 1;
-                }
-            }
+            build_metadata_reduction_input_index(
+                out_idx,
+                &red_idx,
+                &kept_axis_positions,
+                &reduced_axis_positions,
+                &mut in_idx,
+            );
             sum += input.get(&in_idx);
         }
         output.set(out_idx, sum);
@@ -193,11 +192,14 @@ fn execute_metadata_reduce_sum_i32(
 fn execute_metadata_reduce_sum_bool(
     input: &StridedView<u8>,
     output: &mut StridedViewMut<i32>,
+    kept_axes: &[usize],
     reduced_axes: &[usize],
 ) -> Result<()> {
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
     let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
+    let (kept_axis_positions, reduced_axis_positions) =
+        build_metadata_reduction_axis_positions(in_dims.len(), kept_axes, reduced_axes);
     let reduced_total: usize = reduced_dims.iter().product();
     let mut red_idx = vec![0usize; reduced_dims.len()];
     let mut in_idx = vec![0usize; in_dims.len()];
@@ -206,17 +208,13 @@ fn execute_metadata_reduce_sum_bool(
         let mut sum = 0i32;
         for red_flat in 0..reduced_total {
             crate::cpu::common::unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
-            let mut out_pos = 0;
-            let mut red_pos = 0;
-            for (ax, in_slot) in in_idx.iter_mut().enumerate().take(in_dims.len()) {
-                if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    *in_slot = red_idx[red_pos];
-                    red_pos += 1;
-                } else {
-                    *in_slot = out_idx[out_pos];
-                    out_pos += 1;
-                }
-            }
+            build_metadata_reduction_input_index(
+                out_idx,
+                &red_idx,
+                &kept_axis_positions,
+                &reduced_axis_positions,
+                &mut in_idx,
+            );
             sum += if input.get(&in_idx) != 0 { 1 } else { 0 };
         }
         output.set(out_idx, sum);
@@ -228,11 +226,14 @@ fn execute_metadata_reduce_sum_bool(
 fn execute_metadata_reduce_all_bool(
     input: &StridedView<u8>,
     output: &mut StridedViewMut<u8>,
+    kept_axes: &[usize],
     reduced_axes: &[usize],
 ) -> Result<()> {
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
     let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
+    let (kept_axis_positions, reduced_axis_positions) =
+        build_metadata_reduction_axis_positions(in_dims.len(), kept_axes, reduced_axes);
     let reduced_total: usize = reduced_dims.iter().product();
     let mut red_idx = vec![0usize; reduced_dims.len()];
     let mut in_idx = vec![0usize; in_dims.len()];
@@ -241,17 +242,13 @@ fn execute_metadata_reduce_all_bool(
         let mut all_true = true;
         for red_flat in 0..reduced_total {
             crate::cpu::common::unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
-            let mut out_pos = 0;
-            let mut red_pos = 0;
-            for (ax, in_slot) in in_idx.iter_mut().enumerate().take(in_dims.len()) {
-                if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    *in_slot = red_idx[red_pos];
-                    red_pos += 1;
-                } else {
-                    *in_slot = out_idx[out_pos];
-                    out_pos += 1;
-                }
-            }
+            build_metadata_reduction_input_index(
+                out_idx,
+                &red_idx,
+                &kept_axis_positions,
+                &reduced_axis_positions,
+                &mut in_idx,
+            );
             if input.get(&in_idx) == 0 {
                 all_true = false;
                 break;
@@ -266,11 +263,14 @@ fn execute_metadata_reduce_all_bool(
 fn execute_metadata_reduce_any_bool(
     input: &StridedView<u8>,
     output: &mut StridedViewMut<u8>,
+    kept_axes: &[usize],
     reduced_axes: &[usize],
 ) -> Result<()> {
     let in_dims = input.dims().to_vec();
     let out_dims = output.dims().to_vec();
     let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&ax| in_dims[ax]).collect();
+    let (kept_axis_positions, reduced_axis_positions) =
+        build_metadata_reduction_axis_positions(in_dims.len(), kept_axes, reduced_axes);
     let reduced_total: usize = reduced_dims.iter().product();
     let mut red_idx = vec![0usize; reduced_dims.len()];
     let mut in_idx = vec![0usize; in_dims.len()];
@@ -279,17 +279,13 @@ fn execute_metadata_reduce_any_bool(
         let mut any_true = false;
         for red_flat in 0..reduced_total {
             crate::cpu::common::unflatten_index_into(red_flat, &reduced_dims, &mut red_idx);
-            let mut out_pos = 0;
-            let mut red_pos = 0;
-            for (ax, in_slot) in in_idx.iter_mut().enumerate().take(in_dims.len()) {
-                if red_pos < reduced_axes.len() && reduced_axes[red_pos] == ax {
-                    *in_slot = red_idx[red_pos];
-                    red_pos += 1;
-                } else {
-                    *in_slot = out_idx[out_pos];
-                    out_pos += 1;
-                }
-            }
+            build_metadata_reduction_input_index(
+                out_idx,
+                &red_idx,
+                &kept_axis_positions,
+                &reduced_axis_positions,
+                &mut in_idx,
+            );
             if input.get(&in_idx) != 0 {
                 any_true = true;
                 break;
@@ -301,11 +297,47 @@ fn execute_metadata_reduce_any_bool(
     Ok(())
 }
 
+fn build_metadata_reduction_axis_positions(
+    rank: usize,
+    kept_axes: &[usize],
+    reduced_axes: &[usize],
+) -> (Vec<Option<usize>>, Vec<Option<usize>>) {
+    let mut kept_axis_positions = vec![None; rank];
+    for (output_axis, &input_axis) in kept_axes.iter().enumerate() {
+        kept_axis_positions[input_axis] = Some(output_axis);
+    }
+
+    let mut reduced_axis_positions = vec![None; rank];
+    for (reduced_axis, &input_axis) in reduced_axes.iter().enumerate() {
+        reduced_axis_positions[input_axis] = Some(reduced_axis);
+    }
+
+    (kept_axis_positions, reduced_axis_positions)
+}
+
+fn build_metadata_reduction_input_index(
+    out_idx: &[usize],
+    red_idx: &[usize],
+    kept_axis_positions: &[Option<usize>],
+    reduced_axis_positions: &[Option<usize>],
+    in_idx: &mut [usize],
+) {
+    for (axis, slot) in in_idx.iter_mut().enumerate() {
+        if let Some(output_axis) = kept_axis_positions[axis] {
+            *slot = out_idx[output_axis];
+        } else if let Some(reduced_axis) = reduced_axis_positions[axis] {
+            *slot = red_idx[reduced_axis];
+        } else {
+            unreachable!("metadata reduction axis {axis} missing from kept/reduced axis lists");
+        }
+    }
+}
+
 fn plan_metadata_reduction(
     input_dims: &[usize],
     output_dims: &[usize],
     desc: &MetadataPrimsDescriptor,
-) -> Result<Vec<usize>> {
+) -> Result<(Vec<usize>, Vec<usize>)> {
     let MetadataPrimsDescriptor::Reduction {
         modes_a, modes_c, ..
     } = desc
@@ -320,7 +352,20 @@ fn plan_metadata_reduction(
         &[input_dims, output_dims],
         "CpuMetadataReduction",
     )?;
-    Ok(reduction.reduced_axes)
+    let kept_axes = modes_c
+        .iter()
+        .map(|mode| {
+            modes_a
+                .iter()
+                .position(|&candidate| candidate == *mode)
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                    "CpuMetadataReduction: output mode {mode} not found in input modes {modes_a:?}"
+                ))
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((kept_axes, reduction.reduced_axes))
 }
 
 impl TensorMetadataPrims for CpuBackend {
@@ -612,7 +657,7 @@ impl TensorMetadataPrims for CpuBackend {
                 ..
             } => {
                 validate_metadata_handle_count(inputs, 1, "CpuMetadataReduction")?;
-                let reduced_axes = plan_metadata_reduction(
+                let (kept_axes, reduced_axes) = plan_metadata_reduction(
                     tensor_dims_ref(&inputs[0]),
                     tensor_dims_mut(&output),
                     plan,
@@ -627,7 +672,12 @@ impl TensorMetadataPrims for CpuBackend {
                     ) => {
                         let input = tensor_to_view(input)?;
                         let mut output = tensor_to_view_mut(output)?;
-                        execute_metadata_reduce_sum_i32(&input, &mut output, &reduced_axes)
+                        execute_metadata_reduce_sum_i32(
+                            &input,
+                            &mut output,
+                            &kept_axes,
+                            &reduced_axes,
+                        )
                     }
                     (
                         MetadataReductionOp::Sum,
@@ -638,7 +688,12 @@ impl TensorMetadataPrims for CpuBackend {
                     ) => {
                         let input = tensor_to_view(input)?;
                         let mut output = tensor_to_view_mut(output)?;
-                        execute_metadata_reduce_sum_bool(&input, &mut output, &reduced_axes)
+                        execute_metadata_reduce_sum_bool(
+                            &input,
+                            &mut output,
+                            &kept_axes,
+                            &reduced_axes,
+                        )
                     }
                     (
                         MetadataReductionOp::All,
@@ -649,7 +704,12 @@ impl TensorMetadataPrims for CpuBackend {
                     ) => {
                         let input = tensor_to_view(input)?;
                         let mut output = tensor_to_view_mut(output)?;
-                        execute_metadata_reduce_all_bool(&input, &mut output, &reduced_axes)
+                        execute_metadata_reduce_all_bool(
+                            &input,
+                            &mut output,
+                            &kept_axes,
+                            &reduced_axes,
+                        )
                     }
                     (
                         MetadataReductionOp::Any,
@@ -660,7 +720,12 @@ impl TensorMetadataPrims for CpuBackend {
                     ) => {
                         let input = tensor_to_view(input)?;
                         let mut output = tensor_to_view_mut(output)?;
-                        execute_metadata_reduce_any_bool(&input, &mut output, &reduced_axes)
+                        execute_metadata_reduce_any_bool(
+                            &input,
+                            &mut output,
+                            &kept_axes,
+                            &reduced_axes,
+                        )
                     }
                     _ => Err(Error::InvalidArgument(
                         "unsupported metadata reduction execution dtype combination".into(),

@@ -1,5 +1,5 @@
 use tenferro_algebra::Scalar;
-use tenferro_device::LogicalMemorySpace;
+use tenferro_device::{unflatten_col_major_index_into, LogicalMemorySpace};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
@@ -31,6 +31,67 @@ fn tensor_on_host<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
 fn assert_tensor_eq<T: Scalar + core::fmt::Debug + PartialEq>(tensor: &Tensor<T>, expected: &[T]) {
     let host = tensor_on_host(tensor);
     assert_eq!(host.buffer().as_slice().unwrap(), expected);
+}
+
+fn flatten_col_major_index(idx: &[usize], dims: &[usize]) -> usize {
+    let mut flat = 0usize;
+    let mut stride = 1usize;
+    for (&coord, &dim) in idx.iter().zip(dims) {
+        flat += coord * stride;
+        stride *= dim;
+    }
+    flat
+}
+
+fn expected_permuted_metadata_reduction_sum(
+    input_data: &[i32],
+    input_dims: &[usize],
+    modes_a: &[usize],
+    modes_c: &[usize],
+) -> Vec<i32> {
+    let output_dims: Vec<usize> = modes_c.iter().map(|&axis| input_dims[axis]).collect();
+    let reduced_axes: Vec<usize> = modes_a
+        .iter()
+        .copied()
+        .filter(|axis| !modes_c.contains(axis))
+        .collect();
+    let reduced_dims: Vec<usize> = reduced_axes.iter().map(|&axis| input_dims[axis]).collect();
+    let output_total = output_dims.iter().product();
+    let reduced_total = reduced_dims.iter().product();
+    let mut output = vec![0i32; output_total];
+    let mut out_idx = vec![0usize; output_dims.len()];
+    let mut red_idx = vec![0usize; reduced_dims.len()];
+    let mut in_idx = vec![0usize; input_dims.len()];
+    let mut output_axis_for_input_axis = vec![None; input_dims.len()];
+    for (output_axis, &input_axis) in modes_c.iter().enumerate() {
+        output_axis_for_input_axis[input_axis] = Some(output_axis);
+    }
+    let mut reduced_axis_for_input_axis = vec![None; input_dims.len()];
+    for (reduced_axis, &input_axis) in reduced_axes.iter().enumerate() {
+        reduced_axis_for_input_axis[input_axis] = Some(reduced_axis);
+    }
+
+    for out_flat in 0..output_total {
+        unflatten_col_major_index_into(out_flat, &output_dims, &mut out_idx).unwrap();
+        let mut sum = 0i32;
+        for red_flat in 0..reduced_total {
+            unflatten_col_major_index_into(red_flat, &reduced_dims, &mut red_idx).unwrap();
+            for axis in 0..input_dims.len() {
+                if let Some(output_axis) = output_axis_for_input_axis[axis] {
+                    in_idx[axis] = out_idx[output_axis];
+                } else if let Some(reduced_axis) = reduced_axis_for_input_axis[axis] {
+                    in_idx[axis] = red_idx[reduced_axis];
+                } else {
+                    unreachable!("axis {axis} not classified as kept or reduced");
+                }
+            }
+            let flat = flatten_col_major_index(&in_idx, input_dims);
+            sum += input_data[flat];
+        }
+        output[out_flat] = sum;
+    }
+
+    output
 }
 
 fn run_metadata_family<C>(ctx: &mut C, memory_space: LogicalMemorySpace)
@@ -267,10 +328,56 @@ where
     assert_tensor_eq(&reduce_i32_output, &[3, 7]);
 }
 
+fn run_permuted_metadata_reduction_family<C>(ctx: &mut C, memory_space: LogicalMemorySpace)
+where
+    C: TensorMetadataContextFor,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
+{
+    let input_dims = [2usize, 3, 4];
+    let modes_a = vec![0u32, 1, 2];
+    let modes_c = vec![2u32, 0];
+    let input_data: Vec<i32> = (0..24).collect();
+    let input = tensor_i32(&input_data, &input_dims, memory_space);
+    let mut output = Tensor::<i32>::zeros(&[4, 2], memory_space, MemoryOrder::ColumnMajor);
+    let desc = MetadataPrimsDescriptor::Reduction {
+        modes_a: modes_a.clone(),
+        modes_c: modes_c.clone(),
+        input_dtype: MetadataDType::I32,
+        output_dtype: MetadataDType::I32,
+        op: MetadataReductionOp::Sum,
+    };
+
+    assert!(<C::MetadataBackend as TensorMetadataPrims>::has_metadata_support(desc.clone()));
+    let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
+        ctx,
+        &desc,
+        &[MetadataTensorRef::I32(&input)],
+        MetadataTensorMut::I32(&mut output),
+    )
+    .unwrap();
+    <C::MetadataBackend as TensorMetadataPrims>::execute(
+        ctx,
+        &plan,
+        &[MetadataTensorRef::I32(&input)],
+        MetadataTensorMut::I32(&mut output),
+    )
+    .unwrap();
+
+    let expected =
+        expected_permuted_metadata_reduction_sum(&input_data, &input_dims, &[0, 1, 2], &[2, 0]);
+    assert_tensor_eq(&output, &expected);
+}
+
 #[test]
 fn cpu_metadata_family_builds_lu_det_parity_primitives() {
     let mut ctx = CpuContext::new(1);
     run_metadata_family::<CpuContext>(&mut ctx, LogicalMemorySpace::MainMemory);
+}
+
+#[test]
+fn cpu_metadata_family_handles_permuted_reduction_modes_order() {
+    let mut ctx = CpuContext::new(1);
+    run_permuted_metadata_reduction_family::<CpuContext>(&mut ctx, LogicalMemorySpace::MainMemory);
 }
 
 #[cfg(feature = "cuda")]
@@ -282,6 +389,20 @@ fn cuda_metadata_family_builds_lu_det_parity_primitives() {
     let device_id = ctx.device_id();
 
     run_metadata_family::<crate::CudaContext>(
+        &mut ctx,
+        LogicalMemorySpace::GpuMemory { device_id },
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_metadata_family_handles_permuted_reduction_modes_order() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+    let device_id = ctx.device_id();
+
+    run_permuted_metadata_reduction_family::<crate::CudaContext>(
         &mut ctx,
         LogicalMemorySpace::GpuMemory { device_id },
     );

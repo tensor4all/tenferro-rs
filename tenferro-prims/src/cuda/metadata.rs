@@ -213,16 +213,6 @@ fn validate_metadata_handle_count(
     Ok(())
 }
 
-fn derive_kept_axes(rank: usize, reduced_axes: &[usize]) -> Vec<usize> {
-    let mut reduced = vec![false; rank];
-    for &axis in reduced_axes {
-        if let Some(slot) = reduced.get_mut(axis) {
-            *slot = true;
-        }
-    }
-    (0..rank).filter(|axis| !reduced[*axis]).collect()
-}
-
 fn plan_metadata_reduction(
     desc: &MetadataPrimsDescriptor,
     input_dims: &[usize],
@@ -254,13 +244,25 @@ fn plan_metadata_reduction(
         "CudaMetadataReduction output",
     )?;
 
+    let kept_axes = modes_c
+        .iter()
+        .map(|mode| {
+            modes_a
+                .iter()
+                .position(|&candidate| candidate == *mode)
+                .ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                    "CudaMetadataReduction: output mode {mode} not found in input modes {modes_a:?}"
+                ))
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
     let reduced_axes: Vec<usize> = modes_a
         .iter()
         .enumerate()
         .filter(|(_, mode)| !modes_c.contains(mode))
         .map(|(idx, _)| idx)
         .collect();
-    let kept_axes = derive_kept_axes(input_dims.len(), &reduced_axes);
     Ok((kept_axes, reduced_axes))
 }
 
