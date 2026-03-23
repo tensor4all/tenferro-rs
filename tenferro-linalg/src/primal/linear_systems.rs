@@ -78,7 +78,11 @@ where
     if n == 0 {
         return Ok(InvExResult {
             inverse: rhs,
-            info: vec![0; batch_count(batch_dims)],
+            info: crate::backend::tensor_helpers::info_tensor_from_vec_on_space(
+                vec![0; batch_count(batch_dims)],
+                batch_dims,
+                tensor.logical_memory_space(),
+            )?,
         });
     }
     let result = solve_ex(ctx, tensor, &rhs)?;

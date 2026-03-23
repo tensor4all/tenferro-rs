@@ -16,8 +16,8 @@ use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{
-    batch_count, materialize_broadcasted_batches_resolving_conj, validate_solve_rhs_shape,
-    validate_square, BroadcastBatchIndexer,
+    batch_count, materialize_broadcasted_batches_resolving_conj, tensor_from_data_on_space,
+    validate_solve_rhs_shape, validate_square, BroadcastBatchIndexer,
 };
 
 #[cfg(feature = "cuda")]
@@ -89,9 +89,14 @@ where
     )?;
 
     if n == 0 || bc == 0 {
+        let info_shape = if rhs.output_batch_dims.is_empty() {
+            vec![]
+        } else {
+            rhs.output_batch_dims.clone()
+        };
         return Ok(crate::SolveTensorExResult {
             solution: x_work,
-            info: vec![0; bc],
+            info: tensor_from_data_on_space(vec![0; bc], &info_shape, a.logical_memory_space())?,
         });
     }
 
@@ -233,9 +238,14 @@ where
         }
     }
 
+    let info_shape = if rhs.output_batch_dims.is_empty() {
+        vec![]
+    } else {
+        rhs.output_batch_dims.clone()
+    };
     Ok(crate::SolveTensorExResult {
         solution: x_out,
-        info: info_out,
+        info: tensor_from_data_on_space(info_out, &info_shape, a.logical_memory_space())?,
     })
 }
 

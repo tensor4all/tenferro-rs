@@ -171,8 +171,8 @@ pub struct LuFactorExResult {
 pub struct SolveExResult {
     /// Solution tensor.
     pub solution: Tensor,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware inverse result with status codes.
@@ -187,8 +187,8 @@ pub struct SolveExResult {
 pub struct InvExResult {
     /// Inverse tensor.
     pub inverse: Tensor,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware Cholesky result with status codes.
@@ -203,6 +203,6 @@ pub struct InvExResult {
 pub struct CholeskyExResult {
     /// Lower-triangular factor.
     pub l: Tensor,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }

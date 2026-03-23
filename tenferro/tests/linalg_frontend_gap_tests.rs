@@ -130,15 +130,15 @@ fn tensor_frontend_exposes_missing_primal_linalg_wrappers() {
 
     let solve_ex = matrix.solve_ex(&rhs).unwrap();
     assert_eq!(solve_ex.solution.dims(), &[2]);
-    assert_eq!(solve_ex.info, vec![0]);
+    assert_eq!(dense_tensor_data(&solve_ex.info), vec![0]);
 
     let inv_ex = matrix.inv_ex().unwrap();
     assert_eq!(inv_ex.inverse.dims(), &[2, 2]);
-    assert_eq!(inv_ex.info, vec![0]);
+    assert_eq!(dense_tensor_data(&inv_ex.info), vec![0]);
 
     let cholesky_ex = matrix.cholesky_ex().unwrap();
     assert_eq!(cholesky_ex.l.dims(), &[2, 2]);
-    assert_eq!(cholesky_ex.info, vec![0]);
+    assert_eq!(dense_tensor_data(&cholesky_ex.info), vec![0]);
 
     let squared = matrix.matrix_power(2).unwrap();
     assert_eq!(squared.dims(), &[2, 2]);

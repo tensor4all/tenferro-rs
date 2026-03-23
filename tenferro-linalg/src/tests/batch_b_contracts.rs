@@ -501,7 +501,10 @@ fn cuda_public_inv_ex_matches_cpu_mixed_batch_real_matrix() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.inverse.dims(), expected.inverse.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_slice(
             "cuda public inv_ex mixed batch real matrix",
             &tensor_data_on_cpu(&got.inverse),
@@ -1225,7 +1228,10 @@ fn cuda_public_solve_ex_matches_cpu_generic() {
             got.solution.logical_memory_space(),
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_slice(
             "cuda public solve_ex",
             &tensor_data_on_cpu(&got.solution),
@@ -1289,7 +1295,10 @@ fn cuda_public_solve_ex_matches_cpu_complex32_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.solution.dims(), expected.solution.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex solve_ex",
             &tensor_data_on_cpu(&got.solution),
@@ -1353,7 +1362,10 @@ fn cuda_public_solve_ex_matches_cpu_complex64_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.solution.dims(), expected.solution.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex solve_ex",
             &tensor_data_on_cpu(&got.solution),
@@ -1495,7 +1507,10 @@ fn cuda_public_cholesky_ex_matches_cpu_complex32_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.l.dims(), expected.l.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex cholesky_ex",
             &tensor_data_on_cpu(&got.l),
@@ -1545,7 +1560,10 @@ fn cuda_public_cholesky_ex_matches_cpu_complex64_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.l.dims(), expected.l.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex cholesky_ex",
             &tensor_data_on_cpu(&got.l),

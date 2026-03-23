@@ -168,15 +168,15 @@ fn primal_linalg_builders_cover_all_ops() {
     assert_eq!(out_cholesky.dims(), &[2, 2]);
     let out_cholesky_ex = cholesky_ex(&a).run().unwrap();
     assert_eq!(out_cholesky_ex.l.dims(), &[2, 2]);
-    assert_eq!(out_cholesky_ex.info, vec![0]);
+    assert_eq!(tensor_data(&out_cholesky_ex.info), vec![0]);
     let out_solve_ex = solve_ex(&a, &b).run().unwrap();
     assert_eq!(out_solve_ex.solution.dims(), &[2]);
-    assert_eq!(out_solve_ex.info, vec![0]);
+    assert_eq!(tensor_data(&out_solve_ex.info), vec![0]);
     let out_inv = inv(&a).run().unwrap();
     assert_eq!(out_inv.dims(), &[2, 2]);
     let out_inv_ex = inv_ex(&a).run().unwrap();
     assert_eq!(out_inv_ex.inverse.dims(), &[2, 2]);
-    assert_eq!(out_inv_ex.info, vec![0]);
+    assert_eq!(tensor_data(&out_inv_ex.info), vec![0]);
     let out_lu_factor = lu_factor(&a).run().unwrap();
     assert_eq!(out_lu_factor.factors.dims(), &[2, 2]);
     assert_eq!(out_lu_factor.pivots.len(), 2);

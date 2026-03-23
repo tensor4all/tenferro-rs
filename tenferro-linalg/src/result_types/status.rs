@@ -21,8 +21,8 @@ use super::*;
 pub struct CholeskyExResult<T: Scalar> {
     /// Lower-triangular Cholesky factor.
     pub l: Tensor<T>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Structured inverse result with numerical status information.
@@ -44,8 +44,8 @@ pub struct CholeskyExResult<T: Scalar> {
 pub struct InvExResult<T: Scalar> {
     /// Inverse matrix.
     pub inverse: Tensor<T>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Structured solve result with numerical status information.
@@ -68,8 +68,8 @@ pub struct InvExResult<T: Scalar> {
 pub struct SolveExResult<T: Scalar> {
     /// Solution tensor.
     pub solution: Tensor<T>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Packed LU factorization result.

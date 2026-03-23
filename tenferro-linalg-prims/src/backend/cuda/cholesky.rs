@@ -14,7 +14,7 @@ use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
 use crate::backend::linalg_utils::{prepare_matrix_operand, MatrixOperandTransposeType};
 #[cfg(feature = "cuda")]
-use crate::backend::tensor_helpers::{batch_count, validate_square};
+use crate::backend::tensor_helpers::{batch_count, tensor_from_data_on_space, validate_square};
 use crate::CholeskyTensorExResult;
 
 #[cfg(feature = "cuda")]
@@ -160,10 +160,15 @@ where
         a.logical_memory_space(),
         tenferro_tensor::MemoryOrder::ColumnMajor,
     )?;
+    let info_shape = if batch_dims.is_empty() {
+        vec![]
+    } else {
+        batch_dims.to_vec()
+    };
     if n == 0 || bc == 0 {
         return Ok(CholeskyTensorExResult {
             l,
-            info: vec![0; bc],
+            info: tensor_from_data_on_space(vec![0; bc], &info_shape, a.logical_memory_space())?,
         });
     }
 
@@ -241,7 +246,10 @@ where
     }
 
     l = l.tril(0);
-    Ok(CholeskyTensorExResult { l, info })
+    Ok(CholeskyTensorExResult {
+        l,
+        info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,
+    })
 }
 
 #[cfg(not(feature = "cuda"))]

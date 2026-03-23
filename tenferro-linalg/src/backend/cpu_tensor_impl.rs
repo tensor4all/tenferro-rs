@@ -169,9 +169,14 @@ where
         }
     }
 
+    let info_shape = if rhs.output_batch_dims.is_empty() {
+        vec![]
+    } else {
+        rhs.output_batch_dims.clone()
+    };
     Ok(SolveTensorExResult {
         solution: tensor_from_data(solution_data, &rhs.output_dims)?,
-        info,
+        info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,
     })
 }
 
@@ -536,9 +541,14 @@ where
 
     let mut out_shape = vec![n, n];
     out_shape.extend_from_slice(batch_dims);
+    let info_shape = if batch_dims.is_empty() {
+        vec![]
+    } else {
+        batch_dims.to_vec()
+    };
     Ok(CholeskyTensorExResult {
         l: tensor_from_data(l_data, &out_shape)?,
-        info,
+        info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,
     })
 }
 

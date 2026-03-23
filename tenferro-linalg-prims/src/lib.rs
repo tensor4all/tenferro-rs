@@ -361,8 +361,8 @@ pub struct LuTensorExResult<T: LinalgScalar> {
 pub struct SolveTensorExResult<T: LinalgScalar> {
     /// Solution tensor.
     pub solution: Tensor<T>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Result of a tensor-level Cholesky factorization with numerical status.
@@ -377,8 +377,8 @@ pub struct SolveTensorExResult<T: LinalgScalar> {
 pub struct CholeskyTensorExResult<T: LinalgScalar> {
     /// Lower-triangular Cholesky factor.
     pub l: Tensor<T>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Result of a tensor-level Hermitian eigendecomposition.

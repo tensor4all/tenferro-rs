@@ -305,7 +305,7 @@ fn cpu_backend_solve_ex_preserves_successful_batches_and_reports_zero_pivot() {
             &mut ctx, &a, &b,
         )
         .unwrap();
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
     assert_eq!(tensor_data(&result.solution), vec![3.0, -1.0, 0.0, 0.0]);
 }
 
@@ -380,7 +380,7 @@ fn cpu_backend_cholesky_ex_preserves_successful_batches_and_reports_minor() {
         )
         .unwrap();
 
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
     assert_eq!(&tensor_data(&result.l)[..4], tensor_data(&plain).as_slice());
     assert_eq!(&tensor_data(&result.l)[4..], &[0.0, 0.0, 0.0, 0.0]);
 }
@@ -694,7 +694,7 @@ fn cpu_backend_solve_ex_broadcasts_rhs_batches_and_preserves_info() {
         )
         .unwrap();
 
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
     assert_eq!(result.solution.dims(), &[2, 2]);
     assert_eq!(tensor_data(&result.solution), vec![3.0, -1.0, 0.0, 0.0]);
 }
@@ -792,7 +792,7 @@ fn cpu_backend_solve_ex_broadcasts_both_operands_batches_and_repeats_info() {
         )
         .unwrap();
 
-    assert_eq!(result.info, vec![0, 2, 0, 2, 0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2, 0, 2, 0, 2]);
     assert_eq!(result.solution.dims(), &[2, 2, 3]);
     assert_eq!(
         tensor_data(&result.solution),

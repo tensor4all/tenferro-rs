@@ -9,18 +9,18 @@ fn structured_ex_apis_expose_expected_fields() {
         Tensor::from_slice(&[4.0_f64, 2.0, 2.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
     let chol = cholesky_ex(&mut ctx, &spd).unwrap();
     assert_eq!(chol.l.dims(), &[2, 2]);
-    assert_eq!(chol.info, vec![0]);
+    assert_eq!(tensor_data(&chol.info), vec![0]);
 
     let eye =
         Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
     let inv = inv_ex(&mut ctx, &eye).unwrap();
     assert_eq!(inv.inverse.dims(), &[2, 2]);
-    assert_eq!(inv.info, vec![0]);
+    assert_eq!(tensor_data(&inv.info), vec![0]);
 
     let b = Tensor::from_slice(&[3.0_f64, -1.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let solved = solve_ex(&mut ctx, &eye, &b).unwrap();
     assert_eq!(solved.solution.dims(), &[2]);
-    assert_eq!(solved.info, vec![0]);
+    assert_eq!(tensor_data(&solved.info), vec![0]);
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn solve_ex_mixed_batches_preserve_successful_solution_and_report_zero_pivot() {
     .unwrap();
 
     let result = solve_ex(&mut ctx, &a, &b).unwrap();
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data(&result.info), vec![0, 2]);
 
     let payload = tensor_data(&result.solution);
     assert_eq!(&payload[..2], &[3.0, -1.0]);
@@ -101,7 +101,7 @@ fn inv_ex_mixed_batches_preserve_successful_inverse_and_report_zero_pivot() {
     .unwrap();
 
     let result = inv_ex(&mut ctx, &a).unwrap();
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data(&result.info), vec![0, 2]);
 
     let payload = tensor_data(&result.inverse);
     assert_eq!(&payload[..4], &[1.0, 0.0, 0.0, 1.0]);
@@ -133,7 +133,7 @@ fn inv_ex_0x0_batches_return_empty_inverse_and_batch_shaped_zero_info() {
         .contiguous(MemoryOrder::ColumnMajor);
     assert_eq!(two_batch_result.inverse.dims(), &[0, 0, 2]);
     assert!(two_batch_contiguous.buffer().as_slice().unwrap().is_empty());
-    assert_eq!(two_batch_result.info, vec![0, 0]);
+    assert_eq!(tensor_data(&two_batch_result.info), vec![0, 0]);
 
     let zero_batch_contiguous = zero_batch_result
         .inverse
@@ -161,7 +161,7 @@ fn cholesky_ex_mixed_batches_preserve_successful_factor_and_report_failing_minor
     .unwrap();
 
     let result = cholesky_ex(&mut ctx, &a).unwrap();
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data(&result.info), vec![0, 2]);
 
     let payload = tensor_data(&result.l);
     assert_eq!(&payload[..3], &[2.0, 1.0, 0.0]);
@@ -184,7 +184,7 @@ fn cholesky_ex_multi_axis_batches_follow_column_major_batch_order() {
     .unwrap();
 
     let result = cholesky_ex(&mut ctx, &a).unwrap();
-    assert_eq!(result.info, vec![0, 2, 1, 0]);
+    assert_eq!(tensor_data(&result.info), vec![0, 2, 1, 0]);
 
     let payload = tensor_data(&result.l);
     assert_eq!(&payload[..3], &[2.0, 1.0, 0.0]);

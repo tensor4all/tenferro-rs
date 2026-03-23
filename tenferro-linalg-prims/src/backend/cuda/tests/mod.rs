@@ -626,7 +626,10 @@ where
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(got.solution.dims(), &[2, 2, 3]);
     assert_eq!(
         got.solution.logical_memory_space(),
@@ -700,7 +703,10 @@ fn cuda_solve_ex_handles_lazily_conjugated_broadcasted_complex64_input() {
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(
         got.solution.logical_memory_space(),
         LogicalMemorySpace::GpuMemory { device_id: 0 }
@@ -1968,7 +1974,10 @@ where
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_slice(
         "cuda cholesky_ex",
         &tensor_data_on_cpu(&got.l),
@@ -2195,7 +2204,10 @@ fn cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_complex32() {
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_complex_slice(
         "cuda cholesky_ex complex32",
         &tensor_data_on_cpu(&got.l),
@@ -2239,7 +2251,10 @@ fn cuda_cholesky_ex_reports_minor_for_complex_non_spd_matrix_complex64() {
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_complex_slice(
         "cuda cholesky_ex complex64",
         &tensor_data_on_cpu(&got.l),
@@ -2888,7 +2903,10 @@ where
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(
         got.solution.logical_memory_space(),
         LogicalMemorySpace::GpuMemory { device_id: 0 }
@@ -2960,7 +2978,10 @@ where
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(got.solution.dims(), &[2, 2]);
     assert_eq!(
         got.solution.logical_memory_space(),
@@ -3029,7 +3050,10 @@ where
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_slice(
         "cuda solve_ex small pivot",
         &tensor_data_on_cpu(&got.solution),
@@ -3092,7 +3116,10 @@ fn cuda_solve_ex_preserves_complex_mixed_batch_complex32() {
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(
         got.solution.logical_memory_space(),
         LogicalMemorySpace::GpuMemory { device_id: 0 }
@@ -3159,7 +3186,10 @@ fn cuda_solve_ex_preserves_complex_mixed_batch_complex64() {
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(
         got.solution.logical_memory_space(),
         LogicalMemorySpace::GpuMemory { device_id: 0 }
@@ -3226,8 +3256,11 @@ fn cuda_solve_ex_reports_zero_pivot_for_complex_mixed_batch_complex32() {
     )
     .unwrap();
 
-    assert_eq!(expected.info, vec![0, 2]);
-    assert_eq!(got.info, expected.info);
+    assert_eq!(tensor_data_on_cpu(&expected.info), vec![0, 2]);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     let got_solution = tensor_data_on_cpu(&got.solution);
     let expected_solution = tensor_data_on_cpu(&expected.solution);
     assert_close_complex_slice(
@@ -3292,8 +3325,11 @@ fn cuda_solve_ex_reports_zero_pivot_for_complex_mixed_batch_complex64() {
     )
     .unwrap();
 
-    assert_eq!(expected.info, vec![0, 2]);
-    assert_eq!(got.info, expected.info);
+    assert_eq!(tensor_data_on_cpu(&expected.info), vec![0, 2]);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     let got_solution = tensor_data_on_cpu(&got.solution);
     let expected_solution = tensor_data_on_cpu(&expected.solution);
     assert_close_complex_slice(
