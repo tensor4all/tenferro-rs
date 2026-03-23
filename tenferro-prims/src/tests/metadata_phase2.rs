@@ -285,6 +285,38 @@ where
     .is_err());
 }
 
+fn run_metadata_phase2_broadcast_sanity<C>(ctx: &mut C, memory_space: LogicalMemorySpace)
+where
+    C: TensorMetadataContextFor,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
+{
+    let lhs = tensor_i32(&[1, 2], &[2, 1], memory_space);
+    let rhs = tensor_i32(&[10, 20, 30], &[1, 3], memory_space);
+    let mut out = Tensor::<i32>::zeros(&[2, 3], memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let desc = MetadataPrimsDescriptor::Binary {
+        op: MetadataBinaryOp::Add,
+        lhs_dtype: MetadataDType::I32,
+        rhs_dtype: MetadataDType::I32,
+        output_dtype: MetadataDType::I32,
+    };
+    assert!(<C::MetadataBackend as TensorMetadataPrims>::has_metadata_support(desc.clone()));
+    let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
+        ctx,
+        &desc,
+        &[MetadataTensorRef::I32(&lhs), MetadataTensorRef::I32(&rhs)],
+        MetadataTensorMut::I32(&mut out),
+    )
+    .expect("metadata broadcast add should work once broadcast support is added");
+    <C::MetadataBackend as TensorMetadataPrims>::execute(
+        ctx,
+        &plan,
+        &[MetadataTensorRef::I32(&lhs), MetadataTensorRef::I32(&rhs)],
+        MetadataTensorMut::I32(&mut out),
+    )
+    .expect("metadata broadcast add should work once broadcast support is added");
+    assert_tensor_eq(&out, &[11, 12, 21, 22, 31, 32]);
+}
+
 #[test]
 fn cpu_metadata_phase2_family_supports_arithmetic_and_logical_ops() {
     let mut ctx = CpuContext::new(1);
@@ -295,6 +327,12 @@ fn cpu_metadata_phase2_family_supports_arithmetic_and_logical_ops() {
 fn cpu_metadata_phase2_rejects_mismatched_binary_shapes() {
     let mut ctx = CpuContext::new(1);
     run_metadata_phase2_shape_rejection::<CpuContext>(&mut ctx, LogicalMemorySpace::MainMemory);
+}
+
+#[test]
+fn cpu_metadata_phase2_broadcast_binary_add_is_expected_to_work() {
+    let mut ctx = CpuContext::new(1);
+    run_metadata_phase2_broadcast_sanity::<CpuContext>(&mut ctx, LogicalMemorySpace::MainMemory);
 }
 
 #[cfg(feature = "cuda")]
@@ -318,6 +356,19 @@ fn cuda_metadata_phase2_rejects_mismatched_binary_shapes() {
     };
     let device_id = ctx.device_id();
     run_metadata_phase2_shape_rejection::<crate::CudaContext>(
+        &mut ctx,
+        LogicalMemorySpace::GpuMemory { device_id },
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_metadata_phase2_broadcast_binary_add_is_expected_to_work() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+    let device_id = ctx.device_id();
+    run_metadata_phase2_broadcast_sanity::<crate::CudaContext>(
         &mut ctx,
         LogicalMemorySpace::GpuMemory { device_id },
     );
