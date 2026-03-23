@@ -106,7 +106,7 @@ pub(super) fn make_contiguous_on_cuda<S: Scalar>(
         &SemiringCoreDescriptor::MakeContiguous,
         &[input.dims(), input.dims()],
     )?;
-    let mut output = new_gpu_tensor::<S>(input.dims(), ctx.device_id);
+    let mut output = new_gpu_tensor::<S>(input.dims(), ctx.device_id)?;
     execute_plan(ctx, &plan, S::one(), &[input], S::zero(), &mut output)?;
     Ok(output)
 }

@@ -181,7 +181,8 @@ fn cuda_complex_scale_phase1_pointwise_mul_matches_cpu_when_runtime_is_available
         lhs.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorComplexScalePrims<Complex64>>::execute(
         &mut cuda_ctx,
         &plan,
@@ -253,7 +254,8 @@ fn cuda_batched_gemm_matches_cpu_for_small_real_batched_case() {
         &[2, 2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorSemiringCore<Standard<f64>>>::execute(
         &mut cpu_ctx,
         &cpu_plan,
@@ -274,7 +276,8 @@ fn cuda_batched_gemm_matches_cpu_for_small_real_batched_case() {
         &[2, 2, 2],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorSemiringCore<Standard<f64>>>::execute(
         &mut cuda_ctx,
         &cuda_plan,
@@ -330,7 +333,8 @@ fn cuda_make_contiguous_smoke_runs_on_device_tensors_when_runtime_is_available()
         &[3, 2],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     <CudaBackend as TensorSemiringCore<Standard<f32>>>::execute(
         &mut ctx,
@@ -450,7 +454,8 @@ fn cuda_scalar_add_and_abs_match_cpu() {
         lhs.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cpu_ctx,
         &add_plan_cpu,
@@ -471,7 +476,8 @@ fn cuda_scalar_add_and_abs_match_cpu() {
         lhs.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cuda_ctx,
         &add_plan_cuda,
@@ -510,7 +516,8 @@ fn cuda_scalar_add_and_abs_match_cpu() {
         add_out_cpu.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cpu_ctx,
         &abs_plan_cpu,
@@ -525,7 +532,8 @@ fn cuda_scalar_add_and_abs_match_cpu() {
         add_out_cpu.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cuda_ctx,
         &abs_plan_cuda,
@@ -576,7 +584,8 @@ fn cuda_scalar_sum_reduction_matches_cpu() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cpu_ctx,
         &plan_cpu,
@@ -594,7 +603,8 @@ fn cuda_scalar_sum_reduction_matches_cpu() {
         &[2],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cuda_ctx,
         &plan_cuda,
@@ -642,7 +652,8 @@ fn cuda_scalar_prod_reduction_matches_cpu() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cpu_ctx,
         &plan_cpu,
@@ -660,7 +671,8 @@ fn cuda_scalar_prod_reduction_matches_cpu() {
         &[2],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut cuda_ctx,
         &plan_cuda,
@@ -709,7 +721,8 @@ fn cuda_scalar_threshold_and_mask_sum_match_cpu() {
         input.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f32>>>::execute(
         &mut cpu_ctx,
         &mask_plan_cpu,
@@ -730,7 +743,8 @@ fn cuda_scalar_threshold_and_mask_sum_match_cpu() {
         input.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<f32>>>::execute(
         &mut cuda_ctx,
         &mask_plan_cuda,
@@ -768,7 +782,8 @@ fn cuda_scalar_threshold_and_mask_sum_match_cpu() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f32>>>::execute(
         &mut cpu_ctx,
         &reduce_plan_cpu,
@@ -783,7 +798,8 @@ fn cuda_scalar_threshold_and_mask_sum_match_cpu() {
         &[2],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<f32>>>::execute(
         &mut cuda_ctx,
         &reduce_plan_cuda,

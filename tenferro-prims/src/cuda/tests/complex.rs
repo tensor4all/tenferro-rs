@@ -41,7 +41,8 @@ fn cpu_scalar_unary(op: ScalarUnaryOp, input: &Tensor<Complex64>) -> Tensor<Comp
         input.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         &mut ctx,
         &plan,
@@ -70,7 +71,8 @@ fn cpu_scalar_binary(
         lhs.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         &mut ctx,
         &plan,
@@ -99,7 +101,8 @@ fn cpu_scalar_reduction(op: ScalarReductionOp, input: &Tensor<Complex64>) -> Ten
         &[input.dims()[1]],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         &mut ctx,
         &plan,
@@ -124,7 +127,8 @@ fn cpu_analytic_unary(op: AnalyticUnaryOp, input: &Tensor<Complex64>) -> Tensor<
         input.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<Complex64>>>::execute(
         &mut ctx,
         &plan,
@@ -153,7 +157,8 @@ fn cpu_analytic_binary(
         lhs.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<Complex64>>>::execute(
         &mut ctx,
         &plan,
@@ -184,7 +189,8 @@ fn cuda_scalar_unary(
         input.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         ctx,
         &plan,
@@ -221,7 +227,8 @@ fn cuda_scalar_binary(
         lhs.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         ctx,
         &plan,
@@ -258,7 +265,8 @@ fn cuda_scalar_reduction(
         &[input.dims()[1]],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         ctx,
         &plan,
@@ -291,7 +299,8 @@ fn cuda_analytic_unary(
         input.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorAnalyticPrims<Standard<Complex64>>>::execute(
         ctx,
         &plan,
@@ -328,7 +337,8 @@ fn cuda_analytic_binary(
         lhs.dims(),
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorAnalyticPrims<Standard<Complex64>>>::execute(
         ctx,
         &plan,
@@ -371,7 +381,8 @@ fn cuda_complex_scalar_and_analytic_smoke_run_on_device_tensors_when_runtime_is_
         &[2],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         &mut ctx,
         &scalar_plan,
@@ -561,7 +572,8 @@ fn cuda_complex_scalar_binary_sub_smoke_runs_on_device_tensors_when_runtime_is_a
         &[2],
         LogicalMemorySpace::GpuMemory { device_id: 0 },
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CudaBackend as TensorScalarPrims<Standard<Complex64>>>::execute(
         &mut ctx,
         &plan,
