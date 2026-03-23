@@ -5,9 +5,9 @@ mod real_scalar;
 mod triangular;
 mod zero_trailing;
 
-pub use complex_scalar::*;
-pub use copy::*;
-pub use helpers::*;
-pub use real_scalar::*;
-pub use triangular::*;
-pub use zero_trailing::*;
+pub(super) use complex_scalar::*;
+pub(super) use copy::*;
+pub(super) use helpers::*;
+pub(super) use real_scalar::*;
+pub(super) use triangular::*;
+pub(super) use zero_trailing::*;
