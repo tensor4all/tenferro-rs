@@ -497,6 +497,19 @@ pub trait TensorLinalgPrims<T: KernelLinalgScalar> {
     /// ```
     fn lu_factor_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorExResult<T>>;
     fn lu_factor(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>>;
+    /// Compute an LU factorization without pivoting.
+    ///
+    /// Backends may support this only on a subset of devices or dtypes.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_linalg_prims::TensorLinalgPrims;
+    ///
+    /// fn accepts_backend<B: TensorLinalgPrims<f64>>() {}
+    /// let _ = accepts_backend::<todo!()>;
+    /// ```
+    fn lu_factor_no_pivot(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>>;
     /// Compute a Cholesky factorization while returning per-batch numerical status.
     ///
     /// # Examples

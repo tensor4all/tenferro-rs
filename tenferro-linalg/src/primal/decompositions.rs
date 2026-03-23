@@ -199,78 +199,18 @@ where
     T: LiftPermutationMatrixTensor<C>,
     C::Backend: 'static,
 {
-    let (m, n, batch_dims) = validate_2d(tensor)?;
+    let (m, _n, _batch_dims) = validate_2d(tensor)?;
     if pivot == LuPivot::NoPivot {
-        require_main_memory_tensor(tensor, "NoPivot LU")?;
-        let bc = batch_count(batch_dims);
-        let k = m.min(n);
-        let mat_size = m * n;
-
-        let input = ensure_col_major(tensor);
-        let data = extract_slice(&input)?;
-        let offset = input.offset() as usize;
-
-        let mut all_l = vec![T::zero(); m * k * bc];
-        let mut all_u = vec![T::zero(); k * n * bc];
-
-        for batch in 0..bc {
-            let start = offset + batch * mat_size;
-            let mut lu_data = data[start..start + mat_size].to_vec();
-
-            for p in 0..k {
-                let pivot_val = lu_data[p + p * m];
-                if pivot_val.abs_real() <= T::real_epsilon() {
-                    return Err(Error::InvalidArgument(format!(
-                        "NoPivot LU encountered near-zero pivot at row {p} in batch {batch}"
-                    )));
-                }
-
-                for i in (p + 1)..m {
-                    lu_data[i + p * m] = lu_data[i + p * m] / pivot_val;
-                }
-                for j in (p + 1)..n {
-                    let up = lu_data[p + j * m];
-                    for i in (p + 1)..m {
-                        let idx = i + j * m;
-                        lu_data[idx] = lu_data[idx] - lu_data[i + p * m] * up;
-                    }
-                }
-            }
-
-            for j in 0..k {
-                for i in 0..m {
-                    let val = if i < j {
-                        T::zero()
-                    } else if i == j {
-                        T::one()
-                    } else {
-                        lu_data[i + j * m]
-                    };
-                    all_l[batch * m * k + i + j * m] = val;
-                }
-            }
-            for j in 0..n {
-                for i in 0..k {
-                    let val = if i <= j {
-                        lu_data[i + j * m]
-                    } else {
-                        T::zero()
-                    };
-                    all_u[batch * k * n + i + j * k] = val;
-                }
-            }
-        }
-
-        let l_dims = output_dims(&[m, k], batch_dims);
-        let u_dims = output_dims(&[k, n], batch_dims);
+        let result =
+            <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_no_pivot(ctx, tensor)?;
         return Ok(LuResult {
             p: Tensor::empty(
                 &[0],
                 tensor.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
             )?,
-            l: tensor_from_data(all_l, &l_dims)?,
-            u: tensor_from_data(all_u, &u_dims)?,
+            l: result.l,
+            u: result.u,
         });
     }
 

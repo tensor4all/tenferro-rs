@@ -78,6 +78,9 @@ impl<T: KernelLinalgScalar> TensorLinalgBackend<T> for HipTensorLinalgBackend {
     fn lu_factor(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorResult<T>> {
         unsupported()
     }
+    fn lu_factor_no_pivot(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorResult<T>> {
+        unsupported()
+    }
     fn cholesky_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {
         unsupported()
     }

@@ -457,6 +457,13 @@ where
         cpu_impl::lu_factor(ctx, a)
     }
 
+    fn lu_factor_no_pivot(
+        ctx: &mut Self::Context,
+        a: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_device::Result<super::tensor_api::LuTensorResult<T>> {
+        super::cpu_tensor_impl::lu_factor_no_pivot(ctx, a)
+    }
+
     fn cholesky_ex(
         ctx: &mut Self::Context,
         a: &tenferro_tensor::Tensor<T>,

@@ -436,6 +436,10 @@ where
         cpu_impl::lu_factor(ctx, a)
     }
 
+    fn lu_factor_no_pivot(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>> {
+        super::cpu_tensor_impl::lu_factor_no_pivot(ctx, a)
+    }
+
     fn cholesky_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {
         super::cpu_tensor_impl::cholesky_ex(ctx, a)
     }

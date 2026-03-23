@@ -756,6 +756,10 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
         lu::lu_factor(_ctx, _a)
     }
 
+    fn lu_factor_no_pivot(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorResult<T>> {
+        unsupported::<LuTensorResult<T>, T>("lu_factor_no_pivot")
+    }
+
     fn cholesky_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {
         cholesky::cholesky_ex(_ctx, _a)
     }

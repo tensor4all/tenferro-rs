@@ -627,8 +627,7 @@ fn cuda_public_lu_no_pivot_rejects_gpu_tensor_before_host_slice_fallback() {
         let err = lu(ctx, &a_gpu, LuPivot::NoPivot).unwrap_err();
         assert!(matches!(err, tenferro_device::Error::DeviceError(_)));
         assert!(
-            err.to_string()
-                .contains("NoPivot LU is only implemented for main-memory tensors"),
+            err.to_string().contains("lu_factor_no_pivot"),
             "lu(NoPivot) should fail before host-slice extraction, got: {err}"
         );
     }) else {

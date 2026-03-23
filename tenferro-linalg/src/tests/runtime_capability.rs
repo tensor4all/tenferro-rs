@@ -850,6 +850,14 @@ fn lu_public_surface_uses_tensor_p_and_avoids_host_perm_unpack() {
         "lu() should avoid host pivot reconstruction helpers"
     );
     assert!(
+        !lu.contains("require_main_memory_tensor("),
+        "lu() should not keep NoPivot main-memory guards in the public/composite path"
+    );
+    assert!(
+        !lu.contains("extract_slice("),
+        "lu() should not keep NoPivot host-slice extraction in the public/composite path"
+    );
+    assert!(
         lu.contains("lu_permutation_matrix_tensor"),
         "lu() should build tensor-valued P through the LU metadata helper"
     );
