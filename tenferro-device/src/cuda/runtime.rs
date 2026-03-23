@@ -3,6 +3,7 @@
 //! The implementation is split into smaller responsibility-focused modules.
 
 mod kernels;
+mod memory;
 mod shared;
 mod state;
 
