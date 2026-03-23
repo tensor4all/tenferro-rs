@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use num_traits::{Float, NumCast};
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
@@ -12,11 +13,12 @@ impl<T: Scalar> Tensor<T> {
         if memory_space == LogicalMemorySpace::MainMemory {
             tensor
         } else {
-            tensor
-                .to_memory_space_async(memory_space)
-                .unwrap_or_else(|err| {
+            match tensor.to_memory_space_async(memory_space) {
+                Ok(tensor) => tensor,
+                Err(err) => {
                     panic!("tensor allocation for {memory_space:?} failed: {err}")
-                })
+                }
+            }
         }
     }
 
@@ -29,6 +31,70 @@ impl<T: Scalar> Tensor<T> {
             None,
             false,
         )
+    }
+
+    fn like_order(reference: &Self) -> MemoryOrder {
+        if reference.is_row_major_contiguous() && !reference.is_col_major_contiguous() {
+            MemoryOrder::RowMajor
+        } else {
+            MemoryOrder::ColumnMajor
+        }
+    }
+
+    fn required_storage_len(dims: &[usize], strides: &[isize], offset: isize) -> Result<usize> {
+        if dims.len() != strides.len() {
+            return Err(Error::InvalidArgument(format!(
+                "empty_strided rank mismatch: dims={} strides={}",
+                dims.len(),
+                strides.len()
+            )));
+        }
+
+        if dims.iter().product::<usize>() == 0 {
+            return Ok(0);
+        }
+
+        let mut min_pos = offset;
+        let mut max_pos = offset;
+        for (axis, (&dim, &stride)) in dims.iter().zip(strides).enumerate() {
+            let extent = isize::try_from(dim - 1)
+                .ok()
+                .and_then(|d| d.checked_mul(stride))
+                .ok_or_else(|| {
+                    Error::StrideError(format!(
+                        "empty_strided extent overflow for dimension {axis} (size={dim}, stride={stride})"
+                    ))
+                })?;
+            if extent >= 0 {
+                max_pos = max_pos.checked_add(extent).ok_or_else(|| {
+                    Error::StrideError(format!(
+                        "empty_strided maximum offset overflow for dimension {axis}"
+                    ))
+                })?;
+            } else {
+                min_pos = min_pos.checked_add(extent).ok_or_else(|| {
+                    Error::StrideError(format!(
+                        "empty_strided minimum offset overflow for dimension {axis}"
+                    ))
+                })?;
+            }
+        }
+
+        if min_pos < 0 {
+            return Err(Error::StrideError(format!(
+                "empty_strided accesses negative buffer positions {}..={}",
+                min_pos, max_pos
+            )));
+        }
+
+        let max_pos = usize::try_from(max_pos).map_err(|_| {
+            Error::StrideError(format!(
+                "empty_strided maximum position {max_pos} exceeds usize range"
+            ))
+        })?;
+        max_pos
+            .checked_add(1)
+            .ok_or_else(|| Error::StrideError("empty_strided storage length overflow".into()))
     }
 
     /// Create a tensor filled with zeros.
@@ -53,6 +119,28 @@ impl<T: Scalar> Tensor<T> {
         )
     }
 
+    /// Create a tensor with allocated storage.
+    ///
+    /// The current safe implementation initializes the backing storage to
+    /// zero, which keeps the constructor deterministic while preserving the
+    /// requested layout and device placement.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::empty(
+    ///     &[3, 4],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// ```
+    pub fn empty(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self {
+        Self::zeros(dims, memory_space, order)
+    }
+
     /// Create a tensor filled with ones.
     ///
     /// # Examples
@@ -71,6 +159,61 @@ impl<T: Scalar> Tensor<T> {
         let n_elements: usize = dims.iter().product();
         Self::finish_allocation(
             Self::main_memory_contiguous(vec![T::one(); n_elements], dims, order),
+            memory_space,
+        )
+    }
+
+    /// Create a tensor with explicit strides.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the layout would access storage outside the
+    /// allocated buffer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::Tensor;
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let t = Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], 0, LogicalMemorySpace::MainMemory).unwrap();
+    /// assert_eq!(t.strides(), &[1, 2]);
+    /// ```
+    pub fn empty_strided(
+        dims: &[usize],
+        strides: &[isize],
+        offset: isize,
+        memory_space: LogicalMemorySpace,
+    ) -> Result<Self> {
+        let storage_len = Self::required_storage_len(dims, strides, offset)?;
+        let tensor = Self::from_vec(vec![T::zero(); storage_len], dims, strides, offset)?;
+        Ok(Self::finish_allocation(tensor, memory_space))
+    }
+
+    /// Create a tensor filled with `value`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let a = Tensor::<f64>::full(
+    ///     &[2, 3],
+    ///     7.5,
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// ```
+    pub fn full(
+        dims: &[usize],
+        value: T,
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+    ) -> Self {
+        let n_elements: usize = dims.iter().product();
+        Self::finish_allocation(
+            Self::main_memory_contiguous(vec![value; n_elements], dims, order),
             memory_space,
         )
     }
@@ -190,6 +333,103 @@ impl<T: Scalar> Tensor<T> {
         self.buffer.try_into_vec()
     }
 
+    /// Create a tensor with the same shape and layout convention as another tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let base = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// let like = base.empty_like();
+    /// assert_eq!(like.dims(), base.dims());
+    /// ```
+    pub fn empty_like(&self) -> Self {
+        Self::empty(
+            self.dims(),
+            self.logical_memory_space(),
+            Self::like_order(self),
+        )
+    }
+
+    /// Create a zero-filled tensor with the same shape and layout convention as another tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let base = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// let like = base.zeros_like();
+    /// assert_eq!(like.dims(), base.dims());
+    /// ```
+    pub fn zeros_like(&self) -> Self {
+        Self::zeros(
+            self.dims(),
+            self.logical_memory_space(),
+            Self::like_order(self),
+        )
+    }
+
+    /// Create a one-filled tensor with the same shape and layout convention as another tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let base = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// let like = base.ones_like();
+    /// assert_eq!(like.dims(), base.dims());
+    /// ```
+    pub fn ones_like(&self) -> Self {
+        Self::ones(
+            self.dims(),
+            self.logical_memory_space(),
+            Self::like_order(self),
+        )
+    }
+
+    /// Create a tensor filled with `value` and matching the shape/layout convention of another tensor.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let base = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// let like = base.full_like(3.25);
+    /// assert_eq!(like.dims(), base.dims());
+    /// ```
+    pub fn full_like(&self, value: T) -> Self {
+        Self::full(
+            self.dims(),
+            value,
+            self.logical_memory_space(),
+            Self::like_order(self),
+        )
+    }
+
     /// Create an identity matrix.
     ///
     /// # Examples
@@ -226,6 +466,114 @@ impl<T: Scalar> Tensor<T> {
                 });
             data[pos] = T::one();
         }
+        Self::finish_allocation(
+            Self::main_memory_contiguous(data, &dims, order),
+            memory_space,
+        )
+    }
+}
+
+impl<T> Tensor<T>
+where
+    T: Scalar + Float + NumCast,
+{
+    /// Create a regularly spaced 1-D tensor from `start` toward `end`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let xs = Tensor::<f64>::arange(
+    ///     0.0,
+    ///     5.0,
+    ///     1.0,
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// assert_eq!(xs.dims(), &[5]);
+    /// ```
+    pub fn arange(
+        start: T,
+        end: T,
+        step: T,
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+    ) -> Self {
+        assert!(!step.is_zero(), "arange: step must be non-zero");
+
+        let mut data = Vec::new();
+        let zero = T::zero();
+        if step > zero {
+            let mut current = start;
+            while current < end {
+                data.push(current);
+                current = current + step;
+            }
+        } else {
+            let mut current = start;
+            while current > end {
+                data.push(current);
+                current = current + step;
+            }
+        }
+
+        let dims = [data.len()];
+        Self::finish_allocation(
+            Self::main_memory_contiguous(data, &dims, order),
+            memory_space,
+        )
+    }
+
+    /// Create a 1-D tensor containing `n_samples` evenly spaced values.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let xs = Tensor::<f64>::linspace(
+    ///     0.0,
+    ///     1.0,
+    ///     5,
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// assert_eq!(xs.dims(), &[5]);
+    /// ```
+    pub fn linspace(
+        start: T,
+        end: T,
+        n_samples: usize,
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+    ) -> Self {
+        let mut data = Vec::with_capacity(n_samples);
+        match n_samples {
+            0 => {}
+            1 => data.push(start),
+            _ => {
+                let Some(denom) = <T as NumCast>::from(n_samples - 1) else {
+                    panic!(
+                        "linspace: sample count {} cannot be represented in target scalar type",
+                        n_samples
+                    );
+                };
+                let step = (end - start) / denom;
+                let mut current = start;
+                for _ in 0..n_samples {
+                    data.push(current);
+                    current = current + step;
+                }
+                if let Some(last) = data.last_mut() {
+                    *last = end;
+                }
+            }
+        }
+
+        let dims = [data.len()];
         Self::finish_allocation(
             Self::main_memory_contiguous(data, &dims, order),
             memory_space,

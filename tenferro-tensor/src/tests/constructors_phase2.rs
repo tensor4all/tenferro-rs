@@ -37,7 +37,7 @@ fn cpu_empty_strided_validates_layout_and_reports_invalid_layouts() {
     assert_eq!(got.strides(), &[1, 2]);
     assert_eq!(got.logical_memory_space(), CPU);
 
-    let err = Tensor::<f64>::empty_strided(&[2, 2], &[10, 1], 0, CPU).unwrap_err();
+    let err = Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], -1, CPU).unwrap_err();
     assert!(
         matches!(err, Error::StrideError(ref msg) if msg.contains("layout") || msg.contains("buffer positions")),
         "expected empty_strided layout validation error, got {err:?}"
@@ -53,7 +53,10 @@ fn cpu_full_and_like_constructors_fill_expected_values() {
 
     let empty_like = Tensor::<f64>::empty_like(&base);
     assert_eq!(empty_like.dims(), base.dims());
-    assert_eq!(empty_like.logical_memory_space(), base.logical_memory_space());
+    assert_eq!(
+        empty_like.logical_memory_space(),
+        base.logical_memory_space()
+    );
 
     let zeros_like = Tensor::<f64>::zeros_like(&base);
     assert_dense_f64_sequence(&zeros_like, &[2, 3], CPU, &[0.0; 6]);
@@ -93,7 +96,7 @@ fn cuda_empty_strided_validates_layout_and_reports_invalid_layouts() {
     assert_eq!(got.strides(), &[1, 2]);
     assert_eq!(got.logical_memory_space(), GPU0);
 
-    let err = Tensor::<f64>::empty_strided(&[2, 2], &[10, 1], 0, GPU0).unwrap_err();
+    let err = Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], -1, GPU0).unwrap_err();
     assert!(
         matches!(err, Error::StrideError(ref msg) if msg.contains("layout") || msg.contains("buffer positions")),
         "expected empty_strided layout validation error, got {err:?}"
@@ -110,7 +113,10 @@ fn cuda_full_and_like_constructors_fill_expected_values() {
 
     let empty_like = Tensor::<f64>::empty_like(&base);
     assert_eq!(empty_like.dims(), base.dims());
-    assert_eq!(empty_like.logical_memory_space(), base.logical_memory_space());
+    assert_eq!(
+        empty_like.logical_memory_space(),
+        base.logical_memory_space()
+    );
 
     let zeros_like = Tensor::<f64>::zeros_like(&base);
     assert_dense_f64_sequence(&zeros_like, &[2, 3], GPU0, &[0.0; 6]);
