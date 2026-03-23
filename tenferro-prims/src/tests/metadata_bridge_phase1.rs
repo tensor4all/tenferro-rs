@@ -58,13 +58,16 @@ where
     let on_true = tensor_f32(&[10.0, 20.0, 30.0, 40.0], &dims, memory_space);
     let on_false = tensor_f32(&[-1.0, -2.0, -3.0, -4.0], &dims, memory_space);
 
-    let mut mask_as_scalar = Tensor::<f32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let mut mask_as_scalar =
+        Tensor::<f32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let cast_bool_desc = MetadataCastPrimsDescriptor::PointwiseCast {
         input_dtype: MetadataDType::Bool,
     };
-    assert!(<C::ScalarBackend as TensorMetadataCastPrims<f32>>::has_metadata_cast_support(
-        cast_bool_desc.clone()
-    ));
+    assert!(
+        <C::ScalarBackend as TensorMetadataCastPrims<f32>>::has_metadata_cast_support(
+            cast_bool_desc.clone()
+        )
+    );
     let cast_bool_plan = <C::ScalarBackend as TensorMetadataCastPrims<f32>>::plan(
         ctx,
         &cast_bool_desc,
@@ -75,20 +78,25 @@ where
         ctx,
         &cast_bool_plan,
         1.0,
-        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(&mask))],
+        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(
+            &mask,
+        ))],
         0.0,
         &mut mask_as_scalar,
     )
     .unwrap();
     assert_tensor_eq(&mask_as_scalar, &[1.0, 0.0, 1.0, 0.0]);
 
-    let mut ints_as_scalar = Tensor::<f32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let mut ints_as_scalar =
+        Tensor::<f32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let cast_i32_desc = MetadataCastPrimsDescriptor::PointwiseCast {
         input_dtype: MetadataDType::I32,
     };
-    assert!(<C::ScalarBackend as TensorMetadataCastPrims<f32>>::has_metadata_cast_support(
-        cast_i32_desc.clone()
-    ));
+    assert!(
+        <C::ScalarBackend as TensorMetadataCastPrims<f32>>::has_metadata_cast_support(
+            cast_i32_desc.clone()
+        )
+    );
     let cast_i32_plan = <C::ScalarBackend as TensorMetadataCastPrims<f32>>::plan(
         ctx,
         &cast_i32_desc,
@@ -99,14 +107,17 @@ where
         ctx,
         &cast_i32_plan,
         1.0,
-        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::I32(&ints))],
+        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::I32(
+            &ints,
+        ))],
         0.0,
         &mut ints_as_scalar,
     )
     .unwrap();
     assert_tensor_eq(&ints_as_scalar, &[3.0, -2.0, 7.0, 5.0]);
 
-    let mut where_out = Tensor::<f32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let mut where_out =
+        Tensor::<f32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let where_desc = MetadataCastPrimsDescriptor::Where {
         cond_dtype: MetadataDType::Bool,
     };
@@ -144,7 +155,8 @@ where
     let on_true = tensor_f64(&[1.0, 2.0, 3.0, 4.0], &dims, memory_space);
     let on_false = tensor_f64(&[9.0, 8.0, 7.0, 6.0], &dims, memory_space);
 
-    let mut mask_as_scalar = Tensor::<f64>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let mut mask_as_scalar =
+        Tensor::<f64>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let cast_bool_desc = MetadataCastPrimsDescriptor::PointwiseCast {
         input_dtype: MetadataDType::Bool,
     };
@@ -158,14 +170,17 @@ where
         ctx,
         &cast_bool_plan,
         1.0,
-        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(&mask))],
+        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(
+            &mask,
+        ))],
         0.0,
         &mut mask_as_scalar,
     )
     .unwrap();
     assert_tensor_eq(&mask_as_scalar, &[0.0, 1.0, 1.0, 0.0]);
 
-    let mut ints_as_scalar = Tensor::<f64>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let mut ints_as_scalar =
+        Tensor::<f64>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let cast_i32_desc = MetadataCastPrimsDescriptor::PointwiseCast {
         input_dtype: MetadataDType::I32,
     };
@@ -179,14 +194,17 @@ where
         ctx,
         &cast_i32_plan,
         1.0,
-        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::I32(&ints))],
+        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::I32(
+            &ints,
+        ))],
         0.0,
         &mut ints_as_scalar,
     )
     .unwrap();
     assert_tensor_eq(&ints_as_scalar, &[-3.0, 2.0, 11.0, 5.0]);
 
-    let mut where_out = Tensor::<f64>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let mut where_out =
+        Tensor::<f64>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let where_desc = MetadataCastPrimsDescriptor::Where {
         cond_dtype: MetadataDType::Bool,
     };

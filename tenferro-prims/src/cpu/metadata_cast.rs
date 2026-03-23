@@ -6,9 +6,8 @@ use tenferro_tensor::Tensor;
 use crate::{
     blend_cast_into_host_output, cast_metadata_tensor_to_host_scalar_tensor, scalar_where_desc,
     supports_metadata_cast, validate_metadata_cast_shapes, validate_pointwise_cast_bridge_inputs,
-    validate_where_bridge_inputs,
-    CpuBackend, CpuContext, MetadataCastPrimsDescriptor, TensorMetadataCastPrims,
-    TensorScalarPrims,
+    validate_where_bridge_inputs, CpuBackend, CpuContext, MetadataCastPrimsDescriptor,
+    TensorMetadataCastPrims, TensorScalarPrims,
 };
 
 impl<S> TensorMetadataCastPrims<S> for CpuBackend
@@ -64,7 +63,12 @@ where
                 let scalar_plan = <CpuBackend as TensorScalarPrims<Standard<S>>>::plan(
                     ctx,
                     &scalar_desc,
-                    &[cond_scalar.dims(), on_true.dims(), on_false.dims(), output.dims()],
+                    &[
+                        cond_scalar.dims(),
+                        on_true.dims(),
+                        on_false.dims(),
+                        output.dims(),
+                    ],
                 )?;
                 <CpuBackend as TensorScalarPrims<Standard<S>>>::execute(
                     ctx,

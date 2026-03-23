@@ -161,10 +161,7 @@ where
     })
 }
 
-fn for_each_index_result(
-    dims: &[usize],
-    mut f: impl FnMut(&[usize]) -> Result<()>,
-) -> Result<()> {
+fn for_each_index_result(dims: &[usize], mut f: impl FnMut(&[usize]) -> Result<()>) -> Result<()> {
     let mut result = Ok(());
     for_each_index(dims, |idx| {
         if result.is_ok() {
@@ -196,7 +193,9 @@ where
             target_dims,
             target_strides,
             target_offset,
-            |value| cast_metadata_value::<S, u8>(if value != 0 { 1 } else { 0 }, "metadata bool value"),
+            |value| {
+                cast_metadata_value::<S, u8>(if value != 0 { 1 } else { 0 }, "metadata bool value")
+            },
         ),
     }
 }
