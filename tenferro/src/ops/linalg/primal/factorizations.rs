@@ -24,7 +24,7 @@ pub struct LuBuilder<'a, T: LinalgScalar> {
 
 impl<'a, T> LuBuilder<'a, T>
 where
-    T: LinalgRuntimeValue,
+    T: crate::runtime::dispatch::LuLinalgDispatchValue,
 {
     /// Sets LU pivoting policy.
     /// # Examples

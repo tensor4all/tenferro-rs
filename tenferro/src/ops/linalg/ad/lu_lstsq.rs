@@ -14,7 +14,7 @@ pub struct LuAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LuAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::RealLuLinalgDispatchValue,
 {
     /// Sets LU pivot policy.
     /// # Examples
@@ -162,7 +162,7 @@ where
         }
 
         Ok(TypedLuResult {
-            p: primal.p,
+            p: crate::AdTensor::new_primal(primal.p),
             l: out_l,
             u: out_u,
         })

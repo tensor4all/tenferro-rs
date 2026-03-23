@@ -1,6 +1,7 @@
 use tenferro_algebra::Standard;
 use tenferro_einsum::EinsumBackend;
 use tenferro_linalg::backend::{LinalgCapabilityOp, TensorLinalgBackend, TensorLinalgContextFor};
+use tenferro_linalg::LiftPermutationMatrixTensor;
 use tenferro_prims::{
     CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
     SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
@@ -147,6 +148,38 @@ pub(crate) trait RealMatrixExpLinalgDispatchValue:
 
 impl<T> RealMatrixExpLinalgDispatchValue for T where
     T: super::contracts::RealLinalgRuntimeValue + MatrixExpLinalgDispatchValue
+{
+}
+
+pub(crate) trait LuLinalgDispatchValue:
+    super::contracts::LinalgRuntimeValue
+    + LiftPermutationMatrixTensor<CpuContext>
+    + LiftPermutationMatrixTensor<CudaContext>
+    + LiftPermutationMatrixTensor<RocmContext>
+{
+}
+
+impl<T> LuLinalgDispatchValue for T where
+    T: super::contracts::LinalgRuntimeValue
+        + LiftPermutationMatrixTensor<CpuContext>
+        + LiftPermutationMatrixTensor<CudaContext>
+        + LiftPermutationMatrixTensor<RocmContext>
+{
+}
+
+pub(crate) trait RealLuLinalgDispatchValue:
+    super::contracts::RealLinalgRuntimeValue
+    + LiftPermutationMatrixTensor<CpuContext>
+    + LiftPermutationMatrixTensor<CudaContext>
+    + LiftPermutationMatrixTensor<RocmContext>
+{
+}
+
+impl<T> RealLuLinalgDispatchValue for T where
+    T: super::contracts::RealLinalgRuntimeValue
+        + LiftPermutationMatrixTensor<CpuContext>
+        + LiftPermutationMatrixTensor<CudaContext>
+        + LiftPermutationMatrixTensor<RocmContext>
 {
 }
 
