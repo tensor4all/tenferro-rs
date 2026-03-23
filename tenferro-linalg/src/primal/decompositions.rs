@@ -1,3 +1,4 @@
+use super::linear_systems_sign::{lu_permutation_matrix_tensor, LiftPermutationMatrixTensor};
 use super::*;
 
 /// Compute the SVD of a batched matrix.
@@ -181,7 +182,7 @@ where
 ///     .unwrap();
 /// let _partial = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 /// let no_pivot = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
-/// assert!(no_pivot.p.is_none());
+/// assert_eq!(no_pivot.p.dims(), &[0]);
 /// ```
 pub fn lu<T: KernelLinalgScalar, C>(
     ctx: &mut C,
@@ -189,7 +190,13 @@ pub fn lu<T: KernelLinalgScalar, C>(
     pivot: LuPivot,
 ) -> Result<LuResult<T>>
 where
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorMetadataContextFor
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>>::ScalarBackend:
+        tenferro_prims::TensorMetadataCastPrims<T::Real, Context = C>,
+    T: LiftPermutationMatrixTensor<C>,
     C::Backend: 'static,
 {
     let (m, n, batch_dims) = validate_2d(tensor)?;
@@ -257,17 +264,21 @@ where
         let l_dims = output_dims(&[m, k], batch_dims);
         let u_dims = output_dims(&[k, n], batch_dims);
         return Ok(LuResult {
-            p: None,
+            p: Tensor::empty(
+                &[0],
+                tensor.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            )?,
             l: tensor_from_data(all_l, &l_dims)?,
             u: tensor_from_data(all_u, &u_dims)?,
         });
     }
 
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&result.pivots, m)?;
+    let p = lu_permutation_matrix_tensor(ctx, &result.pivots, m)?;
 
     Ok(LuResult {
-        p: Some(pivots),
+        p,
         l: result.l,
         u: result.u,
     })

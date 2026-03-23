@@ -199,6 +199,8 @@ fn complex_primal_frontend_support_extends_beyond_svd_and_qr() {
     let rhs = vector_c64(&[Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.0)]);
 
     let lu = hermitian.lu().unwrap();
+    assert_eq!(lu.p.scalar_type(), ScalarType::C64);
+    assert_eq!(lu.p.dims(), &[2, 2]);
     assert_eq!(lu.l.scalar_type(), ScalarType::C64);
 
     let eigen = hermitian.eigen().unwrap();

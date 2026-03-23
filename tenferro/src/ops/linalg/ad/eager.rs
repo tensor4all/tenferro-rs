@@ -72,7 +72,7 @@ eager_unary!(
     /// ```
     fn lu -> TypedLuResult<T> => lu_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: crate::runtime::dispatch::RealLuLinalgDispatchValue,
     }
 );
 

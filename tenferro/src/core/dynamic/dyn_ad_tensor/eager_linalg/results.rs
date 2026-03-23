@@ -44,13 +44,14 @@ pub struct QrResult {
 ///
 /// ```ignore
 /// let out = x.lu()?;
+/// let _p = &out.p;
 /// let _l = &out.l;
 /// let _u = &out.u;
 /// ```
 #[derive(Clone)]
 pub struct LuResult {
-    /// Permutation indices.
-    pub p: Option<Vec<usize>>,
+    /// Permutation matrix tensor.
+    pub p: Tensor,
     /// Lower factor.
     pub l: Tensor,
     /// Upper factor.

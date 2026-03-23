@@ -55,13 +55,14 @@ pub struct TypedQrResult<T: Scalar + DynTensorTyped> {
 ///
 /// ```text
 /// let out = lu_ad(&ad_a).run().unwrap();
+/// let _p = &out.p;
 /// let _l = &out.l;
 /// let _u = &out.u;
 /// ```
 #[derive(Clone)]
 pub struct TypedLuResult<T: Scalar + DynTensorTyped> {
-    /// Permutation indices.
-    pub p: Option<Vec<usize>>,
+    /// Permutation matrix tensor.
+    pub p: AdTensor<T>,
     /// Lower factor.
     pub l: AdTensor<T>,
     /// Upper factor.

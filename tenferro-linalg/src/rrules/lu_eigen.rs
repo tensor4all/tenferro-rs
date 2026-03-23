@@ -31,7 +31,13 @@ pub fn lu_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorMetadataContextFor
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
+    T: crate::primal::LiftPermutationMatrixTensor<C>,
     C::Backend: 'static,
 {
     let result = lu(ctx, tensor, pivot)
@@ -72,7 +78,8 @@ where
     } else {
         None
     };
-    let p_vec = result.p.as_ref();
+    let p_vec = crate::forward_perm_from_permutation_matrix(&result.p, m, bc)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
 
     let mut grad_a = vec![T::zero(); m * n * bc];
 
@@ -210,15 +217,11 @@ where
         };
 
         let out = &mut grad_a[b * m * n..(b + 1) * m * n];
-        if let Some(pv) = p_vec {
-            let p_b = &pv[b * m..(b + 1) * m];
-            for j in 0..n {
-                for i in 0..m {
-                    out[p_b[i] + j * m] = batch_grad[i + j * m];
-                }
+        let p_b = &p_vec[b * m..(b + 1) * m];
+        for j in 0..n {
+            for i in 0..m {
+                out[p_b[i] + j * m] = batch_grad[i + j * m];
             }
-        } else {
-            out.copy_from_slice(&batch_grad);
         }
     }
 

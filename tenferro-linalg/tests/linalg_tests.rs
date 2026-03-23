@@ -543,7 +543,7 @@ fn lu_reconstruction() {
 
     let l = tensor_data(&result.l);
     let u = tensor_data(&result.u);
-    let p = result.p.unwrap();
+    let p = tensor_data(&result.p);
     let n = 3;
 
     // P A = L U -> A = P^T L U
@@ -558,15 +558,21 @@ fn lu_reconstruction() {
         }
     }
 
-    // Apply P^T: A[p_inv[i], j] = lu[i, j]
-    let mut p_inv = vec![0; n];
+    // Apply P to rows of A and compare with L U.
+    let mut pa = vec![0.0; n * n];
     for i in 0..n {
-        p_inv[p[i]] = i;
+        for j in 0..n {
+            let mut val = 0.0;
+            for k in 0..n {
+                val += p[i + k * n] * data[k + j * n];
+            }
+            pa[i + j * n] = val;
+        }
     }
 
     for i in 0..n {
         for j in 0..n {
-            let err = (data[p[i] + j * n] - lu_prod[i + j * n]).abs();
+            let err = (pa[i + j * n] - lu_prod[i + j * n]).abs();
             assert!(err < 1e-10, "LU reconstruction error at ({i},{j}): {err}");
         }
     }
@@ -1981,7 +1987,7 @@ fn test_lu_complex64_reconstruction() {
 
     let l = complex_tensor_data(&result.l);
     let u = complex_tensor_data(&result.u);
-    let p = result.p.unwrap();
+    let p = complex_tensor_data(&result.p);
     let n = 3;
 
     // L * U = P * A
@@ -1996,14 +2002,18 @@ fn test_lu_complex64_reconstruction() {
         }
     }
 
-    // Apply P^{-1} to rows of lu_prod to get A back
+    // Apply P to rows of A and compare with L U.
     let mut recon = vec![c(0.0, 0.0); n * n];
     for i in 0..n {
         for j in 0..n {
-            recon[p[i] + j * n] = lu_prod[i + j * n];
+            let mut val = c(0.0, 0.0);
+            for k in 0..n {
+                val += p[i + k * n] * data[k + j * n];
+            }
+            recon[i + j * n] = val;
         }
     }
-    let err = complex_max_err(&data, &recon);
+    let err = complex_max_err(&lu_prod, &recon);
     assert!(err < 1e-10, "LU reconstruction error: {err}");
 }
 
@@ -3460,13 +3470,17 @@ fn lu_f32_reconstruction() {
             lu_prod[i + j * n] = val;
         }
     }
-    // Apply P^-1 to get A back
+    // Apply P to A and compare with L U.
     let a_data: Vec<f32> = vec![2.0, 1.0, 1.0, 3.0];
-    let p = &result.p.unwrap();
+    let p = tensor_data_f32(&result.p);
     let mut pa = vec![0.0_f32; n * n];
-    for j in 0..n {
-        for i in 0..n {
-            pa[i + j * n] = a_data[p[i] + j * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = 0.0_f32;
+            for k in 0..n {
+                val += p[i + k * n] * a_data[k + j * n];
+            }
+            pa[i + j * n] = val;
         }
     }
     let err: f32 = lu_prod
@@ -3635,11 +3649,15 @@ fn lu_complex32_reconstruction() {
         }
     }
     // PA = LU, build PA
-    let p = &result.p.unwrap();
+    let p = tensor_data_c32(&result.p);
     let mut pa = vec![c32(0.0, 0.0); n * n];
-    for j in 0..n {
-        for i in 0..n {
-            pa[i + j * n] = data[p[i] + j * n];
+    for i in 0..n {
+        for j in 0..n {
+            let mut val = c32(0.0, 0.0);
+            for k in 0..n {
+                val += p[i + k * n] * data[k + j * n];
+            }
+            pa[i + j * n] = val;
         }
     }
     let err: f32 = lu_prod
@@ -5787,7 +5805,7 @@ fn lu_nopivot_reconstruction() {
     let data = vec![4.0, 1.0, 0.0, 2.0, 3.0, 1.0, 0.0, 1.0, 2.0];
     let a = make_tensor(data.clone(), &[3, 3]);
     let result = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
-    assert!(result.p.is_none());
+    assert_eq!(result.p.dims(), &[0]);
 
     let l = tensor_data(&result.l);
     let u = tensor_data(&result.u);
@@ -6493,7 +6511,7 @@ fn lu_frule_nopivot_executes_without_permutation_path() {
     let a = make_tensor(vec![4.0, 1.0, 0.0, 2.0, 3.0, 1.0, 0.0, 1.0, 2.0], &[3, 3]);
     let da = make_tensor(vec![0.1; 9], &[3, 3]);
     let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::NoPivot).unwrap();
-    assert!(result.p.is_none());
+    assert_eq!(result.p.dims(), &[0]);
     for &val in &tensor_data(&dresult.l) {
         assert!(val.is_finite(), "lu_frule NoPivot dL not finite: {val}");
     }

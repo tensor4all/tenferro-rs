@@ -114,7 +114,8 @@ pub enum LuPivot {
 ///
 /// For an input of shape `(m, n, *)` with `k = min(m, n)`:
 ///
-/// - `p`: permutation indices or `None`
+/// - `p`: permutation matrix tensor of shape `(m, m, *)`
+///   or an empty tensor of shape `[0]` when pivoting is disabled
 /// - `l`: shape `(m, k, *)`
 /// - `u`: shape `(k, n, *)`
 ///
@@ -129,12 +130,12 @@ pub enum LuPivot {
 /// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
 ///     .unwrap();
 /// let result = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
-/// assert!(result.p.is_some());
+/// assert_eq!(result.p.dims(), &[2, 2]);
 /// ```
 #[derive(Debug)]
 pub struct LuResult<T: Scalar> {
-    /// Row permutation indices.
-    pub p: Option<Vec<usize>>,
+    /// Row permutation matrix tensor.
+    pub p: Tensor<T>,
     /// Unit lower-triangular factor.
     pub l: Tensor<T>,
     /// Upper-triangular factor.

@@ -12,6 +12,7 @@ mod tensor_ops;
 pub use decompositions::*;
 pub use least_squares::*;
 pub use linear_systems::*;
+pub use linear_systems_sign::LiftPermutationMatrixTensor;
 pub use matrix_functions::*;
 pub use norms::*;
 pub use spectral::*;

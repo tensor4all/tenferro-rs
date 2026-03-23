@@ -823,6 +823,39 @@ fn det_path_uses_tensor_lu_and_prod_reduction() {
 }
 
 #[test]
+fn lu_public_surface_uses_tensor_p_and_avoids_host_perm_unpack() {
+    let result_types = repo_file("src/result_types/decomposition.rs");
+    let lu_result = file_section(
+        &result_types,
+        "pub struct LuResult",
+        "/// Gradient result for `solve_rrule`",
+    );
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let lu = file_section(
+        &decompositions,
+        "pub fn lu",
+        "/// Compute the packed LU factorization",
+    );
+
+    assert!(
+        lu_result.contains("pub p: Tensor<T>"),
+        "LuResult should expose tensor-valued permutation output"
+    );
+    assert!(
+        !lu_result.contains("Option<Vec<usize>>"),
+        "LuResult should not expose host permutation vectors"
+    );
+    assert!(
+        !lu.contains("backend_pivots_to_forward_perm("),
+        "lu() should avoid host pivot reconstruction helpers"
+    );
+    assert!(
+        lu.contains("lu_permutation_matrix_tensor"),
+        "lu() should build tensor-valued P through the LU metadata helper"
+    );
+}
+
+#[test]
 fn slogdet_path_uses_tensor_lu_and_log_without_slice_bridge() {
     let linear_systems = repo_file("src/primal/linear_systems.rs");
     let slogdet = file_section(
