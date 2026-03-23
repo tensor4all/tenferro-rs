@@ -113,6 +113,38 @@
 //! assert_eq!(c.dims(), &[10, 3, 5]);
 //! ```
 //!
+//! ## Ellipsis notation for batch dimensions
+//!
+//! NumPy/PyTorch/JAX-style ellipsis notation (`...`) is fully supported for
+//! batch dimensions, allowing generic code that works with any number of batch
+//! dimensions (resolves issue #529).
+//!
+//! ```ignore
+//! use tenferro_algebra::Standard;
+//!
+//! // Batched matrix multiply with ellipsis: works with any number of batch dims
+//! // 1 batch dim: A[2,3,4] @ B[2,4,5] -> C[2,3,5]
+//! let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+//! let b = Tensor::<f64>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col);
+//! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+//!     .unwrap();
+//! assert_eq!(c.dims(), &[2, 3, 5]);
+//!
+//! // 2 batch dims: A[2,3,4,5] @ B[2,3,5,6] -> C[2,3,4,6]
+//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col);
+//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col);
+//! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+//!     .unwrap();
+//! assert_eq!(c.dims(), &[2, 3, 4, 6]);
+//!
+//! // No batch dims: A[3,4] @ B[4,5] -> C[3,5]
+//! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
+//! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
+//!     .unwrap();
+//! assert_eq!(c.dims(), &[3, 5]);
+//! ```
+//!
 //! ## Integer label notation
 //!
 //! ```ignore
