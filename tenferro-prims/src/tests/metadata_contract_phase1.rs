@@ -1,21 +1,94 @@
-use crate::{MetadataBinaryOp, MetadataReductionOp, MetadataTernaryOp, MetadataUnaryOp};
+use crate::{
+    MetadataBinaryOp, MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor,
+    MetadataReductionOp, MetadataTensorMut, MetadataTensorRef, MetadataTernaryOp,
+};
+use tenferro_device::LogicalMemorySpace;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 #[test]
-fn metadata_family_exposes_i32_bool_comparison_where_and_sum_descriptors() {
-    assert_eq!(
-        MetadataUnaryOp::IotaStartZero as u8,
-        MetadataUnaryOp::IotaStartZero as u8
+fn metadata_family_exposes_generate_binary_ternary_and_reduction_contracts() {
+    let generate = MetadataPrimsDescriptor::Generate {
+        op: MetadataGenerateOp::IotaStartZero,
+    };
+    let binary = MetadataPrimsDescriptor::Binary {
+        op: MetadataBinaryOp::NotEqual,
+    };
+    let ternary = MetadataPrimsDescriptor::Ternary {
+        op: MetadataTernaryOp::Where,
+    };
+    let reduction = MetadataPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1],
+        op: MetadataReductionOp::Sum,
+    };
+
+    assert!(matches!(
+        generate,
+        MetadataPrimsDescriptor::Generate {
+            op: MetadataGenerateOp::IotaStartZero
+        }
+    ));
+    assert!(matches!(
+        binary,
+        MetadataPrimsDescriptor::Binary {
+            op: MetadataBinaryOp::NotEqual
+        }
+    ));
+    assert!(matches!(
+        ternary,
+        MetadataPrimsDescriptor::Ternary {
+            op: MetadataTernaryOp::Where
+        }
+    ));
+    assert!(matches!(
+        reduction,
+        MetadataPrimsDescriptor::Reduction {
+            modes_a,
+            modes_c,
+            op: MetadataReductionOp::Sum
+        } if modes_a == vec![0, 1] && modes_c == vec![1]
+    ));
+}
+
+#[test]
+fn metadata_family_distinguishes_i32_and_bool_u8_tensor_handles() {
+    let i32_input = Tensor::<i32>::zeros(
+        &[2, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
     );
-    assert_eq!(
-        MetadataBinaryOp::NotEqual as u8,
-        MetadataBinaryOp::NotEqual as u8
+    let bool_input = Tensor::<u8>::zeros(
+        &[2, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
     );
-    assert_eq!(
-        MetadataTernaryOp::Where as u8,
-        MetadataTernaryOp::Where as u8
+    let mut i32_output = Tensor::<i32>::zeros(
+        &[2, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
     );
-    assert_eq!(
-        MetadataReductionOp::Sum as u8,
-        MetadataReductionOp::Sum as u8
+    let mut bool_output = Tensor::<u8>::zeros(
+        &[2, 2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
     );
+
+    let i32_ref = MetadataTensorRef::I32(&i32_input);
+    let bool_ref = MetadataTensorRef::BoolU8(&bool_input);
+    let i32_mut = MetadataTensorMut::I32(&mut i32_output);
+    let bool_mut = MetadataTensorMut::BoolU8(&mut bool_output);
+
+    assert_eq!(i32_ref.dtype(), MetadataDType::I32);
+    assert_eq!(bool_ref.dtype(), MetadataDType::BoolU8);
+    assert_eq!(i32_mut.dtype(), MetadataDType::I32);
+    assert_eq!(bool_mut.dtype(), MetadataDType::BoolU8);
+    assert_ne!(i32_ref.dtype(), bool_ref.dtype());
+
+    fn accepts_ref<'a>(_: MetadataTensorRef<'a>) {}
+    fn accepts_mut<'a>(_: MetadataTensorMut<'a>) {}
+
+    accepts_ref(i32_ref);
+    accepts_ref(bool_ref);
+    accepts_mut(i32_mut);
+    accepts_mut(bool_mut);
 }

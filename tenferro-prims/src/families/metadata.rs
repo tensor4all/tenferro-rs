@@ -1,24 +1,44 @@
-use tenferro_algebra::Algebra;
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
-/// Integer/bool metadata unary operations.
+/// Metadata storage dtypes.
 ///
-/// This family is intentionally narrow. It exists to support metadata-heavy
-/// linalg paths such as LU pivots, determinant parity, and future mask-style
-/// workflows without forcing those values through the scalar or analytic
-/// families.
+/// Metadata tensors currently use `i32` and `u8` storage. `u8` is the initial
+/// bool-like representation until the workspace grows a dedicated metadata
+/// bool tensor type.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_prims::MetadataUnaryOp;
+/// use tenferro_prims::MetadataDType;
 ///
-/// let op = MetadataUnaryOp::IotaStartZero;
-/// assert_eq!(op, MetadataUnaryOp::IotaStartZero);
+/// assert_eq!(MetadataDType::I32, MetadataDType::I32);
+/// assert_eq!(MetadataDType::BoolU8, MetadataDType::BoolU8);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MetadataUnaryOp {
+pub enum MetadataDType {
+    /// Signed 32-bit integer metadata tensors.
+    I32,
+    /// Bool-like metadata tensors stored as `u8`.
+    BoolU8,
+}
+
+/// Metadata tensor generation operations.
+///
+/// Generation is intentionally separate from pointwise metadata ops so the
+/// contract can describe `iota`-style metadata tensors without requiring a
+/// dummy input tensor.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_prims::MetadataGenerateOp;
+///
+/// let op = MetadataGenerateOp::IotaStartZero;
+/// assert!(matches!(op, MetadataGenerateOp::IotaStartZero));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MetadataGenerateOp {
     /// Generate a zero-based iota/arange tensor.
     IotaStartZero,
 }
@@ -35,11 +55,17 @@ pub enum MetadataUnaryOp {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetadataBinaryOp {
+    /// Elementwise equality.
     Equal,
+    /// Elementwise inequality.
     NotEqual,
+    /// Metadata addition.
     Add,
+    /// Metadata subtraction.
     Sub,
+    /// Metadata multiplication.
     Mul,
+    /// Elementwise bitwise-and.
     BitAnd,
 }
 
@@ -55,6 +81,7 @@ pub enum MetadataBinaryOp {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetadataTernaryOp {
+    /// Select from the second or third input using the first input as the mask.
     Where,
 }
 
@@ -70,9 +97,117 @@ pub enum MetadataTernaryOp {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetadataReductionOp {
+    /// Sum metadata values into the output tensor.
     Sum,
+    /// Logical all-reduction over bool-like metadata tensors.
     All,
+    /// Logical any-reduction over bool-like metadata tensors.
     Any,
+}
+
+/// Erased immutable metadata tensor reference.
+///
+/// The contract is intentionally narrow and only admits integer metadata and
+/// bool-like metadata stored as `u8`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{MetadataDType, MetadataTensorRef};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let tensor = Tensor::<i32>::zeros(
+///     &[2, 2],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// );
+/// let metadata = MetadataTensorRef::I32(&tensor);
+/// assert_eq!(metadata.dtype(), MetadataDType::I32);
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub enum MetadataTensorRef<'a> {
+    /// A metadata tensor stored as `i32`.
+    I32(&'a Tensor<i32>),
+    /// A metadata tensor stored as `u8` for bool-like payloads.
+    BoolU8(&'a Tensor<u8>),
+}
+
+impl<'a> MetadataTensorRef<'a> {
+    /// Return the storage dtype carried by this metadata tensor reference.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_prims::{MetadataDType, MetadataTensorRef};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let tensor = Tensor::<u8>::zeros(
+    ///     &[1],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// let metadata = MetadataTensorRef::BoolU8(&tensor);
+    /// assert_eq!(metadata.dtype(), MetadataDType::BoolU8);
+    /// ```
+    pub const fn dtype(&self) -> MetadataDType {
+        match self {
+            Self::I32(_) => MetadataDType::I32,
+            Self::BoolU8(_) => MetadataDType::BoolU8,
+        }
+    }
+}
+
+/// Erased mutable metadata tensor reference.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_prims::{MetadataDType, MetadataTensorMut};
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut tensor = Tensor::<u8>::zeros(
+///     &[2, 2],
+///     LogicalMemorySpace::MainMemory,
+///     MemoryOrder::ColumnMajor,
+/// );
+/// let metadata = MetadataTensorMut::BoolU8(&mut tensor);
+/// assert_eq!(metadata.dtype(), MetadataDType::BoolU8);
+/// ```
+#[derive(Debug)]
+pub enum MetadataTensorMut<'a> {
+    /// A metadata tensor stored as `i32`.
+    I32(&'a mut Tensor<i32>),
+    /// A metadata tensor stored as `u8` for bool-like payloads.
+    BoolU8(&'a mut Tensor<u8>),
+}
+
+impl<'a> MetadataTensorMut<'a> {
+    /// Return the storage dtype carried by this metadata tensor handle.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::LogicalMemorySpace;
+    /// use tenferro_prims::{MetadataDType, MetadataTensorMut};
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let mut tensor = Tensor::<i32>::zeros(
+    ///     &[1],
+    ///     LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// );
+    /// let metadata = MetadataTensorMut::I32(&mut tensor);
+    /// assert_eq!(metadata.dtype(), MetadataDType::I32);
+    /// ```
+    pub const fn dtype(&self) -> MetadataDType {
+        match self {
+            Self::I32(_) => MetadataDType::I32,
+            Self::BoolU8(_) => MetadataDType::BoolU8,
+        }
+    }
 }
 
 /// Descriptor for metadata tensor planning.
@@ -80,27 +215,27 @@ pub enum MetadataReductionOp {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_prims::{MetadataPrimsDescriptor, MetadataUnaryOp};
+/// use tenferro_prims::{MetadataGenerateOp, MetadataPrimsDescriptor};
 ///
-/// let desc = MetadataPrimsDescriptor::PointwiseUnary {
-///     op: MetadataUnaryOp::IotaStartZero,
+/// let desc = MetadataPrimsDescriptor::Generate {
+///     op: MetadataGenerateOp::IotaStartZero,
 /// };
-/// assert!(matches!(desc, MetadataPrimsDescriptor::PointwiseUnary { .. }));
+/// assert!(matches!(desc, MetadataPrimsDescriptor::Generate { .. }));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MetadataPrimsDescriptor {
-    /// Apply a metadata unary operation to one input tensor.
-    PointwiseUnary {
-        /// Unary operation to apply.
-        op: MetadataUnaryOp,
+    /// Generate a metadata tensor without consuming an input tensor.
+    Generate {
+        /// Generation operation to apply.
+        op: MetadataGenerateOp,
     },
     /// Apply a metadata binary operation to two input tensors.
-    PointwiseBinary {
+    Binary {
         /// Binary operation to apply.
         op: MetadataBinaryOp,
     },
     /// Apply a metadata ternary operation to three input tensors.
-    PointwiseTernary {
+    Ternary {
         /// Ternary operation to apply.
         op: MetadataTernaryOp,
     },
@@ -123,70 +258,62 @@ pub enum MetadataPrimsDescriptor {
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_prims::{CpuContext, TensorMetadataContextFor};
+/// use tenferro_prims::TensorMetadataContextFor;
 ///
 /// fn accepts_context<C>(_: &mut C)
 /// where
-///     C: TensorMetadataContextFor<tenferro_algebra::Standard<i32>>,
+///     C: TensorMetadataContextFor,
 /// {
 /// }
 ///
-/// let mut ctx = CpuContext::new(1);
-/// accepts_context(&mut ctx);
+/// // A backend context can satisfy this trait once the metadata family is wired.
 /// ```
-pub trait TensorMetadataContextFor<Alg: Algebra> {
+pub trait TensorMetadataContextFor {
     /// Backend associated with this context for the metadata family.
-    type MetadataBackend: TensorMetadataPrims<Alg, Context = Self>;
+    type MetadataBackend: TensorMetadataPrims<Context = Self>;
 }
 
 /// Metadata tensor planning and execution protocol.
 ///
-/// The first tranche is intentionally small and aimed at LU/pivot-style tensor
-/// metadata. It should not be used as a generic integer algebra.
+/// Metadata execution is overwrite-based and uses erased integer/bool metadata
+/// tensor handles instead of scalar-family `alpha` / `beta` scaling.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_algebra::Standard;
-/// use tenferro_prims::{CpuBackend, CpuContext, MetadataPrimsDescriptor, TensorMetadataPrims};
-///
-/// let mut ctx = CpuContext::new(1);
-/// let desc = MetadataPrimsDescriptor::Reduction {
-///     modes_a: vec![0, 1],
-///     modes_c: vec![1],
-///     op: tenferro_prims::MetadataReductionOp::Sum,
+/// use tenferro_prims::{
+///     MetadataGenerateOp, MetadataPrimsDescriptor, MetadataTensorMut,
+///     MetadataTensorRef, TensorMetadataPrims,
 /// };
-/// let _plan = <CpuBackend as TensorMetadataPrims<Standard<i32>>>::plan(
-///     &mut ctx,
-///     &desc,
-///     &[&[2, 2], &[2]],
-/// )
-/// .unwrap();
+///
+/// fn accepts_family<F: TensorMetadataPrims>(_: &F) {}
+///
+/// let _ = MetadataPrimsDescriptor::Generate {
+///     op: MetadataGenerateOp::IotaStartZero,
+/// };
 /// ```
-pub trait TensorMetadataPrims<Alg: Algebra> {
+pub trait TensorMetadataPrims {
     /// Backend plan type.
     type Plan;
     /// Backend execution context.
     type Context;
 
-    /// Plan a metadata-family operation for the given input/output shapes.
+    /// Plan a metadata-family operation for the given input and output tensor
+    /// handles.
     fn plan(
         ctx: &mut Self::Context,
         desc: &MetadataPrimsDescriptor,
-        shapes: &[&[usize]],
+        inputs: &[MetadataTensorRef<'_>],
+        output: MetadataTensorMut<'_>,
     ) -> Result<Self::Plan>;
 
-    /// Execute a previously planned metadata-family operation.
-    ///
-    /// The execution contract matches the rest of tenferro prims:
-    /// `output <- alpha * op(inputs) + beta * output`.
+    /// Execute a previously planned metadata-family operation in overwrite
+    /// mode.
     fn execute(
         ctx: &mut Self::Context,
         plan: &Self::Plan,
-        alpha: Alg::Scalar,
-        inputs: &[&Tensor<Alg::Scalar>],
-        beta: Alg::Scalar,
-        output: &mut Tensor<Alg::Scalar>,
+        inputs: &[MetadataTensorRef<'_>],
+        output: MetadataTensorMut<'_>,
     ) -> Result<()>;
 
     /// Report whether the backend advertises support for the given descriptor.

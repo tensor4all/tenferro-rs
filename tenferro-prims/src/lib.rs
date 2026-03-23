@@ -11,13 +11,18 @@
 //! - [`TensorAnalyticPrims`] for analytic pointwise and reduction families
 //! - [`TensorComplexRealPrims`] for cross-dtype complex-to-real unary families
 //! - [`TensorComplexScalePrims`] for complex payload scaled by real-valued tensors
-//! - [`TensorMetadataPrims`] for integer/bool metadata tensor families
+//! - [`TensorMetadataPrims`] for integer/bool metadata tensor families with
+//!   overwrite-based execution and erased metadata tensor handles
 //!
-//! Every family follows the same plan/execute pattern:
+//! Most families follow the same plan/execute pattern:
 //!
 //! 1. Create a family descriptor
 //! 2. Build a backend plan for concrete tensor shapes
 //! 3. Execute the plan with BLAS-style `alpha`/`beta` scaling
+//!
+//! [`TensorMetadataPrims`] is the exception: it uses overwrite-based execution
+//! over erased integer/bool metadata tensor handles instead of scalar-family
+//! scaling.
 //!
 //! # CPU GEMM backend selection
 //!

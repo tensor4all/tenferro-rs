@@ -2,6 +2,7 @@ mod analytic;
 mod complex_real;
 mod complex_scale;
 mod context;
+// Metadata families are overwrite-based and use erased integer/bool tensor handles.
 mod metadata;
 mod scalar;
 mod semiring_core;
