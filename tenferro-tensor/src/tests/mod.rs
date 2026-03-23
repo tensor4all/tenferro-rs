@@ -2,6 +2,7 @@ use super::*;
 use tenferro_device::LogicalMemorySpace;
 
 mod buffer;
+mod constructor_fallibility;
 mod combine;
 mod completion_event;
 mod constructors_phase2;
