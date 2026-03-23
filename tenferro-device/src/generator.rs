@@ -5,6 +5,16 @@ use rand_core::Rng;
 
 use crate::{Error, Result};
 
+#[cfg(feature = "cuda")]
+fn cuda_device_zero_based_is_available(device_id: usize) -> bool {
+    std::panic::catch_unwind(|| {
+        cudarc::runtime::result::device::get_count()
+            .map(|count| device_id < count as usize)
+            .unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
 #[derive(Debug)]
 struct GeneratorState {
     engine: mt19937::MT19937,
@@ -47,6 +57,10 @@ pub struct Generator {
     state: GeneratorState,
     #[cfg(feature = "cuda")]
     device_id: Option<usize>,
+    #[cfg(feature = "cuda")]
+    seed: u64,
+    #[cfg(feature = "cuda")]
+    offset: u64,
 }
 
 impl Generator {
@@ -64,6 +78,10 @@ impl Generator {
             state: GeneratorState::from_seed(seed),
             #[cfg(feature = "cuda")]
             device_id: None,
+            #[cfg(feature = "cuda")]
+            seed,
+            #[cfg(feature = "cuda")]
+            offset: 0,
         }
     }
 
@@ -81,10 +99,53 @@ impl Generator {
     /// ```
     #[cfg(feature = "cuda")]
     pub fn cuda(device_id: usize, seed: u64) -> Result<Self> {
+        if !cuda_device_zero_based_is_available(device_id) {
+            return Err(Error::DeviceError(format!(
+                "CUDA generator requires available device {device_id}"
+            )));
+        }
         Ok(Self {
             state: GeneratorState::from_seed(seed),
             device_id: Some(device_id),
+            seed,
+            offset: 0,
         })
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_seed_and_offset(&self, expected_device_id: usize) -> Result<(u64, u64)> {
+        match self.device_id {
+            Some(device_id) if device_id == expected_device_id => Ok((self.seed, self.offset)),
+            Some(device_id) => Err(Error::DeviceError(format!(
+                "CUDA generator is bound to device {device_id}, expected device {expected_device_id}"
+            ))),
+            None => Err(Error::InvalidArgument(
+                "CPU generator cannot drive CUDA RNG execution".into(),
+            )),
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn advance_cuda_offset(
+        &mut self,
+        expected_device_id: usize,
+        delta: u64,
+    ) -> Result<()> {
+        match self.device_id {
+            Some(device_id) if device_id == expected_device_id => {
+                self.offset = self
+                    .offset
+                    .checked_add(delta)
+                    .ok_or_else(|| Error::DeviceError("CUDA generator offset overflow".into()))?;
+                Ok(())
+            }
+            Some(device_id) => Err(Error::DeviceError(format!(
+                "CUDA generator is bound to device {device_id}, expected device {expected_device_id}"
+            ))),
+            None => Err(Error::InvalidArgument(
+                "CPU generator cannot drive CUDA RNG execution".into(),
+            )),
+        }
     }
 
     /// Draw a floating-point sample from the half-open interval `[0, 1)`.

@@ -2,7 +2,10 @@ use tenferro_algebra::{Algebra, Standard};
 use tenferro_device::{Error, Generator, Result};
 use tenferro_tensor::Tensor;
 
+#[cfg(not(feature = "cuda"))]
 use crate::{CudaBackend, CudaContext, RocmBackend, RocmContext};
+#[cfg(feature = "cuda")]
+use crate::{RocmBackend, RocmContext};
 
 /// Random-number generation descriptors for dense eager tensor construction.
 ///
@@ -89,6 +92,7 @@ pub trait TensorRngPrims<Alg: Algebra> {
     fn has_rng_support(desc: RngPrimsDescriptor) -> bool;
 }
 
+#[cfg(not(feature = "cuda"))]
 impl TensorRngPrims<Standard<f64>> for CudaBackend {
     type Plan = (RngPrimsDescriptor, Vec<usize>);
     type Context = CudaContext;
@@ -119,6 +123,7 @@ impl TensorRngPrims<Standard<f64>> for CudaBackend {
     }
 }
 
+#[cfg(not(feature = "cuda"))]
 impl TensorRngPrims<Standard<i32>> for CudaBackend {
     type Plan = (RngPrimsDescriptor, Vec<usize>);
     type Context = CudaContext;

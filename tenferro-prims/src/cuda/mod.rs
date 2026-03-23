@@ -47,6 +47,7 @@ mod metadata;
 mod metadata_cast;
 mod planning;
 mod pointwise_ops;
+mod rng;
 mod runtime;
 mod scalar;
 mod scalar_type;
@@ -58,6 +59,7 @@ pub use complex_scale::CudaComplexScalePlan;
 use custom::CustomCudaRuntime;
 use execution::{execute_plan, has_fast_path, plan_core_descriptor, plan_fast_descriptor};
 use planning::{check_status, NativeCutensorPlan};
+pub use rng::CudaRngPlan;
 pub use scalar::CudaScalarPlan;
 use wrappers::HandleWrapper;
 

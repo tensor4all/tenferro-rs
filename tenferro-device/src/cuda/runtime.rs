@@ -6,6 +6,7 @@ mod kernels;
 mod memory;
 mod metadata;
 mod pointwise;
+mod rng;
 mod shared;
 mod state;
 mod structural;
