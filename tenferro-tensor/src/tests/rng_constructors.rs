@@ -220,4 +220,24 @@ fn cuda_rng_constructors_require_cuda_generators_for_gpu_memory() {
     assert!(
         Tensor::<i32>::randint_like(&gpu_base_i32, -4, 5, Some(&mut cpu_like_integer)).is_err()
     );
+
+    let mut cpu_zero_uniform = Generator::cpu(777);
+    assert!(Tensor::<f64>::rand(
+        &[0],
+        GPU0,
+        MemoryOrder::ColumnMajor,
+        Some(&mut cpu_zero_uniform)
+    )
+    .is_err());
+
+    let mut cpu_zero_integer = Generator::cpu(888);
+    assert!(Tensor::<i32>::randint(
+        -4,
+        5,
+        &[0],
+        GPU0,
+        MemoryOrder::ColumnMajor,
+        Some(&mut cpu_zero_integer)
+    )
+    .is_err());
 }

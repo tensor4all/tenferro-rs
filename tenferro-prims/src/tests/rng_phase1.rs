@@ -321,3 +321,55 @@ fn cuda_rng_phase1_seeded_randint_replay_matches_and_stays_in_range() {
         );
     }
 }
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_rng_phase1_rejects_cpu_generator_for_zero_sized_gpu_outputs() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+    let device_id = ctx.device_id();
+    let dims = [0usize];
+
+    let mut cpu_uniform = Generator::cpu(111);
+    let mut uniform = Tensor::<f64>::zeros(
+        &dims,
+        LogicalMemorySpace::GpuMemory { device_id },
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let uniform_plan = <CudaBackend as TensorRngPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &RngPrimsDescriptor::Uniform,
+        &[&dims],
+    )
+    .unwrap();
+    assert!(<CudaBackend as TensorRngPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &uniform_plan,
+        &mut cpu_uniform,
+        &mut uniform,
+    )
+    .is_err());
+
+    let mut cpu_integer = Generator::cpu(222);
+    let mut randint = Tensor::<i32>::zeros(
+        &dims,
+        LogicalMemorySpace::GpuMemory { device_id },
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let randint_plan = <CudaBackend as TensorRngPrims<Standard<i32>>>::plan(
+        &mut ctx,
+        &RngPrimsDescriptor::Integer { low: -4, high: 5 },
+        &[&dims],
+    )
+    .unwrap();
+    assert!(<CudaBackend as TensorRngPrims<Standard<i32>>>::execute(
+        &mut ctx,
+        &randint_plan,
+        &mut cpu_integer,
+        &mut randint,
+    )
+    .is_err());
+}

@@ -36,11 +36,11 @@ impl CudaRuntime {
         dst_offset: isize,
     ) -> Result<()> {
         validate_rng_output_len(dst_len, dims, dst_strides, dst_offset, "rng uniform dst")?;
+        let (seed, offset_counter) = generator.cuda_seed_and_offset(self.device_id())?;
         let numel = checked_numel(dims)?;
         if numel == 0 {
             return Ok(());
         }
-        let (seed, offset_counter) = generator.cuda_seed_and_offset(self.device_id())?;
         let (kernel, stream) = load_rng_kernel(self, RNG_UNIFORM_F64_KERNEL_NAME)?;
         let dims_dev = stream
             .clone_htod(&dims_to_i64(dims)?)
@@ -100,11 +100,11 @@ impl CudaRuntime {
         dst_offset: isize,
     ) -> Result<()> {
         validate_rng_output_len(dst_len, dims, dst_strides, dst_offset, "rng normal dst")?;
+        let (seed, offset_counter) = generator.cuda_seed_and_offset(self.device_id())?;
         let numel = checked_numel(dims)?;
         if numel == 0 {
             return Ok(());
         }
-        let (seed, offset_counter) = generator.cuda_seed_and_offset(self.device_id())?;
         let (kernel, stream) = load_rng_kernel(self, RNG_NORMAL_F64_KERNEL_NAME)?;
         let dims_dev = stream
             .clone_htod(&dims_to_i64(dims)?)
@@ -171,11 +171,11 @@ impl CudaRuntime {
             )));
         }
         validate_rng_output_len(dst_len, dims, dst_strides, dst_offset, "rng integer dst")?;
+        let (seed, offset_counter) = generator.cuda_seed_and_offset(self.device_id())?;
         let numel = checked_numel(dims)?;
         if numel == 0 {
             return Ok(());
         }
-        let (seed, offset_counter) = generator.cuda_seed_and_offset(self.device_id())?;
         let (kernel, stream) = load_rng_kernel(self, RNG_INT_I32_KERNEL_NAME)?;
         let dims_dev = stream
             .clone_htod(&dims_to_i64(dims)?)
