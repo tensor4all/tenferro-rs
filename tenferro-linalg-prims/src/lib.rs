@@ -326,7 +326,7 @@ pub struct SvdTensorResult<T: LinalgScalar> {
 pub struct LuTensorResult<T: LinalgScalar> {
     pub l: Tensor<T>,
     pub u: Tensor<T>,
-    pub pivots: Vec<i32>,
+    pub pivots: Tensor<i32>,
 }
 
 /// Result of a tensor-level LU factorization with numerical status.
@@ -343,10 +343,10 @@ pub struct LuTensorExResult<T: LinalgScalar> {
     pub l: Tensor<T>,
     /// Upper-triangular factor.
     pub u: Tensor<T>,
-    /// Backend pivot vector.
-    pub pivots: Vec<i32>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Backend pivot tensor.
+    pub pivots: Tensor<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Result of a tensor-level linear solve with numerical status.

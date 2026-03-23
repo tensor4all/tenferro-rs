@@ -1,10 +1,23 @@
 use crate::backend::TensorLinalgContextFor;
+use tenferro_algebra::Scalar;
+use tenferro_device::LogicalMemorySpace;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn assert_ctx<T, C>()
 where
     T: crate::KernelLinalgScalar,
     C: TensorLinalgContextFor<T>,
 {
+}
+
+fn tensor_data_on_cpu<T: Scalar>(tensor: &Tensor<T>) -> Vec<T> {
+    let cpu = tensor
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let contiguous = cpu.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.len();
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
 #[test]
@@ -78,7 +91,8 @@ fn cpu_backend_supports_core_factorizations_after_move() {
     .unwrap();
     assert_eq!(lu.l.dims(), &[2, 2]);
     assert_eq!(lu.u.dims(), &[2, 2]);
-    assert_eq!(lu.pivots.len(), 2);
+    assert_eq!(lu.pivots.dims(), &[2]);
+    assert_eq!(tensor_data_on_cpu(&lu.pivots), vec![1, 0]);
 
     let chol = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky(
         &mut ctx, &spd,
@@ -275,10 +289,13 @@ fn cpu_backend_lu_factor_ex_preserves_successful_batches_and_reports_zero_pivot(
         )
         .unwrap();
 
-    assert_eq!(result.info, vec![0, 2]);
-    assert_eq!(tensor_data(&result.l), tensor_data(&plain.l));
-    assert_eq!(tensor_data(&result.u), tensor_data(&plain.u));
-    assert_eq!(result.pivots, plain.pivots);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.l), tensor_data_on_cpu(&plain.l));
+    assert_eq!(tensor_data_on_cpu(&result.u), tensor_data_on_cpu(&plain.u));
+    assert_eq!(
+        tensor_data_on_cpu(&result.pivots),
+        tensor_data_on_cpu(&plain.pivots)
+    );
 }
 
 #[test]

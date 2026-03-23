@@ -27,6 +27,17 @@ fn tensor_to_col_major_vec<T: KernelLinalgScalar>(tensor: Tensor<T>) -> Result<V
     Ok(slice[offset..offset + len].to_vec())
 }
 
+fn tensor_to_col_major_vec_i32(tensor: Tensor<i32>) -> Result<Vec<i32>> {
+    let contiguous = tensor.into_contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.len();
+    let slice = contiguous
+        .buffer()
+        .as_slice()
+        .ok_or_else(|| Error::DeviceError("expected CPU-accessible contiguous tensor".into()))?;
+    Ok(slice[offset..offset + len].to_vec())
+}
+
 pub(crate) fn solve_vec<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &[T],
@@ -116,7 +127,7 @@ where
     let a_tensor = tensor_from_col_major_slice(a, &[m, n])?;
     let result = <C::Backend as TensorLinalgBackend<T>>::lu_factor(ctx, &a_tensor)?;
     Ok((
-        result.pivots,
+        tensor_to_col_major_vec_i32(result.pivots)?,
         tensor_to_col_major_vec(result.l)?,
         tensor_to_col_major_vec(result.u)?,
     ))

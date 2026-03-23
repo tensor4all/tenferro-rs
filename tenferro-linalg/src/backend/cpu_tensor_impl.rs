@@ -5,7 +5,7 @@
 
 use num_traits::Zero;
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, Result};
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
 use super::col_major_strides;
@@ -23,6 +23,19 @@ use crate::KernelLinalgScalar;
 fn tensor_from_data<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>> {
     let strides = col_major_strides(dims);
     Tensor::from_vec(data, dims, &strides, 0)
+}
+
+fn tensor_from_data_on_space<T: Scalar>(
+    data: Vec<T>,
+    dims: &[usize],
+    memory_space: LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    let tensor = tensor_from_data(data, dims)?;
+    if tensor.logical_memory_space() == memory_space {
+        Ok(tensor)
+    } else {
+        tensor.to_memory_space_async(memory_space)
+    }
 }
 
 fn first_zero_pivot_from_u<T: KernelLinalgScalar>(
@@ -353,11 +366,13 @@ where
     l_shape.extend_from_slice(batch_dims);
     let mut u_shape = vec![k, n];
     u_shape.extend_from_slice(batch_dims);
+    let mut pivots_shape = vec![m];
+    pivots_shape.extend_from_slice(batch_dims);
 
     Ok(LuTensorResult {
         l: tensor_from_data(l_data, &l_shape)?,
         u: tensor_from_data(u_data, &u_shape)?,
-        pivots: all_pivots,
+        pivots: tensor_from_data_on_space(all_pivots, &pivots_shape, a.logical_memory_space())?,
     })
 }
 
@@ -406,12 +421,19 @@ where
     l_shape.extend_from_slice(batch_dims);
     let mut u_shape = vec![k, n];
     u_shape.extend_from_slice(batch_dims);
+    let mut pivots_shape = vec![m];
+    pivots_shape.extend_from_slice(batch_dims);
+    let info_shape = if batch_dims.is_empty() {
+        vec![]
+    } else {
+        batch_dims.to_vec()
+    };
 
     Ok(LuTensorExResult {
         l: tensor_from_data(l_data, &l_shape)?,
         u: tensor_from_data(u_data, &u_shape)?,
-        pivots: all_pivots,
-        info,
+        pivots: tensor_from_data_on_space(all_pivots, &pivots_shape, a.logical_memory_space())?,
+        info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,
     })
 }
 

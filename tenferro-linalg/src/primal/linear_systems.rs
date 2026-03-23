@@ -35,8 +35,12 @@ fn permutation_sign_from_forward_pivots(pivots: &[usize], n: usize) -> Result<i3
     Ok(sign)
 }
 
-fn backend_pivots_to_usize(pivots: &[i32]) -> Result<Vec<usize>> {
-    pivots
+pub(crate) fn backend_pivots_to_usize(pivots: &Tensor<i32>) -> Result<Vec<usize>> {
+    let cpu = pivots.to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)?;
+    let contiguous = cpu.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.len();
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len]
         .iter()
         .map(|&pivot| {
             usize::try_from(pivot).map_err(|_| {

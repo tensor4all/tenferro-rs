@@ -47,7 +47,7 @@ fn tensor_result_structs_clone_and_preserve_shapes() {
     let lu = LuTensorResult {
         l: q.clone(),
         u: r.clone(),
-        pivots: vec![1, 0],
+        pivots: Tensor::from_slice(&[1_i32, 0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     };
     let eigen = EigenTensorResult {
         values: s.clone(),
@@ -71,7 +71,8 @@ fn tensor_result_structs_clone_and_preserve_shapes() {
     assert_eq!(svd_clone.vt.dims(), &[2, 2]);
     assert_eq!(lu_clone.l.dims(), &[2, 2]);
     assert_eq!(lu_clone.u.dims(), &[2, 2]);
-    assert_eq!(lu_clone.pivots, vec![1, 0]);
+    assert_eq!(lu_clone.pivots.dims(), &[2]);
+    assert_eq!(lu_clone.pivots.buffer().as_slice().unwrap(), &[1, 0]);
     assert_eq!(eigen_clone.values.dims(), &[2]);
     assert_eq!(eigen_clone.vectors.dims(), &[2, 2]);
     assert_eq!(eig_clone.values.dims(), &[2]);
@@ -100,7 +101,7 @@ fn linalg_prims_contract_is_visible_from_backend_tests() {
     let lu = PrimLuTensorResult {
         l: q.clone(),
         u: r.clone(),
-        pivots: vec![1, 0],
+        pivots: Tensor::from_slice(&[1_i32, 0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     };
     let eigen = PrimEigenTensorResult {
         values: s.clone(),
@@ -131,7 +132,8 @@ fn linalg_prims_contract_is_visible_from_backend_tests() {
 
     assert_eq!(qr.q.dims(), &[2, 2]);
     assert_eq!(svd.s.dims(), &[2]);
-    assert_eq!(lu.pivots, vec![1, 0]);
+    assert_eq!(lu.pivots.dims(), &[2]);
+    assert_eq!(lu.pivots.buffer().as_slice().unwrap(), &[1, 0]);
     assert_eq!(eigen.values.dims(), &[2]);
     assert_eq!(eig.vectors.dims(), &[2, 2]);
 }
@@ -155,7 +157,7 @@ fn backend_surface_reexports_linalg_prims_types_without_copy_adapters() {
     let lu: LuTensorResult<f64> = PrimLuTensorResult {
         l: q.clone(),
         u: r.clone(),
-        pivots: vec![1, 0],
+        pivots: Tensor::from_slice(&[1_i32, 0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     };
     let eigen: EigenTensorResult<f64> = PrimEigenTensorResult {
         values: s.clone(),
@@ -189,7 +191,8 @@ fn backend_surface_reexports_linalg_prims_types_without_copy_adapters() {
 
     assert_eq!(qr.q.dims(), &[2, 2]);
     assert_eq!(svd.s.dims(), &[2]);
-    assert_eq!(lu.pivots, vec![1, 0]);
+    assert_eq!(lu.pivots.dims(), &[2]);
+    assert_eq!(lu.pivots.buffer().as_slice().unwrap(), &[1, 0]);
     assert_eq!(eigen.values.dims(), &[2]);
     assert_eq!(eig.vectors.dims(), &[2, 2]);
 }

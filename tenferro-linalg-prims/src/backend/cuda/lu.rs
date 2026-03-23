@@ -22,7 +22,9 @@ use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
 use crate::backend::linalg_utils::{prepare_matrix_operand, MatrixOperandTransposeType};
 #[cfg(feature = "cuda")]
-use crate::backend::tensor_helpers::{batch_count, validate_matrix_shape};
+use crate::backend::tensor_helpers::{
+    batch_count, tensor_from_data_on_space, validate_matrix_shape,
+};
 use crate::{LuTensorExResult, LuTensorResult};
 
 #[cfg(feature = "cuda")]
@@ -469,7 +471,7 @@ fn lu_factor_common<T>(
     ctx: &mut tenferro_prims::CudaContext,
     a: &Tensor<T>,
     collect_info: bool,
-) -> Result<(Tensor<T>, Tensor<T>, Vec<i32>, Vec<i32>)>
+) -> Result<(Tensor<T>, Tensor<T>, Tensor<i32>, Tensor<i32>)>
 where
     T: CudaLinalgScalar,
 {
@@ -514,7 +516,19 @@ where
                 pivots_out[batch * m + i] = i as i32;
             }
         }
-        return Ok((l, u, pivots_out, info));
+        let mut pivots_shape = vec![m];
+        pivots_shape.extend_from_slice(batch_dims);
+        let info_shape = if batch_dims.is_empty() {
+            vec![]
+        } else {
+            batch_dims.to_vec()
+        };
+        return Ok((
+            l,
+            u,
+            tensor_from_data_on_space(pivots_out, &pivots_shape, a_work.logical_memory_space())?,
+            tensor_from_data_on_space(info, &info_shape, a_work.logical_memory_space())?,
+        ));
     }
 
     let dtype = T::cuda_data_type();
@@ -632,11 +646,22 @@ where
     launch_lu_split(ctx, &a_work, &l, m, n, k, lower_kernel)?;
     launch_lu_split(ctx, &a_work, &u, m, n, k, upper_kernel)?;
 
-    if collect_info {
-        Ok((l, u, pivots_out, info))
+    let mut pivots_shape = vec![m];
+    pivots_shape.extend_from_slice(batch_dims);
+    let info_shape = if batch_dims.is_empty() {
+        vec![]
     } else {
-        Ok((l, u, pivots_out, Vec::new()))
-    }
+        batch_dims.to_vec()
+    };
+    let pivots =
+        tensor_from_data_on_space(pivots_out, &pivots_shape, a_work.logical_memory_space())?;
+    let info = if collect_info {
+        tensor_from_data_on_space(info, &info_shape, a_work.logical_memory_space())?
+    } else {
+        tensor_from_data_on_space(vec![0i32; bc], &info_shape, a_work.logical_memory_space())?
+    };
+
+    Ok((l, u, pivots, info))
 }
 
 #[cfg(feature = "cuda")]

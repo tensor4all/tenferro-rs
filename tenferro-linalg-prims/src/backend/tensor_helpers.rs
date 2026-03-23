@@ -1,7 +1,7 @@
 //! Shared tensor validation and helper utilities for backend implementations.
 
-use tenferro_algebra::Conjugate;
-use tenferro_device::{Error, Result};
+use tenferro_algebra::{Conjugate, Scalar};
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_prims::TensorResolveConjContextFor;
 use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor};
 
@@ -223,4 +223,18 @@ where
     R: KeepCountScalar,
 {
     input.zero_trailing_by_counts(keep_counts, axis, structural_rank)
+}
+
+#[doc(hidden)]
+pub(crate) fn tensor_from_data_on_space<T: Scalar>(
+    data: Vec<T>,
+    dims: &[usize],
+    memory_space: LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    let tensor = Tensor::from_slice(&data, dims, MemoryOrder::ColumnMajor)?;
+    if tensor.logical_memory_space() == memory_space {
+        Ok(tensor)
+    } else {
+        tensor.to_memory_space_async(memory_space)
+    }
 }

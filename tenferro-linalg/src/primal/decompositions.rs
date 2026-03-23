@@ -264,9 +264,10 @@ where
     }
 
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
+    let pivots = super::linear_systems::backend_pivots_to_usize(&result.pivots)?;
 
     Ok(LuResult {
-        p: Some(result.pivots.into_iter().map(|p| p as usize).collect()),
+        p: Some(pivots),
         l: result.l,
         u: result.u,
     })
@@ -283,13 +284,10 @@ where
 {
     validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
+    let pivots = super::linear_systems::backend_pivots_to_usize(&result.pivots)?;
     Ok(LuFactorResult {
         factors: pack_lu_factors(&result.l, &result.u)?,
-        pivots: result
-            .pivots
-            .into_iter()
-            .map(|pivot| pivot as usize)
-            .collect(),
+        pivots,
     })
 }
 
@@ -307,15 +305,13 @@ where
     validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_ex(ctx, tensor)?;
     let factors = pack_lu_factors(&result.l, &result.u)?;
+    let pivots = super::linear_systems::backend_pivots_to_usize(&result.pivots)?;
+    let info = crate::backend::tensor_helpers::backend_info_to_vec(&result.info)?;
 
     Ok(LuFactorExResult {
         factors,
-        pivots: result
-            .pivots
-            .into_iter()
-            .map(|pivot| pivot as usize)
-            .collect(),
-        info: result.info,
+        pivots,
+        info,
     })
 }
 

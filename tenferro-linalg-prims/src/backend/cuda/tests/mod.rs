@@ -2,6 +2,7 @@ use crate::LinalgCapabilityOp;
 #[cfg(feature = "cuda")]
 use num_complex::{Complex32, Complex64};
 use num_traits::{Float, NumCast};
+use tenferro_algebra::Scalar;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -103,7 +104,7 @@ where
     }
 }
 
-fn tensor_data_on_cpu<T: crate::KernelLinalgScalar>(tensor: &Tensor<T>) -> Vec<T> {
+fn tensor_data_on_cpu<T: Scalar>(tensor: &Tensor<T>) -> Vec<T> {
     let cpu = tensor
         .to_memory_space_async(LogicalMemorySpace::MainMemory)
         .unwrap();
@@ -1154,7 +1155,10 @@ where
         tensor_data_on_cpu(&expected.u),
         "cuda lu_factor upper factor mismatch"
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1205,7 +1209,10 @@ where
     )
     .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(
         tensor_data_on_cpu(&got.l),
         tensor_data_on_cpu(&expected.l),
@@ -1216,7 +1223,10 @@ where
         tensor_data_on_cpu(&expected.u),
         "cuda lu_factor_ex upper factor mismatch"
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1263,8 +1273,11 @@ where
     )
     .unwrap();
 
-    assert_eq!(got.info, vec![0]);
-    assert_eq!(got.info, expected.info);
+    assert_eq!(tensor_data_on_cpu(&got.info), vec![0]);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_eq!(
         tensor_data_on_cpu(&got.l),
         tensor_data_on_cpu(&expected.l),
@@ -1275,7 +1288,10 @@ where
         tensor_data_on_cpu(&expected.u),
         "cuda lu_factor_ex upper factor mismatch for small nonzero pivot"
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1325,7 +1341,10 @@ fn cuda_lu_factor_matches_cpu_for_small_complex32_matrix() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f32 * f32::epsilon(),
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1375,7 +1394,10 @@ fn cuda_lu_factor_matches_cpu_for_small_complex64_matrix() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1427,7 +1449,10 @@ fn cuda_lu_factor_handles_lazily_conjugated_complex64_input() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1471,7 +1496,10 @@ fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex32() {
         )
         .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_complex_slice(
         "cuda lu_factor_ex complex32 lower factor",
         &tensor_data_on_cpu(&got.l),
@@ -1484,7 +1512,10 @@ fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex32() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f32 * f32::epsilon(),
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1528,7 +1559,10 @@ fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex64() {
         )
         .unwrap();
 
-    assert_eq!(got.info, expected.info);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_complex_slice(
         "cuda lu_factor_ex complex64 lower factor",
         &tensor_data_on_cpu(&got.l),
@@ -1541,7 +1575,10 @@ fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex64() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1585,8 +1622,11 @@ fn cuda_lu_factor_ex_reports_zero_pivot_for_complex_mixed_batch_complex32() {
         )
         .unwrap();
 
-    assert_eq!(got.info, vec![0, 2]);
-    assert_eq!(got.info, expected.info);
+    assert_eq!(tensor_data_on_cpu(&got.info), vec![0, 2]);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_complex_slice(
         "cuda lu_factor_ex complex32 zero pivot lower factor",
         &tensor_data_on_cpu(&got.l),
@@ -1599,7 +1639,10 @@ fn cuda_lu_factor_ex_reports_zero_pivot_for_complex_mixed_batch_complex32() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f32 * f32::epsilon(),
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -1643,8 +1686,11 @@ fn cuda_lu_factor_ex_reports_zero_pivot_for_complex_mixed_batch_complex64() {
         )
         .unwrap();
 
-    assert_eq!(got.info, vec![0, 2]);
-    assert_eq!(got.info, expected.info);
+    assert_eq!(tensor_data_on_cpu(&got.info), vec![0, 2]);
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
     assert_close_complex_slice(
         "cuda lu_factor_ex complex64 zero pivot lower factor",
         &tensor_data_on_cpu(&got.l),
@@ -1657,7 +1703,10 @@ fn cuda_lu_factor_ex_reports_zero_pivot_for_complex_mixed_batch_complex64() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
-    assert_eq!(got.pivots, expected.pivots);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
 }
 
 #[cfg(feature = "cuda")]
@@ -2361,12 +2410,12 @@ fn cuda_backend_reports_only_wired_capabilities() {
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex32>>::has_linalg_support(
             LinalgCapabilityOp::Slogdet
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::Slogdet
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f32>>::has_linalg_support(
@@ -2451,12 +2500,12 @@ fn cuda_backend_reports_only_wired_capabilities() {
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex32>>::has_linalg_support(
             LinalgCapabilityOp::Det
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex64>>::has_linalg_support(
             LinalgCapabilityOp::Det
-        )
+        ) == has_native_cuda
     );
     assert!(
         <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<num_complex::Complex32>>::has_linalg_support(
