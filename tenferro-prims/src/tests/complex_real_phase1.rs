@@ -38,7 +38,8 @@ where
         dims,
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let plan = <CpuBackend as TensorComplexRealPrims<C>>::plan(
         &mut ctx,
         &desc,
@@ -75,7 +76,8 @@ where
         &[dims[1]],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let plan = <CpuBackend as TensorComplexRealPrims<C>>::plan(
         &mut ctx,
         &desc,
@@ -195,7 +197,8 @@ fn cpu_complex_real_phase1_executes_real_for_complex64() {
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let plan = <CpuBackend as TensorComplexRealPrims<Complex64>>::plan(
         &mut ctx,
         &desc,
@@ -239,7 +242,8 @@ fn cpu_complex_real_phase1_executes_imag_for_complex32() {
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let plan = <CpuBackend as TensorComplexRealPrims<Complex32>>::plan(
         &mut ctx,
         &desc,

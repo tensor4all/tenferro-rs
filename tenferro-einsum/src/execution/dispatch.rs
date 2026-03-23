@@ -244,7 +244,7 @@ where
     Backend: EinsumBackend<Alg>,
 {
     let memory_space = tensor.logical_memory_space();
-    let mut reduced = alloc_tensor_from_pool::<Alg::Scalar>(&reduce.out_shape, memory_space, pool);
+    let mut reduced = alloc_tensor_from_pool::<Alg::Scalar>(&reduce.out_shape, memory_space, pool)?;
     let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: reduce.original_subs.clone(),
         modes_c: reduce.kept_subs.clone(),
@@ -350,7 +350,7 @@ where
         fused_dims.extend_from_slice(&c_dims[n_lo + n_ro..]);
         fused_strides.extend_from_slice(&c_strides[n_lo + n_ro..]);
 
-        let placeholder = alloc_tensor_from_pool::<Alg::Scalar>(&[], memory_space, pool);
+        let placeholder = alloc_tensor_from_pool::<Alg::Scalar>(&[], memory_space, pool)?;
         let out_tensor = std::mem::replace(output, placeholder);
         let mut c_fused = out_tensor.view_as_strided(fused_dims, fused_strides)?;
         drop(out_tensor); // Arc refcount → 1
@@ -393,7 +393,7 @@ where
         *output = restored;
     } else {
         let mut temp =
-            alloc_tensor_from_pool::<Alg::Scalar>(&plan.c_gemm_shape, memory_space, pool);
+            alloc_tensor_from_pool::<Alg::Scalar>(&plan.c_gemm_shape, memory_space, pool)?;
         let owned_plan;
         let prim_plan: &BackendPlan<Alg, Backend> = if let Some(gp) = gemm_plan {
             gp

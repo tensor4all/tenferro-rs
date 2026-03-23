@@ -14,8 +14,8 @@ fn test_ellipsis_batched_matrix_multiply() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
@@ -29,8 +29,8 @@ fn test_ellipsis_single_batch_dim() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[3, 2, 3], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[3, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[3, 2, 3], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[3, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
@@ -44,8 +44,8 @@ fn test_ellipsis_no_batch_dims() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
@@ -59,8 +59,8 @@ fn test_ellipsis_multiple_batch_dims() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 2, 3], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 3, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 2, 3], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 3, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
@@ -74,8 +74,8 @@ fn test_ellipsis_output_no_ellipsis() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->ik", &[&a, &b], None).unwrap();
@@ -106,8 +106,8 @@ fn test_ellipsis_inconsistent_batch_dims_error() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 3, 3, 5], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 3, 3, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None);
@@ -120,8 +120,8 @@ fn test_ellipsis_insufficient_dims_error() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None);
@@ -134,8 +134,8 @@ fn test_ellipsis_mixed_with_explicit_labels() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
@@ -149,8 +149,8 @@ fn test_ellipsis_elementwise_multiply() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...,...->...", &[&a, &b], None).unwrap();
@@ -163,7 +163,7 @@ fn test_ellipsis_sum_over_batch() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij->...", &[&a], None).unwrap();
 
@@ -175,8 +175,8 @@ fn test_ellipsis_outer_product() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...i,...j->...ij", &[&a, &b], None).unwrap();
@@ -219,7 +219,7 @@ fn test_ellipsis_trace() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[3, 4, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[3, 4, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ii->...", &[&a], None).unwrap();
 
@@ -231,7 +231,7 @@ fn test_ellipsis_diagonal_extraction() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ii->...i", &[&a], None).unwrap();
 
@@ -243,8 +243,8 @@ fn test_ellipsis_large_batch_dims() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4, 5, 6], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 3, 4, 6, 7], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4, 5, 6], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 3, 4, 6, 7], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
@@ -258,7 +258,7 @@ fn test_ellipsis_unary_operations() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij->...ji", &[&a], None).unwrap();
@@ -271,7 +271,7 @@ fn test_ellipsis_sum_all() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...->", &[&a], None).unwrap();
 
@@ -283,7 +283,7 @@ fn test_ellipsis_ellipsis_only_input() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...->...", &[&a], None).unwrap();
 
@@ -295,7 +295,7 @@ fn test_ellipsis_double_ellipsis_error() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...i...j->...ij", &[&a], None);
 
@@ -307,7 +307,7 @@ fn test_ellipsis_invalid_dot_error() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, ".ij->ij", &[&a], None);
 
@@ -319,8 +319,8 @@ fn test_ellipsis_matrix_vector_product() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-    let v = Tensor::<f64>::zeros(&[2, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+    let v = Tensor::<f64>::zeros(&[2, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...j->...i", &[&a, &v], None).unwrap();
@@ -333,8 +333,8 @@ fn test_ellipsis_contraction_with_batch_broadcast() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,jk->...ik", &[&a, &b], None).unwrap();
@@ -493,8 +493,8 @@ fn test_ellipsis_four_batch_dims() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 4, 5, 6], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 3, 4, 6, 7], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 4, 5, 6], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 3, 4, 6, 7], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)

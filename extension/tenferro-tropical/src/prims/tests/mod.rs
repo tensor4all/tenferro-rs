@@ -69,7 +69,8 @@ fn fallback_batched_gemm_and_make_contiguous_slow_path_are_covered() {
         &[2, 2],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     {
         let a_view = tensor_to_view(&a).unwrap();
         let b_view = tensor_to_view(&b).unwrap();
@@ -183,7 +184,8 @@ fn execute_helpers_report_invalid_axis_contracts() {
         &[2, 2],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     {
         let mut out_view = tensor_to_view_mut(&mut matrix_out).unwrap();
         let err = execute_anti_trace(
@@ -230,7 +232,8 @@ fn tropical_execute_and_family_impls_cover_error_and_fast_path_contracts() {
         &[2, 2],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     {
         let mut out_view = tensor_to_view_mut(&mut output).unwrap();
         let err = tropical_execute(

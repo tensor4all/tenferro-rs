@@ -330,7 +330,7 @@ where
                 input.dims(),
                 output.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let temp_strides = temp.strides().to_vec();
             let temp_ptr = tensor_device_mut_ptr(&temp, "CUDA complex-real temporary")?;
             let runtime_op = match unary_op {

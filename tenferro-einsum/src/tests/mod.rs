@@ -13,7 +13,8 @@ fn infer_memory_space_single_cpu() {
         &[2, 3],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let space = infer_memory_space(&[&a]).unwrap();
     assert_eq!(space, LogicalMemorySpace::MainMemory);
 }
@@ -24,17 +25,20 @@ fn infer_memory_space_multiple_cpu() {
         &[2, 3],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let b = Tensor::<f64>::zeros(
         &[3, 4],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let c = Tensor::<f64>::zeros(
         &[4, 5],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let space = infer_memory_space(&[&a, &b, &c]).unwrap();
     assert_eq!(space, LogicalMemorySpace::MainMemory);
 }
@@ -66,7 +70,8 @@ fn infer_memory_space_mixed_errors() {
         &[2, 3],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     // Verify that identical spaces produce Ok
     let space = infer_memory_space(&[&a, &a]).unwrap();
     assert_eq!(space, LogicalMemorySpace::MainMemory);

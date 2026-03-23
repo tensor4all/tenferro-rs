@@ -129,6 +129,7 @@ fn tensor_zeros<T: Scalar>(dims: &[usize]) -> Tensor<T> {
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
     )
+    .unwrap()
 }
 
 /// Column-major strides in element counts (not isize).

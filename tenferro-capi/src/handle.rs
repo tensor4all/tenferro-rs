@@ -39,7 +39,7 @@ pub(crate) fn ensure_col_major(
         tensor.dims(),
         tensor.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [tensor.dims(), result.dims()];
     let plan = <CpuBackend as TensorSemiringCore<Standard<f64>>>::plan(ctx, &desc, &shapes)?;

@@ -1199,7 +1199,8 @@ fn multi_dot_jvp_exact(
             &[0, 0],
             tenferro_device::LogicalMemorySpace::MainMemory,
             tenferro_tensor::MemoryOrder::ColumnMajor
-        );
+        )
+        .unwrap();
         count
     ];
     suffixes[count - 1] = eye_tensor(primals[count - 1].dims()[1]);
@@ -1244,7 +1245,8 @@ fn multi_dot_vjp_exact(
             &[0, 0],
             tenferro_device::LogicalMemorySpace::MainMemory,
             tenferro_tensor::MemoryOrder::ColumnMajor
-        );
+        )
+        .unwrap();
         count
     ];
     suffixes[count - 1] = eye_tensor(primals[count - 1].dims()[1]);

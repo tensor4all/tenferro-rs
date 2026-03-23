@@ -185,7 +185,7 @@ where
                 inputs[0].dims(),
                 input_space,
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             {
                 let mut temp_view = tensor_to_view_mut(&mut temp)?;
                 execute_complex_real_unary_typed::<Input>(

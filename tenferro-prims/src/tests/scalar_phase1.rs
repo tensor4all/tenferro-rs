@@ -64,7 +64,8 @@ fn cpu_scalar_phase1_executes_add_and_mean_reduction() {
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut ctx,
         &add_plan,
@@ -95,7 +96,8 @@ fn cpu_scalar_phase1_executes_add_and_mean_reduction() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut ctx,
         &mean_plan,
@@ -130,7 +132,8 @@ fn cpu_scalar_phase1_mean_reduction_handles_non_contiguous_input() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut ctx,
         &mean_plan,

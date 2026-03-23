@@ -209,7 +209,7 @@ where
 
     // Otherwise copy to a contiguous pooled buffer
     let memory_space = tensor.logical_memory_space();
-    let mut contiguous = alloc_tensor_from_pool::<A::Scalar>(view.dims(), memory_space, pool);
+    let mut contiguous = alloc_tensor_from_pool::<A::Scalar>(view.dims(), memory_space, pool)?;
     let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [view.dims(), contiguous.dims()];
     let plan = <B as TensorSemiringCore<A>>::plan(ctx, &desc, &shapes)?;
@@ -245,7 +245,7 @@ where
         if let Some(src_data) = tensor.buffer().as_slice() {
             let dims = tensor.dims();
             let mut result =
-                alloc_tensor_from_pool::<A::Scalar>(dims, LogicalMemorySpace::MainMemory, pool);
+                alloc_tensor_from_pool::<A::Scalar>(dims, LogicalMemorySpace::MainMemory, pool)?;
 
             let src =
                 strided_view::StridedView::new(src_data, dims, tensor.strides(), tensor.offset())
@@ -272,7 +272,7 @@ where
     }
 
     let memory_space = tensor.logical_memory_space();
-    let mut result = alloc_tensor_from_pool::<A::Scalar>(tensor.dims(), memory_space, pool);
+    let mut result = alloc_tensor_from_pool::<A::Scalar>(tensor.dims(), memory_space, pool)?;
     let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [tensor.dims(), result.dims()];
     let plan = <B as TensorSemiringCore<A>>::plan(ctx, &desc, &shapes)?;

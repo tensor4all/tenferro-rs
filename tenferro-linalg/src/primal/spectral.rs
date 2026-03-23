@@ -119,7 +119,7 @@ where
             &dims,
             tensor.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        ));
+        )?);
     }
 
     let svd_result = svd(ctx, tensor, None)?;
@@ -222,7 +222,7 @@ where
             &dims,
             input.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        ));
+        )?);
     }
 
     let batch_norms = crate::ad_helpers::matrix_exp_batch_1_norms_tensor(ctx, &input)?;

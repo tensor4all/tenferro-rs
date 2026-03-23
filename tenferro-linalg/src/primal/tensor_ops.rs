@@ -152,7 +152,7 @@ where
     let a_input = ensure_col_major(a);
     let tau_input = ensure_col_major(tau);
     let memory_space = a_input.logical_memory_space();
-    let mut q = Tensor::eye(m, memory_space, MemoryOrder::ColumnMajor).narrow(1, 0, n)?;
+    let mut q = crate::prims_bridge::identity_matrix(m, memory_space)?.narrow(1, 0, n)?;
     for _ in batch_dims {
         q = q.unsqueeze(-1)?;
     }
@@ -169,9 +169,9 @@ where
     for reflector in (0..k).rev() {
         let tail_rows = m - reflector;
         let tail = if tail_rows == 1 {
-            Tensor::ones(&vector_tail_dims, memory_space, MemoryOrder::ColumnMajor)
+            Tensor::ones(&vector_tail_dims, memory_space, MemoryOrder::ColumnMajor)?
         } else {
-            let head = Tensor::ones(&vector_tail_dims, memory_space, MemoryOrder::ColumnMajor);
+            let head = Tensor::ones(&vector_tail_dims, memory_space, MemoryOrder::ColumnMajor)?;
             let lower = a_input
                 .narrow(0, reflector + 1, tail_rows - 1)?
                 .select(1, reflector)?;
@@ -251,15 +251,15 @@ where
             &output_dims,
             memory_space,
             MemoryOrder::ColumnMajor,
-        ));
+        )?);
     }
 
-    let mut current = Tensor::ones(base.dims(), memory_space, MemoryOrder::ColumnMajor);
+    let mut current = Tensor::ones(base.dims(), memory_space, MemoryOrder::ColumnMajor)?;
     let mut columns_out = Vec::with_capacity(columns);
 
     columns_out.push(current.clone());
     for _ in 1..columns {
-        let mut next = Tensor::zeros(base.dims(), memory_space, MemoryOrder::ColumnMajor);
+        let mut next = Tensor::zeros(base.dims(), memory_space, MemoryOrder::ColumnMajor)?;
         crate::prims_bridge::scalar_binary_same_shape_into(
             ctx,
             &current,

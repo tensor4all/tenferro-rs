@@ -141,7 +141,7 @@ fn batched_identity<T: KernelLinalgScalar>(
 ) -> Result<Tensor<T>> {
     let mut reshape_dims = vec![n, n];
     reshape_dims.extend(std::iter::repeat(1).take(batch_dims.len()));
-    let eye = Tensor::eye(n, logical_memory_space, MemoryOrder::ColumnMajor);
+    let eye = crate::prims_bridge::identity_matrix(n, logical_memory_space)?;
     let eye = eye.reshape(&reshape_dims)?;
     eye.broadcast(&output_dims(&[n, n], batch_dims))
 }
@@ -192,7 +192,7 @@ where
             &output_dims(&[n, n], batch_dims),
             scaled_input.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        ));
+        )?);
     }
 
     let coeffs = PADE13_COEFFS

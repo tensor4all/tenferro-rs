@@ -11,11 +11,16 @@ where
     type Tangent = StructuredTensor<T>;
 
     fn zero_tangent(&self) -> Self::Tangent {
-        let payload = Tensor::zeros(
+        let payload = match Tensor::zeros(
             self.payload().dims(),
             self.payload().logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        );
+        ) {
+            Ok(payload) => payload,
+            Err(err) => {
+                unreachable!("StructuredTensor::zero_tangent should preserve a valid layout: {err}")
+            }
+        };
         match StructuredTensor::new(
             self.logical_dims().to_vec(),
             self.axis_classes().to_vec(),
@@ -42,11 +47,16 @@ where
     }
 
     fn seed_cotangent(&self) -> Self::Tangent {
-        let payload = Tensor::ones(
+        let payload = match Tensor::ones(
             self.payload().dims(),
             self.payload().logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        );
+        ) {
+            Ok(payload) => payload,
+            Err(err) => unreachable!(
+                "StructuredTensor::seed_cotangent should preserve a valid layout: {err}"
+            ),
+        };
         match StructuredTensor::new(
             self.logical_dims().to_vec(),
             self.axis_classes().to_vec(),

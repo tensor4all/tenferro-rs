@@ -82,7 +82,7 @@ pub(super) fn tensor_device_addr_with_offset<S: Scalar>(
     Ok(tensor_device_ptr_with_offset(name, tensor)? as u64)
 }
 
-pub(super) fn new_gpu_tensor<S: Scalar>(dims: &[usize], device_id: usize) -> Tensor<S> {
+pub(super) fn new_gpu_tensor<S: Scalar>(dims: &[usize], device_id: usize) -> Result<Tensor<S>> {
     Tensor::<S>::zeros(
         dims,
         LogicalMemorySpace::GpuMemory { device_id },

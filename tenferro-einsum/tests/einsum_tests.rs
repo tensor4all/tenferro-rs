@@ -623,7 +623,7 @@ fn einsum_with_path_rejects_structurally_invalid_paths() {
             "{desc} must be rejected by einsum_with_path"
         );
 
-        let mut out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+        let mut out = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
         let with_path_into = einsum_with_path_into::<S, CpuBackend>(
             &mut ctx,
             &subs,
@@ -650,7 +650,7 @@ fn einsum_with_subscripts_into_accumulate() {
     let expected_mm =
         einsum_with_subscripts::<S, CpuBackend>(&mut ctx, &subs, &[&a, &b], None).unwrap();
 
-    let mut out = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let mut out = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     einsum_with_subscripts_into::<S, CpuBackend>(
         &mut ctx,
         &subs,
@@ -686,7 +686,7 @@ fn einsum_with_path_into_accumulate() {
     let base =
         einsum_with_path::<S, CpuBackend>(&mut ctx, &subs, &pairs, &[&a, &b, &c], None).unwrap();
 
-    let mut out = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let mut out = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     einsum_with_path_into::<S, CpuBackend>(
         &mut ctx,
         &subs,
@@ -716,7 +716,7 @@ fn einsum_into_overwrite() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let mut c = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+    let mut c = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
 
     // C = 1.0 * (A @ B) + 0.0 * C
     einsum_into::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 1.0, 0.0, &mut c, None).unwrap();
@@ -741,7 +741,7 @@ fn einsum_into_accumulate() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let mut c = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let mut c = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
 
     // C = 2.0 * (A @ B) + 3.0 * C
     einsum_into::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], 2.0, 3.0, &mut c, None).unwrap();
@@ -861,7 +861,7 @@ fn einsum_rrule_matmul() {
         COL,
     )
     .unwrap();
-    let grad_c = Tensor::<f64>::ones(&[2, 4], MEM, COL);
+    let grad_c = Tensor::<f64>::ones(&[2, 4], MEM, COL).unwrap();
 
     let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &grad_c).unwrap();
     assert_eq!(grads.len(), 2);
@@ -906,7 +906,7 @@ fn einsum_frule_matmul() {
         COL,
     )
     .unwrap();
-    let da = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
 
     // dC = einsum("ij,jk->ik", [dA, B]) since only A has a tangent
     let dc = einsum_frule::<S, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], &[Some(&da), None])
@@ -930,8 +930,8 @@ fn einsum_frule_both_tangents() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
-    let db = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    let db = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
 
     // dC = dA @ B + A @ dB
     let dc =
@@ -1151,8 +1151,8 @@ fn tracked_einsum_rejects_invalid_subscripts() {
     use tidu::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
-    let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
-    let b = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
+    let b = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
 
     let err = tracked_einsum::<S, CpuBackend>(ctx, "ij,jk", &[&a, &b])
         .err()
@@ -1165,8 +1165,8 @@ fn tracked_einsum_rejects_poisoned_backend_context_on_entry() {
     use tidu::TrackedValue;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
-    let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
-    let b = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let a = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
+    let b = TrackedValue::new(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
     poison_mutex(&ctx);
 
     let err = tracked_einsum::<S, CpuBackend>(ctx, "ij,jk->ik", &[&a, &b])
@@ -1181,8 +1181,8 @@ fn tracked_einsum_pullback_rejects_poisoned_backend_context() {
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
-    let a = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL));
-    let b = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let a = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
+    let b = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
     let out = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,jk->ik", &[&a, &b]).unwrap();
     let loss = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,ij->", &[&out, &out]).unwrap();
 
@@ -1198,10 +1198,10 @@ fn tracked_einsum_hvp_rejects_poisoned_backend_context() {
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
-    let mut a_data = Tensor::<f64>::ones(&[2, 2], MEM, COL);
-    a_data.set_fw_grad(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let mut a_data = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    a_data.set_fw_grad(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
     let a = tape.leaf(a_data);
-    let b = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL));
+    let b = tape.leaf(Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap());
     let out = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,jk->ik", &[&a, &b]).unwrap();
     let loss = tracked_einsum::<S, CpuBackend>(Arc::clone(&ctx), "ij,ij->", &[&out, &out]).unwrap();
 
@@ -2400,7 +2400,7 @@ fn einsum_auto_propagates_fw_grad() {
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
 
     // Set tangent on a only: dA = ones
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     a.set_fw_grad(da.clone());
 
     // C = einsum("ij,jk->ik", A, B)
@@ -2467,7 +2467,7 @@ fn hvp_via_fw_grad_composition() {
     let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
 
     // Tangent direction: dA = ones
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     a_data.set_fw_grad(da);
 
     let tape = Tape::<Tensor<f64>>::new();
@@ -2515,7 +2515,7 @@ fn hvp_via_fw_grad_composition() {
 
     // HVP: d(grad_A)/dt = 2*(dA@B)@B^T where dA = ones
     // dA@B = ones @ B = einsum("ij,jk->ik", ones, B)
-    let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     let da_b = einsum::<S, CpuBackend>(
         &mut ctx.lock().unwrap(),
         "ij,jk->ik",
@@ -2558,8 +2558,8 @@ fn hvp_via_leaf_with_tangent_tracks_einsum_direction() {
     let tape = Tape::<Tensor<f64>>::new();
     let x = tape
         .leaf_with_tangent(
-            Tensor::<f64>::ones(&[3], MEM, COL),
-            Tensor::<f64>::ones(&[3], MEM, COL),
+            Tensor::<f64>::ones(&[3], MEM, COL).unwrap(),
+            Tensor::<f64>::ones(&[3], MEM, COL).unwrap(),
         )
         .unwrap();
     let x_id = x.node_id().unwrap();
@@ -2587,8 +2587,8 @@ fn einsum_hvp_matches_manual_matmul_rule() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[2.0, 1.0, 0.0, 3.0], &[2, 2], COL).unwrap();
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
-    let grad_c = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    let grad_c = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     let dgrad_c = Tensor::<f64>::from_slice(&[0.5, 1.0, 1.5, 2.0], &[2, 2], COL).unwrap();
 
     let hvps = einsum_hvp::<S, CpuBackend>(
@@ -2608,7 +2608,7 @@ fn einsum_hvp_matches_manual_matmul_rule() {
     let expected_hvp_a = {
         let term_from_cot =
             einsum::<S, CpuBackend>(&mut ctx, "ik,jk->ij", &[&dgrad_c, &b], None).unwrap();
-        let db_term = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+        let db_term = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
         let _ = db_term;
         term_from_cot
     };
@@ -2949,7 +2949,7 @@ fn nested_einsum_propagates_fw_grad() {
     let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
 
     // Set tangent on a only
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     a.set_fw_grad(da.clone());
 
     // Parenthesized: (ij,jk),kl->il
@@ -2974,7 +2974,7 @@ fn einsum_frule_parenthesized_operand_count_mismatch() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
 
     // "(ij,jk),kl->il" expects 3 operands, but only 2 given
     let result =
@@ -2991,7 +2991,7 @@ fn einsum_frule_parenthesized() {
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
     let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
 
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
 
     let nested_tangent = einsum_frule::<S, CpuBackend>(
         &mut ctx,
@@ -3022,7 +3022,7 @@ fn einsum_into_parenthesized() {
     let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
 
     // Test overwrite: output = 1.0 * einsum + 0.0 * output
-    let mut nested_out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+    let mut nested_out = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
     einsum_into::<S, CpuBackend>(
         &mut ctx,
         "(ij,jk),kl->il",
@@ -3034,7 +3034,7 @@ fn einsum_into_parenthesized() {
     )
     .unwrap();
 
-    let mut flat_out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+    let mut flat_out = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
     einsum_into::<S, CpuBackend>(
         &mut ctx,
         "ij,jk,kl->il",
@@ -3058,7 +3058,7 @@ fn einsum_into_parenthesized() {
     }
 
     // Test accumulate: output = 2.0 * einsum + 1.0 * output
-    let mut accum_out = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let mut accum_out = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     einsum_into::<S, CpuBackend>(
         &mut ctx,
         "(ij,jk),kl->il",
@@ -3092,7 +3092,7 @@ fn dual_einsum_parenthesized() {
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
     let c = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], COL).unwrap();
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL);
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
 
     let a_dual = DualValue::with_tangent(a.clone(), da.clone()).unwrap();
     let b_dual = DualValue::new(b.clone());

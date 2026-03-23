@@ -89,7 +89,7 @@ where
         src.dims(),
         src.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     output.set_preferred_compute_device(src.preferred_compute_device());
     copy_batched_column_major(ctx, src, &mut output)?;
     Ok(output)

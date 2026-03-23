@@ -76,22 +76,26 @@ fn metadata_family_distinguishes_i32_and_bool_tensor_handles() {
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let bool_input = Tensor::<u8>::zeros(
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let mut i32_output = Tensor::<i32>::zeros(
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let mut bool_output = Tensor::<u8>::zeros(
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     let i32_ref = MetadataTensorRef::I32(&i32_input);
     let bool_ref = MetadataTensorRef::Bool(&bool_input);

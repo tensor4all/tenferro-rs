@@ -90,7 +90,8 @@ pub unsafe extern "C" fn tfe_tensor_f64_zeros(
             &dims,
             LogicalMemorySpace::MainMemory,
             MemoryOrder::ColumnMajor,
-        );
+        )
+        .map_err(|e| map_device_error(&e))?;
         Ok(tensor_to_handle(t))
     }));
 

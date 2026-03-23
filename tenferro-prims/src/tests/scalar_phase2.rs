@@ -45,7 +45,8 @@ fn cpu_scalar_phase2_executes_where_for_same_shape_real_tensors() {
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     <CpuBackend as TensorScalarPrims<Standard<f64>>>::execute(
         &mut ctx,

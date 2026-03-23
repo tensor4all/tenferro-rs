@@ -310,8 +310,8 @@ where
 
             if let Some((node, tape)) = out_residual.reverse_handle() {
                 let reverse_specs = reverse_specs.clone();
-                let zero_a = zero_like(self.a.structured_primal().payload());
-                let zero_b = zero_like(self.b.structured_primal().payload());
+                let zero_a = zero_like(self.a.structured_primal().payload())?;
+                let zero_b = zero_like(self.b.structured_primal().payload())?;
                 tape::register_rule::<T>(
                     &tape,
                     node,

@@ -67,12 +67,14 @@ fn cuda_stub_reports_errors_and_resolves_conj() {
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let mut output = Tensor::<f64>::zeros(
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let desc = SemiringCoreDescriptor::MakeContiguous;
 
     let plan_result =
@@ -148,12 +150,14 @@ fn rocm_stub_reports_errors_and_resolves_conj() {
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let mut output = Tensor::<f64>::zeros(
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let desc = SemiringCoreDescriptor::MakeContiguous;
 
     let plan_result =

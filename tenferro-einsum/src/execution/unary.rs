@@ -310,7 +310,7 @@ where
                 &inter_shape,
                 output.logical_memory_space(),
                 pool,
-            );
+            )?;
             // Recursive call for trace/reduce: current_subs → inter_subs
             // inter_subs has no repeated labels, so this hits a different branch.
             execute_single_tensor_einsum::<Alg, Backend>(

@@ -202,7 +202,8 @@ fn analytic_prims_execute_sqrt_and_reject_unsupported_plan_requests() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &plan,

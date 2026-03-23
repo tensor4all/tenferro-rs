@@ -109,7 +109,7 @@ where
         output_dtype: MetadataDType::I32,
     };
     assert!(<C::MetadataBackend as TensorMetadataPrims>::has_metadata_support(iota_desc.clone()));
-    let mut iota = Tensor::<i32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor);
+    let mut iota = Tensor::<i32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
         ctx,
         &iota_desc,
@@ -128,7 +128,7 @@ where
 
     let lhs_i32 = tensor_i32(&[0, 1, 2, 3], &dims, memory_space);
     let rhs_i32 = tensor_i32(&[0, 0, 2, 9], &dims, memory_space);
-    let mut neq = Tensor::<u8>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor);
+    let mut neq = Tensor::<u8>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let binary_desc = MetadataPrimsDescriptor::Binary {
         op: MetadataBinaryOp::NotEqual,
         lhs_dtype: MetadataDType::I32,
@@ -160,7 +160,7 @@ where
 
     let bool_lhs = tensor_u8(&[0, 1, 1, 0], &dims, memory_space);
     let bool_rhs = tensor_u8(&[0, 0, 1, 1], &dims, memory_space);
-    let mut bool_neq = Tensor::<u8>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor);
+    let mut bool_neq = Tensor::<u8>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let bool_binary_desc = MetadataPrimsDescriptor::Binary {
         op: MetadataBinaryOp::NotEqual,
         lhs_dtype: MetadataDType::Bool,
@@ -192,7 +192,8 @@ where
     .unwrap();
     assert_tensor_eq(&bool_neq, &[0, 1, 0, 1]);
 
-    let mut where_i32 = Tensor::<i32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor);
+    let mut where_i32 =
+        Tensor::<i32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let cond = tensor_u8(&[1, 0, 1, 0], &dims, memory_space);
     let on_true_i32 = tensor_i32(&[10, 20, 30, 40], &dims, memory_space);
     let on_false_i32 = tensor_i32(&[-1, -2, -3, -4], &dims, memory_space);
@@ -230,7 +231,8 @@ where
     .unwrap();
     assert_tensor_eq(&where_i32, &[10, -2, 30, -4]);
 
-    let mut where_bool = Tensor::<u8>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor);
+    let mut where_bool =
+        Tensor::<u8>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let on_true_bool = tensor_u8(&[1, 0, 1, 0], &dims, memory_space);
     let on_false_bool = tensor_u8(&[0, 1, 0, 1], &dims, memory_space);
     let bool_ternary_desc = MetadataPrimsDescriptor::Ternary {
@@ -280,7 +282,8 @@ where
         <C::MetadataBackend as TensorMetadataPrims>::has_metadata_support(reduction_desc.clone())
     );
     let reduce_input = tensor_u8(&[1, 0, 1, 1], &[2, 2], memory_space);
-    let mut reduce_output = Tensor::<i32>::zeros(&[2], memory_space, MemoryOrder::ColumnMajor);
+    let mut reduce_output =
+        Tensor::<i32>::zeros(&[2], memory_space, MemoryOrder::ColumnMajor).unwrap();
     let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
         ctx,
         &reduction_desc,
@@ -310,7 +313,8 @@ where
         )
     );
     let reduce_i32_input = tensor_i32(&[1, 2, 3, 4], &[2, 2], memory_space);
-    let mut reduce_i32_output = Tensor::<i32>::zeros(&[2], memory_space, MemoryOrder::ColumnMajor);
+    let mut reduce_i32_output =
+        Tensor::<i32>::zeros(&[2], memory_space, MemoryOrder::ColumnMajor).unwrap();
     let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
         ctx,
         &reduction_i32_desc,
@@ -338,7 +342,7 @@ where
     let modes_c = vec![2u32, 0];
     let input_data: Vec<i32> = (0..24).collect();
     let input = tensor_i32(&input_data, &input_dims, memory_space);
-    let mut output = Tensor::<i32>::zeros(&[4, 2], memory_space, MemoryOrder::ColumnMajor);
+    let mut output = Tensor::<i32>::zeros(&[4, 2], memory_space, MemoryOrder::ColumnMajor).unwrap();
     let desc = MetadataPrimsDescriptor::Reduction {
         modes_a: modes_a.clone(),
         modes_c: modes_c.clone(),
@@ -383,7 +387,7 @@ where
         op: MetadataReductionOp::Sum,
     };
     let mut duplicate_input_output =
-        Tensor::<i32>::zeros(&[2], memory_space, MemoryOrder::ColumnMajor);
+        Tensor::<i32>::zeros(&[2], memory_space, MemoryOrder::ColumnMajor).unwrap();
     assert!(<C::MetadataBackend as TensorMetadataPrims>::plan(
         ctx,
         &duplicate_input_desc,
@@ -400,7 +404,7 @@ where
         op: MetadataReductionOp::Sum,
     };
     let mut duplicate_output_output =
-        Tensor::<i32>::zeros(&[3, 3], memory_space, MemoryOrder::ColumnMajor);
+        Tensor::<i32>::zeros(&[3, 3], memory_space, MemoryOrder::ColumnMajor).unwrap();
     assert!(<C::MetadataBackend as TensorMetadataPrims>::plan(
         ctx,
         &duplicate_output_desc,

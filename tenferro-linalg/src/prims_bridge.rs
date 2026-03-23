@@ -38,7 +38,7 @@ where
         &c_shape,
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )?;
 
     let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims: vec![],
@@ -123,7 +123,7 @@ where
         &output_dims,
         lhs.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let desc = SemiringCoreDescriptor::BatchedGemm {
         batch_dims,
         m,
@@ -182,6 +182,29 @@ pub(crate) fn full_like_constant<T: LinalgScalar>(
     }
 }
 
+pub(crate) fn identity_matrix<T: LinalgScalar>(
+    n: usize,
+    memory_space: LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    let numel = n
+        .checked_mul(n)
+        .ok_or_else(|| Error::InvalidArgument(format!("identity_matrix overflow for n={n}")))?;
+    let mut data = std::iter::repeat_with(T::zero)
+        .take(numel)
+        .collect::<Vec<_>>();
+    for i in 0..n {
+        data[i + i * n] = T::one();
+    }
+    let n_isize = isize::try_from(n)
+        .map_err(|_| Error::StrideError(format!("identity_matrix stride overflow for n={n}")))?;
+    let tensor = Tensor::from_vec(data, &[n, n], &[1, n_isize], 0)?;
+    if memory_space == LogicalMemorySpace::MainMemory {
+        Ok(tensor)
+    } else {
+        tensor.to_memory_space_async(memory_space)
+    }
+}
+
 pub(crate) fn resolve_conj<T, C>(ctx: &mut C, input: &Tensor<T>) -> Tensor<T>
 where
     T: LinalgScalar + tenferro_algebra::Conjugate,
@@ -204,7 +227,7 @@ where
         lhs.dims(),
         lhs.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     scalar_binary_same_shape_into(ctx, lhs, rhs, op, &mut output)?;
     Ok(output)
 }
@@ -277,7 +300,7 @@ where
         cond.dims(),
         cond.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
         ctx,
         &desc,
@@ -308,7 +331,7 @@ where
         input.dims(),
         input.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
         ctx,
         &desc,
@@ -340,7 +363,7 @@ where
         input.dims(),
         input.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan = <C::ComplexRealBackend as TensorComplexRealPrims<T>>::plan(
         ctx,
         &desc,
@@ -421,7 +444,7 @@ where
             lhs.dims(),
             lhs.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        );
+        )?;
         let plan = <C::ComplexScaleBackend as TensorComplexScalePrims<Complex32>>::plan(
             ctx,
             &desc,
@@ -455,7 +478,7 @@ where
             lhs.dims(),
             lhs.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        );
+        )?;
         let plan = <C::ComplexScaleBackend as TensorComplexScalePrims<Complex64>>::plan(
             ctx,
             &desc,
@@ -501,7 +524,7 @@ where
         input.dims(),
         input.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan =
         <<C as TensorScalarContextFor<Standard<T>>>::ScalarBackend as TensorAnalyticPrims<
             Standard<T>,
@@ -529,7 +552,7 @@ where
         lhs.dims(),
         lhs.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan =
         <<C as TensorScalarContextFor<Standard<T>>>::ScalarBackend as TensorAnalyticPrims<
             Standard<T>,
@@ -573,7 +596,7 @@ where
         &output_dims,
         input.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
         ctx,
         &desc,
@@ -638,7 +661,7 @@ where
         &output_dims,
         input.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan = <C::ComplexRealBackend as TensorComplexRealPrims<T>>::plan(
         ctx,
         &desc,

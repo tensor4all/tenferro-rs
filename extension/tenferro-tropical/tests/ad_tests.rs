@@ -417,7 +417,7 @@ fn tracked_maxplus_matmul_pullback() {
     use tenferro_device::LogicalMemorySpace;
     use tenferro_einsum::tracked_einsum;
 
-    let ones = Tensor::<f64>::ones(&[2, 2], LogicalMemorySpace::MainMemory, COL);
+    let ones = Tensor::<f64>::ones(&[2, 2], LogicalMemorySpace::MainMemory, COL).unwrap();
     let ones_tracked = tidu::TrackedValue::new(ones);
 
     let ctx = Arc::new(Mutex::new(ctx()));

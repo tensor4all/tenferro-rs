@@ -55,7 +55,8 @@ fn run_unary_f64(ctx: &mut CpuContext, op: AnalyticUnaryOp, input: &Tensor<f64>)
         input.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         ctx,
         &plan,
@@ -84,7 +85,8 @@ fn run_binary_f64(
         lhs.dims(),
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         ctx,
         &plan,
@@ -169,7 +171,8 @@ fn cpu_analytic_phase1_executes_exp_and_pow() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &exp_plan,
@@ -198,7 +201,8 @@ fn cpu_analytic_phase1_executes_exp_and_pow() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &pow_plan,
@@ -231,7 +235,8 @@ fn cpu_analytic_phase2_executes_extended_unary_and_moment_reductions() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &asin_plan,
@@ -261,7 +266,8 @@ fn cpu_analytic_phase2_executes_extended_unary_and_moment_reductions() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &var_plan,
@@ -288,7 +294,8 @@ fn cpu_analytic_phase2_executes_extended_unary_and_moment_reductions() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &std_plan,
@@ -409,7 +416,8 @@ fn cuda_analytic_phase1_supports_and_executes_sqrt_when_runtime_available() {
         &[2, 2],
         tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
         tenferro_tensor::MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
@@ -461,7 +469,8 @@ fn cuda_analytic_phase1_supports_and_executes_log_when_runtime_available() {
         &[2, 2],
         tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
         tenferro_tensor::MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
@@ -516,7 +525,8 @@ fn cuda_analytic_phase1_supports_and_executes_pow_when_runtime_available() {
         &[2],
         tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
         tenferro_tensor::MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,

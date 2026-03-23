@@ -17,6 +17,7 @@ fn zeros(dims: &[usize]) -> Tensor<f64> {
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
     )
+    .unwrap()
 }
 
 fn assert_tensor_close(lhs: &Tensor<f64>, rhs: &Tensor<f64>) {

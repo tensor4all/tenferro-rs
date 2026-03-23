@@ -40,7 +40,7 @@ fn inverse_rhs<T: KernelLinalgScalar>(
     batch_dims: &[usize],
     memory_space: tenferro_device::LogicalMemorySpace,
 ) -> Result<Tensor<T>> {
-    let mut rhs = Tensor::eye(n, memory_space, MemoryOrder::ColumnMajor);
+    let mut rhs = crate::prims_bridge::identity_matrix(n, memory_space)?;
     for _ in batch_dims {
         rhs = rhs.unsqueeze(-1)?;
     }
