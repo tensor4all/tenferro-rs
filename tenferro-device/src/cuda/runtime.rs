@@ -4,6 +4,7 @@
 
 mod kernels;
 mod memory;
+mod pointwise;
 mod shared;
 mod state;
 mod structural;
