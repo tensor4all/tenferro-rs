@@ -39,9 +39,10 @@ impl GeneratorState {
 
 /// Pseudo-random number generator used across the tenferro workspace.
 ///
-/// The CPU half uses an MT19937 engine seeded from a `u64`. The CUDA-facing
-/// constructor is present for API symmetry but only records the seed/device
-/// metadata for now.
+/// The CPU half uses an MT19937 engine seeded from a `u64`. CUDA execution
+/// uses the same public `Generator` surface but advances an internal
+/// seed/offset pair that device kernels consume through a Philox-style
+/// counter-based scheme.
 ///
 /// # Examples
 ///

@@ -145,10 +145,7 @@ impl CudaRuntime {
         stream
             .synchronize()
             .map_err(|err| cuda_error("CUDA stream synchronize", err))?;
-        let delta = numel_u64
-            .checked_mul(2)
-            .ok_or_else(|| Error::DeviceError("CUDA generator offset overflow".into()))?;
-        generator.advance_cuda_offset(self.device_id(), delta)
+        generator.advance_cuda_offset(self.device_id(), numel_u64)
     }
 
     /// Fill a raw CUDA buffer with integer `i32` samples in `[low, high)`.
