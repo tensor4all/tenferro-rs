@@ -67,6 +67,8 @@ extern "C" __global__ void pointwise_unary_real_f32(
         mapped = logf(value);
     } else if (op_code == 4) {
         mapped = sqrtf(value);
+    } else if (op_code == 5) {
+        mapped = ceilf(value);
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
@@ -103,6 +105,8 @@ extern "C" __global__ void pointwise_unary_real_f64(
         mapped = log(value);
     } else if (op_code == 4) {
         mapped = sqrt(value);
+    } else if (op_code == 5) {
+        mapped = ceil(value);
     }
     dst[dst_idx] = alpha * mapped + beta * dst[dst_idx];
 }
@@ -414,6 +418,7 @@ pub fn unary_opcode(op: RealUnaryOp) -> i32 {
         RealUnaryOp::Reciprocal => 2,
         RealUnaryOp::Log => 3,
         RealUnaryOp::Sqrt => 4,
+        RealUnaryOp::Ceil => 5,
     }
 }
 

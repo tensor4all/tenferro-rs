@@ -479,6 +479,7 @@ pub enum RealUnaryOp {
     Reciprocal,
     Log,
     Sqrt,
+    Ceil,
 }
 
 /// Complex-to-real unary operations exposed by the Layer 0 CUDA runtime.

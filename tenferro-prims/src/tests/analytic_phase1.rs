@@ -1,3 +1,4 @@
+use num_complex::Complex64;
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -116,6 +117,47 @@ fn cpu_analytic_phase1_supports_exp_log_tanh_and_pow() {
         <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
             AnalyticPrimsDescriptor::PointwiseBinary {
                 op: AnalyticBinaryOp::Pow,
+            }
+        )
+    );
+}
+
+#[test]
+fn cpu_analytic_phase1_supports_and_executes_ceil_for_real_scalars() {
+    let mut ctx = CpuContext::new(1);
+    let desc = AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Ceil,
+    };
+    assert!(<CpuBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(desc.clone()));
+
+    let plan =
+        <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::plan(&mut ctx, &desc, &[&[2], &[2]])
+            .unwrap();
+    let input = tensor_f64(&[1.2, -1.2], &[2]);
+    let mut output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+    assert_eq!(output.buffer().as_slice().unwrap(), &[2.0, -1.0]);
+}
+
+#[test]
+fn cpu_analytic_phase1_rejects_ceil_for_complex_scalars() {
+    assert!(
+        !<CpuBackend as TensorAnalyticPrims<Standard<Complex64>>>::has_analytic_support(
+            AnalyticPrimsDescriptor::PointwiseUnary {
+                op: AnalyticUnaryOp::Ceil,
             }
         )
     );
@@ -544,4 +586,65 @@ fn cuda_analytic_phase1_supports_and_executes_pow_when_runtime_available() {
     let got = round_trip.buffer().as_slice().unwrap();
     assert!((got[0] - 8.0).abs() < 1.0e-12, "got {}", got[0]);
     assert!((got[1] - 3.0).abs() < 1.0e-12, "got {}", got[1]);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_analytic_phase1_supports_and_executes_ceil_when_runtime_available() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+
+    let desc = AnalyticPrimsDescriptor::PointwiseUnary {
+        op: AnalyticUnaryOp::Ceil,
+    };
+    assert!(
+        <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::has_analytic_support(
+            desc.clone()
+        )
+    );
+
+    let plan = <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &desc,
+        &[&[2], &[2]],
+    )
+    .unwrap();
+
+    let input = tensor_f64(&[1.2, -1.2], &[2])
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        &[2],
+        tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 },
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    <crate::CudaBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        1.0,
+        &[&input],
+        0.0,
+        &mut output,
+    )
+    .unwrap();
+
+    let round_trip = output
+        .to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)
+        .unwrap();
+    assert_eq!(round_trip.buffer().as_slice().unwrap(), &[2.0, -1.0]);
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_analytic_phase1_rejects_ceil_for_complex_scalars() {
+    assert!(!<crate::CudaBackend as TensorAnalyticPrims<
+        Standard<Complex64>,
+    >>::has_analytic_support(
+        AnalyticPrimsDescriptor::PointwiseUnary {
+            op: AnalyticUnaryOp::Ceil,
+        }
+    ));
 }

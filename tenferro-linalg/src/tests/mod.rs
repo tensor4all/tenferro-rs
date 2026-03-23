@@ -187,6 +187,18 @@ fn matrix_exp_batch_1_norms_keep_batches_separate() {
 }
 
 #[test]
+fn matrix_exp_batch_squaring_counts_stay_tensor_native() {
+    let mut ctx = CpuContext::new(1);
+    let batch_norms =
+        Tensor::from_slice(&[6.0_f64, 2.5, 20.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+
+    let counts =
+        crate::ad_helpers::matrix_exp_batch_squaring_counts_tensor(&mut ctx, &batch_norms).unwrap();
+    assert_eq!(counts.dims(), &[3]);
+    assert_eq!(tensor_data(&counts), vec![1.0, 0.0, 2.0]);
+}
+
+#[test]
 fn blend_tensor_by_real_mask_same_shape_selects_complex_batches() {
     let mut ctx = CpuContext::new(1);
     let on_true = Tensor::from_slice(

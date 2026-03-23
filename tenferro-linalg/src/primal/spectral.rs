@@ -36,30 +36,6 @@ where
     )))
 }
 
-fn control_tensor_from_host_values<R>(
-    values: &[R],
-    dims: &[usize],
-    memory_space: tenferro_device::LogicalMemorySpace,
-) -> Result<Tensor<R>>
-where
-    R: LinalgScalar<Real = R>,
-{
-    let host = if dims.is_empty() {
-        let value = *values
-            .first()
-            .ok_or_else(|| Error::InvalidArgument("matrix_exp: missing control value".into()))?;
-        Tensor::from_vec(vec![value], &[], &[], 0)?
-    } else {
-        Tensor::from_slice(values, dims, MemoryOrder::ColumnMajor)?
-    };
-
-    if memory_space == tenferro_device::LogicalMemorySpace::MainMemory {
-        Ok(host)
-    } else {
-        host.to_memory_space_async(memory_space)
-    }
-}
-
 fn broadcast_batch_control_to_matrix<T: KernelLinalgScalar>(
     value_by_batch: &Tensor<T::Real>,
     batch_dims: &[usize],
@@ -206,10 +182,13 @@ where
     T: KernelLinalgScalar
         + crate::prims_bridge::ScaleTensorByRealSameShape<C>
         + MatrixExpAbsTensor<C>,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
     C: backend::TensorLinalgContextFor<T>,
     C: tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C: tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C: tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>>::ScalarBackend:
+        tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T::Real>, Context = C>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixExp, "matrix_exp")?;
@@ -226,54 +205,51 @@ where
     }
 
     let batch_norms = crate::ad_helpers::matrix_exp_batch_1_norms_tensor(ctx, &input)?;
-    let batch_norms_cpu =
-        batch_norms.to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)?;
-    let batch_norms_slice = batch_norms_cpu.buffer().as_slice().ok_or_else(|| {
-        Error::InvalidArgument(
-            "matrix_exp: expected batch norm tensor to materialize on host".into(),
-        )
-    })?;
-    let s_by_batch: Vec<usize> = batch_norms_slice
-        .iter()
-        .map(|&norm_value| {
-            let norm_f64: f64 = num_traits::NumCast::from(norm_value).ok_or_else(|| {
-                Error::InvalidArgument("matrix_exp: cannot convert 1-norm to f64".into())
-            })?;
-            Ok(if norm_f64 <= crate::ad_helpers::THETA_13 {
-                0
-            } else {
-                (norm_f64 / crate::ad_helpers::THETA_13)
-                    .log2()
-                    .ceil()
-                    .max(0.0) as usize
-            })
-        })
-        .collect::<Result<_>>()?;
-    let s_max = s_by_batch.iter().copied().max().unwrap_or(0);
-
-    let scale_values: Vec<T::Real> = s_by_batch
-        .iter()
-        .map(|&s| {
-            let scale_denom = (1u64 << s.min(63)) as f64;
-            crate::ad_helpers::scalar_from::<T::Real>(1.0 / scale_denom)
-        })
-        .collect::<Result<_>>()?;
-    let scale_tensor = if batch_dims.is_empty() {
-        crate::prims_bridge::full_like_constant(
-            *scale_values.first().ok_or_else(|| {
-                Error::InvalidArgument("matrix_exp: missing batch scaling factor".into())
-            })?,
-            input.dims(),
-            input.logical_memory_space(),
-        )?
+    let s_by_batch_tensor =
+        crate::ad_helpers::matrix_exp_batch_squaring_counts_tensor(ctx, &batch_norms)?;
+    let s_max_tensor = if s_by_batch_tensor.ndim() == 0 {
+        s_by_batch_tensor.clone()
     } else {
-        let scale_by_batch = control_tensor_from_host_values::<T::Real>(
-            &scale_values,
-            batch_dims,
-            input.logical_memory_space(),
-        )?;
-        broadcast_batch_control_to_matrix::<T>(&scale_by_batch, batch_dims, input.dims())?
+        crate::prims_bridge::scalar_reduce_keep_axes(
+            ctx,
+            &s_by_batch_tensor,
+            &[],
+            tenferro_prims::ScalarReductionOp::Max,
+        )?
     };
+    let s_max_host =
+        s_max_tensor.to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)?;
+    let s_max_slice = s_max_host.buffer().as_slice().ok_or_else(|| {
+        Error::InvalidArgument("matrix_exp: expected max squaring count tensor on host".into())
+    })?;
+    let s_max = s_max_slice
+        .first()
+        .copied()
+        .ok_or_else(|| Error::InvalidArgument("matrix_exp: missing max squaring count".into()))
+        .and_then(|value| {
+            num_traits::NumCast::from(value).ok_or_else(|| {
+                Error::InvalidArgument("matrix_exp: cannot convert max squaring count".into())
+            })
+        })?;
+
+    let two_by_batch = crate::prims_bridge::full_like_constant(
+        crate::ad_helpers::scalar_from::<T::Real>(2.0)?,
+        s_by_batch_tensor.dims(),
+        input.logical_memory_space(),
+    )?;
+    let scale_denom = crate::prims_bridge::analytic_binary_same_shape(
+        ctx,
+        &two_by_batch,
+        &s_by_batch_tensor,
+        tenferro_prims::AnalyticBinaryOp::Pow,
+    )?;
+    let scale_by_batch = crate::prims_bridge::scalar_unary_same_shape(
+        ctx,
+        &scale_denom,
+        tenferro_prims::ScalarUnaryOp::Reciprocal,
+    )?;
+    let scale_tensor =
+        broadcast_batch_control_to_matrix::<T>(&scale_by_batch, batch_dims, input.dims())?;
     let scaled_input =
         <T as crate::prims_bridge::ScaleTensorByRealSameShape<C>>::scale_tensor_by_real_same_shape(
             ctx,
@@ -283,32 +259,23 @@ where
 
     let mut result =
         crate::ad_helpers::matrix_exp_tensor_native(ctx, &scaled_input, n, batch_dims, 0)?;
-    let one = crate::ad_helpers::scalar_from::<T::Real>(1.0)?;
-    let zero = crate::ad_helpers::scalar_from::<T::Real>(0.0)?;
     for round in 0..s_max {
         let squared = crate::prims_bridge::batched_gemm_with_semiring_tensors(
             ctx, &result, &result, n, n, n,
         )?;
-        let mask_values: Vec<T::Real> = s_by_batch
-            .iter()
-            .map(|&count| if count > round { one } else { zero })
-            .collect();
-        let mask_tensor = if batch_dims.is_empty() {
-            crate::prims_bridge::full_like_constant(
-                *mask_values.first().ok_or_else(|| {
-                    Error::InvalidArgument("matrix_exp: missing squaring mask value".into())
-                })?,
-                result.dims(),
-                result.logical_memory_space(),
-            )?
-        } else {
-            let mask_by_batch = control_tensor_from_host_values::<T::Real>(
-                &mask_values,
-                batch_dims,
-                result.logical_memory_space(),
-            )?;
-            broadcast_batch_control_to_matrix::<T>(&mask_by_batch, batch_dims, result.dims())?
-        };
+        let round_by_batch = crate::prims_bridge::full_like_constant(
+            crate::ad_helpers::scalar_from::<T::Real>(round as f64)?,
+            s_by_batch_tensor.dims(),
+            result.logical_memory_space(),
+        )?;
+        let mask_by_batch = crate::prims_bridge::scalar_binary_same_shape(
+            ctx,
+            &s_by_batch_tensor,
+            &round_by_batch,
+            tenferro_prims::ScalarBinaryOp::Greater,
+        )?;
+        let mask_tensor =
+            broadcast_batch_control_to_matrix::<T>(&mask_by_batch, batch_dims, result.dims())?;
         result = crate::ad_helpers::blend_tensor_by_real_mask_same_shape(
             ctx,
             &squared,

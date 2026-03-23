@@ -636,7 +636,7 @@ fn matrix_power_path_is_tensor_native_and_uses_tensor_power_logic() {
 }
 
 #[test]
-fn matrix_exp_path_is_tensor_native_with_batchwise_host_control_vector_sync() {
+fn matrix_exp_path_is_tensor_native_with_scalar_host_loop_bound_sync() {
     let spectral = repo_file("src/primal/spectral.rs");
     let matrix_exp = file_section(&spectral, "pub fn matrix_exp", "#[cfg(test)]");
     let matrix_exp_helper = repo_file("src/ad_helpers/matrix_exp.rs");
@@ -659,12 +659,12 @@ fn matrix_exp_path_is_tensor_native_with_batchwise_host_control_vector_sync() {
         "matrix_exp should avoid the old host-slice helper"
     );
     assert!(
-        matrix_exp.contains("batch_norms.to_memory_space_async("),
-        "matrix_exp should sync only the batch-wise control vector to host"
+        !matrix_exp.contains("batch_norms.to_memory_space_async("),
+        "matrix_exp should keep batch norms on-device"
     );
     assert!(
-        !matrix_exp.contains("missing scalar norm value"),
-        "matrix_exp should not extract a single global scalar norm anymore"
+        matrix_exp.contains("s_max_tensor.to_memory_space_async("),
+        "matrix_exp may sync only the reduced scalar loop bound to host"
     );
     assert!(
         matrix_exp.contains("matrix_exp_tensor_native"),
@@ -673,6 +673,14 @@ fn matrix_exp_path_is_tensor_native_with_batchwise_host_control_vector_sync() {
     assert!(
         matrix_exp.contains("matrix_exp_batch_1_norms_tensor"),
         "matrix_exp should build batch-wise norms through tensor-native helper logic"
+    );
+    assert!(
+        matrix_exp.contains("matrix_exp_batch_squaring_counts_tensor"),
+        "matrix_exp should derive squaring counts through a tensor-native helper"
+    );
+    assert!(
+        !matrix_exp.contains("control_tensor_from_host_values"),
+        "matrix_exp should not rebuild control tensors from host vectors"
     );
     assert!(
         tensor_native_helper.contains("ScalarReductionOp::Sum"),
@@ -697,6 +705,10 @@ fn matrix_exp_path_is_tensor_native_with_batchwise_host_control_vector_sync() {
     assert!(
         !tensor_native_helper.contains("backend::slice_bridge::"),
         "matrix_exp helper should avoid slice_bridge helpers"
+    );
+    assert!(
+        tensor_native_helper.contains("AnalyticUnaryOp::Ceil"),
+        "matrix_exp helper should derive squaring counts through tensor-native rounding"
     );
 }
 

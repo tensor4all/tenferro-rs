@@ -2,8 +2,9 @@ use super::*;
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Standard;
 use tenferro_prims::{
-    ComplexRealUnaryOp, ScalarBinaryOp, ScalarReductionOp, ScalarUnaryOp,
-    TensorComplexRealContextFor, TensorScalarContextFor, TensorSemiringContextFor,
+    AnalyticUnaryOp, ComplexRealUnaryOp, ScalarBinaryOp, ScalarReductionOp, ScalarUnaryOp,
+    TensorAnalyticPrims, TensorComplexRealContextFor, TensorScalarContextFor,
+    TensorSemiringContextFor,
 };
 
 /// Padé[13/13] coefficients b[0]..b[13] (integer values as f64).
@@ -102,6 +103,42 @@ where
     )?;
     let batch_axes: Vec<usize> = (1..col_sums.ndim()).collect();
     prims_bridge::scalar_reduce_keep_axes(ctx, &col_sums, &batch_axes, ScalarReductionOp::Max)
+}
+
+/// Compute per-batch Padé scaling counts `s = ceil(log2(max(norm/theta, 1)))`.
+pub(crate) fn matrix_exp_batch_squaring_counts_tensor<R, C>(
+    ctx: &mut C,
+    batch_norms: &Tensor<R>,
+) -> Result<Tensor<R>>
+where
+    R: KernelLinalgScalar<Real = R> + num_traits::Float,
+    C: TensorScalarContextFor<Standard<R>>,
+    <C as TensorScalarContextFor<Standard<R>>>::ScalarBackend:
+        TensorAnalyticPrims<Standard<R>, Context = C>,
+{
+    let theta = prims_bridge::full_like_constant(
+        scalar_from::<R>(THETA_13)?,
+        batch_norms.dims(),
+        batch_norms.logical_memory_space(),
+    )?;
+    let one = prims_bridge::full_like_constant(
+        scalar_from::<R>(1.0)?,
+        batch_norms.dims(),
+        batch_norms.logical_memory_space(),
+    )?;
+    let log2_e = prims_bridge::full_like_constant(
+        scalar_from::<R>(std::f64::consts::LOG2_E)?,
+        batch_norms.dims(),
+        batch_norms.logical_memory_space(),
+    )?;
+
+    let ratio =
+        prims_bridge::scalar_binary_same_shape(ctx, batch_norms, &theta, ScalarBinaryOp::Div)?;
+    let ratio = prims_bridge::scalar_binary_same_shape(ctx, &ratio, &one, ScalarBinaryOp::Maximum)?;
+    let log_ratio = prims_bridge::analytic_unary_same_shape(ctx, &ratio, AnalyticUnaryOp::Log)?;
+    let log2_ratio =
+        prims_bridge::scalar_binary_same_shape(ctx, &log_ratio, &log2_e, ScalarBinaryOp::Mul)?;
+    prims_bridge::analytic_unary_same_shape(ctx, &log2_ratio, AnalyticUnaryOp::Ceil)
 }
 
 /// Blend two same-shape tensors with a real-valued numeric mask.
