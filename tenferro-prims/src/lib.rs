@@ -11,6 +11,7 @@
 //! - [`TensorAnalyticPrims`] for analytic pointwise and reduction families
 //! - [`TensorComplexRealPrims`] for cross-dtype complex-to-real unary families
 //! - [`TensorComplexScalePrims`] for complex payload scaled by real-valued tensors
+//! - [`TensorMetadataPrims`] for integer/bool metadata tensor families
 //!
 //! Every family follows the same plan/execute pattern:
 //!
