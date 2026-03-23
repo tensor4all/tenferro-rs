@@ -246,6 +246,38 @@ where
     .unwrap();
     assert_tensor_eq(&bool_neq, &[0, 1, 0, 1]);
 
+    let bitand_lhs = tensor_i32(&[0, 1, 2, 3], &dims, memory_space);
+    let bitand_rhs = tensor_i32(&[1, 1, 1, 1], &dims, memory_space);
+    let mut bitand = Tensor::<i32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let bitand_desc = MetadataPrimsDescriptor::Binary {
+        op: MetadataBinaryOp::BitAnd,
+        lhs_dtype: MetadataDType::I32,
+        rhs_dtype: MetadataDType::I32,
+        output_dtype: MetadataDType::I32,
+    };
+    assert!(<C::MetadataBackend as TensorMetadataPrims>::has_metadata_support(bitand_desc.clone()));
+    let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
+        ctx,
+        &bitand_desc,
+        &[
+            MetadataTensorRef::I32(&bitand_lhs),
+            MetadataTensorRef::I32(&bitand_rhs),
+        ],
+        MetadataTensorMut::I32(&mut bitand),
+    )
+    .unwrap();
+    <C::MetadataBackend as TensorMetadataPrims>::execute(
+        ctx,
+        &plan,
+        &[
+            MetadataTensorRef::I32(&bitand_lhs),
+            MetadataTensorRef::I32(&bitand_rhs),
+        ],
+        MetadataTensorMut::I32(&mut bitand),
+    )
+    .unwrap();
+    assert_tensor_eq(&bitand, &[0, 1, 0, 1]);
+
     let mut where_i32 =
         Tensor::<i32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
     let cond = tensor_u8(&[1, 0, 1, 0], &dims, memory_space);

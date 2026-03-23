@@ -548,6 +548,25 @@ fn host_metadata_equal_reference(
         .collect()
 }
 
+fn host_metadata_bitand_reference(
+    lhs: &[i32],
+    rhs: &[i32],
+    dims: &[usize],
+    lhs_strides: &[isize],
+    rhs_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<i32> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0i32; numel];
+    for linear_idx in 0..numel {
+        let lhs_idx = linear_offset(linear_idx, dims, lhs_strides, 0) as usize;
+        let rhs_idx = linear_offset(linear_idx, dims, rhs_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = lhs[lhs_idx] & rhs[rhs_idx];
+    }
+    dst
+}
+
 fn host_metadata_where_i32_reference(
     cond: &[u8],
     on_true: &[i32],
@@ -1476,6 +1495,44 @@ fn cuda_runtime_metadata_bool_compare_matches_host_reference() {
     );
     assert_eq!(got_not_equal, expected_not_equal);
     assert_eq!(got_equal, expected_equal);
+}
+
+#[test]
+fn cuda_runtime_metadata_i32_bitand_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataBinaryOp, MetadataBinarySpec, MetadataTensorMut, MetadataTensorRef,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [6usize];
+    let strides = [1isize];
+    let lhs_data = [0i32, 1, 2, 3, 4, 5];
+    let rhs_data = [1i32, 1, 1, 1, 1, 1];
+    let lhs = runtime.alloc::<i32>(lhs_data.len()).unwrap();
+    let rhs = runtime.alloc::<i32>(rhs_data.len()).unwrap();
+    let mut dst = runtime.alloc::<i32>(lhs_data.len()).unwrap();
+    runtime.copy_htod(&lhs_data, &lhs).unwrap();
+    runtime.copy_htod(&rhs_data, &rhs).unwrap();
+
+    let spec = MetadataBinarySpec::new(&dims, &strides, 0, &strides, 0, &strides, 0).unwrap();
+    runtime
+        .metadata_binary(
+            MetadataBinaryOp::BitAnd,
+            MetadataTensorRef::I32(&lhs),
+            MetadataTensorRef::I32(&rhs),
+            MetadataTensorMut::I32(&mut dst),
+            &spec,
+        )
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected =
+        host_metadata_bitand_reference(&lhs_data, &rhs_data, &dims, &strides, &strides, &strides);
+    assert_eq!(got, expected);
 }
 
 #[test]

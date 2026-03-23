@@ -140,7 +140,7 @@ impl CudaRuntime {
                 }
                 unsafe {
                     self.metadata_binary_i32_bool_raw(
-                        metadata_binary_opcode(op),
+                        metadata_compare_opcode(op),
                         lhs.device_ptr().cast_const(),
                         rhs.device_ptr().cast_const(),
                         dst.device_ptr(),
@@ -188,7 +188,7 @@ impl CudaRuntime {
                 }
                 unsafe {
                     self.metadata_binary_i32_i32_raw(
-                        metadata_binary_opcode(op),
+                        metadata_binary_opcode_i32_i32(op),
                         lhs.device_ptr().cast_const(),
                         rhs.device_ptr().cast_const(),
                         dst.device_ptr(),
@@ -236,7 +236,7 @@ impl CudaRuntime {
                 }
                 unsafe {
                     self.metadata_binary_bool_bool_raw(
-                        metadata_binary_opcode(op),
+                        metadata_binary_opcode_bool_bool(op),
                         lhs.device_ptr().cast_const(),
                         rhs.device_ptr().cast_const(),
                         dst.device_ptr(),
@@ -1162,13 +1162,30 @@ impl CudaRuntime {
     }
 }
 
-fn metadata_binary_opcode(op: MetadataBinaryOp) -> i32 {
+fn metadata_compare_opcode(op: MetadataBinaryOp) -> i32 {
+    match op {
+        MetadataBinaryOp::Equal => 0,
+        MetadataBinaryOp::NotEqual => 1,
+        _ => unreachable!("unsupported metadata comparison op"),
+    }
+}
+
+fn metadata_binary_opcode_i32_i32(op: MetadataBinaryOp) -> i32 {
     match op {
         MetadataBinaryOp::Equal => 0,
         MetadataBinaryOp::NotEqual => 1,
         MetadataBinaryOp::Add => 2,
         MetadataBinaryOp::Sub => 3,
         MetadataBinaryOp::Mul => 4,
+        MetadataBinaryOp::BitAnd => 5,
+    }
+}
+
+fn metadata_binary_opcode_bool_bool(op: MetadataBinaryOp) -> i32 {
+    match op {
+        MetadataBinaryOp::Equal => 0,
+        MetadataBinaryOp::NotEqual => 1,
         MetadataBinaryOp::BitAnd => 2,
+        _ => unreachable!("unsupported metadata bool binary op"),
     }
 }

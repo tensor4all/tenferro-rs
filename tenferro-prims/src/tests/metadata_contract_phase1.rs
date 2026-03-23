@@ -26,6 +26,12 @@ fn metadata_family_exposes_dtype_aware_generate_binary_ternary_and_reduction_con
         rhs_dtype: MetadataDType::I32,
         output_dtype: MetadataDType::Bool,
     };
+    let bitand = MetadataPrimsDescriptor::Binary {
+        op: MetadataBinaryOp::BitAnd,
+        lhs_dtype: MetadataDType::I32,
+        rhs_dtype: MetadataDType::I32,
+        output_dtype: MetadataDType::I32,
+    };
     let ternary = MetadataPrimsDescriptor::Ternary {
         op: MetadataTernaryOp::Where,
         cond_dtype: MetadataDType::Bool,
@@ -69,6 +75,15 @@ fn metadata_family_exposes_dtype_aware_generate_binary_ternary_and_reduction_con
             lhs_dtype: MetadataDType::I32,
             rhs_dtype: MetadataDType::I32,
             output_dtype: MetadataDType::Bool,
+        }
+    ));
+    assert!(matches!(
+        bitand,
+        MetadataPrimsDescriptor::Binary {
+            op: MetadataBinaryOp::BitAnd,
+            lhs_dtype: MetadataDType::I32,
+            rhs_dtype: MetadataDType::I32,
+            output_dtype: MetadataDType::I32,
         }
     ));
     assert!(matches!(

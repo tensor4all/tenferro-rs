@@ -174,6 +174,9 @@ extern "C" __global__ void metadata_binary_i32_i32(
         case 4:
             mapped = value * other;
             break;
+        case 5:
+            mapped = value & other;
+            break;
     }
     dst[dst_idx] = mapped;
 }
