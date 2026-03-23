@@ -396,6 +396,21 @@ fn lu_factor_ex_section_does_not_extract_cpu_slices() {
 }
 
 #[test]
+fn lu_solve_section_is_a_thin_backend_wrapper() {
+    let decompositions = repo_file("src/primal/decompositions.rs");
+    let lu_solve = file_section(&decompositions, "pub fn lu_solve", "pub fn eigen");
+
+    assert!(
+        !lu_solve.contains("lu_solve_impl("),
+        "lu_solve should call the backend directly rather than route through the legacy helper"
+    );
+    assert!(
+        lu_solve.contains("::lu_solve(ctx, factors, pivots, b)"),
+        "lu_solve should dispatch through the backend lu_solve contract"
+    );
+}
+
+#[test]
 fn lu_factor_section_does_not_extract_cpu_slices() {
     let decompositions = repo_file("src/primal/decompositions.rs");
     let lu_factor = file_section(&decompositions, "pub fn lu_factor", "pub fn lu_factor_ex");

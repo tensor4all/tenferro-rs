@@ -15,7 +15,8 @@ use super::tensor_api::{
 };
 use super::tensor_helpers::{
     batch_count, ensure_col_major, extract_contiguous_slice, materialize_broadcasted_batches,
-    validate_matrix_shape, validate_solve_rhs_shape, validate_square, BroadcastBatchIndexer,
+    materialize_broadcasted_pivot_batches, validate_lu_pivot_shape, validate_matrix_shape,
+    validate_solve_rhs_shape, validate_square, BroadcastBatchIndexer,
 };
 use crate::KernelLinalgScalar;
 
@@ -112,6 +113,68 @@ fn first_failing_leading_principal_minor<T: KernelLinalgScalar>(
     Err(Error::DeviceError(
         "CPU cholesky_ex failed a batch but no failing leading principal minor was found".into(),
     ))
+}
+
+fn unpack_packed_lu_square<T: KernelLinalgScalar>(
+    factors: &[T],
+    n: usize,
+    lower: &mut [T],
+    upper: &mut [T],
+) {
+    lower.fill(T::zero());
+    upper.fill(T::zero());
+    for j in 0..n {
+        for i in 0..n {
+            let value = factors[i + j * n];
+            if i > j {
+                lower[i + j * n] = value;
+            } else {
+                upper[i + j * n] = value;
+                if i == j {
+                    lower[i + j * n] = T::one();
+                }
+            }
+        }
+    }
+}
+
+fn apply_lu_step_pivots<T: KernelLinalgScalar>(
+    step_pivots: &[i32],
+    rhs: &[T],
+    n: usize,
+    nrhs: usize,
+    out: &mut [T],
+) -> Result<()> {
+    if step_pivots.len() != n {
+        return Err(Error::InvalidArgument(format!(
+            "lu_solve expects {n} pivots per batch, got {}",
+            step_pivots.len()
+        )));
+    }
+    out.copy_from_slice(rhs);
+    for (i, &pivot) in step_pivots.iter().enumerate() {
+        if pivot <= 0 {
+            return Err(Error::InvalidArgument(format!(
+                "lu_solve pivot {pivot} is not 1-indexed positive"
+            )));
+        }
+        let j = usize::try_from(pivot - 1).map_err(|_| {
+            Error::InvalidArgument(format!(
+                "lu_solve pivot {pivot} underflowed during usize conversion"
+            ))
+        })?;
+        if j < i || j >= n {
+            return Err(Error::InvalidArgument(format!(
+                "lu_solve pivot {pivot} is invalid for step {i} and len {n}"
+            )));
+        }
+        if j != i {
+            for col in 0..nrhs {
+                out.swap(i + col * n, j + col * n);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Solve `A x = b` while preserving successful batch payloads and reporting per-batch status.
@@ -221,6 +284,81 @@ where
     }
 
     tensor_from_data(x_data, &rhs.output_dims)
+}
+
+/// Solve `A x = b` from a packed LU factorization and pivot tensor.
+pub(crate) fn lu_solve<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    factors: &Tensor<T>,
+    pivots: &Tensor<i32>,
+    b: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: KernelLinalgScalar,
+{
+    let (n, batch_dims) = validate_square(factors)?;
+    validate_lu_pivot_shape(pivots, n, batch_dims, "lu_solve")?;
+    let rhs = validate_solve_rhs_shape(b, n, batch_dims, "lu_solve")?;
+    let bc = batch_count(&rhs.output_batch_dims);
+    let factor_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "lu_solve", "factors")?;
+
+    let factors_contig =
+        materialize_broadcasted_batches(factors, 2, &factor_batch_indexer, "lu_solve", "factors")?;
+    let pivots_contig = materialize_broadcasted_pivot_batches(
+        pivots,
+        n,
+        batch_dims,
+        &rhs.output_batch_dims,
+        "lu_solve",
+    )?;
+    let rhs_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "lu_solve",
+        "b",
+    )?;
+
+    if n == 0 || bc == 0 {
+        return Ok(rhs_contig);
+    }
+
+    let factors_data = extract_contiguous_slice(&factors_contig)?;
+    let pivots_data: &[i32] = extract_contiguous_slice(&pivots_contig)?;
+    let rhs_data = extract_contiguous_slice(&rhs_contig)?;
+    let factors_off = factors_contig.offset() as usize;
+    let pivots_off = pivots_contig.offset() as usize;
+    let rhs_off = rhs_contig.offset() as usize;
+
+    let mat_size = n * n;
+    let rhs_size = n * rhs.nrhs;
+    let mut out = vec![T::zero(); rhs_size * bc];
+    let mut lower = vec![T::zero(); mat_size];
+    let mut upper = vec![T::zero(); mat_size];
+    let mut permuted_rhs = vec![T::zero(); rhs_size];
+    let mut tmp = vec![T::zero(); rhs_size];
+
+    for batch in 0..bc {
+        let factor_slice =
+            &factors_data[factors_off + batch * mat_size..factors_off + (batch + 1) * mat_size];
+        let pivot_slice = &pivots_data[pivots_off + batch * n..pivots_off + (batch + 1) * n];
+        let rhs_slice = &rhs_data[rhs_off + batch * rhs_size..rhs_off + (batch + 1) * rhs_size];
+
+        unpack_packed_lu_square(factor_slice, n, &mut lower, &mut upper);
+        apply_lu_step_pivots(pivot_slice, rhs_slice, n, rhs.nrhs, &mut permuted_rhs)?;
+        super::cpu::solve_triangular_slices(&lower, &permuted_rhs, n, rhs.nrhs, false, &mut tmp)?;
+        super::cpu::solve_triangular_slices(
+            &upper,
+            &tmp,
+            n,
+            rhs.nrhs,
+            true,
+            &mut out[batch * rhs_size..(batch + 1) * rhs_size],
+        )?;
+    }
+
+    tensor_from_data(out, &rhs.output_dims)
 }
 
 /// Solve triangular `A x = b` via the selected CPU slice backend.

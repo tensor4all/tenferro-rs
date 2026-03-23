@@ -404,6 +404,15 @@ where
         cpu_impl::solve(ctx, a, b)
     }
 
+    fn lu_solve(
+        ctx: &mut Self::Context,
+        factors: &tenferro_tensor::Tensor<T>,
+        pivots: &tenferro_tensor::Tensor<i32>,
+        b: &tenferro_tensor::Tensor<T>,
+    ) -> tenferro_device::Result<tenferro_tensor::Tensor<T>> {
+        super::cpu_tensor_impl::lu_solve(ctx, factors, pivots, b)
+    }
+
     fn solve_triangular(
         ctx: &mut Self::Context,
         a: &tenferro_tensor::Tensor<T>,

@@ -398,6 +398,15 @@ where
         cpu_impl::solve(ctx, a, b)
     }
 
+    fn lu_solve(
+        ctx: &mut Self::Context,
+        factors: &Tensor<T>,
+        pivots: &Tensor<i32>,
+        b: &Tensor<T>,
+    ) -> Result<Tensor<T>> {
+        super::cpu_tensor_impl::lu_solve(ctx, factors, pivots, b)
+    }
+
     fn solve_triangular(
         ctx: &mut Self::Context,
         a: &Tensor<T>,

@@ -325,7 +325,7 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuSolve, "lu_solve")?;
-    lu_solve_impl(ctx, factors, pivots, b)
+    <C::Backend as backend::TensorLinalgBackend<T>>::lu_solve(ctx, factors, pivots, b)
 }
 
 /// Compute the eigendecomposition of a batched square matrix.

@@ -7,8 +7,8 @@
 #[doc(hidden)]
 pub(crate) use tenferro_linalg_prims::backend::{
     batch_count, ensure_col_major, extract_contiguous_slice, materialize_broadcasted_batches,
-    validate_matrix_shape, validate_solve_rhs_shape, validate_square, zero_trailing_by_counts,
-    BroadcastBatchIndexer,
+    materialize_broadcasted_pivot_batches, validate_lu_pivot_shape, validate_matrix_shape,
+    validate_solve_rhs_shape, validate_square, zero_trailing_by_counts, BroadcastBatchIndexer,
 };
 
 use tenferro_device::{Error, LogicalMemorySpace, Result};

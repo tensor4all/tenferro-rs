@@ -40,8 +40,9 @@ pub use hip::HipTensorLinalgBackend;
 #[doc(hidden)]
 pub use tensor_helpers::{
     batch_count, broadcast_batch_dims, ensure_col_major, extract_contiguous_slice,
-    materialize_broadcasted_batches, validate_matrix_shape, validate_solve_rhs_shape,
-    validate_square, zero_trailing_by_counts, BroadcastBatchIndexer, SolveRhsLayout,
+    materialize_broadcasted_batches, materialize_broadcasted_pivot_batches,
+    validate_lu_pivot_shape, validate_matrix_shape, validate_solve_rhs_shape, validate_square,
+    zero_trailing_by_counts, BroadcastBatchIndexer, SolveRhsLayout,
 };
 
 /// Slice-level backend interface for matrix linear algebra operations.

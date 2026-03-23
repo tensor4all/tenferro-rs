@@ -664,6 +664,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
         matches!(
             op,
             LinalgCapabilityOp::Solve
+                | LinalgCapabilityOp::LuSolve
                 | LinalgCapabilityOp::SolveEx
                 | LinalgCapabilityOp::Inv
                 | LinalgCapabilityOp::SolveTriangular
@@ -681,6 +682,7 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
                 | LinalgCapabilityOp::Norm
         ) && match op {
             LinalgCapabilityOp::Solve => solve::has_solve_support::<T>(),
+            LinalgCapabilityOp::LuSolve => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::SolveEx => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::Inv => solve::has_solve_support::<T>(),
             LinalgCapabilityOp::SolveTriangular => {
@@ -714,6 +716,15 @@ impl<T: CudaLinalgScalar> TensorLinalgPrims<T> for CudaTensorLinalgBackend {
 
     fn solve(ctx: &mut Self::Context, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>> {
         solve::solve(ctx, a, b)
+    }
+
+    fn lu_solve(
+        ctx: &mut Self::Context,
+        factors: &Tensor<T>,
+        pivots: &Tensor<i32>,
+        b: &Tensor<T>,
+    ) -> Result<Tensor<T>> {
+        solve::lu_solve(ctx, factors, pivots, b)
     }
 
     fn solve_triangular(

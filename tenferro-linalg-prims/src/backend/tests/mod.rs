@@ -187,6 +187,35 @@ fn cpu_backend_svdvals_matches_thin_svd_after_move() {
 }
 
 #[test]
+fn cpu_backend_lu_solve_accepts_packed_lu_factor_output() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[3.0_f64, 1.0, 1.0, 2.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[9.0_f64, 8.0, 4.0, 5.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let lu = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor(
+        &mut ctx, &a,
+    )
+    .unwrap();
+    let packed = tenferro_tensor::Tensor::merge_strict_lower_and_upper(&lu.l, &lu.u).unwrap();
+    let x = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_solve(
+        &mut ctx, &packed, &lu.pivots, &b,
+    )
+    .unwrap();
+
+    assert_eq!(tensor_data_on_cpu(&x), vec![2.0, 3.0, 0.6, 2.2]);
+}
+
+#[test]
 fn ex_capabilities_track_cpu_ex_implementation_state() {
     use crate::LinalgCapabilityOp::{Cholesky, CholeskyEx, LuFactor, LuFactorEx, SolveEx};
 

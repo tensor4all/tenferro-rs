@@ -470,6 +470,12 @@ pub trait TensorLinalgPrims<T: KernelLinalgScalar> {
     ) -> Result<SolveTensorExResult<T>>;
 
     fn solve(ctx: &mut Self::Context, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>;
+    fn lu_solve(
+        ctx: &mut Self::Context,
+        factors: &Tensor<T>,
+        pivots: &Tensor<i32>,
+        b: &Tensor<T>,
+    ) -> Result<Tensor<T>>;
     fn solve_triangular(
         ctx: &mut Self::Context,
         a: &Tensor<T>,

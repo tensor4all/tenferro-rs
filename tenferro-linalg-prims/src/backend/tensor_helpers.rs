@@ -1,8 +1,6 @@
 //! Shared tensor validation and helper utilities for backend implementations.
 
-use tenferro_algebra::Conjugate;
-#[cfg(feature = "cuda")]
-use tenferro_algebra::Scalar;
+use tenferro_algebra::{Conjugate, Scalar};
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
 use tenferro_device::{Error, Result};
@@ -101,6 +99,61 @@ fn materialize_broadcasted_batches_impl<T: LinalgScalar>(
 }
 
 #[doc(hidden)]
+pub fn materialize_broadcasted_pivot_batches(
+    pivots: &Tensor<i32>,
+    step_count: usize,
+    source_batch_dims: &[usize],
+    output_batch_dims: &[usize],
+    op_name: &str,
+) -> Result<Tensor<i32>> {
+    validate_lu_pivot_shape(pivots, step_count, source_batch_dims, op_name)?;
+    let batch_indexer =
+        BroadcastBatchIndexer::new(source_batch_dims, output_batch_dims, op_name, "pivots")?;
+    if batch_indexer.is_identity() {
+        return Ok(pivots.contiguous(MemoryOrder::ColumnMajor));
+    }
+
+    let mut expanded = pivots.clone();
+    for _ in 0..(output_batch_dims.len() - source_batch_dims.len()) {
+        expanded = expanded.unsqueeze(1)?;
+    }
+    let mut target_dims = vec![step_count];
+    target_dims.extend_from_slice(output_batch_dims);
+    Ok(expanded
+        .broadcast(&target_dims)?
+        .contiguous(MemoryOrder::ColumnMajor))
+}
+
+#[doc(hidden)]
+pub fn validate_lu_pivot_shape(
+    pivots: &Tensor<i32>,
+    step_count: usize,
+    batch_dims: &[usize],
+    op_name: &str,
+) -> Result<()> {
+    let dims = pivots.dims();
+    if dims.is_empty() {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} expects pivot tensor shape ({step_count}, *batch), got scalar pivots"
+        )));
+    }
+    if dims[0] != step_count {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} expects pivots dim[0] == {step_count}, got {}",
+            dims[0]
+        )));
+    }
+    if dims[1..] != *batch_dims {
+        return Err(Error::InvalidArgument(format!(
+            "{op_name} expects pivots batch dims {:?} to match factor batch dims {:?}",
+            &dims[1..],
+            batch_dims
+        )));
+    }
+    Ok(())
+}
+
+#[doc(hidden)]
 pub fn validate_matrix_shape<T: LinalgScalar>(a: &Tensor<T>) -> Result<(usize, usize, &[usize])> {
     let dims = a.dims();
     if dims.len() < 2 {
@@ -142,7 +195,7 @@ pub fn batch_count(batch_dims: &[usize]) -> usize {
 }
 
 #[doc(hidden)]
-pub fn extract_contiguous_slice<T: LinalgScalar>(a: &Tensor<T>) -> Result<&[T]> {
+pub fn extract_contiguous_slice<T: tenferro_algebra::Scalar>(a: &Tensor<T>) -> Result<&[T]> {
     a.buffer()
         .as_slice()
         .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))

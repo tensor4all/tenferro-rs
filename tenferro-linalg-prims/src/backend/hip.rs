@@ -43,6 +43,15 @@ impl<T: KernelLinalgScalar> TensorLinalgPrims<T> for HipTensorLinalgBackend {
         unsupported()
     }
 
+    fn lu_solve(
+        _ctx: &mut Self::Context,
+        _factors: &Tensor<T>,
+        _pivots: &Tensor<i32>,
+        _b: &Tensor<T>,
+    ) -> Result<Tensor<T>> {
+        unsupported()
+    }
+
     fn solve_triangular(
         _ctx: &mut Self::Context,
         _a: &Tensor<T>,
