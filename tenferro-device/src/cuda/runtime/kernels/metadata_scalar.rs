@@ -17,6 +17,10 @@ pub const METADATA_BINARY_I32_BOOL_KERNEL_NAME: &str = "metadata_binary_i32_bool
 pub const METADATA_BINARY_BOOL_BOOL_KERNEL_NAME: &str = "metadata_binary_bool_bool";
 pub const METADATA_TERNARY_I32_KERNEL_NAME: &str = "metadata_where_i32";
 pub const METADATA_TERNARY_BOOL_KERNEL_NAME: &str = "metadata_where_bool";
+pub const METADATA_CAST_BOOL_F32_KERNEL_NAME: &str = "metadata_cast_bool_f32";
+pub const METADATA_CAST_I32_F32_KERNEL_NAME: &str = "metadata_cast_i32_f32";
+pub const METADATA_CAST_BOOL_F64_KERNEL_NAME: &str = "metadata_cast_bool_f64";
+pub const METADATA_CAST_I32_F64_KERNEL_NAME: &str = "metadata_cast_i32_f64";
 pub const METADATA_REDUCE_SUM_I32_KERNEL_NAME: &str = "metadata_reduce_sum_i32";
 pub const METADATA_REDUCE_SUM_BOOL_KERNEL_NAME: &str = "metadata_reduce_sum_bool";
 pub const METADATA_REDUCE_ALL_BOOL_KERNEL_NAME: &str = "metadata_reduce_all_bool";
@@ -283,6 +287,110 @@ extern "C" __global__ void metadata_where_bool(
     long long false_idx = linear_offset(idx, dims, false_strides, false_offset, ndim);
     long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
     dst[dst_idx] = cond[cond_idx] != 0 ? on_true[true_idx] : on_false[false_idx];
+}
+
+extern "C" __global__ void metadata_cast_bool_f32(
+    const unsigned char* input,
+    float* dst,
+    const long long* dims,
+    const long long* input_strides,
+    long long input_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    float alpha,
+    float beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    long long input_idx = linear_offset(idx, dims, input_strides, input_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    float casted = input[input_idx] != 0 ? 1.0f : 0.0f;
+    dst[dst_idx] = alpha * casted + beta * dst[dst_idx];
+}
+
+extern "C" __global__ void metadata_cast_i32_f32(
+    const int* input,
+    float* dst,
+    const long long* dims,
+    const long long* input_strides,
+    long long input_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    float alpha,
+    float beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    long long input_idx = linear_offset(idx, dims, input_strides, input_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    float casted = (float)input[input_idx];
+    dst[dst_idx] = alpha * casted + beta * dst[dst_idx];
+}
+
+extern "C" __global__ void metadata_cast_bool_f64(
+    const unsigned char* input,
+    double* dst,
+    const long long* dims,
+    const long long* input_strides,
+    long long input_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    double alpha,
+    double beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    long long input_idx = linear_offset(idx, dims, input_strides, input_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    double casted = input[input_idx] != 0 ? 1.0 : 0.0;
+    dst[dst_idx] = alpha * casted + beta * dst[dst_idx];
+}
+
+extern "C" __global__ void metadata_cast_i32_f64(
+    const int* input,
+    double* dst,
+    const long long* dims,
+    const long long* input_strides,
+    long long input_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    double alpha,
+    double beta
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    long long input_idx = linear_offset(idx, dims, input_strides, input_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    double casted = (double)input[input_idx];
+    dst[dst_idx] = alpha * casted + beta * dst[dst_idx];
 }
 
 extern "C" __global__ void metadata_reduce_sum_i32(

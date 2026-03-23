@@ -911,6 +911,42 @@ impl MetadataTernarySpec {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct MetadataCastSpec {
+    pub(crate) dims: Vec<usize>,
+    pub(crate) input_strides: Vec<isize>,
+    pub(crate) input_offset: isize,
+    pub(crate) dst_strides: Vec<isize>,
+    pub(crate) dst_offset: isize,
+}
+
+impl MetadataCastSpec {
+    pub(crate) fn new(
+        dims: &[usize],
+        input_strides: &[isize],
+        input_offset: isize,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<Self> {
+        if dims.len() != input_strides.len() || dims.len() != dst_strides.len() {
+            return Err(Error::InvalidArgument(format!(
+                "metadata cast rank mismatch: dims={} input={} dst={}",
+                dims.len(),
+                input_strides.len(),
+                dst_strides.len()
+            )));
+        }
+
+        Ok(Self {
+            dims: dims.to_vec(),
+            input_strides: input_strides.to_vec(),
+            input_offset,
+            dst_strides: dst_strides.to_vec(),
+            dst_offset,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MetadataReductionSpec {
     pub(crate) input_dims: Vec<usize>,
     pub(crate) input_strides: Vec<isize>,

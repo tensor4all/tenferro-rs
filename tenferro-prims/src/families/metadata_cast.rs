@@ -1,13 +1,12 @@
 use num_traits::{NumCast, ToPrimitive};
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::cpu::{tensor_to_view, tensor_to_view_mut};
-use crate::{
-    for_each_index, validate_shape_count, validate_shape_eq, MetadataDType, MetadataTensorRef,
-    ScalarPrimsDescriptor, ScalarTernaryOp,
-};
+use crate::shape_helpers::validate_shape_broadcastable;
+use crate::{validate_shape_count, MetadataDType, MetadataTensorRef};
+#[cfg(feature = "cuda")]
+use crate::{ScalarPrimsDescriptor, ScalarTernaryOp};
 
 /// Metadata-to-scalar bridge planning operations.
 ///
@@ -135,20 +134,20 @@ pub(crate) fn validate_metadata_cast_shapes(
     match desc {
         MetadataCastPrimsDescriptor::PointwiseCast { .. } => {
             validate_shape_count(shapes, 2, op_name)?;
-            validate_shape_eq(shapes[0], shapes[1], op_name)?;
+            validate_shape_broadcastable(shapes[0], shapes[1], op_name)?;
             Ok(())
         }
         MetadataCastPrimsDescriptor::Where { .. } => {
             validate_shape_count(shapes, 4, op_name)?;
-            validate_shape_eq(shapes[0], shapes[1], op_name)?;
-            validate_shape_eq(shapes[0], shapes[2], op_name)?;
-            validate_shape_eq(shapes[0], shapes[3], op_name)?;
+            validate_shape_broadcastable(shapes[0], shapes[3], op_name)?;
+            validate_shape_broadcastable(shapes[1], shapes[3], op_name)?;
+            validate_shape_broadcastable(shapes[2], shapes[3], op_name)?;
             Ok(())
         }
     }
 }
 
-fn cast_metadata_value<S, T>(value: T, label: &str) -> Result<S>
+pub(crate) fn cast_metadata_value<S, T>(value: T, label: &str) -> Result<S>
 where
     S: Scalar + NumCast,
     T: ToPrimitive + Copy,
@@ -161,109 +160,17 @@ where
     })
 }
 
-fn for_each_index_result(dims: &[usize], mut f: impl FnMut(&[usize]) -> Result<()>) -> Result<()> {
+pub(crate) fn for_each_index_result(
+    dims: &[usize],
+    mut f: impl FnMut(&[usize]) -> Result<()>,
+) -> Result<()> {
     let mut result = Ok(());
-    for_each_index(dims, |idx| {
+    crate::for_each_index(dims, |idx| {
         if result.is_ok() {
             result = f(idx);
         }
     });
     result
-}
-
-pub(crate) fn cast_metadata_tensor_to_host_scalar_tensor<S>(
-    input: MetadataTensorRef<'_>,
-    target_dims: &[usize],
-    target_strides: &[isize],
-    target_offset: isize,
-) -> Result<Tensor<S>>
-where
-    S: Scalar + NumCast,
-{
-    match input {
-        MetadataTensorRef::I32(tensor) => cast_metadata_tensor_from_host::<S, i32, _>(
-            tensor,
-            target_dims,
-            target_strides,
-            target_offset,
-            |value| cast_metadata_value::<S, i32>(value, "metadata i32 value"),
-        ),
-        MetadataTensorRef::Bool(tensor) => cast_metadata_tensor_from_host::<S, u8, _>(
-            tensor,
-            target_dims,
-            target_strides,
-            target_offset,
-            |value| {
-                cast_metadata_value::<S, u8>(if value != 0 { 1 } else { 0 }, "metadata bool value")
-            },
-        ),
-    }
-}
-
-fn cast_metadata_tensor_from_host<S, Src, F>(
-    tensor: &Tensor<Src>,
-    target_dims: &[usize],
-    target_strides: &[isize],
-    target_offset: isize,
-    cast: F,
-) -> Result<Tensor<S>>
-where
-    S: Scalar + NumCast,
-    Src: Scalar + Copy,
-    F: Fn(Src) -> Result<S> + Copy,
-{
-    let host_tensor = tensor.to_memory_space_async(LogicalMemorySpace::MainMemory)?;
-    if host_tensor.buffer().as_slice().is_none() {
-        return Err(Error::DeviceError(format!(
-            "metadata tensor is not host-accessible after transfer: {:?}",
-            host_tensor.logical_memory_space()
-        )));
-    }
-    let host_view = tensor_to_view(&host_tensor)?;
-    let mut output = Tensor::<S>::empty_strided(
-        target_dims,
-        target_strides,
-        target_offset,
-        LogicalMemorySpace::MainMemory,
-    )?;
-    let mut output_view = tensor_to_view_mut(&mut output)?;
-    let dims = output_view.dims().to_vec();
-    for_each_index_result(&dims, |idx| {
-        output_view.set(idx, cast(host_view.get(idx))?);
-        Ok(())
-    })?;
-    Ok(output)
-}
-
-pub(crate) fn blend_cast_into_host_output<S>(
-    current_output: &mut Tensor<S>,
-    casted: &Tensor<S>,
-    alpha: S,
-    beta: S,
-) -> Result<()>
-where
-    S: Scalar + Copy,
-{
-    if current_output.buffer().as_slice().is_none() {
-        return Err(Error::DeviceError(format!(
-            "metadata cast output tensor is not host-accessible: {:?}",
-            current_output.logical_memory_space()
-        )));
-    }
-    if casted.buffer().as_slice().is_none() {
-        return Err(Error::DeviceError(format!(
-            "metadata cast source tensor is not host-accessible: {:?}",
-            casted.logical_memory_space()
-        )));
-    }
-    let casted_view = tensor_to_view(casted)?;
-    let mut current_view = tensor_to_view_mut(current_output)?;
-    let dims = current_view.dims().to_vec();
-    for_each_index_result(&dims, |idx| {
-        let blended = alpha * casted_view.get(idx) + beta * current_view.get(idx);
-        current_view.set(idx, blended);
-        Ok(())
-    })
 }
 
 pub(crate) fn validate_where_bridge_inputs<'a, S: Scalar>(
@@ -311,6 +218,7 @@ pub(crate) fn validate_pointwise_cast_bridge_inputs<'a, S: Scalar>(
 }
 
 /// Scalar-family scalar ternary descriptor for metadata bridge reuse.
+#[cfg(feature = "cuda")]
 pub(crate) fn scalar_where_desc() -> ScalarPrimsDescriptor {
     ScalarPrimsDescriptor::PointwiseTernary {
         op: ScalarTernaryOp::Where,

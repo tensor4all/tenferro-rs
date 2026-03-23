@@ -14,8 +14,8 @@ mod structural;
 use kernels::*;
 pub use shared::*;
 pub(crate) use shared::{
-    MetadataBinaryOp, MetadataBinarySpec, MetadataGenerateOp, MetadataGenerateSpec,
-    MetadataReductionOp, MetadataReductionSpec, MetadataTensorMut, MetadataTensorRef,
-    MetadataTernaryOp, MetadataTernarySpec,
+    MetadataBinaryOp, MetadataBinarySpec, MetadataCastSpec, MetadataGenerateOp,
+    MetadataGenerateSpec, MetadataReductionOp, MetadataReductionSpec, MetadataTensorMut,
+    MetadataTensorRef, MetadataTernaryOp, MetadataTernarySpec,
 };
 pub use state::*;
