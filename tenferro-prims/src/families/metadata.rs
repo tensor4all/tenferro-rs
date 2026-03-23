@@ -1,11 +1,11 @@
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
-/// Metadata storage dtypes.
+/// Metadata tensor dtypes.
 ///
-/// Metadata tensors currently use `i32` and `u8` storage. `u8` is the initial
-/// bool-like representation until the workspace grows a dedicated metadata
-/// bool tensor type.
+/// Metadata tensors currently use logical `I32` and `Bool` dtypes. `Bool` is
+/// backed by `u8` storage for now, but that storage detail stays hidden from
+/// the public contract.
 ///
 /// # Examples
 ///
@@ -13,14 +13,14 @@ use tenferro_tensor::Tensor;
 /// use tenferro_prims::MetadataDType;
 ///
 /// assert_eq!(MetadataDType::I32, MetadataDType::I32);
-/// assert_eq!(MetadataDType::BoolU8, MetadataDType::BoolU8);
+/// assert_eq!(MetadataDType::Bool, MetadataDType::Bool);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetadataDType {
     /// Signed 32-bit integer metadata tensors.
     I32,
-    /// Bool-like metadata tensors stored as `u8`.
-    BoolU8,
+    /// Logical bool/mask metadata tensors.
+    Bool,
 }
 
 /// Metadata tensor generation operations.
@@ -108,7 +108,7 @@ pub enum MetadataReductionOp {
 /// Erased immutable metadata tensor reference.
 ///
 /// The contract is intentionally narrow and only admits integer metadata and
-/// bool-like metadata stored as `u8`.
+/// logical bool metadata stored as `u8`.
 ///
 /// # Examples
 ///
@@ -129,12 +129,12 @@ pub enum MetadataReductionOp {
 pub enum MetadataTensorRef<'a> {
     /// A metadata tensor stored as `i32`.
     I32(&'a Tensor<i32>),
-    /// A metadata tensor stored as `u8` for bool-like payloads.
-    BoolU8(&'a Tensor<u8>),
+    /// A logical bool/mask metadata tensor backed by `u8`.
+    Bool(&'a Tensor<u8>),
 }
 
 impl<'a> MetadataTensorRef<'a> {
-    /// Return the storage dtype carried by this metadata tensor reference.
+    /// Return the logical dtype carried by this metadata tensor reference.
     ///
     /// # Examples
     ///
@@ -148,13 +148,13 @@ impl<'a> MetadataTensorRef<'a> {
     ///     LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
     /// );
-    /// let metadata = MetadataTensorRef::BoolU8(&tensor);
-    /// assert_eq!(metadata.dtype(), MetadataDType::BoolU8);
+    /// let metadata = MetadataTensorRef::Bool(&tensor);
+    /// assert_eq!(metadata.dtype(), MetadataDType::Bool);
     /// ```
     pub const fn dtype(&self) -> MetadataDType {
         match self {
             Self::I32(_) => MetadataDType::I32,
-            Self::BoolU8(_) => MetadataDType::BoolU8,
+            Self::Bool(_) => MetadataDType::Bool,
         }
     }
 }
@@ -173,19 +173,19 @@ impl<'a> MetadataTensorRef<'a> {
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
 /// );
-/// let metadata = MetadataTensorMut::BoolU8(&mut tensor);
-/// assert_eq!(metadata.dtype(), MetadataDType::BoolU8);
+/// let metadata = MetadataTensorMut::Bool(&mut tensor);
+/// assert_eq!(metadata.dtype(), MetadataDType::Bool);
 /// ```
 #[derive(Debug)]
 pub enum MetadataTensorMut<'a> {
     /// A metadata tensor stored as `i32`.
     I32(&'a mut Tensor<i32>),
-    /// A metadata tensor stored as `u8` for bool-like payloads.
-    BoolU8(&'a mut Tensor<u8>),
+    /// A logical bool/mask metadata tensor backed by `u8`.
+    Bool(&'a mut Tensor<u8>),
 }
 
 impl<'a> MetadataTensorMut<'a> {
-    /// Return the storage dtype carried by this metadata tensor handle.
+    /// Return the logical dtype carried by this metadata tensor handle.
     ///
     /// # Examples
     ///
@@ -205,7 +205,7 @@ impl<'a> MetadataTensorMut<'a> {
     pub const fn dtype(&self) -> MetadataDType {
         match self {
             Self::I32(_) => MetadataDType::I32,
-            Self::BoolU8(_) => MetadataDType::BoolU8,
+            Self::Bool(_) => MetadataDType::Bool,
         }
     }
 }
@@ -215,10 +215,11 @@ impl<'a> MetadataTensorMut<'a> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_prims::{MetadataGenerateOp, MetadataPrimsDescriptor};
+/// use tenferro_prims::{MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor};
 ///
 /// let desc = MetadataPrimsDescriptor::Generate {
 ///     op: MetadataGenerateOp::IotaStartZero,
+///     output_dtype: MetadataDType::I32,
 /// };
 /// assert!(matches!(desc, MetadataPrimsDescriptor::Generate { .. }));
 /// ```
@@ -228,16 +229,32 @@ pub enum MetadataPrimsDescriptor {
     Generate {
         /// Generation operation to apply.
         op: MetadataGenerateOp,
+        /// Logical dtype of the generated tensor.
+        output_dtype: MetadataDType,
     },
     /// Apply a metadata binary operation to two input tensors.
     Binary {
         /// Binary operation to apply.
         op: MetadataBinaryOp,
+        /// Logical dtype of the left-hand side operand.
+        lhs_dtype: MetadataDType,
+        /// Logical dtype of the right-hand side operand.
+        rhs_dtype: MetadataDType,
+        /// Logical dtype of the output tensor.
+        output_dtype: MetadataDType,
     },
     /// Apply a metadata ternary operation to three input tensors.
     Ternary {
         /// Ternary operation to apply.
         op: MetadataTernaryOp,
+        /// Logical dtype of the condition/mask input.
+        cond_dtype: MetadataDType,
+        /// Logical dtype of the first data input.
+        lhs_dtype: MetadataDType,
+        /// Logical dtype of the second data input.
+        rhs_dtype: MetadataDType,
+        /// Logical dtype of the output tensor.
+        output_dtype: MetadataDType,
     },
     /// Reduce one tensor into an output tensor over the dropped modes.
     Reduction {
@@ -245,6 +262,10 @@ pub enum MetadataPrimsDescriptor {
         modes_a: Vec<u32>,
         /// Output modes that remain after reduction.
         modes_c: Vec<u32>,
+        /// Logical dtype of the input tensor.
+        input_dtype: MetadataDType,
+        /// Logical dtype of the output tensor.
+        output_dtype: MetadataDType,
         /// Reduction operator to use.
         op: MetadataReductionOp,
     },
