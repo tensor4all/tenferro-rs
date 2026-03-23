@@ -44,6 +44,7 @@ mod custom;
 mod execution;
 mod family_common;
 mod metadata;
+mod metadata_cast;
 mod planning;
 mod pointwise_ops;
 mod runtime;

@@ -13,6 +13,8 @@
 //! - [`TensorComplexScalePrims`] for complex payload scaled by real-valued tensors
 //! - [`TensorMetadataPrims`] for integer/bool metadata tensor families with
 //!   overwrite-based execution and erased metadata tensor handles
+//! - [`TensorMetadataCastPrims`] for metadata-to-scalar bridge families such as
+//!   bool/int casts and `where`
 //!
 //! Most families follow the same plan/execute pattern:
 //!

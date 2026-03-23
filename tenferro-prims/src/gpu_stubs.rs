@@ -6,7 +6,8 @@ use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::{
-    PlanCache, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
+    MetadataCastPrimsDescriptor, MetadataScalarTensorRef, PlanCache, SemiringCoreDescriptor,
+    SemiringFastPathDescriptor, TensorMetadataCastPrims, TensorSemiringCore,
     TensorSemiringFastPath,
 };
 
@@ -226,6 +227,39 @@ impl<S: Scalar> TensorSemiringFastPath<Standard<S>> for CudaBackend {
     }
 }
 
+#[cfg(not(feature = "cuda"))]
+impl<S: Scalar + num_traits::NumCast> TensorMetadataCastPrims<S> for CudaBackend {
+    type Plan = MetadataCastPrimsDescriptor;
+    type Context = CudaContext;
+
+    fn plan(
+        _ctx: &mut CudaContext,
+        desc: &MetadataCastPrimsDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<Self::Plan> {
+        Err(Error::DeviceError(format!(
+            "metadata cast family descriptor {desc:?} is not implemented on CudaBackend in phase 1"
+        )))
+    }
+
+    fn execute(
+        _ctx: &mut CudaContext,
+        _plan: &Self::Plan,
+        _alpha: S,
+        _inputs: &[MetadataScalarTensorRef<'_, S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
+    ) -> Result<()> {
+        Err(Error::DeviceError(
+            "metadata cast family execution is not implemented on CudaBackend in phase 1".into(),
+        ))
+    }
+
+    fn has_metadata_cast_support(_desc: MetadataCastPrimsDescriptor) -> bool {
+        false
+    }
+}
+
 // ===========================================================================
 // ROCm stub types (always present — no real ROCm backend yet)
 // ===========================================================================
@@ -363,6 +397,38 @@ impl RocmBackend {
             tenferro_tensor::MemoryOrder::ColumnMajor,
         )
         .unwrap_or_else(|_| src.clone())
+    }
+}
+
+impl<S: Scalar + num_traits::NumCast> TensorMetadataCastPrims<S> for RocmBackend {
+    type Plan = MetadataCastPrimsDescriptor;
+    type Context = RocmContext;
+
+    fn plan(
+        _ctx: &mut RocmContext,
+        desc: &MetadataCastPrimsDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<Self::Plan> {
+        Err(Error::DeviceError(format!(
+            "metadata cast family descriptor {desc:?} is not implemented on RocmBackend in phase 1"
+        )))
+    }
+
+    fn execute(
+        _ctx: &mut RocmContext,
+        _plan: &Self::Plan,
+        _alpha: S,
+        _inputs: &[MetadataScalarTensorRef<'_, S>],
+        _beta: S,
+        _output: &mut Tensor<S>,
+    ) -> Result<()> {
+        Err(Error::DeviceError(
+            "metadata cast family execution is not implemented on RocmBackend in phase 1".into(),
+        ))
+    }
+
+    fn has_metadata_cast_support(_desc: MetadataCastPrimsDescriptor) -> bool {
+        false
     }
 }
 

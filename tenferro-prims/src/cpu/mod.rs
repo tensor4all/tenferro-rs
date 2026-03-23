@@ -15,6 +15,7 @@ mod family_reduction;
 mod gemm_support;
 mod layout_fusion;
 mod metadata;
+mod metadata_cast;
 mod plan;
 mod planning;
 mod reduction;
