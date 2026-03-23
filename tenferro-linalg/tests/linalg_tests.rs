@@ -630,12 +630,16 @@ fn eigen_symmetric() {
 }
 
 #[test]
-fn eigen_nonsymmetric_returns_error() {
+fn eigen_uses_lower_triangle_when_upper_triangle_disagrees() {
     let mut ctx = CpuContext::new(1);
-    // Non-symmetric matrix: [[2, 3], [1, 4]]
-    let data = vec![2.0, 1.0, 3.0, 4.0];
+    // Lower triangle encodes [[2, 1], [1, 2]] while the upper triangle disagrees.
+    let data = vec![2.0, 1.0, 99.0, 2.0];
     let a = make_tensor(data, &[2, 2]);
-    assert!(eigen(&mut ctx, &a).is_err());
+    let result = eigen(&mut ctx, &a).unwrap();
+
+    let vals = tensor_data(&result.values);
+    assert!((vals[0] - 1.0).abs() < 1e-10, "eigenvalue 0: {}", vals[0]);
+    assert!((vals[1] - 3.0).abs() < 1e-10, "eigenvalue 1: {}", vals[1]);
 }
 
 #[test]

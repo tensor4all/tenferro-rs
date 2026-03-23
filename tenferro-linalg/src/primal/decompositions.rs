@@ -338,6 +338,26 @@ where
 /// Compute the eigendecomposition of a batched square matrix.
 ///
 /// Input shape: `(n, n, *)`.
+/// The lower triangle is treated as canonical input, matching the default
+/// `UPLO='L'` behavior used by PyTorch's `linalg.eigh`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_linalg::eigen;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::<f64>::from_slice(
+///     &[2.0, 1.0, 1.0, 2.0],
+///     &[2, 2],
+///     MemoryOrder::ColumnMajor,
+/// ).unwrap();
+/// let result = eigen(&mut ctx, &a).unwrap();
+/// assert_eq!(result.values.dims(), &[2]);
+/// ```
 pub fn eigen<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
@@ -347,12 +367,7 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::EigenSym, "eigen")?;
-    let (n, batch_dims) = validate_square(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    validate_hermitian_batches(data, offset, n, bc, "eigen")?;
+    let _ = validate_square(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::eigen_sym(ctx, tensor)?;
 
     Ok(EigenResult {
