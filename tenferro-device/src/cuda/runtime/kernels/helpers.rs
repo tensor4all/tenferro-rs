@@ -63,6 +63,67 @@ pub fn checked_numel(dims: &[usize]) -> Result<usize> {
     })
 }
 
+pub fn required_storage_len(
+    dims: &[usize],
+    strides: &[isize],
+    offset: isize,
+    label: &str,
+) -> Result<usize> {
+    if dims.len() != strides.len() {
+        return Err(Error::InvalidArgument(format!(
+            "{label} rank mismatch: dims={} strides={}",
+            dims.len(),
+            strides.len()
+        )));
+    }
+
+    if dims.contains(&0) {
+        return Ok(0);
+    }
+
+    let mut min_pos = offset;
+    let mut max_pos = offset;
+    for (axis, (&dim, &stride)) in dims.iter().zip(strides).enumerate() {
+        let extent = isize::try_from(dim - 1)
+            .ok()
+            .and_then(|d| d.checked_mul(stride))
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "{label} extent overflow for dimension {axis} (size={dim}, stride={stride})"
+                ))
+            })?;
+        if extent >= 0 {
+            max_pos = max_pos.checked_add(extent).ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "{label} maximum offset overflow for dimension {axis}"
+                ))
+            })?;
+        } else {
+            min_pos = min_pos.checked_add(extent).ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "{label} minimum offset overflow for dimension {axis}"
+                ))
+            })?;
+        }
+    }
+
+    if min_pos < 0 {
+        return Err(Error::InvalidArgument(format!(
+            "{label} accesses negative buffer positions {}..={}",
+            min_pos, max_pos
+        )));
+    }
+
+    let max_pos = usize::try_from(max_pos).map_err(|_| {
+        Error::InvalidArgument(format!(
+            "{label} maximum position {max_pos} exceeds usize range"
+        ))
+    })?;
+    max_pos
+        .checked_add(1)
+        .ok_or_else(|| Error::InvalidArgument(format!("{label} storage length overflow")))
+}
+
 pub fn contiguous_strides(dims: &[usize], order: ContiguousOrder) -> Result<Vec<isize>> {
     let mut strides = vec![0isize; dims.len()];
     let mut stride = 1isize;

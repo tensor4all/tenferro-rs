@@ -12,12 +12,17 @@ impl CudaRuntime {
         match (op, dst) {
             (MetadataGenerateOp::IotaStartZero, MetadataTensorMut::I32(dst)) => {
                 self.ensure_same_device(dst.device_id())?;
-                let numel = checked_numel(&spec.dims)?;
-                if dst.len() != numel {
+                let required_len = required_storage_len(
+                    &spec.dims,
+                    spec.dst_strides(),
+                    spec.dst_offset(),
+                    "metadata iota destination",
+                )?;
+                if dst.len() < required_len {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata iota length mismatch: dst={} expected={}",
+                        "metadata iota length mismatch: dst={} required={}",
                         dst.len(),
-                        numel
+                        required_len
                     )));
                 }
                 unsafe { self.metadata_generate_iota_i32_raw(dst.device_ptr(), spec) }
@@ -654,6 +659,14 @@ impl CudaRuntime {
             })
             .collect::<Result<_>>()?;
         let reduced_total = checked_numel(&reduced_dims)?;
+        if (kernel_name == METADATA_REDUCE_SUM_I32_KERNEL_NAME
+            || kernel_name == METADATA_REDUCE_SUM_BOOL_KERNEL_NAME)
+            && reduced_total > i32::MAX as usize
+        {
+            return Err(Error::InvalidArgument(
+                "metadata sum currently requires reduction volume <= i32::MAX".into(),
+            ));
+        }
         let (kernel, stream) = load_metadata_scalar_kernel(self, kernel_name)?;
         let input_strides_dev = stream
             .clone_htod(&to_i64_vec(&spec.input_strides, "metadata input stride")?)

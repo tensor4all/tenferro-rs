@@ -467,6 +467,21 @@ fn host_metadata_iota_reference(
     dst
 }
 
+fn host_metadata_iota_layout_reference(
+    dims: &[usize],
+    dst_strides: &[isize],
+    dst_offset: isize,
+    dst_len: usize,
+) -> Vec<i32> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0i32; dst_len];
+    for linear_idx in 0..numel {
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, dst_offset) as usize;
+        dst[dst_idx] = linear_idx as i32;
+    }
+    dst
+}
+
 fn host_metadata_not_equal_reference(
     lhs: &[i32],
     rhs: &[i32],
@@ -484,6 +499,39 @@ fn host_metadata_not_equal_reference(
         dst[dst_idx] = u8::from(lhs[lhs_idx] != rhs[rhs_idx]);
     }
     dst
+}
+
+fn host_metadata_not_equal_bool_reference(
+    lhs: &[u8],
+    rhs: &[u8],
+    dims: &[usize],
+    lhs_strides: &[isize],
+    rhs_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<u8> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0u8; numel];
+    for linear_idx in 0..numel {
+        let lhs_idx = linear_offset(linear_idx, dims, lhs_strides, 0) as usize;
+        let rhs_idx = linear_offset(linear_idx, dims, rhs_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = u8::from(lhs[lhs_idx] != rhs[rhs_idx]);
+    }
+    dst
+}
+
+fn host_metadata_equal_bool_reference(
+    lhs: &[u8],
+    rhs: &[u8],
+    dims: &[usize],
+    lhs_strides: &[isize],
+    rhs_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<u8> {
+    host_metadata_not_equal_bool_reference(lhs, rhs, dims, lhs_strides, rhs_strides, dst_strides)
+        .into_iter()
+        .map(|value| u8::from(value == 0))
+        .collect()
 }
 
 fn host_metadata_equal_reference(
@@ -512,6 +560,32 @@ fn host_metadata_where_i32_reference(
 ) -> Vec<i32> {
     let numel = dims.iter().product::<usize>();
     let mut dst = vec![0i32; numel];
+    for linear_idx in 0..numel {
+        let cond_idx = linear_offset(linear_idx, dims, cond_strides, 0) as usize;
+        let true_idx = linear_offset(linear_idx, dims, true_strides, 0) as usize;
+        let false_idx = linear_offset(linear_idx, dims, false_strides, 0) as usize;
+        let dst_idx = linear_offset(linear_idx, dims, dst_strides, 0) as usize;
+        dst[dst_idx] = if cond[cond_idx] != 0 {
+            on_true[true_idx]
+        } else {
+            on_false[false_idx]
+        };
+    }
+    dst
+}
+
+fn host_metadata_where_bool_reference(
+    cond: &[u8],
+    on_true: &[u8],
+    on_false: &[u8],
+    dims: &[usize],
+    cond_strides: &[isize],
+    true_strides: &[isize],
+    false_strides: &[isize],
+    dst_strides: &[isize],
+) -> Vec<u8> {
+    let numel = dims.iter().product::<usize>();
+    let mut dst = vec![0u8; numel];
     for linear_idx in 0..numel {
         let cond_idx = linear_offset(linear_idx, dims, cond_strides, 0) as usize;
         let true_idx = linear_offset(linear_idx, dims, true_strides, 0) as usize;
@@ -1216,6 +1290,160 @@ fn cuda_runtime_metadata_iota_i32_matches_host_reference() {
 
     let got = runtime.copy_dtoh(&dst).unwrap();
     let expected = host_metadata_iota_reference(&dims, &dst_strides, 0);
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_metadata_reduction_spec_rejects_non_partition_axes() {
+    use tenferro_device::cuda::runtime::MetadataReductionSpec;
+
+    let overlap =
+        MetadataReductionSpec::new(&[2usize, 3], &[1isize, 2], 0, &[2], &[1], 0, &[0], &[0]);
+    assert!(overlap
+        .unwrap_err()
+        .to_string()
+        .contains("appears in both kept_axes and reduced_axes"));
+
+    let missing =
+        MetadataReductionSpec::new(&[2usize, 3], &[1isize, 2], 0, &[2], &[1], 0, &[0], &[]);
+    assert!(missing
+        .unwrap_err()
+        .to_string()
+        .contains("is missing from kept_axes and reduced_axes"));
+}
+
+#[test]
+fn cuda_runtime_metadata_iota_i32_supports_offset_noncontiguous_layout() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataGenerateOp, MetadataGenerateSpec, MetadataTensorMut,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [2usize, 2];
+    let dst_strides = [1isize, 3];
+    let dst_offset = 1isize;
+    let spec = MetadataGenerateSpec::new(&dims, &dst_strides, dst_offset).unwrap();
+    let mut dst = runtime.alloc::<i32>(6).unwrap();
+
+    runtime
+        .metadata_generate(
+            MetadataGenerateOp::IotaStartZero,
+            MetadataTensorMut::I32(&mut dst),
+            &spec,
+        )
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_metadata_iota_layout_reference(&dims, &dst_strides, dst_offset, 6);
+    assert_eq!(got, expected);
+}
+
+#[test]
+fn cuda_runtime_metadata_bool_compare_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataBinaryOp, MetadataBinarySpec, MetadataTensorMut, MetadataTensorRef,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [6usize];
+    let strides = [1isize];
+    let lhs_data = [0u8, 1, 1, 0, 1, 0];
+    let rhs_data = [0u8, 0, 1, 1, 1, 0];
+    let lhs = runtime.alloc::<u8>(lhs_data.len()).unwrap();
+    let rhs = runtime.alloc::<u8>(rhs_data.len()).unwrap();
+    let mut not_equal = runtime.alloc::<u8>(lhs_data.len()).unwrap();
+    let mut equal = runtime.alloc::<u8>(lhs_data.len()).unwrap();
+    runtime.copy_htod(&lhs_data, &lhs).unwrap();
+    runtime.copy_htod(&rhs_data, &rhs).unwrap();
+
+    let spec = MetadataBinarySpec::new(&dims, &strides, 0, &strides, 0, &strides, 0).unwrap();
+    runtime
+        .metadata_binary(
+            MetadataBinaryOp::NotEqual,
+            MetadataTensorRef::Bool(&lhs),
+            MetadataTensorRef::Bool(&rhs),
+            MetadataTensorMut::Bool(&mut not_equal),
+            &spec,
+        )
+        .unwrap();
+    runtime
+        .metadata_binary(
+            MetadataBinaryOp::Equal,
+            MetadataTensorRef::Bool(&lhs),
+            MetadataTensorRef::Bool(&rhs),
+            MetadataTensorMut::Bool(&mut equal),
+            &spec,
+        )
+        .unwrap();
+
+    let got_not_equal = runtime.copy_dtoh(&not_equal).unwrap();
+    let got_equal = runtime.copy_dtoh(&equal).unwrap();
+    let expected_not_equal = host_metadata_not_equal_bool_reference(
+        &lhs_data, &rhs_data, &dims, &strides, &strides, &strides,
+    );
+    let expected_equal = host_metadata_equal_bool_reference(
+        &lhs_data, &rhs_data, &dims, &strides, &strides, &strides,
+    );
+    assert_eq!(got_not_equal, expected_not_equal);
+    assert_eq!(got_equal, expected_equal);
+}
+
+#[test]
+fn cuda_runtime_metadata_where_bool_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataTensorMut, MetadataTensorRef, MetadataTernaryOp, MetadataTernarySpec,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [6usize];
+    let strides = [1isize];
+    let cond_data = [0u8, 1, 0, 0, 1, 0];
+    let true_data = [0u8, 11, 0, 0, 22, 0];
+    let false_data = [0u8, 101, 0, 0, 202, 0];
+    let cond = runtime.alloc::<u8>(cond_data.len()).unwrap();
+    let on_true = runtime.alloc::<u8>(true_data.len()).unwrap();
+    let on_false = runtime.alloc::<u8>(false_data.len()).unwrap();
+    let mut dst = runtime.alloc::<u8>(false_data.len()).unwrap();
+    runtime.copy_htod(&cond_data, &cond).unwrap();
+    runtime.copy_htod(&true_data, &on_true).unwrap();
+    runtime.copy_htod(&false_data, &on_false).unwrap();
+
+    let spec = MetadataTernarySpec::new(&dims, &strides, 0, &strides, 0, &strides, 0, &strides, 0)
+        .unwrap();
+    runtime
+        .metadata_ternary(
+            MetadataTernaryOp::Where,
+            MetadataTensorRef::Bool(&cond),
+            MetadataTensorRef::Bool(&on_true),
+            MetadataTensorRef::Bool(&on_false),
+            MetadataTensorMut::Bool(&mut dst),
+            &spec,
+        )
+        .unwrap();
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    let expected = host_metadata_where_bool_reference(
+        &cond_data,
+        &true_data,
+        &false_data,
+        &dims,
+        &strides,
+        &strides,
+        &strides,
+        &strides,
+    );
     assert_eq!(got, expected);
 }
 

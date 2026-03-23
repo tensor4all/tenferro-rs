@@ -944,6 +944,25 @@ impl MetadataReductionSpec {
             )));
         }
 
+        let kept_seen = validate_axes_list(kept_axes, input_dims.len(), "metadata reduction kept")?;
+        let reduced_seen =
+            validate_axes_list(reduced_axes, input_dims.len(), "metadata reduction reduced")?;
+        for axis in 0..input_dims.len() {
+            match (kept_seen[axis], reduced_seen[axis]) {
+                (true, true) => {
+                    return Err(Error::InvalidArgument(format!(
+                        "metadata reduction axis {axis} appears in both kept_axes and reduced_axes"
+                    )));
+                }
+                (false, false) => {
+                    return Err(Error::InvalidArgument(format!(
+                        "metadata reduction axis {axis} is missing from kept_axes and reduced_axes"
+                    )));
+                }
+                _ => {}
+            }
+        }
+
         for (output_axis, &input_axis) in kept_axes.iter().enumerate() {
             let Some(&expected_dim) = input_dims.get(input_axis) else {
                 return Err(Error::InvalidArgument(format!(
@@ -969,6 +988,24 @@ impl MetadataReductionSpec {
             reduced_axes: reduced_axes.to_vec(),
         })
     }
+}
+
+fn validate_axes_list(axes: &[usize], rank: usize, label: &str) -> Result<Vec<bool>> {
+    let mut seen = vec![false; rank];
+    for &axis in axes {
+        let Some(slot) = seen.get_mut(axis) else {
+            return Err(Error::InvalidArgument(format!(
+                "{label} axis {axis} out of bounds"
+            )));
+        };
+        if *slot {
+            return Err(Error::InvalidArgument(format!(
+                "{label} axis {axis} is duplicated"
+            )));
+        }
+        *slot = true;
+    }
+    Ok(seen)
 }
 
 pub(super) trait RuntimeRealScalar: cudarc::driver::DeviceRepr + Copy + 'static {
