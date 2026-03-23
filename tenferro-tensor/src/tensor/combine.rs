@@ -4,7 +4,7 @@ use std::sync::Arc;
 use num_complex::{Complex32, Complex64};
 #[cfg(feature = "cuda")]
 use std::any::TypeId;
-use tenferro_algebra::{Conjugate, Scalar};
+use tenferro_algebra::Scalar;
 #[cfg(feature = "cuda")]
 use tenferro_device::cuda::runtime::{
     self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, StridedCopyTransform,
@@ -17,7 +17,7 @@ use crate::layout::compute_contiguous_strides;
 use crate::DataBuffer;
 use crate::MemoryOrder;
 
-impl<T: Scalar + Conjugate> Tensor<T> {
+impl<T: Scalar> Tensor<T> {
     /// Stack tensors along a new dimension.
     ///
     /// Creates a new dimension and concatenates the input tensors along it.
@@ -307,7 +307,7 @@ impl<T: Scalar + Conjugate> Tensor<T> {
 }
 
 #[cfg(feature = "cuda")]
-fn materialize_cuda_contiguous_buffer<T: Scalar + Conjugate + 'static>(
+fn materialize_cuda_contiguous_buffer<T: Scalar + 'static>(
     tensor: &Tensor<T>,
     runtime: &Arc<device_cuda::CudaRuntime>,
 ) -> Result<CudaBuffer<T>> {
@@ -341,7 +341,7 @@ fn materialize_cuda_contiguous_buffer<T: Scalar + Conjugate + 'static>(
 }
 
 #[cfg(feature = "cuda")]
-fn cat_gpu<T: Scalar + Conjugate + 'static>(
+fn cat_gpu<T: Scalar + 'static>(
     tensors: &[&Tensor<T>],
     dim: usize,
     memory_space: LogicalMemorySpace,

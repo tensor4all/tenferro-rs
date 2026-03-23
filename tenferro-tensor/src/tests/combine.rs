@@ -1,8 +1,44 @@
 use super::*;
 use num_complex::Complex64;
+use num_traits::{One, Zero};
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
 use tenferro_device::{ComputeDevice, Error};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TropicalLike(f64);
+
+impl std::ops::Add for TropicalLike {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        TropicalLike(self.0 + rhs.0)
+    }
+}
+
+impl std::ops::Mul for TropicalLike {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self::Output {
+        TropicalLike(self.0 * rhs.0)
+    }
+}
+
+impl Zero for TropicalLike {
+    fn zero() -> Self {
+        TropicalLike(0.0)
+    }
+
+    fn is_zero(&self) -> bool {
+        self.0 == 0.0
+    }
+}
+
+impl One for TropicalLike {
+    fn one() -> Self {
+        TropicalLike(1.0)
+    }
+}
 
 fn col_tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
@@ -62,6 +98,64 @@ fn stack_validates_inputs_and_dimension_range() {
     assert!(
         matches!(dim_err, Error::InvalidArgument(ref msg) if msg.contains("out of range")),
         "expected out-of-range error, got {dim_err:?}"
+    );
+}
+
+#[test]
+fn stack_and_cat_remain_available_for_custom_scalars_without_conjugation() {
+    let a = Tensor::from_slice(
+        &[
+            TropicalLike(1.0),
+            TropicalLike(2.0),
+            TropicalLike(3.0),
+            TropicalLike(4.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = Tensor::from_slice(
+        &[
+            TropicalLike(5.0),
+            TropicalLike(6.0),
+            TropicalLike(7.0),
+            TropicalLike(8.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let stacked = Tensor::stack(&[&a, &b], 0).unwrap();
+    assert_eq!(stacked.dims(), &[2, 2, 2]);
+    assert_eq!(
+        stacked.buffer().as_slice().unwrap(),
+        &[
+            TropicalLike(1.0),
+            TropicalLike(5.0),
+            TropicalLike(2.0),
+            TropicalLike(6.0),
+            TropicalLike(3.0),
+            TropicalLike(7.0),
+            TropicalLike(4.0),
+            TropicalLike(8.0),
+        ]
+    );
+
+    let concatenated = Tensor::cat(&[&a, &b], 1).unwrap();
+    assert_eq!(concatenated.dims(), &[2, 4]);
+    assert_eq!(
+        concatenated.buffer().as_slice().unwrap(),
+        &[
+            TropicalLike(1.0),
+            TropicalLike(2.0),
+            TropicalLike(3.0),
+            TropicalLike(4.0),
+            TropicalLike(5.0),
+            TropicalLike(6.0),
+            TropicalLike(7.0),
+            TropicalLike(8.0),
+        ]
     );
 }
 

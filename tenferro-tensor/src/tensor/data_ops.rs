@@ -1,3 +1,6 @@
+use std::any::TypeId;
+
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar};
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
@@ -353,7 +356,7 @@ impl<T: Scalar> Tensor<T> {
     }
 }
 
-impl<T: Scalar + Conjugate> Tensor<T> {
+impl<T: Scalar> Tensor<T> {
     /// Materialize the logical tensor values into a fresh contiguous tensor.
     ///
     /// The returned tensor is resolved (`conjugated = false`) and clears any
@@ -384,11 +387,7 @@ impl<T: Scalar + Conjugate> Tensor<T> {
                 &mut data,
                 &dst_strides,
             );
-            if self.conjugated {
-                for value in &mut data {
-                    *value = value.conj();
-                }
-            }
+            apply_logical_conjugation_if_needed(&mut data, self.conjugated);
         }
 
         Tensor::from_owned_contiguous_data(
@@ -399,5 +398,37 @@ impl<T: Scalar + Conjugate> Tensor<T> {
             None,
             false,
         )
+    }
+}
+
+/// Apply logical conjugation in place when the element type supports it.
+///
+/// This uses a narrow private runtime dispatch so `Tensor::cat` / `Tensor::stack`
+/// can stay generic over `Scalar` while built-in complex tensors still materialize
+/// their logical values correctly.
+fn apply_logical_conjugation_if_needed<T: Scalar + 'static>(data: &mut [T], conjugated: bool) {
+    if !conjugated || data.is_empty() {
+        return;
+    }
+
+    if TypeId::of::<T>() == TypeId::of::<Complex32>() {
+        // SAFETY: the type check above guarantees `T` really is `Complex32`.
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<Complex32>(), data.len())
+        };
+        for value in data {
+            *value = value.conj();
+        }
+        return;
+    }
+
+    if TypeId::of::<T>() == TypeId::of::<Complex64>() {
+        // SAFETY: the type check above guarantees `T` really is `Complex64`.
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<Complex64>(), data.len())
+        };
+        for value in data {
+            *value = value.conj();
+        }
     }
 }

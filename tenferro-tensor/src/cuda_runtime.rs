@@ -1,7 +1,7 @@
 use std::{any::TypeId, sync::Arc};
 
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::{Conjugate, Scalar};
+use tenferro_algebra::Scalar;
 use tenferro_device::cuda::runtime::{
     self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, StridedCopyTransform,
     TriangularHalf, TriangularMergeSpec, TriangularPartSpec, ZeroTrailingByCountsSpec,
@@ -149,7 +149,7 @@ pub(super) fn materialize_logical_contiguous_tensor<T>(
     order: MemoryOrder,
 ) -> Result<Tensor<T>>
 where
-    T: Scalar + Conjugate + 'static,
+    T: Scalar + 'static,
 {
     let space = source.logical_memory_space();
     let runtime = gpu_runtime(space)?;
