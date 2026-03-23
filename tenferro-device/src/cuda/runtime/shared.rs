@@ -748,6 +748,10 @@ pub(crate) enum MetadataGenerateOp {
 pub(crate) enum MetadataBinaryOp {
     Equal,
     NotEqual,
+    Add,
+    Sub,
+    Mul,
+    BitAnd,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -198,10 +198,118 @@ impl CudaRuntime {
         } else {
             MetadataBinaryOp::NotEqual
         };
-        unsafe { self.metadata_binary_i32_bool_raw(op, lhs, rhs, dst, &spec) }
+        unsafe {
+            self.metadata_binary_i32_bool_raw(
+                if matches!(op, MetadataBinaryOp::Equal) {
+                    0
+                } else {
+                    1
+                },
+                lhs,
+                rhs,
+                dst,
+                &spec,
+            )
+        }
     }
 
-    /// Materialize an equality/inequality comparison over two bool metadata buffers.
+    /// Materialize integer metadata arithmetic over two raw CUDA buffers.
+    ///
+    /// `op_code` follows the metadata family encoding used by tenferro:
+    /// `0 = Equal`, `1 = NotEqual`, `2 = Add`, `3 = Sub`, `4 = Mul`.
+    /// Equality and inequality are accepted so the same path can also be used
+    /// for integer comparison tests.
+    ///
+    /// # Safety
+    ///
+    /// `lhs`, `rhs`, and `dst` must point to live CUDA allocations on this
+    /// runtime's device and be compatible with the provided layout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime;
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let lhs = runtime.alloc_raw::<i32>(4).unwrap();
+    /// let rhs = runtime.alloc_raw::<i32>(4).unwrap();
+    /// let dst = runtime.alloc_raw::<i32>(4).unwrap();
+    /// unsafe {
+    ///     runtime.metadata_binary_i32_i32(
+    ///         2,
+    ///         lhs,
+    ///         4,
+    ///         rhs,
+    ///         4,
+    ///         dst,
+    ///         4,
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         &[1],
+    ///         0,
+    ///         &[1],
+    ///         0,
+    ///     )
+    ///     .unwrap();
+    ///     runtime.free_raw(lhs).unwrap();
+    ///     runtime.free_raw(rhs).unwrap();
+    ///     runtime.free_raw(dst).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn metadata_binary_i32_i32(
+        &self,
+        op_code: i32,
+        lhs: *const i32,
+        lhs_len: usize,
+        rhs: *const i32,
+        rhs_len: usize,
+        dst: *mut i32,
+        dst_len: usize,
+        dims: &[usize],
+        lhs_strides: &[isize],
+        lhs_offset: isize,
+        rhs_strides: &[isize],
+        rhs_offset: isize,
+        dst_strides: &[isize],
+        dst_offset: isize,
+    ) -> Result<()> {
+        validate_len(
+            lhs_len,
+            dims,
+            lhs_strides,
+            lhs_offset,
+            "metadata binary lhs",
+        )?;
+        validate_len(
+            rhs_len,
+            dims,
+            rhs_strides,
+            rhs_offset,
+            "metadata binary rhs",
+        )?;
+        validate_len(
+            dst_len,
+            dims,
+            dst_strides,
+            dst_offset,
+            "metadata binary dst",
+        )?;
+        let spec = MetadataBinarySpec::new(
+            dims,
+            lhs_strides,
+            lhs_offset,
+            rhs_strides,
+            rhs_offset,
+            dst_strides,
+            dst_offset,
+        )?;
+        unsafe { self.metadata_binary_i32_i32_raw(op_code, lhs, rhs, dst, &spec) }
+    }
+
+    /// Materialize an equality/inequality/bitand comparison over two bool metadata buffers.
+    ///
+    /// `op_code` follows the metadata family encoding used by tenferro:
+    /// `0 = Equal`, `1 = NotEqual`, `2 = BitAnd`.
     ///
     /// Bool metadata is `u8`-backed today; the output is also `u8`-backed.
     ///
@@ -214,13 +322,28 @@ impl CudaRuntime {
     ///
     /// ```ignore
     /// use tenferro_device::cuda::runtime;
-    ///
     /// let runtime = runtime::get_or_init(0).unwrap();
     /// let lhs = runtime.alloc_raw::<u8>(4).unwrap();
     /// let rhs = runtime.alloc_raw::<u8>(4).unwrap();
     /// let dst = runtime.alloc_raw::<u8>(4).unwrap();
     /// unsafe {
-    ///     runtime.metadata_binary_bool_bool(false, lhs, 4, rhs, 4, dst, 4, &[4], &[1], 0, &[1], 0, &[1], 0).unwrap();
+    ///     runtime.metadata_binary_bool_bool(
+    ///         2,
+    ///         lhs,
+    ///         4,
+    ///         rhs,
+    ///         4,
+    ///         dst,
+    ///         4,
+    ///         &[4],
+    ///         &[1],
+    ///         0,
+    ///         &[1],
+    ///         0,
+    ///         &[1],
+    ///         0,
+    ///     )
+    ///     .unwrap();
     ///     runtime.free_raw(lhs).unwrap();
     ///     runtime.free_raw(rhs).unwrap();
     ///     runtime.free_raw(dst).unwrap();
@@ -228,7 +351,7 @@ impl CudaRuntime {
     /// ```
     pub unsafe fn metadata_binary_bool_bool(
         &self,
-        equal: bool,
+        op_code: i32,
         lhs: *const u8,
         lhs_len: usize,
         rhs: *const u8,
@@ -273,12 +396,7 @@ impl CudaRuntime {
             dst_strides,
             dst_offset,
         )?;
-        let op = if equal {
-            MetadataBinaryOp::Equal
-        } else {
-            MetadataBinaryOp::NotEqual
-        };
-        unsafe { self.metadata_binary_bool_bool_raw(op, lhs, rhs, dst, &spec) }
+        unsafe { self.metadata_binary_bool_bool_raw(op_code, lhs, rhs, dst, &spec) }
     }
 
     /// Materialize a `where` ternary metadata operation for integer outputs.

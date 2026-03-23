@@ -41,16 +41,33 @@ fn validate_supported_binary(
     rhs_dtype: MetadataDType,
     output_dtype: MetadataDType,
 ) -> Result<()> {
-    if !matches!(op, MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual) {
-        return Err(Error::InvalidArgument(format!(
-            "metadata binary operation {op:?} is not supported on CpuBackend"
-        )));
-    }
-    match (lhs_dtype, rhs_dtype, output_dtype) {
-        (MetadataDType::I32, MetadataDType::I32, MetadataDType::Bool)
-        | (MetadataDType::Bool, MetadataDType::Bool, MetadataDType::Bool) => Ok(()),
+    match (op, lhs_dtype, rhs_dtype, output_dtype) {
+        (
+            MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+            MetadataDType::I32,
+            MetadataDType::I32,
+            MetadataDType::Bool,
+        )
+        | (
+            MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+        )
+        | (
+            MetadataBinaryOp::Add | MetadataBinaryOp::Sub | MetadataBinaryOp::Mul,
+            MetadataDType::I32,
+            MetadataDType::I32,
+            MetadataDType::I32,
+        )
+        | (
+            MetadataBinaryOp::BitAnd,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+        ) => Ok(()),
         _ => Err(Error::InvalidArgument(format!(
-            "unsupported metadata binary dtype combination: lhs={lhs_dtype:?} rhs={rhs_dtype:?} dst={output_dtype:?}"
+            "unsupported metadata binary dtype combination: op={op:?} lhs={lhs_dtype:?} rhs={rhs_dtype:?} dst={output_dtype:?}"
         ))),
     }
 }
@@ -133,16 +150,17 @@ fn execute_metadata_generate_i32(output: &mut StridedViewMut<i32>) -> Result<()>
     Ok(())
 }
 
-fn execute_metadata_binary_map<Lhs, Rhs, F>(
+fn execute_metadata_binary_map<Lhs, Rhs, OutputT, F>(
     lhs: &StridedView<Lhs>,
     rhs: &StridedView<Rhs>,
-    output: &mut StridedViewMut<u8>,
+    output: &mut StridedViewMut<OutputT>,
     f: F,
 ) -> Result<()>
 where
     Lhs: Copy,
     Rhs: Copy,
-    F: Fn(Lhs, Rhs) -> u8 + Copy,
+    OutputT: Copy,
+    F: Fn(Lhs, Rhs) -> OutputT + Copy,
 {
     let dims = output.dims().to_vec();
     crate::for_each_index(&dims, |idx| {
@@ -425,11 +443,6 @@ impl TensorMetadataPrims for CpuBackend {
             } => {
                 validate_supported_binary(*op, *lhs_dtype, *rhs_dtype, *output_dtype)?;
                 validate_metadata_handle_count(inputs, 2, "CpuMetadataBinary")?;
-                if !matches!(&output, MetadataTensorMut::Bool(_)) {
-                    return Err(Error::InvalidArgument(
-                        "metadata binary currently writes bool metadata outputs".into(),
-                    ));
-                }
                 validate_shape_eq(
                     tensor_dims_ref(&inputs[0]),
                     tensor_dims_ref(&inputs[1]),
@@ -535,6 +548,24 @@ impl TensorMetadataPrims for CpuBackend {
                     (
                         MetadataDType::I32,
                         MetadataDType::I32,
+                        MetadataDType::I32,
+                        MetadataTensorRef::I32(lhs),
+                        MetadataTensorRef::I32(rhs),
+                        MetadataTensorMut::I32(dst),
+                    ) => {
+                        let lhs = tensor_to_view(lhs)?;
+                        let rhs = tensor_to_view(rhs)?;
+                        let mut dst = tensor_to_view_mut(dst)?;
+                        execute_metadata_binary_map(&lhs, &rhs, &mut dst, |x, y| match *op {
+                            MetadataBinaryOp::Add => x + y,
+                            MetadataBinaryOp::Sub => x - y,
+                            MetadataBinaryOp::Mul => x * y,
+                            _ => unreachable!("unsupported metadata binary op"),
+                        })
+                    }
+                    (
+                        MetadataDType::I32,
+                        MetadataDType::I32,
                         MetadataDType::Bool,
                         MetadataTensorRef::I32(lhs),
                         MetadataTensorRef::I32(rhs),
@@ -544,10 +575,9 @@ impl TensorMetadataPrims for CpuBackend {
                         let rhs = tensor_to_view(rhs)?;
                         let mut dst = tensor_to_view_mut(dst)?;
                         execute_metadata_binary_map(&lhs, &rhs, &mut dst, |x, y| {
-                            let equal = x == y;
                             let mapped = match *op {
-                                MetadataBinaryOp::Equal => equal,
-                                MetadataBinaryOp::NotEqual => !equal,
+                                MetadataBinaryOp::Equal => x == y,
+                                MetadataBinaryOp::NotEqual => x != y,
                                 _ => unreachable!("unsupported metadata binary op"),
                             };
                             if mapped {
@@ -569,10 +599,10 @@ impl TensorMetadataPrims for CpuBackend {
                         let rhs = tensor_to_view(rhs)?;
                         let mut dst = tensor_to_view_mut(dst)?;
                         execute_metadata_binary_map(&lhs, &rhs, &mut dst, |x, y| {
-                            let equal = (x != 0) == (y != 0);
                             let mapped = match *op {
-                                MetadataBinaryOp::Equal => equal,
-                                MetadataBinaryOp::NotEqual => !equal,
+                                MetadataBinaryOp::Equal => (x != 0) == (y != 0),
+                                MetadataBinaryOp::NotEqual => (x != 0) != (y != 0),
+                                MetadataBinaryOp::BitAnd => (x != 0) && (y != 0),
                                 _ => unreachable!("unsupported metadata binary op"),
                             };
                             if mapped {
@@ -765,18 +795,30 @@ impl TensorMetadataPrims for CpuBackend {
                 lhs_dtype,
                 rhs_dtype,
                 output_dtype,
-            } => {
-                matches!(op, MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual)
-                    && matches!(
-                        (lhs_dtype, rhs_dtype, output_dtype),
-                        (MetadataDType::I32, MetadataDType::I32, MetadataDType::Bool)
-                            | (
-                                MetadataDType::Bool,
-                                MetadataDType::Bool,
-                                MetadataDType::Bool
-                            )
-                    )
-            }
+            } => matches!(
+                (op, lhs_dtype, rhs_dtype, output_dtype),
+                (
+                    MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+                    MetadataDType::I32,
+                    MetadataDType::I32,
+                    MetadataDType::Bool
+                ) | (
+                    MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool
+                ) | (
+                    MetadataBinaryOp::Add | MetadataBinaryOp::Sub | MetadataBinaryOp::Mul,
+                    MetadataDType::I32,
+                    MetadataDType::I32,
+                    MetadataDType::I32
+                ) | (
+                    MetadataBinaryOp::BitAnd,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool
+                )
+            ),
             MetadataPrimsDescriptor::Ternary {
                 op: MetadataTernaryOp::Where,
                 cond_dtype: MetadataDType::Bool,

@@ -10,6 +10,7 @@ use super::helpers::{compile_ptx_once, load_kernel_from_ptx};
 use crate::Result;
 
 pub const METADATA_GENERATE_IOTA_I32_KERNEL_NAME: &str = "metadata_generate_iota_i32";
+pub const METADATA_BINARY_I32_I32_KERNEL_NAME: &str = "metadata_binary_i32_i32";
 pub const METADATA_BINARY_I32_BOOL_KERNEL_NAME: &str = "metadata_binary_i32_bool";
 pub const METADATA_BINARY_BOOL_BOOL_KERNEL_NAME: &str = "metadata_binary_bool_bool";
 pub const METADATA_TERNARY_I32_KERNEL_NAME: &str = "metadata_where_i32";
@@ -87,6 +88,54 @@ extern "C" __global__ void metadata_binary_i32_bool(
     dst[dst_idx] = mapped;
 }
 
+extern "C" __global__ void metadata_binary_i32_i32(
+    const int* lhs,
+    const int* rhs,
+    int* dst,
+    const long long* dims,
+    const long long* lhs_strides,
+    long long lhs_offset,
+    const long long* rhs_strides,
+    long long rhs_offset,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    int op_code
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    long long lhs_idx = linear_offset(idx, dims, lhs_strides, lhs_offset, ndim);
+    long long rhs_idx = linear_offset(idx, dims, rhs_strides, rhs_offset, ndim);
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    int value = lhs[lhs_idx];
+    int other = rhs[rhs_idx];
+    int mapped = 0;
+    switch (op_code) {
+        case 0:
+            mapped = (value == other) ? 1 : 0;
+            break;
+        case 1:
+            mapped = (value != other) ? 1 : 0;
+            break;
+        case 2:
+            mapped = value + other;
+            break;
+        case 3:
+            mapped = value - other;
+            break;
+        case 4:
+            mapped = value * other;
+            break;
+    }
+    dst[dst_idx] = mapped;
+}
+
 extern "C" __global__ void metadata_binary_bool_bool(
     const unsigned char* lhs,
     const unsigned char* rhs,
@@ -114,7 +163,18 @@ extern "C" __global__ void metadata_binary_bool_bool(
     long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
     unsigned char value = lhs[lhs_idx];
     unsigned char other = rhs[rhs_idx];
-    unsigned char mapped = op_code == 0 ? (value == other) : (value != other);
+    unsigned char mapped = 0;
+    switch (op_code) {
+        case 0:
+            mapped = (value == other) ? 1 : 0;
+            break;
+        case 1:
+            mapped = (value != other) ? 1 : 0;
+            break;
+        case 2:
+            mapped = (value != 0 && other != 0) ? 1 : 0;
+            break;
+    }
     dst[dst_idx] = mapped;
 }
 

@@ -4,6 +4,7 @@ mod complex_real_phase1;
 mod complex_scale_phase1;
 mod metadata_contract_phase1;
 mod metadata_phase1;
+mod metadata_phase2;
 mod organization;
 mod scalar_phase1;
 mod scalar_phase2;

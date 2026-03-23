@@ -147,16 +147,33 @@ fn validate_supported_binary(
     rhs_dtype: MetadataDType,
     output_dtype: MetadataDType,
 ) -> Result<()> {
-    if !matches!(op, MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual) {
-        return Err(Error::InvalidArgument(format!(
-            "metadata binary operation {op:?} is not supported on CudaBackend"
-        )));
-    }
-    match (lhs_dtype, rhs_dtype, output_dtype) {
-        (MetadataDType::I32, MetadataDType::I32, MetadataDType::Bool)
-        | (MetadataDType::Bool, MetadataDType::Bool, MetadataDType::Bool) => Ok(()),
+    match (op, lhs_dtype, rhs_dtype, output_dtype) {
+        (
+            MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+            MetadataDType::I32,
+            MetadataDType::I32,
+            MetadataDType::Bool,
+        )
+        | (
+            MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+        )
+        | (
+            MetadataBinaryOp::Add | MetadataBinaryOp::Sub | MetadataBinaryOp::Mul,
+            MetadataDType::I32,
+            MetadataDType::I32,
+            MetadataDType::I32,
+        )
+        | (
+            MetadataBinaryOp::BitAnd,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+            MetadataDType::Bool,
+        ) => Ok(()),
         _ => Err(Error::InvalidArgument(format!(
-            "unsupported metadata binary dtype combination: lhs={lhs_dtype:?} rhs={rhs_dtype:?} dst={output_dtype:?}"
+            "unsupported metadata binary dtype combination: op={op:?} lhs={lhs_dtype:?} rhs={rhs_dtype:?} dst={output_dtype:?}"
         ))),
     }
 }
@@ -339,6 +356,36 @@ impl TensorMetadataPrims for CudaBackend {
                         MetadataTensorRef::I32(lhs),
                         MetadataTensorRef::I32(rhs),
                         MetadataTensorMut::Bool(dst),
+                    ) => {
+                        ensure_cuda_tensor(lhs, ctx.device_id(), "CudaMetadataBinary lhs")?;
+                        ensure_cuda_tensor(rhs, ctx.device_id(), "CudaMetadataBinary rhs")?;
+                        ensure_cuda_tensor(dst, ctx.device_id(), "CudaMetadataBinary dst")?;
+                        validate_storage_len(
+                            lhs.buffer().len(),
+                            lhs.dims(),
+                            lhs.strides(),
+                            lhs.offset(),
+                            "CudaMetadataBinary lhs",
+                        )?;
+                        validate_storage_len(
+                            rhs.buffer().len(),
+                            rhs.dims(),
+                            rhs.strides(),
+                            rhs.offset(),
+                            "CudaMetadataBinary rhs",
+                        )?;
+                        validate_storage_len(
+                            dst.buffer().len(),
+                            dst.dims(),
+                            dst.strides(),
+                            dst.offset(),
+                            "CudaMetadataBinary dst",
+                        )?;
+                    }
+                    (
+                        MetadataTensorRef::I32(lhs),
+                        MetadataTensorRef::I32(rhs),
+                        MetadataTensorMut::I32(dst),
                     ) => {
                         ensure_cuda_tensor(lhs, ctx.device_id(), "CudaMetadataBinary lhs")?;
                         ensure_cuda_tensor(rhs, ctx.device_id(), "CudaMetadataBinary rhs")?;
@@ -633,7 +680,6 @@ impl TensorMetadataPrims for CudaBackend {
                 rhs_dtype,
                 output_dtype,
             } => {
-                let equal = matches!(op, MetadataBinaryOp::Equal);
                 match (
                     *lhs_dtype,
                     *rhs_dtype,
@@ -658,7 +704,41 @@ impl TensorMetadataPrims for CudaBackend {
                         let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
                         unsafe {
                             runtime.metadata_binary_i32_bool(
-                                equal,
+                                matches!(*op, MetadataBinaryOp::Equal),
+                                lhs_ptr,
+                                lhs_len,
+                                rhs_ptr,
+                                rhs_len,
+                                dst_ptr,
+                                dst_len,
+                                lhs.dims(),
+                                lhs.strides(),
+                                lhs.offset(),
+                                rhs.strides(),
+                                rhs.offset(),
+                                dst.strides(),
+                                dst.offset(),
+                            )?;
+                        }
+                        Ok(())
+                    }
+                    (
+                        MetadataDType::I32,
+                        MetadataDType::I32,
+                        MetadataDType::I32,
+                        MetadataTensorRef::I32(lhs),
+                        MetadataTensorRef::I32(rhs),
+                        MetadataTensorMut::I32(dst),
+                    ) => {
+                        let lhs_len = lhs.buffer().len();
+                        let rhs_len = rhs.buffer().len();
+                        let dst_len = dst.buffer().len();
+                        let lhs_ptr = tensor_device_ptr_ref(lhs, "CudaMetadataBinary lhs")?;
+                        let rhs_ptr = tensor_device_ptr_ref(rhs, "CudaMetadataBinary rhs")?;
+                        let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
+                        unsafe {
+                            runtime.metadata_binary_i32_i32(
+                                metadata_binary_opcode(*op),
                                 lhs_ptr,
                                 lhs_len,
                                 rhs_ptr,
@@ -692,7 +772,7 @@ impl TensorMetadataPrims for CudaBackend {
                         let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
                         unsafe {
                             runtime.metadata_binary_bool_bool(
-                                equal,
+                                metadata_binary_opcode(*op),
                                 lhs_ptr,
                                 lhs_len,
                                 rhs_ptr,
@@ -970,18 +1050,30 @@ impl TensorMetadataPrims for CudaBackend {
                 lhs_dtype,
                 rhs_dtype,
                 output_dtype,
-            } => {
-                matches!(op, MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual)
-                    && matches!(
-                        (lhs_dtype, rhs_dtype, output_dtype),
-                        (MetadataDType::I32, MetadataDType::I32, MetadataDType::Bool)
-                            | (
-                                MetadataDType::Bool,
-                                MetadataDType::Bool,
-                                MetadataDType::Bool
-                            )
-                    )
-            }
+            } => matches!(
+                (op, lhs_dtype, rhs_dtype, output_dtype),
+                (
+                    MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+                    MetadataDType::I32,
+                    MetadataDType::I32,
+                    MetadataDType::Bool
+                ) | (
+                    MetadataBinaryOp::Equal | MetadataBinaryOp::NotEqual,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool
+                ) | (
+                    MetadataBinaryOp::Add | MetadataBinaryOp::Sub | MetadataBinaryOp::Mul,
+                    MetadataDType::I32,
+                    MetadataDType::I32,
+                    MetadataDType::I32
+                ) | (
+                    MetadataBinaryOp::BitAnd,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool,
+                    MetadataDType::Bool
+                )
+            ),
             MetadataPrimsDescriptor::Ternary {
                 op: MetadataTernaryOp::Where,
                 cond_dtype: MetadataDType::Bool,
@@ -1024,5 +1116,16 @@ impl TensorMetadataPrims for CudaBackend {
             ),
             _ => false,
         }
+    }
+}
+
+fn metadata_binary_opcode(op: MetadataBinaryOp) -> i32 {
+    match op {
+        MetadataBinaryOp::Equal => 0,
+        MetadataBinaryOp::NotEqual => 1,
+        MetadataBinaryOp::Add => 2,
+        MetadataBinaryOp::Sub => 3,
+        MetadataBinaryOp::Mul => 4,
+        MetadataBinaryOp::BitAnd => 2,
     }
 }

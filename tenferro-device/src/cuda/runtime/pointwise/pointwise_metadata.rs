@@ -88,7 +88,55 @@ impl CudaRuntime {
                 }
                 unsafe {
                     self.metadata_binary_i32_bool_raw(
-                        op,
+                        metadata_binary_opcode(op),
+                        lhs.device_ptr().cast_const(),
+                        rhs.device_ptr().cast_const(),
+                        dst.device_ptr(),
+                        spec,
+                    )
+                }
+            }
+            (
+                MetadataTensorRef::I32(lhs),
+                MetadataTensorRef::I32(rhs),
+                MetadataTensorMut::I32(dst),
+            ) => {
+                self.ensure_same_device(lhs.device_id())?;
+                self.ensure_same_device(rhs.device_id())?;
+                self.ensure_same_device(dst.device_id())?;
+                let lhs_required = required_storage_len(
+                    &spec.dims,
+                    &spec.lhs_strides,
+                    spec.lhs_offset,
+                    "metadata binary lhs",
+                )?;
+                let rhs_required = required_storage_len(
+                    &spec.dims,
+                    &spec.rhs_strides,
+                    spec.rhs_offset,
+                    "metadata binary rhs",
+                )?;
+                let dst_required = required_storage_len(
+                    &spec.dims,
+                    &spec.dst_strides,
+                    spec.dst_offset,
+                    "metadata binary dst",
+                )?;
+                if lhs.len() < lhs_required || rhs.len() < rhs_required || dst.len() < dst_required
+                {
+                    return Err(Error::InvalidArgument(format!(
+                        "metadata binary storage mismatch: lhs={} rhs={} dst={} required_lhs={} required_rhs={} required_dst={}",
+                        lhs.len(),
+                        rhs.len(),
+                        dst.len(),
+                        lhs_required,
+                        rhs_required,
+                        dst_required
+                    )));
+                }
+                unsafe {
+                    self.metadata_binary_i32_i32_raw(
+                        metadata_binary_opcode(op),
                         lhs.device_ptr().cast_const(),
                         rhs.device_ptr().cast_const(),
                         dst.device_ptr(),
@@ -136,7 +184,7 @@ impl CudaRuntime {
                 }
                 unsafe {
                     self.metadata_binary_bool_bool_raw(
-                        op,
+                        metadata_binary_opcode(op),
                         lhs.device_ptr().cast_const(),
                         rhs.device_ptr().cast_const(),
                         dst.device_ptr(),
@@ -510,7 +558,7 @@ impl CudaRuntime {
 
     pub(crate) unsafe fn metadata_binary_i32_bool_raw(
         &self,
-        op: MetadataBinaryOp,
+        op_code: i32,
         lhs: *const i32,
         rhs: *const i32,
         dst: *mut u8,
@@ -518,7 +566,25 @@ impl CudaRuntime {
     ) -> Result<()> {
         self.metadata_binary_compare_raw(
             METADATA_BINARY_I32_BOOL_KERNEL_NAME,
-            op,
+            op_code,
+            lhs,
+            rhs,
+            dst,
+            spec,
+        )
+    }
+
+    pub(crate) unsafe fn metadata_binary_i32_i32_raw(
+        &self,
+        op_code: i32,
+        lhs: *const i32,
+        rhs: *const i32,
+        dst: *mut i32,
+        spec: &MetadataBinarySpec,
+    ) -> Result<()> {
+        self.metadata_binary_arithmetic_raw(
+            METADATA_BINARY_I32_I32_KERNEL_NAME,
+            op_code,
             lhs,
             rhs,
             dst,
@@ -528,7 +594,7 @@ impl CudaRuntime {
 
     pub(crate) unsafe fn metadata_binary_bool_bool_raw(
         &self,
-        op: MetadataBinaryOp,
+        op_code: i32,
         lhs: *const u8,
         rhs: *const u8,
         dst: *mut u8,
@@ -536,7 +602,7 @@ impl CudaRuntime {
     ) -> Result<()> {
         self.metadata_binary_compare_raw(
             METADATA_BINARY_BOOL_BOOL_KERNEL_NAME,
-            op,
+            op_code,
             lhs,
             rhs,
             dst,
@@ -547,7 +613,7 @@ impl CudaRuntime {
     unsafe fn metadata_binary_compare_raw<Lhs, Rhs>(
         &self,
         kernel_name: &str,
-        op: MetadataBinaryOp,
+        op_code: i32,
         lhs: *const Lhs,
         rhs: *const Rhs,
         dst: *mut u8,
@@ -588,7 +654,6 @@ impl CudaRuntime {
         let numel_u32 = u32::try_from(numel).map_err(|_| {
             Error::InvalidArgument("metadata binary currently requires len <= u32::MAX".into())
         })?;
-        let opcode = metadata_binary_opcode(op);
         let lhs_ptr = lhs as u64;
         let rhs_ptr = rhs as u64;
         let dst_ptr = dst as u64;
@@ -613,7 +678,84 @@ impl CudaRuntime {
                 .arg(&dst_offset)
                 .arg(&ndim)
                 .arg(&numel_u64)
-                .arg(&opcode)
+                .arg(&op_code)
+                .launch(config)
+                .map_err(|err| cuda_error("CUDA metadata binary kernel launch", err))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    unsafe fn metadata_binary_arithmetic_raw<Lhs, Rhs>(
+        &self,
+        kernel_name: &str,
+        op_code: i32,
+        lhs: *const Lhs,
+        rhs: *const Rhs,
+        dst: *mut i32,
+        spec: &MetadataBinarySpec,
+    ) -> Result<()>
+    where
+        Lhs: cudarc::driver::DeviceRepr,
+        Rhs: cudarc::driver::DeviceRepr,
+    {
+        let numel = checked_numel(&spec.dims)?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let (kernel, stream) = load_metadata_scalar_kernel(self, kernel_name)?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(&spec.dims)?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD metadata dims", err))?;
+        let lhs_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.lhs_strides, "metadata lhs stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD metadata lhs strides", err))?;
+        let rhs_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.rhs_strides, "metadata rhs stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD metadata rhs strides", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(&spec.dst_strides, "metadata dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD metadata dst strides", err))?;
+        let ndim = i32::try_from(spec.dims.len())
+            .map_err(|_| Error::InvalidArgument("metadata rank exceeds i32 range".into()))?;
+        let lhs_offset = i64::try_from(spec.lhs_offset)
+            .map_err(|_| Error::InvalidArgument("metadata lhs offset exceeds i64 range".into()))?;
+        let rhs_offset = i64::try_from(spec.rhs_offset)
+            .map_err(|_| Error::InvalidArgument("metadata rhs offset exceeds i64 range".into()))?;
+        let dst_offset = i64::try_from(spec.dst_offset)
+            .map_err(|_| Error::InvalidArgument("metadata dst offset exceeds i64 range".into()))?;
+        let numel_u64 = u64::try_from(numel)
+            .map_err(|_| Error::InvalidArgument("metadata numel exceeds u64 range".into()))?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("metadata binary currently requires len <= u32::MAX".into())
+        })?;
+        let lhs_ptr = lhs as u64;
+        let rhs_ptr = rhs as u64;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            stream
+                .launch_builder(&kernel)
+                .arg(&lhs_ptr)
+                .arg(&rhs_ptr)
+                .arg(&dst_ptr)
+                .arg(&dims_dev)
+                .arg(&lhs_strides_dev)
+                .arg(&lhs_offset)
+                .arg(&rhs_strides_dev)
+                .arg(&rhs_offset)
+                .arg(&dst_strides_dev)
+                .arg(&dst_offset)
+                .arg(&ndim)
+                .arg(&numel_u64)
+                .arg(&op_code)
                 .launch(config)
                 .map_err(|err| cuda_error("CUDA metadata binary kernel launch", err))?;
         }
@@ -891,5 +1033,9 @@ fn metadata_binary_opcode(op: MetadataBinaryOp) -> i32 {
     match op {
         MetadataBinaryOp::Equal => 0,
         MetadataBinaryOp::NotEqual => 1,
+        MetadataBinaryOp::Add => 2,
+        MetadataBinaryOp::Sub => 3,
+        MetadataBinaryOp::Mul => 4,
+        MetadataBinaryOp::BitAnd => 2,
     }
 }
