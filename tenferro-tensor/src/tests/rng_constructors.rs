@@ -144,6 +144,35 @@ fn cuda_rand_and_randn_seeded_replay_match() {
 
 #[cfg(feature = "cuda")]
 #[test]
+fn cuda_randint_seeded_replay_match_and_stays_in_range() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let mut lhs = Generator::cuda(0, 99).unwrap();
+    let mut rhs = Generator::cuda(0, 99).unwrap();
+    let lhs_randint =
+        Tensor::<i32>::randint(-3, 7, &[64], GPU0, MemoryOrder::ColumnMajor, Some(&mut lhs))
+            .unwrap();
+    let rhs_randint =
+        Tensor::<i32>::randint(-3, 7, &[64], GPU0, MemoryOrder::ColumnMajor, Some(&mut rhs))
+            .unwrap();
+    let lhs_host = host_i32(&lhs_randint);
+    let rhs_host = host_i32(&rhs_randint);
+    assert_eq!(
+        lhs_host.buffer().as_slice().unwrap(),
+        rhs_host.buffer().as_slice().unwrap()
+    );
+    for &value in lhs_host.buffer().as_slice().unwrap() {
+        assert!(
+            (-3..7).contains(&value),
+            "randint sample {value} escaped range"
+        );
+    }
+}
+
+#[cfg(feature = "cuda")]
+#[test]
 fn cuda_rng_constructors_require_cuda_generators_for_gpu_memory() {
     if !cuda_device_zero_is_available() {
         return;

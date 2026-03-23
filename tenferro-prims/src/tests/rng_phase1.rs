@@ -263,3 +263,61 @@ fn cuda_rng_phase1_seeded_normal_replay_matches() {
         0.0,
     );
 }
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_rng_phase1_seeded_randint_replay_matches_and_stays_in_range() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+    let device_id = ctx.device_id();
+    let dims = [64usize];
+    let low = -3;
+    let high = 7;
+    let desc = RngPrimsDescriptor::Integer { low, high };
+
+    let mut lhs_gen = Generator::cuda(device_id, 99).unwrap();
+    let mut rhs_gen = Generator::cuda(device_id, 99).unwrap();
+
+    let mut lhs = Tensor::<i32>::zeros(
+        &dims,
+        LogicalMemorySpace::GpuMemory { device_id },
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let mut rhs = Tensor::<i32>::zeros(
+        &dims,
+        LogicalMemorySpace::GpuMemory { device_id },
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let plan =
+        <CudaBackend as TensorRngPrims<Standard<i32>>>::plan(&mut ctx, &desc, &[&dims]).unwrap();
+    <CudaBackend as TensorRngPrims<Standard<i32>>>::execute(
+        &mut ctx,
+        &plan,
+        &mut lhs_gen,
+        &mut lhs,
+    )
+    .unwrap();
+    <CudaBackend as TensorRngPrims<Standard<i32>>>::execute(
+        &mut ctx,
+        &plan,
+        &mut rhs_gen,
+        &mut rhs,
+    )
+    .unwrap();
+
+    let lhs_host = tensor_on_host(&lhs);
+    let rhs_host = tensor_on_host(&rhs);
+    assert_eq!(
+        lhs_host.buffer().as_slice().unwrap(),
+        rhs_host.buffer().as_slice().unwrap()
+    );
+    for &value in lhs_host.buffer().as_slice().unwrap() {
+        assert!(
+            (low..high).contains(&value),
+            "randint sample {value} escaped range"
+        );
+    }
+}
