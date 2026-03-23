@@ -9,17 +9,17 @@ use crate::layout::{compute_contiguous_strides, validate_layout_against_len};
 use crate::{DataBuffer, MemoryOrder};
 
 impl<T: Scalar> Tensor<T> {
-    fn finish_allocation(tensor: Self, memory_space: LogicalMemorySpace) -> Self {
+    fn finish_allocation_result(tensor: Self, memory_space: LogicalMemorySpace) -> Result<Self> {
         if memory_space == LogicalMemorySpace::MainMemory {
-            tensor
+            Ok(tensor)
         } else {
-            match tensor.to_memory_space_async(memory_space) {
-                Ok(tensor) => tensor,
-                Err(err) => {
-                    panic!("tensor allocation for {memory_space:?} failed: {err}")
-                }
-            }
+            tensor.to_memory_space_async(memory_space)
         }
+    }
+
+    fn finish_allocation(tensor: Self, memory_space: LogicalMemorySpace) -> Self {
+        Self::finish_allocation_result(tensor, memory_space)
+            .unwrap_or_else(|err| panic!("tensor allocation for {memory_space:?} failed: {err}"))
     }
 
     fn main_memory_contiguous(data: Vec<T>, dims: &[usize], order: MemoryOrder) -> Self {
@@ -125,6 +125,9 @@ impl<T: Scalar> Tensor<T> {
     /// zero, which keeps the constructor deterministic while preserving the
     /// requested layout and device placement.
     ///
+    /// The `*_like` family preserves a row-major layout only when the source
+    /// tensor is row-major contiguous and not column-major contiguous.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -187,7 +190,7 @@ impl<T: Scalar> Tensor<T> {
     ) -> Result<Self> {
         let storage_len = Self::required_storage_len(dims, strides, offset)?;
         let tensor = Self::from_vec(vec![T::zero(); storage_len], dims, strides, offset)?;
-        Ok(Self::finish_allocation(tensor, memory_space))
+        Self::finish_allocation_result(tensor, memory_space)
     }
 
     /// Create a tensor filled with `value`.
@@ -359,6 +362,9 @@ impl<T: Scalar> Tensor<T> {
 
     /// Create a zero-filled tensor with the same shape and layout convention as another tensor.
     ///
+    /// The `*_like` family preserves a row-major layout only when the source
+    /// tensor is row-major contiguous and not column-major contiguous.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -383,6 +389,9 @@ impl<T: Scalar> Tensor<T> {
 
     /// Create a one-filled tensor with the same shape and layout convention as another tensor.
     ///
+    /// The `*_like` family preserves a row-major layout only when the source
+    /// tensor is row-major contiguous and not column-major contiguous.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -406,6 +415,9 @@ impl<T: Scalar> Tensor<T> {
     }
 
     /// Create a tensor filled with `value` and matching the shape/layout convention of another tensor.
+    ///
+    /// The `*_like` family preserves a row-major layout only when the source
+    /// tensor is row-major contiguous and not column-major contiguous.
     ///
     /// # Examples
     ///
@@ -500,8 +512,12 @@ where
         step: T,
         memory_space: LogicalMemorySpace,
         order: MemoryOrder,
-    ) -> Self {
-        assert!(!step.is_zero(), "arange: step must be non-zero");
+    ) -> Result<Self> {
+        if step.is_zero() {
+            return Err(Error::InvalidArgument(
+                "arange: step must be non-zero".into(),
+            ));
+        }
 
         let mut data = Vec::new();
         let zero = T::zero();
@@ -520,13 +536,13 @@ where
         }
 
         let dims = [data.len()];
-        Self::finish_allocation(
-            Self::main_memory_contiguous(data, &dims, order),
-            memory_space,
-        )
+        let tensor = Self::main_memory_contiguous(data, &dims, order);
+        Self::finish_allocation_result(tensor, memory_space)
     }
 
     /// Create a 1-D tensor containing `n_samples` evenly spaced values.
+    ///
+    /// Returns an error if `n_samples` is negative.
     ///
     /// # Examples
     ///
@@ -546,20 +562,31 @@ where
     pub fn linspace(
         start: T,
         end: T,
-        n_samples: usize,
+        n_samples: isize,
         memory_space: LogicalMemorySpace,
         order: MemoryOrder,
-    ) -> Self {
+    ) -> Result<Self> {
+        if n_samples < 0 {
+            return Err(Error::InvalidArgument(format!(
+                "linspace: steps must be non-negative, got {n_samples}"
+            )));
+        }
+
+        let n_samples = usize::try_from(n_samples).map_err(|_| {
+            Error::InvalidArgument(format!(
+                "linspace: steps {n_samples} cannot be represented as usize"
+            ))
+        })?;
         let mut data = Vec::with_capacity(n_samples);
         match n_samples {
             0 => {}
             1 => data.push(start),
             _ => {
                 let Some(denom) = <T as NumCast>::from(n_samples - 1) else {
-                    panic!(
+                    return Err(Error::InvalidArgument(format!(
                         "linspace: sample count {} cannot be represented in target scalar type",
                         n_samples
-                    );
+                    )));
                 };
                 let step = (end - start) / denom;
                 let mut current = start;
@@ -574,9 +601,7 @@ where
         }
 
         let dims = [data.len()];
-        Self::finish_allocation(
-            Self::main_memory_contiguous(data, &dims, order),
-            memory_space,
-        )
+        let tensor = Self::main_memory_contiguous(data, &dims, order);
+        Self::finish_allocation_result(tensor, memory_space)
     }
 }
