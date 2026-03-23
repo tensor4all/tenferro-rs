@@ -200,12 +200,50 @@ where
     T: LinalgScalar,
     C: TensorScalarContextFor<Standard<T>>,
 {
-    let desc = ScalarPrimsDescriptor::PointwiseBinary { op };
     let mut output = Tensor::zeros(
         lhs.dims(),
         lhs.logical_memory_space(),
         MemoryOrder::ColumnMajor,
     );
+    scalar_binary_same_shape_into(ctx, lhs, rhs, op, &mut output)?;
+    Ok(output)
+}
+
+pub(crate) fn scalar_binary_same_shape_into<T, C>(
+    ctx: &mut C,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T>,
+    op: ScalarBinaryOp,
+    output: &mut Tensor<T>,
+) -> Result<()>
+where
+    T: LinalgScalar,
+    C: TensorScalarContextFor<Standard<T>>,
+{
+    if lhs.dims() != rhs.dims() {
+        return Err(Error::ShapeMismatch {
+            expected: lhs.dims().to_vec(),
+            got: rhs.dims().to_vec(),
+        });
+    }
+    if lhs.dims() != output.dims() {
+        return Err(Error::ShapeMismatch {
+            expected: lhs.dims().to_vec(),
+            got: output.dims().to_vec(),
+        });
+    }
+    if lhs.logical_memory_space() != rhs.logical_memory_space()
+        || lhs.logical_memory_space() != output.logical_memory_space()
+    {
+        return Err(Error::InvalidArgument(format!(
+            "scalar_binary_same_shape_into requires matching memory spaces, got lhs {:?}, rhs {:?}, output {:?}",
+            lhs.logical_memory_space(),
+            rhs.logical_memory_space(),
+            output.logical_memory_space()
+        )));
+    }
+
+    let desc = ScalarPrimsDescriptor::PointwiseBinary { op };
     let plan = <C::ScalarBackend as TensorScalarPrims<Standard<T>>>::plan(
         ctx,
         &desc,
@@ -217,9 +255,9 @@ where
         T::one(),
         &[lhs, rhs],
         T::zero(),
-        &mut output,
+        output,
     )?;
-    Ok(output)
+    Ok(())
 }
 
 pub(crate) fn scalar_where_same_shape<T, C>(

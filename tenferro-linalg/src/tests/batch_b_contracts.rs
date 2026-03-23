@@ -2180,6 +2180,34 @@ fn vander_supports_batched_vectors() {
     );
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_vander_matches_cpu_generic() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let x_cpu = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let expected = vander(&mut cpu_ctx, &x_cpu, Some(4), false).unwrap();
+        let x_gpu = x_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = vander(ctx, &x_gpu, Some(4), false).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_slice(
+            "cuda vander generic",
+            &tensor_data_on_cpu(&got),
+            &tensor_data(&expected),
+            2048.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
 #[test]
 fn tensorinv_inverts_tensorized_identity() {
     let mut ctx = CpuContext::new(1);
@@ -2610,12 +2638,6 @@ fn batch_b_ops_reject_cuda_context() {
         let tau = Tensor::from_slice(&[0.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor).unwrap();
         assert!(matches!(
             householder_product(ctx, &reflectors, &tau),
-            Err(tenferro_device::Error::DeviceError(_))
-        ));
-
-        let x = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-        assert!(matches!(
-            vander(ctx, &x, Some(3), true),
             Err(tenferro_device::Error::DeviceError(_))
         ));
 

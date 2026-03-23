@@ -201,6 +201,29 @@ fn public_and_ad_linalg_layers_do_not_fall_back_to_cpu_slice_helpers() {
 }
 
 #[test]
+fn vander_stays_tensor_native_and_avoids_host_extraction() {
+    let tensor_ops = repo_file("src/primal/tensor_ops.rs");
+    let vander = file_section(&tensor_ops, "pub fn vander", "pub fn tensorinv");
+
+    assert!(
+        vander.contains("scalar_binary_same_shape_into("),
+        "vander should be composed from tensor-native scalar primitives rather than host loops"
+    );
+    assert!(
+        !vander.contains("extract_slice("),
+        "vander should stay tensor-native and avoid extract_slice(...)"
+    );
+    assert!(
+        !vander.contains("tensor_from_data("),
+        "vander should stay tensor-native and avoid tensor_from_data(...)"
+    );
+    assert!(
+        !vander.contains("require_linalg_support("),
+        "vander should not gate tensor-native composition behind a backend linalg capability check"
+    );
+}
+
+#[test]
 fn solve_ex_and_inv_ex_sections_do_not_extract_cpu_slices() {
     let linear_systems = repo_file("src/primal/linear_systems.rs");
     let solve_ex = file_section(&linear_systems, "pub fn solve_ex", "pub fn inv");

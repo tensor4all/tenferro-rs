@@ -182,55 +182,62 @@ where
 
 /// Build a Vandermonde matrix from leading-dimension vectors.
 pub fn vander<T: KernelLinalgScalar, C>(
-    _ctx: &mut C,
+    ctx: &mut C,
     x: &Tensor<T>,
     columns: Option<usize>,
     increasing: bool,
 ) -> Result<Tensor<T>>
 where
-    C: backend::TensorLinalgContextFor<T>,
-    C::Backend: 'static,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
 {
-    require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Vander, "vander")?;
-
     let (vector_len, batch_dims): (usize, &[usize]) = if x.ndim() == 0 {
         (1, &[])
     } else {
         (x.dims()[0], &x.dims()[1..])
     };
     let columns = columns.unwrap_or(vector_len);
+    let output_dims = output_dims(&[vector_len, columns], batch_dims);
+    let output_numel = output_dims.iter().product::<usize>();
 
     let x_input = ensure_col_major(x);
-    let x_data = extract_slice(&x_input)?;
-    let x_offset = x_input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    let mut out = vec![T::zero(); vector_len * columns * bc];
-
-    for batch in 0..bc {
-        let vector = if x.ndim() == 0 {
-            &x_data[x_offset..x_offset + 1]
-        } else {
-            let start = x_offset + batch * vector_len;
-            &x_data[start..start + vector_len]
-        };
-        for row in 0..vector_len {
-            let value = vector[row];
-            let mut powers = vec![T::one(); columns];
-            for col in 1..columns {
-                powers[col] = powers[col - 1] * value;
-            }
-            for col in 0..columns {
-                let power = if increasing {
-                    powers[col]
-                } else {
-                    powers[columns.saturating_sub(col + 1)]
-                };
-                out[batch * vector_len * columns + row + col * vector_len] = power;
-            }
-        }
+    let base = if x.ndim() == 0 {
+        x_input.reshape(&[1])?
+    } else {
+        x_input
+    };
+    let memory_space = base.logical_memory_space();
+    if output_numel == 0 {
+        return Ok(Tensor::zeros(
+            &output_dims,
+            memory_space,
+            MemoryOrder::ColumnMajor,
+        ));
     }
 
-    tensor_from_data(out, &output_dims(&[vector_len, columns], batch_dims))
+    let mut current = Tensor::ones(base.dims(), memory_space, MemoryOrder::ColumnMajor);
+    let mut columns_out = Vec::with_capacity(columns);
+
+    columns_out.push(current.clone());
+    for _ in 1..columns {
+        let mut next = Tensor::zeros(base.dims(), memory_space, MemoryOrder::ColumnMajor);
+        crate::prims_bridge::scalar_binary_same_shape_into(
+            ctx,
+            &current,
+            &base,
+            tenferro_prims::ScalarBinaryOp::Mul,
+            &mut next,
+        )?;
+        columns_out.push(next.clone());
+        current = next;
+    }
+
+    if !increasing {
+        columns_out.reverse();
+    }
+
+    let column_refs: Vec<&Tensor<T>> = columns_out.iter().collect();
+    Tensor::stack(&column_refs, 1)
 }
 
 /// Invert a tensorized square operator.
