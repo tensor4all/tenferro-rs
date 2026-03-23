@@ -11,11 +11,6 @@ fn cuda_device_zero_is_available() -> bool {
     std::panic::catch_unwind(|| cudarc::driver::CudaContext::new(0).is_ok()).unwrap_or(false)
 }
 
-#[cfg(not(feature = "cuda"))]
-fn cuda_device_zero_is_available() -> bool {
-    false
-}
-
 fn host_f64(tensor: &Tensor<f64>) -> Tensor<f64> {
     tensor.to_memory_space_async(CPU).unwrap()
 }
@@ -144,5 +139,56 @@ fn cuda_rand_and_randn_seeded_replay_match() {
     assert_eq!(
         host_f64(&lhs_randn).buffer().as_slice().unwrap(),
         host_f64(&rhs_randn).buffer().as_slice().unwrap()
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_rng_constructors_require_cuda_generators_for_gpu_memory() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let gpu_base_f64 = Tensor::<f64>::zeros(&[2, 3], GPU0, MemoryOrder::ColumnMajor).unwrap();
+    let gpu_base_i32 = Tensor::<i32>::zeros(&[2, 3], GPU0, MemoryOrder::ColumnMajor).unwrap();
+
+    let mut cpu_uniform = Generator::cpu(111);
+    assert!(Tensor::<f64>::rand(
+        &[2, 3],
+        GPU0,
+        MemoryOrder::ColumnMajor,
+        Some(&mut cpu_uniform)
+    )
+    .is_err());
+
+    let mut cpu_normal = Generator::cpu(222);
+    assert!(Tensor::<f64>::randn(
+        &[2, 3],
+        GPU0,
+        MemoryOrder::ColumnMajor,
+        Some(&mut cpu_normal)
+    )
+    .is_err());
+
+    let mut cpu_integer = Generator::cpu(333);
+    assert!(Tensor::<i32>::randint(
+        -4,
+        5,
+        &[2, 3],
+        GPU0,
+        MemoryOrder::ColumnMajor,
+        Some(&mut cpu_integer)
+    )
+    .is_err());
+
+    let mut cpu_like_uniform = Generator::cpu(444);
+    assert!(Tensor::<f64>::rand_like(&gpu_base_f64, Some(&mut cpu_like_uniform)).is_err());
+
+    let mut cpu_like_normal = Generator::cpu(555);
+    assert!(Tensor::<f64>::randn_like(&gpu_base_f64, Some(&mut cpu_like_normal)).is_err());
+
+    let mut cpu_like_integer = Generator::cpu(666);
+    assert!(
+        Tensor::<i32>::randint_like(&gpu_base_i32, -4, 5, Some(&mut cpu_like_integer)).is_err()
     );
 }

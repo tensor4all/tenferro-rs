@@ -7,6 +7,9 @@ use super::Tensor;
 use crate::layout::validate_layout_against_len;
 use crate::{DataBuffer, MemoryOrder};
 
+#[cfg(feature = "cuda")]
+use tenferro_device::cuda::runtime as device_cuda;
+
 impl<T: Scalar> Tensor<T> {
     pub(crate) fn finish_allocation(
         tensor: Self,
@@ -479,6 +482,40 @@ fn finish_generated_allocation<T: Scalar>(
     )
 }
 
+#[cfg(feature = "cuda")]
+fn gpu_generated_tensor<T: Scalar>(
+    dims: &[usize],
+    memory_space: LogicalMemorySpace,
+    order: MemoryOrder,
+) -> Result<Tensor<T>> {
+    let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+        return Err(Error::DeviceError(format!(
+            "expected CUDA memory space, got {memory_space:?}"
+        )));
+    };
+    let runtime = device_cuda::get_or_init(device_id)?;
+    let allocation = runtime.alloc::<T>(dims.iter().product())?;
+    let tensor = Tensor::from_parts(
+        unsafe {
+            DataBuffer::from_gpu_parts(
+                allocation.device_ptr(),
+                allocation.len(),
+                memory_space,
+                move || drop(allocation),
+            )
+        },
+        Arc::from(dims),
+        Arc::from(crate::layout::compute_contiguous_strides(dims, order)),
+        0,
+        memory_space,
+        None,
+        None,
+        false,
+        None,
+    );
+    Ok(tensor)
+}
+
 impl Tensor<f64> {
     /// Create a tensor filled with uniform samples on `[0, 1)`.
     ///
@@ -504,6 +541,30 @@ impl Tensor<f64> {
         generator: Option<&mut Generator>,
     ) -> Result<Self> {
         let generator = require_generator(generator)?;
+        #[cfg(feature = "cuda")]
+        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+            let tensor = gpu_generated_tensor::<f64>(dims, memory_space, order)?;
+            let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+                unreachable!("gpu_generated_tensor only accepts GPU memory");
+            };
+            let runtime = device_cuda::get_or_init(device_id)?;
+            let dst =
+                tensor.buffer().as_device_ptr().ok_or_else(|| {
+                    Error::DeviceError("CUDA RNG destination is not on GPU".into())
+                })? as *mut f64;
+            let dst_len = tensor.buffer().len();
+            unsafe {
+                runtime.rng_fill_uniform_f64_raw(
+                    generator,
+                    dst,
+                    dst_len,
+                    tensor.dims(),
+                    tensor.strides(),
+                    tensor.offset(),
+                )?;
+            }
+            return Ok(tensor);
+        }
         let n_elements: usize = dims.iter().product();
         let mut data = Vec::with_capacity(n_elements);
         for _ in 0..n_elements {
@@ -536,6 +597,30 @@ impl Tensor<f64> {
         generator: Option<&mut Generator>,
     ) -> Result<Self> {
         let generator = require_generator(generator)?;
+        #[cfg(feature = "cuda")]
+        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+            let tensor = gpu_generated_tensor::<f64>(dims, memory_space, order)?;
+            let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+                unreachable!("gpu_generated_tensor only accepts GPU memory");
+            };
+            let runtime = device_cuda::get_or_init(device_id)?;
+            let dst =
+                tensor.buffer().as_device_ptr().ok_or_else(|| {
+                    Error::DeviceError("CUDA RNG destination is not on GPU".into())
+                })? as *mut f64;
+            let dst_len = tensor.buffer().len();
+            unsafe {
+                runtime.rng_fill_normal_f64_raw(
+                    generator,
+                    dst,
+                    dst_len,
+                    tensor.dims(),
+                    tensor.strides(),
+                    tensor.offset(),
+                )?;
+            }
+            return Ok(tensor);
+        }
         let n_elements: usize = dims.iter().product();
         let mut data = Vec::with_capacity(n_elements);
         for _ in 0..n_elements {
@@ -628,6 +713,32 @@ impl Tensor<i32> {
         generator: Option<&mut Generator>,
     ) -> Result<Self> {
         let generator = require_generator(generator)?;
+        #[cfg(feature = "cuda")]
+        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+            let tensor = gpu_generated_tensor::<i32>(dims, memory_space, order)?;
+            let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+                unreachable!("gpu_generated_tensor only accepts GPU memory");
+            };
+            let runtime = device_cuda::get_or_init(device_id)?;
+            let dst =
+                tensor.buffer().as_device_ptr().ok_or_else(|| {
+                    Error::DeviceError("CUDA RNG destination is not on GPU".into())
+                })? as *mut i32;
+            let dst_len = tensor.buffer().len();
+            unsafe {
+                runtime.rng_fill_i32_raw(
+                    generator,
+                    low,
+                    high,
+                    dst,
+                    dst_len,
+                    tensor.dims(),
+                    tensor.strides(),
+                    tensor.offset(),
+                )?;
+            }
+            return Ok(tensor);
+        }
         let n_elements: usize = dims.iter().product();
         let mut data = Vec::with_capacity(n_elements);
         for _ in 0..n_elements {
