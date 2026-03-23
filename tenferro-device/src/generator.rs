@@ -1,5 +1,10 @@
-use std::convert::TryFrom;
-use std::f64::consts::TAU;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    convert::TryFrom,
+    f64::consts::TAU,
+    sync::{Mutex, OnceLock},
+};
 
 use rand_core::Rng;
 
@@ -13,6 +18,17 @@ fn cuda_device_zero_based_is_available(device_id: usize) -> bool {
             .unwrap_or(false)
     })
     .unwrap_or(false)
+}
+
+fn default_seed(extra: u64) -> u64 {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    let pid = u64::from(std::process::id());
+    let counter = COUNTER.fetch_add(1, Ordering::Relaxed);
+    now ^ pid.rotate_left(17) ^ counter.rotate_left(33) ^ extra.rotate_left(7)
 }
 
 #[derive(Debug)]
@@ -227,6 +243,77 @@ impl Generator {
                 return i32::try_from(value).map_err(|_| {
                     Error::InvalidArgument(format!("integer sample {value} does not fit into i32"))
                 });
+            }
+        }
+    }
+}
+
+fn default_cpu_generator() -> &'static Mutex<Generator> {
+    static DEFAULT_CPU_GENERATOR: OnceLock<Mutex<Generator>> = OnceLock::new();
+    DEFAULT_CPU_GENERATOR.get_or_init(|| Mutex::new(Generator::cpu(default_seed(0))))
+}
+
+#[cfg(feature = "cuda")]
+fn default_cuda_generators() -> &'static Mutex<std::collections::HashMap<usize, Generator>> {
+    use std::collections::HashMap;
+
+    static DEFAULT_CUDA_GENERATORS: OnceLock<Mutex<HashMap<usize, Generator>>> = OnceLock::new();
+    DEFAULT_CUDA_GENERATORS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Run a closure with a shared default generator for the requested memory space.
+///
+/// The default generator is process-global and advances across calls. CPU
+/// memory spaces share a CPU default generator, while each CUDA device gets its
+/// own device-bound default generator.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_device::{with_default_generator, LogicalMemorySpace};
+///
+/// let value = with_default_generator(LogicalMemorySpace::MainMemory, |generator| {
+///     Ok(generator.sample_uniform_f64())
+/// }).unwrap();
+/// assert!(value >= 0.0 && value < 1.0);
+/// ```
+pub fn with_default_generator<R, F>(space: crate::LogicalMemorySpace, f: F) -> Result<R>
+where
+    F: FnOnce(&mut Generator) -> Result<R>,
+{
+    match space {
+        crate::LogicalMemorySpace::MainMemory
+        | crate::LogicalMemorySpace::PinnedMemory
+        | crate::LogicalMemorySpace::ManagedMemory => {
+            let mut guard = default_cpu_generator()
+                .lock()
+                .map_err(|_| Error::DeviceError("default CPU generator mutex poisoned".into()))?;
+            f(&mut guard)
+        }
+        crate::LogicalMemorySpace::GpuMemory { device_id } => {
+            #[cfg(feature = "cuda")]
+            {
+                use std::collections::hash_map::Entry;
+
+                let mut guard = default_cuda_generators().lock().map_err(|_| {
+                    Error::DeviceError("default CUDA generator mutex poisoned".into())
+                })?;
+                let generator = match guard.entry(device_id) {
+                    Entry::Occupied(entry) => entry.into_mut(),
+                    Entry::Vacant(entry) => {
+                        let seed = default_seed(device_id as u64);
+                        let generator = Generator::cuda(device_id, seed)?;
+                        entry.insert(generator)
+                    }
+                };
+                f(generator)
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                let _ = device_id;
+                Err(Error::DeviceError(
+                    "default CUDA generator requires the cuda feature".into(),
+                ))
             }
         }
     }

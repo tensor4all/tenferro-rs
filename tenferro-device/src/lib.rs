@@ -318,7 +318,7 @@ pub use batch_index::{
     broadcast_batch_dims, checked_batch_count, flatten_col_major_index,
     unflatten_col_major_index_into, BroadcastBatchIndexer,
 };
-pub use generator::Generator;
+pub use generator::{with_default_generator, Generator};
 
 #[cfg(test)]
 mod tests {

@@ -112,6 +112,43 @@ fn cpu_randn_has_basic_statistical_sanity() {
     assert!((var - 1.0).abs() < 0.2, "randn variance drifted to {var}");
 }
 
+#[test]
+fn cpu_default_generator_none_uses_shared_advancing_state() {
+    let base_f64 = Tensor::<f64>::zeros(&[2, 3], CPU, MemoryOrder::ColumnMajor).unwrap();
+    let base_i32 = Tensor::<i32>::zeros(&[2, 3], CPU, MemoryOrder::ColumnMajor).unwrap();
+
+    let first = Tensor::<f64>::rand(&[64], CPU, MemoryOrder::ColumnMajor, None).unwrap();
+    let second = Tensor::<f64>::rand(&[64], CPU, MemoryOrder::ColumnMajor, None).unwrap();
+    assert_ne!(
+        host_f64(&first).buffer().as_slice().unwrap(),
+        host_f64(&second).buffer().as_slice().unwrap()
+    );
+
+    let rand_like = Tensor::<f64>::rand_like(&base_f64, None).unwrap();
+    assert_eq!(rand_like.dims(), base_f64.dims());
+    assert_eq!(rand_like.strides(), base_f64.strides());
+    assert_eq!(
+        rand_like.logical_memory_space(),
+        base_f64.logical_memory_space()
+    );
+
+    let randn_like = Tensor::<f64>::randn_like(&base_f64, None).unwrap();
+    assert_eq!(randn_like.dims(), base_f64.dims());
+    assert_eq!(randn_like.strides(), base_f64.strides());
+    assert_eq!(
+        randn_like.logical_memory_space(),
+        base_f64.logical_memory_space()
+    );
+
+    let randint_like = Tensor::<i32>::randint_like(&base_i32, -3, 7, None).unwrap();
+    assert_eq!(randint_like.dims(), base_i32.dims());
+    assert_eq!(randint_like.strides(), base_i32.strides());
+    assert_eq!(
+        randint_like.logical_memory_space(),
+        base_i32.logical_memory_space()
+    );
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_rand_and_randn_seeded_replay_match() {
@@ -139,6 +176,48 @@ fn cuda_rand_and_randn_seeded_replay_match() {
     assert_eq!(
         host_f64(&lhs_randn).buffer().as_slice().unwrap(),
         host_f64(&rhs_randn).buffer().as_slice().unwrap()
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_default_generator_none_uses_shared_advancing_state() {
+    if !cuda_device_zero_is_available() {
+        return;
+    }
+
+    let base_f64 = Tensor::<f64>::zeros(&[2, 3], GPU0, MemoryOrder::ColumnMajor).unwrap();
+    let base_i32 = Tensor::<i32>::zeros(&[2, 3], GPU0, MemoryOrder::ColumnMajor).unwrap();
+
+    let first = Tensor::<f64>::rand(&[64], GPU0, MemoryOrder::ColumnMajor, None).unwrap();
+    let second = Tensor::<f64>::rand(&[64], GPU0, MemoryOrder::ColumnMajor, None).unwrap();
+    assert_ne!(
+        host_f64(&first).buffer().as_slice().unwrap(),
+        host_f64(&second).buffer().as_slice().unwrap()
+    );
+
+    let rand_like = Tensor::<f64>::rand_like(&base_f64, None).unwrap();
+    assert_eq!(rand_like.dims(), base_f64.dims());
+    assert_eq!(rand_like.strides(), base_f64.strides());
+    assert_eq!(
+        rand_like.logical_memory_space(),
+        base_f64.logical_memory_space()
+    );
+
+    let randn_like = Tensor::<f64>::randn_like(&base_f64, None).unwrap();
+    assert_eq!(randn_like.dims(), base_f64.dims());
+    assert_eq!(randn_like.strides(), base_f64.strides());
+    assert_eq!(
+        randn_like.logical_memory_space(),
+        base_f64.logical_memory_space()
+    );
+
+    let randint_like = Tensor::<i32>::randint_like(&base_i32, -3, 7, None).unwrap();
+    assert_eq!(randint_like.dims(), base_i32.dims());
+    assert_eq!(randint_like.strides(), base_i32.strides());
+    assert_eq!(
+        randint_like.logical_memory_space(),
+        base_i32.logical_memory_space()
     );
 }
 

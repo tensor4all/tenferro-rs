@@ -2,7 +2,7 @@
 use std::sync::Arc;
 
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, Generator, LogicalMemorySpace, Result};
+use tenferro_device::{with_default_generator, Generator, LogicalMemorySpace, Result};
 
 use super::super::Tensor;
 use crate::MemoryOrder;
@@ -14,10 +14,18 @@ use crate::DataBuffer;
 #[cfg(feature = "cuda")]
 use tenferro_device::cuda::runtime as device_cuda;
 
-fn require_generator<'a>(generator: Option<&'a mut Generator>) -> Result<&'a mut Generator> {
-    generator.ok_or_else(|| {
-        Error::InvalidArgument("random constructors require an explicit Generator".into())
-    })
+fn with_generator<'a, R, F>(
+    memory_space: LogicalMemorySpace,
+    generator: Option<&'a mut Generator>,
+    f: F,
+) -> Result<R>
+where
+    F: FnOnce(&mut Generator) -> Result<R>,
+{
+    match generator {
+        Some(generator) => f(generator),
+        None => with_default_generator(memory_space, f),
+    }
 }
 
 fn finish_generated_allocation<T: Scalar>(
@@ -55,7 +63,7 @@ fn gpu_generated_tensor<T: Scalar>(
             )
         },
         Arc::from(dims),
-        Arc::from(crate::layout::compute_contiguous_strides(dims, order)),
+        Arc::from(compute_contiguous_strides(dims, order)),
         0,
         memory_space,
         None,
@@ -72,15 +80,13 @@ impl Tensor<f64> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_device::Generator;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let mut generator = Generator::cpu(1234);
     /// let t = Tensor::<f64>::rand(
     ///     &[2, 2],
     ///     tenferro_device::LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    ///     Some(&mut generator),
+    ///     None,
     /// ).unwrap();
     /// assert_eq!(t.dims(), &[2, 2]);
     /// ```
@@ -90,37 +96,37 @@ impl Tensor<f64> {
         order: MemoryOrder,
         generator: Option<&mut Generator>,
     ) -> Result<Self> {
-        let generator = require_generator(generator)?;
-        #[cfg(feature = "cuda")]
-        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
-            let tensor = gpu_generated_tensor::<f64>(dims, memory_space, order)?;
-            let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
-                unreachable!("gpu_generated_tensor only accepts GPU memory");
-            };
-            let runtime = device_cuda::get_or_init(device_id)?;
-            let dst =
-                tensor.buffer().as_device_ptr().ok_or_else(|| {
+        with_generator(memory_space, generator, |generator| {
+            #[cfg(feature = "cuda")]
+            if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+                let tensor = gpu_generated_tensor::<f64>(dims, memory_space, order)?;
+                let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+                    unreachable!("gpu_generated_tensor only accepts GPU memory");
+                };
+                let runtime = device_cuda::get_or_init(device_id)?;
+                let dst = tensor.buffer().as_device_ptr().ok_or_else(|| {
                     Error::DeviceError("CUDA RNG destination is not on GPU".into())
                 })? as *mut f64;
-            let dst_len = tensor.buffer().len();
-            unsafe {
-                runtime.rng_fill_uniform_f64_raw(
-                    generator,
-                    dst,
-                    dst_len,
-                    tensor.dims(),
-                    tensor.strides(),
-                    tensor.offset(),
-                )?;
+                let dst_len = tensor.buffer().len();
+                unsafe {
+                    runtime.rng_fill_uniform_f64_raw(
+                        generator,
+                        dst,
+                        dst_len,
+                        tensor.dims(),
+                        tensor.strides(),
+                        tensor.offset(),
+                    )?;
+                }
+                return Ok(tensor);
             }
-            return Ok(tensor);
-        }
-        let n_elements: usize = dims.iter().product();
-        let mut data = Vec::with_capacity(n_elements);
-        for _ in 0..n_elements {
-            data.push(generator.sample_uniform_f64());
-        }
-        finish_generated_allocation(data, dims, memory_space, order)
+            let n_elements: usize = dims.iter().product();
+            let mut data = Vec::with_capacity(n_elements);
+            for _ in 0..n_elements {
+                data.push(generator.sample_uniform_f64());
+            }
+            finish_generated_allocation(data, dims, memory_space, order)
+        })
     }
 
     /// Create a tensor filled with standard-normal samples.
@@ -128,15 +134,13 @@ impl Tensor<f64> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_device::Generator;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let mut generator = Generator::cpu(1234);
     /// let t = Tensor::<f64>::randn(
     ///     &[4],
     ///     tenferro_device::LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    ///     Some(&mut generator),
+    ///     None,
     /// ).unwrap();
     /// assert_eq!(t.dims(), &[4]);
     /// ```
@@ -146,37 +150,37 @@ impl Tensor<f64> {
         order: MemoryOrder,
         generator: Option<&mut Generator>,
     ) -> Result<Self> {
-        let generator = require_generator(generator)?;
-        #[cfg(feature = "cuda")]
-        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
-            let tensor = gpu_generated_tensor::<f64>(dims, memory_space, order)?;
-            let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
-                unreachable!("gpu_generated_tensor only accepts GPU memory");
-            };
-            let runtime = device_cuda::get_or_init(device_id)?;
-            let dst =
-                tensor.buffer().as_device_ptr().ok_or_else(|| {
+        with_generator(memory_space, generator, |generator| {
+            #[cfg(feature = "cuda")]
+            if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+                let tensor = gpu_generated_tensor::<f64>(dims, memory_space, order)?;
+                let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+                    unreachable!("gpu_generated_tensor only accepts GPU memory");
+                };
+                let runtime = device_cuda::get_or_init(device_id)?;
+                let dst = tensor.buffer().as_device_ptr().ok_or_else(|| {
                     Error::DeviceError("CUDA RNG destination is not on GPU".into())
                 })? as *mut f64;
-            let dst_len = tensor.buffer().len();
-            unsafe {
-                runtime.rng_fill_normal_f64_raw(
-                    generator,
-                    dst,
-                    dst_len,
-                    tensor.dims(),
-                    tensor.strides(),
-                    tensor.offset(),
-                )?;
+                let dst_len = tensor.buffer().len();
+                unsafe {
+                    runtime.rng_fill_normal_f64_raw(
+                        generator,
+                        dst,
+                        dst_len,
+                        tensor.dims(),
+                        tensor.strides(),
+                        tensor.offset(),
+                    )?;
+                }
+                return Ok(tensor);
             }
-            return Ok(tensor);
-        }
-        let n_elements: usize = dims.iter().product();
-        let mut data = Vec::with_capacity(n_elements);
-        for _ in 0..n_elements {
-            data.push(generator.sample_standard_normal_f64());
-        }
-        finish_generated_allocation(data, dims, memory_space, order)
+            let n_elements: usize = dims.iter().product();
+            let mut data = Vec::with_capacity(n_elements);
+            for _ in 0..n_elements {
+                data.push(generator.sample_standard_normal_f64());
+            }
+            finish_generated_allocation(data, dims, memory_space, order)
+        })
     }
 
     /// Create a tensor with the same shape/layout convention as another tensor and fill it with
@@ -185,16 +189,10 @@ impl Tensor<f64> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_device::Generator;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let base = Tensor::<f64>::zeros(
-    ///     &[2, 3],
-    ///     tenferro_device::LogicalMemorySpace::MainMemory,
-    ///     MemoryOrder::RowMajor,
-    /// ).unwrap();
-    /// let mut generator = Generator::cpu(1234);
-    /// let t = base.rand_like(Some(&mut generator)).unwrap();
+    /// let base = Tensor::<f64>::zeros(&[2, 3], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
+    /// let t = Tensor::<f64>::rand_like(&base, None).unwrap();
     /// assert_eq!(t.dims(), base.dims());
     /// ```
     pub fn rand_like(reference: &Self, generator: Option<&mut Generator>) -> Result<Self> {
@@ -212,16 +210,10 @@ impl Tensor<f64> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_device::Generator;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let base = Tensor::<f64>::zeros(
-    ///     &[2, 3],
-    ///     tenferro_device::LogicalMemorySpace::MainMemory,
-    ///     MemoryOrder::RowMajor,
-    /// ).unwrap();
-    /// let mut generator = Generator::cpu(1234);
-    /// let t = base.randn_like(Some(&mut generator)).unwrap();
+    /// let base = Tensor::<f64>::zeros(&[2, 3], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
+    /// let t = Tensor::<f64>::randn_like(&base, None).unwrap();
     /// assert_eq!(t.dims(), base.dims());
     /// ```
     pub fn randn_like(reference: &Self, generator: Option<&mut Generator>) -> Result<Self> {
@@ -240,17 +232,15 @@ impl Tensor<i32> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_device::Generator;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let mut generator = Generator::cpu(1234);
     /// let t = Tensor::<i32>::randint(
     ///     -2,
     ///     5,
     ///     &[2, 2],
     ///     tenferro_device::LogicalMemorySpace::MainMemory,
     ///     MemoryOrder::ColumnMajor,
-    ///     Some(&mut generator),
+    ///     None,
     /// ).unwrap();
     /// assert_eq!(t.dims(), &[2, 2]);
     /// ```
@@ -262,39 +252,39 @@ impl Tensor<i32> {
         order: MemoryOrder,
         generator: Option<&mut Generator>,
     ) -> Result<Self> {
-        let generator = require_generator(generator)?;
-        #[cfg(feature = "cuda")]
-        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
-            let tensor = gpu_generated_tensor::<i32>(dims, memory_space, order)?;
-            let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
-                unreachable!("gpu_generated_tensor only accepts GPU memory");
-            };
-            let runtime = device_cuda::get_or_init(device_id)?;
-            let dst =
-                tensor.buffer().as_device_ptr().ok_or_else(|| {
+        with_generator(memory_space, generator, |generator| {
+            #[cfg(feature = "cuda")]
+            if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+                let tensor = gpu_generated_tensor::<i32>(dims, memory_space, order)?;
+                let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+                    unreachable!("gpu_generated_tensor only accepts GPU memory");
+                };
+                let runtime = device_cuda::get_or_init(device_id)?;
+                let dst = tensor.buffer().as_device_ptr().ok_or_else(|| {
                     Error::DeviceError("CUDA RNG destination is not on GPU".into())
                 })? as *mut i32;
-            let dst_len = tensor.buffer().len();
-            unsafe {
-                runtime.rng_fill_i32_raw(
-                    generator,
-                    low,
-                    high,
-                    dst,
-                    dst_len,
-                    tensor.dims(),
-                    tensor.strides(),
-                    tensor.offset(),
-                )?;
+                let dst_len = tensor.buffer().len();
+                unsafe {
+                    runtime.rng_fill_i32_raw(
+                        generator,
+                        low,
+                        high,
+                        dst,
+                        dst_len,
+                        tensor.dims(),
+                        tensor.strides(),
+                        tensor.offset(),
+                    )?;
+                }
+                return Ok(tensor);
             }
-            return Ok(tensor);
-        }
-        let n_elements: usize = dims.iter().product();
-        let mut data = Vec::with_capacity(n_elements);
-        for _ in 0..n_elements {
-            data.push(generator.sample_integer_i32(low, high)?);
-        }
-        finish_generated_allocation(data, dims, memory_space, order)
+            let n_elements: usize = dims.iter().product();
+            let mut data = Vec::with_capacity(n_elements);
+            for _ in 0..n_elements {
+                data.push(generator.sample_integer_i32(low, high)?);
+            }
+            finish_generated_allocation(data, dims, memory_space, order)
+        })
     }
 
     /// Create a tensor with the same shape/layout convention as another tensor and fill it with
@@ -303,16 +293,10 @@ impl Tensor<i32> {
     /// # Examples
     ///
     /// ```ignore
-    /// use tenferro_device::Generator;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let base = Tensor::<i32>::zeros(
-    ///     &[2, 3],
-    ///     tenferro_device::LogicalMemorySpace::MainMemory,
-    ///     MemoryOrder::ColumnMajor,
-    /// ).unwrap();
-    /// let mut generator = Generator::cpu(1234);
-    /// let t = base.randint_like(-2, 5, Some(&mut generator)).unwrap();
+    /// let base = Tensor::<i32>::zeros(&[2, 3], tenferro_device::LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
+    /// let t = Tensor::<i32>::randint_like(&base, -2, 5, None).unwrap();
     /// assert_eq!(t.dims(), base.dims());
     /// ```
     pub fn randint_like(
