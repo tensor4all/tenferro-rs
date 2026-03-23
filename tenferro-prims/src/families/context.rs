@@ -226,7 +226,6 @@ where
     }
 }
 
-#[cfg(feature = "cuda")]
 impl TensorMetadataContextFor for CudaContext
 where
     CudaBackend: TensorMetadataPrims<Context = CudaContext>,
@@ -257,6 +256,13 @@ where
     RocmBackend: TensorScalarPrims<Alg, Context = RocmContext>,
 {
     type ScalarBackend = RocmBackend;
+}
+
+impl TensorMetadataContextFor for RocmContext
+where
+    RocmBackend: TensorMetadataPrims<Context = RocmContext>,
+{
+    type MetadataBackend = RocmBackend;
 }
 
 impl<Input> TensorComplexRealContextFor<Input> for RocmContext

@@ -1137,7 +1137,10 @@ fn cuda_public_lu_factor_matches_cpu_complex32_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.factors.dims(), expected.factors.dims());
-        assert_eq!(got.pivots, expected.pivots);
+        assert_eq!(
+            tensor_data_on_cpu(&got.pivots),
+            tensor_data_on_cpu(&expected.pivots)
+        );
         assert_close_complex_slice(
             "cuda public lu_factor complex32 factors",
             &tensor_data_on_cpu(&got.factors),
@@ -1173,8 +1176,14 @@ fn cuda_public_lu_factor_ex_matches_cpu_mixed_batch_f64_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.factors.dims(), expected.factors.dims());
-        assert_eq!(got.pivots, expected.pivots);
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.pivots),
+            tensor_data_on_cpu(&expected.pivots)
+        );
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_eq!(
             tensor_data_on_cpu(&got.factors),
             tensor_data_on_cpu(&expected.factors)

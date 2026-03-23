@@ -8,14 +8,7 @@ mod batch_b_contracts;
 mod organization;
 mod runtime_capability;
 
-fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
-    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
-    let offset = contiguous.offset() as usize;
-    let len = contiguous.dims().iter().product::<usize>().max(1);
-    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
-}
-
-fn tensor_data_complex64(tensor: &Tensor<Complex64>) -> Vec<Complex64> {
+fn tensor_data<T: tenferro_algebra::Scalar + Copy>(tensor: &Tensor<T>) -> Vec<T> {
     let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
     let offset = contiguous.offset() as usize;
     let len = contiguous.dims().iter().product::<usize>().max(1);
@@ -238,7 +231,7 @@ fn blend_tensor_by_real_mask_same_shape_selects_complex_batches() {
     )
     .unwrap();
     assert_eq!(
-        tensor_data_complex64(&blended),
+        tensor_data(&blended),
         vec![
             Complex64::new(2.0, 1.0),
             Complex64::new(2.0, 1.0),
@@ -292,7 +285,7 @@ fn complex_pinv_diagonal_matrix_matches_expected_inverse() {
     .unwrap();
 
     let ap = pinv(&mut ctx, &a, None).unwrap();
-    let data = tensor_data_complex64(&ap);
+    let data = tensor_data(&ap);
     let expected = [
         Complex64::new(0.5, -0.5),
         Complex64::new(0.0, 0.0),

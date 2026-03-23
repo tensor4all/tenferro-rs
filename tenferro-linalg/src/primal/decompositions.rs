@@ -282,12 +282,11 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    let (m, _, _) = validate_2d(tensor)?;
+    let _ = validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&result.pivots, m)?;
     Ok(LuFactorResult {
         factors: pack_lu_factors(&result.l, &result.u)?,
-        pivots,
+        pivots: result.pivots,
     })
 }
 
@@ -302,16 +301,14 @@ where
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuFactorEx, "lu_factor_ex")?;
 
-    let (m, _, _) = validate_2d(tensor)?;
+    let _ = validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_ex(ctx, tensor)?;
     let factors = pack_lu_factors(&result.l, &result.u)?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&result.pivots, m)?;
-    let info = crate::backend::tensor_helpers::backend_info_to_vec(&result.info)?;
 
     Ok(LuFactorExResult {
         factors,
-        pivots,
-        info,
+        pivots: result.pivots,
+        info: result.info,
     })
 }
 
@@ -319,7 +316,7 @@ where
 pub fn lu_solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     factors: &Tensor<T>,
-    pivots: &[usize],
+    pivots: &Tensor<i32>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where

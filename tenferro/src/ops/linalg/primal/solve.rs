@@ -20,20 +20,20 @@ binary_linalg_builder!(
 pub struct LuSolveBuilder<'a, T: LinalgScalar> {
     factors: &'a Tensor<T>,
     b: &'a Tensor<T>,
-    pivots: Option<&'a [usize]>,
+    pivots: Option<&'a Tensor<i32>>,
 }
 
 impl<'a, T> LuSolveBuilder<'a, T>
 where
     T: LinalgRuntimeValue,
 {
-    /// Sets forward row-permutation indices from `lu_factor`.
+    /// Sets the backend pivot tensor from `lu_factor`.
     /// # Examples
     ///
     /// ```ignore
     /// let _builder = builder.pivots(&pivots);
     /// ```
-    pub fn pivots(mut self, pivots: &'a [usize]) -> Self {
+    pub fn pivots(mut self, pivots: &'a Tensor<i32>) -> Self {
         self.pivots = Some(pivots);
         self
     }
@@ -47,7 +47,7 @@ where
     pub fn run(self) -> Result<Tensor<T>> {
         let pivots = self.pivots.ok_or_else(|| {
             Error::Backend(tenferro_device::Error::InvalidArgument(
-                "lu_solve builder requires `.pivots(&[..])` before `run()`".into(),
+                "lu_solve builder requires `.pivots(&Tensor<i32>)` before `run()`".into(),
             ))
         })?;
         dispatch_linalg_runtime!(

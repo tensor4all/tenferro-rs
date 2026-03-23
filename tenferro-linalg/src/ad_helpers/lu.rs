@@ -7,7 +7,7 @@ pub(crate) fn pack_lu_factors<T: LinalgScalar>(l: &Tensor<T>, u: &Tensor<T>) -> 
 pub(crate) fn lu_solve_impl<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     factors: &Tensor<T>,
-    pivots: &[usize],
+    pivots: &Tensor<i32>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
@@ -17,11 +17,12 @@ where
     let (n, batch_dims) = validate_square(factors)?;
     let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "lu_solve")?;
     let bc = batch_count(batch_dims);
+    let pivot_perm = backend::tensor_helpers::backend_pivots_to_forward_perm(pivots, n)?;
     let expected_pivots = n * bc;
-    if pivots.len() != expected_pivots {
+    if pivot_perm.len() != expected_pivots {
         return Err(Error::InvalidArgument(format!(
             "lu_solve expects pivots.len() == {expected_pivots}, got {}",
-            pivots.len()
+            pivot_perm.len()
         )));
     }
 
@@ -45,7 +46,7 @@ where
         let rhs_start = rhs_offset + batch * rhs_size;
         let factor_slice = &factors_data[factor_start..factor_start + mat_size];
         let rhs_slice = &rhs_data[rhs_start..rhs_start + rhs_size];
-        let pivot_slice = &pivots[batch * n..(batch + 1) * n];
+        let pivot_slice = &pivot_perm[batch * n..(batch + 1) * n];
 
         unpack_packed_lu_square(factor_slice, n, &mut lower, &mut upper);
         apply_lu_permutation(pivot_slice, rhs_slice, n, rhs.nrhs, &mut permuted_rhs)?;

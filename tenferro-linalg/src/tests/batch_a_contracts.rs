@@ -35,12 +35,12 @@ fn lu_factor_contract_uses_packed_factors_and_forward_pivots() {
 
     let factored = lu_factor(&mut ctx, &a).unwrap();
     assert_eq!(factored.factors.dims(), &[2, 3]);
-    assert_eq!(factored.pivots.len(), 2);
+    assert_eq!(tensor_data(&factored.pivots).len(), 2);
 
     let factored_ex = lu_factor_ex(&mut ctx, &a).unwrap();
     assert_eq!(factored_ex.factors.dims(), &[2, 3]);
-    assert_eq!(factored_ex.pivots.len(), 2);
-    assert_eq!(factored_ex.info, vec![0]);
+    assert_eq!(tensor_data(&factored_ex.pivots).len(), 2);
+    assert_eq!(tensor_data(&factored_ex.info), vec![0]);
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn lu_factor_ex_does_not_treat_small_nonzero_pivot_as_zero() {
     .unwrap();
 
     let result = lu_factor_ex(&mut ctx, &a).unwrap();
-    assert_eq!(result.info, vec![0]);
+    assert_eq!(tensor_data(&result.info), vec![0]);
 }
 
 #[test]
@@ -224,8 +224,12 @@ fn lu_factor_ex_mixed_batches_preserve_successful_packed_factors_and_info() {
     let expected = lu_factor(&mut ctx, &good).unwrap();
     let result = lu_factor_ex(&mut ctx, &batched).unwrap();
 
-    assert_eq!(result.info, vec![0, 2]);
-    assert_eq!(&result.pivots[..2], expected.pivots.as_slice());
+    assert_eq!(tensor_data(&result.info), vec![0, 2]);
+    assert_eq!(result.pivots.dims(), &[2, 2]);
+    assert_eq!(
+        &tensor_data(&result.pivots)[..2],
+        tensor_data(&expected.pivots).as_slice()
+    );
     assert_eq!(
         &tensor_data(&result.factors)[..4],
         tensor_data(&expected.factors).as_slice()
@@ -245,7 +249,8 @@ fn structured_ex_and_lu_solve_reject_invalid_contracts() {
     ));
 
     let factored = lu_factor(&mut ctx, &a).unwrap();
-    let lu_err = lu_solve(&mut ctx, &factored.factors, &[0], &bad_rhs).unwrap_err();
+    let bad_pivots = Tensor::from_slice(&[0_i32], &[1], MemoryOrder::ColumnMajor).unwrap();
+    let lu_err = lu_solve(&mut ctx, &factored.factors, &bad_pivots, &bad_rhs).unwrap_err();
     assert!(matches!(lu_err, tenferro_device::Error::InvalidArgument(_)));
 }
 

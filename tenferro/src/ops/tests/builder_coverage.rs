@@ -183,7 +183,7 @@ fn primal_linalg_builders_cover_all_ops() {
     let out_lu_factor_ex = lu_factor_ex(&a).run().unwrap();
     assert_eq!(out_lu_factor_ex.factors.dims(), &[2, 2]);
     assert_eq!(out_lu_factor_ex.pivots.len(), 2);
-    assert_eq!(out_lu_factor_ex.info, vec![0]);
+    assert_eq!(tensor_data(&out_lu_factor_ex.info), vec![0]);
     let out_lu_solve = lu_solve(&out_lu_factor.factors, &b)
         .pivots(&out_lu_factor.pivots)
         .run()

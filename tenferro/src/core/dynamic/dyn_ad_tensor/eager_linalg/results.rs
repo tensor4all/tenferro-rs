@@ -1,4 +1,5 @@
 use super::Tensor;
+use tenferro_tensor::Tensor as DenseTensor;
 
 /// Dynamic AD-aware SVD result.
 ///
@@ -136,8 +137,8 @@ pub struct LstsqResult {
 pub struct LuFactorResult {
     /// Packed LU factors.
     pub factors: Tensor,
-    /// Flattened forward row permutations.
-    pub pivots: Vec<usize>,
+    /// Backend pivot tensor in 1-indexed step-pivot form.
+    pub pivots: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware LU factorization result with status codes.
@@ -152,10 +153,10 @@ pub struct LuFactorResult {
 pub struct LuFactorExResult {
     /// Packed LU factors.
     pub factors: Tensor,
-    /// Flattened forward row permutations.
-    pub pivots: Vec<usize>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Backend pivot tensor in 1-indexed step-pivot form.
+    pub pivots: DenseTensor<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware solve result with status codes.
