@@ -84,22 +84,22 @@ where
                 diagonal.dims(),
                 diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let zero: Tensor<f32> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let nonzero_mask: Tensor<f32> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let reduced: Tensor<f32> = Tensor::zeros(
                 &[],
                 nonzero_mask.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             runtime.pointwise_unary_real_f32_raw(
                 RealUnaryOp::Abs,
                 1.0,
@@ -165,22 +165,22 @@ where
                 diagonal.dims(),
                 diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let zero: Tensor<f64> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let nonzero_mask: Tensor<f64> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let reduced: Tensor<f64> = Tensor::zeros(
                 &[],
                 nonzero_mask.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             runtime.pointwise_unary_real_f64_raw(
                 RealUnaryOp::Abs,
                 1.0,
@@ -246,22 +246,22 @@ where
                 diagonal.dims(),
                 diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let zero: Tensor<f32> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let nonzero_mask: Tensor<f32> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let reduced: Tensor<f32> = Tensor::zeros(
                 &[],
                 nonzero_mask.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             runtime.pointwise_unary_complex32_to_real_f32_raw(
                 ComplexRealUnaryOp::Abs,
                 1.0,
@@ -328,22 +328,22 @@ where
                 diagonal.dims(),
                 diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let zero: Tensor<f64> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let nonzero_mask: Tensor<f64> = Tensor::zeros(
                 abs_diagonal.dims(),
                 abs_diagonal.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             let reduced: Tensor<f64> = Tensor::zeros(
                 &[],
                 nonzero_mask.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            );
+            )?;
             runtime.pointwise_unary_complex64_to_real_f64_raw(
                 ComplexRealUnaryOp::Abs,
                 1.0,

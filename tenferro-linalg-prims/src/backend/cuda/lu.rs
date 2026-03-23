@@ -499,12 +499,12 @@ where
         &l_dims,
         a_work.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let u = Tensor::zeros(
         &u_dims,
         a_work.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let mut pivots_out = vec![0i32; k * bc];
     let mut info = vec![0i32; bc];
 

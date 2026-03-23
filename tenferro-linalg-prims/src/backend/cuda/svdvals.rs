@@ -97,7 +97,7 @@ where
 
     let mut s_dims = vec![k];
     s_dims.extend_from_slice(batch_dims);
-    let s = Tensor::zeros(&s_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor);
+    let s = Tensor::zeros(&s_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?;
 
     if m == 0 || n == 0 || bc == 0 {
         return Ok(s);

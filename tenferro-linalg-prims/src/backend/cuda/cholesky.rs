@@ -159,7 +159,7 @@ where
         a.dims(),
         a.logical_memory_space(),
         tenferro_tensor::MemoryOrder::ColumnMajor,
-    );
+    )?;
     if n == 0 || bc == 0 {
         return Ok(CholeskyTensorExResult {
             l,

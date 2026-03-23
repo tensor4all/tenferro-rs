@@ -100,8 +100,8 @@ where
     let mut r_dims = vec![k, n];
     r_dims.extend_from_slice(batch_dims);
 
-    let mut q = Tensor::zeros(&q_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor);
-    let mut r = Tensor::zeros(&r_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor);
+    let mut q = Tensor::zeros(&q_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?;
+    let mut r = Tensor::zeros(&r_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?;
 
     if m == 0 || n == 0 || bc == 0 {
         return Ok(QrTensorResult { q, r });

@@ -117,9 +117,9 @@ where
     let mut s_dims = vec![k];
     s_dims.extend_from_slice(batch_dims);
 
-    let mut u = Tensor::zeros(&u_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor);
-    let mut vt = Tensor::zeros(&vt_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor);
-    let s = Tensor::zeros(&s_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor);
+    let mut u = Tensor::zeros(&u_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?;
+    let mut vt = Tensor::zeros(&vt_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?;
+    let s = Tensor::zeros(&s_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?;
 
     if m == 0 || n == 0 || bc == 0 {
         return Ok(SvdTensorResult { u, s, vt });
@@ -176,20 +176,20 @@ where
     let u_work = if wide {
         let mut dims = vec![m_work, k];
         dims.extend_from_slice(batch_dims);
-        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)
+        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?
     } else {
         let mut dims = vec![m_work, k];
         dims.extend_from_slice(batch_dims);
-        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)
+        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?
     };
     let vt_work = if wide {
         let mut dims = vec![k, n_work];
         dims.extend_from_slice(batch_dims);
-        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)
+        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?
     } else {
         let mut dims = vec![k, n_work];
         dims.extend_from_slice(batch_dims);
-        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)
+        Tensor::zeros(&dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?
     };
 
     let u_base = context_device_ptr(ctx, &u_work, "thin_svd u")?.cast::<T>();

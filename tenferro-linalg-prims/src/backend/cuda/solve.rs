@@ -123,7 +123,7 @@ where
         &rhs.output_dims,
         a.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let runtime = load_runtime(ctx)?;
 
     let a_base = context_device_ptr(ctx, &a_work, "solve_ex a")?.cast::<T>();
