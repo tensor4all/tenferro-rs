@@ -740,8 +740,15 @@ impl<'a> MetadataTensorMut<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MetadataConstantValue {
+    I32(i32),
+    Bool(bool),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MetadataGenerateOp {
     IotaStartZero,
+    Constant(MetadataConstantValue),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

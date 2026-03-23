@@ -10,6 +10,8 @@ use super::helpers::{compile_ptx_once, load_kernel_from_ptx};
 use crate::Result;
 
 pub const METADATA_GENERATE_IOTA_I32_KERNEL_NAME: &str = "metadata_generate_iota_i32";
+pub const METADATA_GENERATE_CONSTANT_I32_KERNEL_NAME: &str = "metadata_generate_constant_i32";
+pub const METADATA_GENERATE_CONSTANT_BOOL_KERNEL_NAME: &str = "metadata_generate_constant_bool";
 pub const METADATA_BINARY_I32_I32_KERNEL_NAME: &str = "metadata_binary_i32_i32";
 pub const METADATA_BINARY_I32_BOOL_KERNEL_NAME: &str = "metadata_binary_i32_bool";
 pub const METADATA_BINARY_BOOL_BOOL_KERNEL_NAME: &str = "metadata_binary_bool_bool";
@@ -55,6 +57,46 @@ extern "C" __global__ void metadata_generate_iota_i32(
 
     long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
     dst[dst_idx] = (int)idx;
+}
+
+extern "C" __global__ void metadata_generate_constant_i32(
+    int* dst,
+    const long long* dims,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    int value
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    dst[dst_idx] = value;
+}
+
+extern "C" __global__ void metadata_generate_constant_bool(
+    unsigned char* dst,
+    const long long* dims,
+    const long long* dst_strides,
+    long long dst_offset,
+    int ndim,
+    unsigned long long numel,
+    unsigned char value
+) {
+    unsigned long long idx =
+        (unsigned long long)blockIdx.x * (unsigned long long)blockDim.x +
+        (unsigned long long)threadIdx.x;
+    if (idx >= numel) {
+        return;
+    }
+
+    long long dst_idx = linear_offset(idx, dims, dst_strides, dst_offset, ndim);
+    dst[dst_idx] = value;
 }
 
 extern "C" __global__ void metadata_binary_i32_bool(

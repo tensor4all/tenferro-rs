@@ -3,9 +3,9 @@ use tenferro_device::{unflatten_col_major_index_into, LogicalMemorySpace};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{
-    CpuContext, MetadataBinaryOp, MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor,
-    MetadataReductionOp, MetadataTensorMut, MetadataTensorRef, MetadataTernaryOp,
-    TensorMetadataContextFor, TensorMetadataPrims,
+    CpuContext, MetadataBinaryOp, MetadataConstantValue, MetadataDType, MetadataGenerateOp,
+    MetadataPrimsDescriptor, MetadataReductionOp, MetadataTensorMut, MetadataTensorRef,
+    MetadataTernaryOp, TensorMetadataContextFor, TensorMetadataPrims,
 };
 
 fn tensor_i32(data: &[i32], dims: &[usize], memory_space: LogicalMemorySpace) -> Tensor<i32> {
@@ -125,6 +125,60 @@ where
     )
     .unwrap();
     assert_tensor_eq(&iota, &[0, 1, 2, 3]);
+
+    let constant_i32_desc = MetadataPrimsDescriptor::Generate {
+        op: MetadataGenerateOp::Constant(MetadataConstantValue::I32(7)),
+        output_dtype: MetadataDType::I32,
+    };
+    assert!(
+        <C::MetadataBackend as TensorMetadataPrims>::has_metadata_support(
+            constant_i32_desc.clone()
+        )
+    );
+    let mut constant_i32 =
+        Tensor::<i32>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
+        ctx,
+        &constant_i32_desc,
+        &[],
+        MetadataTensorMut::I32(&mut constant_i32),
+    )
+    .unwrap();
+    <C::MetadataBackend as TensorMetadataPrims>::execute(
+        ctx,
+        &plan,
+        &[],
+        MetadataTensorMut::I32(&mut constant_i32),
+    )
+    .unwrap();
+    assert_tensor_eq(&constant_i32, &[7, 7, 7, 7]);
+
+    let constant_bool_desc = MetadataPrimsDescriptor::Generate {
+        op: MetadataGenerateOp::Constant(MetadataConstantValue::Bool(true)),
+        output_dtype: MetadataDType::Bool,
+    };
+    assert!(
+        <C::MetadataBackend as TensorMetadataPrims>::has_metadata_support(
+            constant_bool_desc.clone()
+        )
+    );
+    let mut constant_bool =
+        Tensor::<u8>::zeros(&dims, memory_space, MemoryOrder::ColumnMajor).unwrap();
+    let plan = <C::MetadataBackend as TensorMetadataPrims>::plan(
+        ctx,
+        &constant_bool_desc,
+        &[],
+        MetadataTensorMut::Bool(&mut constant_bool),
+    )
+    .unwrap();
+    <C::MetadataBackend as TensorMetadataPrims>::execute(
+        ctx,
+        &plan,
+        &[],
+        MetadataTensorMut::Bool(&mut constant_bool),
+    )
+    .unwrap();
+    assert_tensor_eq(&constant_bool, &[1, 1, 1, 1]);
 
     let lhs_i32 = tensor_i32(&[0, 1, 2, 3], &dims, memory_space);
     let rhs_i32 = tensor_i32(&[0, 0, 2, 9], &dims, memory_space);

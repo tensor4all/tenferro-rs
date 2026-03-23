@@ -5,9 +5,10 @@ use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
 use crate::{
-    validate_rank, validate_shape_eq, CudaBackend, CudaContext, MetadataBinaryOp, MetadataDType,
-    MetadataGenerateOp, MetadataPrimsDescriptor, MetadataReductionOp, MetadataTensorMut,
-    MetadataTensorRef, MetadataTernaryOp, TensorMetadataPrims,
+    validate_rank, validate_shape_eq, CudaBackend, CudaContext, MetadataBinaryOp,
+    MetadataConstantValue, MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor,
+    MetadataReductionOp, MetadataTensorMut, MetadataTensorRef, MetadataTernaryOp,
+    TensorMetadataPrims,
 };
 
 fn ensure_cuda_tensor<T: Scalar>(tensor: &Tensor<T>, device_id: usize, label: &str) -> Result<()> {
@@ -131,13 +132,16 @@ fn validate_storage_len(
     Ok(())
 }
 
-fn validate_supported_generate(output_dtype: MetadataDType) -> Result<()> {
-    if output_dtype == MetadataDType::I32 {
-        Ok(())
-    } else {
-        Err(Error::InvalidArgument(
-            "metadata iota currently supports I32 output only".into(),
-        ))
+fn validate_supported_generate(op: MetadataGenerateOp, output_dtype: MetadataDType) -> Result<()> {
+    match (op, output_dtype) {
+        (MetadataGenerateOp::IotaStartZero, MetadataDType::I32)
+        | (MetadataGenerateOp::Constant(MetadataConstantValue::I32(_)), MetadataDType::I32)
+        | (MetadataGenerateOp::Constant(MetadataConstantValue::Bool(_)), MetadataDType::Bool) => {
+            Ok(())
+        }
+        _ => Err(Error::InvalidArgument(format!(
+            "unsupported metadata generate dtype combination: op={op:?} dst={output_dtype:?}"
+        ))),
     }
 }
 
@@ -311,15 +315,14 @@ impl TensorMetadataPrims for CudaBackend {
     ) -> Result<Self::Plan> {
         match desc {
             MetadataPrimsDescriptor::Generate { op, output_dtype } => {
-                validate_supported_generate(*output_dtype)?;
+                validate_supported_generate(*op, *output_dtype)?;
                 validate_metadata_handle_count(inputs, 0, "CudaMetadataGenerate")?;
-                if !matches!(*op, MetadataGenerateOp::IotaStartZero) {
-                    return Err(Error::InvalidArgument(format!(
-                        "metadata generate operation {op:?} is not supported on CudaBackend"
-                    )));
-                }
-                match output {
-                    MetadataTensorMut::I32(tensor) => {
+                match (*op, output) {
+                    (MetadataGenerateOp::IotaStartZero, MetadataTensorMut::I32(tensor))
+                    | (
+                        MetadataGenerateOp::Constant(MetadataConstantValue::I32(_)),
+                        MetadataTensorMut::I32(tensor),
+                    ) => {
                         ensure_cuda_tensor(tensor, ctx.device_id(), "CudaMetadataGenerate output")?;
                         validate_storage_len(
                             tensor.buffer().len(),
@@ -329,7 +332,24 @@ impl TensorMetadataPrims for CudaBackend {
                             "CudaMetadataGenerate output",
                         )?;
                     }
-                    MetadataTensorMut::Bool(_) => unreachable!(),
+                    (
+                        MetadataGenerateOp::Constant(MetadataConstantValue::Bool(_)),
+                        MetadataTensorMut::Bool(tensor),
+                    ) => {
+                        ensure_cuda_tensor(tensor, ctx.device_id(), "CudaMetadataGenerate output")?;
+                        validate_storage_len(
+                            tensor.buffer().len(),
+                            tensor.dims(),
+                            tensor.strides(),
+                            tensor.offset(),
+                            "CudaMetadataGenerate output",
+                        )?;
+                    }
+                    _ => {
+                        return Err(Error::InvalidArgument(
+                            "metadata generate output dtype does not match payload".into(),
+                        ));
+                    }
                 }
                 Ok(desc.clone())
             }
@@ -672,6 +692,52 @@ impl TensorMetadataPrims for CudaBackend {
                 }
                 MetadataTensorMut::Bool(_) => Err(Error::InvalidArgument(
                     "metadata iota currently supports I32 output only".into(),
+                )),
+            },
+            MetadataPrimsDescriptor::Generate {
+                op: MetadataGenerateOp::Constant(MetadataConstantValue::I32(value)),
+                output_dtype: MetadataDType::I32,
+            } => match output {
+                MetadataTensorMut::I32(dst) => {
+                    let dst_len = dst.buffer().len();
+                    let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataGenerate output")?;
+                    unsafe {
+                        runtime.metadata_generate_constant_i32(
+                            dst_ptr,
+                            dst_len,
+                            dst.dims(),
+                            dst.strides(),
+                            dst.offset(),
+                            *value,
+                        )?;
+                    }
+                    Ok(())
+                }
+                MetadataTensorMut::Bool(_) => Err(Error::InvalidArgument(
+                    "metadata constant output dtype does not match payload".into(),
+                )),
+            },
+            MetadataPrimsDescriptor::Generate {
+                op: MetadataGenerateOp::Constant(MetadataConstantValue::Bool(value)),
+                output_dtype: MetadataDType::Bool,
+            } => match output {
+                MetadataTensorMut::Bool(dst) => {
+                    let dst_len = dst.buffer().len();
+                    let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataGenerate output")?;
+                    unsafe {
+                        runtime.metadata_generate_constant_bool(
+                            dst_ptr,
+                            dst_len,
+                            dst.dims(),
+                            dst.strides(),
+                            dst.offset(),
+                            *value,
+                        )?;
+                    }
+                    Ok(())
+                }
+                MetadataTensorMut::I32(_) => Err(Error::InvalidArgument(
+                    "metadata constant output dtype does not match payload".into(),
                 )),
             },
             MetadataPrimsDescriptor::Binary {
@@ -1041,10 +1107,18 @@ impl TensorMetadataPrims for CudaBackend {
 
     fn has_metadata_support(desc: MetadataPrimsDescriptor) -> bool {
         match desc {
-            MetadataPrimsDescriptor::Generate {
-                op: MetadataGenerateOp::IotaStartZero,
-                output_dtype: MetadataDType::I32,
-            } => true,
+            MetadataPrimsDescriptor::Generate { op, output_dtype } => matches!(
+                (op, output_dtype),
+                (MetadataGenerateOp::IotaStartZero, MetadataDType::I32)
+                    | (
+                        MetadataGenerateOp::Constant(MetadataConstantValue::I32(_)),
+                        MetadataDType::I32
+                    )
+                    | (
+                        MetadataGenerateOp::Constant(MetadataConstantValue::Bool(_)),
+                        MetadataDType::Bool
+                    )
+            ),
             MetadataPrimsDescriptor::Binary {
                 op,
                 lhs_dtype,

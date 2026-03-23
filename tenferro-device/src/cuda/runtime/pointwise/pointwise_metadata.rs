@@ -33,9 +33,61 @@ impl CudaRuntime {
                 }
                 unsafe { self.metadata_generate_iota_i32_raw(dst.device_ptr(), spec) }
             }
+            (
+                MetadataGenerateOp::Constant(MetadataConstantValue::I32(value)),
+                MetadataTensorMut::I32(dst),
+            ) => {
+                self.ensure_same_device(dst.device_id())?;
+                let required_len = required_storage_len(
+                    &spec.dims,
+                    spec.dst_strides(),
+                    spec.dst_offset(),
+                    "metadata constant destination",
+                )?;
+                if dst.len() < required_len {
+                    return Err(Error::InvalidArgument(format!(
+                        "metadata constant length mismatch: dst={} required={}",
+                        dst.len(),
+                        required_len
+                    )));
+                }
+                unsafe { self.metadata_generate_constant_i32_raw(dst.device_ptr(), value, spec) }
+            }
+            (
+                MetadataGenerateOp::Constant(MetadataConstantValue::Bool(value)),
+                MetadataTensorMut::Bool(dst),
+            ) => {
+                self.ensure_same_device(dst.device_id())?;
+                let required_len = required_storage_len(
+                    &spec.dims,
+                    spec.dst_strides(),
+                    spec.dst_offset(),
+                    "metadata constant destination",
+                )?;
+                if dst.len() < required_len {
+                    return Err(Error::InvalidArgument(format!(
+                        "metadata constant length mismatch: dst={} required={}",
+                        dst.len(),
+                        required_len
+                    )));
+                }
+                unsafe {
+                    self.metadata_generate_constant_bool_raw(dst.device_ptr(), value as u8, spec)
+                }
+            }
             (MetadataGenerateOp::IotaStartZero, MetadataTensorMut::Bool(_)) => Err(
                 Error::InvalidArgument("metadata iota currently supports i32 output only".into()),
             ),
+            (
+                MetadataGenerateOp::Constant(MetadataConstantValue::I32(_)),
+                MetadataTensorMut::Bool(_),
+            )
+            | (
+                MetadataGenerateOp::Constant(MetadataConstantValue::Bool(_)),
+                MetadataTensorMut::I32(_),
+            ) => Err(Error::InvalidArgument(
+                "metadata constant output dtype does not match payload".into(),
+            )),
         }
     }
 
@@ -554,6 +606,87 @@ impl CudaRuntime {
         stream
             .synchronize()
             .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    fn metadata_generate_constant_raw_impl<T: cudarc::driver::DeviceRepr + Copy>(
+        &self,
+        kernel_name: &'static str,
+        dst: *mut T,
+        value: T,
+        spec: &MetadataGenerateSpec,
+    ) -> Result<()> {
+        let numel = checked_numel(spec.dims())?;
+        if numel == 0 {
+            return Ok(());
+        }
+
+        let (kernel, stream) = load_metadata_scalar_kernel(self, kernel_name)?;
+        let dims_dev = stream
+            .clone_htod(&dims_to_i64(spec.dims())?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD metadata dims", err))?;
+        let dst_strides_dev = stream
+            .clone_htod(&to_i64_vec(spec.dst_strides(), "metadata dst stride")?)
+            .map_err(|err| cuda_error("cudaMemcpyHtoD metadata dst strides", err))?;
+        let ndim = i32::try_from(spec.dims().len())
+            .map_err(|_| Error::InvalidArgument("metadata rank exceeds i32 range".into()))?;
+        let dst_offset = i64::try_from(spec.dst_offset())
+            .map_err(|_| Error::InvalidArgument("metadata dst offset exceeds i64 range".into()))?;
+        let numel_u64 = u64::try_from(numel)
+            .map_err(|_| Error::InvalidArgument("metadata numel exceeds u64 range".into()))?;
+        let numel_u32 = u32::try_from(numel).map_err(|_| {
+            Error::InvalidArgument("metadata generate currently requires len <= i32::MAX".into())
+        })?;
+        let dst_ptr = dst as u64;
+        let config = LaunchConfig {
+            grid_dim: (numel_u32.div_ceil(256), 1, 1),
+            block_dim: (256, 1, 1),
+            shared_mem_bytes: 0,
+        };
+
+        unsafe {
+            stream
+                .launch_builder(&kernel)
+                .arg(&dst_ptr)
+                .arg(&dims_dev)
+                .arg(&dst_strides_dev)
+                .arg(&dst_offset)
+                .arg(&ndim)
+                .arg(&numel_u64)
+                .arg(&value)
+                .launch(config)
+                .map_err(|err| cuda_error("CUDA metadata constant kernel launch", err))?;
+        }
+        stream
+            .synchronize()
+            .map_err(|err| cuda_error("CUDA stream synchronize", err))
+    }
+
+    pub(crate) unsafe fn metadata_generate_constant_i32_raw(
+        &self,
+        dst: *mut i32,
+        value: i32,
+        spec: &MetadataGenerateSpec,
+    ) -> Result<()> {
+        self.metadata_generate_constant_raw_impl(
+            METADATA_GENERATE_CONSTANT_I32_KERNEL_NAME,
+            dst,
+            value,
+            spec,
+        )
+    }
+
+    pub(crate) unsafe fn metadata_generate_constant_bool_raw(
+        &self,
+        dst: *mut u8,
+        value: u8,
+        spec: &MetadataGenerateSpec,
+    ) -> Result<()> {
+        self.metadata_generate_constant_raw_impl(
+            METADATA_GENERATE_CONSTANT_BOOL_KERNEL_NAME,
+            dst,
+            value,
+            spec,
+        )
     }
 
     pub(crate) unsafe fn metadata_binary_i32_bool_raw(

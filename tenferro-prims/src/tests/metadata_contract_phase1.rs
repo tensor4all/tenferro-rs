@@ -1,6 +1,7 @@
 use crate::{
-    MetadataBinaryOp, MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor,
-    MetadataReductionOp, MetadataTensorMut, MetadataTensorRef, MetadataTernaryOp,
+    MetadataBinaryOp, MetadataConstantValue, MetadataDType, MetadataGenerateOp,
+    MetadataPrimsDescriptor, MetadataReductionOp, MetadataTensorMut, MetadataTensorRef,
+    MetadataTernaryOp,
 };
 use tenferro_device::LogicalMemorySpace;
 use tenferro_tensor::{MemoryOrder, Tensor};
@@ -10,6 +11,14 @@ fn metadata_family_exposes_dtype_aware_generate_binary_ternary_and_reduction_con
     let generate = MetadataPrimsDescriptor::Generate {
         op: MetadataGenerateOp::IotaStartZero,
         output_dtype: MetadataDType::I32,
+    };
+    let generate_i32 = MetadataPrimsDescriptor::Generate {
+        op: MetadataGenerateOp::Constant(MetadataConstantValue::I32(3)),
+        output_dtype: MetadataDType::I32,
+    };
+    let generate_bool = MetadataPrimsDescriptor::Generate {
+        op: MetadataGenerateOp::Constant(MetadataConstantValue::Bool(true)),
+        output_dtype: MetadataDType::Bool,
     };
     let binary = MetadataPrimsDescriptor::Binary {
         op: MetadataBinaryOp::NotEqual,
@@ -37,6 +46,20 @@ fn metadata_family_exposes_dtype_aware_generate_binary_ternary_and_reduction_con
         MetadataPrimsDescriptor::Generate {
             op: MetadataGenerateOp::IotaStartZero,
             output_dtype: MetadataDType::I32,
+        }
+    ));
+    assert!(matches!(
+        generate_i32,
+        MetadataPrimsDescriptor::Generate {
+            op: MetadataGenerateOp::Constant(MetadataConstantValue::I32(3)),
+            output_dtype: MetadataDType::I32,
+        }
+    ));
+    assert!(matches!(
+        generate_bool,
+        MetadataPrimsDescriptor::Generate {
+            op: MetadataGenerateOp::Constant(MetadataConstantValue::Bool(true)),
+            output_dtype: MetadataDType::Bool,
         }
     ));
     assert!(matches!(

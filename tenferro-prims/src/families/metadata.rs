@@ -23,24 +23,70 @@ pub enum MetadataDType {
     Bool,
 }
 
-/// Metadata tensor generation operations.
-///
-/// Generation is intentionally separate from pointwise metadata ops so the
-/// contract can describe `iota`-style metadata tensors without requiring a
-/// dummy input tensor.
+/// Constant payload for metadata tensor generation.
 ///
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_prims::MetadataGenerateOp;
+/// use tenferro_prims::{MetadataConstantValue, MetadataDType};
+///
+/// let int_value = MetadataConstantValue::I32(7);
+/// let bool_value = MetadataConstantValue::Bool(true);
+/// assert_eq!(int_value.dtype(), MetadataDType::I32);
+/// assert_eq!(bool_value.dtype(), MetadataDType::Bool);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MetadataConstantValue {
+    /// Integer metadata payload.
+    I32(i32),
+    /// Logical bool payload.
+    Bool(bool),
+}
+
+impl MetadataConstantValue {
+    /// Return the logical dtype carried by this constant payload.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro_prims::{MetadataConstantValue, MetadataDType};
+    ///
+    /// assert_eq!(MetadataConstantValue::I32(-3).dtype(), MetadataDType::I32);
+    /// assert_eq!(MetadataConstantValue::Bool(false).dtype(), MetadataDType::Bool);
+    /// ```
+    pub const fn dtype(self) -> MetadataDType {
+        match self {
+            Self::I32(_) => MetadataDType::I32,
+            Self::Bool(_) => MetadataDType::Bool,
+        }
+    }
+}
+
+/// Metadata tensor generation operations.
+///
+/// Generation is intentionally separate from pointwise metadata ops so the
+/// contract can describe `iota`-style and constant metadata tensors without
+/// requiring a dummy input tensor.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro_prims::{MetadataConstantValue, MetadataGenerateOp};
 ///
 /// let op = MetadataGenerateOp::IotaStartZero;
 /// assert!(matches!(op, MetadataGenerateOp::IotaStartZero));
+/// let constant = MetadataGenerateOp::Constant(MetadataConstantValue::Bool(true));
+/// assert!(matches!(
+///     constant,
+///     MetadataGenerateOp::Constant(MetadataConstantValue::Bool(true))
+/// ));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MetadataGenerateOp {
     /// Generate a zero-based iota/arange tensor.
     IotaStartZero,
+    /// Generate a tensor filled with a constant payload.
+    Constant(MetadataConstantValue),
 }
 
 /// Integer/bool metadata binary operations.
@@ -216,10 +262,12 @@ impl<'a> MetadataTensorMut<'a> {
 /// # Examples
 ///
 /// ```rust
-/// use tenferro_prims::{MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor};
+/// use tenferro_prims::{
+///     MetadataConstantValue, MetadataDType, MetadataGenerateOp, MetadataPrimsDescriptor,
+/// };
 ///
 /// let desc = MetadataPrimsDescriptor::Generate {
-///     op: MetadataGenerateOp::IotaStartZero,
+///     op: MetadataGenerateOp::Constant(MetadataConstantValue::I32(3)),
 ///     output_dtype: MetadataDType::I32,
 /// };
 /// assert!(matches!(desc, MetadataPrimsDescriptor::Generate { .. }));

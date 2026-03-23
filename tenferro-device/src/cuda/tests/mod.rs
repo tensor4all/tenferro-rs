@@ -1294,6 +1294,59 @@ fn cuda_runtime_metadata_iota_i32_matches_host_reference() {
 }
 
 #[test]
+fn cuda_runtime_metadata_constant_i32_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime;
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [8usize];
+    let dst_strides = [1isize];
+    let dst = runtime.alloc::<i32>(dims.iter().product()).unwrap();
+
+    unsafe {
+        runtime
+            .metadata_generate_constant_i32(dst.device_ptr(), dst.len(), &dims, &dst_strides, 0, 7)
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    assert_eq!(got, vec![7; 8]);
+}
+
+#[test]
+fn cuda_runtime_metadata_constant_bool_matches_host_reference() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime;
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [8usize];
+    let dst_strides = [1isize];
+    let dst = runtime.alloc::<u8>(dims.iter().product()).unwrap();
+
+    unsafe {
+        runtime
+            .metadata_generate_constant_bool(
+                dst.device_ptr(),
+                dst.len(),
+                &dims,
+                &dst_strides,
+                0,
+                true,
+            )
+            .unwrap();
+    }
+
+    let got = runtime.copy_dtoh(&dst).unwrap();
+    assert_eq!(got, vec![1; 8]);
+}
+
+#[test]
 fn cuda_runtime_metadata_iota_i32_rejects_len_over_i32_max() {
     if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
         return;

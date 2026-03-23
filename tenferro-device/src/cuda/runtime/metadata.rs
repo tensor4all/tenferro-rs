@@ -120,6 +120,90 @@ impl CudaRuntime {
         unsafe { self.metadata_generate_iota_i32_raw(dst, &spec) }
     }
 
+    /// Materialize a constant `i32` metadata tensor into a raw CUDA buffer.
+    ///
+    /// The tensor layout follows the same storage rules as
+    /// [`metadata_generate_iota_i32`](Self::metadata_generate_iota_i32).
+    ///
+    /// # Safety
+    ///
+    /// `dst` must point to a live CUDA allocation on this runtime's device and
+    /// be compatible with the provided layout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime;
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let dst = runtime.alloc_raw::<i32>(4).unwrap();
+    /// unsafe {
+    ///     runtime.metadata_generate_constant_i32(dst, 4, &[4], &[1], 0, 7).unwrap();
+    ///     runtime.free_raw(dst).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn metadata_generate_constant_i32(
+        &self,
+        dst: *mut i32,
+        dst_len: usize,
+        dims: &[usize],
+        dst_strides: &[isize],
+        dst_offset: isize,
+        value: i32,
+    ) -> Result<()> {
+        validate_len(
+            dst_len,
+            dims,
+            dst_strides,
+            dst_offset,
+            "metadata constant destination",
+        )?;
+        let spec = MetadataGenerateSpec::new(dims, dst_strides, dst_offset)?;
+        unsafe { self.metadata_generate_constant_i32_raw(dst, value, &spec) }
+    }
+
+    /// Materialize a constant logical-bool metadata tensor into a raw CUDA buffer.
+    ///
+    /// The tensor is stored in tenferro's current `u8`-backed logical bool
+    /// representation, so `value` is written as `0` or `1` in device storage.
+    ///
+    /// # Safety
+    ///
+    /// `dst` must point to a live CUDA allocation on this runtime's device and
+    /// be compatible with the provided layout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::cuda::runtime;
+    ///
+    /// let runtime = runtime::get_or_init(0).unwrap();
+    /// let dst = runtime.alloc_raw::<u8>(4).unwrap();
+    /// unsafe {
+    ///     runtime.metadata_generate_constant_bool(dst, 4, &[4], &[1], 0, true).unwrap();
+    ///     runtime.free_raw(dst).unwrap();
+    /// }
+    /// ```
+    pub unsafe fn metadata_generate_constant_bool(
+        &self,
+        dst: *mut u8,
+        dst_len: usize,
+        dims: &[usize],
+        dst_strides: &[isize],
+        dst_offset: isize,
+        value: bool,
+    ) -> Result<()> {
+        validate_len(
+            dst_len,
+            dims,
+            dst_strides,
+            dst_offset,
+            "metadata constant destination",
+        )?;
+        let spec = MetadataGenerateSpec::new(dims, dst_strides, dst_offset)?;
+        unsafe { self.metadata_generate_constant_bool_raw(dst, value as u8, &spec) }
+    }
+
     /// Materialize an equality/inequality metadata comparison over two raw CUDA buffers.
     ///
     /// `equal = true` selects equality; `equal = false` selects inequality.
