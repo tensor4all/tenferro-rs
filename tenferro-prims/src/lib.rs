@@ -15,6 +15,8 @@
 //!   overwrite-based execution and erased metadata tensor handles
 //! - [`TensorMetadataCastPrims`] for metadata-to-scalar bridge families such as
 //!   bool/int casts and `where`
+//! - [`TensorRngPrims`] for dense eager RNG constructors such as `rand` and
+//!   `randn`
 //!
 //! Most families follow the same plan/execute pattern:
 //!

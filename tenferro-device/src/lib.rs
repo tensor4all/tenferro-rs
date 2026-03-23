@@ -22,6 +22,7 @@ use std::fmt;
 mod batch_index;
 #[cfg(feature = "cuda")]
 pub mod cuda;
+mod generator;
 
 /// Logical memory space where tensor data resides.
 ///
@@ -317,6 +318,7 @@ pub use batch_index::{
     broadcast_batch_dims, checked_batch_count, flatten_col_major_index,
     unflatten_col_major_index_into, BroadcastBatchIndexer,
 };
+pub use generator::Generator;
 
 #[cfg(test)]
 mod tests {

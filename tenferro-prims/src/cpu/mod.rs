@@ -19,6 +19,7 @@ mod metadata_cast;
 mod plan;
 mod planning;
 mod reduction;
+mod rng;
 mod scalar;
 #[cfg(feature = "gemm-blas")]
 mod scratch;
@@ -28,6 +29,7 @@ pub use complex_real::CpuComplexRealPlan;
 pub use complex_scale::CpuComplexScalePlan;
 pub use context::{CpuBackend, CpuContext};
 pub use plan::CpuPlan;
+pub use rng::CpuRngPlan;
 pub use scalar::CpuScalarPlan;
 
 /// Convert a CPU tensor to an immutable strided view.

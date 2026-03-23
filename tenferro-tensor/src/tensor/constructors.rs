@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_device::{Error, Generator, LogicalMemorySpace, Result};
 
 use super::Tensor;
 use crate::layout::validate_layout_against_len;
@@ -457,6 +457,216 @@ impl<T: Scalar> Tensor<T> {
             value,
             self.logical_memory_space(),
             Self::like_order(self),
+        )
+    }
+}
+
+fn require_generator<'a>(generator: Option<&'a mut Generator>) -> Result<&'a mut Generator> {
+    generator.ok_or_else(|| {
+        Error::InvalidArgument("random constructors require an explicit Generator".into())
+    })
+}
+
+fn finish_generated_allocation<T: Scalar>(
+    data: Vec<T>,
+    dims: &[usize],
+    memory_space: LogicalMemorySpace,
+    order: MemoryOrder,
+) -> Result<Tensor<T>> {
+    Tensor::finish_allocation(
+        Tensor::main_memory_contiguous(data, dims, order),
+        memory_space,
+    )
+}
+
+impl Tensor<f64> {
+    /// Create a tensor filled with uniform samples on `[0, 1)`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::Generator;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let mut generator = Generator::cpu(1234);
+    /// let t = Tensor::<f64>::rand(
+    ///     &[2, 2],
+    ///     tenferro_device::LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    ///     Some(&mut generator),
+    /// ).unwrap();
+    /// assert_eq!(t.dims(), &[2, 2]);
+    /// ```
+    pub fn rand(
+        dims: &[usize],
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+        generator: Option<&mut Generator>,
+    ) -> Result<Self> {
+        let generator = require_generator(generator)?;
+        let n_elements: usize = dims.iter().product();
+        let mut data = Vec::with_capacity(n_elements);
+        for _ in 0..n_elements {
+            data.push(generator.sample_uniform_f64());
+        }
+        finish_generated_allocation(data, dims, memory_space, order)
+    }
+
+    /// Create a tensor filled with standard-normal samples.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::Generator;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let mut generator = Generator::cpu(1234);
+    /// let t = Tensor::<f64>::randn(
+    ///     &[4],
+    ///     tenferro_device::LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    ///     Some(&mut generator),
+    /// ).unwrap();
+    /// assert_eq!(t.dims(), &[4]);
+    /// ```
+    pub fn randn(
+        dims: &[usize],
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+        generator: Option<&mut Generator>,
+    ) -> Result<Self> {
+        let generator = require_generator(generator)?;
+        let n_elements: usize = dims.iter().product();
+        let mut data = Vec::with_capacity(n_elements);
+        for _ in 0..n_elements {
+            data.push(generator.sample_standard_normal_f64());
+        }
+        finish_generated_allocation(data, dims, memory_space, order)
+    }
+
+    /// Create a tensor with the same shape/layout convention as another tensor and fill it with
+    /// uniform samples on `[0, 1)`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::Generator;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let base = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     tenferro_device::LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::RowMajor,
+    /// ).unwrap();
+    /// let mut generator = Generator::cpu(1234);
+    /// let t = base.rand_like(Some(&mut generator)).unwrap();
+    /// assert_eq!(t.dims(), base.dims());
+    /// ```
+    pub fn rand_like(reference: &Self, generator: Option<&mut Generator>) -> Result<Self> {
+        Self::rand(
+            reference.dims(),
+            reference.logical_memory_space(),
+            Self::like_order(reference),
+            generator,
+        )
+    }
+
+    /// Create a tensor with the same shape/layout convention as another tensor and fill it with
+    /// standard-normal samples.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::Generator;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let base = Tensor::<f64>::zeros(
+    ///     &[2, 3],
+    ///     tenferro_device::LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::RowMajor,
+    /// ).unwrap();
+    /// let mut generator = Generator::cpu(1234);
+    /// let t = base.randn_like(Some(&mut generator)).unwrap();
+    /// assert_eq!(t.dims(), base.dims());
+    /// ```
+    pub fn randn_like(reference: &Self, generator: Option<&mut Generator>) -> Result<Self> {
+        Self::randn(
+            reference.dims(),
+            reference.logical_memory_space(),
+            Self::like_order(reference),
+            generator,
+        )
+    }
+}
+
+impl Tensor<i32> {
+    /// Create a tensor filled with integer samples in `[low, high)`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::Generator;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let mut generator = Generator::cpu(1234);
+    /// let t = Tensor::<i32>::randint(
+    ///     -2,
+    ///     5,
+    ///     &[2, 2],
+    ///     tenferro_device::LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    ///     Some(&mut generator),
+    /// ).unwrap();
+    /// assert_eq!(t.dims(), &[2, 2]);
+    /// ```
+    pub fn randint(
+        low: i32,
+        high: i32,
+        dims: &[usize],
+        memory_space: LogicalMemorySpace,
+        order: MemoryOrder,
+        generator: Option<&mut Generator>,
+    ) -> Result<Self> {
+        let generator = require_generator(generator)?;
+        let n_elements: usize = dims.iter().product();
+        let mut data = Vec::with_capacity(n_elements);
+        for _ in 0..n_elements {
+            data.push(generator.sample_integer_i32(low, high)?);
+        }
+        finish_generated_allocation(data, dims, memory_space, order)
+    }
+
+    /// Create a tensor with the same shape/layout convention as another tensor and fill it with
+    /// integer samples in `[low, high)`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_device::Generator;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let base = Tensor::<i32>::zeros(
+    ///     &[2, 3],
+    ///     tenferro_device::LogicalMemorySpace::MainMemory,
+    ///     MemoryOrder::ColumnMajor,
+    /// ).unwrap();
+    /// let mut generator = Generator::cpu(1234);
+    /// let t = base.randint_like(-2, 5, Some(&mut generator)).unwrap();
+    /// assert_eq!(t.dims(), base.dims());
+    /// ```
+    pub fn randint_like(
+        reference: &Self,
+        low: i32,
+        high: i32,
+        generator: Option<&mut Generator>,
+    ) -> Result<Self> {
+        Self::randint(
+            low,
+            high,
+            reference.dims(),
+            reference.logical_memory_space(),
+            Self::like_order(reference),
+            generator,
         )
     }
 }
