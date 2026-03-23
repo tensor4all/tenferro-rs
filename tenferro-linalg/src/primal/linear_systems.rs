@@ -145,7 +145,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Prod,
     )?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&lu.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&lu.pivots, n)?;
 
     let sign_len = if dims.is_empty() { 1 } else { bc };
     let mut sign_data = vec![T::Real::one(); sign_len];
@@ -210,7 +210,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Sum,
     )?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&lu.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&lu.pivots, n)?;
 
     let zero_diagonal = crate::prims_bridge::full_like_constant(
         T::zero(),
@@ -319,7 +319,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Sum,
     )?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&lu.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&lu.pivots, n)?;
 
     let zero_real = crate::prims_bridge::full_like_constant(
         R::zero(),

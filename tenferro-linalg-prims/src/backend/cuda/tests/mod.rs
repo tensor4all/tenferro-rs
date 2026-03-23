@@ -114,6 +114,22 @@ fn tensor_data_on_cpu<T: Scalar>(tensor: &Tensor<T>) -> Vec<T> {
     contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
+fn assert_lu_metadata_space<T: Scalar>(factors: &Tensor<T>, pivots: &Tensor<i32>) {
+    assert_eq!(
+        pivots.logical_memory_space(),
+        factors.logical_memory_space()
+    );
+}
+
+fn assert_lu_metadata_space_ex<T: Scalar>(
+    factors: &Tensor<T>,
+    pivots: &Tensor<i32>,
+    info: &Tensor<i32>,
+) {
+    assert_lu_metadata_space(factors, pivots);
+    assert_eq!(info.logical_memory_space(), factors.logical_memory_space());
+}
+
 fn matmul_col_major<T: Float>(lhs: &[T], m: usize, k: usize, rhs: &[T], n: usize) -> Vec<T> {
     let mut out = vec![T::zero(); m * n];
     for col in 0..n {
@@ -1155,6 +1171,8 @@ where
         tensor_data_on_cpu(&expected.u),
         "cuda lu_factor upper factor mismatch"
     );
+    assert_lu_metadata_space(&got.l, &got.pivots);
+    assert_lu_metadata_space(&expected.l, &expected.pivots);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -1223,10 +1241,72 @@ where
         tensor_data_on_cpu(&expected.u),
         "cuda lu_factor_ex upper factor mismatch"
     );
+    assert_lu_metadata_space_ex(&got.l, &got.pivots, &got.info);
+    assert_lu_metadata_space_ex(&expected.l, &expected.pivots, &expected.info);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
     );
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_uses_step_pivot_shape_for_rectangular_matrix_generic<T>()
+where
+    T: crate::KernelLinalgScalar<Real = T>
+        + super::scalar_type::CudaLinalgScalar
+        + Float
+        + std::fmt::Debug,
+{
+    if !cuda_runtime_available() {
+        return;
+    }
+
+    let path = cutensor_path().expect("TENFERRO_TEST_CUDA is set but libcutensor.so was not found");
+    let (_backend, mut cuda_ctx) = tenferro_prims::CudaBackend::load(path).unwrap();
+    let mut cpu_ctx = tenferro_prims::CpuContext::new(1);
+
+    let a_cpu = Tensor::from_slice(
+        &[
+            cast::<T>(4.0),
+            cast::<T>(0.0),
+            cast::<T>(0.0),
+            cast::<T>(1.0),
+            cast::<T>(3.0),
+            cast::<T>(0.0),
+        ],
+        &[3, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let expected =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<T>>::lu_factor_ex(
+            &mut cpu_ctx,
+            &a_cpu,
+        )
+        .unwrap();
+    assert_eq!(expected.pivots.dims(), &[2]);
+
+    let a_gpu = a_cpu
+        .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
+        .unwrap();
+    let got = <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<T>>::lu_factor_ex(
+        &mut cuda_ctx,
+        &a_gpu,
+    )
+    .unwrap();
+
+    assert_eq!(got.pivots.dims(), &[2]);
+    assert_eq!(
+        tensor_data_on_cpu(&got.pivots),
+        tensor_data_on_cpu(&expected.pivots)
+    );
+    assert_eq!(
+        tensor_data_on_cpu(&got.info),
+        tensor_data_on_cpu(&expected.info)
+    );
+    assert_lu_metadata_space_ex(&got.l, &got.pivots, &got.info);
+    assert_lu_metadata_space_ex(&expected.l, &expected.pivots, &expected.info);
 }
 
 #[cfg(feature = "cuda")]
@@ -1341,6 +1421,8 @@ fn cuda_lu_factor_matches_cpu_for_small_complex32_matrix() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f32 * f32::epsilon(),
     );
+    assert_lu_metadata_space(&got.l, &got.pivots);
+    assert_lu_metadata_space(&expected.l, &expected.pivots);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -1394,6 +1476,8 @@ fn cuda_lu_factor_matches_cpu_for_small_complex64_matrix() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
+    assert_lu_metadata_space(&got.l, &got.pivots);
+    assert_lu_metadata_space(&expected.l, &expected.pivots);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -1449,6 +1533,8 @@ fn cuda_lu_factor_handles_lazily_conjugated_complex64_input() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
+    assert_lu_metadata_space(&got.l, &got.pivots);
+    assert_lu_metadata_space(&expected.l, &expected.pivots);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -1512,6 +1598,8 @@ fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex32() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f32 * f32::epsilon(),
     );
+    assert_lu_metadata_space_ex(&got.l, &got.pivots, &got.info);
+    assert_lu_metadata_space_ex(&expected.l, &expected.pivots, &expected.info);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -1575,6 +1663,8 @@ fn cuda_lu_factor_ex_matches_cpu_for_complex_mixed_batch_complex64() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
+    assert_lu_metadata_space_ex(&got.l, &got.pivots, &got.info);
+    assert_lu_metadata_space_ex(&expected.l, &expected.pivots, &expected.info);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -1639,6 +1729,8 @@ fn cuda_lu_factor_ex_reports_zero_pivot_for_complex_mixed_batch_complex32() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f32 * f32::epsilon(),
     );
+    assert_lu_metadata_space_ex(&got.l, &got.pivots, &got.info);
+    assert_lu_metadata_space_ex(&expected.l, &expected.pivots, &expected.info);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -1703,6 +1795,8 @@ fn cuda_lu_factor_ex_reports_zero_pivot_for_complex_mixed_batch_complex64() {
         &tensor_data_on_cpu(&expected.u),
         256.0_f64 * f64::epsilon(),
     );
+    assert_lu_metadata_space_ex(&got.l, &got.pivots, &got.info);
+    assert_lu_metadata_space_ex(&expected.l, &expected.pivots, &expected.info);
     assert_eq!(
         tensor_data_on_cpu(&got.pivots),
         tensor_data_on_cpu(&expected.pivots)
@@ -3328,6 +3422,12 @@ fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f32() {
 #[cfg(feature = "cuda")]
 fn cuda_lu_factor_ex_matches_cpu_for_mixed_batch_f64() {
     cuda_lu_factor_ex_matches_cpu_for_mixed_batch_generic::<f64>();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn cuda_lu_factor_uses_step_pivot_shape_for_rectangular_matrix_f64() {
+    cuda_lu_factor_uses_step_pivot_shape_for_rectangular_matrix_generic::<f64>();
 }
 
 #[test]

@@ -192,9 +192,9 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
+    let (m, n, batch_dims) = validate_2d(tensor)?;
     if pivot == LuPivot::NoPivot {
         require_main_memory_tensor(tensor, "NoPivot LU")?;
-        let (m, n, batch_dims) = validate_2d(tensor)?;
         let bc = batch_count(batch_dims);
         let k = m.min(n);
         let mat_size = m * n;
@@ -264,7 +264,7 @@ where
     }
 
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&result.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&result.pivots, m)?;
 
     Ok(LuResult {
         p: Some(pivots),
@@ -282,9 +282,9 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    validate_2d(tensor)?;
+    let (m, _, _) = validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&result.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&result.pivots, m)?;
     Ok(LuFactorResult {
         factors: pack_lu_factors(&result.l, &result.u)?,
         pivots,
@@ -302,10 +302,10 @@ where
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuFactorEx, "lu_factor_ex")?;
 
-    validate_2d(tensor)?;
+    let (m, _, _) = validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_ex(ctx, tensor)?;
     let factors = pack_lu_factors(&result.l, &result.u)?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&result.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&result.pivots, m)?;
     let info = crate::backend::tensor_helpers::backend_info_to_vec(&result.info)?;
 
     Ok(LuFactorExResult {

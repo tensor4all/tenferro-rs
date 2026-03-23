@@ -27,31 +27,51 @@ pub(crate) fn backend_info_to_vec(info: &Tensor<i32>) -> Result<Vec<i32>> {
 }
 
 #[doc(hidden)]
-pub(crate) fn backend_pivots_to_usize(pivots: &Tensor<i32>) -> Result<Vec<usize>> {
+pub(crate) fn backend_pivots_to_forward_perm(
+    pivots: &Tensor<i32>,
+    row_count: usize,
+) -> Result<Vec<usize>> {
     let cpu = pivots.to_memory_space_async(LogicalMemorySpace::MainMemory)?;
     let contiguous = cpu.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
     let offset = contiguous.offset() as usize;
     let len = contiguous.len();
     let dims = contiguous.dims();
-    let pivot_len = dims.first().copied().unwrap_or(0);
+    let step_count = dims.first().copied().unwrap_or(0);
+    let batch_count = if dims.len() <= 1 {
+        1
+    } else {
+        dims[1..].iter().product()
+    };
     let slice = contiguous.buffer().as_slice().ok_or_else(|| {
         Error::InvalidArgument("backend LU pivot tensor is not CPU accessible".into())
     })?;
     let flat = &slice[offset..offset + len];
 
-    if pivot_len == 0 {
-        return Ok(Vec::new());
+    if step_count == 0 {
+        let identity: Vec<usize> = (0..row_count).collect();
+        let mut out = Vec::with_capacity(row_count * batch_count);
+        for _ in 0..batch_count {
+            out.extend_from_slice(&identity);
+        }
+        return Ok(out);
     }
-    if flat.len() % pivot_len != 0 {
+    if flat.len() % step_count != 0 {
         return Err(Error::InvalidArgument(format!(
-            "backend LU pivot tensor length {} is not divisible by pivot length {pivot_len}",
-            flat.len()
+            "backend LU pivot tensor length {} is not divisible by pivot length {step_count}",
+            flat.len(),
+        )));
+    }
+
+    let actual_batches = flat.len() / step_count;
+    if actual_batches != batch_count {
+        return Err(Error::InvalidArgument(format!(
+            "backend LU pivot tensor batch count {actual_batches} does not match expected {batch_count}",
         )));
     }
 
     let mut out = Vec::with_capacity(flat.len());
-    for step_pivots in flat.chunks(pivot_len) {
-        let mut perm: Vec<usize> = (0..pivot_len).collect();
+    for step_pivots in flat.chunks(step_count) {
+        let mut perm: Vec<usize> = (0..row_count).collect();
         for (i, &pivot) in step_pivots.iter().enumerate() {
             if pivot <= 0 {
                 return Err(Error::InvalidArgument(format!(

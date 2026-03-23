@@ -92,6 +92,10 @@ fn cpu_backend_supports_core_factorizations_after_move() {
     assert_eq!(lu.l.dims(), &[2, 2]);
     assert_eq!(lu.u.dims(), &[2, 2]);
     assert_eq!(lu.pivots.dims(), &[2]);
+    assert_eq!(
+        lu.pivots.logical_memory_space(),
+        lu.l.logical_memory_space()
+    );
     assert_eq!(tensor_data_on_cpu(&lu.pivots), vec![2, 2]);
 
     let chol = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky(
@@ -114,6 +118,46 @@ fn cpu_backend_supports_core_factorizations_after_move() {
     .unwrap();
     assert_eq!(eig.values.dims(), &[2]);
     assert_eq!(eig.vectors.dims(), &[2, 2]);
+}
+
+#[test]
+fn cpu_backend_lu_factor_uses_step_pivot_shape_for_rectangular_matrix() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[4.0_f64, 0.0, 0.0, 1.0, 3.0, 0.0],
+        &[3, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let lu = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor(
+        &mut ctx, &a,
+    )
+    .unwrap();
+    let lu_ex =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_ex(
+            &mut ctx, &a,
+        )
+        .unwrap();
+
+    assert_eq!(lu.pivots.dims(), &[2]);
+    assert_eq!(tensor_data_on_cpu(&lu.pivots), vec![1, 2]);
+    assert_eq!(
+        lu.pivots.logical_memory_space(),
+        lu.l.logical_memory_space()
+    );
+
+    assert_eq!(lu_ex.pivots.dims(), &[2]);
+    assert_eq!(tensor_data_on_cpu(&lu_ex.pivots), vec![1, 2]);
+    assert_eq!(tensor_data_on_cpu(&lu_ex.info), vec![0]);
+    assert_eq!(
+        lu_ex.pivots.logical_memory_space(),
+        lu_ex.l.logical_memory_space()
+    );
+    assert_eq!(
+        lu_ex.info.logical_memory_space(),
+        lu_ex.l.logical_memory_space()
+    );
 }
 
 #[test]
@@ -292,6 +336,14 @@ fn cpu_backend_lu_factor_ex_preserves_successful_batches_and_reports_zero_pivot(
     assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
     assert_eq!(tensor_data_on_cpu(&result.l), tensor_data_on_cpu(&plain.l));
     assert_eq!(tensor_data_on_cpu(&result.u), tensor_data_on_cpu(&plain.u));
+    assert_eq!(
+        result.pivots.logical_memory_space(),
+        result.l.logical_memory_space()
+    );
+    assert_eq!(
+        result.info.logical_memory_space(),
+        result.l.logical_memory_space()
+    );
     assert_eq!(
         tensor_data_on_cpu(&result.pivots),
         tensor_data_on_cpu(&plain.pivots)
