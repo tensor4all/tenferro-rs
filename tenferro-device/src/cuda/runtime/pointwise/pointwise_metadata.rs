@@ -12,6 +12,12 @@ impl CudaRuntime {
         match (op, dst) {
             (MetadataGenerateOp::IotaStartZero, MetadataTensorMut::I32(dst)) => {
                 self.ensure_same_device(dst.device_id())?;
+                let numel = checked_numel(&spec.dims)?;
+                if numel > i32::MAX as usize {
+                    return Err(Error::InvalidArgument(
+                        "metadata iota currently requires len <= i32::MAX".into(),
+                    ));
+                }
                 let required_len = required_storage_len(
                     &spec.dims,
                     spec.dst_strides(),
@@ -50,14 +56,34 @@ impl CudaRuntime {
                 self.ensure_same_device(lhs.device_id())?;
                 self.ensure_same_device(rhs.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let numel = checked_numel(&spec.dims)?;
-                if lhs.len() != numel || rhs.len() != numel || dst.len() != numel {
+                let lhs_required = required_storage_len(
+                    &spec.dims,
+                    &spec.lhs_strides,
+                    spec.lhs_offset,
+                    "metadata binary lhs",
+                )?;
+                let rhs_required = required_storage_len(
+                    &spec.dims,
+                    &spec.rhs_strides,
+                    spec.rhs_offset,
+                    "metadata binary rhs",
+                )?;
+                let dst_required = required_storage_len(
+                    &spec.dims,
+                    &spec.dst_strides,
+                    spec.dst_offset,
+                    "metadata binary dst",
+                )?;
+                if lhs.len() < lhs_required || rhs.len() < rhs_required || dst.len() < dst_required
+                {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata binary length mismatch: lhs={} rhs={} dst={} expected={}",
+                        "metadata binary storage mismatch: lhs={} rhs={} dst={} required_lhs={} required_rhs={} required_dst={}",
                         lhs.len(),
                         rhs.len(),
                         dst.len(),
-                        numel
+                        lhs_required,
+                        rhs_required,
+                        dst_required
                     )));
                 }
                 unsafe {
@@ -128,15 +154,45 @@ impl CudaRuntime {
                 self.ensure_same_device(on_true.device_id())?;
                 self.ensure_same_device(on_false.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let numel = checked_numel(&spec.dims)?;
-                if cond.len() != numel || on_true.len() != numel || on_false.len() != numel || dst.len() != numel {
+                let cond_required = required_storage_len(
+                    &spec.dims,
+                    &spec.cond_strides,
+                    spec.cond_offset,
+                    "metadata ternary cond",
+                )?;
+                let true_required = required_storage_len(
+                    &spec.dims,
+                    &spec.true_strides,
+                    spec.true_offset,
+                    "metadata ternary true",
+                )?;
+                let false_required = required_storage_len(
+                    &spec.dims,
+                    &spec.false_strides,
+                    spec.false_offset,
+                    "metadata ternary false",
+                )?;
+                let dst_required = required_storage_len(
+                    &spec.dims,
+                    &spec.dst_strides,
+                    spec.dst_offset,
+                    "metadata ternary dst",
+                )?;
+                if cond.len() < cond_required
+                    || on_true.len() < true_required
+                    || on_false.len() < false_required
+                    || dst.len() < dst_required
+                {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata ternary length mismatch: cond={} true={} false={} dst={} expected={}",
+                        "metadata ternary storage mismatch: cond={} true={} false={} dst={} required_cond={} required_true={} required_false={} required_dst={}",
                         cond.len(),
                         on_true.len(),
                         on_false.len(),
                         dst.len(),
-                        numel
+                        cond_required,
+                        true_required,
+                        false_required,
+                        dst_required
                     )));
                 }
                 unsafe {
@@ -160,15 +216,45 @@ impl CudaRuntime {
                 self.ensure_same_device(on_true.device_id())?;
                 self.ensure_same_device(on_false.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let numel = checked_numel(&spec.dims)?;
-                if cond.len() != numel || on_true.len() != numel || on_false.len() != numel || dst.len() != numel {
+                let cond_required = required_storage_len(
+                    &spec.dims,
+                    &spec.cond_strides,
+                    spec.cond_offset,
+                    "metadata ternary cond",
+                )?;
+                let true_required = required_storage_len(
+                    &spec.dims,
+                    &spec.true_strides,
+                    spec.true_offset,
+                    "metadata ternary true",
+                )?;
+                let false_required = required_storage_len(
+                    &spec.dims,
+                    &spec.false_strides,
+                    spec.false_offset,
+                    "metadata ternary false",
+                )?;
+                let dst_required = required_storage_len(
+                    &spec.dims,
+                    &spec.dst_strides,
+                    spec.dst_offset,
+                    "metadata ternary dst",
+                )?;
+                if cond.len() < cond_required
+                    || on_true.len() < true_required
+                    || on_false.len() < false_required
+                    || dst.len() < dst_required
+                {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata ternary length mismatch: cond={} true={} false={} dst={} expected={}",
+                        "metadata ternary storage mismatch: cond={} true={} false={} dst={} required_cond={} required_true={} required_false={} required_dst={}",
                         cond.len(),
                         on_true.len(),
                         on_false.len(),
                         dst.len(),
-                        numel
+                        cond_required,
+                        true_required,
+                        false_required,
+                        dst_required
                     )));
                 }
                 unsafe {
@@ -206,15 +292,25 @@ impl CudaRuntime {
             ) => {
                 self.ensure_same_device(input.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let input_numel = checked_numel(&spec.input_dims)?;
-                let output_numel = checked_numel(&spec.output_dims)?;
-                if input.len() != input_numel || dst.len() != output_numel {
+                let input_required = required_storage_len(
+                    &spec.input_dims,
+                    &spec.input_strides,
+                    spec.input_offset,
+                    "metadata reduction input",
+                )?;
+                let output_required = required_storage_len(
+                    &spec.output_dims,
+                    &spec.output_strides,
+                    spec.output_offset,
+                    "metadata reduction output",
+                )?;
+                if input.len() < input_required || dst.len() < output_required {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata reduction length mismatch: input={} dst={} expected_input={} expected_dst={}",
+                        "metadata reduction storage mismatch: input={} dst={} required_input={} required_dst={}",
                         input.len(),
                         dst.len(),
-                        input_numel,
-                        output_numel
+                        input_required,
+                        output_required
                     )));
                 }
                 unsafe {
@@ -232,15 +328,25 @@ impl CudaRuntime {
             ) => {
                 self.ensure_same_device(input.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let input_numel = checked_numel(&spec.input_dims)?;
-                let output_numel = checked_numel(&spec.output_dims)?;
-                if input.len() != input_numel || dst.len() != output_numel {
+                let input_required = required_storage_len(
+                    &spec.input_dims,
+                    &spec.input_strides,
+                    spec.input_offset,
+                    "metadata reduction input",
+                )?;
+                let output_required = required_storage_len(
+                    &spec.output_dims,
+                    &spec.output_strides,
+                    spec.output_offset,
+                    "metadata reduction output",
+                )?;
+                if input.len() < input_required || dst.len() < output_required {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata reduction length mismatch: input={} dst={} expected_input={} expected_dst={}",
+                        "metadata reduction storage mismatch: input={} dst={} required_input={} required_dst={}",
                         input.len(),
                         dst.len(),
-                        input_numel,
-                        output_numel
+                        input_required,
+                        output_required
                     )));
                 }
                 unsafe {
@@ -258,15 +364,25 @@ impl CudaRuntime {
             ) => {
                 self.ensure_same_device(input.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let input_numel = checked_numel(&spec.input_dims)?;
-                let output_numel = checked_numel(&spec.output_dims)?;
-                if input.len() != input_numel || dst.len() != output_numel {
+                let input_required = required_storage_len(
+                    &spec.input_dims,
+                    &spec.input_strides,
+                    spec.input_offset,
+                    "metadata reduction input",
+                )?;
+                let output_required = required_storage_len(
+                    &spec.output_dims,
+                    &spec.output_strides,
+                    spec.output_offset,
+                    "metadata reduction output",
+                )?;
+                if input.len() < input_required || dst.len() < output_required {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata reduction length mismatch: input={} dst={} expected_input={} expected_dst={}",
+                        "metadata reduction storage mismatch: input={} dst={} required_input={} required_dst={}",
                         input.len(),
                         dst.len(),
-                        input_numel,
-                        output_numel
+                        input_required,
+                        output_required
                     )));
                 }
                 unsafe {
@@ -284,15 +400,25 @@ impl CudaRuntime {
             ) => {
                 self.ensure_same_device(input.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let input_numel = checked_numel(&spec.input_dims)?;
-                let output_numel = checked_numel(&spec.output_dims)?;
-                if input.len() != input_numel || dst.len() != output_numel {
+                let input_required = required_storage_len(
+                    &spec.input_dims,
+                    &spec.input_strides,
+                    spec.input_offset,
+                    "metadata reduction input",
+                )?;
+                let output_required = required_storage_len(
+                    &spec.output_dims,
+                    &spec.output_strides,
+                    spec.output_offset,
+                    "metadata reduction output",
+                )?;
+                if input.len() < input_required || dst.len() < output_required {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata reduction length mismatch: input={} dst={} expected_input={} expected_dst={}",
+                        "metadata reduction storage mismatch: input={} dst={} required_input={} required_dst={}",
                         input.len(),
                         dst.len(),
-                        input_numel,
-                        output_numel
+                        input_required,
+                        output_required
                     )));
                 }
                 unsafe {
@@ -336,7 +462,7 @@ impl CudaRuntime {
         let numel_u64 = u64::try_from(numel)
             .map_err(|_| Error::InvalidArgument("metadata numel exceeds u64 range".into()))?;
         let numel_u32 = u32::try_from(numel).map_err(|_| {
-            Error::InvalidArgument("metadata generate currently requires len <= u32::MAX".into())
+            Error::InvalidArgument("metadata generate currently requires len <= i32::MAX".into())
         })?;
         let dst_ptr = dst as u64;
         let config = LaunchConfig {

@@ -1294,6 +1294,35 @@ fn cuda_runtime_metadata_iota_i32_matches_host_reference() {
 }
 
 #[test]
+fn cuda_runtime_metadata_iota_i32_rejects_len_over_i32_max() {
+    if std::env::var_os("TENFERRO_TEST_CUDA").is_none() {
+        return;
+    }
+
+    use tenferro_device::cuda::runtime::{
+        self, MetadataGenerateOp, MetadataGenerateSpec, MetadataTensorMut,
+    };
+
+    let runtime = runtime::get_or_init(0).unwrap();
+    let dims = [(i32::MAX as usize) + 1];
+    let dst_strides = [1isize];
+    let spec = MetadataGenerateSpec::new(&dims, &dst_strides, 0).unwrap();
+    let mut dst = runtime.alloc::<i32>(1).unwrap();
+
+    let err = runtime
+        .metadata_generate(
+            MetadataGenerateOp::IotaStartZero,
+            MetadataTensorMut::I32(&mut dst),
+            &spec,
+        )
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("len <= i32::MAX"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn cuda_runtime_metadata_reduction_spec_rejects_non_partition_axes() {
     use tenferro_device::cuda::runtime::MetadataReductionSpec;
 
@@ -1407,11 +1436,11 @@ fn cuda_runtime_metadata_where_bool_matches_host_reference() {
     };
 
     let runtime = runtime::get_or_init(0).unwrap();
-    let dims = [6usize];
-    let strides = [1isize];
-    let cond_data = [0u8, 1, 0, 0, 1, 0];
-    let true_data = [0u8, 11, 0, 0, 22, 0];
-    let false_data = [0u8, 101, 0, 0, 202, 0];
+    let dims = [2usize, 2];
+    let strides = [3isize, 1];
+    let cond_data = [0u8, 1, 0, 0, 1];
+    let true_data = [0u8, 11, 0, 0, 22];
+    let false_data = [0u8, 101, 0, 0, 202];
     let cond = runtime.alloc::<u8>(cond_data.len()).unwrap();
     let on_true = runtime.alloc::<u8>(true_data.len()).unwrap();
     let on_false = runtime.alloc::<u8>(false_data.len()).unwrap();
@@ -1459,22 +1488,24 @@ fn cuda_runtime_metadata_not_equal_and_sum_match_host_reference() {
     };
 
     let runtime = runtime::get_or_init(0).unwrap();
-    let dims = [6usize];
-    let strides = [1isize];
-    let lhs_data = [0i32, 1, 2, 3, 4, 5];
-    let rhs_data = [0i32, 0, 2, 9, 4, 8];
+    let dims = [2usize, 2];
+    let lhs_strides = [3isize, 1];
+    let rhs_strides = [1isize, 3];
+    let dst_strides = [3isize, 1];
+    let lhs_data = [0i32, 1, 99, 3, 4];
+    let rhs_data = [0i32, 0, 88, 9, 4];
     let lhs = runtime.alloc::<i32>(lhs_data.len()).unwrap();
     let rhs = runtime.alloc::<i32>(rhs_data.len()).unwrap();
     let mut mask = runtime.alloc::<u8>(lhs_data.len()).unwrap();
     let mut eq_mask = runtime.alloc::<u8>(lhs_data.len()).unwrap();
-    let mut sum = runtime.alloc::<i32>(1).unwrap();
-    let mut all = runtime.alloc::<u8>(1).unwrap();
-    let mut any = runtime.alloc::<u8>(1).unwrap();
+    let mut sum = runtime.alloc::<i32>(2).unwrap();
+    let mut all = runtime.alloc::<u8>(2).unwrap();
+    let mut any = runtime.alloc::<u8>(2).unwrap();
     runtime.copy_htod(&lhs_data, &lhs).unwrap();
     runtime.copy_htod(&rhs_data, &rhs).unwrap();
 
     let binary_spec =
-        MetadataBinarySpec::new(&dims, &strides, 0, &strides, 0, &strides, 0).unwrap();
+        MetadataBinarySpec::new(&dims, &lhs_strides, 0, &rhs_strides, 0, &dst_strides, 0).unwrap();
     runtime
         .metadata_binary(
             MetadataBinaryOp::NotEqual,
@@ -1495,7 +1526,7 @@ fn cuda_runtime_metadata_not_equal_and_sum_match_host_reference() {
         .unwrap();
 
     let reduction_spec =
-        MetadataReductionSpec::new(&dims, &strides, 0, &[], &[], 0, &[], &[0]).unwrap();
+        MetadataReductionSpec::new(&dims, &dst_strides, 0, &[2usize], &[1], 0, &[1], &[0]).unwrap();
     runtime
         .metadata_reduction(
             MetadataReductionOp::Sum,
@@ -1527,13 +1558,27 @@ fn cuda_runtime_metadata_not_equal_and_sum_match_host_reference() {
     let got_all = runtime.copy_dtoh(&all).unwrap();
     let got_any = runtime.copy_dtoh(&any).unwrap();
     let expected_mask = host_metadata_not_equal_reference(
-        &lhs_data, &rhs_data, &dims, &strides, &strides, &strides,
+        &lhs_data,
+        &rhs_data,
+        &dims,
+        &lhs_strides,
+        &rhs_strides,
+        &dst_strides,
     );
-    let expected_eq_mask =
-        host_metadata_equal_reference(&lhs_data, &rhs_data, &dims, &strides, &strides, &strides);
-    let expected_sum = host_metadata_sum_bool_reference(&expected_mask, &dims, &strides, &[], &[0]);
-    let expected_all = host_metadata_all_bool_reference(&expected_mask, &dims, &strides, &[], &[0]);
-    let expected_any = host_metadata_any_bool_reference(&expected_mask, &dims, &strides, &[], &[0]);
+    let expected_eq_mask = host_metadata_equal_reference(
+        &lhs_data,
+        &rhs_data,
+        &dims,
+        &lhs_strides,
+        &rhs_strides,
+        &dst_strides,
+    );
+    let expected_sum =
+        host_metadata_sum_bool_reference(&expected_mask, &dims, &dst_strides, &[1], &[0]);
+    let expected_all =
+        host_metadata_all_bool_reference(&expected_mask, &dims, &dst_strides, &[1], &[0]);
+    let expected_any =
+        host_metadata_any_bool_reference(&expected_mask, &dims, &dst_strides, &[1], &[0]);
     assert_eq!(got_mask, expected_mask);
     assert_eq!(got_eq_mask, expected_eq_mask);
     assert_eq!(got_sum, expected_sum);
