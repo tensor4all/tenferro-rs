@@ -6,6 +6,7 @@ mod kernels;
 mod memory;
 mod shared;
 mod state;
+mod structural;
 
 pub use kernels::*;
 pub use shared::*;
