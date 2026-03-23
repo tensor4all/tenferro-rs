@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tenferro_device::LogicalMemorySpace;
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 
 /// Data storage for tensor elements.
 ///
@@ -310,6 +310,66 @@ impl<T> DataBuffer<T> {
         match &*self.inner {
             BufferInner::Gpu { space, .. } => Some(*space),
             _ => None,
+        }
+    }
+
+    pub(crate) fn reinterpret_as<U>(&self, new_len: usize) -> Result<DataBuffer<U>>
+    where
+        T: Send + Sync + 'static,
+        U: Send + Sync + 'static,
+    {
+        let src_bytes = self
+            .len()
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| Error::InvalidArgument("buffer byte-size overflow".into()))?;
+        let dst_bytes = new_len
+            .checked_mul(std::mem::size_of::<U>())
+            .ok_or_else(|| Error::InvalidArgument("reinterpreted buffer byte-size overflow".into()))?;
+        if src_bytes != dst_bytes {
+            return Err(Error::InvalidArgument(format!(
+                "buffer reinterpretation changes byte size: src_bytes={src_bytes} dst_bytes={dst_bytes}"
+            )));
+        }
+
+        let align = std::mem::align_of::<U>();
+        match &*self.inner {
+            BufferInner::Owned(v) => {
+                let ptr = v.as_ptr() as *const U;
+                if new_len != 0 && (ptr as usize) % align != 0 {
+                    return Err(Error::InvalidArgument(format!(
+                        "buffer reinterpretation would violate alignment {}",
+                        align
+                    )));
+                }
+                let owner = self.clone();
+                Ok(unsafe { DataBuffer::from_external(ptr, new_len, move || drop(owner)) })
+            }
+            BufferInner::External { ptr, .. } => {
+                let ptr = *ptr as *const U;
+                if new_len != 0 && (ptr as usize) % align != 0 {
+                    return Err(Error::InvalidArgument(format!(
+                        "external buffer reinterpretation would violate alignment {}",
+                        align
+                    )));
+                }
+                let owner = self.clone();
+                Ok(unsafe { DataBuffer::from_external(ptr, new_len, move || drop(owner)) })
+            }
+            BufferInner::Gpu {
+                device_ptr,
+                space,
+                ..
+            } => {
+                let ptr = *device_ptr as *mut U;
+                if new_len != 0 && (ptr as usize) % align != 0 {
+                    return Err(Error::InvalidArgument(format!(
+                        "gpu buffer reinterpretation would violate alignment {}",
+                        align
+                    )));
+                }
+                let owner = self.clone();
+                Ok(unsafe { DataBuffer::from_gpu_parts(ptr, new_len, *space, move || drop(owner)) })
+            }
         }
     }
 }
