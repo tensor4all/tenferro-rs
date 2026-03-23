@@ -7,6 +7,7 @@ mod metadata_contract_phase1;
 mod metadata_phase1;
 mod metadata_phase2;
 mod organization;
+mod rng_phase1;
 mod scalar_phase1;
 mod scalar_phase2;
 

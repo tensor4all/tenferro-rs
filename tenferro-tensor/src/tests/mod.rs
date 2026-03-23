@@ -7,6 +7,7 @@ mod completion_event;
 mod constructor_fallibility;
 mod constructors_phase2;
 mod representation_helpers;
+mod rng_constructors;
 
 #[cfg(feature = "cuda")]
 mod cuda;
