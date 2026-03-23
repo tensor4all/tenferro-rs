@@ -104,14 +104,34 @@ impl CudaRuntime {
                 self.ensure_same_device(lhs.device_id())?;
                 self.ensure_same_device(rhs.device_id())?;
                 self.ensure_same_device(dst.device_id())?;
-                let numel = checked_numel(&spec.dims)?;
-                if lhs.len() != numel || rhs.len() != numel || dst.len() != numel {
+                let lhs_required = required_storage_len(
+                    &spec.dims,
+                    &spec.lhs_strides,
+                    spec.lhs_offset,
+                    "metadata binary lhs",
+                )?;
+                let rhs_required = required_storage_len(
+                    &spec.dims,
+                    &spec.rhs_strides,
+                    spec.rhs_offset,
+                    "metadata binary rhs",
+                )?;
+                let dst_required = required_storage_len(
+                    &spec.dims,
+                    &spec.dst_strides,
+                    spec.dst_offset,
+                    "metadata binary dst",
+                )?;
+                if lhs.len() < lhs_required || rhs.len() < rhs_required || dst.len() < dst_required
+                {
                     return Err(Error::InvalidArgument(format!(
-                        "metadata binary length mismatch: lhs={} rhs={} dst={} expected={}",
+                        "metadata binary storage mismatch: lhs={} rhs={} dst={} required_lhs={} required_rhs={} required_dst={}",
                         lhs.len(),
                         rhs.len(),
                         dst.len(),
-                        numel
+                        lhs_required,
+                        rhs_required,
+                        dst_required
                     )));
                 }
                 unsafe {
