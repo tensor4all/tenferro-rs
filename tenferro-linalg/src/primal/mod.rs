@@ -3,6 +3,7 @@ use super::*;
 mod decompositions;
 mod least_squares;
 mod linear_systems;
+mod linear_systems_sign;
 mod matrix_functions;
 mod norms;
 mod spectral;

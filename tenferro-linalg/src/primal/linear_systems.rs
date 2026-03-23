@@ -1,40 +1,9 @@
 use super::*;
+use crate::primal::linear_systems_sign::*;
 use num_complex::{Complex32, Complex64, ComplexFloat};
-use num_traits::One;
+use num_traits::{NumCast, One};
 use tenferro_algebra::Conjugate;
-
-fn permutation_sign_from_forward_pivots(pivots: &[usize], n: usize) -> Result<i32> {
-    if pivots.len() != n {
-        return Err(Error::InvalidArgument(format!(
-            "det expects {n} pivots per batch, got {}",
-            pivots.len()
-        )));
-    }
-
-    let mut visited = vec![false; n];
-    let mut sign = 1i32;
-    for i in 0..n {
-        if visited[i] {
-            continue;
-        }
-        let mut j = i;
-        while !visited[j] {
-            visited[j] = true;
-            let next = pivots[j];
-            if next >= n {
-                return Err(Error::InvalidArgument(format!(
-                    "det pivot index {next} is out of range for n={n}"
-                )));
-            }
-            if next != i {
-                sign = -sign;
-            }
-            j = next;
-        }
-    }
-    Ok(sign)
-}
-
+use tenferro_prims::{TensorMetadataCastPrims, TensorMetadataContextFor, TensorMetadataPrims};
 fn inverse_rhs<T: KernelLinalgScalar>(
     n: usize,
     batch_dims: &[usize],
@@ -123,19 +92,19 @@ where
 pub fn det<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>
+        + TensorMetadataContextFor,
     T: crate::prims_bridge::ScaleTensorByRealSameShape<C>,
+    T::Real: Scalar + NumCast + One + 'static,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>>::ScalarBackend:
+        TensorMetadataCastPrims<T::Real, Context = C>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det")?;
 
-    let (n, batch_dims) = validate_square(tensor)?;
-    let bc = batch_count(batch_dims);
-    let dims = if batch_dims.is_empty() {
-        vec![]
-    } else {
-        batch_dims.to_vec()
-    };
+    let (_n, batch_dims) = validate_square(tensor)?;
     let lu = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
     let diagonal = lu.u.diagonal(&[(0, 1)])?;
     let kept_axes: Vec<usize> = (0..batch_dims.len()).collect();
@@ -145,24 +114,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Prod,
     )?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&lu.pivots, n)?;
-
-    let sign_len = if dims.is_empty() { 1 } else { bc };
-    let mut sign_data = vec![T::Real::one(); sign_len];
-    for batch in 0..bc {
-        let sign = permutation_sign_from_forward_pivots(&pivots[batch * n..(batch + 1) * n], n)?;
-        if sign < 0 {
-            sign_data[batch] = T::Real::zero() - T::Real::one();
-        }
-    }
-
-    let sign_host = tensor_from_data(sign_data, &dims)?;
-    let sign_tensor =
-        if tensor.logical_memory_space() == tenferro_device::LogicalMemorySpace::MainMemory {
-            sign_host
-        } else {
-            sign_host.to_memory_space_async(tensor.logical_memory_space())?
-        };
+    let sign_tensor = lu_permutation_sign_tensor::<T, C>(ctx, &lu.pivots)?;
 
     <T as crate::prims_bridge::ScaleTensorByRealSameShape<C>>::scale_tensor_by_real_same_shape(
         ctx,
@@ -183,14 +135,18 @@ fn slogdet_real_impl<T, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<SlogdetRes
 where
     T: KernelLinalgScalar<Real = T> + num_traits::Float,
     C: backend::TensorLinalgContextFor<T>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + TensorMetadataContextFor,
     C::Backend: 'static,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>
+            + TensorMetadataCastPrims<T, Context = C>,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet")?;
 
-    let (n, batch_dims) = validate_square(tensor)?;
+    let (_n, batch_dims) = validate_square(tensor)?;
     let lu = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
     let diagonal = lu.u.diagonal(&[(0, 1)])?;
     let abs_diagonal = crate::prims_bridge::scalar_unary_same_shape(
@@ -210,7 +166,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Sum,
     )?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&lu.pivots, n)?;
+    let sign_perm = lu_permutation_sign_tensor::<T, C>(ctx, &lu.pivots)?;
 
     let zero_diagonal = crate::prims_bridge::full_like_constant(
         T::zero(),
@@ -246,32 +202,6 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Prod,
     )?;
-
-    let bc = batch_count(batch_dims);
-    let sign_len = if batch_dims.is_empty() { 1 } else { bc };
-    let mut sign_data = vec![T::one(); sign_len];
-    for batch in 0..bc {
-        let sign = permutation_sign_from_forward_pivots(&pivots[batch * n..(batch + 1) * n], n)?;
-        if sign < 0 {
-            sign_data[batch] = T::zero() - T::one();
-        }
-    }
-    let dims = if batch_dims.is_empty() {
-        vec![]
-    } else {
-        batch_dims.to_vec()
-    };
-    let sign_perm_host = if dims.is_empty() {
-        Tensor::from_vec(sign_data, &dims, &[], 0)?
-    } else {
-        tensor_from_data(sign_data, &dims)?
-    };
-    let sign_perm =
-        if tensor.logical_memory_space() == tenferro_device::LogicalMemorySpace::MainMemory {
-            sign_perm_host
-        } else {
-            sign_perm_host.to_memory_space_async(tensor.logical_memory_space())?
-        };
     let sign = crate::prims_bridge::scalar_binary_same_shape(
         ctx,
         &sign_perm,
@@ -290,16 +220,20 @@ where
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<R>>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
         + tenferro_prims::TensorComplexRealContextFor<T>,
+    C: TensorMetadataContextFor,
     C::Backend: 'static,
     R: KernelLinalgScalar<Real = R> + num_traits::Float,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<R>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<R>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<R>, Context = C>
+            + TensorMetadataCastPrims<R, Context = C>,
     <C as tenferro_prims::TensorComplexRealContextFor<T>>::ComplexRealBackend:
         tenferro_prims::TensorComplexRealPrims<T, Context = C, Real = R>,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet")?;
 
-    let (n, batch_dims) = validate_square(tensor)?;
+    let (_n, batch_dims) = validate_square(tensor)?;
     let lu = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
     let diagonal = lu.u.diagonal(&[(0, 1)])?;
     let abs_diagonal = crate::prims_bridge::complex_real_unary_same_shape(
@@ -319,7 +253,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Sum,
     )?;
-    let pivots = crate::backend::tensor_helpers::backend_pivots_to_forward_perm(&lu.pivots, n)?;
+    let sign_perm = lu_permutation_sign_tensor::<T, C>(ctx, &lu.pivots)?;
 
     let zero_real = crate::prims_bridge::full_like_constant(
         R::zero(),
@@ -355,32 +289,6 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Prod,
     )?;
-
-    let bc = batch_count(batch_dims);
-    let sign_len = if batch_dims.is_empty() { 1 } else { bc };
-    let mut sign_data = vec![R::one(); sign_len];
-    for batch in 0..bc {
-        let sign = permutation_sign_from_forward_pivots(&pivots[batch * n..(batch + 1) * n], n)?;
-        if sign < 0 {
-            sign_data[batch] = R::zero() - R::one();
-        }
-    }
-    let dims = if batch_dims.is_empty() {
-        vec![]
-    } else {
-        batch_dims.to_vec()
-    };
-    let sign_perm_host = if dims.is_empty() {
-        Tensor::from_vec(sign_data, &dims, &[], 0)?
-    } else {
-        tensor_from_data(sign_data, &dims)?
-    };
-    let sign_perm =
-        if tensor.logical_memory_space() == tenferro_device::LogicalMemorySpace::MainMemory {
-            sign_perm_host
-        } else {
-            sign_perm_host.to_memory_space_async(tensor.logical_memory_space())?
-        };
     let sign = crate::prims_bridge::complex_scale_same_shape(ctx, &sign_from_diag, &sign_perm)?;
 
     Ok(SlogdetResult { sign, logabsdet })
@@ -389,10 +297,14 @@ where
 impl<C> SlogdetDispatch<C> for f32
 where
     C: backend::TensorLinalgContextFor<f32>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f32>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f32>>
+        + TensorMetadataContextFor,
     C::Backend: 'static,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f32>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f32>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f32>, Context = C>
+            + TensorMetadataCastPrims<f32, Context = C>,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
 {
     fn slogdet_dispatch(
         ctx: &mut C,
@@ -405,10 +317,14 @@ where
 impl<C> SlogdetDispatch<C> for f64
 where
     C: backend::TensorLinalgContextFor<f64>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f64>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f64>>
+        + TensorMetadataContextFor,
     C::Backend: 'static,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f64>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f64>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f64>, Context = C>
+            + TensorMetadataCastPrims<f64, Context = C>,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
 {
     fn slogdet_dispatch(
         ctx: &mut C,
@@ -424,12 +340,16 @@ where
     C: backend::TensorLinalgContextFor<Complex32>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f32>>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<Complex32>>
-        + tenferro_prims::TensorComplexRealContextFor<Complex32>,
+        + tenferro_prims::TensorComplexRealContextFor<Complex32>
+        + TensorMetadataContextFor,
     C::Backend: 'static,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f32>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f32>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f32>, Context = C>
+            + TensorMetadataCastPrims<f32, Context = C>,
     <C as tenferro_prims::TensorComplexRealContextFor<Complex32>>::ComplexRealBackend:
         tenferro_prims::TensorComplexRealPrims<Complex32, Context = C, Real = f32>,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
 {
     fn slogdet_dispatch(
         ctx: &mut C,
@@ -445,12 +365,16 @@ where
     C: backend::TensorLinalgContextFor<Complex64>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f64>>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<Complex64>>
-        + tenferro_prims::TensorComplexRealContextFor<Complex64>,
+        + tenferro_prims::TensorComplexRealContextFor<Complex64>
+        + TensorMetadataContextFor,
     C::Backend: 'static,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<f64>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f64>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<f64>, Context = C>
+            + TensorMetadataCastPrims<f64, Context = C>,
     <C as tenferro_prims::TensorComplexRealContextFor<Complex64>>::ComplexRealBackend:
         tenferro_prims::TensorComplexRealPrims<Complex64, Context = C, Real = f64>,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
 {
     fn slogdet_dispatch(
         ctx: &mut C,

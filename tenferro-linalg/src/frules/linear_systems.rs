@@ -90,10 +90,14 @@ pub fn solve_triangular_frule<T: KernelLinalgScalar, C>(
 where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorMetadataContextFor,
     C::Backend: 'static,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>
+            + tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
 {
     if tangent_a.dims() != a.dims() {
         return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
@@ -248,8 +252,12 @@ pub fn det_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 where
     T: KernelLinalgScalar + crate::prims_bridge::ScaleTensorByRealSameShape<C>,
     C: backend::TensorLinalgContextFor<T>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorMetadataContextFor,
     C::Backend: 'static,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det_frule")
         .map_err(to_ad_err)?;

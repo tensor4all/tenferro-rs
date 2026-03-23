@@ -729,6 +729,22 @@ fn det_path_uses_tensor_lu_and_prod_reduction() {
         "det should avoid slice_bridge helpers"
     );
     assert!(
+        !det.contains("backend_pivots_to_forward_perm("),
+        "det should avoid host pivot reconstruction"
+    );
+    assert!(
+        !det.contains("permutation_sign_from_forward_pivots("),
+        "det should avoid host pivot sign reconstruction"
+    );
+    assert!(
+        !det.contains("tensor_from_data("),
+        "det should avoid materializing sign tensors from host data"
+    );
+    assert!(
+        !det.contains("sign_data"),
+        "det should avoid host sign reconstruction buffers"
+    );
+    assert!(
         det.contains("ScalarReductionOp::Prod"),
         "det should derive its diagonal product through scalar reduction"
     );
@@ -767,6 +783,22 @@ fn slogdet_path_uses_tensor_lu_and_log_without_slice_bridge() {
         !slogdet.contains("backend::slice_bridge::"),
         "slogdet should avoid slice_bridge helpers"
     );
+    assert!(
+        !slogdet.contains("backend_pivots_to_forward_perm("),
+        "slogdet should avoid host pivot reconstruction"
+    );
+    assert!(
+        !slogdet.contains("permutation_sign_from_forward_pivots("),
+        "slogdet should avoid host pivot sign reconstruction"
+    );
+    assert!(
+        !slogdet.contains("tensor_from_data("),
+        "slogdet should avoid materializing sign tensors from host data"
+    );
+    assert!(
+        !slogdet.contains("sign_data"),
+        "slogdet should avoid host sign reconstruction buffers"
+    );
 }
 
 #[test]
@@ -797,6 +829,22 @@ fn complex_slogdet_path_uses_complex_real_and_complex_scale_without_slice_bridge
     assert!(
         !slogdet.contains("backend::slice_bridge::"),
         "complex slogdet should avoid slice_bridge helpers"
+    );
+    assert!(
+        !slogdet.contains("backend_pivots_to_forward_perm("),
+        "complex slogdet should avoid host pivot reconstruction"
+    );
+    assert!(
+        !slogdet.contains("permutation_sign_from_forward_pivots("),
+        "complex slogdet should avoid host pivot sign reconstruction"
+    );
+    assert!(
+        !slogdet.contains("tensor_from_data("),
+        "complex slogdet should avoid materializing sign tensors from host data"
+    );
+    assert!(
+        !slogdet.contains("sign_data"),
+        "complex slogdet should avoid host sign reconstruction buffers"
     );
 }
 
