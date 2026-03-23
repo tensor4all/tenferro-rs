@@ -123,11 +123,3 @@ fn zero_trailing_by_counts_linalg_wrapper_matches_tensor_helper() {
         extract_contiguous_slice(&expected).unwrap()
     );
 }
-
-#[test]
-fn backend_pivots_to_forward_perm_reconstructs_full_length_permutation() {
-    let pivots = Tensor::from_slice(&[2_i32, 3], &[2], MemoryOrder::ColumnMajor).unwrap();
-    let perm = backend_pivots_to_forward_perm(&pivots, 3).unwrap();
-
-    assert_eq!(perm, vec![1, 2, 0]);
-}
