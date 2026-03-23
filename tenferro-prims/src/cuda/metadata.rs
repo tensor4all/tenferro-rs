@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
@@ -199,6 +201,18 @@ fn validate_supported_reduction(
     }
 }
 
+fn validate_unique_mode_labels(modes: &[u32], label: &str) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for &mode in modes {
+        if !seen.insert(mode) {
+            return Err(Error::InvalidArgument(format!(
+                "{label} contains duplicate mode label {mode}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_metadata_handle_count(
     inputs: &[MetadataTensorRef<'_>],
     expected: usize,
@@ -226,6 +240,8 @@ fn plan_metadata_reduction(
             "expected metadata reduction descriptor".into(),
         ));
     };
+    validate_unique_mode_labels(modes_a, "CudaMetadataReduction input")?;
+    validate_unique_mode_labels(modes_c, "CudaMetadataReduction output")?;
     validate_rank(input_dims, modes_a.len(), "CudaMetadataReduction input")?;
     validate_rank(output_dims, modes_c.len(), "CudaMetadataReduction output")?;
 

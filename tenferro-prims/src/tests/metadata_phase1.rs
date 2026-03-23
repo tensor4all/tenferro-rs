@@ -368,6 +368,48 @@ where
     assert_tensor_eq(&output, &expected);
 }
 
+fn run_duplicate_mode_reduction_rejection<C>(ctx: &mut C, memory_space: LogicalMemorySpace)
+where
+    C: TensorMetadataContextFor,
+    C::MetadataBackend: TensorMetadataPrims<Context = C>,
+{
+    let input = tensor_i32(&[1, 2, 3, 4, 5, 6], &[2, 3], memory_space);
+
+    let duplicate_input_desc = MetadataPrimsDescriptor::Reduction {
+        modes_a: vec![0, 0],
+        modes_c: vec![0],
+        input_dtype: MetadataDType::I32,
+        output_dtype: MetadataDType::I32,
+        op: MetadataReductionOp::Sum,
+    };
+    let mut duplicate_input_output =
+        Tensor::<i32>::zeros(&[2], memory_space, MemoryOrder::ColumnMajor);
+    assert!(<C::MetadataBackend as TensorMetadataPrims>::plan(
+        ctx,
+        &duplicate_input_desc,
+        &[MetadataTensorRef::I32(&input)],
+        MetadataTensorMut::I32(&mut duplicate_input_output),
+    )
+    .is_err());
+
+    let duplicate_output_desc = MetadataPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1, 1],
+        input_dtype: MetadataDType::I32,
+        output_dtype: MetadataDType::I32,
+        op: MetadataReductionOp::Sum,
+    };
+    let mut duplicate_output_output =
+        Tensor::<i32>::zeros(&[3, 3], memory_space, MemoryOrder::ColumnMajor);
+    assert!(<C::MetadataBackend as TensorMetadataPrims>::plan(
+        ctx,
+        &duplicate_output_desc,
+        &[MetadataTensorRef::I32(&input)],
+        MetadataTensorMut::I32(&mut duplicate_output_output),
+    )
+    .is_err());
+}
+
 #[test]
 fn cpu_metadata_family_builds_lu_det_parity_primitives() {
     let mut ctx = CpuContext::new(1);
@@ -378,6 +420,12 @@ fn cpu_metadata_family_builds_lu_det_parity_primitives() {
 fn cpu_metadata_family_handles_permuted_reduction_modes_order() {
     let mut ctx = CpuContext::new(1);
     run_permuted_metadata_reduction_family::<CpuContext>(&mut ctx, LogicalMemorySpace::MainMemory);
+}
+
+#[test]
+fn cpu_metadata_family_rejects_duplicate_reduction_modes() {
+    let mut ctx = CpuContext::new(1);
+    run_duplicate_mode_reduction_rejection::<CpuContext>(&mut ctx, LogicalMemorySpace::MainMemory);
 }
 
 #[cfg(feature = "cuda")]
@@ -403,6 +451,20 @@ fn cuda_metadata_family_handles_permuted_reduction_modes_order() {
     let device_id = ctx.device_id();
 
     run_permuted_metadata_reduction_family::<crate::CudaContext>(
+        &mut ctx,
+        LogicalMemorySpace::GpuMemory { device_id },
+    );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_metadata_family_rejects_duplicate_reduction_modes() {
+    let Some((_backend, mut ctx)) = load_cuda_backend() else {
+        return;
+    };
+    let device_id = ctx.device_id();
+
+    run_duplicate_mode_reduction_rejection::<crate::CudaContext>(
         &mut ctx,
         LogicalMemorySpace::GpuMemory { device_id },
     );

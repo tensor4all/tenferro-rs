@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_device::{Error, Result};
 
@@ -91,6 +93,18 @@ fn validate_supported_reduction(
             "unsupported metadata reduction dtype combination: op={op:?} input={input_dtype:?} dst={output_dtype:?}"
         ))),
     }
+}
+
+fn validate_unique_mode_labels(modes: &[u32], label: &str) -> Result<()> {
+    let mut seen = BTreeSet::new();
+    for &mode in modes {
+        if !seen.insert(mode) {
+            return Err(Error::InvalidArgument(format!(
+                "{label} contains duplicate mode label {mode}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_metadata_handle_count(
@@ -346,6 +360,8 @@ fn plan_metadata_reduction(
             "expected metadata reduction descriptor".into(),
         ));
     };
+    validate_unique_mode_labels(modes_a, "CpuMetadataReduction input")?;
+    validate_unique_mode_labels(modes_c, "CpuMetadataReduction output")?;
     let reduction = plan_reduction(
         modes_a,
         modes_c,
