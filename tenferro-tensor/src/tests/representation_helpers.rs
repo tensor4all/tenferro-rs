@@ -110,6 +110,44 @@ macro_rules! representation_suite {
             }
 
             #[test]
+            fn view_as_complex_allows_odd_leading_stride_for_singleton_dims() {
+                let singleton = Tensor::<$real>::from_vec(
+                    vec![1.0 as $real, 11.0 as $real, 99.0 as $real],
+                    &[1, 2],
+                    &[1, 1],
+                    0,
+                )
+                .unwrap();
+
+                let view = singleton.view_as_complex().unwrap();
+                assert_eq!(view.dims(), &[1]);
+                assert_eq!(view.strides(), &[0]);
+                assert_eq!(
+                    view.buffer().as_slice().unwrap()[0],
+                    <$complex>::new(1.0 as $real, 11.0 as $real)
+                );
+            }
+
+            #[test]
+            fn view_as_complex_does_not_require_even_backing_storage_len() {
+                let subview = Tensor::<$real>::from_vec(
+                    vec![1.0 as $real, 11.0 as $real, 99.0 as $real],
+                    &[1, 2],
+                    &[2, 1],
+                    0,
+                )
+                .unwrap();
+
+                let view = subview.view_as_complex().unwrap();
+                assert_eq!(view.dims(), &[1]);
+                assert_eq!(view.strides(), &[1]);
+                assert_eq!(
+                    view.buffer().as_slice().unwrap()[0],
+                    <$complex>::new(1.0 as $real, 11.0 as $real)
+                );
+            }
+
+            #[test]
             fn view_as_real_matches_cuda_parity_when_available() {
                 if !cuda_device_zero_is_available() {
                     return;

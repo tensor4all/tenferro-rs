@@ -20,16 +20,27 @@ fn view_as_real_strides(strides: &[isize]) -> Result<Vec<isize>> {
     Ok(output)
 }
 
-fn view_as_complex_strides(strides: &[isize]) -> Result<Vec<isize>> {
-    if strides.is_empty() {
+fn view_as_complex_strides(dims: &[usize], strides: &[isize]) -> Result<Vec<isize>> {
+    if dims.is_empty() || strides.is_empty() {
         return Err(Error::InvalidArgument(
             "view_as_complex requires at least one dimension".into(),
         ));
     }
+    if dims.len() != strides.len() {
+        return Err(Error::InvalidArgument(format!(
+            "view_as_complex rank mismatch: dims={} strides={}",
+            dims.len(),
+            strides.len()
+        )));
+    }
 
     let mut output = Vec::with_capacity(strides.len().saturating_sub(1));
-    for (axis, &stride) in strides[..strides.len() - 1].iter().enumerate() {
-        if stride % 2 != 0 {
+    for (axis, (&dim, &stride)) in dims[..dims.len() - 1]
+        .iter()
+        .zip(&strides[..strides.len() - 1])
+        .enumerate()
+    {
+        if dim != 1 && stride % 2 != 0 {
             return Err(Error::InvalidArgument(format!(
                 "view_as_complex requires even strides on all leading dimensions, got stride {stride} at axis {axis}"
             )));
@@ -621,15 +632,10 @@ impl Tensor<f32> {
         }
 
         let dims = self.dims()[..self.ndim() - 1].to_vec();
-        let strides = view_as_complex_strides(self.strides())?;
+        let strides = view_as_complex_strides(self.dims(), self.strides())?;
         let offset = self.offset() / 2;
-        let source_len = self.buffer().len();
-        if source_len % 2 != 0 {
-            return Err(Error::InvalidArgument(
-                "view_as_complex requires an even-sized real storage buffer".into(),
-            ));
-        }
-        let buffer = self.buffer().reinterpret_as::<Complex32>(source_len / 2)?;
+        let source_len = self.buffer().len() / 2;
+        let buffer = self.buffer().reinterpret_as::<Complex32>(source_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
         Ok(Tensor::from_parts(
             buffer,
@@ -682,15 +688,10 @@ impl Tensor<f64> {
         }
 
         let dims = self.dims()[..self.ndim() - 1].to_vec();
-        let strides = view_as_complex_strides(self.strides())?;
+        let strides = view_as_complex_strides(self.dims(), self.strides())?;
         let offset = self.offset() / 2;
-        let source_len = self.buffer().len();
-        if source_len % 2 != 0 {
-            return Err(Error::InvalidArgument(
-                "view_as_complex requires an even-sized real storage buffer".into(),
-            ));
-        }
-        let buffer = self.buffer().reinterpret_as::<Complex64>(source_len / 2)?;
+        let source_len = self.buffer().len() / 2;
+        let buffer = self.buffer().reinterpret_as::<Complex64>(source_len)?;
         validate_layout_against_len(&dims, &strides, offset, buffer.len())?;
         Ok(Tensor::from_parts(
             buffer,

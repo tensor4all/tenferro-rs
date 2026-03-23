@@ -327,9 +327,9 @@ impl<T> DataBuffer<T> {
             .ok_or_else(|| {
                 Error::InvalidArgument("reinterpreted buffer byte-size overflow".into())
             })?;
-        if src_bytes != dst_bytes {
+        if dst_bytes > src_bytes {
             return Err(Error::InvalidArgument(format!(
-                "buffer reinterpretation changes byte size: src_bytes={src_bytes} dst_bytes={dst_bytes}"
+                "buffer reinterpretation exceeds source byte size: src_bytes={src_bytes} dst_bytes={dst_bytes}"
             )));
         }
 
