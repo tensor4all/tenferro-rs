@@ -172,6 +172,12 @@ fn validate_supported_binary(
         )
         | (
             MetadataBinaryOp::BitAnd,
+            MetadataDType::I32,
+            MetadataDType::I32,
+            MetadataDType::I32,
+        )
+        | (
+            MetadataBinaryOp::BitAnd,
             MetadataDType::Bool,
             MetadataDType::Bool,
             MetadataDType::Bool,
@@ -804,7 +810,7 @@ impl TensorMetadataPrims for CudaBackend {
                         let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
                         unsafe {
                             runtime.metadata_binary_i32_i32(
-                                metadata_binary_opcode(*op),
+                                metadata_binary_opcode_i32_i32(*op),
                                 lhs_ptr,
                                 lhs_len,
                                 rhs_ptr,
@@ -838,7 +844,7 @@ impl TensorMetadataPrims for CudaBackend {
                         let dst_ptr = tensor_device_ptr_mut(dst, "CudaMetadataBinary dst")?;
                         unsafe {
                             runtime.metadata_binary_bool_bool(
-                                metadata_binary_opcode(*op),
+                                metadata_binary_opcode_bool_bool(*op),
                                 lhs_ptr,
                                 lhs_len,
                                 rhs_ptr,
@@ -1143,6 +1149,11 @@ impl TensorMetadataPrims for CudaBackend {
                     MetadataDType::I32
                 ) | (
                     MetadataBinaryOp::BitAnd,
+                    MetadataDType::I32,
+                    MetadataDType::I32,
+                    MetadataDType::I32
+                ) | (
+                    MetadataBinaryOp::BitAnd,
                     MetadataDType::Bool,
                     MetadataDType::Bool,
                     MetadataDType::Bool
@@ -1193,13 +1204,22 @@ impl TensorMetadataPrims for CudaBackend {
     }
 }
 
-fn metadata_binary_opcode(op: MetadataBinaryOp) -> i32 {
+fn metadata_binary_opcode_i32_i32(op: MetadataBinaryOp) -> i32 {
     match op {
         MetadataBinaryOp::Equal => 0,
         MetadataBinaryOp::NotEqual => 1,
         MetadataBinaryOp::Add => 2,
         MetadataBinaryOp::Sub => 3,
         MetadataBinaryOp::Mul => 4,
+        MetadataBinaryOp::BitAnd => 5,
+    }
+}
+
+fn metadata_binary_opcode_bool_bool(op: MetadataBinaryOp) -> i32 {
+    match op {
+        MetadataBinaryOp::Equal => 0,
+        MetadataBinaryOp::NotEqual => 1,
         MetadataBinaryOp::BitAnd => 2,
+        _ => unreachable!("unsupported metadata bool binary op"),
     }
 }

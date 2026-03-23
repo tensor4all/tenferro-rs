@@ -65,6 +65,12 @@ fn validate_supported_binary(
         )
         | (
             MetadataBinaryOp::BitAnd,
+            MetadataDType::I32,
+            MetadataDType::I32,
+            MetadataDType::I32,
+        )
+        | (
+            MetadataBinaryOp::BitAnd,
             MetadataDType::Bool,
             MetadataDType::Bool,
             MetadataDType::Bool,
@@ -600,6 +606,7 @@ impl TensorMetadataPrims for CpuBackend {
                             MetadataBinaryOp::Add => x + y,
                             MetadataBinaryOp::Sub => x - y,
                             MetadataBinaryOp::Mul => x * y,
+                            MetadataBinaryOp::BitAnd => x & y,
                             _ => unreachable!("unsupported metadata binary op"),
                         })
                     }
@@ -857,6 +864,11 @@ impl TensorMetadataPrims for CpuBackend {
                     MetadataDType::Bool
                 ) | (
                     MetadataBinaryOp::Add | MetadataBinaryOp::Sub | MetadataBinaryOp::Mul,
+                    MetadataDType::I32,
+                    MetadataDType::I32,
+                    MetadataDType::I32
+                ) | (
+                    MetadataBinaryOp::BitAnd,
                     MetadataDType::I32,
                     MetadataDType::I32,
                     MetadataDType::I32
