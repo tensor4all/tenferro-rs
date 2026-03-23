@@ -1,7 +1,11 @@
 //! Shared tensor validation and helper utilities for backend implementations.
 
-use tenferro_algebra::{Conjugate, Scalar};
-use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_algebra::Conjugate;
+#[cfg(feature = "cuda")]
+use tenferro_algebra::Scalar;
+#[cfg(feature = "cuda")]
+use tenferro_device::LogicalMemorySpace;
+use tenferro_device::{Error, Result};
 use tenferro_prims::TensorResolveConjContextFor;
 use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor};
 
@@ -225,6 +229,7 @@ where
     input.zero_trailing_by_counts(keep_counts, axis, structural_rank)
 }
 
+#[cfg(feature = "cuda")]
 #[doc(hidden)]
 pub(crate) fn tensor_from_data_on_space<T: Scalar>(
     data: Vec<T>,

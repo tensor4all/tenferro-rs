@@ -92,7 +92,7 @@ fn cpu_backend_supports_core_factorizations_after_move() {
     assert_eq!(lu.l.dims(), &[2, 2]);
     assert_eq!(lu.u.dims(), &[2, 2]);
     assert_eq!(lu.pivots.dims(), &[2]);
-    assert_eq!(tensor_data_on_cpu(&lu.pivots), vec![1, 0]);
+    assert_eq!(tensor_data_on_cpu(&lu.pivots), vec![2, 2]);
 
     let chol = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky(
         &mut ctx, &spd,

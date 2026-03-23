@@ -26,5 +26,55 @@ pub(crate) fn backend_info_to_vec(info: &Tensor<i32>) -> Result<Vec<i32>> {
     Ok(slice[offset..offset + len].to_vec())
 }
 
+#[doc(hidden)]
+pub(crate) fn backend_pivots_to_usize(pivots: &Tensor<i32>) -> Result<Vec<usize>> {
+    let cpu = pivots.to_memory_space_async(LogicalMemorySpace::MainMemory)?;
+    let contiguous = cpu.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.len();
+    let dims = contiguous.dims();
+    let pivot_len = dims.first().copied().unwrap_or(0);
+    let slice = contiguous.buffer().as_slice().ok_or_else(|| {
+        Error::InvalidArgument("backend LU pivot tensor is not CPU accessible".into())
+    })?;
+    let flat = &slice[offset..offset + len];
+
+    if pivot_len == 0 {
+        return Ok(Vec::new());
+    }
+    if flat.len() % pivot_len != 0 {
+        return Err(Error::InvalidArgument(format!(
+            "backend LU pivot tensor length {} is not divisible by pivot length {pivot_len}",
+            flat.len()
+        )));
+    }
+
+    let mut out = Vec::with_capacity(flat.len());
+    for step_pivots in flat.chunks(pivot_len) {
+        let mut perm: Vec<usize> = (0..pivot_len).collect();
+        for (i, &pivot) in step_pivots.iter().enumerate() {
+            if pivot <= 0 {
+                return Err(Error::InvalidArgument(format!(
+                    "backend LU pivot {pivot} is not 1-indexed positive"
+                )));
+            }
+            let j = usize::try_from(pivot - 1).map_err(|_| {
+                Error::InvalidArgument(format!(
+                    "backend LU pivot {pivot} underflowed during usize conversion"
+                ))
+            })?;
+            if j < i || j >= perm.len() {
+                return Err(Error::InvalidArgument(format!(
+                    "backend LU pivot {pivot} is invalid for step {i} and len {}",
+                    perm.len()
+                )));
+            }
+            perm.swap(i, j);
+        }
+        out.extend_from_slice(&perm);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests;

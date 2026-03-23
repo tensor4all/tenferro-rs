@@ -35,23 +35,6 @@ fn permutation_sign_from_forward_pivots(pivots: &[usize], n: usize) -> Result<i3
     Ok(sign)
 }
 
-pub(crate) fn backend_pivots_to_usize(pivots: &Tensor<i32>) -> Result<Vec<usize>> {
-    let cpu = pivots.to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)?;
-    let contiguous = cpu.contiguous(MemoryOrder::ColumnMajor);
-    let offset = contiguous.offset() as usize;
-    let len = contiguous.len();
-    contiguous.buffer().as_slice().unwrap()[offset..offset + len]
-        .iter()
-        .map(|&pivot| {
-            usize::try_from(pivot).map_err(|_| {
-                Error::InvalidArgument(format!(
-                    "backend LU pivot {pivot} is negative and cannot be converted to usize"
-                ))
-            })
-        })
-        .collect()
-}
-
 fn inverse_rhs<T: KernelLinalgScalar>(
     n: usize,
     batch_dims: &[usize],
@@ -162,7 +145,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Prod,
     )?;
-    let pivots = backend_pivots_to_usize(&lu.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&lu.pivots)?;
 
     let sign_len = if dims.is_empty() { 1 } else { bc };
     let mut sign_data = vec![T::Real::one(); sign_len];
@@ -227,7 +210,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Sum,
     )?;
-    let pivots = backend_pivots_to_usize(&lu.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&lu.pivots)?;
 
     let zero_diagonal = crate::prims_bridge::full_like_constant(
         T::zero(),
@@ -336,7 +319,7 @@ where
         &kept_axes,
         tenferro_prims::ScalarReductionOp::Sum,
     )?;
-    let pivots = backend_pivots_to_usize(&lu.pivots)?;
+    let pivots = crate::backend::tensor_helpers::backend_pivots_to_usize(&lu.pivots)?;
 
     let zero_real = crate::prims_bridge::full_like_constant(
         R::zero(),

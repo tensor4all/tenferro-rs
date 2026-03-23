@@ -383,8 +383,7 @@ fn check_getrf_info(info: i32, allow_positive: bool, op: &str) -> Result<()> {
 }
 
 #[cfg(feature = "cuda")]
-fn pivots_to_forward_perm(m: usize, pivots: &[i32]) -> Result<Vec<usize>> {
-    let mut perm: Vec<usize> = (0..m).collect();
+fn validate_step_pivots_1indexed(m: usize, pivots: &[i32]) -> Result<()> {
     for (i, &p) in pivots.iter().enumerate() {
         if p <= 0 {
             return Err(Error::DeviceError(
@@ -393,14 +392,13 @@ fn pivots_to_forward_perm(m: usize, pivots: &[i32]) -> Result<Vec<usize>> {
         }
         let j = usize::try_from(p - 1)
             .map_err(|_| Error::DeviceError("lu: pivot index underflow".into()))?;
-        if j >= m {
+        if j < i || j >= m {
             return Err(Error::DeviceError(format!(
-                "lu: cuSOLVER pivot index {p} out of range for m={m}"
+                "lu: cuSOLVER pivot index {p} is invalid for step {i} and m={m}"
             )));
         }
-        perm.swap(i, j);
     }
-    Ok(perm)
+    Ok(())
 }
 
 #[cfg(feature = "cuda")]
@@ -507,16 +505,16 @@ where
         a_work.logical_memory_space(),
         MemoryOrder::ColumnMajor,
     );
-    let mut pivots_out = vec![0i32; m * bc];
+    let mut pivots_out = vec![0i32; k * bc];
     let mut info = vec![0i32; bc];
 
     if m == 0 || n == 0 || bc == 0 {
         for batch in 0..bc {
-            for i in 0..m {
-                pivots_out[batch * m + i] = i as i32;
+            for i in 0..k {
+                pivots_out[batch * k + i] = (i + 1) as i32;
             }
         }
-        let mut pivots_shape = vec![m];
+        let mut pivots_shape = vec![k];
         pivots_shape.extend_from_slice(batch_dims);
         let info_shape = if batch_dims.is_empty() {
             vec![]
@@ -612,10 +610,8 @@ where
             info[batch] = host_info[0];
         }
 
-        let perm = pivots_to_forward_perm(m, &host_pivots)?;
-        for (i, &p) in perm.iter().enumerate() {
-            pivots_out[batch * m + i] = p as i32;
-        }
+        validate_step_pivots_1indexed(m, &host_pivots)?;
+        pivots_out[batch * k..(batch + 1) * k].copy_from_slice(&host_pivots);
     }
 
     let (lower_kernel, upper_kernel) = match dtype {
@@ -646,7 +642,7 @@ where
     launch_lu_split(ctx, &a_work, &l, m, n, k, lower_kernel)?;
     launch_lu_split(ctx, &a_work, &u, m, n, k, upper_kernel)?;
 
-    let mut pivots_shape = vec![m];
+    let mut pivots_shape = vec![k];
     pivots_shape.extend_from_slice(batch_dims);
     let info_shape = if batch_dims.is_empty() {
         vec![]

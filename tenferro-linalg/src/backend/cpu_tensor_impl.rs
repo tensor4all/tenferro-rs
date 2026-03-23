@@ -38,6 +38,35 @@ fn tensor_from_data_on_space<T: Scalar>(
     }
 }
 
+fn forward_perm_to_step_pivots_1indexed(perm: &[usize], k: usize) -> Result<Vec<i32>> {
+    if k > perm.len() {
+        return Err(Error::InvalidArgument(format!(
+            "LU pivot length {k} exceeds permutation length {}",
+            perm.len()
+        )));
+    }
+
+    let mut current: Vec<usize> = (0..perm.len()).collect();
+    let mut pivots = vec![0i32; k];
+    for i in 0..k {
+        let desired = perm[i];
+        let j = current[i..]
+            .iter()
+            .position(|&row| row == desired)
+            .map(|delta| i + delta)
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "LU forward permutation is invalid at step {i}: missing row {desired}"
+                ))
+            })?;
+        pivots[i] = i32::try_from(j + 1).map_err(|_| {
+            Error::InvalidArgument(format!("LU pivot index {} does not fit into i32", j + 1))
+        })?;
+        current.swap(i, j);
+    }
+    Ok(pivots)
+}
+
 fn first_zero_pivot_from_u<T: KernelLinalgScalar>(
     u: &[T],
     diag_len: usize,
@@ -343,7 +372,7 @@ where
 
     let mut l_data = vec![T::zero(); m * k * bc];
     let mut u_data = vec![T::zero(); k * n * bc];
-    let mut all_pivots = vec![0i32; m * bc];
+    let mut all_pivots = vec![0i32; k * bc];
 
     let mut perm = vec![0usize; m];
     let mut l_buf = vec![T::zero(); m * k];
@@ -357,16 +386,15 @@ where
         super::cpu::lu_slices(a_slice, m, n, &mut perm, &mut l_buf, &mut u_buf)?;
         l_data[i * m * k..(i + 1) * m * k].copy_from_slice(&l_buf);
         u_data[i * k * n..(i + 1) * k * n].copy_from_slice(&u_buf);
-        for (j, &p) in perm.iter().enumerate() {
-            all_pivots[i * m + j] = p as i32;
-        }
+        let pivots = forward_perm_to_step_pivots_1indexed(&perm, k)?;
+        all_pivots[i * k..(i + 1) * k].copy_from_slice(&pivots);
     }
 
     let mut l_shape = vec![m, k];
     l_shape.extend_from_slice(batch_dims);
     let mut u_shape = vec![k, n];
     u_shape.extend_from_slice(batch_dims);
-    let mut pivots_shape = vec![m];
+    let mut pivots_shape = vec![k];
     pivots_shape.extend_from_slice(batch_dims);
 
     Ok(LuTensorResult {
@@ -395,7 +423,7 @@ where
 
     let mut l_data = vec![T::zero(); m * k * bc];
     let mut u_data = vec![T::zero(); k * n * bc];
-    let mut all_pivots = vec![0i32; m * bc];
+    let mut all_pivots = vec![0i32; k * bc];
     let mut info = vec![0i32; bc];
 
     let mut perm = vec![0usize; m];
@@ -412,16 +440,15 @@ where
         l_data[i * m * k..(i + 1) * m * k].copy_from_slice(&l_buf);
         u_data[i * k * n..(i + 1) * k * n].copy_from_slice(&u_buf);
         info[i] = first_zero_pivot_from_u(&u_buf, k, k);
-        for (j, &p) in perm.iter().enumerate() {
-            all_pivots[i * m + j] = p as i32;
-        }
+        let pivots = forward_perm_to_step_pivots_1indexed(&perm, k)?;
+        all_pivots[i * k..(i + 1) * k].copy_from_slice(&pivots);
     }
 
     let mut l_shape = vec![m, k];
     l_shape.extend_from_slice(batch_dims);
     let mut u_shape = vec![k, n];
     u_shape.extend_from_slice(batch_dims);
-    let mut pivots_shape = vec![m];
+    let mut pivots_shape = vec![k];
     pivots_shape.extend_from_slice(batch_dims);
     let info_shape = if batch_dims.is_empty() {
         vec![]
