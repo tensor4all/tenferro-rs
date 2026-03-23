@@ -104,7 +104,7 @@ macro_rules! representation_suite {
 
                 let err = invalid.view_as_complex().unwrap_err();
                 assert!(
-                    matches!(err, Error::InvalidArgument(ref msg) if msg.contains("stride 1") || msg.contains("last dimension")),
+                    matches!(err, Error::InvalidArgument(ref msg) if msg.contains("stride 1") || msg.contains("last stride") || msg.contains("last dimension")),
                     "expected layout contract error, got {err:?}"
                 );
             }
@@ -116,7 +116,7 @@ macro_rules! representation_suite {
                 }
 
                 let base = complex_tensor();
-                let expected = base.view_as_real();
+                let expected = base.view_as_real().unwrap();
                 let got = base
                     .to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 })
                     .unwrap()
