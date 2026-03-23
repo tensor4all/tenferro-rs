@@ -18,6 +18,30 @@ fn constructors_source(relative: &str) -> String {
     })
 }
 
+fn constructor_body<'a>(source: &'a str, name: &str) -> &'a str {
+    let signature = format!("pub fn {name}");
+    let start = source
+        .find(&signature)
+        .unwrap_or_else(|| panic!("missing public constructor {name}"));
+    let tail = &source[start..];
+    let next = tail
+        .find("\n    ///")
+        .or_else(|| tail.find("\nimpl<"))
+        .or_else(|| tail.find("\nfn "))
+        .unwrap_or(tail.len());
+    &tail[..next]
+}
+
+fn assert_constructor_body_is_fallible(source: &str, name: &str) {
+    let body = constructor_body(source, name);
+    for needle in ["panic!(", "unwrap_or_else(|err| panic!"] {
+        assert!(
+            !body.contains(needle),
+            "public constructor {name} still contains forbidden panic path: {needle}"
+        );
+    }
+}
+
 #[test]
 fn cpu_empty_strided_rejects_invalid_layouts_without_panicking() {
     let err = Tensor::<f64>::empty_strided(&[2, 2], &[1, 2], -1, CPU)
@@ -112,22 +136,22 @@ fn cuda_eye_rejects_overflow_without_panicking() {
 
 #[test]
 fn constructors_source_no_longer_contains_panic_based_public_paths() {
-    for relative in [
-        "src/tensor/constructors.rs",
-        "src/tensor/constructors_special.rs",
+    let regular = constructors_source("src/tensor/constructors.rs");
+    for name in [
+        "empty",
+        "zeros",
+        "ones",
+        "full",
+        "empty_like",
+        "zeros_like",
+        "ones_like",
+        "full_like",
     ] {
-        let source = constructors_source(relative);
-        let forbidden = [
-            "unwrap_or_else(|err| panic!",
-            "panic!(\"tensor allocation",
-            "panic!(\"eye:",
-        ];
+        assert_constructor_body_is_fallible(&regular, name);
+    }
 
-        for needle in forbidden {
-            assert!(
-                !source.contains(needle),
-                "{relative} still contains forbidden panic path: {needle}"
-            );
-        }
+    let special = constructors_source("src/tensor/constructors_special.rs");
+    for name in ["eye", "arange", "linspace"] {
+        assert_constructor_body_is_fallible(&special, name);
     }
 }
