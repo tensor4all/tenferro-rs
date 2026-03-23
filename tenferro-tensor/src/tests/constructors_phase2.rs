@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::compute_contiguous_strides;
 use tenferro_device::{Error, LogicalMemorySpace};
 
 const CPU: LogicalMemorySpace = LogicalMemorySpace::MainMemory;
@@ -18,6 +19,40 @@ fn assert_dense_f64_sequence(
     assert_eq!(tensor.dims(), dims);
     assert_eq!(tensor.logical_memory_space(), space);
     assert_eq!(host.buffer().as_slice().unwrap(), expected);
+}
+
+fn assert_like_layout_policy(space: LogicalMemorySpace) {
+    let base = Tensor::<f64>::zeros(&[2, 3, 4], space, MemoryOrder::ColumnMajor).unwrap();
+    let non_contiguous = base.permute(&[1, 2, 0]).unwrap();
+    let expected_non_contiguous =
+        compute_contiguous_strides(non_contiguous.dims(), MemoryOrder::ColumnMajor);
+
+    let non_contiguous_cases = [
+        non_contiguous.empty_like().unwrap(),
+        non_contiguous.zeros_like().unwrap(),
+        non_contiguous.ones_like().unwrap(),
+        non_contiguous.full_like(3.25).unwrap(),
+    ];
+    for like in non_contiguous_cases {
+        assert_eq!(like.strides(), expected_non_contiguous.as_slice());
+        assert_eq!(like.logical_memory_space(), space);
+        assert!(like.is_col_major_contiguous());
+    }
+
+    let ambiguous = Tensor::<f64>::zeros(&[1, 3], space, MemoryOrder::RowMajor).unwrap();
+    let expected_ambiguous = compute_contiguous_strides(ambiguous.dims(), MemoryOrder::ColumnMajor);
+
+    let ambiguous_cases = [
+        ambiguous.empty_like().unwrap(),
+        ambiguous.zeros_like().unwrap(),
+        ambiguous.ones_like().unwrap(),
+        ambiguous.full_like(3.25).unwrap(),
+    ];
+    for like in ambiguous_cases {
+        assert_eq!(like.strides(), expected_ambiguous.as_slice());
+        assert_eq!(like.logical_memory_space(), space);
+        assert!(like.is_col_major_contiguous());
+    }
 }
 
 #[test]
@@ -83,6 +118,11 @@ fn cpu_full_and_like_constructors_fill_expected_values() {
     let row_major_full_like = Tensor::<f64>::full_like(&row_major_base, 3.25).unwrap();
     assert_eq!(row_major_full_like.strides(), row_major_base.strides());
     assert!(row_major_full_like.is_row_major_contiguous());
+}
+
+#[test]
+fn cpu_like_constructors_fall_back_to_column_major_for_ambiguous_and_non_contiguous_layouts() {
+    assert_like_layout_policy(CPU);
 }
 
 #[test]
@@ -175,6 +215,12 @@ fn cuda_full_and_like_constructors_fill_expected_values() {
     let row_major_full_like = Tensor::<f64>::full_like(&row_major_base, 3.25).unwrap();
     assert_eq!(row_major_full_like.strides(), row_major_base.strides());
     assert!(row_major_full_like.is_row_major_contiguous());
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_like_constructors_fall_back_to_column_major_for_ambiguous_and_non_contiguous_layouts() {
+    assert_like_layout_policy(GPU0);
 }
 
 #[cfg(feature = "cuda")]

@@ -10,10 +10,12 @@ const CPU: LogicalMemorySpace = LogicalMemorySpace::MainMemory;
 #[cfg(feature = "cuda")]
 const GPU0: LogicalMemorySpace = LogicalMemorySpace::GpuMemory { device_id: 0 };
 
-fn constructors_source() -> String {
+fn constructors_source(relative: &str) -> String {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("src/tensor/constructors.rs");
-    fs::read_to_string(path).expect("failed to read constructors.rs for source-level regression")
+    path.push(relative);
+    fs::read_to_string(path).unwrap_or_else(|err| {
+        panic!("failed to read {relative} for source-level regression: {err}")
+    })
 }
 
 #[test]
@@ -110,17 +112,22 @@ fn cuda_eye_rejects_overflow_without_panicking() {
 
 #[test]
 fn constructors_source_no_longer_contains_panic_based_public_paths() {
-    let source = constructors_source();
-    let forbidden = [
-        "unwrap_or_else(|err| panic!",
-        "panic!(\"tensor allocation",
-        "panic!(\"eye:",
-    ];
+    for relative in [
+        "src/tensor/constructors.rs",
+        "src/tensor/constructors_special.rs",
+    ] {
+        let source = constructors_source(relative);
+        let forbidden = [
+            "unwrap_or_else(|err| panic!",
+            "panic!(\"tensor allocation",
+            "panic!(\"eye:",
+        ];
 
-    for needle in forbidden {
-        assert!(
-            !source.contains(needle),
-            "constructors.rs still contains forbidden panic path: {needle}"
-        );
+        for needle in forbidden {
+            assert!(
+                !source.contains(needle),
+                "{relative} still contains forbidden panic path: {needle}"
+            );
+        }
     }
 }

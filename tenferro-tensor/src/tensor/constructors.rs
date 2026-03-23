@@ -30,6 +30,11 @@ impl<T: Scalar> Tensor<T> {
         )
     }
 
+    /// Layout policy for the `*_like` constructors.
+    ///
+    /// Row-major is preserved only when the source is row-major contiguous
+    /// and not column-major contiguous. Ambiguous or non-contiguous sources
+    /// fall back to column-major so the result layout remains deterministic.
     fn like_order(reference: &Self) -> MemoryOrder {
         if reference.is_row_major_contiguous() && !reference.is_col_major_contiguous() {
             MemoryOrder::RowMajor
@@ -128,6 +133,7 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// The `*_like` family preserves a row-major layout only when the source
     /// tensor is row-major contiguous and not column-major contiguous.
+    /// Ambiguous or non-contiguous inputs fall back to column-major.
     ///
     /// # Examples
     ///
@@ -373,6 +379,7 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// The `*_like` family preserves a row-major layout only when the source
     /// tensor is row-major contiguous and not column-major contiguous.
+    /// Ambiguous or non-contiguous inputs fall back to column-major.
     ///
     /// # Examples
     ///
@@ -400,6 +407,7 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// The `*_like` family preserves a row-major layout only when the source
     /// tensor is row-major contiguous and not column-major contiguous.
+    /// Ambiguous or non-contiguous inputs fall back to column-major.
     ///
     /// # Examples
     ///
@@ -427,6 +435,7 @@ impl<T: Scalar> Tensor<T> {
     ///
     /// The `*_like` family preserves a row-major layout only when the source
     /// tensor is row-major contiguous and not column-major contiguous.
+    /// Ambiguous or non-contiguous inputs fall back to column-major.
     ///
     /// # Examples
     ///
