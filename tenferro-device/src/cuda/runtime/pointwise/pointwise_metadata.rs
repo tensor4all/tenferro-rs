@@ -457,7 +457,7 @@ impl CudaRuntime {
         }
     }
 
-    unsafe fn metadata_generate_iota_i32_raw(
+    pub(crate) unsafe fn metadata_generate_iota_i32_raw(
         &self,
         dst: *mut i32,
         spec: &MetadataGenerateSpec,
@@ -508,7 +508,7 @@ impl CudaRuntime {
             .map_err(|err| cuda_error("CUDA stream synchronize", err))
     }
 
-    unsafe fn metadata_binary_i32_bool_raw(
+    pub(crate) unsafe fn metadata_binary_i32_bool_raw(
         &self,
         op: MetadataBinaryOp,
         lhs: *const i32,
@@ -526,7 +526,7 @@ impl CudaRuntime {
         )
     }
 
-    unsafe fn metadata_binary_bool_bool_raw(
+    pub(crate) unsafe fn metadata_binary_bool_bool_raw(
         &self,
         op: MetadataBinaryOp,
         lhs: *const u8,
@@ -622,7 +622,7 @@ impl CudaRuntime {
             .map_err(|err| cuda_error("CUDA stream synchronize", err))
     }
 
-    unsafe fn metadata_where_i32_raw(
+    pub(crate) unsafe fn metadata_where_i32_raw(
         &self,
         cond: *const u8,
         on_true: *const i32,
@@ -640,7 +640,7 @@ impl CudaRuntime {
         )
     }
 
-    unsafe fn metadata_where_bool_raw(
+    pub(crate) unsafe fn metadata_where_bool_raw(
         &self,
         cond: *const u8,
         on_true: *const u8,
@@ -744,7 +744,7 @@ impl CudaRuntime {
             .map_err(|err| cuda_error("CUDA stream synchronize", err))
     }
 
-    unsafe fn metadata_reduce_sum_i32_raw(
+    pub(crate) unsafe fn metadata_reduce_sum_i32_raw(
         &self,
         input: *const i32,
         dst: *mut i32,
@@ -753,7 +753,7 @@ impl CudaRuntime {
         self.metadata_reduce_raw(METADATA_REDUCE_SUM_I32_KERNEL_NAME, input, dst, spec)
     }
 
-    unsafe fn metadata_reduce_sum_bool_raw(
+    pub(crate) unsafe fn metadata_reduce_sum_bool_raw(
         &self,
         input: *const u8,
         dst: *mut i32,
@@ -762,7 +762,7 @@ impl CudaRuntime {
         self.metadata_reduce_raw(METADATA_REDUCE_SUM_BOOL_KERNEL_NAME, input, dst, spec)
     }
 
-    unsafe fn metadata_reduce_all_bool_raw(
+    pub(crate) unsafe fn metadata_reduce_all_bool_raw(
         &self,
         input: *const u8,
         dst: *mut u8,
@@ -771,7 +771,7 @@ impl CudaRuntime {
         self.metadata_reduce_raw(METADATA_REDUCE_ALL_BOOL_KERNEL_NAME, input, dst, spec)
     }
 
-    unsafe fn metadata_reduce_any_bool_raw(
+    pub(crate) unsafe fn metadata_reduce_any_bool_raw(
         &self,
         input: *const u8,
         dst: *mut u8,

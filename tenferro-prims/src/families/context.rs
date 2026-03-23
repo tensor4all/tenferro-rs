@@ -4,7 +4,8 @@ use tenferro_tensor::Tensor;
 
 use crate::{
     CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
-    TensorComplexRealPrims, TensorComplexScalePrims, TensorScalarPrims, TensorSemiringCore,
+    TensorComplexRealPrims, TensorComplexScalePrims, TensorMetadataContextFor, TensorMetadataPrims,
+    TensorScalarPrims, TensorSemiringCore,
 };
 
 /// Bridge trait that binds a semiring execution context to its backend.
@@ -175,6 +176,13 @@ where
     }
 }
 
+impl TensorMetadataContextFor for CpuContext
+where
+    CpuBackend: TensorMetadataPrims<Context = CpuContext>,
+{
+    type MetadataBackend = CpuBackend;
+}
+
 impl<Input> TensorComplexScaleContextFor<Input> for CpuContext
 where
     Input: ComplexFloat + Scalar,
@@ -216,6 +224,14 @@ where
     fn resolve_conj(ctx: &mut Self, src: &Tensor<T>) -> Tensor<T> {
         CudaBackend::resolve_conj(ctx, src)
     }
+}
+
+#[cfg(feature = "cuda")]
+impl TensorMetadataContextFor for CudaContext
+where
+    CudaBackend: TensorMetadataPrims<Context = CudaContext>,
+{
+    type MetadataBackend = CudaBackend;
 }
 
 impl<Input> TensorComplexScaleContextFor<Input> for CudaContext
