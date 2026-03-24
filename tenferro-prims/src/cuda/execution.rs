@@ -11,6 +11,9 @@ use crate::{
     SemiringCoreDescriptor, SemiringFastPathDescriptor,
 };
 
+use super::diagonal::{
+    execute_anti_diag, execute_anti_trace, execute_trace, validate_diagonal_plan,
+};
 use super::planning::{
     check_status, default_col_major_strides, plan_contraction, plan_elementwise_binary,
     plan_permutation, plan_reduction,
@@ -67,9 +70,15 @@ pub(super) fn plan_core_descriptor<S: Scalar>(
         }
         SemiringCoreDescriptor::Trace { .. }
         | SemiringCoreDescriptor::AntiTrace { .. }
-        | SemiringCoreDescriptor::AntiDiag { .. } => Err(Error::DeviceError(
-            "Trace/AntiTrace/AntiDiag not yet supported on CUDA backend".into(),
-        )),
+        | SemiringCoreDescriptor::AntiDiag { .. } => {
+            validate_diagonal_plan(desc, shapes)?;
+            let _ = (data_type, compute);
+            Ok(CudaPlan {
+                plan: CudaPlanStorage::DeferredDiagonal,
+                desc: CudaPlanDescriptor::Core(desc.clone()),
+                _marker: PhantomData,
+            })
+        }
         SemiringCoreDescriptor::ReduceAdd { modes_a, modes_c } => {
             validate_shape_count(shapes, 2, "ReduceAdd")?;
             let modes_a_i32: Vec<i32> = modes_a.iter().map(|&m| m as i32).collect();
@@ -319,6 +328,51 @@ pub(super) fn execute_plan<S: Scalar>(
                 )
             };
             check_status(status, "cutensorReduce")
+        }
+        CudaPlanDescriptor::Core(SemiringCoreDescriptor::Trace {
+            modes_a,
+            modes_c,
+            paired,
+        }) => {
+            validate_execute_inputs(inputs, 1, "Trace")?;
+            let CudaPlanStorage::DeferredDiagonal = &plan.plan else {
+                return Err(Error::DeviceError(
+                    "CUDA trace plan was expected to be deferred".into(),
+                ));
+            };
+            execute_trace(
+                ctx, modes_a, modes_c, paired, alpha, inputs[0], beta, output,
+            )
+        }
+        CudaPlanDescriptor::Core(SemiringCoreDescriptor::AntiTrace {
+            modes_a,
+            modes_c,
+            paired,
+        }) => {
+            validate_execute_inputs(inputs, 1, "AntiTrace")?;
+            let CudaPlanStorage::DeferredDiagonal = &plan.plan else {
+                return Err(Error::DeviceError(
+                    "CUDA anti-trace plan was expected to be deferred".into(),
+                ));
+            };
+            execute_anti_trace(
+                ctx, modes_a, modes_c, paired, alpha, inputs[0], beta, output,
+            )
+        }
+        CudaPlanDescriptor::Core(SemiringCoreDescriptor::AntiDiag {
+            modes_a,
+            modes_c,
+            paired,
+        }) => {
+            validate_execute_inputs(inputs, 1, "AntiDiag")?;
+            let CudaPlanStorage::DeferredDiagonal = &plan.plan else {
+                return Err(Error::DeviceError(
+                    "CUDA anti-diag plan was expected to be deferred".into(),
+                ));
+            };
+            execute_anti_diag(
+                ctx, modes_a, modes_c, paired, alpha, inputs[0], beta, output,
+            )
         }
         CudaPlanDescriptor::Fast(SemiringFastPathDescriptor::ElementwiseBinary { .. }) => {
             validate_execute_inputs(inputs, 2, "ElementwiseBinary")?;

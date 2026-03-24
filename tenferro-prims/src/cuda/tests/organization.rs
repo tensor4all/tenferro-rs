@@ -14,6 +14,7 @@ fn cuda_backend_is_split_into_focused_modules() {
     let root = fs::read_to_string(format!("{ROOT}/mod.rs")).unwrap();
     for needle in [
         "mod analytic;",
+        "mod diagonal;",
         "mod execution;",
         "mod planning;",
         "mod scalar_type;",
@@ -32,6 +33,7 @@ fn split_cuda_modules_stay_under_size_guideline() {
     for path in [
         format!("{ROOT}/mod.rs"),
         format!("{ROOT}/analytic.rs"),
+        format!("{ROOT}/diagonal.rs"),
         format!("{ROOT}/execution.rs"),
         format!("{ROOT}/planning.rs"),
         format!("{ROOT}/scalar_type.rs"),

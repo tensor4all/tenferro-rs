@@ -5,6 +5,7 @@ use tenferro_prims::CpuContext;
 
 mod batch_a_contracts;
 mod batch_b_contracts;
+mod diagonal_helpers;
 mod organization;
 mod runtime_capability;
 

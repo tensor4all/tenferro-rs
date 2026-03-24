@@ -41,6 +41,7 @@ mod analytic;
 mod complex_real;
 mod complex_scale;
 mod custom;
+mod diagonal;
 mod execution;
 mod family_common;
 mod metadata;
@@ -158,6 +159,7 @@ enum CudaPlanDescriptor {
 enum CudaPlanStorage {
     Compiled(NativeCutensorPlan),
     DeferredMakeContiguous,
+    DeferredDiagonal,
 }
 
 pub struct CudaPlan<T: Scalar> {

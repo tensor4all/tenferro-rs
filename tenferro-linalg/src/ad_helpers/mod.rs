@@ -1,11 +1,13 @@
 mod backend_ops;
 mod complex_ops;
+mod diagonal;
 mod layout;
 mod lu;
 mod matrix_exp;
 mod matrix_ops;
 mod svd;
 mod validation;
+mod views;
 
 use crate::{backend, prims_bridge, KernelLinalgScalar, NormKind};
 use chainrules_core::AdResult;
@@ -16,6 +18,7 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 
 pub(crate) use backend_ops::*;
 pub(crate) use complex_ops::*;
+pub(crate) use diagonal::*;
 pub(crate) use layout::*;
 pub(crate) use lu::*;
 #[doc(hidden)]
@@ -24,3 +27,4 @@ pub(crate) use matrix_exp::*;
 pub(crate) use matrix_ops::*;
 pub(crate) use svd::*;
 pub(crate) use validation::*;
+pub(crate) use views::*;
