@@ -129,9 +129,12 @@ where
             0 => {}
             1 => data.push(start),
             _ => {
-                let denom = <T as NumCast>::from(n_samples - 1).unwrap_or_else(|| {
-                    unreachable!("linspace denominator should fit the supported float scalar types")
-                });
+                let denom = <T as NumCast>::from(n_samples - 1).ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "linspace: sample count {} cannot be represented in target scalar type",
+                        n_samples
+                    ))
+                })?;
                 let step = (end - start) / denom;
                 let mut current = start;
                 for _ in 0..n_samples {
