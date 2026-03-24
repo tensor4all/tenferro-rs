@@ -20,60 +20,44 @@ use super::*;
 /// let cotangent = Tensor::<f64>::ones(&[3], mem, col).unwrap();
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
-pub fn solve_rrule<T: KernelLinalgScalar, C>(
+pub fn solve_rrule<T, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
     cotangent: &Tensor<T>,
 ) -> AdResult<SolveGrad<T>>
 where
-    T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    T: KernelLinalgScalar + tenferro_algebra::Conjugate,
+    C: backend::TensorLinalgContextFor<T> + tenferro_prims::TensorResolveConjContextFor<T>,
     C::Backend: 'static,
 {
-    // Ax = b → G = A^{-H} dx, dB = G, dA = -G x^H
-    let x = solve(ctx, a, b)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(a)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    // Ax = b → G = A^{-H} dx̄, dB = G, dA = -G x^H
+    let x = solve(ctx, a, b).map_err(to_ad_err)?;
+    let (n, batch_dims) = validate_square(a).map_err(to_ad_err)?;
     let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "solve_rrule")
         .map_err(to_ad_err)?;
     let nrhs = rhs.nrhs;
+    let sr = rhs.structural_rank;
 
-    let (a_data, _) = extract_data(a)?;
-    let (x_data, _) = extract_data(&x)?;
-    let (dx_data, _) = extract_data(cotangent)?;
+    // Promote cotangent and x to matrix form [n, nrhs, batch...]
+    let dx_mat = rhs_to_matrix(cotangent, sr).map_err(to_ad_err)?;
+    let x_mat = rhs_to_matrix(&x, sr).map_err(to_ad_err)?;
 
-    let mut grad_a_data = vec![T::zero(); n * n * bc];
-    let mut grad_b_data = vec![T::zero(); n * nrhs * bc];
+    // G = solve(A^H, cotangent)
+    let a_h = matrix_adjoint_eager(ctx, a).map_err(to_ad_err)?;
+    let g = solve(ctx, &a_h, &dx_mat).map_err(to_ad_err)?;
 
-    for batch in 0..bc {
-        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+    // dB = G (convert back to original RHS shape)
+    let grad_b = matrix_to_rhs(g.clone(), sr).map_err(to_ad_err)?;
 
-        // G = A^{-H} dx = solve(A^H, dx)
-        let at = adjoint_transpose(a_b, n, n);
-        let g = backend_solve(ctx, &at, dx_b, n, nrhs)?;
+    // dA = -G x^H  (use alpha=-1 in GEMM)
+    let x_h = matrix_adjoint_eager(ctx, &x_mat).map_err(to_ad_err)?;
+    let grad_a = prims_bridge::batched_gemm_alpha_tensors(ctx, &g, &x_h, n, nrhs, n, -T::one())
+        .map_err(to_ad_err)?;
 
-        // dB = G
-        grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
-
-        // dA = -G x^H (n×nrhs × nrhs×n = n×n)
-        let x_h = adjoint_transpose(x_b, n, nrhs);
-        let g_xh = backend_mat_mul(ctx, &g, n, nrhs, &x_h, n)?;
-        let neg_g_xh = scale_vec(&g_xh, -T::one());
-        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg_g_xh);
-    }
-
-    let a_dims = output_dims(&[n, n], batch_dims);
-    let b_dims = rhs.output_dims;
     Ok(SolveGrad {
-        a: tensor_from_data(grad_a_data, &a_dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
-        b: tensor_from_data(grad_b_data, &b_dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+        a: grad_a,
+        b: grad_b,
     })
 }
 
@@ -84,7 +68,7 @@ where
 /// - `G = A^{-H} x̄` solved with conjugate-transposed triangular structure
 /// - `b̄ = G`
 /// - `Ā = proj(-G x^H)` where `proj = triu` for upper, `tril` for lower
-pub fn solve_triangular_rrule<T: KernelLinalgScalar, C>(
+pub fn solve_triangular_rrule<T, C>(
     ctx: &mut C,
     a: &Tensor<T>,
     b: &Tensor<T>,
@@ -92,68 +76,52 @@ pub fn solve_triangular_rrule<T: KernelLinalgScalar, C>(
     upper: bool,
 ) -> AdResult<SolveGrad<T>>
 where
-    T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    T: KernelLinalgScalar + tenferro_algebra::Conjugate,
+    C: backend::TensorLinalgContextFor<T> + tenferro_prims::TensorResolveConjContextFor<T>,
     C::Backend: 'static,
 {
-    let x = solve_triangular(ctx, a, b, upper)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(a)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    let x = solve_triangular(ctx, a, b, upper).map_err(to_ad_err)?;
+    let (n, _) = validate_square(a).map_err(to_ad_err)?;
     let rhs = backend::tensor_helpers::validate_solve_rhs_shape(
         b,
         n,
-        batch_dims,
+        &a.dims()[2..],
         "solve_triangular_rrule",
     )
     .map_err(to_ad_err)?;
     let nrhs = rhs.nrhs;
+    let sr = rhs.structural_rank;
 
-    let (a_data, _) = extract_data(a)?;
-    let (x_data, _) = extract_data(&x)?;
-    let (dx_data, _) = extract_data(cotangent)?;
+    // Promote cotangent and x to matrix form
+    let dx_mat = rhs_to_matrix(cotangent, sr).map_err(to_ad_err)?;
+    let x_mat = rhs_to_matrix(&x, sr).map_err(to_ad_err)?;
 
-    let mut grad_a_data = vec![T::zero(); n * n * bc];
-    let mut grad_b_data = vec![T::zero(); n * nrhs * bc];
+    // G = solve_triangular(A^H, dx, !upper)  (A^H flips upper/lower)
+    let a_h = matrix_adjoint_eager(ctx, a).map_err(to_ad_err)?;
+    let g = solve_triangular(ctx, &a_h, &dx_mat, !upper).map_err(to_ad_err)?;
 
-    for batch in 0..bc {
-        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        let dx_b = &dx_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+    // dB = G
+    let grad_b = matrix_to_rhs(g.clone(), sr).map_err(to_ad_err)?;
 
-        // G = A^{-H} dX, where A^H flips upper/lower.
-        let at = adjoint_transpose(a_b, n, n);
-        let g = backend_solve_tri(ctx, &at, dx_b, n, nrhs, !upper)?;
+    // dA = proj(-G x^H)
+    let x_h = matrix_adjoint_eager(ctx, &x_mat).map_err(to_ad_err)?;
+    let neg_g_xh = prims_bridge::batched_gemm_alpha_tensors(ctx, &g, &x_h, n, nrhs, n, -T::one())
+        .map_err(to_ad_err)?;
+    let grad_a = if upper {
+        neg_g_xh.triu(0)
+    } else {
+        neg_g_xh.tril(0)
+    };
 
-        // dB = G
-        grad_b_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&g);
-
-        // dA = proj(-G x^H)
-        let x_h = adjoint_transpose(x_b, n, nrhs);
-        let g_xh = backend_mat_mul(ctx, &g, n, nrhs, &x_h, n)?;
-        let neg_g_xh = scale_vec(&g_xh, -T::one());
-        let projected = if upper {
-            triu(&neg_g_xh, n)
-        } else {
-            tril(&neg_g_xh, n)
-        };
-        grad_a_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&projected);
-    }
-
-    let a_dims = output_dims(&[n, n], batch_dims);
-    let b_dims = rhs.output_dims;
     Ok(SolveGrad {
-        a: tensor_from_data(grad_a_data, &a_dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
-        b: tensor_from_data(grad_b_data, &b_dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+        a: grad_a,
+        b: grad_b,
     })
 }
 
 /// Reverse-mode AD rule for matrix inverse (VJP / pullback).
 ///
-/// `Ā = -A⁻ᴴ · cotangent · A⁻ᴴ`.
+/// `Ā = -A⁻ᵀ · cotangent · A⁻ᵀ`.
 ///
 /// # Examples
 ///
@@ -183,32 +151,17 @@ where
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Inv, "inv_rrule")
         .map_err(to_ad_err)?;
 
-    // dA = -B^T dB B^T where B = A^{-1}
-    let b_inv = inv(ctx, tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    // dA = -B^T dB B^T where B = A^{-1}  (real-only, so transpose = adjoint)
+    let b_inv = inv(ctx, tensor).map_err(to_ad_err)?;
+    let (n, _) = validate_square(tensor).map_err(to_ad_err)?;
 
-    let (binv_data, _) = extract_data(&b_inv)?;
-    let (db_data, _) = extract_data(cotangent)?;
+    let bt = matrix_transpose(&b_inv).map_err(to_ad_err)?;
+    let bt_db = prims_bridge::batched_gemm_with_semiring_tensors(ctx, &bt, cotangent, n, n, n)
+        .map_err(to_ad_err)?;
+    let grad_a = prims_bridge::batched_gemm_alpha_tensors(ctx, &bt_db, &bt, n, n, n, -T::one())
+        .map_err(to_ad_err)?;
 
-    let mut grad_a = vec![T::zero(); n * n * bc];
-
-    for batch in 0..bc {
-        let b_b = &binv_data[batch * n * n..(batch + 1) * n * n];
-        let db_b = &db_data[batch * n * n..(batch + 1) * n * n];
-
-        let bt = transpose(b_b, n, n);
-        let bt_db = backend_mat_mul(ctx, &bt, n, n, db_b, n)?;
-        let bt_db_bt = backend_mat_mul(ctx, &bt_db, n, n, &bt, n)?;
-        let neg = scale_vec(&bt_db_bt, -T::one());
-        grad_a[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg);
-    }
-
-    let dims = output_dims(&[n, n], batch_dims);
-    tensor_from_data(grad_a, &dims)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))
+    Ok(grad_a)
 }
 
 /// Reverse-mode AD rule for determinant (VJP / pullback).
@@ -249,35 +202,36 @@ where
         .map_err(to_ad_err)?;
 
     // dA = ddet * det(A) * A^{-T}
-    let det_val = det(ctx, tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    let det_val = det(ctx, tensor).map_err(to_ad_err)?;
+    let a_inv = inv(ctx, tensor).map_err(to_ad_err)?;
+    let a_inv_t = matrix_transpose(&a_inv).map_err(to_ad_err)?;
 
-    let (a_data, _) = extract_data(tensor)?;
-    let (det_data, _) = extract_data(&det_val)?;
-    let (ddet_data, _) = extract_data(cotangent)?;
+    // scale = cotangent * det(A), shape [batch...]
+    let scale = prims_bridge::scalar_binary_same_shape(
+        ctx,
+        cotangent,
+        &det_val,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )
+    .map_err(to_ad_err)?;
 
-    let mut grad_a = vec![T::zero(); n * n * bc];
+    // broadcast scale [batch...] → [1, 1, batch...] → [n, n, batch...]
+    let scale_expanded = scale
+        .unsqueeze(0)
+        .map_err(to_ad_err)?
+        .unsqueeze(0)
+        .map_err(to_ad_err)?
+        .broadcast(a_inv_t.dims())
+        .map_err(to_ad_err)?;
+    let grad_a = prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &scale_expanded,
+        &a_inv_t,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )
+    .map_err(to_ad_err)?;
 
-    for batch in 0..bc {
-        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-        let d = det_data[batch];
-        let dd = ddet_data[batch];
-
-        // A^{-T}
-        let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
-        let a_inv_t = transpose(&a_inv, n, n);
-
-        let scale = dd * d;
-        let da_b = scale_vec(&a_inv_t, scale);
-        grad_a[batch * n * n..(batch + 1) * n * n].copy_from_slice(&da_b);
-    }
-
-    let dims = output_dims(&[n, n], batch_dims);
-    tensor_from_data(grad_a, &dims)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))
+    Ok(grad_a)
 }
 
 /// Reverse-mode AD rule for slogdet (VJP / pullback).
@@ -311,35 +265,43 @@ pub fn slogdet_rrule<
 ) -> AdResult<Tensor<T>>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Slogdet, "slogdet_rrule")
         .map_err(to_ad_err)?;
 
     // dA = d_logabsdet * A^{-T}
-    let (n, batch_dims) = validate_square(tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
-
-    let (a_data, _) = extract_data(tensor)?;
-
-    let mut grad_a = vec![T::zero(); n * n * bc];
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
 
     if let Some(ref dlog) = cotangent.logabsdet {
-        let (dlog_data, _) = extract_data(dlog)?;
-        for batch in 0..bc {
-            let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-            let dl = dlog_data[batch];
+        let a_inv = inv(ctx, tensor).map_err(to_ad_err)?;
+        let a_inv_t = matrix_transpose(&a_inv).map_err(to_ad_err)?;
 
-            let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
-            let a_inv_t = transpose(&a_inv, n, n);
-            let da_b = scale_vec(&a_inv_t, dl);
-            grad_a[batch * n * n..(batch + 1) * n * n].copy_from_slice(&da_b);
-        }
+        // broadcast dlog [batch...] → [1, 1, batch...] → [n, n, batch...]
+        let dlog_expanded = dlog
+            .unsqueeze(0)
+            .map_err(to_ad_err)?
+            .unsqueeze(0)
+            .map_err(to_ad_err)?
+            .broadcast(a_inv_t.dims())
+            .map_err(to_ad_err)?;
+        let grad_a = prims_bridge::scalar_binary_same_shape(
+            ctx,
+            &dlog_expanded,
+            &a_inv_t,
+            tenferro_prims::ScalarBinaryOp::Mul,
+        )
+        .map_err(to_ad_err)?;
+        Ok(grad_a)
+    } else {
+        let dims = output_dims(&[n, n], batch_dims);
+        Tensor::zeros(
+            &dims,
+            tensor.logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .map_err(to_ad_err)
     }
-
-    let dims = output_dims(&[n, n], batch_dims);
-    tensor_from_data(grad_a, &dims)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))
 }

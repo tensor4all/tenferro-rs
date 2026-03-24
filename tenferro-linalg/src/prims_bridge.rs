@@ -77,6 +77,22 @@ where
     T: LinalgScalar,
     C: TensorSemiringContextFor<Standard<T>>,
 {
+    batched_gemm_alpha_tensors(ctx, lhs, rhs, m, k, n, T::one())
+}
+
+pub(crate) fn batched_gemm_alpha_tensors<T, C>(
+    ctx: &mut C,
+    lhs: &Tensor<T>,
+    rhs: &Tensor<T>,
+    m: usize,
+    k: usize,
+    n: usize,
+    alpha: T,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+    C: TensorSemiringContextFor<Standard<T>>,
+{
     let lhs = lhs.contiguous(MemoryOrder::ColumnMajor);
     let rhs = rhs.contiguous(MemoryOrder::ColumnMajor);
 
@@ -138,7 +154,7 @@ where
     <C::SemiringBackend as TensorSemiringCore<Standard<T>>>::execute(
         ctx,
         &plan,
-        T::one(),
+        alpha,
         &[&lhs, &rhs],
         T::zero(),
         &mut output,
@@ -163,6 +179,33 @@ where
         T,
         <C as TensorSemiringContextFor<Standard<T>>>::SemiringBackend,
     >(ctx, a, m, k, b, n)
+}
+
+pub(crate) fn semiring_core_single_input_into<T, C>(
+    ctx: &mut C,
+    desc: &SemiringCoreDescriptor,
+    input: &Tensor<T>,
+    alpha: T,
+    beta: T,
+    output: &mut Tensor<T>,
+) -> Result<()>
+where
+    T: LinalgScalar,
+    C: TensorSemiringContextFor<Standard<T>>,
+{
+    let plan = <C::SemiringBackend as TensorSemiringCore<Standard<T>>>::plan(
+        ctx,
+        desc,
+        &[input.dims(), output.dims()],
+    )?;
+    <C::SemiringBackend as TensorSemiringCore<Standard<T>>>::execute(
+        ctx,
+        &plan,
+        alpha,
+        &[input],
+        beta,
+        output,
+    )
 }
 
 pub(crate) fn full_like_constant<T: LinalgScalar>(
