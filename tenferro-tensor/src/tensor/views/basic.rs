@@ -1,4 +1,17 @@
 use super::*;
+use tenferro_algebra::Conjugate;
+
+fn matrix_transpose_permutation(ndim: usize) -> Result<Vec<usize>> {
+    if ndim < 2 {
+        return Err(Error::InvalidArgument(
+            "mT requires at least 2 dimensions".into(),
+        ));
+    }
+
+    let mut perm: Vec<usize> = (0..ndim).collect();
+    perm.swap(ndim - 2, ndim - 1);
+    Ok(perm)
+}
 
 impl<T: Scalar> Tensor<T> {
     /// Permute (reorder) the dimensions of the tensor.
@@ -432,5 +445,60 @@ impl<T: Scalar> Tensor<T> {
         new_strides.remove(dim);
 
         Ok(self.shared_view_with(Arc::from(new_dims), Arc::from(new_strides), self.offset))
+    }
+
+    /// Return a zero-copy view with the last two axes transposed.
+    ///
+    /// This is a metadata-only operation. For batched matrices, leading batch
+    /// axes are preserved and only the final two matrix axes are swapped.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::from_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ///     &[2, 3],
+    ///     MemoryOrder::ColumnMajor,
+    /// )
+    /// .unwrap();
+    /// let mt = t.mT().unwrap();
+    /// assert_eq!(mt.dims(), &[3, 2]);
+    /// ```
+    #[allow(non_snake_case)]
+    pub fn mT(&self) -> Result<Tensor<T>> {
+        self.permute(&matrix_transpose_permutation(self.ndim())?)
+    }
+}
+
+impl<T> Tensor<T>
+where
+    T: Scalar + Conjugate,
+{
+    /// Return a zero-copy conjugate-transpose view over the last two axes.
+    ///
+    /// This is equivalent to `self.mT()?.conj()`: swap the trailing matrix axes
+    /// and toggle the lazy conjugation flag.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let z = Tensor::<Complex64>::from_slice(
+    ///     &[Complex64::new(1.0, 2.0), Complex64::new(3.0, 4.0)],
+    ///     &[2, 1],
+    ///     MemoryOrder::ColumnMajor,
+    /// )
+    /// .unwrap();
+    /// let mh = z.mH().unwrap();
+    /// assert_eq!(mh.dims(), &[1, 2]);
+    /// assert!(mh.is_conjugated());
+    /// ```
+    #[allow(non_snake_case)]
+    pub fn mH(&self) -> Result<Tensor<T>> {
+        Ok(self.mT()?.conj())
     }
 }

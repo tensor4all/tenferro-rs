@@ -226,6 +226,99 @@ representation_suite!(
     [1.0_f32, 11.0, 2.0, 22.0]
 );
 
+macro_rules! component_view_suite {
+    ($module:ident, $complex:ty, $real:ty, $values:expr, $real_values:expr, $imag_values:expr) => {
+        mod $module {
+            use super::*;
+
+            fn complex_tensor() -> Tensor<$complex> {
+                Tensor::<$complex>::from_slice(&$values, &[2, 2], MemoryOrder::ColumnMajor).unwrap()
+            }
+
+            #[test]
+            fn real_returns_zero_copy_component_view() {
+                let base = complex_tensor();
+                let real = base.real().unwrap();
+
+                assert_eq!(real.dims(), &[2, 2]);
+                assert_eq!(real.strides(), &[2, 4]);
+                assert_eq!(real.offset(), 0);
+                assert_eq!(real.buffer().as_ptr().unwrap() as usize, base.buffer().as_ptr().unwrap() as usize);
+                assert_eq!(
+                    real.contiguous(MemoryOrder::ColumnMajor)
+                        .buffer()
+                        .as_slice()
+                        .unwrap(),
+                    &$real_values
+                );
+            }
+
+            #[test]
+            fn imag_returns_zero_copy_component_view() {
+                let base = complex_tensor();
+                let imag = base.imag().unwrap();
+
+                assert_eq!(imag.dims(), &[2, 2]);
+                assert_eq!(imag.strides(), &[2, 4]);
+                assert_eq!(imag.offset(), 1);
+                assert_eq!(imag.buffer().as_ptr().unwrap() as usize, base.buffer().as_ptr().unwrap() as usize);
+                assert_eq!(
+                    imag.contiguous(MemoryOrder::ColumnMajor)
+                        .buffer()
+                        .as_slice()
+                        .unwrap(),
+                    &$imag_values
+                );
+            }
+
+            #[test]
+            fn real_and_imag_reject_conjugated_inputs() {
+                let base = complex_tensor();
+
+                let real_err = base.conj().real().unwrap_err();
+                assert!(
+                    matches!(real_err, Error::InvalidArgument(ref msg) if msg.contains("resolved complex tensor")),
+                    "expected resolved-complex error from real(), got {real_err:?}"
+                );
+
+                let imag_err = base.conj().imag().unwrap_err();
+                assert!(
+                    matches!(imag_err, Error::InvalidArgument(ref msg) if msg.contains("resolved complex tensor")),
+                    "expected resolved-complex error from imag(), got {imag_err:?}"
+                );
+            }
+        }
+    };
+}
+
+component_view_suite!(
+    complex64_components,
+    Complex64,
+    f64,
+    [
+        Complex64::new(1.0, 11.0),
+        Complex64::new(2.0, 22.0),
+        Complex64::new(3.0, 33.0),
+        Complex64::new(4.0, 44.0),
+    ],
+    [1.0_f64, 2.0, 3.0, 4.0],
+    [11.0_f64, 22.0, 33.0, 44.0]
+);
+
+component_view_suite!(
+    complex32_components,
+    Complex32,
+    f32,
+    [
+        Complex32::new(1.0, 11.0),
+        Complex32::new(2.0, 22.0),
+        Complex32::new(3.0, 33.0),
+        Complex32::new(4.0, 44.0),
+    ],
+    [1.0_f32, 2.0, 3.0, 4.0],
+    [11.0_f32, 22.0, 33.0, 44.0]
+);
+
 #[test]
 fn view_as_real_rejects_conjugated_complex_tensors() {
     let complex64 = Tensor::<Complex64>::from_slice(

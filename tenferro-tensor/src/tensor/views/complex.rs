@@ -43,6 +43,10 @@ fn view_as_complex_strides(dims: &[usize], strides: &[isize]) -> Result<Vec<isiz
     Ok(output)
 }
 
+fn select_complex_component<T: Scalar>(view: Tensor<T>, component: usize) -> Result<Tensor<T>> {
+    view.select(view.ndim() - 1, component)
+}
+
 impl Tensor<Complex32> {
     /// Return a zero-copy real view of a complex tensor.
     ///
@@ -97,6 +101,54 @@ impl Tensor<Complex32> {
             None,
         ))
     }
+
+    /// Return a zero-copy view of the real part of a resolved complex tensor.
+    ///
+    /// This is implemented as `view_as_real()` followed by selecting the real
+    /// lane of the trailing size-2 axis.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex32;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let z = Tensor::<Complex32>::from_slice(
+    ///     &[Complex32::new(1.0, 2.0)],
+    ///     &[1],
+    ///     MemoryOrder::ColumnMajor,
+    /// )
+    /// .unwrap();
+    /// let real = z.real().unwrap();
+    /// assert_eq!(real.dims(), &[1]);
+    /// ```
+    pub fn real(&self) -> Result<Tensor<f32>> {
+        select_complex_component(self.view_as_real()?, 0)
+    }
+
+    /// Return a zero-copy view of the imaginary part of a resolved complex tensor.
+    ///
+    /// This is implemented as `view_as_real()` followed by selecting the
+    /// imaginary lane of the trailing size-2 axis.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex32;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let z = Tensor::<Complex32>::from_slice(
+    ///     &[Complex32::new(1.0, 2.0)],
+    ///     &[1],
+    ///     MemoryOrder::ColumnMajor,
+    /// )
+    /// .unwrap();
+    /// let imag = z.imag().unwrap();
+    /// assert_eq!(imag.dims(), &[1]);
+    /// ```
+    pub fn imag(&self) -> Result<Tensor<f32>> {
+        select_complex_component(self.view_as_real()?, 1)
+    }
 }
 
 impl Tensor<Complex64> {
@@ -150,6 +202,54 @@ impl Tensor<Complex64> {
             false,
             None,
         ))
+    }
+
+    /// Return a zero-copy view of the real part of a resolved complex tensor.
+    ///
+    /// This is implemented as `view_as_real()` followed by selecting the real
+    /// lane of the trailing size-2 axis.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let z = Tensor::<Complex64>::from_slice(
+    ///     &[Complex64::new(1.0, 2.0)],
+    ///     &[1],
+    ///     MemoryOrder::ColumnMajor,
+    /// )
+    /// .unwrap();
+    /// let real = z.real().unwrap();
+    /// assert_eq!(real.dims(), &[1]);
+    /// ```
+    pub fn real(&self) -> Result<Tensor<f64>> {
+        select_complex_component(self.view_as_real()?, 0)
+    }
+
+    /// Return a zero-copy view of the imaginary part of a resolved complex tensor.
+    ///
+    /// This is implemented as `view_as_real()` followed by selecting the
+    /// imaginary lane of the trailing size-2 axis.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let z = Tensor::<Complex64>::from_slice(
+    ///     &[Complex64::new(1.0, 2.0)],
+    ///     &[1],
+    ///     MemoryOrder::ColumnMajor,
+    /// )
+    /// .unwrap();
+    /// let imag = z.imag().unwrap();
+    /// assert_eq!(imag.dims(), &[1]);
+    /// ```
+    pub fn imag(&self) -> Result<Tensor<f64>> {
+        select_complex_component(self.view_as_real()?, 1)
     }
 }
 
