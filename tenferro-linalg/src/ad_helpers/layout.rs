@@ -6,12 +6,16 @@ pub(crate) fn ensure_col_major<T: LinalgScalar>(tensor: &Tensor<T>) -> Tensor<T>
     tensor.contiguous(MemoryOrder::ColumnMajor)
 }
 
-/// Extract the raw data slice from a tensor.
-pub(crate) fn extract_slice<T: LinalgScalar>(tensor: &Tensor<T>) -> Result<&[T]> {
-    tensor
-        .buffer()
-        .as_slice()
-        .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))
+fn extract_contiguous_vec<T: Scalar>(tensor: &Tensor<T>) -> AdResult<Vec<T>> {
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let total_len: usize = tensor.dims().iter().product();
+    let slice = contiguous.buffer().as_slice().ok_or_else(|| {
+        chainrules_core::AutodiffError::InvalidArgument(
+            "tensor buffer is not a contiguous CPU slice".into(),
+        )
+    })?;
+    Ok(slice[offset..offset + total_len].to_vec())
 }
 
 /// Convert an f64 constant to scalar type `T`.
@@ -43,24 +47,12 @@ pub(crate) fn tensor_from_data_scalar<T: Scalar>(
 
 /// Extract owned contiguous data from a tensor.
 pub(crate) fn extract_data<T: LinalgScalar>(tensor: &Tensor<T>) -> AdResult<(Vec<T>, usize)> {
-    let t = ensure_col_major(tensor);
-    let offset = t.offset() as usize;
-    let slice = extract_slice(&t).map_err(to_ad_err)?;
-    let total_len = tensor.dims().iter().product::<usize>();
-    Ok((slice[offset..offset + total_len].to_vec(), 0))
+    Ok((extract_contiguous_vec(tensor)?, 0))
 }
 
 /// Extract owned contiguous data from a scalar-backed tensor.
 pub(crate) fn extract_data_scalar<T: Scalar>(tensor: &Tensor<T>) -> AdResult<Vec<T>> {
-    let t = tensor.contiguous(MemoryOrder::ColumnMajor);
-    let offset = t.offset() as usize;
-    let slice = t.buffer().as_slice().ok_or_else(|| {
-        chainrules_core::AutodiffError::InvalidArgument(
-            "tensor buffer is not a contiguous CPU slice".into(),
-        )
-    })?;
-    let total_len: usize = tensor.dims().iter().product();
-    Ok(slice[offset..offset + total_len].to_vec())
+    extract_contiguous_vec(tensor)
 }
 
 /// Extract a forward permutation vector from a permutation matrix tensor.
@@ -128,3 +120,6 @@ where
     }
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests;

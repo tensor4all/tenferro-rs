@@ -456,6 +456,9 @@ where
     }
 }
 
+#[cfg(test)]
+mod tests;
+
 macro_rules! impl_norm_primal_real {
     ($ty:ty) => {
         impl<C> NormPrimal<C> for $ty

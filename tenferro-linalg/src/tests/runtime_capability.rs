@@ -201,6 +201,27 @@ fn public_and_ad_linalg_layers_do_not_fall_back_to_cpu_slice_helpers() {
 }
 
 #[test]
+fn ad_helper_cleanup_targets_do_not_use_slice_bridge_or_extract_slice() {
+    for path in [
+        "src/ad_helpers/backend_ops.rs",
+        "src/ad_helpers/complex_ops.rs",
+        "src/ad_helpers/matrix_exp.rs",
+    ] {
+        let contents = repo_file(path);
+        assert!(
+            !contents.contains("backend::slice_bridge::"),
+            "{path} should not call backend::slice_bridge::* once the AD cleanup plan is complete"
+        );
+    }
+
+    let layout = repo_file("src/ad_helpers/layout.rs");
+    assert!(
+        !layout.contains("extract_slice("),
+        "src/ad_helpers/layout.rs should not expose extract_slice-driven AD materialization"
+    );
+}
+
+#[test]
 fn vander_stays_tensor_native_and_avoids_host_extraction() {
     let tensor_ops = repo_file("src/primal/tensor_ops.rs");
     let vander = file_section(&tensor_ops, "pub fn vander", "pub fn tensorinv");
@@ -658,7 +679,7 @@ fn matrix_exp_path_is_tensor_native_with_scalar_host_loop_bound_sync() {
     let tensor_native_helper = file_section(
         &matrix_exp_helper,
         "pub(crate) fn matrix_exp_batch_1_norms_tensor",
-        "pub(crate) fn matrix_1_norm",
+        "pub(crate) fn matrix_exp_single",
     );
 
     assert!(

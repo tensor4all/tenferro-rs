@@ -225,3 +225,74 @@ representation_suite!(
     &[2, 1],
     [1.0_f32, 11.0, 2.0, 22.0]
 );
+
+#[test]
+fn view_as_real_rejects_conjugated_complex_tensors() {
+    let complex64 = Tensor::<Complex64>::from_slice(
+        &[Complex64::new(1.0, 2.0)],
+        &[1],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = complex64.conj().view_as_real().unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(ref msg) if msg.contains("resolved complex tensor"))
+    );
+
+    let complex32 = Tensor::<Complex32>::from_slice(
+        &[Complex32::new(1.0, 2.0)],
+        &[1],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = complex32.conj().view_as_real().unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(ref msg) if msg.contains("resolved complex tensor"))
+    );
+}
+
+#[test]
+fn view_as_complex_rejects_scalar_wrong_last_dim_wrong_last_stride_and_odd_offset() {
+    let scalar = Tensor::<f64>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap();
+    let err = scalar.view_as_complex().unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(ref msg) if msg.contains("at least one dimension"))
+    );
+
+    let wrong_last_dim =
+        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let err = wrong_last_dim.view_as_complex().unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(ref msg) if msg.contains("last dimension")));
+
+    let wrong_last_stride =
+        Tensor::<f64>::from_vec(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], &[1, 2], 0).unwrap();
+    let err = wrong_last_stride.view_as_complex().unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(ref msg) if msg.contains("last stride")));
+
+    let odd_offset = Tensor::<f64>::from_vec(vec![0.0, 1.0, 11.0], &[1, 2], &[2, 1], 1).unwrap();
+    let err = odd_offset.view_as_complex().unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(ref msg) if msg.contains("even element offset")));
+}
+
+#[test]
+fn view_as_complex_rejects_same_error_cases_for_f32() {
+    let scalar = Tensor::<f32>::from_slice(&[1.0], &[], MemoryOrder::ColumnMajor).unwrap();
+    let err = scalar.view_as_complex().unwrap_err();
+    assert!(
+        matches!(err, Error::InvalidArgument(ref msg) if msg.contains("at least one dimension"))
+    );
+
+    let wrong_last_dim =
+        Tensor::<f32>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let err = wrong_last_dim.view_as_complex().unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(ref msg) if msg.contains("last dimension")));
+
+    let wrong_last_stride =
+        Tensor::<f32>::from_vec(vec![1.0, 2.0, 3.0, 4.0], &[2, 2], &[1, 2], 0).unwrap();
+    let err = wrong_last_stride.view_as_complex().unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(ref msg) if msg.contains("last stride")));
+
+    let odd_offset = Tensor::<f32>::from_vec(vec![0.0, 1.0, 11.0], &[1, 2], &[2, 1], 1).unwrap();
+    let err = odd_offset.view_as_complex().unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(ref msg) if msg.contains("even element offset")));
+}

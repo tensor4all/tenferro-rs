@@ -320,3 +320,42 @@ fn cuda_rng_constructors_require_cuda_generators_for_gpu_memory() {
     )
     .is_err());
 }
+
+#[test]
+fn special_constructors_cover_row_major_negative_steps_and_sample_count_edges() {
+    let eye = Tensor::<f64>::eye(3, CPU, MemoryOrder::RowMajor).unwrap();
+    assert_eq!(eye.dims(), &[3, 3]);
+    assert_eq!(eye.strides(), &[3, 1]);
+    assert_eq!(
+        eye.buffer().as_slice().unwrap(),
+        &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    );
+
+    let descending = Tensor::<f64>::arange(5.0, -1.0, -2.0, CPU, MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(descending.dims(), &[3]);
+    assert_eq!(descending.buffer().as_slice().unwrap(), &[5.0, 3.0, 1.0]);
+
+    let empty = Tensor::<f64>::linspace(0.0, 1.0, 0, CPU, MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(empty.dims(), &[0]);
+    assert!(empty.buffer().as_slice().unwrap().is_empty());
+
+    let singleton = Tensor::<f64>::linspace(4.0, 10.0, 1, CPU, MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(singleton.dims(), &[1]);
+    assert_eq!(singleton.buffer().as_slice().unwrap(), &[4.0]);
+}
+
+#[test]
+fn special_constructors_cover_column_major_eye_and_empty_sequences() {
+    let eye = Tensor::<f64>::eye(2, CPU, MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(eye.strides(), &[1, 2]);
+    assert_eq!(eye.buffer().as_slice().unwrap(), &[1.0, 0.0, 0.0, 1.0]);
+
+    let empty_eye = Tensor::<f64>::eye(0, CPU, MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(empty_eye.dims(), &[0, 0]);
+    assert!(empty_eye.buffer().as_slice().unwrap().is_empty());
+
+    let empty_descending =
+        Tensor::<f64>::arange(-1.0, 5.0, -1.0, CPU, MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(empty_descending.dims(), &[0]);
+    assert!(empty_descending.buffer().as_slice().unwrap().is_empty());
+}

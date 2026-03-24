@@ -3,8 +3,11 @@ use tenferro_device::{Generator, LogicalMemorySpace};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::{CpuBackend, CpuContext, RngPrimsDescriptor, TensorRngPrims};
+#[cfg(not(feature = "cuda"))]
+use crate::{CudaBackend, CudaContext};
 #[cfg(feature = "cuda")]
 use crate::{CudaBackend, CudaContext};
+use crate::{RocmBackend, RocmContext};
 
 fn assert_close_slice(actual: &[f64], expected: &[f64], tol: f64) {
     assert_eq!(actual.len(), expected.len());
@@ -372,4 +375,164 @@ fn cuda_rng_phase1_rejects_cpu_generator_for_zero_sized_gpu_outputs() {
         &mut randint,
     )
     .is_err());
+}
+
+#[test]
+fn cpu_rng_phase1_rejects_invalid_ranges_dtype_mismatch_and_shape_mismatch() {
+    let mut ctx = CpuContext::new(1);
+
+    let err = <CpuBackend as TensorRngPrims<Standard<i32>>>::plan(
+        &mut ctx,
+        &RngPrimsDescriptor::Integer { low: 4, high: 4 },
+        &[&[2]],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("low < high"));
+
+    let err = <CpuBackend as TensorRngPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &RngPrimsDescriptor::Integer { low: -2, high: 3 },
+        &[&[2]],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("Tensor<i32>"));
+
+    let err = <CpuBackend as TensorRngPrims<Standard<i32>>>::plan(
+        &mut ctx,
+        &RngPrimsDescriptor::Uniform,
+        &[&[2]],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("Tensor<f64>"));
+
+    let plan = <CpuBackend as TensorRngPrims<Standard<f64>>>::plan(
+        &mut ctx,
+        &RngPrimsDescriptor::Uniform,
+        &[&[2]],
+    )
+    .unwrap();
+    let mut generator = Generator::cpu(5);
+    let mut wrong_output = Tensor::<f64>::zeros(
+        &[3],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = <CpuBackend as TensorRngPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &plan,
+        &mut generator,
+        &mut wrong_output,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        tenferro_device::Error::ShapeMismatch { expected, got }
+        if expected == vec![2] && got == vec![3]
+    ));
+}
+
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn stub_rng_family_descriptors_reject_all_non_cuda_backends_and_dtypes() {
+    let mut cuda_ctx = CudaContext::new();
+    let mut rocm_ctx = RocmContext::new();
+    let mut generator = Generator::cpu(123);
+    let mut float_output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let mut int_output = Tensor::<i32>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    for desc in [
+        RngPrimsDescriptor::Uniform,
+        RngPrimsDescriptor::Normal,
+        RngPrimsDescriptor::Integer { low: -2, high: 3 },
+    ] {
+        let cuda_f64_plan =
+            <CudaBackend as TensorRngPrims<Standard<f64>>>::plan(&mut cuda_ctx, &desc, &[&[2]])
+                .unwrap_err();
+        assert!(cuda_f64_plan.to_string().contains("CudaBackend"));
+        let cuda_i32_plan =
+            <CudaBackend as TensorRngPrims<Standard<i32>>>::plan(&mut cuda_ctx, &desc, &[&[2]])
+                .unwrap_err();
+        assert!(cuda_i32_plan.to_string().contains("CudaBackend"));
+
+        let rocm_f64_plan =
+            <RocmBackend as TensorRngPrims<Standard<f64>>>::plan(&mut rocm_ctx, &desc, &[&[2]])
+                .unwrap_err();
+        assert!(rocm_f64_plan.to_string().contains("RocmBackend"));
+        let rocm_i32_plan =
+            <RocmBackend as TensorRngPrims<Standard<i32>>>::plan(&mut rocm_ctx, &desc, &[&[2]])
+                .unwrap_err();
+        assert!(rocm_i32_plan.to_string().contains("RocmBackend"));
+    }
+
+    for plan in [
+        (RngPrimsDescriptor::Uniform, vec![2]),
+        (RngPrimsDescriptor::Normal, vec![2]),
+    ] {
+        let cuda_err = <CudaBackend as TensorRngPrims<Standard<f64>>>::execute(
+            &mut cuda_ctx,
+            &plan,
+            &mut generator,
+            &mut float_output,
+        )
+        .unwrap_err();
+        assert!(cuda_err.to_string().contains("CudaBackend"));
+        let rocm_err = <RocmBackend as TensorRngPrims<Standard<f64>>>::execute(
+            &mut rocm_ctx,
+            &plan,
+            &mut generator,
+            &mut float_output,
+        )
+        .unwrap_err();
+        assert!(rocm_err.to_string().contains("RocmBackend"));
+    }
+
+    let int_plan = (RngPrimsDescriptor::Integer { low: -2, high: 3 }, vec![2]);
+    let cuda_err = <CudaBackend as TensorRngPrims<Standard<i32>>>::execute(
+        &mut cuda_ctx,
+        &int_plan,
+        &mut generator,
+        &mut int_output,
+    )
+    .unwrap_err();
+    assert!(cuda_err.to_string().contains("CudaBackend"));
+    let rocm_err = <RocmBackend as TensorRngPrims<Standard<i32>>>::execute(
+        &mut rocm_ctx,
+        &int_plan,
+        &mut generator,
+        &mut int_output,
+    )
+    .unwrap_err();
+    assert!(rocm_err.to_string().contains("RocmBackend"));
+
+    assert!(
+        !<CudaBackend as TensorRngPrims<Standard<f64>>>::has_rng_support(
+            RngPrimsDescriptor::Uniform
+        )
+    );
+    assert!(
+        !<CudaBackend as TensorRngPrims<Standard<i32>>>::has_rng_support(
+            RngPrimsDescriptor::Integer { low: -2, high: 3 }
+        )
+    );
+    assert!(
+        !<RocmBackend as TensorRngPrims<Standard<f64>>>::has_rng_support(
+            RngPrimsDescriptor::Normal
+        )
+    );
+    assert!(
+        !<RocmBackend as TensorRngPrims<Standard<i32>>>::has_rng_support(
+            RngPrimsDescriptor::Integer { low: -2, high: 3 }
+        )
+    );
 }

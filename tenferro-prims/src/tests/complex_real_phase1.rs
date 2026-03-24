@@ -96,6 +96,48 @@ where
     output
 }
 
+fn execute_reduce_real_cpu<C>(
+    values: &[C],
+    dims: &[usize],
+    reduction_op: ScalarReductionOp,
+) -> Tensor<C::Real>
+where
+    C: Scalar + num_complex::ComplexFloat,
+    C::Real: Scalar + Zero + One,
+    CpuBackend: TensorComplexRealPrims<C, Real = C::Real, Context = CpuContext>,
+{
+    let mut ctx = CpuContext::new(1);
+    let input = Tensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap();
+    let desc = ComplexRealPrimsDescriptor::Reduction {
+        modes_a: vec![0, 1],
+        modes_c: vec![1],
+        unary_op: ComplexRealUnaryOp::Abs,
+        reduction_op,
+    };
+    let mut output = Tensor::<C::Real>::zeros(
+        &[dims[1]],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let plan = <CpuBackend as TensorComplexRealPrims<C>>::plan(
+        &mut ctx,
+        &desc,
+        &[input.dims(), output.dims()],
+    )
+    .unwrap();
+    <CpuBackend as TensorComplexRealPrims<C>>::execute(
+        &mut ctx,
+        &plan,
+        <C::Real as One>::one(),
+        &[&input],
+        <C::Real as Zero>::zero(),
+        &mut output,
+    )
+    .unwrap();
+    output
+}
+
 #[test]
 fn cpu_complex_real_phase1_supports_abs_for_complex32_and_complex64() {
     let desc = ComplexRealPrimsDescriptor::PointwiseUnary {
@@ -278,4 +320,66 @@ fn cpu_complex_real_phase1_executes_abs_sum_reduction_for_complex64() {
         &[2, 2],
     );
     assert_close_slice_f64(output.buffer().as_slice().unwrap(), &[18.0, 42.0], 1.0e-12);
+}
+
+#[test]
+fn cpu_complex_real_phase1_executes_all_reduction_modes_for_complex64() {
+    let values = [
+        Complex64::new(3.0, 4.0),
+        Complex64::new(0.0, 4.0),
+        Complex64::new(1.0, 0.0),
+        Complex64::new(0.0, 2.0),
+    ];
+
+    let sum = execute_reduce_real_cpu::<Complex64>(&values, &[2, 2], ScalarReductionOp::Sum);
+    assert_close_slice_f64(sum.buffer().as_slice().unwrap(), &[9.0, 3.0], 1.0e-12);
+
+    let prod = execute_reduce_real_cpu::<Complex64>(&values, &[2, 2], ScalarReductionOp::Prod);
+    assert_close_slice_f64(prod.buffer().as_slice().unwrap(), &[20.0, 2.0], 1.0e-12);
+
+    let mean = execute_reduce_real_cpu::<Complex64>(&values, &[2, 2], ScalarReductionOp::Mean);
+    assert_close_slice_f64(mean.buffer().as_slice().unwrap(), &[4.5, 1.5], 1.0e-12);
+
+    let max = execute_reduce_real_cpu::<Complex64>(&values, &[2, 2], ScalarReductionOp::Max);
+    assert_close_slice_f64(max.buffer().as_slice().unwrap(), &[5.0, 2.0], 1.0e-12);
+
+    let min = execute_reduce_real_cpu::<Complex64>(&values, &[2, 2], ScalarReductionOp::Min);
+    assert_close_slice_f64(min.buffer().as_slice().unwrap(), &[4.0, 1.0], 1.0e-12);
+}
+
+#[test]
+fn cpu_complex_real_phase1_accumulates_beta_for_all_unary_ops() {
+    let mut ctx = CpuContext::new(1);
+    let input = Tensor::from_slice(
+        &[Complex64::new(3.0, 4.0), Complex64::new(-5.0, 12.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    for (op, expected) in [
+        (ComplexRealUnaryOp::Abs, vec![7.0, 11.0]),
+        (ComplexRealUnaryOp::Real, vec![5.0, -7.0]),
+        (ComplexRealUnaryOp::Imag, vec![6.0, 10.0]),
+    ] {
+        let desc = ComplexRealPrimsDescriptor::PointwiseUnary { op };
+        let plan = <CpuBackend as TensorComplexRealPrims<Complex64>>::plan(
+            &mut ctx,
+            &desc,
+            &[input.dims(), &[2]],
+        )
+        .unwrap();
+        let mut output =
+            Tensor::<f64>::from_slice(&[1.0, -1.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        <CpuBackend as TensorComplexRealPrims<Complex64>>::execute(
+            &mut ctx,
+            &plan,
+            1.0,
+            &[&input],
+            2.0,
+            &mut output,
+        )
+        .unwrap();
+        assert_close_slice_f64(output.buffer().as_slice().unwrap(), &expected, 1.0e-12);
+    }
 }

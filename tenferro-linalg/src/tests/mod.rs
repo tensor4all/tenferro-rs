@@ -91,8 +91,9 @@ fn linalg_scalar_helpers_and_validation_accept_valid_inputs() {
     ];
     validate_hermitian_batches(&hermitian, 0, 2, 1, "eigh").unwrap();
 
-    let slice = extract_slice(&square).unwrap();
-    assert_eq!(slice, &[1.0, 0.0, 0.0, 1.0]);
+    let (square_data, square_offset) = extract_data(&square).unwrap();
+    assert_eq!(square_offset, 0);
+    assert_eq!(square_data, vec![1.0, 0.0, 0.0, 1.0]);
 
     let scalar = scalar_from::<f32>(1.25).unwrap();
     assert_eq!(scalar, 1.25_f32);
@@ -196,6 +197,163 @@ fn matrix_exp_batch_squaring_counts_stay_tensor_native() {
         crate::ad_helpers::matrix_exp_batch_squaring_counts_tensor(&mut ctx, &batch_norms).unwrap();
     assert_eq!(counts.dims(), &[3]);
     assert_eq!(tensor_data(&counts), vec![1.0, 0.0, 2.0]);
+}
+
+#[test]
+fn matrix_power_covers_special_exponents_and_min_value_guard() {
+    let mut ctx = CpuContext::new(1);
+    let a =
+        Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 0).unwrap()),
+        vec![1.0, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 1).unwrap()),
+        tensor_data(&a)
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 2).unwrap()),
+        vec![4.0, 0.0, 0.0, 16.0]
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 3).unwrap()),
+        vec![8.0, 0.0, 0.0, 64.0]
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, -1).unwrap()),
+        vec![0.5, 0.0, 0.0, 0.25]
+    );
+
+    let err = matrix_power(&mut ctx, &a, i64::MIN).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("i64::MIN exponent")));
+}
+
+#[test]
+fn inv_ex_zero_sized_matrix_returns_zero_info_tensor() {
+    let mut ctx = CpuContext::new(1);
+    let empty = Tensor::<f64>::zeros(
+        &[0, 0],
+        tenferro_device::LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result = inv_ex(&mut ctx, &empty).unwrap();
+    assert_eq!(result.inverse.dims(), &[0, 0]);
+    assert_eq!(result.info.dims(), &[] as &[usize]);
+    assert_eq!(tensor_data(&result.info), vec![0]);
+}
+
+#[test]
+fn det_and_slogdet_cover_complex_dispatch_paths() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            Complex64::new(0.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let det_value = det(&mut ctx, &a).unwrap();
+    assert_eq!(tensor_data(&det_value), vec![Complex64::new(-2.0, 0.0)]);
+
+    let slogdet_value = slogdet(&mut ctx, &a).unwrap();
+    assert_eq!(
+        tensor_data(&slogdet_value.sign),
+        vec![Complex64::new(-1.0, 0.0)]
+    );
+    assert!((tensor_data(&slogdet_value.logabsdet)[0] - 2.0_f64.ln()).abs() < 1.0e-12);
+}
+
+#[test]
+fn norm_variants_cover_real_and_complex_vector_and_matrix_edges() {
+    let mut ctx = CpuContext::new(1);
+
+    let real_vector = Tensor::from_slice(&[3.0_f64, -4.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_vector, NormKind::L1).unwrap()),
+        vec![7.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_vector, NormKind::Inf).unwrap()),
+        vec![4.0]
+    );
+    assert!(
+        (tensor_data(&norm(&mut ctx, &real_vector, NormKind::Fro).unwrap())[0] - 5.0).abs()
+            < 1.0e-12
+    );
+    assert!(norm(&mut ctx, &real_vector, NormKind::Nuclear).is_err());
+    assert!(norm(&mut ctx, &real_vector, NormKind::Spectral).is_err());
+
+    let empty_matrix = Tensor::<f64>::zeros(
+        &[0, 3],
+        tenferro_device::LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &empty_matrix, NormKind::L1).unwrap()),
+        vec![0.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &empty_matrix, NormKind::Inf).unwrap()),
+        vec![0.0]
+    );
+
+    let real_matrix =
+        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 2.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_matrix, NormKind::Nuclear).unwrap()),
+        vec![3.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_matrix, NormKind::Spectral).unwrap()),
+        vec![2.0]
+    );
+
+    let complex_vector = Tensor::from_slice(
+        &[Complex64::new(3.0, 4.0), Complex64::new(0.0, 2.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &complex_vector, NormKind::L1).unwrap()),
+        vec![7.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &complex_vector, NormKind::Inf).unwrap()),
+        vec![5.0]
+    );
+    assert!(
+        (tensor_data(&norm(&mut ctx, &complex_vector, NormKind::Fro).unwrap())[0]
+            - 29.0_f64.sqrt())
+        .abs()
+            < 1.0e-12
+    );
+
+    let complex_matrix = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let nuclear = tensor_data(&norm(&mut ctx, &complex_matrix, NormKind::Nuclear).unwrap())[0];
+    let spectral = tensor_data(&norm(&mut ctx, &complex_matrix, NormKind::Spectral).unwrap())[0];
+    assert!((nuclear - (2.0_f64.sqrt() + 2.0)).abs() < 1.0e-12);
+    assert!((spectral - 2.0).abs() < 1.0e-12);
 }
 
 #[test]

@@ -154,8 +154,7 @@ where
         let rhs = sub_vec(db_b, &da_x);
 
         // dX from triangular solve with the same structure.
-        let dx_b = backend::slice_bridge::solve_triangular_vec(ctx, a_b, &rhs, n, nrhs, upper)
-            .map_err(to_ad_err)?;
+        let dx_b = backend_solve_tri(ctx, a_b, &rhs, n, nrhs, upper)?;
 
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b);
     }

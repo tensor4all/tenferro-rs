@@ -2741,6 +2741,68 @@ fn cuda_wrappers_label_missing_library_errors() {
 }
 
 #[test]
+#[cfg(not(feature = "cuda"))]
+fn cuda_runtime_stub_helpers_cover_success_and_small_unsupported_paths() {
+    assert!(super::runtime::check_cublas_status(0, "cublasCreate_v2").is_ok());
+    assert!(super::runtime::check_cusolver_status(0, "cusolverDnSetStream").is_ok());
+
+    let ctx = tenferro_prims::CudaContext::new();
+    let err = match super::runtime::load_runtime(&ctx) {
+        Ok(_) => panic!("expected non-cuda runtime loader to fail"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("load_runtime"));
+
+    assert!(!super::solve::has_solve_support::<f64>());
+    assert!(!super::solve::has_solve_support::<num_complex::Complex64>());
+}
+
+#[test]
+#[cfg(not(feature = "cuda"))]
+fn cuda_backend_stub_methods_cover_ex_svdvals_and_lu_solve_paths() {
+    let mut ctx = tenferro_prims::CudaContext::new();
+    let a =
+        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    let b = Tensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let pivots = Tensor::from_slice(&[1_i32, 2], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_ex(
+            &mut ctx, &a, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_solve(
+            &mut ctx, &a, &pivots, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::svdvals(&mut ctx, &a)
+            .is_err()
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_ex(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_no_pivot(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <super::CudaTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky_ex(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+}
+
+#[test]
 #[cfg(feature = "cuda")]
 fn cuda_runtime_loads_solver_handles_with_real_context() {
     if !cuda_runtime_available() {

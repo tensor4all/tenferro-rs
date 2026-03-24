@@ -699,6 +699,130 @@ fn cpu_backend_solve_broadcasts_rhs_batches() {
 }
 
 #[test]
+fn hip_backend_stub_methods_cover_all_small_unsupported_paths() {
+    let mut ctx = tenferro_prims::RocmContext::new();
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[1.0_f64, 0.0, 0.0, 1.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[1.0_f64, 2.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let pivots = tenferro_tensor::Tensor::from_slice(
+        &[1_i32, 2],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    for op in [
+        crate::LinalgCapabilityOp::Solve,
+        crate::LinalgCapabilityOp::LuSolve,
+        crate::LinalgCapabilityOp::SolveEx,
+        crate::LinalgCapabilityOp::Qr,
+        crate::LinalgCapabilityOp::ThinSvd,
+        crate::LinalgCapabilityOp::LuFactor,
+        crate::LinalgCapabilityOp::LuFactorEx,
+        crate::LinalgCapabilityOp::Cholesky,
+        crate::LinalgCapabilityOp::CholeskyEx,
+        crate::LinalgCapabilityOp::EigenSym,
+        crate::LinalgCapabilityOp::Eig,
+    ] {
+        assert!(
+            !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(op)
+        );
+    }
+
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_ex(
+            &mut ctx, &a, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve(
+            &mut ctx, &a, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_solve(
+            &mut ctx, &a, &pivots, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_triangular(
+            &mut ctx, &a, &b, true
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::qr(&mut ctx, &a)
+            .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::thin_svd(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::svdvals(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_ex(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_no_pivot(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky_ex(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::eigen_sym(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::eig(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn cpu_backend_solve_ex_broadcasts_rhs_batches_and_preserves_info() {
     let mut ctx = tenferro_prims::CpuContext::new(1);
     let a = tenferro_tensor::Tensor::from_slice(

@@ -29,7 +29,32 @@ fn cuda_stubs_return_device_error() {
     with_cuda_ctx(|ctx| {
         let a = dummy_tensor();
         let b = dummy_tensor();
+        let pivots = Tensor::from_slice(&[1_i32, 2], &[2], MemoryOrder::ColumnMajor).unwrap();
+
+        assert!(
+            !<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::has_linalg_support(
+                crate::backend::tensor_api::LinalgCapabilityOp::SolveEx
+            )
+        );
+        assert!(
+            !<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::has_linalg_support(
+                crate::backend::tensor_api::LinalgCapabilityOp::LuFactorEx
+            )
+        );
+        assert!(
+            !<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::has_linalg_support(
+                crate::backend::tensor_api::LinalgCapabilityOp::CholeskyEx
+            )
+        );
+
+        assert!(
+            <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::solve_ex(ctx, &a, &b).is_err()
+        );
         assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::solve(ctx, &a, &b).is_err());
+        assert!(
+            <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::lu_solve(ctx, &a, &pivots, &b)
+                .is_err()
+        );
         assert!(
             <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::solve_triangular(
                 ctx, &a, &b, true,
@@ -38,7 +63,18 @@ fn cuda_stubs_return_device_error() {
         );
         assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::qr(ctx, &a).is_err());
         assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::thin_svd(ctx, &a).is_err());
+        assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::svdvals(ctx, &a).is_err());
+        assert!(
+            <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::lu_factor_ex(ctx, &a).is_err()
+        );
         assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::lu_factor(ctx, &a).is_err());
+        assert!(
+            <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::lu_factor_no_pivot(ctx, &a)
+                .is_err()
+        );
+        assert!(
+            <CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::cholesky_ex(ctx, &a).is_err()
+        );
         assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::cholesky(ctx, &a).is_err());
         assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::eigen_sym(ctx, &a).is_err());
         assert!(<CudaTensorLinalgBackend as TensorLinalgBackend<f64>>::eig(ctx, &a).is_err());
