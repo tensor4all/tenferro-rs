@@ -10,17 +10,8 @@ mod tensor_api;
 mod tensor_helpers;
 
 #[cfg(feature = "linalg-lapack")]
-#[path = "../../../tenferro-linalg/src/backend/blas_lapack_backend/mod.rs"]
 mod blas_lapack_backend;
 mod cpu;
-#[cfg(feature = "linalg-faer")]
-#[path = "../../../tenferro-linalg/src/backend/cpu_faer.rs"]
-mod cpu_faer;
-#[cfg(feature = "linalg-lapack")]
-#[path = "../../../tenferro-linalg/src/backend/cpu_lapack.rs"]
-mod cpu_lapack;
-#[path = "../../../tenferro-linalg/src/backend/cpu_tensor_impl.rs"]
-mod cpu_tensor_impl;
 mod cuda;
 #[cfg(feature = "linalg-faer")]
 mod faer_backend;
