@@ -21,7 +21,7 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
 /// let cotangent = EigCotangent::<f64> {
 ///     values: None,
 ///     vectors: None,
@@ -120,8 +120,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-/// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+/// let cotangent = Tensor::<f64>::ones(&[4, 3], mem, col).unwrap();
 /// let grad_a = pinv_rrule(&mut ctx, &a, &cotangent, None).unwrap();
 /// ```
 pub fn pinv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -131,8 +131,11 @@ pub fn pinv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     rcond: Option<f64>,
 ) -> AdResult<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>
+        + tenferro_algebra::Conjugate,
     C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
     T::Real: tenferro_tensor::KeepCountScalar,

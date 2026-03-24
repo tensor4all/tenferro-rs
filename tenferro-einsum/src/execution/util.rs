@@ -15,7 +15,7 @@ pub(crate) fn alloc_tensor_from_pool<T: Scalar>(
     dims: &[usize],
     memory_space: LogicalMemorySpace,
     pool: &mut BufferPool<T>,
-) -> Tensor<T> {
+) -> Result<Tensor<T>> {
     let numel = dims.iter().product::<usize>().max(1);
     let bytes = numel.saturating_mul(std::mem::size_of::<T>());
     if bytes > MAX_POOLED_BYTES {
@@ -30,7 +30,7 @@ pub(crate) fn alloc_tensor_from_pool<T: Scalar>(
         s *= d as isize;
     }
     Tensor::from_vec(data, dims, &strides, 0)
-        .unwrap_or_else(|_| Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor))
+        .or_else(|_| Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor))
 }
 
 /// Apply a staged diagonal extraction plan to a tensor.

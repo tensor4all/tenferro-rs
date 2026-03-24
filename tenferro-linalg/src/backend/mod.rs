@@ -56,7 +56,6 @@ pub(crate) mod faer_backend;
 
 // Tensor-level API and types
 pub(crate) mod cpu_tensor_impl;
-pub(crate) mod slice_bridge;
 pub mod tensor_api;
 pub mod tensor_context;
 pub(crate) mod tensor_helpers;
@@ -87,6 +86,7 @@ pub use blas_lapack_backend::BlasLapackBackend;
 pub use tenferro_linalg_prims::backend::CpuTensorLinalgBackend;
 
 // GPU backend stubs (public)
+pub(crate) use tenferro_linalg_prims::backend::col_major_strides;
 pub use tenferro_linalg_prims::backend::{
     CudaDataType, CudaLinalgScalar, CudaTensorLinalgBackend, HipTensorLinalgBackend,
 };
@@ -193,17 +193,4 @@ pub trait LinalgBackend<T: Copy + 'static> {
         values_ri: &mut [T],
         vectors_ri: &mut [T],
     ) -> Result<()>;
-}
-
-/// Compute column-major strides for given dimensions.
-pub(crate) fn col_major_strides(dims: &[usize]) -> Vec<isize> {
-    let mut strides = vec![0isize; dims.len()];
-    if dims.is_empty() {
-        return strides;
-    }
-    strides[0] = 1;
-    for i in 1..dims.len() {
-        strides[i] = strides[i - 1] * dims[i - 1] as isize;
-    }
-    strides
 }

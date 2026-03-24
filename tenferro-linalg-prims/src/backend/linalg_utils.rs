@@ -1,11 +1,67 @@
 //! Torch-aligned tensor layout helpers for linalg backends.
 
-use tenferro_algebra::Standard;
+use tenferro_algebra::{Conjugate, Standard};
 use tenferro_device::{Error, Result};
-use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringContextFor, TensorSemiringCore};
+use tenferro_prims::{
+    SemiringCoreDescriptor, TensorResolveConjContextFor, TensorSemiringContextFor,
+    TensorSemiringCore,
+};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::LinalgScalar;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MatrixOperandTransposeType {
+    None,
+    Transpose,
+    ConjugateTranspose,
+}
+
+pub(crate) fn to_matrix_operand_transpose_type(
+    transpose: bool,
+    conjugate: bool,
+) -> MatrixOperandTransposeType {
+    if !transpose {
+        MatrixOperandTransposeType::None
+    } else if conjugate {
+        MatrixOperandTransposeType::ConjugateTranspose
+    } else {
+        MatrixOperandTransposeType::Transpose
+    }
+}
+
+fn transpose_first_two_axes<T>(tensor: &Tensor<T>) -> Result<Tensor<T>>
+where
+    T: LinalgScalar,
+{
+    if tensor.ndim() < 2 {
+        return Err(Error::InvalidArgument(format!(
+            "matrix operand transpose expects at least 2D tensor, got {}D",
+            tensor.ndim()
+        )));
+    }
+    let mut perm: Vec<usize> = (0..tensor.ndim()).collect();
+    perm.swap(0, 1);
+    tensor.permute(&perm)
+}
+
+pub(crate) fn prepare_matrix_operand<T, C>(
+    ctx: &mut C,
+    src: &Tensor<T>,
+    transform: MatrixOperandTransposeType,
+) -> Result<Tensor<T>>
+where
+    T: LinalgScalar + Conjugate,
+    C: TensorSemiringContextFor<Standard<T>> + TensorResolveConjContextFor<T>,
+{
+    let transformed = match transform {
+        MatrixOperandTransposeType::None => src.clone(),
+        MatrixOperandTransposeType::Transpose => transpose_first_two_axes(src)?,
+        MatrixOperandTransposeType::ConjugateTranspose => transpose_first_two_axes(&src.conj())?,
+    };
+    let resolved = <C as TensorResolveConjContextFor<T>>::resolve_conj(ctx, &transformed);
+    clone_batched_column_major(ctx, &resolved)
+}
 
 pub(crate) fn matrix_stride(dims: &[usize]) -> Result<usize> {
     if dims.len() < 2 {
@@ -33,7 +89,7 @@ where
         src.dims(),
         src.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     output.set_preferred_compute_device(src.preferred_compute_device());
     copy_batched_column_major(ctx, src, &mut output)?;
     Ok(output)

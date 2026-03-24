@@ -326,7 +326,7 @@ pub struct SvdTensorResult<T: LinalgScalar> {
 pub struct LuTensorResult<T: LinalgScalar> {
     pub l: Tensor<T>,
     pub u: Tensor<T>,
-    pub pivots: Vec<i32>,
+    pub pivots: Tensor<i32>,
 }
 
 /// Result of a tensor-level LU factorization with numerical status.
@@ -343,10 +343,10 @@ pub struct LuTensorExResult<T: LinalgScalar> {
     pub l: Tensor<T>,
     /// Upper-triangular factor.
     pub u: Tensor<T>,
-    /// Backend pivot vector.
-    pub pivots: Vec<i32>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Backend pivot tensor.
+    pub pivots: Tensor<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Result of a tensor-level linear solve with numerical status.
@@ -361,8 +361,8 @@ pub struct LuTensorExResult<T: LinalgScalar> {
 pub struct SolveTensorExResult<T: LinalgScalar> {
     /// Solution tensor.
     pub solution: Tensor<T>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Result of a tensor-level Cholesky factorization with numerical status.
@@ -377,8 +377,8 @@ pub struct SolveTensorExResult<T: LinalgScalar> {
 pub struct CholeskyTensorExResult<T: LinalgScalar> {
     /// Lower-triangular Cholesky factor.
     pub l: Tensor<T>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: Tensor<i32>,
 }
 
 /// Result of a tensor-level Hermitian eigendecomposition.
@@ -470,6 +470,12 @@ pub trait TensorLinalgPrims<T: KernelLinalgScalar> {
     ) -> Result<SolveTensorExResult<T>>;
 
     fn solve(ctx: &mut Self::Context, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>>;
+    fn lu_solve(
+        ctx: &mut Self::Context,
+        factors: &Tensor<T>,
+        pivots: &Tensor<i32>,
+        b: &Tensor<T>,
+    ) -> Result<Tensor<T>>;
     fn solve_triangular(
         ctx: &mut Self::Context,
         a: &Tensor<T>,
@@ -491,6 +497,19 @@ pub trait TensorLinalgPrims<T: KernelLinalgScalar> {
     /// ```
     fn lu_factor_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorExResult<T>>;
     fn lu_factor(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>>;
+    /// Compute an LU factorization without pivoting.
+    ///
+    /// Backends may support this only on a subset of devices or dtypes.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_linalg_prims::TensorLinalgPrims;
+    ///
+    /// fn accepts_backend<B: TensorLinalgPrims<f64>>() {}
+    /// let _ = accepts_backend::<todo!()>;
+    /// ```
+    fn lu_factor_no_pivot(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>>;
     /// Compute a Cholesky factorization while returning per-batch numerical status.
     ///
     /// # Examples

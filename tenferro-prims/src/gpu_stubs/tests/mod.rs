@@ -1,10 +1,31 @@
 use std::ptr;
 
 use num_complex::Complex64;
+use tenferro_algebra::Standard;
+use tenferro_device::{Generator, LogicalMemorySpace};
 use tenferro_tensor::MemoryOrder;
 
 use super::*;
-use crate::SemiringBinaryOp;
+use crate::{
+    ComplexRealPrimsDescriptor, ComplexRealUnaryOp, ComplexScalePrimsDescriptor,
+    MetadataCastPrimsDescriptor, MetadataConstantValue, MetadataDType, MetadataGenerateOp,
+    MetadataPrimsDescriptor, MetadataScalarTensorRef, MetadataTensorMut, MetadataTensorRef,
+    RngPrimsDescriptor, SemiringBinaryOp, TensorComplexRealPrims, TensorComplexScalePrims,
+    TensorMetadataCastPrims, TensorMetadataPrims, TensorResolveConjContextFor, TensorRngPrims,
+};
+
+fn dummy_real_tensor() -> Tensor<f64> {
+    Tensor::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap()
+}
+
+fn dummy_complex_tensor() -> Tensor<Complex64> {
+    Tensor::from_slice(
+        &[Complex64::new(1.0, 2.0), Complex64::new(-3.0, 4.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap()
+}
 
 #[cfg(not(feature = "cuda"))]
 fn assert_send<T: Send>() {}
@@ -67,12 +88,14 @@ fn cuda_stub_reports_errors_and_resolves_conj() {
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let mut output = Tensor::<f64>::zeros(
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let desc = SemiringCoreDescriptor::MakeContiguous;
 
     let plan_result =
@@ -148,12 +171,14 @@ fn rocm_stub_reports_errors_and_resolves_conj() {
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let mut output = Tensor::<f64>::zeros(
         &[1],
         tenferro_device::LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let desc = SemiringCoreDescriptor::MakeContiguous;
 
     let plan_result =
@@ -213,4 +238,426 @@ fn rocm_stub_reports_errors_and_resolves_conj() {
         passthrough.buffer().as_slice().unwrap(),
         complex.buffer().as_slice().unwrap()
     );
+}
+
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn cuda_stub_context_metadata_and_family_protocols_reject_execution() {
+    let mut ctx = CudaContext::new();
+    assert_eq!(ctx.device_id(), 0);
+    assert!(matches!(ctx.bind_to_device(), Err(Error::DeviceError(_))));
+
+    let metadata_desc = MetadataPrimsDescriptor::Generate {
+        op: MetadataGenerateOp::Constant(MetadataConstantValue::I32(3)),
+        output_dtype: MetadataDType::I32,
+    };
+    let mut metadata_out = Tensor::<i32>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = <CudaBackend as TensorMetadataPrims>::plan(
+        &mut ctx,
+        &metadata_desc,
+        &[],
+        MetadataTensorMut::I32(&mut metadata_out),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("stub CudaBackend"));
+    let err = <CudaBackend as TensorMetadataPrims>::execute(
+        &mut ctx,
+        &metadata_desc,
+        &[],
+        MetadataTensorMut::I32(&mut metadata_out),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("stub CudaBackend"));
+    assert!(!<CudaBackend as TensorMetadataPrims>::has_metadata_support(
+        metadata_desc.clone()
+    ));
+
+    let complex = dummy_complex_tensor();
+    let resolved = <CudaContext as TensorResolveConjContextFor<Complex64>>::resolve_conj(
+        &mut ctx,
+        &complex.conj(),
+    );
+    assert!(!resolved.is_conjugated());
+
+    let mut real_output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let complex_real_desc = ComplexRealPrimsDescriptor::PointwiseUnary {
+        op: ComplexRealUnaryOp::Abs,
+    };
+    let err = <CudaBackend as TensorComplexRealPrims<Complex64>>::plan(
+        &mut ctx,
+        &complex_real_desc,
+        &[complex.dims(), real_output.dims()],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    let err = <CudaBackend as TensorComplexRealPrims<Complex64>>::execute(
+        &mut ctx,
+        &(),
+        1.0,
+        &[&complex],
+        0.0,
+        &mut real_output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    assert!(
+        !<CudaBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(
+            complex_real_desc.clone()
+        )
+    );
+
+    let real = dummy_real_tensor();
+    let mut complex_output = Tensor::<Complex64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = <CudaBackend as TensorComplexScalePrims<Complex64>>::plan(
+        &mut ctx,
+        &ComplexScalePrimsDescriptor::PointwiseMul,
+        &[complex.dims(), real.dims(), complex_output.dims()],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    let err = <CudaBackend as TensorComplexScalePrims<Complex64>>::execute(
+        &mut ctx,
+        &(),
+        Complex64::new(1.0, 0.0),
+        &complex,
+        &real,
+        Complex64::new(0.0, 0.0),
+        &mut complex_output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    assert!(
+        !<CudaBackend as TensorComplexScalePrims<Complex64>>::has_complex_scale_support(
+            ComplexScalePrimsDescriptor::PointwiseMul
+        )
+    );
+
+    let rng_desc = RngPrimsDescriptor::Uniform;
+    let mut generator = Generator::cpu(7);
+    let mut rng_output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = <CudaBackend as TensorRngPrims<Standard<f64>>>::plan(&mut ctx, &rng_desc, &[&[2]])
+        .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    let err = <CudaBackend as TensorRngPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &(rng_desc.clone(), vec![2]),
+        &mut generator,
+        &mut rng_output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    assert!(!<CudaBackend as TensorRngPrims<Standard<f64>>>::has_rng_support(rng_desc));
+
+    let int_desc = RngPrimsDescriptor::Integer { low: -1, high: 3 };
+    let err = <CudaBackend as TensorRngPrims<Standard<i32>>>::plan(&mut ctx, &int_desc, &[&[2]])
+        .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    assert!(!<CudaBackend as TensorRngPrims<Standard<i32>>>::has_rng_support(int_desc));
+}
+
+#[test]
+fn rocm_stub_context_metadata_and_family_protocols_reject_execution() {
+    let mut ctx = RocmContext::new();
+
+    let metadata_desc = MetadataPrimsDescriptor::Generate {
+        op: MetadataGenerateOp::Constant(MetadataConstantValue::Bool(true)),
+        output_dtype: MetadataDType::Bool,
+    };
+    let metadata_input = Tensor::<u8>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let mut metadata_out = Tensor::<u8>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = <RocmBackend as TensorMetadataPrims>::plan(
+        &mut ctx,
+        &metadata_desc,
+        &[],
+        MetadataTensorMut::Bool(&mut metadata_out),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    let err = <RocmBackend as TensorMetadataPrims>::execute(
+        &mut ctx,
+        &metadata_desc,
+        &[MetadataTensorRef::Bool(&metadata_input)],
+        MetadataTensorMut::Bool(&mut metadata_out),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    assert!(!<RocmBackend as TensorMetadataPrims>::has_metadata_support(
+        metadata_desc.clone()
+    ));
+
+    let complex = dummy_complex_tensor();
+    let resolved = <RocmContext as TensorResolveConjContextFor<Complex64>>::resolve_conj(
+        &mut ctx,
+        &complex.conj(),
+    );
+    assert!(!resolved.is_conjugated());
+
+    let mut real_output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let complex_real_desc = ComplexRealPrimsDescriptor::PointwiseUnary {
+        op: ComplexRealUnaryOp::Abs,
+    };
+    let err = <RocmBackend as TensorComplexRealPrims<Complex64>>::plan(
+        &mut ctx,
+        &complex_real_desc,
+        &[complex.dims(), real_output.dims()],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    let err = <RocmBackend as TensorComplexRealPrims<Complex64>>::execute(
+        &mut ctx,
+        &(),
+        1.0,
+        &[&complex],
+        0.0,
+        &mut real_output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    assert!(
+        !<RocmBackend as TensorComplexRealPrims<Complex64>>::has_complex_real_support(
+            complex_real_desc.clone()
+        )
+    );
+
+    let real = dummy_real_tensor();
+    let mut complex_output = Tensor::<Complex64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = <RocmBackend as TensorComplexScalePrims<Complex64>>::plan(
+        &mut ctx,
+        &ComplexScalePrimsDescriptor::PointwiseMul,
+        &[complex.dims(), real.dims(), complex_output.dims()],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    let err = <RocmBackend as TensorComplexScalePrims<Complex64>>::execute(
+        &mut ctx,
+        &(),
+        Complex64::new(1.0, 0.0),
+        &complex,
+        &real,
+        Complex64::new(0.0, 0.0),
+        &mut complex_output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    assert!(
+        !<RocmBackend as TensorComplexScalePrims<Complex64>>::has_complex_scale_support(
+            ComplexScalePrimsDescriptor::PointwiseMul
+        )
+    );
+
+    let rng_desc = RngPrimsDescriptor::Uniform;
+    let mut generator = Generator::cpu(7);
+    let mut rng_output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let err = <RocmBackend as TensorRngPrims<Standard<f64>>>::plan(&mut ctx, &rng_desc, &[&[2]])
+        .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    let err = <RocmBackend as TensorRngPrims<Standard<f64>>>::execute(
+        &mut ctx,
+        &(rng_desc.clone(), vec![2]),
+        &mut generator,
+        &mut rng_output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    assert!(!<RocmBackend as TensorRngPrims<Standard<f64>>>::has_rng_support(rng_desc));
+
+    let int_desc = RngPrimsDescriptor::Integer { low: -1, high: 3 };
+    let err = <RocmBackend as TensorRngPrims<Standard<i32>>>::plan(&mut ctx, &int_desc, &[&[2]])
+        .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    assert!(!<RocmBackend as TensorRngPrims<Standard<i32>>>::has_rng_support(int_desc));
+}
+
+#[cfg(not(feature = "cuda"))]
+#[test]
+fn cuda_metadata_cast_stub_rejects_pointwise_and_where_protocols() {
+    let mut ctx = CudaContext::new();
+    let mask = Tensor::<u8>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let scalar = Tensor::<f64>::ones(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let pointwise = MetadataCastPrimsDescriptor::PointwiseCast {
+        input_dtype: MetadataDType::Bool,
+    };
+    let err =
+        <CudaBackend as TensorMetadataCastPrims<f64>>::plan(&mut ctx, &pointwise, &[&[2], &[2]])
+            .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    let err = <CudaBackend as TensorMetadataCastPrims<f64>>::execute(
+        &mut ctx,
+        &pointwise,
+        1.0,
+        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(
+            &mask,
+        ))],
+        0.0,
+        &mut output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    assert!(
+        !<CudaBackend as TensorMetadataCastPrims<f64>>::has_metadata_cast_support(
+            pointwise.clone()
+        )
+    );
+
+    let where_desc = MetadataCastPrimsDescriptor::Where {
+        cond_dtype: MetadataDType::Bool,
+    };
+    let err = <CudaBackend as TensorMetadataCastPrims<f64>>::plan(
+        &mut ctx,
+        &where_desc,
+        &[&[2], &[2], &[2], &[2]],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    let err = <CudaBackend as TensorMetadataCastPrims<f64>>::execute(
+        &mut ctx,
+        &where_desc,
+        1.0,
+        &[
+            MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(&mask)),
+            MetadataScalarTensorRef::Scalar(&scalar),
+            MetadataScalarTensorRef::Scalar(&scalar),
+        ],
+        0.0,
+        &mut output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("CudaBackend"));
+    assert!(!<CudaBackend as TensorMetadataCastPrims<f64>>::has_metadata_cast_support(where_desc));
+}
+
+#[test]
+fn rocm_metadata_cast_stub_rejects_pointwise_and_where_protocols() {
+    let mut ctx = RocmContext::new();
+    let mask = Tensor::<u8>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let scalar = Tensor::<f64>::ones(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let mut output = Tensor::<f64>::zeros(
+        &[2],
+        LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let pointwise = MetadataCastPrimsDescriptor::PointwiseCast {
+        input_dtype: MetadataDType::Bool,
+    };
+    let err =
+        <RocmBackend as TensorMetadataCastPrims<f64>>::plan(&mut ctx, &pointwise, &[&[2], &[2]])
+            .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    let err = <RocmBackend as TensorMetadataCastPrims<f64>>::execute(
+        &mut ctx,
+        &pointwise,
+        1.0,
+        &[MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(
+            &mask,
+        ))],
+        0.0,
+        &mut output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    assert!(
+        !<RocmBackend as TensorMetadataCastPrims<f64>>::has_metadata_cast_support(
+            pointwise.clone()
+        )
+    );
+
+    let where_desc = MetadataCastPrimsDescriptor::Where {
+        cond_dtype: MetadataDType::Bool,
+    };
+    let err = <RocmBackend as TensorMetadataCastPrims<f64>>::plan(
+        &mut ctx,
+        &where_desc,
+        &[&[2], &[2], &[2], &[2]],
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    let err = <RocmBackend as TensorMetadataCastPrims<f64>>::execute(
+        &mut ctx,
+        &where_desc,
+        1.0,
+        &[
+            MetadataScalarTensorRef::Metadata(MetadataTensorRef::Bool(&mask)),
+            MetadataScalarTensorRef::Scalar(&scalar),
+            MetadataScalarTensorRef::Scalar(&scalar),
+        ],
+        0.0,
+        &mut output,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("RocmBackend"));
+    assert!(!<RocmBackend as TensorMetadataCastPrims<f64>>::has_metadata_cast_support(where_desc));
 }

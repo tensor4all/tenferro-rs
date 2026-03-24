@@ -47,10 +47,11 @@ pub(crate) fn complex_solve_nn<T: KernelLinalgScalar<Real = T> + num_traits::Flo
 where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>,
+    C::Backend: 'static,
 {
     let nn = 2 * n;
     let mut a_real = vec![T::zero(); nn * nn];
-    let mut b_real = vec![T::zero(); nn * nn];
+    let mut b_real = vec![T::zero(); nn * n];
 
     for j in 0..n {
         for i in 0..n {
@@ -66,8 +67,7 @@ where
         }
     }
 
-    let x_real =
-        backend::slice_bridge::solve_vec(ctx, &a_real, &b_real, nn, nn).map_err(to_ad_err)?;
+    let x_real = backend_solve(ctx, &a_real, &b_real, nn, n)?;
 
     let zero = Cx::new(T::zero(), T::zero());
     let mut result = vec![zero; n * n];

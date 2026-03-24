@@ -2,10 +2,10 @@ use std::ops::{Add, Div, Mul};
 
 use num_complex::{Complex32, Complex64, ComplexFloat};
 use num_traits::Zero;
-use strided_kernel::{map_into, zip_map2_into};
+use strided_kernel::{map_into, zip_map2_into, zip_map3_into};
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, Result};
+use tenferro_device::{unflatten_col_major_index_into, Error, Result};
 
 use crate::infra::typed_dispatch::{dispatch_real_scalar_type, dispatch_standard_scalar_type};
 use crate::{for_each_index, validate_rank, validate_shape_count, validate_shape_eq};
@@ -172,16 +172,44 @@ where
     Ok(())
 }
 
+pub(crate) fn execute_ternary_map<S, F>(
+    alpha: S,
+    cond: &StridedView<S>,
+    on_true: &StridedView<S>,
+    on_false: &StridedView<S>,
+    beta: S,
+    output: &mut StridedViewMut<S>,
+    f: F,
+) -> Result<()>
+where
+    S: CpuScalarValue,
+    F: Fn(S, S, S) -> S + Copy,
+{
+    if beta == S::zero() {
+        let alpha_value = alpha;
+        zip_map3_into(output, cond, on_true, on_false, move |c, t, f_value| {
+            alpha_value * f(c, t, f_value)
+        })
+        .map_err(|err| Error::DeviceError(err.to_string()))?;
+        return Ok(());
+    }
+
+    let dims = output.dims().to_vec();
+    for_each_index(&dims, |idx| {
+        let value = alpha * f(cond.get(idx), on_true.get(idx), on_false.get(idx));
+        output.set(idx, value + beta * output.get(idx));
+    });
+    Ok(())
+}
+
 /// Unflatten a linear index into a pre-allocated buffer (column-major).
-pub(super) fn unflatten_index_into(mut flat: usize, dims: &[usize], out: &mut [usize]) {
+pub(super) fn unflatten_index_into(flat: usize, dims: &[usize], out: &mut [usize]) {
     debug_assert!(
         flat < dims.iter().product::<usize>(),
         "flat index {flat} out of range for dims {dims:?}"
     );
-    for d in 0..dims.len() {
-        out[d] = flat % dims[d];
-        flat /= dims[d];
-    }
+    unflatten_col_major_index_into(flat, dims, out)
+        .expect("cpu reduction index buffers must match dims and stay in range");
 }
 
 pub(crate) fn is_supported_scalar_type<T: Scalar + 'static>() -> bool {

@@ -71,7 +71,7 @@ This applies to `target_a`, `target_b`, `c_gemm_shape` in einsum's `GemmPlan`, a
 
 ### File Organization
 
-Keep source files **small and focused** — one logical concern per file. Avoid monolithic files that grow beyond ~500 lines. Benefits:
+Keep source files **small and focused** — one logical concern per file. Use **~1000 lines** as the soft upper bound; files in the 500–1000 range are fine when they cover a single coherent concern. Actively split files that exceed 1000 lines. Benefits:
 
 - **Abstraction review**: module boundaries make the public/private API surface explicit and easier to audit
 - **Parallel editing**: multiple agents (or humans) can work on separate files without merge conflicts

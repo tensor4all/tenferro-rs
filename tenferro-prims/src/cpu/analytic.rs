@@ -43,28 +43,33 @@ pub enum CpuAnalyticPlan {
 }
 
 fn supports_analytic_unary<S: Scalar + 'static>(op: AnalyticUnaryOp) -> bool {
-    is_supported_scalar_type::<S>()
-        && matches!(
-            op,
-            AnalyticUnaryOp::Sqrt
-                | AnalyticUnaryOp::Rsqrt
-                | AnalyticUnaryOp::Exp
-                | AnalyticUnaryOp::Expm1
-                | AnalyticUnaryOp::Log
-                | AnalyticUnaryOp::Log1p
-                | AnalyticUnaryOp::Sin
-                | AnalyticUnaryOp::Cos
-                | AnalyticUnaryOp::Tan
-                | AnalyticUnaryOp::Tanh
-                | AnalyticUnaryOp::Asin
-                | AnalyticUnaryOp::Acos
-                | AnalyticUnaryOp::Atan
-                | AnalyticUnaryOp::Sinh
-                | AnalyticUnaryOp::Cosh
-                | AnalyticUnaryOp::Asinh
-                | AnalyticUnaryOp::Acosh
-                | AnalyticUnaryOp::Atanh
-        )
+    match op {
+        AnalyticUnaryOp::Ceil => is_supported_ordered_real_type::<S>(),
+        _ => {
+            is_supported_scalar_type::<S>()
+                && matches!(
+                    op,
+                    AnalyticUnaryOp::Sqrt
+                        | AnalyticUnaryOp::Rsqrt
+                        | AnalyticUnaryOp::Exp
+                        | AnalyticUnaryOp::Expm1
+                        | AnalyticUnaryOp::Log
+                        | AnalyticUnaryOp::Log1p
+                        | AnalyticUnaryOp::Sin
+                        | AnalyticUnaryOp::Cos
+                        | AnalyticUnaryOp::Tan
+                        | AnalyticUnaryOp::Tanh
+                        | AnalyticUnaryOp::Asin
+                        | AnalyticUnaryOp::Acos
+                        | AnalyticUnaryOp::Atan
+                        | AnalyticUnaryOp::Sinh
+                        | AnalyticUnaryOp::Cosh
+                        | AnalyticUnaryOp::Asinh
+                        | AnalyticUnaryOp::Acosh
+                        | AnalyticUnaryOp::Atanh
+                )
+        }
+    }
 }
 
 fn supports_analytic_binary<S: Scalar + 'static>(op: AnalyticBinaryOp) -> bool {
@@ -97,6 +102,20 @@ fn execute_analytic_unary_typed<S: CpuScalarValue>(
         AnalyticUnaryOp::Exp => execute_unary_map(alpha, input, beta, output, |x| x.exp()),
         AnalyticUnaryOp::Expm1 => {
             execute_unary_map(alpha, input, beta, output, |x| x.exp() - S::one())
+        }
+        AnalyticUnaryOp::Ceil => {
+            dispatch_real_scalar_type!(S, Concrete, {
+                let input = cast_strided_view!(input, S, Concrete);
+                let output = cast_strided_view_mut!(output, S, Concrete);
+                let alpha = cast_scalar_value!(alpha, S, Concrete);
+                let beta = cast_scalar_value!(beta, S, Concrete);
+                return execute_unary_map(alpha, input, beta, output, |x| x.ceil());
+            });
+
+            Err(Error::InvalidArgument(format!(
+                "analytic unary operation {op:?} is not supported for {}",
+                std::any::type_name::<S>()
+            )))
         }
         AnalyticUnaryOp::Log => execute_unary_map(alpha, input, beta, output, |x| x.ln()),
         AnalyticUnaryOp::Log1p => {

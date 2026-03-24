@@ -13,8 +13,8 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 4], mem, col).unwrap();
 /// let (n, dn) = norm_frule(&mut ctx, &a, &da, NormKind::Fro).unwrap();
 /// ```
 pub fn norm_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -34,7 +34,7 @@ where
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Norm, "norm_frule")
         .map_err(to_ad_err)?;
 
-    let nrm = norm(ctx, tensor, kind)
+    let nrm = crate::primal::norm_real_impl(ctx, tensor, kind)
         .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
 
     if tensor.ndim() == 1 {

@@ -1,8 +1,8 @@
 use chainrules_core::Differentiable;
 use tenferro_algebra::Scalar;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor::Tensor;
 
-use super::{accumulate_structured_tangent, StructuredTensor};
+use super::StructuredTensor;
 
 impl<T> Differentiable for StructuredTensor<T>
 where
@@ -11,30 +11,28 @@ where
     type Tangent = StructuredTensor<T>;
 
     fn zero_tangent(&self) -> Self::Tangent {
-        let payload = Tensor::zeros(
-            self.payload().dims(),
-            self.payload().logical_memory_space(),
-            MemoryOrder::ColumnMajor,
-        );
-        match StructuredTensor::new(
+        StructuredTensor::from_validated_parts(
             self.logical_dims().to_vec(),
             self.axis_classes().to_vec(),
-            payload,
-        ) {
-            Ok(value) => value,
-            Err(err) => {
-                unreachable!("StructuredTensor::zero_tangent should preserve a valid layout: {err}")
-            }
-        }
+            self.payload().zero_tangent(),
+        )
     }
 
     fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent {
-        match accumulate_structured_tangent(a, b) {
-            Ok(value) => value,
-            Err(err) => unreachable!(
-                "StructuredTensor::accumulate_tangent requires matching structured layouts: {err}"
-            ),
-        }
+        assert_eq!(
+            a.logical_dims(),
+            b.logical_dims(),
+            "StructuredTensor::accumulate_tangent requires matching logical dims"
+        );
+        assert_eq!(
+            a.axis_classes(),
+            b.axis_classes(),
+            "StructuredTensor::accumulate_tangent requires matching axis classes"
+        );
+        let logical_dims = a.logical_dims().to_vec();
+        let axis_classes = a.axis_classes().to_vec();
+        let payload = Tensor::<T>::accumulate_tangent(a.into_payload(), b.payload());
+        StructuredTensor::from_validated_parts(logical_dims, axis_classes, payload)
     }
 
     fn num_elements(&self) -> usize {
@@ -42,21 +40,11 @@ where
     }
 
     fn seed_cotangent(&self) -> Self::Tangent {
-        let payload = Tensor::ones(
-            self.payload().dims(),
-            self.payload().logical_memory_space(),
-            MemoryOrder::ColumnMajor,
-        );
-        match StructuredTensor::new(
+        StructuredTensor::from_validated_parts(
             self.logical_dims().to_vec(),
             self.axis_classes().to_vec(),
-            payload,
-        ) {
-            Ok(value) => value,
-            Err(err) => unreachable!(
-                "StructuredTensor::seed_cotangent should preserve a valid layout: {err}"
-            ),
-        }
+            self.payload().seed_cotangent(),
+        )
     }
 }
 

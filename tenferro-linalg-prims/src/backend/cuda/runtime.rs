@@ -2,6 +2,7 @@ use std::ffi::c_void;
 
 #[cfg(feature = "cuda")]
 use cudarc::runtime::result as cuda_result;
+use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
@@ -174,10 +175,7 @@ pub(super) fn copy_device_to_host<T: Copy>(
         .map_err(|err| Error::DeviceError(format!("{label} failed: {err:?}")))
 }
 
-pub(super) fn device_ptr<T: crate::KernelLinalgScalar>(
-    tensor: &Tensor<T>,
-    label: &str,
-) -> Result<*mut c_void> {
+pub(super) fn device_ptr<T: Scalar>(tensor: &Tensor<T>, label: &str) -> Result<*mut c_void> {
     let _ = tensor_device_id(tensor, label)?;
     tensor
         .buffer()
@@ -193,7 +191,7 @@ pub(super) fn context_device_ptr<T>(
     label: &str,
 ) -> Result<*mut c_void>
 where
-    T: crate::KernelLinalgScalar,
+    T: Scalar,
 {
     let tensor_device_id = tensor_device_id(tensor, label)?;
     if tensor_device_id != ctx.device_id() {
@@ -205,10 +203,7 @@ where
     device_ptr(tensor, label)
 }
 
-fn tensor_device_id<T: crate::KernelLinalgScalar>(
-    tensor: &Tensor<T>,
-    label: &str,
-) -> Result<usize> {
+fn tensor_device_id<T: Scalar>(tensor: &Tensor<T>, label: &str) -> Result<usize> {
     match tensor.logical_memory_space() {
         LogicalMemorySpace::GpuMemory { device_id } => Ok(device_id),
         _ => Err(Error::DeviceError(format!(

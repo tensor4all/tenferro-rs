@@ -36,6 +36,18 @@ where
     )))
 }
 
+fn broadcast_batch_control_to_matrix<T: KernelLinalgScalar>(
+    value_by_batch: &Tensor<T::Real>,
+    batch_dims: &[usize],
+    matrix_dims: &[usize],
+) -> Result<Tensor<T::Real>> {
+    let mut reshape_dims = vec![1, 1];
+    reshape_dims.extend_from_slice(batch_dims);
+    value_by_batch
+        .reshape(&reshape_dims)?
+        .broadcast(matrix_dims)
+}
+
 /// Compute the Moore-Penrose pseudoinverse of a matrix.
 ///
 /// # Examples
@@ -56,7 +68,9 @@ where
 /// assert_eq!(ap.logical_memory_space(), LogicalMemorySpace::MainMemory);
 /// ```
 pub fn pinv<
-    T: KernelLinalgScalar<Real = T> + num_traits::Float + tenferro_tensor::KeepCountScalar,
+    T: KernelLinalgScalar
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>
+        + tenferro_algebra::Conjugate,
     C,
 >(
     ctx: &mut C,
@@ -64,12 +78,12 @@ pub fn pinv<
     rcond: Option<f64>,
 ) -> Result<Tensor<T>>
 where
-    T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>
         + tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
     C::Backend: 'static,
-    T::Real: tenferro_tensor::KeepCountScalar,
+    T::Real: num_traits::Float + tenferro_tensor::KeepCountScalar,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Pinv, "pinv")?;
 
@@ -81,7 +95,7 @@ where
             &dims,
             tensor.logical_memory_space(),
             MemoryOrder::ColumnMajor,
-        ));
+        )?);
     }
 
     let svd_result = svd(ctx, tensor, None)?;
@@ -95,7 +109,7 @@ where
         &s_max_axes,
         tenferro_prims::ScalarReductionOp::Max,
     )?;
-    let threshold: T = scalar_from(rcond.unwrap_or(1e-15))?;
+    let threshold: T::Real = scalar_from(rcond.unwrap_or(1e-15))?;
     let threshold_tensor = crate::prims_bridge::full_like_constant(
         threshold,
         s_max.dims(),
@@ -115,7 +129,7 @@ where
         tenferro_prims::ScalarBinaryOp::Greater,
     )?;
     let one_mask = crate::prims_bridge::full_like_constant(
-        T::one(),
+        <T::Real as num_traits::One>::one(),
         keep_mask.dims(),
         keep_mask.logical_memory_space(),
     )?;
@@ -151,47 +165,124 @@ where
     )?;
 
     let sinv_for_vt = sinv.unsqueeze(1)?.broadcast(vt_input.dims())?;
-    let vt_scaled = crate::prims_bridge::scalar_binary_same_shape(
-        ctx,
-        &vt_input,
-        &sinv_for_vt,
-        tenferro_prims::ScalarBinaryOp::Mul,
-    )?;
+    let vt_scaled = crate::prims_bridge::complex_scale_same_shape(ctx, &vt_input, &sinv_for_vt)?;
 
     let mut perm = vec![1, 0];
     perm.extend(2..u_input.ndim());
-    let u_t = u_input.permute(&perm)?;
-    let vt_t = vt_scaled.permute(&perm)?;
+    let u_t = crate::prims_bridge::resolve_conj(ctx, &u_input.conj().permute(&perm)?);
+    let vt_t = crate::prims_bridge::resolve_conj(ctx, &vt_scaled.conj().permute(&perm)?);
 
     crate::prims_bridge::batched_gemm_with_semiring_tensors(ctx, &vt_t, &u_t, n, k, m)
 }
 
 /// Compute the matrix exponential `exp(A)` of a square matrix.
-pub fn matrix_exp<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
+#[allow(private_bounds)]
+pub fn matrix_exp<T, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>
+        + MatrixExpAbsTensor<C>,
+    T::Real: KernelLinalgScalar<Real = T::Real> + num_traits::Float,
     C: backend::TensorLinalgContextFor<T>,
+    C: tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    C: tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
+    C: tenferro_prims::TensorSemiringContextFor<tenferro_algebra::Standard<T>>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>>::ScalarBackend:
+        tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T::Real>, Context = C>,
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::MatrixExp, "matrix_exp")?;
-    require_main_memory_tensor(tensor, "matrix_exp")?;
 
     let (n, batch_dims) = validate_square(tensor)?;
     let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    let mat_size = n * n;
-
-    let mut result_data = vec![T::zero(); mat_size * bc];
-
-    for b in 0..bc {
-        let start = offset + b * mat_size;
-        let a_slice = &data[start..start + mat_size];
-        let exp_a = matrix_exp_single(ctx, a_slice, n)?;
-        result_data[b * mat_size..(b + 1) * mat_size].copy_from_slice(&exp_a);
+    if n == 0 {
+        let dims = output_dims(&[n, n], batch_dims);
+        return Ok(Tensor::zeros(
+            &dims,
+            input.logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )?);
     }
 
-    let dims = output_dims(&[n, n], batch_dims);
-    tensor_from_data(result_data, &dims)
+    let batch_norms = crate::ad_helpers::matrix_exp_batch_1_norms_tensor(ctx, &input)?;
+    let s_by_batch_tensor =
+        crate::ad_helpers::matrix_exp_batch_squaring_counts_tensor(ctx, &batch_norms)?;
+    let s_max_tensor = if s_by_batch_tensor.ndim() == 0 {
+        s_by_batch_tensor.clone()
+    } else {
+        crate::prims_bridge::scalar_reduce_keep_axes(
+            ctx,
+            &s_by_batch_tensor,
+            &[],
+            tenferro_prims::ScalarReductionOp::Max,
+        )?
+    };
+    let s_max_host =
+        s_max_tensor.to_memory_space_async(tenferro_device::LogicalMemorySpace::MainMemory)?;
+    let s_max_slice = s_max_host.buffer().as_slice().ok_or_else(|| {
+        Error::InvalidArgument("matrix_exp: expected max squaring count tensor on host".into())
+    })?;
+    let s_max = s_max_slice
+        .first()
+        .copied()
+        .ok_or_else(|| Error::InvalidArgument("matrix_exp: missing max squaring count".into()))
+        .and_then(|value| {
+            num_traits::NumCast::from(value).ok_or_else(|| {
+                Error::InvalidArgument("matrix_exp: cannot convert max squaring count".into())
+            })
+        })?;
+
+    let two_by_batch = crate::prims_bridge::full_like_constant(
+        crate::ad_helpers::scalar_from::<T::Real>(2.0)?,
+        s_by_batch_tensor.dims(),
+        input.logical_memory_space(),
+    )?;
+    let scale_denom = crate::prims_bridge::analytic_binary_same_shape(
+        ctx,
+        &two_by_batch,
+        &s_by_batch_tensor,
+        tenferro_prims::AnalyticBinaryOp::Pow,
+    )?;
+    let scale_by_batch = crate::prims_bridge::scalar_unary_same_shape(
+        ctx,
+        &scale_denom,
+        tenferro_prims::ScalarUnaryOp::Reciprocal,
+    )?;
+    let scale_tensor =
+        broadcast_batch_control_to_matrix::<T>(&scale_by_batch, batch_dims, input.dims())?;
+    let scaled_input =
+        <T as crate::prims_bridge::ScaleTensorByRealSameShape<C>>::scale_tensor_by_real_same_shape(
+            ctx,
+            &input,
+            &scale_tensor,
+        )?;
+
+    let mut result =
+        crate::ad_helpers::matrix_exp_tensor_native(ctx, &scaled_input, n, batch_dims, 0)?;
+    for round in 0..s_max {
+        let squared = crate::prims_bridge::batched_gemm_with_semiring_tensors(
+            ctx, &result, &result, n, n, n,
+        )?;
+        let round_by_batch = crate::prims_bridge::full_like_constant(
+            crate::ad_helpers::scalar_from::<T::Real>(round as f64)?,
+            s_by_batch_tensor.dims(),
+            result.logical_memory_space(),
+        )?;
+        let mask_by_batch = crate::prims_bridge::scalar_binary_same_shape(
+            ctx,
+            &s_by_batch_tensor,
+            &round_by_batch,
+            tenferro_prims::ScalarBinaryOp::Greater,
+        )?;
+        let mask_tensor =
+            broadcast_batch_control_to_matrix::<T>(&mask_by_batch, batch_dims, result.dims())?;
+        result = crate::ad_helpers::blend_tensor_by_real_mask_same_shape(
+            ctx,
+            &squared,
+            &result,
+            &mask_tensor,
+        )?;
+    }
+
+    Ok(result)
 }

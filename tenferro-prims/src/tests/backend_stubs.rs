@@ -38,7 +38,8 @@ where
         &[1],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let err = <Backend as TensorScalarPrims<Standard<f64>>>::execute(
         ctx,
         &(),
@@ -82,7 +83,8 @@ where
         &[1],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let err = <Backend as TensorAnalyticPrims<Standard<f64>>>::execute(
         ctx,
         &(),

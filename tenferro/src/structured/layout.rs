@@ -325,6 +325,18 @@ impl<T: Scalar> StructuredTensor<T> {
             axis_classes: self.axis_classes.clone(),
         }
     }
+
+    pub(crate) fn from_validated_parts(
+        logical_dims: Vec<usize>,
+        axis_classes: Vec<usize>,
+        payload: Tensor<T>,
+    ) -> Self {
+        Self {
+            payload,
+            logical_dims,
+            axis_classes,
+        }
+    }
 }
 
 impl<T: Scalar> From<Tensor<T>> for StructuredTensor<T> {

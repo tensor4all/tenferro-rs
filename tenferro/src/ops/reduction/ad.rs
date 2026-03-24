@@ -35,7 +35,7 @@ where
             )?,
         );
         let tangent = if has_forward(&operands) || has_any_tangent(&operands) {
-            let zero_tangent = zero_like(self.tensor.primal());
+            let zero_tangent = zero_like(self.tensor.primal())?;
             let tangent_input = if let Some(tangent) = self.tensor.structured_tangent() {
                 tangent.payload()
             } else {

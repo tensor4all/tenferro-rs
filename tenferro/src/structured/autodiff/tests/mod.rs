@@ -60,6 +60,19 @@ fn accumulate_tangent_and_num_elements_follow_structured_layout() {
 }
 
 #[test]
+#[should_panic(expected = "StructuredTensor::accumulate_tangent requires matching axis classes")]
+fn accumulate_tangent_rejects_mismatched_structured_layouts() {
+    let diag = diag(&[1.0, 2.0], 2).seed_cotangent();
+    let dense = StructuredTensor::from_dense(
+        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap(),
+    )
+    .seed_cotangent();
+
+    let _ = StructuredTensor::accumulate_tangent(diag, &dense);
+}
+
+#[test]
 fn dense_zero_and_seed_tangents_preserve_dense_layout() {
     let dense = StructuredTensor::from_dense(
         DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)

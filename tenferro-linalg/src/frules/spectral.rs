@@ -20,8 +20,8 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = eig_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn eig_frule<
@@ -117,8 +117,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 4], mem, col).unwrap();
 /// let (pinv_a, dpinv_a) = pinv_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
 pub fn pinv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -128,8 +128,11 @@ pub fn pinv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     rcond: Option<f64>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar
+        + crate::prims_bridge::ScaleTensorByRealSameShape<C>
+        + tenferro_algebra::Conjugate,
     C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
         + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::Backend: 'static,
     T::Real: tenferro_tensor::KeepCountScalar,

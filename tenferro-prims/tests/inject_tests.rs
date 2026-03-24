@@ -206,7 +206,8 @@ where
         &[2, 2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     <CpuBackend as TensorSemiringCore<Standard<T>>>::execute(
         &mut ctx,

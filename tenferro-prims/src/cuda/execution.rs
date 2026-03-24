@@ -2,7 +2,7 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::ptr;
 
-use tenferro_algebra::{Scalar, Standard};
+use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
@@ -15,9 +15,10 @@ use super::planning::{
     check_status, default_col_major_strides, plan_contraction, plan_elementwise_binary,
     plan_permutation, plan_reduction,
 };
+use super::runtime::allocate_workspace;
 use super::scalar_type::{scalar_compute_descriptor, scalar_data_type};
 use super::{CudaContext, CudaPlan, CudaPlanDescriptor, CudaPlanStorage};
-use crate::cuda_ffi::{CUTENSOR_OP_ADD, CUTENSOR_OP_MUL};
+use crate::cuda_ffi::{CUTENSOR_OP_ADD, CUTENSOR_OP_IDENTITY, CUTENSOR_OP_MUL};
 
 pub(super) fn plan_core_descriptor<S: Scalar>(
     ctx: &mut CudaContext,
@@ -38,20 +39,19 @@ pub(super) fn plan_core_descriptor<S: Scalar>(
         } => {
             validate_shape_count(shapes, 3, "BatchedGemm")?;
             let nb = batch_dims.len() as u32;
-            let mut modes_a = Vec::new();
-            let mut modes_b = Vec::new();
-            let mut modes_c = Vec::new();
-            for i in 0..nb {
-                modes_a.push(i as i32);
-                modes_b.push(i as i32);
-                modes_c.push(i as i32);
-            }
-            let m_mode = nb as i32;
-            let k_mode = (nb + 1) as i32;
-            let n_mode = (nb + 2) as i32;
+            let m_mode = 0i32;
+            let k_mode = 1i32;
+            let n_mode = 2i32;
+            let batch_modes: Vec<i32> = (0..nb).map(|i| (i + 3) as i32).collect();
+            let mut modes_a = Vec::with_capacity(2 + batch_modes.len());
+            let mut modes_b = Vec::with_capacity(2 + batch_modes.len());
+            let mut modes_c = Vec::with_capacity(2 + batch_modes.len());
             modes_a.extend([m_mode, k_mode]);
             modes_b.extend([k_mode, n_mode]);
             modes_c.extend([m_mode, n_mode]);
+            modes_a.extend(batch_modes.iter().copied());
+            modes_b.extend(batch_modes.iter().copied());
+            modes_c.extend(batch_modes.iter().copied());
             let strides_a = default_col_major_strides(shapes[0]);
             let strides_b = default_col_major_strides(shapes[1]);
             let strides_c = default_col_major_strides(shapes[2]);
@@ -166,6 +166,10 @@ pub(super) fn plan_fast_descriptor<S: Scalar>(
                 &modes,
                 shapes[0],
                 &strides,
+                &strides,
+                &strides,
+                CUTENSOR_OP_IDENTITY,
+                CUTENSOR_OP_IDENTITY,
                 cutensor_op,
             )?;
             Ok(CudaPlan {
@@ -189,8 +193,6 @@ pub(super) fn execute_plan<S: Scalar>(
         .map_err(|e| Error::DeviceError(format!("CUDA runtime set-device failed: {e:?}")))?;
     let handle = ctx.handle.raw;
     let stream: *mut c_void = ptr::null_mut();
-    let ws_ptr: *mut c_void = ptr::null_mut();
-    let ws_size: u64 = 0;
 
     let alpha_ptr = &alpha as *const S as *const c_void;
     let beta_ptr = &beta as *const S as *const c_void;
@@ -204,6 +206,8 @@ pub(super) fn execute_plan<S: Scalar>(
                     "CUDA contraction plan was not compiled".into(),
                 ));
             };
+            let workspace = allocate_workspace(plan_handle.workspace_size)?;
+            let ws_ptr = workspace.as_ref().map_or(ptr::null_mut(), |ws| ws.ptr);
             let a_ptr = inputs[0]
                 .buffer()
                 .as_device_ptr()
@@ -224,7 +228,7 @@ pub(super) fn execute_plan<S: Scalar>(
             let status = unsafe {
                 (ctx.vtable.contract)(
                     handle,
-                    plan_handle.raw,
+                    plan_handle.plan.raw,
                     alpha_ptr,
                     a_ptr,
                     b_ptr,
@@ -232,7 +236,7 @@ pub(super) fn execute_plan<S: Scalar>(
                     c_ptr,
                     d_ptr,
                     ws_ptr,
-                    ws_size,
+                    plan_handle.workspace_size,
                     stream,
                 )
             };
@@ -268,7 +272,14 @@ pub(super) fn execute_plan<S: Scalar>(
                 as *const c_void as *mut c_void;
 
             let status = unsafe {
-                (ctx.vtable.permute)(handle, plan_handle.raw, alpha_ptr, a_ptr, b_ptr, stream)
+                (ctx.vtable.permute)(
+                    handle,
+                    plan_handle.plan.raw,
+                    alpha_ptr,
+                    a_ptr,
+                    b_ptr,
+                    stream,
+                )
             };
             check_status(status, "cutensorPermute")
         }
@@ -279,6 +290,8 @@ pub(super) fn execute_plan<S: Scalar>(
                     "CUDA reduction plan was not compiled".into(),
                 ));
             };
+            let workspace = allocate_workspace(plan_handle.workspace_size)?;
+            let ws_ptr = workspace.as_ref().map_or(ptr::null_mut(), |ws| ws.ptr);
             let a_ptr = inputs[0]
                 .buffer()
                 .as_device_ptr()
@@ -294,14 +307,14 @@ pub(super) fn execute_plan<S: Scalar>(
             let status = unsafe {
                 (ctx.vtable.reduce)(
                     handle,
-                    plan_handle.raw,
+                    plan_handle.plan.raw,
                     alpha_ptr,
                     a_ptr,
                     beta_ptr,
                     c_ptr,
                     d_ptr,
                     ws_ptr,
-                    ws_size,
+                    plan_handle.workspace_size,
                     stream,
                 )
             };
@@ -334,7 +347,7 @@ pub(super) fn execute_plan<S: Scalar>(
             let status = unsafe {
                 (ctx.vtable.elementwise_binary_execute)(
                     handle,
-                    plan_handle.raw,
+                    plan_handle.plan.raw,
                     alpha_ptr,
                     a_ptr,
                     gamma_ptr,

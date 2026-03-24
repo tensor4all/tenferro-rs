@@ -15,9 +15,9 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let b = Tensor::<f64>::ones(&[3], mem, col);
-/// let cotangent = Tensor::<f64>::ones(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let b = Tensor::<f64>::ones(&[3], mem, col).unwrap();
+/// let cotangent = Tensor::<f64>::ones(&[3], mem, col).unwrap();
 /// let grad = solve_rrule(&mut ctx, &a, &b, &cotangent).unwrap();
 /// ```
 pub fn solve_rrule<T: KernelLinalgScalar, C>(
@@ -166,8 +166,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let cotangent = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let grad_a = inv_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn inv_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -226,8 +226,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let cotangent = Tensor::<f64>::ones(&[], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let cotangent = Tensor::<f64>::ones(&[], mem, col).unwrap();
 /// let grad_a = det_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
 pub fn det_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -236,10 +236,14 @@ pub fn det_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     cotangent: &Tensor<T>,
 ) -> AdResult<Tensor<T>>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + crate::prims_bridge::ScaleTensorByRealSameShape<C>,
     C: backend::TensorLinalgContextFor<T>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorMetadataContextFor,
     C::Backend: 'static,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det_rrule")
         .map_err(to_ad_err)?;
@@ -291,13 +295,16 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
 /// let cotangent = SlogdetCotangent {
-///     logabsdet: Some(Tensor::ones(&[], mem, col)),
+///     logabsdet: Some(Tensor::ones(&[], mem, col).unwrap()),
 /// };
 /// let grad_a = slogdet_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn slogdet_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn slogdet_rrule<
+    T: KernelLinalgScalar<Real = T> + num_traits::Float + crate::SlogdetDispatch<C>,
+    C,
+>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &SlogdetCotangent<T>,

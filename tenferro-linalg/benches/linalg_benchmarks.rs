@@ -207,7 +207,7 @@ fn bench_ad_solve_rrule(c: &mut Criterion) {
     for &(label, n, nrhs, batches) in &cases {
         let a = matrix_tensor(n, n, batches, 0.05, n as f64);
         let b = rhs_tensor(n, nrhs, batches, 0.5);
-        let cotangent = Tensor::<f64>::ones(b.dims(), MEM, COL);
+        let cotangent = Tensor::<f64>::ones(b.dims(), MEM, COL).unwrap();
         let mut ctx = CpuContext::new(1);
         group.bench_with_input(BenchmarkId::new("shape", label), &label, |bench, _| {
             bench.iter(|| {

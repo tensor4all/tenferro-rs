@@ -1,10 +1,23 @@
 use crate::backend::TensorLinalgContextFor;
+use tenferro_algebra::Scalar;
+use tenferro_device::LogicalMemorySpace;
+use tenferro_tensor::{MemoryOrder, Tensor};
 
 fn assert_ctx<T, C>()
 where
     T: crate::KernelLinalgScalar,
     C: TensorLinalgContextFor<T>,
 {
+}
+
+fn tensor_data_on_cpu<T: Scalar>(tensor: &Tensor<T>) -> Vec<T> {
+    let cpu = tensor
+        .to_memory_space_async(LogicalMemorySpace::MainMemory)
+        .unwrap();
+    let contiguous = cpu.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.len();
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
 }
 
 #[test]
@@ -78,7 +91,12 @@ fn cpu_backend_supports_core_factorizations_after_move() {
     .unwrap();
     assert_eq!(lu.l.dims(), &[2, 2]);
     assert_eq!(lu.u.dims(), &[2, 2]);
-    assert_eq!(lu.pivots.len(), 2);
+    assert_eq!(lu.pivots.dims(), &[2]);
+    assert_eq!(
+        lu.pivots.logical_memory_space(),
+        lu.l.logical_memory_space()
+    );
+    assert_eq!(tensor_data_on_cpu(&lu.pivots), vec![2, 2]);
 
     let chol = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky(
         &mut ctx, &spd,
@@ -100,6 +118,46 @@ fn cpu_backend_supports_core_factorizations_after_move() {
     .unwrap();
     assert_eq!(eig.values.dims(), &[2]);
     assert_eq!(eig.vectors.dims(), &[2, 2]);
+}
+
+#[test]
+fn cpu_backend_lu_factor_uses_step_pivot_shape_for_rectangular_matrix() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[4.0_f64, 0.0, 0.0, 1.0, 3.0, 0.0],
+        &[3, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let lu = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor(
+        &mut ctx, &a,
+    )
+    .unwrap();
+    let lu_ex =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_ex(
+            &mut ctx, &a,
+        )
+        .unwrap();
+
+    assert_eq!(lu.pivots.dims(), &[2]);
+    assert_eq!(tensor_data_on_cpu(&lu.pivots), vec![1, 2]);
+    assert_eq!(
+        lu.pivots.logical_memory_space(),
+        lu.l.logical_memory_space()
+    );
+
+    assert_eq!(lu_ex.pivots.dims(), &[2]);
+    assert_eq!(tensor_data_on_cpu(&lu_ex.pivots), vec![1, 2]);
+    assert_eq!(tensor_data_on_cpu(&lu_ex.info), vec![0]);
+    assert_eq!(
+        lu_ex.pivots.logical_memory_space(),
+        lu_ex.l.logical_memory_space()
+    );
+    assert_eq!(
+        lu_ex.info.logical_memory_space(),
+        lu_ex.l.logical_memory_space()
+    );
 }
 
 #[test]
@@ -126,6 +184,35 @@ fn cpu_backend_svdvals_matches_thin_svd_after_move() {
         s.buffer().as_slice().unwrap(),
         svd.s.buffer().as_slice().unwrap()
     );
+}
+
+#[test]
+fn cpu_backend_lu_solve_accepts_packed_lu_factor_output() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[3.0_f64, 1.0, 1.0, 2.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[9.0_f64, 8.0, 4.0, 5.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let lu = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor(
+        &mut ctx, &a,
+    )
+    .unwrap();
+    let packed = tenferro_tensor::Tensor::merge_strict_lower_and_upper(&lu.l, &lu.u).unwrap();
+    let x = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_solve(
+        &mut ctx, &packed, &lu.pivots, &b,
+    )
+    .unwrap();
+
+    assert_eq!(tensor_data_on_cpu(&x), vec![2.0, 3.0, 0.6, 2.2]);
 }
 
 #[test]
@@ -247,7 +334,7 @@ fn cpu_backend_solve_ex_preserves_successful_batches_and_reports_zero_pivot() {
             &mut ctx, &a, &b,
         )
         .unwrap();
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
     assert_eq!(tensor_data(&result.solution), vec![3.0, -1.0, 0.0, 0.0]);
 }
 
@@ -275,10 +362,21 @@ fn cpu_backend_lu_factor_ex_preserves_successful_batches_and_reports_zero_pivot(
         )
         .unwrap();
 
-    assert_eq!(result.info, vec![0, 2]);
-    assert_eq!(tensor_data(&result.l), tensor_data(&plain.l));
-    assert_eq!(tensor_data(&result.u), tensor_data(&plain.u));
-    assert_eq!(result.pivots, plain.pivots);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.l), tensor_data_on_cpu(&plain.l));
+    assert_eq!(tensor_data_on_cpu(&result.u), tensor_data_on_cpu(&plain.u));
+    assert_eq!(
+        result.pivots.logical_memory_space(),
+        result.l.logical_memory_space()
+    );
+    assert_eq!(
+        result.info.logical_memory_space(),
+        result.l.logical_memory_space()
+    );
+    assert_eq!(
+        tensor_data_on_cpu(&result.pivots),
+        tensor_data_on_cpu(&plain.pivots)
+    );
 }
 
 #[test]
@@ -311,12 +409,21 @@ fn cpu_backend_cholesky_ex_preserves_successful_batches_and_reports_minor() {
         )
         .unwrap();
 
-    assert_eq!(result.info, vec![0, 2]);
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
     assert_eq!(&tensor_data(&result.l)[..4], tensor_data(&plain).as_slice());
     assert_eq!(&tensor_data(&result.l)[4..], &[0.0, 0.0, 0.0, 0.0]);
 }
 
 fn tensor_data(tensor: &tenferro_tensor::Tensor<f64>) -> Vec<f64> {
+    let contiguous = tensor.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.len();
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
+}
+
+fn tensor_data_c64(
+    tensor: &tenferro_tensor::Tensor<num_complex::Complex64>,
+) -> Vec<num_complex::Complex64> {
     let contiguous = tensor.contiguous(tenferro_tensor::MemoryOrder::ColumnMajor);
     let offset = contiguous.offset() as usize;
     let len = contiguous.len();
@@ -332,6 +439,30 @@ fn linalg_utils_matrix_stride_uses_leading_matrix_dims() {
     assert_eq!(
         crate::backend::linalg_utils::matrix_stride(&[2, 3, 4, 5]).unwrap(),
         6
+    );
+}
+
+#[test]
+fn linalg_utils_to_matrix_operand_transpose_type_maps_flags_to_dispatch() {
+    use crate::backend::linalg_utils::MatrixOperandTransposeType::{
+        ConjugateTranspose, None, Transpose,
+    };
+
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(false, false),
+        None
+    );
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(true, false),
+        Transpose
+    );
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(true, true),
+        ConjugateTranspose
+    );
+    assert_eq!(
+        crate::backend::linalg_utils::to_matrix_operand_transpose_type(false, true),
+        None
     );
 }
 
@@ -358,4 +489,502 @@ fn linalg_utils_clone_batched_column_major_repackages_permuted_batches() {
         permuted.logical_memory_space()
     );
     assert_eq!(tensor_data(&cloned), tensor_data(&permuted));
+}
+
+#[test]
+fn linalg_utils_prepare_matrix_operand_resolves_lazy_conjugation() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, 2.0),
+            num_complex::Complex64::new(-3.0, 4.0),
+            num_complex::Complex64::new(5.0, -6.0),
+            num_complex::Complex64::new(-7.0, -8.0),
+        ],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let conjugated = base.conj();
+
+    let prepared = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &conjugated,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::None,
+    )
+    .unwrap();
+    let expected = tenferro_prims::CpuBackend::resolve_conj(&mut ctx, &conjugated);
+
+    assert_eq!(prepared.dims(), conjugated.dims());
+    assert!(prepared.is_col_major_contiguous());
+    assert!(!prepared.is_conjugated());
+    assert_eq!(tensor_data_c64(&prepared), tensor_data_c64(&expected));
+}
+
+#[test]
+fn linalg_utils_prepare_matrix_operand_transposes_first_two_axes_before_repacking() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 2.0, 3.0, 4.0, 5.0, 6.0, //
+            10.0, 20.0, 30.0, 40.0, 50.0, 60.0,
+        ],
+        &[2, 3, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let prepared = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &base,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::Transpose,
+    )
+    .unwrap();
+    let expected = base.permute(&[1, 0, 2]).unwrap();
+
+    assert_eq!(prepared.dims(), expected.dims());
+    assert!(prepared.is_col_major_contiguous());
+    assert_eq!(tensor_data(&prepared), tensor_data(&expected));
+}
+
+#[test]
+fn linalg_utils_prepare_matrix_operand_conjugate_transpose_handles_plain_and_lazily_conjugated_inputs(
+) {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, 2.0),
+            num_complex::Complex64::new(-3.0, 4.0),
+            num_complex::Complex64::new(5.0, -6.0),
+            num_complex::Complex64::new(-7.0, -8.0),
+        ],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let lazy_conjugated = base.conj();
+
+    let prepared_plain = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &base,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::ConjugateTranspose,
+    )
+    .unwrap();
+    let prepared_lazy = crate::backend::linalg_utils::prepare_matrix_operand(
+        &mut ctx,
+        &lazy_conjugated,
+        crate::backend::linalg_utils::MatrixOperandTransposeType::ConjugateTranspose,
+    )
+    .unwrap();
+
+    let expected_plain = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, -2.0),
+            num_complex::Complex64::new(5.0, 6.0),
+            num_complex::Complex64::new(-3.0, -4.0),
+            num_complex::Complex64::new(-7.0, 8.0),
+        ],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let expected_lazy = base.permute(&[1, 0]).unwrap();
+
+    assert_eq!(prepared_plain.dims(), expected_plain.dims());
+    assert_eq!(
+        tensor_data_c64(&prepared_plain),
+        tensor_data_c64(&expected_plain)
+    );
+    assert_eq!(prepared_lazy.dims(), expected_lazy.dims());
+    assert_eq!(
+        tensor_data_c64(&prepared_lazy),
+        tensor_data_c64(&expected_lazy)
+    );
+}
+
+#[test]
+fn tensor_helpers_materialize_broadcasted_batches_resolving_conj_handles_lazy_conjugated_input() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let base = tenferro_tensor::Tensor::from_slice(
+        &[
+            num_complex::Complex64::new(1.0, 2.0),
+            num_complex::Complex64::new(-3.0, 4.0),
+            num_complex::Complex64::new(5.0, -6.0),
+            num_complex::Complex64::new(-7.0, -8.0),
+        ],
+        &[2, 2, 1],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let lazy_conjugated = base.conj();
+    let batch_indexer =
+        crate::backend::tensor_helpers::BroadcastBatchIndexer::new(&[1], &[2, 3], "solve", "b")
+            .unwrap();
+
+    let got = crate::backend::tensor_helpers::materialize_broadcasted_batches_resolving_conj(
+        &mut ctx,
+        &lazy_conjugated,
+        2,
+        &batch_indexer,
+        "solve",
+        "b",
+    )
+    .unwrap();
+    let resolved = tenferro_prims::CpuBackend::resolve_conj(&mut ctx, &lazy_conjugated);
+    let expected = crate::backend::tensor_helpers::materialize_broadcasted_batches(
+        &resolved,
+        2,
+        &batch_indexer,
+        "solve",
+        "b",
+    )
+    .unwrap();
+
+    assert_eq!(got.dims(), expected.dims());
+    assert!(!got.is_conjugated());
+    assert!(got.is_col_major_contiguous());
+    assert_eq!(tensor_data_c64(&got), tensor_data_c64(&expected));
+}
+
+#[test]
+fn tensor_helpers_broadcast_batch_indexer_maps_column_major_output_indices() {
+    let indexer =
+        crate::backend::tensor_helpers::BroadcastBatchIndexer::new(&[1, 3], &[2, 3], "solve", "b")
+            .unwrap();
+
+    assert_eq!(indexer.output_batch_dims(), &[2, 3]);
+    assert!(!indexer.is_identity());
+    assert_eq!(
+        (0..6)
+            .map(|index| indexer.source_linear_batch_index(index))
+            .collect::<Vec<_>>(),
+        vec![0, 0, 1, 1, 2, 2]
+    );
+}
+
+#[test]
+fn tensor_helpers_broadcast_batch_dims_merges_unit_axes_symmetrically() {
+    let merged =
+        crate::backend::tensor_helpers::broadcast_batch_dims(&[2, 1], &[1, 3], "solve", "a", "b")
+            .unwrap();
+    assert_eq!(merged, vec![2, 3]);
+}
+
+#[test]
+fn cpu_backend_solve_broadcasts_rhs_batches() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 2.0, //
+            3.0, 0.0, 0.0, 4.0,
+        ],
+        &[2, 2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[6.0_f64, 8.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let x = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve(
+        &mut ctx, &a, &b,
+    )
+    .unwrap();
+
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(tensor_data(&x), vec![6.0, 4.0, 2.0, 2.0]);
+}
+
+#[test]
+fn hip_backend_stub_methods_cover_all_small_unsupported_paths() {
+    let mut ctx = tenferro_prims::RocmContext::new();
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[1.0_f64, 0.0, 0.0, 1.0],
+        &[2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[1.0_f64, 2.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let pivots = tenferro_tensor::Tensor::from_slice(
+        &[1_i32, 2],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    for op in [
+        crate::LinalgCapabilityOp::Solve,
+        crate::LinalgCapabilityOp::LuSolve,
+        crate::LinalgCapabilityOp::SolveEx,
+        crate::LinalgCapabilityOp::Qr,
+        crate::LinalgCapabilityOp::ThinSvd,
+        crate::LinalgCapabilityOp::LuFactor,
+        crate::LinalgCapabilityOp::LuFactorEx,
+        crate::LinalgCapabilityOp::Cholesky,
+        crate::LinalgCapabilityOp::CholeskyEx,
+        crate::LinalgCapabilityOp::EigenSym,
+        crate::LinalgCapabilityOp::Eig,
+    ] {
+        assert!(
+            !<crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::has_linalg_support(op)
+        );
+    }
+
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_ex(
+            &mut ctx, &a, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve(
+            &mut ctx, &a, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_solve(
+            &mut ctx, &a, &pivots, &b
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_triangular(
+            &mut ctx, &a, &b, true
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::qr(&mut ctx, &a)
+            .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::thin_svd(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::svdvals(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_ex(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::lu_factor_no_pivot(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky_ex(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::cholesky(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::eigen_sym(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+    assert!(
+        <crate::backend::HipTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::eig(
+            &mut ctx, &a
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn cpu_backend_solve_ex_broadcasts_rhs_batches_and_preserves_info() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 1.0, //
+            1.0, 2.0, 2.0, 4.0,
+        ],
+        &[2, 2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[3.0_f64, -1.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_ex(
+            &mut ctx, &a, &b,
+        )
+        .unwrap();
+
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2]);
+    assert_eq!(result.solution.dims(), &[2, 2]);
+    assert_eq!(tensor_data(&result.solution), vec![3.0, -1.0, 0.0, 0.0]);
+}
+
+#[test]
+fn cpu_backend_solve_triangular_broadcasts_rhs_batches() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 2.0, //
+            3.0, 0.0, 0.0, 4.0,
+        ],
+        &[2, 2, 2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[6.0_f64, 8.0],
+        &[2],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let x =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_triangular(
+            &mut ctx, &a, &b, true,
+        )
+        .unwrap();
+
+    assert_eq!(x.dims(), &[2, 2]);
+    assert_eq!(tensor_data(&x), vec![6.0, 4.0, 2.0, 2.0]);
+}
+
+#[test]
+fn cpu_backend_solve_broadcasts_both_operands_batches() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 2.0, //
+            3.0, 0.0, 0.0, 4.0,
+        ],
+        &[2, 2, 2, 1],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[
+            6.0_f64, 8.0, //
+            9.0, 12.0, //
+            15.0, 20.0,
+        ],
+        &[2, 1, 3],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let x = <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve(
+        &mut ctx, &a, &b,
+    )
+    .unwrap();
+
+    assert_eq!(x.dims(), &[2, 2, 3]);
+    assert_eq!(
+        tensor_data(&x),
+        vec![6.0, 4.0, 2.0, 2.0, 9.0, 6.0, 3.0, 3.0, 15.0, 10.0, 5.0, 5.0]
+    );
+}
+
+#[test]
+fn cpu_backend_solve_ex_broadcasts_both_operands_batches_and_repeats_info() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 1.0, //
+            1.0, 2.0, 2.0, 4.0,
+        ],
+        &[2, 2, 2, 1],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[
+            3.0_f64, -1.0, //
+            4.0, -2.0, //
+            5.0, -3.0,
+        ],
+        &[2, 1, 3],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_ex(
+            &mut ctx, &a, &b,
+        )
+        .unwrap();
+
+    assert_eq!(tensor_data_on_cpu(&result.info), vec![0, 2, 0, 2, 0, 2]);
+    assert_eq!(result.solution.dims(), &[2, 2, 3]);
+    assert_eq!(
+        tensor_data(&result.solution),
+        vec![3.0, -1.0, 0.0, 0.0, 4.0, -2.0, 0.0, 0.0, 5.0, -3.0, 0.0, 0.0]
+    );
+}
+
+#[test]
+fn cpu_backend_solve_triangular_broadcasts_both_operands_batches() {
+    let mut ctx = tenferro_prims::CpuContext::new(1);
+    let a = tenferro_tensor::Tensor::from_slice(
+        &[
+            1.0_f64, 0.0, 0.0, 2.0, //
+            3.0, 0.0, 0.0, 4.0,
+        ],
+        &[2, 2, 2, 1],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let b = tenferro_tensor::Tensor::from_slice(
+        &[
+            6.0_f64, 8.0, //
+            9.0, 12.0, //
+            15.0, 20.0,
+        ],
+        &[2, 1, 3],
+        tenferro_tensor::MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let x =
+        <crate::backend::CpuTensorLinalgBackend as crate::TensorLinalgPrims<f64>>::solve_triangular(
+            &mut ctx, &a, &b, true,
+        )
+        .unwrap();
+
+    assert_eq!(x.dims(), &[2, 2, 3]);
+    assert_eq!(
+        tensor_data(&x),
+        vec![6.0, 4.0, 2.0, 2.0, 9.0, 6.0, 3.0, 3.0, 15.0, 10.0, 5.0, 5.0]
+    );
 }

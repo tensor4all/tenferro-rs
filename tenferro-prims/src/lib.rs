@@ -9,12 +9,24 @@
 //!   contraction fast paths
 //! - [`TensorScalarPrims`] for standard scalar pointwise and reduction families
 //! - [`TensorAnalyticPrims`] for analytic pointwise and reduction families
+//! - [`TensorComplexRealPrims`] for cross-dtype complex-to-real unary families
+//! - [`TensorComplexScalePrims`] for complex payload scaled by real-valued tensors
+//! - [`TensorMetadataPrims`] for integer/bool metadata tensor families with
+//!   overwrite-based execution and erased metadata tensor handles
+//! - [`TensorMetadataCastPrims`] for metadata-to-scalar bridge families such as
+//!   bool/int casts and `where`
+//! - [`TensorRngPrims`] for dense eager RNG constructors such as `rand` and
+//!   `randn`
 //!
-//! Every family follows the same plan/execute pattern:
+//! Most families follow the same plan/execute pattern:
 //!
 //! 1. Create a family descriptor
 //! 2. Build a backend plan for concrete tensor shapes
 //! 3. Execute the plan with BLAS-style `alpha`/`beta` scaling
+//!
+//! [`TensorMetadataPrims`] is the exception: it uses overwrite-based execution
+//! over erased integer/bool metadata tensor handles instead of scalar-family
+//! scaling.
 //!
 //! # CPU GEMM backend selection
 //!
@@ -175,6 +187,7 @@ mod families;
 mod infra;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
+mod shape_helpers;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.
@@ -187,6 +200,10 @@ mod gpu_stubs;
 
 #[doc(hidden)]
 pub use cpu::CpuAnalyticPlan;
+#[doc(hidden)]
+pub use cpu::CpuComplexRealPlan;
+#[doc(hidden)]
+pub use cpu::CpuComplexScalePlan;
 #[doc(hidden)]
 pub use cpu::CpuScalarPlan;
 pub use cpu::*;

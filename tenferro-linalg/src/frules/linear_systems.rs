@@ -13,10 +13,10 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let b = Tensor::<f64>::ones(&[3], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
-/// let db = Tensor::<f64>::ones(&[3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let b = Tensor::<f64>::ones(&[3], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
+/// let db = Tensor::<f64>::ones(&[3], mem, col).unwrap();
 /// let (x, dx) = solve_frule(&mut ctx, &a, &b, &da, &db).unwrap();
 /// ```
 pub fn solve_frule<T: KernelLinalgScalar, C>(
@@ -90,10 +90,14 @@ pub fn solve_triangular_frule<T: KernelLinalgScalar, C>(
 where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorMetadataContextFor,
     C::Backend: 'static,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
     <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
-        'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
+        'static
+            + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>
+            + tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
 {
     if tangent_a.dims() != a.dims() {
         return Err(chainrules_core::AutodiffError::InvalidArgument(format!(
@@ -150,8 +154,7 @@ where
         let rhs = sub_vec(db_b, &da_x);
 
         // dX from triangular solve with the same structure.
-        let dx_b = backend::slice_bridge::solve_triangular_vec(ctx, a_b, &rhs, n, nrhs, upper)
-            .map_err(to_ad_err)?;
+        let dx_b = backend_solve_tri(ctx, a_b, &rhs, n, nrhs, upper)?;
 
         dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b);
     }
@@ -175,8 +178,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (a_inv, da_inv) = inv_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn inv_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -236,8 +239,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (d, dd) = det_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn det_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -246,10 +249,14 @@ pub fn det_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
     tangent: &Tensor<T>,
 ) -> AdResult<(Tensor<T>, Tensor<T>)>
 where
-    T: KernelLinalgScalar,
+    T: KernelLinalgScalar + crate::prims_bridge::ScaleTensorByRealSameShape<C>,
     C: backend::TensorLinalgContextFor<T>
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>
+        + tenferro_prims::TensorMetadataContextFor,
     C::Backend: 'static,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::Det, "det_frule")
         .map_err(to_ad_err)?;
@@ -299,11 +306,14 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::eye(3, mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::eye(3, mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = slogdet_frule(&mut ctx, &a, &da).unwrap();
 /// ```
-pub fn slogdet_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn slogdet_frule<
+    T: KernelLinalgScalar<Real = T> + num_traits::Float + crate::SlogdetDispatch<C>,
+    C,
+>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,

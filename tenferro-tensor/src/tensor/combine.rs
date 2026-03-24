@@ -1,10 +1,20 @@
 use std::sync::Arc;
 
+#[cfg(feature = "cuda")]
+use num_complex::{Complex32, Complex64};
+#[cfg(feature = "cuda")]
+use std::any::TypeId;
 use tenferro_algebra::Scalar;
+#[cfg(feature = "cuda")]
+use tenferro_device::cuda::runtime::{
+    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, StridedCopyTransform,
+};
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
 use super::Tensor;
 use crate::layout::compute_contiguous_strides;
+#[cfg(feature = "cuda")]
+use crate::DataBuffer;
 use crate::MemoryOrder;
 
 impl<T: Scalar> Tensor<T> {
@@ -15,7 +25,10 @@ impl<T: Scalar> Tensor<T> {
     /// supported and count from the end.
     ///
     /// This is a dense materialization operation that allocates a new buffer.
-    /// Phase 1 only supports main-memory tensors.
+    /// It is implemented by inserting a size-1 axis with
+    /// [`Tensor::unsqueeze`] and then delegating to [`Tensor::cat`], so it
+    /// materializes logical values, resolves conjugation, and supports the same
+    /// CPU and same-device CUDA paths as concatenation.
     ///
     /// # Arguments
     ///
@@ -27,9 +40,8 @@ impl<T: Scalar> Tensor<T> {
     /// Returns an error if:
     /// - The input list is empty
     /// - Tensors have different shapes
-    /// - Tensors have different memory spaces
+    /// - Tensors have different memory spaces or devices
     /// - The dimension is out of range
-    /// - Non-main-memory tensors are provided (Phase 1 limitation)
     ///
     /// # Examples
     ///
@@ -78,12 +90,6 @@ impl<T: Scalar> Tensor<T> {
         };
 
         let memory_space = first.logical_memory_space();
-        if memory_space != LogicalMemorySpace::MainMemory {
-            return Err(Error::InvalidArgument(
-                "stack only supports main-memory tensors in Phase 1".to_string(),
-            ));
-        }
-
         for (i, t) in tensors.iter().enumerate() {
             if t.dims() != first.dims() {
                 return Err(Error::ShapeMismatch {
@@ -99,72 +105,13 @@ impl<T: Scalar> Tensor<T> {
             }
         }
 
-        let n = tensors.len();
-        let mut result_dims: Vec<usize> = first.dims.to_vec();
-        result_dims.insert(dim, n);
+        let unsqueezed: Vec<Tensor<T>> = tensors
+            .iter()
+            .map(|tensor| tensor.unsqueeze(dim as isize))
+            .collect::<Result<_>>()?;
+        let unsqueezed_refs: Vec<&Tensor<T>> = unsqueezed.iter().collect();
 
-        let result_strides = compute_contiguous_strides(&result_dims, MemoryOrder::ColumnMajor);
-        let result_len: usize = result_dims.iter().product();
-        let mut result_data = vec![T::zero(); result_len];
-
-        let src_strides = compute_contiguous_strides(&first.dims, MemoryOrder::ColumnMajor);
-
-        for (stack_idx, tensor) in tensors.iter().enumerate() {
-            let contiguous_tensor = tensor.contiguous(MemoryOrder::ColumnMajor);
-            let src = contiguous_tensor.buffer().as_slice().unwrap();
-
-            let mut index = vec![0usize; ndim];
-            let n_elements: usize = first.dims.iter().product();
-
-            if n_elements > 0 {
-                for _ in 0..n_elements {
-                    let src_pos: isize = index
-                        .iter()
-                        .zip(src_strides.iter())
-                        .map(|(&i, &s)| (i as isize) * s)
-                        .sum();
-
-                    let mut result_index = Vec::with_capacity(ndim + 1);
-                    for (axis, &idx) in index.iter().enumerate() {
-                        if axis == dim {
-                            result_index.push(stack_idx);
-                        }
-                        result_index.push(idx);
-                    }
-                    if dim == ndim {
-                        result_index.push(stack_idx);
-                    }
-
-                    let dst_pos: isize = result_index
-                        .iter()
-                        .zip(result_strides.iter())
-                        .map(|(&i, &s)| (i as isize) * s)
-                        .sum();
-
-                    result_data[dst_pos as usize] = src[src_pos as usize];
-
-                    for axis in (0..ndim).rev() {
-                        index[axis] += 1;
-                        if index[axis] < first.dims[axis] {
-                            break;
-                        }
-                        index[axis] = 0;
-                    }
-                }
-            }
-        }
-
-        Ok(Tensor::from_parts(
-            crate::DataBuffer::from_vec(result_data),
-            Arc::from(result_dims),
-            Arc::from(result_strides),
-            0,
-            memory_space,
-            first.preferred_compute_device,
-            None,
-            false,
-            None,
-        ))
+        Tensor::cat(&unsqueezed_refs, dim as isize)
     }
 
     /// Concatenate tensors along an existing dimension.
@@ -174,7 +121,10 @@ impl<T: Scalar> Tensor<T> {
     /// Negative dimensions are supported and count from the end.
     ///
     /// This is a dense materialization operation that allocates a new buffer.
-    /// Phase 1 only supports main-memory tensors.
+    /// Logical conjugation is materialized per input, the output is resolved
+    /// (`conjugated = false`), and any preferred compute-device hint is cleared.
+    /// Main-memory tensors are always supported; with `cuda` enabled, same-device
+    /// GPU tensors are also supported.
     ///
     /// # Arguments
     ///
@@ -190,7 +140,7 @@ impl<T: Scalar> Tensor<T> {
     /// - Tensors have mismatched sizes on non-concatenated dimensions
     /// - Tensors have different memory spaces
     /// - The dimension is out of range
-    /// - Non-main-memory tensors are provided (Phase 1 limitation)
+    /// - Non-main-memory tensors are provided without `cuda` support
     ///
     /// # Examples
     ///
@@ -245,12 +195,6 @@ impl<T: Scalar> Tensor<T> {
         };
 
         let memory_space = first.logical_memory_space();
-        if memory_space != LogicalMemorySpace::MainMemory {
-            return Err(Error::InvalidArgument(
-                "cat only supports main-memory tensors in Phase 1".to_string(),
-            ));
-        }
-
         let mut total_cat_dim = 0usize;
         for (i, t) in tensors.iter().enumerate() {
             if t.ndim() != ndim {
@@ -284,12 +228,31 @@ impl<T: Scalar> Tensor<T> {
         result_dims[dim] = total_cat_dim;
 
         let result_strides = compute_contiguous_strides(&result_dims, MemoryOrder::ColumnMajor);
+
+        #[cfg(feature = "cuda")]
+        if matches!(memory_space, LogicalMemorySpace::GpuMemory { .. }) {
+            return cat_gpu(tensors, dim, memory_space, &result_dims, &result_strides);
+        }
+
+        #[cfg(not(feature = "cuda"))]
+        if memory_space != LogicalMemorySpace::MainMemory {
+            return Err(Error::InvalidArgument(
+                "cat only supports main-memory tensors in Phase 1".to_string(),
+            ));
+        }
+        #[cfg(feature = "cuda")]
+        if memory_space != LogicalMemorySpace::MainMemory {
+            return Err(Error::InvalidArgument(format!(
+                "cat only supports main-memory or same-device GPU tensors, got {memory_space:?}"
+            )));
+        }
+
         let result_len: usize = result_dims.iter().product();
         let mut result_data = vec![T::zero(); result_len];
 
         let mut cat_offset: usize = 0;
         for tensor in tensors {
-            let contiguous_tensor = tensor.contiguous(MemoryOrder::ColumnMajor);
+            let contiguous_tensor = tensor.materialize_logical_contiguous(MemoryOrder::ColumnMajor);
             let src = contiguous_tensor.buffer().as_slice().unwrap();
             let src_strides = compute_contiguous_strides(&tensor.dims, MemoryOrder::ColumnMajor);
 
@@ -335,10 +298,120 @@ impl<T: Scalar> Tensor<T> {
             Arc::from(result_strides),
             0,
             memory_space,
-            first.preferred_compute_device,
+            None,
             None,
             false,
             None,
         ))
     }
+}
+
+#[cfg(feature = "cuda")]
+fn materialize_cuda_contiguous_buffer<T: Scalar + 'static>(
+    tensor: &Tensor<T>,
+    runtime: &Arc<device_cuda::CudaRuntime>,
+) -> Result<CudaBuffer<T>> {
+    let src_ptr = tensor.buffer().as_device_ptr().ok_or_else(|| {
+        Error::DeviceError("cat: GPU tensor buffer is not resident on device".into())
+    })?;
+    let spec = StridedCopySpec::to_contiguous(
+        tensor.dims(),
+        tensor.strides(),
+        tensor.offset(),
+        ContiguousOrder::ColumnMajor,
+    )?;
+    let dst = runtime.alloc::<T>(tensor.len())?;
+    if tensor.is_empty() {
+        return Ok(dst);
+    }
+
+    unsafe {
+        if tensor.is_conjugated() && supports_conj_strided_copy::<T>() {
+            runtime.copy_strided_raw_with_transform(
+                src_ptr,
+                dst.device_ptr(),
+                &spec,
+                StridedCopyTransform::Conj,
+            )?;
+        } else {
+            runtime.copy_strided_raw(src_ptr, dst.device_ptr(), &spec)?;
+        }
+    }
+    Ok(dst)
+}
+
+#[cfg(feature = "cuda")]
+fn cat_gpu<T: Scalar + 'static>(
+    tensors: &[&Tensor<T>],
+    dim: usize,
+    memory_space: LogicalMemorySpace,
+    result_dims: &[usize],
+    result_strides: &[isize],
+) -> Result<Tensor<T>> {
+    let LogicalMemorySpace::GpuMemory { device_id } = memory_space else {
+        return Err(Error::DeviceError(format!(
+            "cat: unsupported CUDA memory space {memory_space:?}"
+        )));
+    };
+    let runtime = device_cuda::get_or_init(device_id)?;
+
+    // Stage each source into a contiguous GPU buffer so we can reuse the
+    // concat-pack substrate without falling back to host materialization.
+    let mut current_dims = tensors[0].dims().to_vec();
+    let mut current_buf = materialize_cuda_contiguous_buffer(tensors[0], &runtime)?;
+    for next in tensors.iter().skip(1) {
+        let next_buf = materialize_cuda_contiguous_buffer(next, &runtime)?;
+        let current_strides = compute_contiguous_strides(&current_dims, MemoryOrder::ColumnMajor);
+        let next_strides = compute_contiguous_strides(next.dims(), MemoryOrder::ColumnMajor);
+        let current_spec = StridedCopySpec::to_contiguous(
+            &current_dims,
+            &current_strides,
+            0,
+            ContiguousOrder::ColumnMajor,
+        )?;
+        let next_spec = StridedCopySpec::to_contiguous(
+            next.dims(),
+            &next_strides,
+            0,
+            ContiguousOrder::ColumnMajor,
+        )?;
+
+        current_buf = runtime.pack_concat_sources(
+            &current_buf,
+            &current_spec,
+            &next_buf,
+            &next_spec,
+            dim,
+            ContiguousOrder::ColumnMajor,
+        )?;
+        current_dims[dim] = current_dims[dim]
+            .checked_add(next.dims()[dim])
+            .ok_or_else(|| Error::InvalidArgument("cat: dimension size overflow".to_string()))?;
+    }
+
+    debug_assert_eq!(current_dims.as_slice(), result_dims);
+
+    let current_len = current_buf.len();
+    let current_ptr = current_buf.device_ptr();
+    let buffer = unsafe {
+        DataBuffer::from_gpu_parts(current_ptr, current_len, memory_space, move || {
+            drop(current_buf)
+        })
+    };
+    Ok(Tensor::from_parts(
+        buffer,
+        Arc::from(result_dims.to_vec()),
+        Arc::from(result_strides.to_vec()),
+        0,
+        memory_space,
+        None,
+        None,
+        false,
+        None,
+    ))
+}
+
+#[cfg(feature = "cuda")]
+fn supports_conj_strided_copy<T: 'static>() -> bool {
+    TypeId::of::<T>() == TypeId::of::<Complex32>() || TypeId::of::<T>() == TypeId::of::<Complex64>()
 }

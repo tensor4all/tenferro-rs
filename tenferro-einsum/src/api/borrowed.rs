@@ -209,7 +209,7 @@ where
     let canonical_refs: Vec<&Tensor<Alg::Scalar>> = canonical_operands.iter().collect();
     let memory_space = infer_memory_space(&canonical_refs)?;
     let mut output =
-        Tensor::<Alg::Scalar>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor);
+        Tensor::<Alg::Scalar>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor)?;
     let mut pool = BufferPool::new();
     execute_tree::<Alg, Backend>(
         ctx,

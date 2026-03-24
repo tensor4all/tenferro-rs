@@ -15,9 +15,11 @@ use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime, Devi
 use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
-use crate::backend::linalg_utils::clone_batched_column_major;
-#[cfg(feature = "cuda")]
-use crate::backend::tensor_helpers::{batch_count, validate_solve_rhs_shape, validate_square};
+use crate::backend::tensor_helpers::{
+    batch_count, materialize_broadcasted_batches_resolving_conj,
+    materialize_broadcasted_pivot_batches, tensor_from_data_on_space, validate_lu_pivot_shape,
+    validate_solve_rhs_shape, validate_square, BroadcastBatchIndexer,
+};
 
 #[cfg(feature = "cuda")]
 fn checked_mul(lhs: usize, rhs: usize, label: &str) -> Result<usize> {
@@ -77,12 +79,25 @@ where
 {
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let x_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve_ex",
+        "b",
+    )?;
 
     if n == 0 || bc == 0 {
+        let info_shape = if rhs.output_batch_dims.is_empty() {
+            vec![]
+        } else {
+            rhs.output_batch_dims.clone()
+        };
         return Ok(crate::SolveTensorExResult {
-            solution: clone_batched_column_major(ctx, b)?,
-            info: vec![0; bc],
+            solution: x_work,
+            info: tensor_from_data_on_space(vec![0; bc], &info_shape, a.logical_memory_space())?,
         });
     }
 
@@ -100,13 +115,21 @@ where
     let n_i32 = as_i32(n, "solve_ex n")?;
     let nrhs_i32 = as_i32(rhs.nrhs, "solve_ex nrhs")?;
 
-    let a_work = clone_batched_column_major(ctx, a)?;
-    let x_work = clone_batched_column_major(ctx, b)?;
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
+    let a_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
+        a,
+        2,
+        &a_batch_indexer,
+        "solve_ex",
+        "a",
+    )?;
     let x_out = Tensor::zeros(
         &rhs.output_dims,
         a.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let runtime = load_runtime(ctx)?;
 
     let a_base = context_device_ptr(ctx, &a_work, "solve_ex a")?.cast::<T>();
@@ -216,9 +239,14 @@ where
         }
     }
 
+    let info_shape = if rhs.output_batch_dims.is_empty() {
+        vec![]
+    } else {
+        rhs.output_batch_dims.clone()
+    };
     Ok(crate::SolveTensorExResult {
         solution: x_out,
-        info: info_out,
+        info: tensor_from_data_on_space(info_out, &info_shape, a.logical_memory_space())?,
     })
 }
 
@@ -245,10 +273,18 @@ where
 {
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let x_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve",
+        "b",
+    )?;
 
     if n == 0 || bc == 0 {
-        return clone_batched_column_major(ctx, b);
+        return Ok(x_work);
     }
 
     if !solve_supported::<T>() {
@@ -265,8 +301,10 @@ where
     let n_i32 = as_i32(n, "solve n")?;
     let nrhs_i32 = as_i32(rhs.nrhs, "solve nrhs")?;
 
-    let a_work = clone_batched_column_major(ctx, a)?;
-    let x_work = clone_batched_column_major(ctx, b)?;
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
+    let a_work =
+        materialize_broadcasted_batches_resolving_conj(ctx, a, 2, &a_batch_indexer, "solve", "a")?;
     let runtime = load_runtime(ctx)?;
 
     let a_base = context_device_ptr(ctx, &a_work, "solve a")?.cast::<T>();
@@ -356,4 +394,117 @@ where
     T: CudaLinalgScalar,
 {
     super::runtime::unsupported("solve")
+}
+
+#[cfg(feature = "cuda")]
+pub(super) fn lu_solve<T>(
+    ctx: &mut tenferro_prims::CudaContext,
+    factors: &Tensor<T>,
+    pivots: &Tensor<i32>,
+    b: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: CudaLinalgScalar,
+{
+    let (n, batch_dims) = validate_square(factors)?;
+    validate_lu_pivot_shape(pivots, n, batch_dims, "lu_solve")?;
+    let rhs = validate_solve_rhs_shape(b, n, batch_dims, "lu_solve")?;
+    let bc = batch_count(&rhs.output_batch_dims);
+    let factor_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "lu_solve", "factors")?;
+    let factors_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
+        factors,
+        2,
+        &factor_batch_indexer,
+        "lu_solve",
+        "factors",
+    )?;
+    let pivots_work = materialize_broadcasted_pivot_batches(
+        pivots,
+        n,
+        batch_dims,
+        &rhs.output_batch_dims,
+        "lu_solve",
+    )?;
+    let x_work = materialize_broadcasted_batches_resolving_conj(
+        ctx,
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "lu_solve",
+        "b",
+    )?;
+
+    if n == 0 || bc == 0 {
+        return Ok(x_work);
+    }
+
+    if !solve_supported::<T>() {
+        return Err(Error::DeviceError(format!(
+            "CUDA lu_solve currently supports only f32/f64/complex32/complex64, got {:?}",
+            T::cuda_data_type()
+        )));
+    }
+
+    let dtype = T::cuda_data_type();
+    let factor_stride = checked_mul(n, n, "lu_solve factor_stride")?;
+    let rhs_stride = checked_mul(n, rhs.nrhs, "lu_solve rhs_stride")?;
+    let lda = as_i32(n, "lu_solve lda")?;
+    let n_i32 = as_i32(n, "lu_solve n")?;
+    let nrhs_i32 = as_i32(rhs.nrhs, "lu_solve nrhs")?;
+
+    let runtime = load_runtime(ctx)?;
+    let factor_base = context_device_ptr(ctx, &factors_work, "lu_solve factors")?.cast::<T>();
+    let pivot_base = context_device_ptr(ctx, &pivots_work, "lu_solve pivots")?.cast::<i32>();
+    let x_base = context_device_ptr(ctx, &x_work, "lu_solve rhs")?.cast::<T>();
+    let factor_offset = factors_work.offset() as usize;
+    let pivot_offset = pivots_work.offset() as usize;
+    let x_offset = x_work.offset() as usize;
+
+    let info =
+        DeviceAllocation::alloc(ctx, std::mem::size_of::<i32>(), "cudaMalloc(lu_solve info)")?;
+    let mut host_info = [0_i32; 1];
+
+    for batch in 0..bc {
+        let factor_ptr =
+            unsafe { factor_base.add(factor_offset + batch * factor_stride) }.cast::<c_void>();
+        let pivot_ptr = unsafe { pivot_base.add(pivot_offset + batch * n) };
+        let x_ptr = unsafe { x_base.add(x_offset + batch * rhs_stride) };
+
+        runtime.cusolver_api().getrs(
+            dtype,
+            runtime.cusolver_handle.raw,
+            n_i32,
+            nrhs_i32,
+            factor_ptr,
+            lda,
+            pivot_ptr,
+            x_ptr.cast::<c_void>(),
+            lda,
+            info.as_mut_ptr().cast::<i32>(),
+        )?;
+        copy_device_to_host(
+            ctx,
+            info.as_mut_ptr().cast::<c_void>(),
+            &mut host_info,
+            "cudaMemcpyDtoH(lu_solve getrs info)",
+        )?;
+        check_info("lu_solve/getrs", host_info[0])?;
+    }
+
+    Ok(x_work)
+}
+
+#[cfg(not(feature = "cuda"))]
+pub(super) fn lu_solve<T>(
+    _ctx: &mut tenferro_prims::CudaContext,
+    _factors: &Tensor<T>,
+    _pivots: &Tensor<i32>,
+    _b: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: CudaLinalgScalar,
+{
+    super::runtime::unsupported("lu_solve")
 }

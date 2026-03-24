@@ -63,7 +63,7 @@ fn databuffer_clone_shares() {
 
 #[test]
 fn zeros_column_major() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert_eq!(t.dims(), &[3, 4]);
     assert_eq!(t.strides(), &[1, 3]);
     assert_eq!(t.offset(), 0);
@@ -74,7 +74,7 @@ fn zeros_column_major() {
 
 #[test]
 fn zeros_row_major() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, ROW);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, ROW).unwrap();
     assert_eq!(t.dims(), &[3, 4]);
     assert_eq!(t.strides(), &[4, 1]);
     let data = t.buffer().as_slice().unwrap();
@@ -83,7 +83,7 @@ fn zeros_row_major() {
 
 #[test]
 fn zeros_scalar() {
-    let t = Tensor::<f64>::zeros(&[], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[], MEM, COL).unwrap();
     assert_eq!(t.dims(), &[] as &[usize]);
     assert_eq!(t.len(), 1);
     assert_eq!(t.ndim(), 0);
@@ -91,14 +91,14 @@ fn zeros_scalar() {
 
 #[test]
 fn zeros_empty_dim() {
-    let t = Tensor::<f64>::zeros(&[0, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[0, 4], MEM, COL).unwrap();
     assert_eq!(t.len(), 0);
     assert!(t.is_empty());
 }
 
 #[test]
 fn ones_basic() {
-    let t = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
     let data = t.buffer().as_slice().unwrap();
     assert!(data.iter().all(|&x| x == 1.0));
     assert_eq!(t.len(), 6);
@@ -173,7 +173,7 @@ fn from_vec_strides_length_mismatch() {
 
 #[test]
 fn eye_3x3_col_major() {
-    let t = Tensor::<f64>::eye(3, MEM, COL);
+    let t = Tensor::<f64>::eye(3, MEM, COL).unwrap();
     assert_eq!(t.dims(), &[3, 3]);
     let data = t.buffer().as_slice().unwrap();
     // Column-major: [1,0,0, 0,1,0, 0,0,1]
@@ -182,7 +182,7 @@ fn eye_3x3_col_major() {
 
 #[test]
 fn eye_3x3_row_major() {
-    let t = Tensor::<f64>::eye(3, MEM, ROW);
+    let t = Tensor::<f64>::eye(3, MEM, ROW).unwrap();
     assert_eq!(t.dims(), &[3, 3]);
     let data = t.buffer().as_slice().unwrap();
     // Row-major: [1,0,0, 0,1,0, 0,0,1]
@@ -191,7 +191,7 @@ fn eye_3x3_row_major() {
 
 #[test]
 fn eye_1x1() {
-    let t = Tensor::<f64>::eye(1, MEM, COL);
+    let t = Tensor::<f64>::eye(1, MEM, COL).unwrap();
     assert_eq!(t.buffer().as_slice().unwrap(), &[1.0]);
 }
 
@@ -201,37 +201,37 @@ fn eye_1x1() {
 
 #[test]
 fn ndim() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     assert_eq!(t.ndim(), 3);
 }
 
 #[test]
 fn len_3d() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     assert_eq!(t.len(), 24);
 }
 
 #[test]
 fn is_empty_nonempty() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     assert!(!t.is_empty());
 }
 
 #[test]
 fn logical_memory_space() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     assert_eq!(t.logical_memory_space(), MEM);
 }
 
 #[test]
 fn preferred_compute_device_default_none() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     assert!(t.preferred_compute_device().is_none());
 }
 
 #[test]
 fn set_preferred_compute_device() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let dev = ComputeDevice::Cpu { device_id: 0 };
     t.set_preferred_compute_device(Some(dev));
     assert_eq!(t.preferred_compute_device(), Some(dev));
@@ -239,14 +239,14 @@ fn set_preferred_compute_device() {
 
 #[test]
 fn effective_compute_devices_default() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let devs = t.effective_compute_devices(OpKind::BatchedGemm).unwrap();
     assert_eq!(devs, vec![ComputeDevice::Cpu { device_id: 0 }]);
 }
 
 #[test]
 fn effective_compute_devices_override() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let dev = ComputeDevice::Cpu { device_id: 0 };
     t.set_preferred_compute_device(Some(dev));
     let devs = t.effective_compute_devices(OpKind::Contract).unwrap();
@@ -255,7 +255,7 @@ fn effective_compute_devices_override() {
 
 #[test]
 fn effective_compute_devices_rejects_invalid_cpu_override() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     t.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 99 }));
     let err = t.effective_compute_devices(OpKind::Contract).unwrap_err();
     assert!(matches!(
@@ -269,7 +269,7 @@ fn effective_compute_devices_rejects_invalid_cpu_override() {
 
 #[test]
 fn effective_compute_devices_rejects_invalid_cuda_override() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     t.set_preferred_compute_device(Some(ComputeDevice::Cuda { device_id: 1 }));
     let err = t
         .effective_compute_devices(OpKind::BatchedGemm)
@@ -285,13 +285,13 @@ fn effective_compute_devices_rejects_invalid_cuda_override() {
 
 #[test]
 fn is_conjugated_default_false() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     assert!(!t.is_conjugated());
 }
 
 #[test]
 fn is_ready_cpu() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     assert!(t.is_ready());
 }
 
@@ -314,7 +314,7 @@ fn clone_shares_buffer() {
 
 #[test]
 fn conj_toggles_flag() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let tc = t.conj();
     assert!(tc.is_conjugated());
     let tcc = tc.conj();
@@ -323,7 +323,7 @@ fn conj_toggles_flag() {
 
 #[test]
 fn into_conj() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let tc = t.into_conj();
     assert!(tc.is_conjugated());
 }
@@ -334,24 +334,24 @@ fn into_conj() {
 
 #[test]
 fn contiguous_col_major() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(t.is_contiguous());
 }
 
 #[test]
 fn contiguous_row_major() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, ROW);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, ROW).unwrap();
     assert!(t.is_contiguous());
 }
 
 #[test]
 fn not_contiguous_after_permute() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     let tp = t.permute(&[1, 0]).unwrap();
     // Transposed column-major: strides [3, 1] with dims [4, 3]
     // This is actually row-major contiguous! So it IS contiguous.
     // Let's test with a 3D case instead.
-    let t3 = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let t3 = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     let tp3 = t3.permute(&[2, 0, 1]).unwrap();
     // dims [4, 2, 3], strides [6, 1, 2] — not contiguous in either order
     assert!(!tp3.is_contiguous());
@@ -373,7 +373,7 @@ fn permute_transpose() {
 
 #[test]
 fn permute_identity() {
-    let t = Tensor::<f64>::zeros(&[3, 4, 5], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4, 5], MEM, COL).unwrap();
     let tp = t.permute(&[0, 1, 2]).unwrap();
     assert_eq!(tp.dims(), &[3, 4, 5]);
     assert_eq!(tp.strides(), t.strides());
@@ -381,7 +381,7 @@ fn permute_identity() {
 
 #[test]
 fn permute_3d() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     let tp = t.permute(&[2, 0, 1]).unwrap();
     assert_eq!(tp.dims(), &[4, 2, 3]);
     // Col-major strides: [1, 2, 6] → permuted: [6, 1, 2]
@@ -390,7 +390,7 @@ fn permute_3d() {
 
 #[test]
 fn permute_invalid_length() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(
         matches!(
             t.permute(&[0]),
@@ -402,7 +402,7 @@ fn permute_invalid_length() {
 
 #[test]
 fn permute_out_of_range() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(
         matches!(
             t.permute(&[0, 5]),
@@ -414,7 +414,7 @@ fn permute_out_of_range() {
 
 #[test]
 fn permute_duplicate() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(
         matches!(
             t.permute(&[0, 0]),
@@ -430,7 +430,7 @@ fn permute_duplicate() {
 
 #[test]
 fn broadcast_expand_dim1() {
-    let t = Tensor::<f64>::ones(&[3, 1], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 1], MEM, COL).unwrap();
     let b = t.broadcast(&[3, 4]).unwrap();
     assert_eq!(b.dims(), &[3, 4]);
     assert_eq!(b.strides()[1], 0);
@@ -438,7 +438,7 @@ fn broadcast_expand_dim1() {
 
 #[test]
 fn broadcast_same_shape() {
-    let t = Tensor::<f64>::ones(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 4], MEM, COL).unwrap();
     let b = t.broadcast(&[3, 4]).unwrap();
     assert_eq!(b.dims(), &[3, 4]);
     assert_eq!(b.strides(), t.strides());
@@ -446,7 +446,7 @@ fn broadcast_same_shape() {
 
 #[test]
 fn broadcast_incompatible() {
-    let t = Tensor::<f64>::ones(&[3, 2], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 2], MEM, COL).unwrap();
     assert!(
         matches!(
             t.broadcast(&[3, 4]),
@@ -462,7 +462,7 @@ fn broadcast_incompatible() {
 
 #[test]
 fn diagonal_2d() {
-    let t = Tensor::<f64>::eye(3, MEM, COL);
+    let t = Tensor::<f64>::eye(3, MEM, COL).unwrap();
     let d = t.diagonal(&[(0, 1)]).unwrap();
     assert_eq!(d.dims(), &[3]);
     // Col-major strides [1, 3] → diagonal stride 1+3=4
@@ -485,7 +485,7 @@ fn diagonal_data_access() {
 
 #[test]
 fn diagonal_mismatched_dims() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(
         matches!(
             t.diagonal(&[(0, 1)]),
@@ -497,7 +497,7 @@ fn diagonal_mismatched_dims() {
 
 #[test]
 fn diagonal_same_axis() {
-    let t = Tensor::<f64>::zeros(&[3, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 3], MEM, COL).unwrap();
     assert!(
         matches!(
             t.diagonal(&[(0, 0)]),
@@ -513,7 +513,7 @@ fn diagonal_same_axis() {
 
 #[test]
 fn reshape_flatten() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let r = t.reshape(&[6]).unwrap();
     assert_eq!(r.dims(), &[6]);
     assert_eq!(r.strides(), &[1]);
@@ -521,21 +521,21 @@ fn reshape_flatten() {
 
 #[test]
 fn reshape_same_shape() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let r = t.reshape(&[2, 3]).unwrap();
     assert_eq!(r.dims(), &[2, 3]);
 }
 
 #[test]
 fn reshape_different_shape() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let r = t.reshape(&[3, 2]).unwrap();
     assert_eq!(r.dims(), &[3, 2]);
 }
 
 #[test]
 fn reshape_incompatible_size() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     assert!(
         matches!(
             t.reshape(&[5]),
@@ -547,7 +547,7 @@ fn reshape_incompatible_size() {
 
 #[test]
 fn reshape_non_contiguous_fails() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     let tp = t.permute(&[2, 0, 1]).unwrap();
     assert!(
         matches!(
@@ -611,7 +611,7 @@ fn select_dim1() {
 
 #[test]
 fn select_out_of_range_dim() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(
         matches!(
             t.select(2, 0),
@@ -623,7 +623,7 @@ fn select_out_of_range_dim() {
 
 #[test]
 fn select_out_of_range_index() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(
         matches!(
             t.select(0, 3),
@@ -652,7 +652,7 @@ fn narrow_basic() {
 
 #[test]
 fn narrow_full_range() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     let n = t.narrow(0, 0, 3).unwrap();
     assert_eq!(n.dims(), &[3, 4]);
     assert_eq!(n.offset(), 0);
@@ -660,7 +660,7 @@ fn narrow_full_range() {
 
 #[test]
 fn narrow_out_of_range() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert!(
         matches!(
             t.narrow(1, 3, 2),
@@ -703,7 +703,7 @@ fn contiguous_from_permuted() {
 
 #[test]
 fn into_contiguous_passthrough() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let ptr = t.buffer().as_ptr();
     let c = t.into_contiguous(COL);
     assert_eq!(c.buffer().as_ptr(), ptr);
@@ -711,7 +711,7 @@ fn into_contiguous_passthrough() {
 
 #[test]
 fn into_contiguous_copies_when_needed() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     let tp = t.permute(&[2, 0, 1]).unwrap();
     let c = tp.into_contiguous(COL);
     assert!(c.is_contiguous());
@@ -724,7 +724,7 @@ fn into_contiguous_copies_when_needed() {
 
 #[test]
 fn tril_3x3() {
-    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
     let lower = t.tril(0);
     assert_eq!(lower.dims(), &[3, 3]);
     let data = lower.buffer().as_slice().unwrap();
@@ -734,7 +734,7 @@ fn tril_3x3() {
 
 #[test]
 fn triu_3x3() {
-    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
     let upper = t.triu(0);
     assert_eq!(upper.dims(), &[3, 3]);
     let data = upper.buffer().as_slice().unwrap();
@@ -744,7 +744,7 @@ fn triu_3x3() {
 
 #[test]
 fn tril_with_diagonal_offset() {
-    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
     let lower = t.tril(1);
     let data = lower.buffer().as_slice().unwrap();
     // tril(1): keep where j - i <= 1
@@ -755,7 +755,7 @@ fn tril_with_diagonal_offset() {
 
 #[test]
 fn triu_with_negative_diagonal() {
-    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
     let upper = t.triu(-1);
     let data = upper.buffer().as_slice().unwrap();
     // triu(-1): keep where j - i >= -1
@@ -767,7 +767,7 @@ fn triu_with_negative_diagonal() {
 
 #[test]
 fn tril_triu_complementary() {
-    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 3], MEM, COL).unwrap();
     let lower = t.tril(0);
     let upper = t.triu(1);
     // tril(0) + triu(1) should reconstruct the original
@@ -800,14 +800,14 @@ fn triu_rank1_returns_vector_unchanged() {
 
 #[test]
 fn to_memory_space_same_space() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let t2 = t.to_memory_space_async(MEM).unwrap();
     assert_eq!(t2.dims(), &[2, 3]);
 }
 
 #[test]
 fn to_memory_space_gpu_behavior_matches_feature_support() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let result = t.to_memory_space_async(LogicalMemorySpace::GpuMemory { device_id: 0 });
 
     #[cfg(feature = "cuda")]
@@ -829,7 +829,7 @@ fn to_memory_space_gpu_behavior_matches_feature_support() {
 
 #[test]
 fn tensor_metadata() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     assert_eq!(t.dims(), &[3, 4]);
     assert_eq!(t.ndim(), 2);
     assert_eq!(t.offset(), 0);
@@ -840,14 +840,14 @@ fn tensor_metadata() {
 
 #[test]
 fn tensor_permute() {
-    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4], MEM, COL).unwrap();
     let tp = t.permute(&[1, 0]).unwrap();
     assert_eq!(tp.dims(), &[4, 3]);
 }
 
 #[test]
 fn tensor_broadcast() {
-    let t = Tensor::<f64>::ones(&[1, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[1, 3], MEM, COL).unwrap();
     let tb = t.broadcast(&[4, 3]).unwrap();
     assert_eq!(tb.dims(), &[4, 3]);
     assert_eq!(tb.strides()[0], 0);
@@ -855,14 +855,14 @@ fn tensor_broadcast() {
 
 #[test]
 fn tensor_select() {
-    let t = Tensor::<f64>::zeros(&[3, 4, 5], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 4, 5], MEM, COL).unwrap();
     let ts = t.select(2, 2).unwrap();
     assert_eq!(ts.dims(), &[3, 4]);
 }
 
 #[test]
 fn tensor_narrow() {
-    let t = Tensor::<f64>::zeros(&[3, 10], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[3, 10], MEM, COL).unwrap();
     let tn = t.narrow(1, 2, 3).unwrap();
     assert_eq!(tn.dims(), &[3, 3]);
 }
@@ -879,7 +879,7 @@ fn tensor_permute_contiguous() {
 
 #[test]
 fn tensor_conj() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     let tc = t.conj();
     assert!(tc.is_conjugated());
 }
@@ -892,7 +892,7 @@ fn tensor_conj() {
 fn zero_tangent() {
     use chainrules_core::Differentiable;
 
-    let t = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
     let zt = t.zero_tangent();
     assert_eq!(zt.dims(), &[2, 3]);
     let data = zt.buffer().as_slice().unwrap();
@@ -903,8 +903,8 @@ fn zero_tangent() {
 fn accumulate_tangent_basic() {
     use chainrules_core::Differentiable;
 
-    let a = Tensor::<f64>::ones(&[2, 3], MEM, COL);
-    let b = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    let a = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
+    let b = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
     let result = Tensor::<f64>::accumulate_tangent(a, &b);
     assert_eq!(result.dims(), &[2, 3]);
     let data = result.buffer().as_slice().unwrap();
@@ -928,15 +928,15 @@ fn accumulate_tangent_with_zero() {
 
 #[test]
 fn fw_grad_default_none() {
-    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
     assert!(!t.has_fw_grad());
     assert!(t.fw_grad().is_none());
 }
 
 #[test]
 fn fw_grad_set_and_get() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
+    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
     t.set_fw_grad(grad);
     assert!(t.has_fw_grad());
     assert_eq!(t.fw_grad().unwrap().dims(), &[2, 3]);
@@ -944,8 +944,8 @@ fn fw_grad_set_and_get() {
 
 #[test]
 fn fw_grad_detach() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
+    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
     t.set_fw_grad(grad);
     let detached = t.detach_fw_grad();
     assert!(detached.is_some());
@@ -955,8 +955,8 @@ fn fw_grad_detach() {
 
 #[test]
 fn fw_grad_clone_preserves() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL);
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
+    let grad = Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap();
     t.set_fw_grad(grad);
     let cloned = t.clone();
     assert!(cloned.has_fw_grad());
@@ -965,8 +965,8 @@ fn fw_grad_clone_preserves() {
 
 #[test]
 fn fw_grad_view_ops_strip() {
-    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL);
-    t.set_fw_grad(Tensor::<f64>::ones(&[2, 3], MEM, COL));
+    let mut t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
+    t.set_fw_grad(Tensor::<f64>::ones(&[2, 3], MEM, COL).unwrap());
 
     // View operations strip fw_grad in Phase 1
     let permuted = t.permute(&[1, 0]).unwrap();
@@ -1040,19 +1040,19 @@ fn accumulate_tangent_no_fw_grad() {
 
 #[test]
 fn eye_small_sizes_work() {
-    let t = Tensor::<f64>::eye(1, MEM, COL);
+    let t = Tensor::<f64>::eye(1, MEM, COL).unwrap();
     assert_eq!(t.dims(), &[1, 1]);
 
-    let t = Tensor::<f64>::eye(2, MEM, ROW);
+    let t = Tensor::<f64>::eye(2, MEM, ROW).unwrap();
     assert_eq!(t.dims(), &[2, 2]);
 
-    let t = Tensor::<f64>::eye(10, MEM, COL);
+    let t = Tensor::<f64>::eye(10, MEM, COL).unwrap();
     assert_eq!(t.dims(), &[10, 10]);
 }
 
 #[test]
 fn tril_triu_normal_sizes_work() {
-    let t = Tensor::<f64>::ones(&[5, 5], MEM, COL);
+    let t = Tensor::<f64>::ones(&[5, 5], MEM, COL).unwrap();
     let lower = t.tril(0);
     assert_eq!(lower.dims(), &[5, 5]);
 
@@ -1062,7 +1062,7 @@ fn tril_triu_normal_sizes_work() {
 
 #[test]
 fn tril_triu_batched_works() {
-    let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL).unwrap();
     let lower = t.tril(0);
     assert_eq!(lower.dims(), &[3, 3, 2]);
 
@@ -1119,7 +1119,7 @@ fn contiguous_copy_with_offset() {
 
 #[test]
 fn contiguous_copy_3d_tensor() {
-    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     let tp = t.permute(&[2, 0, 1]).unwrap();
     let c = tp.contiguous(COL);
     assert!(c.is_contiguous());
@@ -1128,7 +1128,7 @@ fn contiguous_copy_3d_tensor() {
 
 #[test]
 fn contiguous_copy_batched_tril() {
-    let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL);
+    let t = Tensor::<f64>::ones(&[3, 3, 2], MEM, COL).unwrap();
     let lower = t.tril(0);
     let c = lower.contiguous(COL);
     assert_eq!(c.dims(), &[3, 3, 2]);
@@ -1137,7 +1137,7 @@ fn contiguous_copy_batched_tril() {
 
 #[test]
 fn contiguous_copy_empty_tensor() {
-    let t = Tensor::<f64>::zeros(&[0, 4], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[0, 4], MEM, COL).unwrap();
     let c = t.contiguous(COL);
     assert_eq!(c.dims(), &[0, 4]);
     assert!(c.buffer().as_slice().unwrap().is_empty());
@@ -1145,7 +1145,7 @@ fn contiguous_copy_empty_tensor() {
 
 #[test]
 fn contiguous_copy_scalar_tensor() {
-    let t = Tensor::<f64>::zeros(&[], MEM, COL);
+    let t = Tensor::<f64>::zeros(&[], MEM, COL).unwrap();
     let c = t.contiguous(COL);
     assert_eq!(c.dims(), &[] as &[usize]);
     assert_eq!(c.buffer().as_slice().unwrap().len(), 1);

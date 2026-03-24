@@ -418,6 +418,7 @@ fn exercise_real_linalg_suite(matrix: &Tensor, triangular: &Tensor, rhs: &Tensor
     let qr = matrix.qr().unwrap();
     assert_eq!(qr.q.dims(), &[2, 2]);
     let lu = matrix.lu().unwrap();
+    assert_eq!(lu.p.dims(), &[2, 2]);
     assert_eq!(lu.l.dims(), &[2, 2]);
     let eigen = matrix.eigen().unwrap();
     assert_eq!(eigen.values.dims(), &[2]);

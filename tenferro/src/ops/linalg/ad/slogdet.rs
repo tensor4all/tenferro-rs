@@ -13,7 +13,7 @@ pub struct SlogdetAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> SlogdetAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::SlogdetLinalgDispatchValue,
 {
     /// Executes AD slogdet.
     /// # Examples
@@ -79,7 +79,7 @@ where
         if let Some(spec) = input_spec {
             if let Some((node, tape)) = out_sign.reverse_handle() {
                 let spec = spec.clone();
-                let zero = zero_like(spec.layout.payload());
+                let zero = zero_like(spec.layout.payload())?;
                 tape::register_rule::<T>(
                     &tape,
                     node,

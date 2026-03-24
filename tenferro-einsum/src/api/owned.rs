@@ -134,7 +134,7 @@ where
         &output_shape,
         memory_space,
         tenferro_tensor::MemoryOrder::ColumnMajor,
-    );
+    )?;
     let mut pool = BufferPool::new();
     crate::execution::execute::execute_tree::<Alg, Backend>(
         ctx,

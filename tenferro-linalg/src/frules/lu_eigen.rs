@@ -17,7 +17,7 @@ use super::*;
 /// let mut ctx = CpuContext::new(1);
 /// let a = Tensor::from_slice(&[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0], &[3, 3], col)
 ///     .unwrap();
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
 pub fn lu_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
@@ -28,7 +28,13 @@ pub fn lu_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
 ) -> AdResult<(LuResult<T>, LuResult<T>)>
 where
     T: KernelLinalgScalar,
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorMetadataContextFor
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
+        tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
+    T: crate::primal::LiftPermutationMatrixTensor<C>,
     C::Backend: 'static,
 {
     let result = lu(ctx, tensor, pivot)
@@ -40,7 +46,8 @@ where
 
     let (l_data, _) = extract_data(&result.l)?;
     let (u_data, _) = extract_data(&result.u)?;
-    let p_vec = result.p.as_ref();
+    let p_vec = crate::forward_perm_from_permutation_matrix(&result.p, m, bc)
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     let (da_data, _) = extract_data(tangent)?;
 
     let mut dl_data = vec![T::zero(); m * k * bc];
@@ -53,15 +60,11 @@ where
 
         // Apply permutation: P dA (m×n)
         let mut pda = vec![T::zero(); m * n];
-        if let Some(pv) = p_vec {
-            let p_b = &pv[b * m..(b + 1) * m];
-            for i in 0..m {
-                for j in 0..n {
-                    pda[i + j * m] = da_b[p_b[i] + j * m];
-                }
+        let p_b = &p_vec[b * m..(b + 1) * m];
+        for i in 0..m {
+            for j in 0..n {
+                pda[i + j * m] = da_b[p_b[i] + j * m];
             }
-        } else {
-            pda.copy_from_slice(da_b);
         }
 
         // F = L^{-1} P dA U^{-1} (k×k for square part)
@@ -129,7 +132,12 @@ where
     let l_dims = output_dims(&[m, k], batch_dims);
     let u_dims = output_dims(&[k, n], batch_dims);
     let dresult = LuResult {
-        p: None, // permutation has no derivative
+        p: Tensor::zeros(
+            result.p.dims(),
+            result.p.logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
         l: tensor_from_data(dl_data, &l_dims)
             .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
         u: tensor_from_data(du_data, &u_dims)
@@ -151,8 +159,8 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 3], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = eigen_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn eigen_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

@@ -10,9 +10,11 @@ description = "Device abstraction and shared error types for the tenferro worksp
 [dependencies]
 thiserror.workspace = true
 cudarc = { workspace = true, optional = true }
+num-complex.workspace = true
+mt19937 = "3.3.0"
+rand_core = "0.10"
 
 [features]
 cuda = ["dep:cudarc"]
 
 [dev-dependencies]
-num-complex.workspace = true

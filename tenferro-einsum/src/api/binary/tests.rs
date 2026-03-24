@@ -31,7 +31,7 @@ fn binary_into_accumulates_with_alpha_beta() {
     let mut ctx = CpuContext::new(1);
     let a = mat(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let b = mat(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
-    let mut out = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+    let mut out = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
     einsum_binary_into::<Standard<f64>, CpuBackend>(
         &mut ctx,
         "ij,jk->ik",
@@ -64,8 +64,8 @@ fn binary_into_accumulates_with_alpha_beta() {
 #[test]
 fn binary_rejects_non_binary_notation() {
     let mut ctx = CpuContext::new(1);
-    let a = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
-    let b = Tensor::<f64>::zeros(&[2, 2], MEM, COL);
+    let a = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 2], MEM, COL).unwrap();
     let result = einsum_binary::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk,kl->il", &a, &b, None);
     match result {
         Ok(_) => panic!("expected binary notation validation error"),

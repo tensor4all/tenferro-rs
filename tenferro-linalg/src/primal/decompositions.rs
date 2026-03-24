@@ -1,3 +1,4 @@
+use super::linear_systems_sign::{lu_permutation_matrix_tensor, LiftPermutationMatrixTensor};
 use super::*;
 
 /// Compute the SVD of a batched matrix.
@@ -22,7 +23,7 @@ use super::*;
 ///
 /// let col = MemoryOrder::ColumnMajor;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 ///
 /// let _full = svd(&mut ctx, &a, None).unwrap();
 /// let opts = SvdOptions {
@@ -107,7 +108,7 @@ where
 ///     &[3, 4],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let _values = svdvals(&mut ctx, &a).unwrap();
 /// ```
 pub fn svdvals<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T::Real>>
@@ -138,7 +139,7 @@ where
 ///     &[4, 3],
 ///     LogicalMemorySpace::MainMemory,
 ///     MemoryOrder::ColumnMajor,
-/// );
+/// ).unwrap();
 /// let _result = qr(&mut ctx, &a).unwrap();
 /// ```
 ///
@@ -181,7 +182,7 @@ where
 ///     .unwrap();
 /// let _partial = lu(&mut ctx, &a, LuPivot::Partial).unwrap();
 /// let no_pivot = lu(&mut ctx, &a, LuPivot::NoPivot).unwrap();
-/// assert!(no_pivot.p.is_none());
+/// assert_eq!(no_pivot.p.dims(), &[0]);
 /// ```
 pub fn lu<T: KernelLinalgScalar, C>(
     ctx: &mut C,
@@ -189,84 +190,35 @@ pub fn lu<T: KernelLinalgScalar, C>(
     pivot: LuPivot,
 ) -> Result<LuResult<T>>
 where
-    C: backend::TensorLinalgContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorMetadataContextFor
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
+    C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>>::ScalarBackend:
+        tenferro_prims::TensorMetadataCastPrims<T::Real, Context = C>,
+    T: LiftPermutationMatrixTensor<C>,
     C::Backend: 'static,
 {
+    let (m, _n, _batch_dims) = validate_2d(tensor)?;
     if pivot == LuPivot::NoPivot {
-        require_main_memory_tensor(tensor, "NoPivot LU")?;
-        let (m, n, batch_dims) = validate_2d(tensor)?;
-        let bc = batch_count(batch_dims);
-        let k = m.min(n);
-        let mat_size = m * n;
-
-        let input = ensure_col_major(tensor);
-        let data = extract_slice(&input)?;
-        let offset = input.offset() as usize;
-
-        let mut all_l = vec![T::zero(); m * k * bc];
-        let mut all_u = vec![T::zero(); k * n * bc];
-
-        for batch in 0..bc {
-            let start = offset + batch * mat_size;
-            let mut lu_data = data[start..start + mat_size].to_vec();
-
-            for p in 0..k {
-                let pivot_val = lu_data[p + p * m];
-                if pivot_val.abs_real() <= T::real_epsilon() {
-                    return Err(Error::InvalidArgument(format!(
-                        "NoPivot LU encountered near-zero pivot at row {p} in batch {batch}"
-                    )));
-                }
-
-                for i in (p + 1)..m {
-                    lu_data[i + p * m] = lu_data[i + p * m] / pivot_val;
-                }
-                for j in (p + 1)..n {
-                    let up = lu_data[p + j * m];
-                    for i in (p + 1)..m {
-                        let idx = i + j * m;
-                        lu_data[idx] = lu_data[idx] - lu_data[i + p * m] * up;
-                    }
-                }
-            }
-
-            for j in 0..k {
-                for i in 0..m {
-                    let val = if i < j {
-                        T::zero()
-                    } else if i == j {
-                        T::one()
-                    } else {
-                        lu_data[i + j * m]
-                    };
-                    all_l[batch * m * k + i + j * m] = val;
-                }
-            }
-            for j in 0..n {
-                for i in 0..k {
-                    let val = if i <= j {
-                        lu_data[i + j * m]
-                    } else {
-                        T::zero()
-                    };
-                    all_u[batch * k * n + i + j * k] = val;
-                }
-            }
-        }
-
-        let l_dims = output_dims(&[m, k], batch_dims);
-        let u_dims = output_dims(&[k, n], batch_dims);
+        let result =
+            <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_no_pivot(ctx, tensor)?;
         return Ok(LuResult {
-            p: None,
-            l: tensor_from_data(all_l, &l_dims)?,
-            u: tensor_from_data(all_u, &u_dims)?,
+            p: Tensor::empty(
+                &[0],
+                tensor.logical_memory_space(),
+                MemoryOrder::ColumnMajor,
+            )?,
+            l: result.l,
+            u: result.u,
         });
     }
 
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
+    let p = lu_permutation_matrix_tensor(ctx, &result.pivots, m)?;
 
     Ok(LuResult {
-        p: Some(result.pivots.into_iter().map(|p| p as usize).collect()),
+        p,
         l: result.l,
         u: result.u,
     })
@@ -281,15 +233,11 @@ where
     C: backend::TensorLinalgContextFor<T>,
     C::Backend: 'static,
 {
-    validate_2d(tensor)?;
+    let _ = validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor(ctx, tensor)?;
     Ok(LuFactorResult {
         factors: pack_lu_factors(&result.l, &result.u)?,
-        pivots: result
-            .pivots
-            .into_iter()
-            .map(|pivot| pivot as usize)
-            .collect(),
+        pivots: result.pivots,
     })
 }
 
@@ -304,17 +252,13 @@ where
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuFactorEx, "lu_factor_ex")?;
 
-    validate_2d(tensor)?;
+    let _ = validate_2d(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::lu_factor_ex(ctx, tensor)?;
     let factors = pack_lu_factors(&result.l, &result.u)?;
 
     Ok(LuFactorExResult {
         factors,
-        pivots: result
-            .pivots
-            .into_iter()
-            .map(|pivot| pivot as usize)
-            .collect(),
+        pivots: result.pivots,
         info: result.info,
     })
 }
@@ -323,7 +267,7 @@ where
 pub fn lu_solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     factors: &Tensor<T>,
-    pivots: &[usize],
+    pivots: &Tensor<i32>,
     b: &Tensor<T>,
 ) -> Result<Tensor<T>>
 where
@@ -332,12 +276,32 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::LuSolve, "lu_solve")?;
-    lu_solve_impl(ctx, factors, pivots, b)
+    <C::Backend as backend::TensorLinalgBackend<T>>::lu_solve(ctx, factors, pivots, b)
 }
 
 /// Compute the eigendecomposition of a batched square matrix.
 ///
 /// Input shape: `(n, n, *)`.
+/// The lower triangle is treated as canonical input, matching the default
+/// `UPLO='L'` behavior used by PyTorch's `linalg.eigh`.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_linalg::eigen;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let a = Tensor::<f64>::from_slice(
+///     &[2.0, 1.0, 1.0, 2.0],
+///     &[2, 2],
+///     MemoryOrder::ColumnMajor,
+/// ).unwrap();
+/// let result = eigen(&mut ctx, &a).unwrap();
+/// assert_eq!(result.values.dims(), &[2]);
+/// ```
 pub fn eigen<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
@@ -347,12 +311,7 @@ where
     C::Backend: 'static,
 {
     require_linalg_support::<T, C>(backend::LinalgCapabilityOp::EigenSym, "eigen")?;
-    let (n, batch_dims) = validate_square(tensor)?;
-    let input = ensure_col_major(tensor);
-    let data = extract_slice(&input)?;
-    let offset = input.offset() as usize;
-    let bc = batch_count(batch_dims);
-    validate_hermitian_batches(data, offset, n, bc, "eigen")?;
+    let _ = validate_square(tensor)?;
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::eigen_sym(ctx, tensor)?;
 
     Ok(EigenResult {

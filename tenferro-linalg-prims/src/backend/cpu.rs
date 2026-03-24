@@ -398,6 +398,15 @@ where
         cpu_impl::solve(ctx, a, b)
     }
 
+    fn lu_solve(
+        ctx: &mut Self::Context,
+        factors: &Tensor<T>,
+        pivots: &Tensor<i32>,
+        b: &Tensor<T>,
+    ) -> Result<Tensor<T>> {
+        super::cpu_tensor_impl::lu_solve(ctx, factors, pivots, b)
+    }
+
     fn solve_triangular(
         ctx: &mut Self::Context,
         a: &Tensor<T>,
@@ -425,6 +434,10 @@ where
 
     fn lu_factor(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>> {
         cpu_impl::lu_factor(ctx, a)
+    }
+
+    fn lu_factor_no_pivot(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>> {
+        super::cpu_tensor_impl::lu_factor_no_pivot(ctx, a)
     }
 
     fn cholesky_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {

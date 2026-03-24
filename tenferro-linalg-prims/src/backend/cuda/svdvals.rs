@@ -18,7 +18,7 @@ use super::runtime::{context_device_ptr, copy_device_to_host, load_runtime, Devi
 use super::scalar_type::CudaDataType;
 use super::scalar_type::CudaLinalgScalar;
 #[cfg(feature = "cuda")]
-use crate::backend::linalg_utils::clone_batched_column_major;
+use crate::backend::linalg_utils::{prepare_matrix_operand, to_matrix_operand_transpose_type};
 #[cfg(feature = "cuda")]
 use crate::backend::tensor_helpers::{batch_count, validate_matrix_shape};
 
@@ -97,20 +97,13 @@ where
 
     let mut s_dims = vec![k];
     s_dims.extend_from_slice(batch_dims);
-    let s = Tensor::zeros(&s_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor);
+    let s = Tensor::zeros(&s_dims, a.logical_memory_space(), MemoryOrder::ColumnMajor)?;
 
     if m == 0 || n == 0 || bc == 0 {
         return Ok(s);
     }
 
-    let a_input = if m < n {
-        let mut perm: Vec<usize> = (0..a.ndim()).collect();
-        perm.swap(0, 1);
-        a.permute(&perm)?
-    } else {
-        a.clone()
-    };
-    let a_work = clone_batched_column_major(ctx, &a_input)?;
+    let a_work = prepare_matrix_operand(ctx, a, to_matrix_operand_transpose_type(m < n, false))?;
     let (m_work, n_work) = if m < n { (n, m) } else { (m, n) };
 
     let runtime = load_runtime(ctx)?;

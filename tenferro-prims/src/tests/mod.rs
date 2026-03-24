@@ -1,7 +1,16 @@
 mod analytic_phase1;
 mod backend_stubs;
+mod complex_real_phase1;
+mod complex_scale_phase1;
+mod coverage_protocols;
+mod metadata_bridge_phase1;
+mod metadata_contract_phase1;
+mod metadata_phase1;
+mod metadata_phase2;
 mod organization;
+mod rng_phase1;
 mod scalar_phase1;
+mod scalar_phase2;
 
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
@@ -197,7 +206,8 @@ fn analytic_prims_execute_sqrt_and_reject_unsupported_plan_requests() {
         &[2],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     <CpuBackend as TensorAnalyticPrims<Standard<f64>>>::execute(
         &mut ctx,
         &plan,

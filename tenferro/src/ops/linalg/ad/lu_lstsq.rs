@@ -14,7 +14,7 @@ pub struct LuAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> LuAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: crate::runtime::dispatch::RealLuLinalgDispatchValue,
 {
     /// Sets LU pivot policy.
     /// # Examples
@@ -162,7 +162,7 @@ where
         }
 
         Ok(TypedLuResult {
-            p: primal.p,
+            p: crate::AdTensor::new_primal(primal.p),
             l: out_l,
             u: out_u,
         })
@@ -310,8 +310,8 @@ where
 
             if let Some((node, tape)) = out_residual.reverse_handle() {
                 let reverse_specs = reverse_specs.clone();
-                let zero_a = zero_like(self.a.structured_primal().payload());
-                let zero_b = zero_like(self.b.structured_primal().payload());
+                let zero_a = zero_like(self.a.structured_primal().payload())?;
+                let zero_b = zero_like(self.b.structured_primal().payload())?;
                 tape::register_rule::<T>(
                     &tape,
                     node,

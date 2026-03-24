@@ -1,6 +1,6 @@
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, Result};
+use tenferro_device::{checked_batch_count, Error, Result};
 
 /// Trait for types that support strided GEMM via faer (zero-copy, zero-allocation).
 ///
@@ -137,10 +137,7 @@ pub(super) fn advance_batch_offset(offset: isize, step: isize) -> Result<isize> 
 
 #[inline]
 pub(super) fn batch_iteration_count(batch_dims: &[usize]) -> Result<usize> {
-    batch_dims.iter().try_fold(1usize, |acc, &dim| {
-        acc.checked_mul(dim)
-            .ok_or_else(|| Error::InvalidArgument("batch iteration count overflow".into()))
-    })
+    checked_batch_count(batch_dims)
 }
 
 #[inline]

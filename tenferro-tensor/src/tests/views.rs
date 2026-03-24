@@ -7,7 +7,8 @@ fn diagonal_reports_stride_overflow_for_zero_extent_view() {
         &[0, 0],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
     let view = base
         .view_as_strided(vec![0, 0], vec![isize::MAX, 1])
         .unwrap();
@@ -58,7 +59,8 @@ fn unsqueeze_rejects_out_of_range_dimensions() {
         &[2, 3],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     let pos_err = base.unsqueeze(3).unwrap_err();
     assert!(
@@ -149,7 +151,8 @@ fn broadcast_rejects_target_rank_mismatch() {
         &[1, 3],
         LogicalMemorySpace::MainMemory,
         MemoryOrder::ColumnMajor,
-    );
+    )
+    .unwrap();
 
     let err = base.broadcast(&[4, 3, 1]).unwrap_err();
     assert!(

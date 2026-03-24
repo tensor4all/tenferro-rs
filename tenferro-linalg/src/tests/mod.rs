@@ -8,7 +8,7 @@ mod batch_b_contracts;
 mod organization;
 mod runtime_capability;
 
-fn tensor_data(tensor: &Tensor<f64>) -> Vec<f64> {
+fn tensor_data<T: tenferro_algebra::Scalar + Copy>(tensor: &Tensor<T>) -> Vec<T> {
     let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
     let offset = contiguous.offset() as usize;
     let len = contiguous.dims().iter().product::<usize>().max(1);
@@ -91,8 +91,9 @@ fn linalg_scalar_helpers_and_validation_accept_valid_inputs() {
     ];
     validate_hermitian_batches(&hermitian, 0, 2, 1, "eigh").unwrap();
 
-    let slice = extract_slice(&square).unwrap();
-    assert_eq!(slice, &[1.0, 0.0, 0.0, 1.0]);
+    let (square_data, square_offset) = extract_data(&square).unwrap();
+    assert_eq!(square_offset, 0);
+    assert_eq!(square_data, vec![1.0, 0.0, 0.0, 1.0]);
 
     let scalar = scalar_from::<f32>(1.25).unwrap();
     assert_eq!(scalar, 1.25_f32);
@@ -169,6 +170,252 @@ fn slogdet_matches_expected_sign_and_logabsdet() {
 }
 
 #[test]
+fn matrix_exp_batch_1_norms_keep_batches_separate() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            6.0_f64, 0.0, 0.0, 6.0, // batch 0
+            2.0, 0.5, -1.0, 1.5, // batch 1
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let norms = crate::ad_helpers::matrix_exp_batch_1_norms_tensor(&mut ctx, &a).unwrap();
+    assert_eq!(norms.dims(), &[2]);
+    assert_eq!(tensor_data(&norms), vec![6.0, 2.5]);
+}
+
+#[test]
+fn matrix_exp_batch_squaring_counts_stay_tensor_native() {
+    let mut ctx = CpuContext::new(1);
+    let batch_norms =
+        Tensor::from_slice(&[6.0_f64, 2.5, 20.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+
+    let counts =
+        crate::ad_helpers::matrix_exp_batch_squaring_counts_tensor(&mut ctx, &batch_norms).unwrap();
+    assert_eq!(counts.dims(), &[3]);
+    assert_eq!(tensor_data(&counts), vec![1.0, 0.0, 2.0]);
+}
+
+#[test]
+fn matrix_power_covers_special_exponents_and_min_value_guard() {
+    let mut ctx = CpuContext::new(1);
+    let a =
+        Tensor::from_slice(&[2.0_f64, 0.0, 0.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 0).unwrap()),
+        vec![1.0, 0.0, 0.0, 1.0]
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 1).unwrap()),
+        tensor_data(&a)
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 2).unwrap()),
+        vec![4.0, 0.0, 0.0, 16.0]
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, 3).unwrap()),
+        vec![8.0, 0.0, 0.0, 64.0]
+    );
+    assert_eq!(
+        tensor_data(&matrix_power(&mut ctx, &a, -1).unwrap()),
+        vec![0.5, 0.0, 0.0, 0.25]
+    );
+
+    let err = matrix_power(&mut ctx, &a, i64::MIN).unwrap_err();
+    assert!(matches!(err, Error::InvalidArgument(msg) if msg.contains("i64::MIN exponent")));
+}
+
+#[test]
+fn inv_ex_zero_sized_matrix_returns_zero_info_tensor() {
+    let mut ctx = CpuContext::new(1);
+    let empty = Tensor::<f64>::zeros(
+        &[0, 0],
+        tenferro_device::LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let result = inv_ex(&mut ctx, &empty).unwrap();
+    assert_eq!(result.inverse.dims(), &[0, 0]);
+    assert_eq!(result.info.dims(), &[] as &[usize]);
+    assert_eq!(tensor_data(&result.info), vec![0]);
+}
+
+#[test]
+fn det_and_slogdet_cover_complex_dispatch_paths() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            Complex64::new(0.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let det_value = det(&mut ctx, &a).unwrap();
+    assert_eq!(tensor_data(&det_value), vec![Complex64::new(-2.0, 0.0)]);
+
+    let slogdet_value = slogdet(&mut ctx, &a).unwrap();
+    assert_eq!(
+        tensor_data(&slogdet_value.sign),
+        vec![Complex64::new(-1.0, 0.0)]
+    );
+    assert!((tensor_data(&slogdet_value.logabsdet)[0] - 2.0_f64.ln()).abs() < 1.0e-12);
+}
+
+#[test]
+fn norm_variants_cover_real_and_complex_vector_and_matrix_edges() {
+    let mut ctx = CpuContext::new(1);
+
+    let real_vector = Tensor::from_slice(&[3.0_f64, -4.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_vector, NormKind::L1).unwrap()),
+        vec![7.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_vector, NormKind::Inf).unwrap()),
+        vec![4.0]
+    );
+    assert!(
+        (tensor_data(&norm(&mut ctx, &real_vector, NormKind::Fro).unwrap())[0] - 5.0).abs()
+            < 1.0e-12
+    );
+    assert!(norm(&mut ctx, &real_vector, NormKind::Nuclear).is_err());
+    assert!(norm(&mut ctx, &real_vector, NormKind::Spectral).is_err());
+
+    let empty_matrix = Tensor::<f64>::zeros(
+        &[0, 3],
+        tenferro_device::LogicalMemorySpace::MainMemory,
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &empty_matrix, NormKind::L1).unwrap()),
+        vec![0.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &empty_matrix, NormKind::Inf).unwrap()),
+        vec![0.0]
+    );
+
+    let real_matrix =
+        Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 2.0], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_matrix, NormKind::Nuclear).unwrap()),
+        vec![3.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &real_matrix, NormKind::Spectral).unwrap()),
+        vec![2.0]
+    );
+
+    let complex_vector = Tensor::from_slice(
+        &[Complex64::new(3.0, 4.0), Complex64::new(0.0, 2.0)],
+        &[2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &complex_vector, NormKind::L1).unwrap()),
+        vec![7.0]
+    );
+    assert_eq!(
+        tensor_data(&norm(&mut ctx, &complex_vector, NormKind::Inf).unwrap()),
+        vec![5.0]
+    );
+    assert!(
+        (tensor_data(&norm(&mut ctx, &complex_vector, NormKind::Fro).unwrap())[0]
+            - 29.0_f64.sqrt())
+        .abs()
+            < 1.0e-12
+    );
+
+    let complex_matrix = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 2.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let nuclear = tensor_data(&norm(&mut ctx, &complex_matrix, NormKind::Nuclear).unwrap())[0];
+    let spectral = tensor_data(&norm(&mut ctx, &complex_matrix, NormKind::Spectral).unwrap())[0];
+    assert!((nuclear - (2.0_f64.sqrt() + 2.0)).abs() < 1.0e-12);
+    assert!((spectral - 2.0).abs() < 1.0e-12);
+}
+
+#[test]
+fn blend_tensor_by_real_mask_same_shape_selects_complex_batches() {
+    let mut ctx = CpuContext::new(1);
+    let on_true = Tensor::from_slice(
+        &[
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(3.0, -1.0),
+            Complex64::new(3.0, -1.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let on_false = Tensor::from_slice(
+        &[
+            Complex64::new(5.0, 0.5),
+            Complex64::new(5.0, 0.5),
+            Complex64::new(5.0, 0.5),
+            Complex64::new(5.0, 0.5),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+        ],
+        &[2, 2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let mask = Tensor::from_slice(&[1.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor)
+        .unwrap()
+        .reshape(&[1, 1, 2])
+        .unwrap()
+        .broadcast(&[2, 2, 2])
+        .unwrap();
+
+    let blended = crate::ad_helpers::blend_tensor_by_real_mask_same_shape(
+        &mut ctx, &on_true, &on_false, &mask,
+    )
+    .unwrap();
+    assert_eq!(
+        tensor_data(&blended),
+        vec![
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(2.0, 1.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+            Complex64::new(7.0, 2.0),
+        ]
+    );
+}
+
+#[test]
 fn svd_cutoff_fixed_shape_zero_fill_semantics_hold() {
     let mut ctx = CpuContext::new(1);
     let a = Tensor::from_slice(
@@ -190,4 +437,37 @@ fn svd_cutoff_fixed_shape_zero_fill_semantics_hold() {
     assert_eq!(tensor_data(&result.s), vec![3.0, 0.0]);
     assert_eq!(tensor_data(&result.u), vec![1.0, 0.0, 0.0, 0.0]);
     assert_eq!(tensor_data(&result.vt), vec![1.0, 0.0, 0.0, 0.0]);
+}
+
+#[test]
+fn complex_pinv_diagonal_matrix_matches_expected_inverse() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::from_slice(
+        &[
+            Complex64::new(1.0, 1.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(0.0, 0.0),
+            Complex64::new(2.0, -1.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+
+    let ap = pinv(&mut ctx, &a, None).unwrap();
+    let data = tensor_data(&ap);
+    let expected = [
+        Complex64::new(0.5, -0.5),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.0, 0.0),
+        Complex64::new(0.4, 0.2),
+    ];
+
+    assert_eq!(ap.dims(), &[2, 2]);
+    for (got, want) in data.iter().zip(expected.iter()) {
+        assert!(
+            (*got - *want).norm() < 1.0e-10,
+            "got {got:?}, want {want:?}"
+        );
+    }
 }

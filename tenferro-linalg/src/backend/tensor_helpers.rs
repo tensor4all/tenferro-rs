@@ -1,148 +1,36 @@
-//! Shared tensor validation and helper utilities for backend implementations.
+//! Thin re-export layer for shared tensor helper substrate.
 //!
-//! This module provides common tensor operations used by CPU (and future GPU)
-//! backend implementations: shape validation, contiguous packing, and output
-//! tensor allocation.
+//! The actual broadcast/solve/layout helpers live in `tenferro-linalg-prims`
+//! so the tensor-level linalg crate can reuse the same hidden substrate
+//! without maintaining a local copy.
 
-use tenferro_device::{Error, Result};
-use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor};
+#[doc(hidden)]
+pub(crate) use tenferro_linalg_prims::backend::{
+    batch_count, ensure_col_major, extract_contiguous_slice, materialize_broadcasted_batches,
+    materialize_broadcasted_pivot_batches, validate_lu_pivot_shape, validate_matrix_shape,
+    validate_solve_rhs_shape, validate_square, zero_trailing_by_counts, BroadcastBatchIndexer,
+};
 
-use crate::LinalgScalar;
+use tenferro_device::{LogicalMemorySpace, Result};
+use tenferro_tensor::Tensor;
 
-/// Normalized RHS metadata for solve-style operations.
-pub(crate) struct SolveRhsLayout {
-    /// Number of right-hand sides.
-    pub nrhs: usize,
-    /// Output shape to preserve the original vector-vs-matrix rank.
-    pub output_dims: Vec<usize>,
-}
-
-/// Validate that a tensor has at least 2 dimensions and return `(m, n, batch_dims)`.
-pub(crate) fn validate_matrix_shape<T: LinalgScalar>(
-    a: &Tensor<T>,
-) -> Result<(usize, usize, &[usize])> {
-    let dims = a.dims();
-    if dims.len() < 2 {
-        return Err(Error::InvalidArgument(format!(
-            "expected at least 2D tensor, got {}D",
-            dims.len()
-        )));
-    }
-    let m = dims[0];
-    let n = dims[1];
-    let batch_dims = &dims[2..];
-    Ok((m, n, batch_dims))
-}
-
-/// Validate that a tensor is square (m == n) and return `(n, batch_dims)`.
-pub(crate) fn validate_square<T: LinalgScalar>(a: &Tensor<T>) -> Result<(usize, &[usize])> {
-    let (m, n, batch_dims) = validate_matrix_shape(a)?;
-    if m != n {
-        return Err(Error::InvalidArgument(format!(
-            "expected square matrix, got {}x{}",
-            m, n
-        )));
-    }
-    Ok((n, batch_dims))
-}
-
-/// Ensure a tensor is column-major contiguous.
-pub(crate) fn ensure_col_major<T: LinalgScalar>(a: &Tensor<T>) -> Tensor<T> {
-    a.contiguous(MemoryOrder::ColumnMajor)
-}
-
-/// Compute the total number of elements in batch dimensions.
-pub(crate) fn batch_count(batch_dims: &[usize]) -> usize {
-    if batch_dims.is_empty() {
-        1
-    } else {
-        batch_dims.iter().product()
-    }
-}
-
-/// Extract the underlying buffer slice from a tensor. Returns an error if
-/// the buffer is not CPU-accessible.
-pub(crate) fn extract_contiguous_slice<T: LinalgScalar>(a: &Tensor<T>) -> Result<&[T]> {
-    a.buffer()
-        .as_slice()
-        .ok_or_else(|| Error::InvalidArgument("tensor buffer is not a contiguous CPU slice".into()))
-}
-
-/// Thin wrapper over the tensor-level keep-count trailing zero-fill helper.
-pub(crate) fn zero_trailing_by_counts<T, R>(
-    input: &Tensor<T>,
-    keep_counts: &Tensor<R>,
-    axis: usize,
-    structural_rank: usize,
-) -> Result<Tensor<T>>
-where
-    T: LinalgScalar,
-    R: KeepCountScalar,
-{
-    input.zero_trailing_by_counts(keep_counts, axis, structural_rank)
-}
-
-/// Validate solve RHS shape against a square matrix `(n, n, batch...)`.
-///
-/// Accepted RHS shapes:
-/// - `(n, batch...)`
-/// - `(n, nrhs, batch...)`
-pub(crate) fn validate_solve_rhs_shape<T: LinalgScalar>(
-    b: &Tensor<T>,
-    n: usize,
+#[doc(hidden)]
+pub(crate) fn info_tensor_from_vec_on_space(
+    info: Vec<i32>,
     batch_dims: &[usize],
-    op_name: &str,
-) -> Result<SolveRhsLayout> {
-    let dims = b.dims();
-    if dims.len() == 1 + batch_dims.len() {
-        if dims[0] != n {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} expects b dim[0] == n ({n}), got {}",
-                dims[0]
-            )));
-        }
-        if &dims[1..] != batch_dims {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
-                batch_dims,
-                &dims[1..]
-            )));
-        }
-        return Ok(SolveRhsLayout {
-            nrhs: 1,
-            output_dims: dims.to_vec(),
-        });
+    memory_space: LogicalMemorySpace,
+) -> Result<Tensor<i32>> {
+    let shape = if batch_dims.is_empty() {
+        vec![]
+    } else {
+        batch_dims.to_vec()
+    };
+    let tensor = Tensor::from_slice(&info, &shape, tenferro_tensor::MemoryOrder::ColumnMajor)?;
+    if memory_space == LogicalMemorySpace::MainMemory {
+        Ok(tensor)
+    } else {
+        tensor.to_memory_space_async(memory_space)
     }
-
-    if dims.len() == 2 + batch_dims.len() {
-        if dims[0] != n {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} expects b dim[0] == n ({n}), got {}",
-                dims[0]
-            )));
-        }
-        if dims[1] == 0 {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} requires b dim[1] (nrhs) > 0"
-            )));
-        }
-        if &dims[2..] != batch_dims {
-            return Err(Error::InvalidArgument(format!(
-                "{op_name} batch dims mismatch: expected {:?}, got {:?}",
-                batch_dims,
-                &dims[2..]
-            )));
-        }
-        return Ok(SolveRhsLayout {
-            nrhs: dims[1],
-            output_dims: dims.to_vec(),
-        });
-    }
-
-    Err(Error::InvalidArgument(format!(
-        "{op_name} expects b shape (n, *) or (n, k, *), got {:?}",
-        dims
-    )))
 }
 
 #[cfg(test)]

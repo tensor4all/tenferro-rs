@@ -1,6 +1,7 @@
 use tenferro_algebra::Standard;
 use tenferro_einsum::EinsumBackend;
 use tenferro_linalg::backend::{LinalgCapabilityOp, TensorLinalgBackend, TensorLinalgContextFor};
+use tenferro_linalg::LiftPermutationMatrixTensor;
 use tenferro_prims::{
     CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
     SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
@@ -68,6 +69,118 @@ impl RuntimeSlot for RocmRuntimeSlot {
     type SemiringBackend = RocmBackend;
 
     const NAME: &'static str = "rocm";
+}
+
+pub(crate) trait ScaledRealLinalgDispatchValue:
+    super::contracts::RealLinalgRuntimeValue
+    + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+{
+}
+
+impl<T> ScaledRealLinalgDispatchValue for T where
+    T: super::contracts::RealLinalgRuntimeValue
+        + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+{
+}
+
+pub(crate) trait NormLinalgDispatchValue:
+    super::contracts::RealLinalgRuntimeValue
+    + tenferro_linalg::NormPrimal<CpuContext>
+    + tenferro_linalg::NormPrimal<CudaContext>
+    + tenferro_linalg::NormPrimal<RocmContext>
+{
+}
+
+impl<T> NormLinalgDispatchValue for T where
+    T: super::contracts::RealLinalgRuntimeValue
+        + tenferro_linalg::NormPrimal<CpuContext>
+        + tenferro_linalg::NormPrimal<CudaContext>
+        + tenferro_linalg::NormPrimal<RocmContext>
+{
+}
+
+pub(crate) trait SlogdetLinalgDispatchValue:
+    super::contracts::RealLinalgRuntimeValue
+    + tenferro_linalg::SlogdetDispatch<CpuContext>
+    + tenferro_linalg::SlogdetDispatch<CudaContext>
+    + tenferro_linalg::SlogdetDispatch<RocmContext>
+{
+}
+
+impl<T> SlogdetLinalgDispatchValue for T where
+    T: super::contracts::RealLinalgRuntimeValue
+        + tenferro_linalg::SlogdetDispatch<CpuContext>
+        + tenferro_linalg::SlogdetDispatch<CudaContext>
+        + tenferro_linalg::SlogdetDispatch<RocmContext>
+{
+}
+
+pub(crate) trait MatrixExpLinalgDispatchValue:
+    super::contracts::LinalgRuntimeValue
+    + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+    + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+    + tenferro_linalg::MatrixExpAbsTensor<CpuContext>
+    + tenferro_linalg::MatrixExpAbsTensor<CudaContext>
+    + tenferro_linalg::MatrixExpAbsTensor<RocmContext>
+{
+}
+
+impl<T> MatrixExpLinalgDispatchValue for T where
+    T: super::contracts::LinalgRuntimeValue
+        + tenferro_linalg::ScaleTensorByRealSameShape<CpuContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<CudaContext>
+        + tenferro_linalg::ScaleTensorByRealSameShape<RocmContext>
+        + tenferro_linalg::MatrixExpAbsTensor<CpuContext>
+        + tenferro_linalg::MatrixExpAbsTensor<CudaContext>
+        + tenferro_linalg::MatrixExpAbsTensor<RocmContext>
+{
+}
+
+pub(crate) trait RealMatrixExpLinalgDispatchValue:
+    super::contracts::RealLinalgRuntimeValue + MatrixExpLinalgDispatchValue
+{
+}
+
+impl<T> RealMatrixExpLinalgDispatchValue for T where
+    T: super::contracts::RealLinalgRuntimeValue + MatrixExpLinalgDispatchValue
+{
+}
+
+pub(crate) trait LuLinalgDispatchValue:
+    super::contracts::LinalgRuntimeValue
+    + LiftPermutationMatrixTensor<CpuContext>
+    + LiftPermutationMatrixTensor<CudaContext>
+    + LiftPermutationMatrixTensor<RocmContext>
+{
+}
+
+impl<T> LuLinalgDispatchValue for T where
+    T: super::contracts::LinalgRuntimeValue
+        + LiftPermutationMatrixTensor<CpuContext>
+        + LiftPermutationMatrixTensor<CudaContext>
+        + LiftPermutationMatrixTensor<RocmContext>
+{
+}
+
+pub(crate) trait RealLuLinalgDispatchValue:
+    super::contracts::RealLinalgRuntimeValue
+    + LiftPermutationMatrixTensor<CpuContext>
+    + LiftPermutationMatrixTensor<CudaContext>
+    + LiftPermutationMatrixTensor<RocmContext>
+{
+}
+
+impl<T> RealLuLinalgDispatchValue for T where
+    T: super::contracts::RealLinalgRuntimeValue
+        + LiftPermutationMatrixTensor<CpuContext>
+        + LiftPermutationMatrixTensor<CudaContext>
+        + LiftPermutationMatrixTensor<RocmContext>
+{
 }
 
 fn contract_capability_marker() -> SemiringFastPathDescriptor {

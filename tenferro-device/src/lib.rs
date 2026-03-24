@@ -19,8 +19,10 @@
 
 use std::fmt;
 
+mod batch_index;
 #[cfg(feature = "cuda")]
 pub mod cuda;
+mod generator;
 
 /// Logical memory space where tensor data resides.
 ///
@@ -310,6 +312,13 @@ pub enum Error {
 /// assert_eq!(compute().unwrap(), 42);
 /// ```
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[doc(hidden)]
+pub use batch_index::{
+    broadcast_batch_dims, checked_batch_count, flatten_col_major_index,
+    unflatten_col_major_index_into, BroadcastBatchIndexer,
+};
+pub use generator::{with_default_generator, Generator};
 
 #[cfg(test)]
 mod tests {

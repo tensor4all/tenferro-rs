@@ -47,6 +47,14 @@ impl<T: KernelLinalgScalar> TensorLinalgBackend<T> for HipTensorLinalgBackend {
     fn solve(_ctx: &mut Self::Context, _a: &Tensor<T>, _b: &Tensor<T>) -> Result<Tensor<T>> {
         unsupported()
     }
+    fn lu_solve(
+        _ctx: &mut Self::Context,
+        _factors: &Tensor<T>,
+        _pivots: &Tensor<i32>,
+        _b: &Tensor<T>,
+    ) -> Result<Tensor<T>> {
+        unsupported()
+    }
     fn solve_triangular(
         _ctx: &mut Self::Context,
         _a: &Tensor<T>,
@@ -68,6 +76,9 @@ impl<T: KernelLinalgScalar> TensorLinalgBackend<T> for HipTensorLinalgBackend {
         unsupported()
     }
     fn lu_factor(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorResult<T>> {
+        unsupported()
+    }
+    fn lu_factor_no_pivot(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<LuTensorResult<T>> {
         unsupported()
     }
     fn cholesky_ex(_ctx: &mut Self::Context, _a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {

@@ -8,10 +8,13 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     type Tangent = Tensor<T>;
 
     fn zero_tangent(&self) -> Tensor<T> {
-        Tensor::zeros(
-            &self.dims,
-            self.logical_memory_space,
+        Tensor::from_owned_contiguous_data(
+            vec![T::zero(); self.len()],
+            self.dims.clone(),
             MemoryOrder::ColumnMajor,
+            self.logical_memory_space,
+            self.preferred_compute_device,
+            false,
         )
     }
 
@@ -20,10 +23,13 @@ impl<T: Scalar> chainrules_core::Differentiable for Tensor<T> {
     }
 
     fn seed_cotangent(&self) -> Tensor<T> {
-        Tensor::ones(
-            &self.dims,
-            self.logical_memory_space,
+        Tensor::from_owned_contiguous_data(
+            vec![T::one(); self.len()],
+            self.dims.clone(),
             MemoryOrder::ColumnMajor,
+            self.logical_memory_space,
+            self.preferred_compute_device,
+            false,
         )
     }
 

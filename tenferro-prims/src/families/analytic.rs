@@ -22,6 +22,7 @@ pub enum AnalyticUnaryOp {
     Rsqrt,
     Exp,
     Expm1,
+    Ceil,
     Log,
     Log1p,
     Sin,

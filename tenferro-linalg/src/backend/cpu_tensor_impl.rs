@@ -5,7 +5,7 @@
 
 use num_traits::Zero;
 use tenferro_algebra::Scalar;
-use tenferro_device::{Error, Result};
+use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
 use super::col_major_strides;
@@ -14,8 +14,9 @@ use super::tensor_api::{
     QrTensorResult, SolveTensorExResult, SvdTensorResult,
 };
 use super::tensor_helpers::{
-    batch_count, ensure_col_major, extract_contiguous_slice, validate_matrix_shape,
-    validate_solve_rhs_shape, validate_square,
+    batch_count, ensure_col_major, extract_contiguous_slice, materialize_broadcasted_batches,
+    materialize_broadcasted_pivot_batches, validate_lu_pivot_shape, validate_matrix_shape,
+    validate_solve_rhs_shape, validate_square, BroadcastBatchIndexer,
 };
 use crate::KernelLinalgScalar;
 
@@ -23,6 +24,48 @@ use crate::KernelLinalgScalar;
 fn tensor_from_data<T: Scalar>(data: Vec<T>, dims: &[usize]) -> Result<Tensor<T>> {
     let strides = col_major_strides(dims);
     Tensor::from_vec(data, dims, &strides, 0)
+}
+
+fn tensor_from_data_on_space<T: Scalar>(
+    data: Vec<T>,
+    dims: &[usize],
+    memory_space: LogicalMemorySpace,
+) -> Result<Tensor<T>> {
+    let tensor = tensor_from_data(data, dims)?;
+    if tensor.logical_memory_space() == memory_space {
+        Ok(tensor)
+    } else {
+        tensor.to_memory_space_async(memory_space)
+    }
+}
+
+fn forward_perm_to_step_pivots_1indexed(perm: &[usize], k: usize) -> Result<Vec<i32>> {
+    if k > perm.len() {
+        return Err(Error::InvalidArgument(format!(
+            "LU pivot length {k} exceeds permutation length {}",
+            perm.len()
+        )));
+    }
+
+    let mut current: Vec<usize> = (0..perm.len()).collect();
+    let mut pivots = vec![0i32; k];
+    for i in 0..k {
+        let desired = perm[i];
+        let j = current[i..]
+            .iter()
+            .position(|&row| row == desired)
+            .map(|delta| i + delta)
+            .ok_or_else(|| {
+                Error::InvalidArgument(format!(
+                    "LU forward permutation is invalid at step {i}: missing row {desired}"
+                ))
+            })?;
+        pivots[i] = i32::try_from(j + 1).map_err(|_| {
+            Error::InvalidArgument(format!("LU pivot index {} does not fit into i32", j + 1))
+        })?;
+        current.swap(i, j);
+    }
+    Ok(pivots)
 }
 
 fn first_zero_pivot_from_u<T: KernelLinalgScalar>(
@@ -72,6 +115,68 @@ fn first_failing_leading_principal_minor<T: KernelLinalgScalar>(
     ))
 }
 
+fn unpack_packed_lu_square<T: KernelLinalgScalar>(
+    factors: &[T],
+    n: usize,
+    lower: &mut [T],
+    upper: &mut [T],
+) {
+    lower.fill(T::zero());
+    upper.fill(T::zero());
+    for j in 0..n {
+        for i in 0..n {
+            let value = factors[i + j * n];
+            if i > j {
+                lower[i + j * n] = value;
+            } else {
+                upper[i + j * n] = value;
+                if i == j {
+                    lower[i + j * n] = T::one();
+                }
+            }
+        }
+    }
+}
+
+fn apply_lu_step_pivots<T: KernelLinalgScalar>(
+    step_pivots: &[i32],
+    rhs: &[T],
+    n: usize,
+    nrhs: usize,
+    out: &mut [T],
+) -> Result<()> {
+    if step_pivots.len() != n {
+        return Err(Error::InvalidArgument(format!(
+            "lu_solve expects {n} pivots per batch, got {}",
+            step_pivots.len()
+        )));
+    }
+    out.copy_from_slice(rhs);
+    for (i, &pivot) in step_pivots.iter().enumerate() {
+        if pivot <= 0 {
+            return Err(Error::InvalidArgument(format!(
+                "lu_solve pivot {pivot} is not 1-indexed positive"
+            )));
+        }
+        let j = usize::try_from(pivot - 1).map_err(|_| {
+            Error::InvalidArgument(format!(
+                "lu_solve pivot {pivot} underflowed during usize conversion"
+            ))
+        })?;
+        if j < i || j >= n {
+            return Err(Error::InvalidArgument(format!(
+                "lu_solve pivot {pivot} is invalid for step {i} and len {n}"
+            )));
+        }
+        if j != i {
+            for col in 0..nrhs {
+                out.swap(i + col * n, j + col * n);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Solve `A x = b` while preserving successful batch payloads and reporting per-batch status.
 pub(crate) fn solve_ex<T>(
     _ctx: &mut tenferro_prims::CpuContext,
@@ -84,10 +189,18 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_ex")?;
     let nrhs = rhs.nrhs;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_ex", "a")?;
 
-    let a_contig = ensure_col_major(a);
-    let b_contig = ensure_col_major(b);
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_ex", "a")?;
+    let b_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve_ex",
+        "b",
+    )?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -119,9 +232,14 @@ where
         }
     }
 
+    let info_shape = if rhs.output_batch_dims.is_empty() {
+        vec![]
+    } else {
+        rhs.output_batch_dims.clone()
+    };
     Ok(SolveTensorExResult {
         solution: tensor_from_data(solution_data, &rhs.output_dims)?,
-        info,
+        info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,
     })
 }
 
@@ -137,10 +255,18 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve")?;
     let nrhs = rhs.nrhs;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve", "a")?;
 
-    let a_contig = ensure_col_major(a);
-    let b_contig = ensure_col_major(b);
+    let a_contig = materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve", "a")?;
+    let b_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve",
+        "b",
+    )?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -160,6 +286,81 @@ where
     tensor_from_data(x_data, &rhs.output_dims)
 }
 
+/// Solve `A x = b` from a packed LU factorization and pivot tensor.
+pub(crate) fn lu_solve<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    factors: &Tensor<T>,
+    pivots: &Tensor<i32>,
+    b: &Tensor<T>,
+) -> Result<Tensor<T>>
+where
+    T: KernelLinalgScalar,
+{
+    let (n, batch_dims) = validate_square(factors)?;
+    validate_lu_pivot_shape(pivots, n, batch_dims, "lu_solve")?;
+    let rhs = validate_solve_rhs_shape(b, n, batch_dims, "lu_solve")?;
+    let bc = batch_count(&rhs.output_batch_dims);
+    let factor_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "lu_solve", "factors")?;
+
+    let factors_contig =
+        materialize_broadcasted_batches(factors, 2, &factor_batch_indexer, "lu_solve", "factors")?;
+    let pivots_contig = materialize_broadcasted_pivot_batches(
+        pivots,
+        n,
+        batch_dims,
+        &rhs.output_batch_dims,
+        "lu_solve",
+    )?;
+    let rhs_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "lu_solve",
+        "b",
+    )?;
+
+    if n == 0 || bc == 0 {
+        return Ok(rhs_contig);
+    }
+
+    let factors_data = extract_contiguous_slice(&factors_contig)?;
+    let pivots_data: &[i32] = extract_contiguous_slice(&pivots_contig)?;
+    let rhs_data = extract_contiguous_slice(&rhs_contig)?;
+    let factors_off = factors_contig.offset() as usize;
+    let pivots_off = pivots_contig.offset() as usize;
+    let rhs_off = rhs_contig.offset() as usize;
+
+    let mat_size = n * n;
+    let rhs_size = n * rhs.nrhs;
+    let mut out = vec![T::zero(); rhs_size * bc];
+    let mut lower = vec![T::zero(); mat_size];
+    let mut upper = vec![T::zero(); mat_size];
+    let mut permuted_rhs = vec![T::zero(); rhs_size];
+    let mut tmp = vec![T::zero(); rhs_size];
+
+    for batch in 0..bc {
+        let factor_slice =
+            &factors_data[factors_off + batch * mat_size..factors_off + (batch + 1) * mat_size];
+        let pivot_slice = &pivots_data[pivots_off + batch * n..pivots_off + (batch + 1) * n];
+        let rhs_slice = &rhs_data[rhs_off + batch * rhs_size..rhs_off + (batch + 1) * rhs_size];
+
+        unpack_packed_lu_square(factor_slice, n, &mut lower, &mut upper);
+        apply_lu_step_pivots(pivot_slice, rhs_slice, n, rhs.nrhs, &mut permuted_rhs)?;
+        super::cpu::solve_triangular_slices(&lower, &permuted_rhs, n, rhs.nrhs, false, &mut tmp)?;
+        super::cpu::solve_triangular_slices(
+            &upper,
+            &tmp,
+            n,
+            rhs.nrhs,
+            true,
+            &mut out[batch * rhs_size..(batch + 1) * rhs_size],
+        )?;
+    }
+
+    tensor_from_data(out, &rhs.output_dims)
+}
+
 /// Solve triangular `A x = b` via the selected CPU slice backend.
 pub(crate) fn solve_triangular<T>(
     _ctx: &mut tenferro_prims::CpuContext,
@@ -173,10 +374,19 @@ where
     let (n, batch_dims) = validate_square(a)?;
     let rhs = validate_solve_rhs_shape(b, n, batch_dims, "solve_triangular")?;
     let nrhs = rhs.nrhs;
-    let bc = batch_count(batch_dims);
+    let bc = batch_count(&rhs.output_batch_dims);
+    let a_batch_indexer =
+        BroadcastBatchIndexer::new(batch_dims, &rhs.output_batch_dims, "solve_triangular", "a")?;
 
-    let a_contig = ensure_col_major(a);
-    let b_contig = ensure_col_major(b);
+    let a_contig =
+        materialize_broadcasted_batches(a, 2, &a_batch_indexer, "solve_triangular", "a")?;
+    let b_contig = materialize_broadcasted_batches(
+        b,
+        rhs.structural_rank,
+        &rhs.rhs_batch_indexer,
+        "solve_triangular",
+        "b",
+    )?;
     let a_data = extract_contiguous_slice(&a_contig)?;
     let b_data = extract_contiguous_slice(&b_contig)?;
     let a_off = a_contig.offset() as usize;
@@ -305,7 +515,7 @@ where
 
     let mut l_data = vec![T::zero(); m * k * bc];
     let mut u_data = vec![T::zero(); k * n * bc];
-    let mut all_pivots = vec![0i32; m * bc];
+    let mut all_pivots = vec![0i32; k * bc];
 
     let mut perm = vec![0usize; m];
     let mut l_buf = vec![T::zero(); m * k];
@@ -319,8 +529,88 @@ where
         super::cpu::lu_slices(a_slice, m, n, &mut perm, &mut l_buf, &mut u_buf)?;
         l_data[i * m * k..(i + 1) * m * k].copy_from_slice(&l_buf);
         u_data[i * k * n..(i + 1) * k * n].copy_from_slice(&u_buf);
-        for (j, &p) in perm.iter().enumerate() {
-            all_pivots[i * m + j] = p as i32;
+        let pivots = forward_perm_to_step_pivots_1indexed(&perm, k)?;
+        all_pivots[i * k..(i + 1) * k].copy_from_slice(&pivots);
+    }
+
+    let mut l_shape = vec![m, k];
+    l_shape.extend_from_slice(batch_dims);
+    let mut u_shape = vec![k, n];
+    u_shape.extend_from_slice(batch_dims);
+    let mut pivots_shape = vec![k];
+    pivots_shape.extend_from_slice(batch_dims);
+
+    Ok(LuTensorResult {
+        l: tensor_from_data(l_data, &l_shape)?,
+        u: tensor_from_data(u_data, &u_shape)?,
+        pivots: tensor_from_data_on_space(all_pivots, &pivots_shape, a.logical_memory_space())?,
+    })
+}
+
+pub(crate) fn lu_factor_no_pivot<T>(
+    _ctx: &mut tenferro_prims::CpuContext,
+    a: &Tensor<T>,
+) -> Result<LuTensorResult<T>>
+where
+    T: KernelLinalgScalar,
+{
+    let (m, n, batch_dims) = validate_matrix_shape(a)?;
+    let bc = batch_count(batch_dims);
+    let k = m.min(n);
+    let mat_size = m * n;
+
+    let input = ensure_col_major(a);
+    let data = extract_contiguous_slice(&input)?;
+    let offset = input.offset() as usize;
+
+    let mut all_l = vec![T::zero(); m * k * bc];
+    let mut all_u = vec![T::zero(); k * n * bc];
+
+    for batch in 0..bc {
+        let start = offset + batch * mat_size;
+        let mut lu_data = data[start..start + mat_size].to_vec();
+
+        for p in 0..k {
+            let pivot_val = lu_data[p + p * m];
+            if pivot_val.abs_real() <= T::real_epsilon() {
+                return Err(Error::InvalidArgument(format!(
+                    "NoPivot LU encountered near-zero pivot at row {p} in batch {batch}"
+                )));
+            }
+
+            for i in (p + 1)..m {
+                lu_data[i + p * m] = lu_data[i + p * m] / pivot_val;
+            }
+            for j in (p + 1)..n {
+                let up = lu_data[p + j * m];
+                for i in (p + 1)..m {
+                    let idx = i + j * m;
+                    lu_data[idx] = lu_data[idx] - lu_data[i + p * m] * up;
+                }
+            }
+        }
+
+        for j in 0..k {
+            for i in 0..m {
+                let val = if i < j {
+                    T::zero()
+                } else if i == j {
+                    T::one()
+                } else {
+                    lu_data[i + j * m]
+                };
+                all_l[batch * m * k + i + j * m] = val;
+            }
+        }
+        for j in 0..n {
+            for i in 0..k {
+                let val = if i <= j {
+                    lu_data[i + j * m]
+                } else {
+                    T::zero()
+                };
+                all_u[batch * k * n + i + j * k] = val;
+            }
         }
     }
 
@@ -330,9 +620,13 @@ where
     u_shape.extend_from_slice(batch_dims);
 
     Ok(LuTensorResult {
-        l: tensor_from_data(l_data, &l_shape)?,
-        u: tensor_from_data(u_data, &u_shape)?,
-        pivots: all_pivots,
+        l: tensor_from_data(all_l, &l_shape)?,
+        u: tensor_from_data(all_u, &u_shape)?,
+        pivots: Tensor::empty(
+            &[0],
+            a.logical_memory_space(),
+            tenferro_tensor::MemoryOrder::ColumnMajor,
+        )?,
     })
 }
 
@@ -355,7 +649,7 @@ where
 
     let mut l_data = vec![T::zero(); m * k * bc];
     let mut u_data = vec![T::zero(); k * n * bc];
-    let mut all_pivots = vec![0i32; m * bc];
+    let mut all_pivots = vec![0i32; k * bc];
     let mut info = vec![0i32; bc];
 
     let mut perm = vec![0usize; m];
@@ -372,21 +666,27 @@ where
         l_data[i * m * k..(i + 1) * m * k].copy_from_slice(&l_buf);
         u_data[i * k * n..(i + 1) * k * n].copy_from_slice(&u_buf);
         info[i] = first_zero_pivot_from_u(&u_buf, k, k);
-        for (j, &p) in perm.iter().enumerate() {
-            all_pivots[i * m + j] = p as i32;
-        }
+        let pivots = forward_perm_to_step_pivots_1indexed(&perm, k)?;
+        all_pivots[i * k..(i + 1) * k].copy_from_slice(&pivots);
     }
 
     let mut l_shape = vec![m, k];
     l_shape.extend_from_slice(batch_dims);
     let mut u_shape = vec![k, n];
     u_shape.extend_from_slice(batch_dims);
+    let mut pivots_shape = vec![k];
+    pivots_shape.extend_from_slice(batch_dims);
+    let info_shape = if batch_dims.is_empty() {
+        vec![]
+    } else {
+        batch_dims.to_vec()
+    };
 
     Ok(LuTensorExResult {
         l: tensor_from_data(l_data, &l_shape)?,
         u: tensor_from_data(u_data, &u_shape)?,
-        pivots: all_pivots,
-        info,
+        pivots: tensor_from_data_on_space(all_pivots, &pivots_shape, a.logical_memory_space())?,
+        info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,
     })
 }
 
@@ -462,9 +762,14 @@ where
 
     let mut out_shape = vec![n, n];
     out_shape.extend_from_slice(batch_dims);
+    let info_shape = if batch_dims.is_empty() {
+        vec![]
+    } else {
+        batch_dims.to_vec()
+    };
     Ok(CholeskyTensorExResult {
         l: tensor_from_data(l_data, &out_shape)?,
-        info,
+        info: tensor_from_data_on_space(info, &info_shape, a.logical_memory_space())?,
     })
 }
 

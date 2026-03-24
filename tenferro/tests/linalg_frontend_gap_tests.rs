@@ -3,6 +3,13 @@ use tenferro::{forward_ad, set_default_runtime, RuntimeContext, ScalarType, Tens
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
+fn dense_tensor_data<T: tenferro_algebra::Scalar + Copy>(tensor: &DenseTensor<T>) -> Vec<T> {
+    let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
+    let offset = contiguous.offset() as usize;
+    let len = contiguous.dims().iter().product::<usize>().max(1);
+    contiguous.buffer().as_slice().unwrap()[offset..offset + len].to_vec()
+}
+
 fn matrix_f32(values: &[f32], dims: &[usize]) -> Tensor {
     Tensor::from_tensor(DenseTensor::from_slice(values, dims, MemoryOrder::ColumnMajor).unwrap())
 }
@@ -111,27 +118,27 @@ fn tensor_frontend_exposes_missing_primal_linalg_wrappers() {
 
     let lu_factor = matrix.lu_factor().unwrap();
     assert_eq!(lu_factor.factors.dims(), &[2, 2]);
-    assert_eq!(lu_factor.pivots.len(), 2);
+    assert_eq!(dense_tensor_data(&lu_factor.pivots).len(), 2);
 
     let lu_factor_ex = matrix.lu_factor_ex().unwrap();
     assert_eq!(lu_factor_ex.factors.dims(), &[2, 2]);
-    assert_eq!(lu_factor_ex.pivots.len(), 2);
-    assert_eq!(lu_factor_ex.info, vec![0]);
+    assert_eq!(dense_tensor_data(&lu_factor_ex.pivots).len(), 2);
+    assert_eq!(dense_tensor_data(&lu_factor_ex.info), vec![0]);
 
     let lu_solved = lu_factor.factors.lu_solve(&rhs, &lu_factor.pivots).unwrap();
     assert_eq!(lu_solved.dims(), &[2]);
 
     let solve_ex = matrix.solve_ex(&rhs).unwrap();
     assert_eq!(solve_ex.solution.dims(), &[2]);
-    assert_eq!(solve_ex.info, vec![0]);
+    assert_eq!(dense_tensor_data(&solve_ex.info), vec![0]);
 
     let inv_ex = matrix.inv_ex().unwrap();
     assert_eq!(inv_ex.inverse.dims(), &[2, 2]);
-    assert_eq!(inv_ex.info, vec![0]);
+    assert_eq!(dense_tensor_data(&inv_ex.info), vec![0]);
 
     let cholesky_ex = matrix.cholesky_ex().unwrap();
     assert_eq!(cholesky_ex.l.dims(), &[2, 2]);
-    assert_eq!(cholesky_ex.info, vec![0]);
+    assert_eq!(dense_tensor_data(&cholesky_ex.info), vec![0]);
 
     let squared = matrix.matrix_power(2).unwrap();
     assert_eq!(squared.dims(), &[2, 2]);
@@ -192,6 +199,8 @@ fn complex_primal_frontend_support_extends_beyond_svd_and_qr() {
     let rhs = vector_c64(&[Complex64::new(1.0, 0.5), Complex64::new(-2.0, 1.0)]);
 
     let lu = hermitian.lu().unwrap();
+    assert_eq!(lu.p.scalar_type(), ScalarType::C64);
+    assert_eq!(lu.p.dims(), &[2, 2]);
     assert_eq!(lu.l.scalar_type(), ScalarType::C64);
 
     let eigen = hermitian.eigen().unwrap();

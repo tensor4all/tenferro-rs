@@ -159,7 +159,7 @@ where
             Some(tangent) => {
                 to_dense_in_ctx::<B, _, T>(ctx, tangent)?.contiguous(MemoryOrder::ColumnMajor)
             }
-            None => zero_like(&primal),
+            None => zero_like(&primal)?,
         })
     } else {
         None
@@ -229,12 +229,12 @@ where
         .map(StructuredTensor::into_payload)
 }
 
-pub(crate) fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Tensor<T> {
-    Tensor::zeros(
+pub(crate) fn zero_like<T: Scalar>(tensor: &Tensor<T>) -> Result<Tensor<T>> {
+    Ok(Tensor::zeros(
         tensor.dims(),
         tensor.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    )
+    )?)
 }
 
 pub(crate) fn scalar_from_rank0_tensor<T>(tensor: &Tensor<T>, op_name: &'static str) -> Result<T>

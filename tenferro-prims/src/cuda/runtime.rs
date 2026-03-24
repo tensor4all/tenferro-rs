@@ -82,7 +82,7 @@ pub(super) fn tensor_device_addr_with_offset<S: Scalar>(
     Ok(tensor_device_ptr_with_offset(name, tensor)? as u64)
 }
 
-pub(super) fn new_gpu_tensor<S: Scalar>(dims: &[usize], device_id: usize) -> Tensor<S> {
+pub(super) fn new_gpu_tensor<S: Scalar>(dims: &[usize], device_id: usize) -> Result<Tensor<S>> {
     Tensor::<S>::zeros(
         dims,
         LogicalMemorySpace::GpuMemory { device_id },
@@ -106,7 +106,7 @@ pub(super) fn make_contiguous_on_cuda<S: Scalar>(
         &SemiringCoreDescriptor::MakeContiguous,
         &[input.dims(), input.dims()],
     )?;
-    let mut output = new_gpu_tensor::<S>(input.dims(), ctx.device_id);
+    let mut output = new_gpu_tensor::<S>(input.dims(), ctx.device_id)?;
     execute_plan(ctx, &plan, S::one(), &[input], S::zero(), &mut output)?;
     Ok(output)
 }

@@ -281,66 +281,90 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     let ad_a_rev = reverse_leaf_f64(a, &tape);
 
     let qr_out = qr(&ad_a_rev).unwrap();
-    let qr_cot_q = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        qr_out.q.dims(),
-        qr_out.q.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let qr_cot_q = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            qr_out.q.dims(),
+            qr_out.q.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     assert!(pullback_wrt(&qr_out.q, &qr_cot_q, &[&ad_a_rev]).unwrap()[0].is_some());
-    let qr_cot_r = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        qr_out.r.dims(),
-        qr_out.r.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let qr_cot_r = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            qr_out.r.dims(),
+            qr_out.r.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     assert!(pullback_wrt(&qr_out.r, &qr_cot_r, &[&ad_a_rev]).unwrap()[0].is_some());
 
     let lu_out = lu(&ad_a_rev).unwrap();
-    let lu_cot_l = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        lu_out.l.dims(),
-        lu_out.l.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let lu_cot_l = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            lu_out.l.dims(),
+            lu_out.l.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     assert!(pullback_wrt(&lu_out.l, &lu_cot_l, &[&ad_a_rev]).unwrap()[0].is_some());
-    let lu_cot_u = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        lu_out.u.dims(),
-        lu_out.u.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let lu_cot_u = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            lu_out.u.dims(),
+            lu_out.u.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     assert!(pullback_wrt(&lu_out.u, &lu_cot_u, &[&ad_a_rev]).unwrap()[0].is_some());
 
     let eigen_out = eigen(&ad_a_rev).unwrap();
-    let eigen_cot_values = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        eigen_out.values.dims(),
-        eigen_out.values.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let eigen_cot_values = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            eigen_out.values.dims(),
+            eigen_out.values.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     assert!(pullback_wrt(&eigen_out.values, &eigen_cot_values, &[&ad_a_rev]).unwrap()[0].is_some());
-    let eigen_cot_vectors = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        eigen_out.vectors.dims(),
-        eigen_out.vectors.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let eigen_cot_vectors = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            eigen_out.vectors.dims(),
+            eigen_out.vectors.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     assert!(
         pullback_wrt(&eigen_out.vectors, &eigen_cot_vectors, &[&ad_a_rev]).unwrap()[0].is_some()
     );
 
     let slogdet_out = slogdet(&ad_a_rev).unwrap();
-    let slogdet_cot_sign = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        slogdet_out.sign.dims(),
-        slogdet_out.sign.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let slogdet_cot_sign = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            slogdet_out.sign.dims(),
+            slogdet_out.sign.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     let sign_grad = pullback_wrt(&slogdet_out.sign, &slogdet_cot_sign, &[&ad_a_rev]).unwrap();
     let sign_grad_a = sign_grad[0]
         .as_ref()
         .expect("missing slogdet sign gradient");
     assert!(as_slice(sign_grad_a).iter().all(|x| x.abs() < 1e-12));
 
-    let slogdet_cot_logabs = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        slogdet_out.logabsdet.dims(),
-        slogdet_out.logabsdet.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let slogdet_cot_logabs = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            slogdet_out.logabsdet.dims(),
+            slogdet_out.logabsdet.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     assert!(
         pullback_wrt(&slogdet_out.logabsdet, &slogdet_cot_logabs, &[&ad_a_rev]).unwrap()[0]
             .is_some()
@@ -357,20 +381,26 @@ fn multi_output_builders_register_reverse_pullback_smoke() {
     let ad_ls_a = reverse_leaf_f64(a_ls, &tape);
     let ad_ls_b = reverse_leaf_f64(b_ls, &tape);
     let lstsq_out = lstsq(&ad_ls_a, &ad_ls_b).unwrap();
-    let lstsq_cot_x = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        lstsq_out.x.dims(),
-        lstsq_out.x.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let lstsq_cot_x = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            lstsq_out.x.dims(),
+            lstsq_out.x.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     let grads_x = pullback_wrt(&lstsq_out.x, &lstsq_cot_x, &[&ad_ls_a, &ad_ls_b]).unwrap();
     assert!(grads_x[0].is_some());
     assert!(grads_x[1].is_some());
 
-    let lstsq_cot_residual = AdTensor::new_primal(DenseTensor::<f64>::ones(
-        lstsq_out.residual.dims(),
-        lstsq_out.residual.primal().logical_memory_space(),
-        MemoryOrder::ColumnMajor,
-    ));
+    let lstsq_cot_residual = AdTensor::new_primal(
+        DenseTensor::<f64>::ones(
+            lstsq_out.residual.dims(),
+            lstsq_out.residual.primal().logical_memory_space(),
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap(),
+    );
     let grads_res = pullback_wrt(
         &lstsq_out.residual,
         &lstsq_cot_residual,

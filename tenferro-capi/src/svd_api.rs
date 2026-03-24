@@ -391,6 +391,7 @@ pub unsafe extern "C" fn tfe_svd_frule_f64(
                 LogicalMemorySpace::MainMemory,
                 MemoryOrder::ColumnMajor,
             )
+            .map_err(|e| map_device_error(&e))?
         } else {
             let tang_tensor = handle_to_ref(tangent);
             let (tang_matrix, _, _) = matricize(tang_tensor, left_indices, right_indices)?;

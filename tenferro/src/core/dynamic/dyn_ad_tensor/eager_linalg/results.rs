@@ -1,4 +1,5 @@
 use super::Tensor;
+use tenferro_tensor::Tensor as DenseTensor;
 
 /// Dynamic AD-aware SVD result.
 ///
@@ -43,13 +44,14 @@ pub struct QrResult {
 ///
 /// ```ignore
 /// let out = x.lu()?;
+/// let _p = &out.p;
 /// let _l = &out.l;
 /// let _u = &out.u;
 /// ```
 #[derive(Clone)]
 pub struct LuResult {
-    /// Permutation indices.
-    pub p: Option<Vec<usize>>,
+    /// Permutation matrix tensor.
+    pub p: Tensor,
     /// Lower factor.
     pub l: Tensor,
     /// Upper factor.
@@ -136,8 +138,8 @@ pub struct LstsqResult {
 pub struct LuFactorResult {
     /// Packed LU factors.
     pub factors: Tensor,
-    /// Flattened forward row permutations.
-    pub pivots: Vec<usize>,
+    /// Backend pivot tensor in 1-indexed step-pivot form.
+    pub pivots: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware LU factorization result with status codes.
@@ -152,10 +154,10 @@ pub struct LuFactorResult {
 pub struct LuFactorExResult {
     /// Packed LU factors.
     pub factors: Tensor,
-    /// Flattened forward row permutations.
-    pub pivots: Vec<usize>,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Backend pivot tensor in 1-indexed step-pivot form.
+    pub pivots: DenseTensor<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware solve result with status codes.
@@ -170,8 +172,8 @@ pub struct LuFactorExResult {
 pub struct SolveExResult {
     /// Solution tensor.
     pub solution: Tensor,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware inverse result with status codes.
@@ -186,8 +188,8 @@ pub struct SolveExResult {
 pub struct InvExResult {
     /// Inverse tensor.
     pub inverse: Tensor,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }
 
 /// Dynamic AD-aware Cholesky result with status codes.
@@ -202,6 +204,6 @@ pub struct InvExResult {
 pub struct CholeskyExResult {
     /// Lower-triangular factor.
     pub l: Tensor,
-    /// Per-batch numerical status.
-    pub info: Vec<i32>,
+    /// Per-batch numerical status tensor.
+    pub info: DenseTensor<i32>,
 }

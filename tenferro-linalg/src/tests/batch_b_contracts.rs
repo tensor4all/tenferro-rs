@@ -412,6 +412,43 @@ fn cuda_public_pinv_matches_cpu_rank_deficient_real_matrix() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_pinv_matches_cpu_small_complex_matrix() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                num_complex::Complex64::new(1.0, 1.0),
+                num_complex::Complex64::new(0.5, -0.25),
+                num_complex::Complex64::new(-2.0, 0.75),
+                num_complex::Complex64::new(3.0, -1.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = pinv(&mut cpu_ctx, &a_cpu, None).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = pinv(ctx, &a_gpu, None).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public pinv small complex matrix",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_inv_matches_cpu_small_real_matrix() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -464,7 +501,10 @@ fn cuda_public_inv_ex_matches_cpu_mixed_batch_real_matrix() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.inverse.dims(), expected.inverse.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_slice(
             "cuda public inv_ex mixed batch real matrix",
             &tensor_data_on_cpu(&got.inverse),
@@ -499,6 +539,43 @@ fn cuda_public_fro_norm_matches_cpu_small_real_matrix() {
         assert_eq!(got.dims(), expected.dims());
         assert_close_slice(
             "cuda public fro norm small real matrix",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_fro_norm_matches_cpu_small_complex_matrix() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(3.0_f64, 4.0),
+                Complex::new(0.0, -1.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(0.0, 2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = norm(&mut cpu_ctx, &a_cpu, NormKind::Fro).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = norm(ctx, &a_gpu, NormKind::Fro).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            "cuda public fro norm small complex matrix",
             &tensor_data_on_cpu(&got),
             &tensor_data_on_cpu(&expected),
             4096.0 * f64::EPSILON,
@@ -550,8 +627,7 @@ fn cuda_public_lu_no_pivot_rejects_gpu_tensor_before_host_slice_fallback() {
         let err = lu(ctx, &a_gpu, LuPivot::NoPivot).unwrap_err();
         assert!(matches!(err, tenferro_device::Error::DeviceError(_)));
         assert!(
-            err.to_string()
-                .contains("NoPivot LU is only implemented for main-memory tensors"),
+            err.to_string().contains("lu_factor_no_pivot"),
             "lu(NoPivot) should fail before host-slice extraction, got: {err}"
         );
     }) else {
@@ -654,24 +730,75 @@ fn cuda_public_matrix_power_matches_cpu_small_complex_matrix_c64() {
 }
 
 #[cfg(feature = "cuda")]
-fn cpu_context_matrix_exp_reject_gpu_tensors_before_host_slice_fallback_impl() {
-    let Some(()) = with_cuda_ctx(|_| {
+fn cuda_public_matrix_exp_matches_cpu_small_real_batched_f64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
-        let a_gpu =
-            Tensor::from_slice(&[2.0_f64, 1.0, 1.0, 3.0], &[2, 2], MemoryOrder::ColumnMajor)
-                .unwrap()
-                .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory {
-                    device_id: 0,
-                })
-                .unwrap();
+        let a_cpu = Tensor::from_slice(
+            &[
+                6.0_f64, 0.0, 0.0, 6.0, // batch 0
+                2.0, 0.5, -1.0, 1.5, // batch 1
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = matrix_exp(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
 
-        let exp_err = matrix_exp(&mut cpu_ctx, &a_gpu).unwrap_err();
-        assert!(matches!(exp_err, tenferro_device::Error::DeviceError(_)));
-        assert!(
-            exp_err
-                .to_string()
-                .contains("matrix_exp is only implemented for main-memory tensors"),
-            "matrix_exp should fail before host-slice extraction, got: {exp_err}"
+        let got = matrix_exp(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_real_slice(
+            "cuda public matrix exp f64 batched",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            8192.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_matrix_exp_matches_cpu_small_complex_batched_c64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(3.0, 1.0),
+                Complex::new(0.5, -0.25),
+                Complex::new(-1.0, 0.75),
+                Complex::new(2.0, -0.5),
+                Complex::new(1.5, 0.25),
+                Complex::new(-0.75, 1.25),
+                Complex::new(0.5, 0.5),
+                Complex::new(4.0, -1.0),
+            ],
+            &[2, 2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = matrix_exp(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = matrix_exp(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public matrix exp c64 batched",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            8192.0_f64 * f64::EPSILON,
         );
     }) else {
         return;
@@ -727,6 +854,80 @@ fn cuda_public_det_matches_cpu_f64_impl() {
         assert_eq!(got.dims(), expected.dims());
         assert_close_real_slice(
             "cuda public det f64",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            2048.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_det_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f32, 1.0),
+                Complex::new(1.0, -1.0),
+                Complex::new(3.0, 0.5),
+                Complex::new(4.0, -2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = det(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = det(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public det complex32",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            2048.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_det_matches_cpu_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f64, 1.0),
+                Complex::new(1.0, -1.0),
+                Complex::new(3.0, 0.5),
+                Complex::new(4.0, -2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = det(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = det(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public det complex64",
             &tensor_data_on_cpu(&got),
             &tensor_data_on_cpu(&expected),
             2048.0_f64 * f64::EPSILON,
@@ -817,6 +1018,102 @@ fn cuda_public_slogdet_matches_cpu_f64_impl() {
 }
 
 #[cfg(feature = "cuda")]
+fn cuda_public_slogdet_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f32, 1.0),
+                Complex::new(1.0, -1.0),
+                Complex::new(3.0, 0.5),
+                Complex::new(4.0, -2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = slogdet(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = slogdet(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.sign.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.logabsdet.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.sign.dims(), expected.sign.dims());
+        assert_eq!(got.logabsdet.dims(), expected.logabsdet.dims());
+        assert_close_complex_slice(
+            "cuda public slogdet sign complex32",
+            &tensor_data_on_cpu(&got.sign),
+            &tensor_data_on_cpu(&expected.sign),
+            2048.0_f32 * f32::EPSILON,
+        );
+        assert_close_real_slice(
+            "cuda public slogdet logabsdet complex32",
+            &tensor_data_on_cpu(&got.logabsdet),
+            &tensor_data_on_cpu(&expected.logabsdet),
+            2048.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_slogdet_matches_cpu_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f64, 1.0),
+                Complex::new(1.0, -1.0),
+                Complex::new(3.0, 0.5),
+                Complex::new(4.0, -2.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = slogdet(&mut cpu_ctx, &a_cpu).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = slogdet(ctx, &a_gpu).unwrap();
+        assert_eq!(
+            got.sign.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(
+            got.logabsdet.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.sign.dims(), expected.sign.dims());
+        assert_eq!(got.logabsdet.dims(), expected.logabsdet.dims());
+        assert_close_complex_slice(
+            "cuda public slogdet sign complex64",
+            &tensor_data_on_cpu(&got.sign),
+            &tensor_data_on_cpu(&expected.sign),
+            2048.0_f64 * f64::EPSILON,
+        );
+        assert_close_real_slice(
+            "cuda public slogdet logabsdet complex64",
+            &tensor_data_on_cpu(&got.logabsdet),
+            &tensor_data_on_cpu(&expected.logabsdet),
+            2048.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
 fn cuda_public_lu_factor_matches_cpu_complex32_impl() {
     let Some(()) = with_cuda_ctx(|ctx| {
         let mut cpu_ctx = CpuContext::new(1);
@@ -842,7 +1139,10 @@ fn cuda_public_lu_factor_matches_cpu_complex32_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.factors.dims(), expected.factors.dims());
-        assert_eq!(got.pivots, expected.pivots);
+        assert_eq!(
+            tensor_data_on_cpu(&got.pivots),
+            tensor_data_on_cpu(&expected.pivots)
+        );
         assert_close_complex_slice(
             "cuda public lu_factor complex32 factors",
             &tensor_data_on_cpu(&got.factors),
@@ -878,8 +1178,14 @@ fn cuda_public_lu_factor_ex_matches_cpu_mixed_batch_f64_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.factors.dims(), expected.factors.dims());
-        assert_eq!(got.pivots, expected.pivots);
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.pivots),
+            tensor_data_on_cpu(&expected.pivots)
+        );
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_eq!(
             tensor_data_on_cpu(&got.factors),
             tensor_data_on_cpu(&expected.factors)
@@ -921,7 +1227,10 @@ fn cuda_public_solve_ex_matches_cpu_generic() {
             got.solution.logical_memory_space(),
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_slice(
             "cuda public solve_ex",
             &tensor_data_on_cpu(&got.solution),
@@ -985,7 +1294,10 @@ fn cuda_public_solve_ex_matches_cpu_complex32_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.solution.dims(), expected.solution.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex solve_ex",
             &tensor_data_on_cpu(&got.solution),
@@ -1049,11 +1361,106 @@ fn cuda_public_solve_ex_matches_cpu_complex64_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.solution.dims(), expected.solution.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex solve_ex",
             &tensor_data_on_cpu(&got.solution),
             &tensor_data_on_cpu(&expected.solution),
+            4096.0_f64 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_solve_triangular_matches_cpu_complex32_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f32, 1.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(1.0, -2.0),
+                Complex::new(3.0, 4.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b_cpu = Tensor::from_slice(
+            &[Complex::new(5.0_f32, -1.0), Complex::new(2.0, 3.0)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = solve_triangular(&mut cpu_ctx, &a_cpu, &b_cpu, true).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let b_gpu = b_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = solve_triangular(ctx, &a_gpu, &b_gpu, true).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public solve_triangular complex32",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
+            4096.0_f32 * f32::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
+#[cfg(feature = "cuda")]
+fn cuda_public_solve_triangular_matches_cpu_complex64_impl() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let a_cpu = Tensor::from_slice(
+            &[
+                Complex::new(2.0_f64, 1.0),
+                Complex::new(0.0, 0.0),
+                Complex::new(1.0, -2.0),
+                Complex::new(3.0, 4.0),
+            ],
+            &[2, 2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let b_cpu = Tensor::from_slice(
+            &[Complex::new(5.0_f64, -1.0), Complex::new(2.0, 3.0)],
+            &[2],
+            MemoryOrder::ColumnMajor,
+        )
+        .unwrap();
+        let expected = solve_triangular(&mut cpu_ctx, &a_cpu, &b_cpu, true).unwrap();
+        let a_gpu = a_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let b_gpu = b_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = solve_triangular(ctx, &a_gpu, &b_gpu, true).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_complex_slice(
+            "cuda public solve_triangular complex64",
+            &tensor_data_on_cpu(&got),
+            &tensor_data_on_cpu(&expected),
             4096.0_f64 * f64::EPSILON,
         );
     }) else {
@@ -1099,7 +1506,10 @@ fn cuda_public_cholesky_ex_matches_cpu_complex32_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.l.dims(), expected.l.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex cholesky_ex",
             &tensor_data_on_cpu(&got.l),
@@ -1149,7 +1559,10 @@ fn cuda_public_cholesky_ex_matches_cpu_complex64_impl() {
             tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
         );
         assert_eq!(got.l.dims(), expected.l.dims());
-        assert_eq!(got.info, expected.info);
+        assert_eq!(
+            tensor_data_on_cpu(&got.info),
+            tensor_data_on_cpu(&expected.info)
+        );
         assert_close_complex_slice(
             "cuda public complex cholesky_ex",
             &tensor_data_on_cpu(&got.l),
@@ -1746,6 +2159,41 @@ fn householder_product_supports_batches_and_rejects_batch_mismatch() {
     assert!(matches!(err, tenferro_device::Error::InvalidArgument(_)));
 }
 
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_householder_product_matches_cpu_generic() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let reflectors_cpu =
+            Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
+                .unwrap();
+        let tau_cpu = Tensor::from_slice(&[2.0_f64], &[1], MemoryOrder::ColumnMajor).unwrap();
+        let expected = householder_product(&mut cpu_ctx, &reflectors_cpu, &tau_cpu).unwrap();
+
+        let reflectors_gpu = reflectors_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let tau_gpu = tau_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+        let got = householder_product(ctx, &reflectors_gpu, &tau_gpu).unwrap();
+
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_slice(
+            "cuda householder_product generic",
+            &tensor_data_on_cpu(&got),
+            &tensor_data(&expected),
+            2048.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
+}
+
 #[test]
 fn vander_supports_default_and_custom_column_counts() {
     let mut ctx = CpuContext::new(1);
@@ -1791,6 +2239,34 @@ fn vander_supports_batched_vectors() {
             16.0, 25.0, 4.0, 5.0, 1.0, 1.0,
         ]
     );
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_vander_matches_cpu_generic() {
+    let Some(()) = with_cuda_ctx(|ctx| {
+        let mut cpu_ctx = CpuContext::new(1);
+        let x_cpu = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+        let expected = vander(&mut cpu_ctx, &x_cpu, Some(4), false).unwrap();
+        let x_gpu = x_cpu
+            .to_memory_space_async(tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 })
+            .unwrap();
+
+        let got = vander(ctx, &x_gpu, Some(4), false).unwrap();
+        assert_eq!(
+            got.logical_memory_space(),
+            tenferro_device::LogicalMemorySpace::GpuMemory { device_id: 0 }
+        );
+        assert_eq!(got.dims(), expected.dims());
+        assert_close_slice(
+            "cuda vander generic",
+            &tensor_data_on_cpu(&got),
+            &tensor_data(&expected),
+            2048.0 * f64::EPSILON,
+        );
+    }) else {
+        return;
+    };
 }
 
 #[test]
@@ -1906,6 +2382,12 @@ fn public_cuda_pinv_matches_cpu_for_rank_deficient_real_matrix() {
 
 #[test]
 #[cfg(feature = "cuda")]
+fn public_cuda_pinv_matches_cpu_for_small_complex_matrix() {
+    cuda_public_pinv_matches_cpu_small_complex_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
 fn public_cuda_inv_matches_cpu_for_small_real_matrix() {
     cuda_public_inv_matches_cpu_small_real_matrix();
 }
@@ -1920,6 +2402,12 @@ fn public_cuda_inv_ex_matches_cpu_for_mixed_batch_real_matrix() {
 #[cfg(feature = "cuda")]
 fn public_cuda_fro_norm_matches_cpu_for_small_real_matrix() {
     cuda_public_fro_norm_matches_cpu_small_real_matrix();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_fro_norm_matches_cpu_for_small_complex_matrix() {
+    cuda_public_fro_norm_matches_cpu_small_complex_matrix();
 }
 
 #[test]
@@ -1948,8 +2436,14 @@ fn public_cuda_matrix_power_matches_cpu_for_small_complex_matrix_c64() {
 
 #[test]
 #[cfg(feature = "cuda")]
-fn cpu_context_matrix_exp_reject_gpu_tensors_before_host_slice_fallback() {
-    cpu_context_matrix_exp_reject_gpu_tensors_before_host_slice_fallback_impl();
+fn public_cuda_matrix_exp_matches_cpu_for_small_real_batched_f64() {
+    cuda_public_matrix_exp_matches_cpu_small_real_batched_f64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_matrix_exp_matches_cpu_for_small_complex_batched_c64() {
+    cuda_public_matrix_exp_matches_cpu_small_complex_batched_c64_impl();
 }
 
 #[test]
@@ -1966,6 +2460,18 @@ fn public_cuda_det_matches_cpu_for_small_matrix_f64() {
 
 #[test]
 #[cfg(feature = "cuda")]
+fn public_cuda_det_matches_cpu_for_small_complex_matrix_c32() {
+    cuda_public_det_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_det_matches_cpu_for_small_complex_matrix_c64() {
+    cuda_public_det_matches_cpu_complex64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
 fn public_cuda_slogdet_matches_cpu_for_small_matrix_f32() {
     cuda_public_slogdet_matches_cpu_f32_impl();
 }
@@ -1974,6 +2480,18 @@ fn public_cuda_slogdet_matches_cpu_for_small_matrix_f32() {
 #[cfg(feature = "cuda")]
 fn public_cuda_slogdet_matches_cpu_for_small_matrix_f64() {
     cuda_public_slogdet_matches_cpu_f64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_slogdet_matches_cpu_for_small_complex_matrix_c32() {
+    cuda_public_slogdet_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_slogdet_matches_cpu_for_small_complex_matrix_c64() {
+    cuda_public_slogdet_matches_cpu_complex64_impl();
 }
 
 #[test]
@@ -2004,6 +2522,18 @@ fn public_cuda_solve_ex_matches_cpu_for_mixed_batch_complex32() {
 #[cfg(feature = "cuda")]
 fn public_cuda_solve_ex_matches_cpu_for_mixed_batch_complex64() {
     cuda_public_solve_ex_matches_cpu_complex64_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_solve_triangular_matches_cpu_for_small_complex32_matrix() {
+    cuda_public_solve_triangular_matches_cpu_complex32_impl();
+}
+
+#[test]
+#[cfg(feature = "cuda")]
+fn public_cuda_solve_triangular_matches_cpu_for_small_complex64_matrix() {
+    cuda_public_solve_triangular_matches_cpu_complex64_impl();
 }
 
 #[test]
@@ -2154,30 +2684,6 @@ fn tensorsolve_rejects_rank_and_shape_contract_violations() {
 #[test]
 fn batch_b_ops_reject_cuda_context() {
     with_cuda_ctx(|ctx| {
-        let a_vec =
-            Tensor::from_slice(&[1.0_f64, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-        let b_vec =
-            Tensor::from_slice(&[0.0_f64, 1.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
-        assert!(matches!(
-            cross(ctx, &a_vec, &b_vec),
-            Err(tenferro_device::Error::DeviceError(_))
-        ));
-
-        let reflectors =
-            Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
-                .unwrap();
-        let tau = Tensor::from_slice(&[0.0_f64, 0.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-        assert!(matches!(
-            householder_product(ctx, &reflectors, &tau),
-            Err(tenferro_device::Error::DeviceError(_))
-        ));
-
-        let x = Tensor::from_slice(&[2.0_f64, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap();
-        assert!(matches!(
-            vander(ctx, &x, Some(3), true),
-            Err(tenferro_device::Error::DeviceError(_))
-        ));
-
         let eye = Tensor::from_slice(&[1.0_f64, 0.0, 0.0, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
         assert!(matches!(

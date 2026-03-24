@@ -35,7 +35,7 @@ where
         input.dims(),
         input.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan = B::plan(ctx, &desc, &[input.dims(), output.dims()]).map_err(Error::from)?;
     B::execute(ctx, &plan, T::one(), &[input], T::zero(), &mut output).map_err(Error::from)?;
     Ok(output)
@@ -64,7 +64,7 @@ where
         lhs.dims(),
         lhs.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan =
         B::plan(ctx, &desc, &[lhs.dims(), rhs.dims(), output.dims()]).map_err(Error::from)?;
     B::execute(ctx, &plan, T::one(), &[lhs, rhs], T::zero(), &mut output).map_err(Error::from)?;
@@ -103,7 +103,7 @@ where
             runtime,
         });
     }
-    let mut output = Tensor::zeros(&[], input.logical_memory_space(), MemoryOrder::ColumnMajor);
+    let mut output = Tensor::zeros(&[], input.logical_memory_space(), MemoryOrder::ColumnMajor)?;
     let plan = B::plan(ctx, &desc, &[input.dims(), output.dims()]).map_err(Error::from)?;
     B::execute(ctx, &plan, T::one(), &[input], T::zero(), &mut output).map_err(Error::from)?;
     Ok(output)
@@ -131,7 +131,7 @@ where
         input.dims(),
         input.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan = B::plan(ctx, &desc, &[input.dims(), output.dims()]).map_err(Error::from)?;
     B::execute(ctx, &plan, T::one(), &[input], T::zero(), &mut output).map_err(Error::from)?;
     Ok(output)
@@ -160,7 +160,7 @@ where
         lhs.dims(),
         lhs.logical_memory_space(),
         MemoryOrder::ColumnMajor,
-    );
+    )?;
     let plan =
         B::plan(ctx, &desc, &[lhs.dims(), rhs.dims(), output.dims()]).map_err(Error::from)?;
     B::execute(ctx, &plan, T::one(), &[lhs, rhs], T::zero(), &mut output).map_err(Error::from)?;
@@ -199,7 +199,7 @@ where
             runtime,
         });
     }
-    let mut output = Tensor::zeros(&[], input.logical_memory_space(), MemoryOrder::ColumnMajor);
+    let mut output = Tensor::zeros(&[], input.logical_memory_space(), MemoryOrder::ColumnMajor)?;
     let plan = B::plan(ctx, &desc, &[input.dims(), output.dims()]).map_err(Error::from)?;
     B::execute(ctx, &plan, T::one(), &[input], T::zero(), &mut output).map_err(Error::from)?;
     Ok(output)

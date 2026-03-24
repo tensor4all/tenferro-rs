@@ -179,11 +179,11 @@ where
             } else {
                 einsum_with_subscripts::<Alg, Backend>(ctx, subs, primals, None)?
             };
-            Ok(Tensor::<Alg::Scalar>::zeros(
+            Tensor::<Alg::Scalar>::zeros(
                 primal_out.dims(),
                 primal_out.logical_memory_space(),
                 MemoryOrder::ColumnMajor,
-            ))
+            )
         }
     }
 }
@@ -278,7 +278,7 @@ where
             Some(t) => t,
             None => {
                 let space = primals[k].logical_memory_space();
-                Tensor::zeros(primals[k].dims(), space, MemoryOrder::ColumnMajor)
+                Tensor::zeros(primals[k].dims(), space, MemoryOrder::ColumnMajor)?
             }
         };
 

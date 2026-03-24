@@ -16,11 +16,11 @@ impl<T: Scalar> StructuredTensor<T> {
     pub fn set_preferred_compute_device(&mut self, device: Option<ComputeDevice>) {
         let mut payload = self.payload().clone();
         payload.set_preferred_compute_device(device);
-        *self = self.with_payload_like(payload).unwrap_or_else(|err| {
-            unreachable!(
-                "StructuredTensor::set_preferred_compute_device should preserve layout: {err}"
-            )
-        });
+        *self = Self::from_validated_parts(
+            self.logical_dims().to_vec(),
+            self.axis_classes().to_vec(),
+            payload,
+        );
     }
 
     pub fn to_memory_space_async(&self, target: LogicalMemorySpace) -> Result<Self> {

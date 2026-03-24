@@ -1,3 +1,5 @@
+use tenferro_algebra::Conjugate;
+
 /// Hidden CUDA dtype inventory for linalg backend dispatch.
 ///
 /// # Examples
@@ -26,7 +28,7 @@ pub enum CudaDataType {
 /// require_cuda_linalg::<f64>();
 /// ```
 #[doc(hidden)]
-pub trait CudaLinalgScalar: crate::KernelLinalgScalar {
+pub trait CudaLinalgScalar: crate::KernelLinalgScalar + Conjugate {
     fn cuda_data_type() -> CudaDataType;
 }
 

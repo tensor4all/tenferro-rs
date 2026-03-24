@@ -4,6 +4,7 @@ use super::{
 };
 use crate::{AdTensor, DynTensorTyped, Result};
 use tenferro_algebra::Scalar;
+use tenferro_tensor::Tensor as DenseTensor;
 
 fn with_dense_primal<T, R, F>(value: &AdTensor<T>, op: &'static str, f: F) -> Result<R>
 where
@@ -151,7 +152,7 @@ impl Tensor {
     /// ```ignore
     /// let x = factors.lu_solve(&rhs, &pivots)?;
     /// ```
-    pub fn lu_solve(&self, rhs: &Self, pivots: &[usize]) -> Result<Self> {
+    pub fn lu_solve(&self, rhs: &Self, pivots: &DenseTensor<i32>) -> Result<Self> {
         match (self, rhs) {
             (Self::F32(lhs), Self::F32(rhs)) => {
                 with_dense_primal_pair(lhs, rhs, "lu_solve", |factors, rhs| {

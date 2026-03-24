@@ -3,7 +3,7 @@ use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
 use crate::cpu::common::{
-    execute_binary_map, execute_unary_map, is_supported_ordered_real_type,
+    execute_binary_map, execute_ternary_map, execute_unary_map, is_supported_ordered_real_type,
     is_supported_scalar_type, plan_reduction, validate_pointwise_shapes, CpuScalarValue,
 };
 use crate::cpu::family_reduction::{
@@ -17,7 +17,7 @@ use crate::infra::typed_dispatch::{
 };
 use crate::{
     validate_execute_inputs, CpuBackend, CpuContext, ScalarBinaryOp, ScalarPrimsDescriptor,
-    ScalarReductionOp, ScalarUnaryOp, TensorScalarPrims,
+    ScalarReductionOp, ScalarTernaryOp, ScalarUnaryOp, TensorScalarPrims,
 };
 
 /// CPU execution plan for the scalar protocol family.
@@ -35,6 +35,9 @@ pub enum CpuScalarPlan {
     },
     PointwiseBinary {
         op: ScalarBinaryOp,
+    },
+    PointwiseTernary {
+        op: ScalarTernaryOp,
     },
     Reduction {
         reduced_axes: Vec<usize>,
@@ -68,6 +71,10 @@ fn supports_scalar_binary<S: Scalar + 'static>(op: ScalarBinaryOp) -> bool {
         | ScalarBinaryOp::ClampMin
         | ScalarBinaryOp::ClampMax => is_supported_ordered_real_type::<S>(),
     }
+}
+
+fn supports_scalar_ternary<S: Scalar + 'static>(op: ScalarTernaryOp) -> bool {
+    matches!(op, ScalarTernaryOp::Where) && is_supported_ordered_real_type::<S>()
 }
 
 fn supports_scalar_reduction<S: Scalar + 'static>(op: ScalarReductionOp) -> bool {
@@ -194,6 +201,28 @@ fn execute_scalar_binary_complex<S: CpuScalarValue>(
     }
 }
 
+fn execute_scalar_ternary_real<S: num_traits::Float + CpuScalarValue>(
+    alpha: S,
+    cond: &strided_view::StridedView<S>,
+    on_true: &strided_view::StridedView<S>,
+    on_false: &strided_view::StridedView<S>,
+    beta: S,
+    output: &mut strided_view::StridedViewMut<S>,
+    op: ScalarTernaryOp,
+) -> Result<()> {
+    match op {
+        ScalarTernaryOp::Where => {
+            execute_ternary_map(alpha, cond, on_true, on_false, beta, output, |c, t, f| {
+                if c != S::zero() {
+                    t
+                } else {
+                    f
+                }
+            })
+        }
+    }
+}
+
 fn execute_scalar_unary<T: Scalar + 'static>(
     alpha: T,
     input: &strided_view::StridedView<T>,
@@ -242,6 +271,33 @@ fn execute_scalar_binary<T: Scalar + 'static>(
 
     Err(Error::InvalidArgument(format!(
         "scalar binary operation {op:?} is not supported for {}",
+        std::any::type_name::<T>()
+    )))
+}
+
+fn execute_scalar_ternary<T: Scalar + 'static>(
+    alpha: T,
+    cond: &strided_view::StridedView<T>,
+    on_true: &strided_view::StridedView<T>,
+    on_false: &strided_view::StridedView<T>,
+    beta: T,
+    output: &mut strided_view::StridedViewMut<T>,
+    op: ScalarTernaryOp,
+) -> Result<()> {
+    dispatch_real_scalar_type!(T, Concrete, {
+        let cond = cast_strided_view!(cond, T, Concrete);
+        let on_true = cast_strided_view!(on_true, T, Concrete);
+        let on_false = cast_strided_view!(on_false, T, Concrete);
+        let output = cast_strided_view_mut!(output, T, Concrete);
+        let alpha = cast_scalar_value!(alpha, T, Concrete);
+        let beta = cast_scalar_value!(beta, T, Concrete);
+        return execute_scalar_ternary_real::<Concrete>(
+            alpha, cond, on_true, on_false, beta, output, op,
+        );
+    });
+
+    Err(Error::InvalidArgument(format!(
+        "scalar ternary operation {op:?} is not supported for {}",
         std::any::type_name::<T>()
     )))
 }
@@ -350,6 +406,16 @@ impl<S: Scalar + 'static> TensorScalarPrims<Standard<S>> for CpuBackend {
                 }
                 Ok(CpuScalarPlan::PointwiseBinary { op: *op })
             }
+            ScalarPrimsDescriptor::PointwiseTernary { op } => {
+                validate_pointwise_shapes(shapes, 3, "ScalarPointwiseTernary")?;
+                if !supports_scalar_ternary::<S>(*op) {
+                    return Err(Error::InvalidArgument(format!(
+                        "scalar ternary operation {op:?} is not supported on CpuBackend for {}",
+                        std::any::type_name::<S>()
+                    )));
+                }
+                Ok(CpuScalarPlan::PointwiseTernary { op: *op })
+            }
             ScalarPrimsDescriptor::Reduction {
                 modes_a,
                 modes_c,
@@ -395,6 +461,18 @@ impl<S: Scalar + 'static> TensorScalarPrims<Standard<S>> for CpuBackend {
                 validate_execute_inputs(inputs, 2, "ScalarPointwiseBinary")?;
                 execute_scalar_binary(alpha, view_refs[0], view_refs[1], beta, &mut out_view, *op)
             }
+            CpuScalarPlan::PointwiseTernary { op } => {
+                validate_execute_inputs(inputs, 3, "ScalarPointwiseTernary")?;
+                execute_scalar_ternary(
+                    alpha,
+                    view_refs[0],
+                    view_refs[1],
+                    view_refs[2],
+                    beta,
+                    &mut out_view,
+                    *op,
+                )
+            }
             CpuScalarPlan::Reduction { reduced_axes, op } => {
                 validate_execute_inputs(inputs, 1, "ScalarReduction")?;
                 execute_scalar_reduction(
@@ -413,6 +491,7 @@ impl<S: Scalar + 'static> TensorScalarPrims<Standard<S>> for CpuBackend {
         match desc {
             ScalarPrimsDescriptor::PointwiseUnary { op } => supports_scalar_unary::<S>(op),
             ScalarPrimsDescriptor::PointwiseBinary { op } => supports_scalar_binary::<S>(op),
+            ScalarPrimsDescriptor::PointwiseTernary { op } => supports_scalar_ternary::<S>(op),
             ScalarPrimsDescriptor::Reduction { op, .. } => supports_scalar_reduction::<S>(op),
         }
     }

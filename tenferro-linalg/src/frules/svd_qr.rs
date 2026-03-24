@@ -20,8 +20,8 @@ use super::*;
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
 /// let mut ctx = CpuContext::new(1);
-/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-/// let da = Tensor::<f64>::ones(&[3, 4], mem, col);
+/// let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+/// let da = Tensor::<f64>::ones(&[3, 4], mem, col).unwrap();
 /// let (result, dresult) = svd_frule(&mut ctx, &a, &da, None).unwrap();
 /// ```
 pub fn svd_frule<T, C>(
@@ -174,7 +174,7 @@ where
 ///     &[4, 3],
 ///     col,
 /// ).unwrap();
-/// let da = Tensor::<f64>::ones(&[4, 3], mem, col);
+/// let da = Tensor::<f64>::ones(&[4, 3], mem, col).unwrap();
 /// let (result, dresult) = qr_frule(&mut ctx, &a, &da).unwrap();
 /// ```
 pub fn qr_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(

@@ -54,6 +54,21 @@ pub enum ScalarBinaryOp {
     ClampMax,
 }
 
+/// Pointwise scalar ternary operations.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_prims::ScalarTernaryOp;
+///
+/// let op = ScalarTernaryOp::Where;
+/// assert_eq!(op, ScalarTernaryOp::Where);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScalarTernaryOp {
+    Where,
+}
+
 /// Scalar reduction operations.
 ///
 /// # Examples
@@ -96,6 +111,11 @@ pub enum ScalarPrimsDescriptor {
     PointwiseBinary {
         /// The binary scalar operation to apply.
         op: ScalarBinaryOp,
+    },
+    /// Apply a ternary pointwise operation to three input tensors.
+    PointwiseTernary {
+        /// The ternary scalar operation to apply.
+        op: ScalarTernaryOp,
     },
     /// Reduce one tensor into an output tensor over the dropped modes.
     Reduction {

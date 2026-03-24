@@ -1,6 +1,10 @@
+use std::any::TypeId;
+
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::{Conjugate, Scalar};
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
+use tenferro_device::{checked_batch_count, unflatten_col_major_index_into};
 
 use super::Tensor;
 use crate::layout::{compute_contiguous_strides, copy_strided, is_contiguous_in_order};
@@ -231,10 +235,24 @@ impl<T: Scalar> Tensor<T> {
             TriangularHalf::Upper => "triu",
         });
         let batch_dims = &self.dims[2..];
+        let n_batch = checked_batch_count(batch_dims).unwrap_or_else(|err| {
+            panic!(
+                "triangular_part: invalid batch dims {:?}: {err}",
+                batch_dims
+            )
+        });
         let mut batch_index = vec![0usize; batch_dims.len()];
-        let n_batch = batch_dims.iter().product::<usize>().max(1);
 
-        for _ in 0..n_batch {
+        for batch in 0..n_batch {
+            if !batch_dims.is_empty() {
+                unflatten_col_major_index_into(batch, batch_dims, &mut batch_index)
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "triangular_part: failed to unflatten batch index {batch} for dims {:?}: {err}",
+                            batch_dims
+                        )
+                    });
+            }
             let src_batch_off: isize = batch_index
                 .iter()
                 .enumerate()
@@ -296,14 +314,6 @@ impl<T: Scalar> Tensor<T> {
                     data[dst_pos] = src[src_pos];
                 }
             }
-
-            for axis in 0..batch_dims.len() {
-                batch_index[axis] += 1;
-                if batch_index[axis] < batch_dims[axis] {
-                    break;
-                }
-                batch_index[axis] = 0;
-            }
         }
 
         Tensor::from_parts(
@@ -343,5 +353,82 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn triu(&self, diagonal: isize) -> Tensor<T> {
         self.triangular_part(diagonal, TriangularHalf::Upper)
+    }
+}
+
+impl<T: Scalar> Tensor<T> {
+    /// Materialize the logical tensor values into a fresh contiguous tensor.
+    ///
+    /// The returned tensor is resolved (`conjugated = false`) and clears any
+    /// preferred compute-device hint. GPU tensors use the Layer 0 logical-copy
+    /// substrate when available.
+    pub(crate) fn materialize_logical_contiguous(&self, order: MemoryOrder) -> Tensor<T> {
+        self.wait();
+
+        #[cfg(feature = "cuda")]
+        if matches!(
+            self.logical_memory_space,
+            LogicalMemorySpace::GpuMemory { .. }
+        ) {
+            return crate::cuda_runtime::materialize_logical_contiguous_tensor(self, order)
+                .unwrap_or_else(|err| {
+                    panic!("materialize_logical_contiguous: GPU materialization failed: {err}")
+                });
+        }
+
+        let mut data = vec![T::zero(); self.len()];
+        if !data.is_empty() {
+            let dst_strides = compute_contiguous_strides(&self.dims, order);
+            copy_strided(
+                self.cpu_backed_slice_or_panic("materialize_logical_contiguous"),
+                &self.dims,
+                &self.strides,
+                self.offset,
+                &mut data,
+                &dst_strides,
+            );
+            apply_logical_conjugation_if_needed(&mut data, self.conjugated);
+        }
+
+        Tensor::from_owned_contiguous_data(
+            data,
+            self.dims.clone(),
+            order,
+            self.logical_memory_space,
+            None,
+            false,
+        )
+    }
+}
+
+/// Apply logical conjugation in place when the element type supports it.
+///
+/// This uses a narrow private runtime dispatch so `Tensor::cat` / `Tensor::stack`
+/// can stay generic over `Scalar` while built-in complex tensors still materialize
+/// their logical values correctly.
+fn apply_logical_conjugation_if_needed<T: Scalar + 'static>(data: &mut [T], conjugated: bool) {
+    if !conjugated || data.is_empty() {
+        return;
+    }
+
+    if TypeId::of::<T>() == TypeId::of::<Complex32>() {
+        // SAFETY: the type check above guarantees `T` really is `Complex32`.
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<Complex32>(), data.len())
+        };
+        for value in data {
+            *value = value.conj();
+        }
+        return;
+    }
+
+    if TypeId::of::<T>() == TypeId::of::<Complex64>() {
+        // SAFETY: the type check above guarantees `T` really is `Complex64`.
+        let data = unsafe {
+            std::slice::from_raw_parts_mut(data.as_mut_ptr().cast::<Complex64>(), data.len())
+        };
+        for value in data {
+            *value = value.conj();
+        }
     }
 }

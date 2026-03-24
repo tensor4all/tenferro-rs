@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::{any::TypeId, sync::Arc};
 
+use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
 use tenferro_device::cuda::runtime::{
-    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, TriangularHalf,
-    TriangularMergeSpec, TriangularPartSpec, ZeroTrailingByCountsSpec,
+    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, StridedCopyTransform,
+    TriangularHalf, TriangularMergeSpec, TriangularPartSpec, ZeroTrailingByCountsSpec,
 };
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
@@ -16,6 +17,10 @@ fn gpu_runtime(space: LogicalMemorySpace) -> Result<Arc<device_cuda::CudaRuntime
         )));
     };
     device_cuda::get_or_init(device_id)
+}
+
+fn supports_conj_strided_copy<T: 'static>() -> bool {
+    TypeId::of::<T>() == TypeId::of::<Complex32>() || TypeId::of::<T>() == TypeId::of::<Complex64>()
 }
 
 fn buffer_from_cuda_allocation<T: Scalar>(
@@ -134,6 +139,63 @@ pub(super) fn contiguous_tensor<T: Scalar>(
 
     unsafe {
         runtime.copy_strided_raw(src_ptr, dst_ptr, &spec)?;
+    }
+
+    Ok(output)
+}
+
+pub(super) fn materialize_logical_contiguous_tensor<T>(
+    source: &Tensor<T>,
+    order: MemoryOrder,
+) -> Result<Tensor<T>>
+where
+    T: Scalar + 'static,
+{
+    let space = source.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let out_strides = compute_contiguous_strides(source.dims(), order);
+    let output = Tensor::from_parts(
+        alloc_gpu_buffer(source.len(), space)?,
+        Arc::from(source.dims()),
+        Arc::from(out_strides),
+        0,
+        space,
+        None,
+        None,
+        false,
+        None,
+    );
+    if source.is_empty() {
+        return Ok(output);
+    }
+
+    let src_ptr = source
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("source tensor buffer is not on GPU".into()))?;
+    let dst_ptr = output
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("output tensor buffer is not on GPU".into()))?
+        as *mut T;
+    let spec = StridedCopySpec::to_contiguous(
+        source.dims(),
+        source.strides(),
+        source.offset(),
+        contiguous_order(order),
+    )?;
+
+    unsafe {
+        if source.is_conjugated() && supports_conj_strided_copy::<T>() {
+            runtime.copy_strided_raw_with_transform(
+                src_ptr,
+                dst_ptr,
+                &spec,
+                StridedCopyTransform::Conj,
+            )?;
+        } else {
+            runtime.copy_strided_raw(src_ptr, dst_ptr, &spec)?;
+        }
     }
 
     Ok(output)

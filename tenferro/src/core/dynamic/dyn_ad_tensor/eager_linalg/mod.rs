@@ -179,7 +179,7 @@ impl Tensor {
             Self::F32(value) => {
                 let out = ad::lu(value)?;
                 Ok(LuResult {
-                    p: out.p,
+                    p: out.p.into(),
                     l: out.l.into(),
                     u: out.u.into(),
                 })
@@ -187,7 +187,7 @@ impl Tensor {
             Self::F64(value) => {
                 let out = ad::lu(value)?;
                 Ok(LuResult {
-                    p: out.p,
+                    p: out.p.into(),
                     l: out.l.into(),
                     u: out.u.into(),
                 })
@@ -196,7 +196,7 @@ impl Tensor {
                 let dense = Self::dense_primal_complex_only(value, "lu")?;
                 let out = crate::ops::lu(&dense).run()?;
                 Ok(LuResult {
-                    p: out.p,
+                    p: out.p.into(),
                     l: Tensor::from_tensor(out.l),
                     u: Tensor::from_tensor(out.u),
                 })
@@ -205,7 +205,7 @@ impl Tensor {
                 let dense = Self::dense_primal_complex_only(value, "lu")?;
                 let out = crate::ops::lu(&dense).run()?;
                 Ok(LuResult {
-                    p: out.p,
+                    p: out.p.into(),
                     l: Tensor::from_tensor(out.l),
                     u: Tensor::from_tensor(out.u),
                 })

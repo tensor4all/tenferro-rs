@@ -54,6 +54,34 @@ type FnCublasDtrsm = unsafe extern "C" fn(
     *mut f64,
     i32,
 ) -> CublasStatus;
+type FnCublasCtrsm = unsafe extern "C" fn(
+    CublasHandle,
+    i32,
+    i32,
+    CublasOperation,
+    i32,
+    i32,
+    i32,
+    *const Complex32,
+    *const Complex32,
+    i32,
+    *mut Complex32,
+    i32,
+) -> CublasStatus;
+type FnCublasZtrsm = unsafe extern "C" fn(
+    CublasHandle,
+    i32,
+    i32,
+    CublasOperation,
+    i32,
+    i32,
+    i32,
+    *const Complex64,
+    *const Complex64,
+    i32,
+    *mut Complex64,
+    i32,
+) -> CublasStatus;
 
 type FnCusolverDnCreate = unsafe extern "C" fn(*mut CusolverDnHandle) -> CusolverStatus;
 type FnCusolverDnDestroy = unsafe extern "C" fn(CusolverDnHandle) -> CusolverStatus;
@@ -478,6 +506,8 @@ pub(super) struct CublasApi {
     set_stream: FnCublasSetStream,
     strsm: FnCublasStrsm,
     dtrsm: FnCublasDtrsm,
+    ctrsm: FnCublasCtrsm,
+    ztrsm: FnCublasZtrsm,
 }
 
 pub(super) struct CusolverDnApi {
@@ -552,6 +582,8 @@ impl CublasApi {
             set_stream: load_symbol(&lib, "cublasSetStream_v2")?,
             strsm: load_symbol(&lib, "cublasStrsm_v2")?,
             dtrsm: load_symbol(&lib, "cublasDtrsm_v2")?,
+            ctrsm: load_symbol(&lib, "cublasCtrsm_v2")?,
+            ztrsm: load_symbol(&lib, "cublasZtrsm_v2")?,
             _lib: lib,
         })
     }
@@ -625,9 +657,44 @@ impl CublasApi {
                 },
                 "cublasDtrsm_v2",
             ),
-            _ => Err(Error::DeviceError(format!(
-                "CUDA triangular solve currently supports only f32/f64, got {dtype:?}"
-            ))),
+            CudaDataType::Complex32 => check_cublas_status(
+                unsafe {
+                    (self.ctrsm)(
+                        handle,
+                        side,
+                        uplo,
+                        trans,
+                        diag,
+                        m,
+                        n,
+                        alpha.cast::<Complex32>(),
+                        a.cast::<Complex32>(),
+                        lda,
+                        b.cast::<Complex32>(),
+                        ldb,
+                    )
+                },
+                "cublasCtrsm_v2",
+            ),
+            CudaDataType::Complex64 => check_cublas_status(
+                unsafe {
+                    (self.ztrsm)(
+                        handle,
+                        side,
+                        uplo,
+                        trans,
+                        diag,
+                        m,
+                        n,
+                        alpha.cast::<Complex64>(),
+                        a.cast::<Complex64>(),
+                        lda,
+                        b.cast::<Complex64>(),
+                        ldb,
+                    )
+                },
+                "cublasZtrsm_v2",
+            ),
         }
     }
 }

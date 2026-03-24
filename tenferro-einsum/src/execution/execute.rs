@@ -211,7 +211,7 @@ where
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = &tree.step_output_shapes[step_idx];
             let mut result =
-                alloc_tensor_from_pool::<Alg::Scalar>(result_shape, memory_space, pool);
+                alloc_tensor_from_pool::<Alg::Scalar>(result_shape, memory_space, pool)?;
             execute_pairwise_with_plan::<Alg, Backend>(
                 ctx,
                 &step_plans[step_idx],
