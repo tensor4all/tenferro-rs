@@ -8,6 +8,7 @@ mod batch_b_contracts;
 mod diagonal_helpers;
 mod organization;
 mod runtime_capability;
+mod views_helpers;
 
 fn tensor_data<T: tenferro_algebra::Scalar + Copy>(tensor: &Tensor<T>) -> Vec<T> {
     let contiguous = tensor.contiguous(MemoryOrder::ColumnMajor);
