@@ -16,20 +16,15 @@ use crate::{
 use tenferro_device::Result;
 use tenferro_tensor::Tensor;
 
-mod cholesky;
-mod eig;
-mod lu;
-mod qr;
-mod solve;
-mod solve_triangular;
-mod svdvals;
-mod tensor_impl;
-mod thin_svd;
+#[cfg(feature = "linalg-faer")]
+use super::cpu_faer as cpu_impl;
+#[cfg(feature = "linalg-lapack")]
+use super::cpu_lapack as cpu_impl;
 
 #[cfg(feature = "linalg-faer")]
 type SelectedCpuSliceBackend = super::faer_backend::FaerBackend;
 #[cfg(feature = "linalg-lapack")]
-type SelectedCpuSliceBackend = super::blas_lapack_backend::BlasLapackBackend;
+type SelectedCpuSliceBackend = super::cpu_lapack::LapackBackend;
 
 mod private {
     use num_complex::{Complex32, Complex64};
@@ -396,11 +391,11 @@ where
         a: &Tensor<T>,
         b: &Tensor<T>,
     ) -> Result<SolveTensorExResult<T>> {
-        solve::solve_ex(ctx, a, b)
+        super::cpu_tensor_impl::solve_ex(ctx, a, b)
     }
 
     fn solve(ctx: &mut Self::Context, a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>> {
-        solve::solve(ctx, a, b)
+        cpu_impl::solve(ctx, a, b)
     }
 
     fn lu_solve(
@@ -409,7 +404,7 @@ where
         pivots: &Tensor<i32>,
         b: &Tensor<T>,
     ) -> Result<Tensor<T>> {
-        solve::lu_solve(ctx, factors, pivots, b)
+        super::cpu_tensor_impl::lu_solve(ctx, factors, pivots, b)
     }
 
     fn solve_triangular(
@@ -418,47 +413,47 @@ where
         b: &Tensor<T>,
         upper: bool,
     ) -> Result<Tensor<T>> {
-        solve_triangular::solve_triangular(ctx, a, b, upper)
+        cpu_impl::solve_triangular(ctx, a, b, upper)
     }
 
     fn qr(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<QrTensorResult<T>> {
-        qr::qr(ctx, a)
+        cpu_impl::qr(ctx, a)
     }
 
     fn thin_svd(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<SvdTensorResult<T>> {
-        thin_svd::thin_svd(ctx, a)
+        cpu_impl::thin_svd(ctx, a)
     }
 
     fn svdvals(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<Tensor<T::Real>> {
-        svdvals::svdvals(ctx, a)
+        Ok(cpu_impl::thin_svd(ctx, a)?.s)
     }
 
     fn lu_factor_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorExResult<T>> {
-        lu::lu_factor_ex(ctx, a)
+        super::cpu_tensor_impl::lu_factor_ex(ctx, a)
     }
 
     fn lu_factor(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>> {
-        lu::lu_factor(ctx, a)
+        cpu_impl::lu_factor(ctx, a)
     }
 
     fn lu_factor_no_pivot(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<LuTensorResult<T>> {
-        lu::lu_factor_no_pivot(ctx, a)
+        super::cpu_tensor_impl::lu_factor_no_pivot(ctx, a)
     }
 
     fn cholesky_ex(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<CholeskyTensorExResult<T>> {
-        cholesky::cholesky_ex(ctx, a)
+        super::cpu_tensor_impl::cholesky_ex(ctx, a)
     }
 
     fn cholesky(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<Tensor<T>> {
-        cholesky::cholesky(ctx, a)
+        cpu_impl::cholesky(ctx, a)
     }
 
     fn eigen_sym(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<EigenTensorResult<T>> {
-        eig::eigen_sym(ctx, a)
+        cpu_impl::eigen_sym(ctx, a)
     }
 
     fn eig(ctx: &mut Self::Context, a: &Tensor<T>) -> Result<EigTensorResult<T>> {
-        eig::eig(ctx, a)
+        cpu_impl::eig(ctx, a)
     }
 }
 

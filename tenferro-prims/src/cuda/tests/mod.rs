@@ -1,5 +1,4 @@
 mod complex;
-mod diagonal;
 mod organization;
 
 use crate::SemiringBinaryOp;
