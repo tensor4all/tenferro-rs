@@ -782,8 +782,8 @@ fn test_ellipsis_zero_contraction_dim() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 3, 0], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 0, 4], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 3, 0], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 0, 4], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
@@ -806,8 +806,8 @@ fn test_ellipsis_no_invalid_label_error() {
     let mut ctx = make_context();
     let col = MemoryOrder::ColumnMajor;
 
-    let a = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
-    let b = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
+    let a = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col).unwrap();
+    let b = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col).unwrap();
 
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None);
