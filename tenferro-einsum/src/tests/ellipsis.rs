@@ -797,3 +797,33 @@ fn test_ellipsis_zero_contraction_dim() {
         "All result values should be zero when contracting over dimension 0"
     );
 }
+
+/// Regression test for issue #529: Verifies that ellipsis notation does NOT produce
+/// the original error "invalid einsum label character: '.' (U+002E)".
+/// This confirms the ellipsis expansion is properly handled before label parsing.
+#[test]
+fn test_ellipsis_no_invalid_label_error() {
+    let mut ctx = make_context();
+    let col = MemoryOrder::ColumnMajor;
+
+    let a = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
+    let b = Tensor::<f64>::zeros(&[2, 2, 2], LogicalMemorySpace::MainMemory, col);
+
+    let result =
+        einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None);
+
+    match &result {
+        Ok(tensor) => {
+            assert_eq!(tensor.dims(), &[2, 2, 2]);
+        }
+        Err(e) => {
+            let error_msg = format!("{:?}", e);
+            assert!(
+                !error_msg.contains("invalid einsum label character"),
+                "Ellipsis notation should not produce 'invalid einsum label character' error. Got: {}",
+                error_msg
+            );
+            panic!("Unexpected error: {:?}", e);
+        }
+    }
+}
