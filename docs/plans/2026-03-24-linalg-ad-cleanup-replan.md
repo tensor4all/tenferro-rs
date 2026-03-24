@@ -8,6 +8,104 @@
 
 **Tech Stack:** Rust workspace crates `tenferro-linalg`, `tenferro-linalg-prims`, `tenferro-prims`, `tenferro-tensor`; existing tensor-native LU/SVD/QR/solve contracts; runtime capability source guards; CPU/CUDA parity tests.
 
+## Status Update After Executing This Replan
+
+This file remains the historical execution plan for the original linalg AD cleanup. Do not reinterpret the task list below as the current frontier. The cleanup described by this replan has already been executed on this line of work; use the notes in this section as the current handoff snapshot.
+
+### What already landed from the original cleanup plan
+
+- The host-bridge cleanup targeted by this replan was completed earlier on this branch lineage.
+- The key results of that work were:
+  - source/runtime guards were added so public/composite linalg code does not quietly regress to CPU-name checks or `slice_bridge` transport
+  - remaining live `slice_bridge`-driven AD/composite paths were removed
+  - dead `backend/slice_bridge.rs` dependence was deleted from the active linalg stack
+  - focused verification, release-mode tests, docs, and coverage gates were brought back to green
+  - the resulting cleanup was upstreamed earlier via PR `#553`
+
+### Current follow-on work now happening on this branch
+
+The active work is no longer the `slice_bridge` cleanup itself. The branch has moved on to a broader CPU/GPU-symmetric tensor-native linalg AD refactor whose immediate goal is to keep high-level AD formulas device-agnostic while pushing runtime-specific details down into `tenferro-linalg-prims` and `tenferro-prims`.
+
+Authoritative execution context:
+
+- worktree: `/home/shinaoka/tensor4all/tenferro-rs/.worktrees/complex-real-unary-substrate`
+- branch: `feat/complex-real-unary-substrate`
+- do not use the repository root checkout at `/home/shinaoka/tensor4all/tenferro-rs` as the source of truth for this refactor; that checkout was previously dirty/stale
+
+### Follow-on phases already completed after this replan
+
+- Backend ownership/layout cleanup is complete.
+  - `tenferro-linalg-prims/src/backend/cpu.rs` now dispatches through local per-op CPU modules instead of old `cpu_faer` / `cpu_lapack` / `cpu_tensor_impl` path imports.
+  - `tenferro-linalg-prims/src/backend/hip.rs` now routes through mirrored per-op HIP stub modules instead of open-coded inline unsupported bodies.
+- Tensor view ergonomics is complete.
+  - Added `Tensor::mT()` and `Tensor::mH()` in `tenferro-tensor/src/tensor/views/basic.rs`.
+  - Added `Tensor<Complex32>::real()/imag()` and `Tensor<Complex64>::real()/imag()` in `tenferro-tensor/src/tensor/views/complex.rs`.
+  - Important semantic note: `real()` / `imag()` currently require a resolved complex tensor because they are built on `view_as_real()`, which rejects lazy-conjugated inputs.
+- Functional diagonal substrate is complete in the shared linalg layer.
+  - Added `tenferro-linalg/src/ad_helpers/diagonal.rs` with `diag_extract`, `trace_tensor`, `diag_scatter`, `diag_embed`, and `diag_scatter_add`.
+  - Added `prims_bridge::semiring_core_single_input_into(...)` in `tenferro-linalg/src/prims_bridge.rs`.
+  - `diag_extract` reorders raw `Tensor::diagonal(&[(0, 1)])` output from `[batch..., diag]` to `[diag, batch...]` so downstream linalg formulas stay matrix-first.
+  - `diag_scatter` auto-dispatches between `AntiTrace` and `AntiDiag` based on input shape.
+  - `diag_scatter_add` makes a functional copy via `Tensor::stack(&[base], 0)?.squeeze_dim(0)?` before updating the diagonal.
+- CUDA diagonal execution parity is complete.
+  - `tenferro-prims/src/cuda/mod.rs` now includes `mod diagonal;` and `CudaPlanStorage::DeferredDiagonal`.
+  - `tenferro-prims/src/cuda/execution.rs` now validates/plans/dispatches `Trace`, `AntiTrace`, and `AntiDiag` instead of rejecting them.
+
+Validation already completed for the post-replan substrate phases:
+
+- `cargo test -p tenferro-linalg-prims --release --lib`
+- `cargo test -p tenferro-linalg --release --lib`
+- `cargo test -p tenferro-tensor --release --lib`
+- `cargo test -p tenferro-prims --release --lib`
+- focused sweep also passed:
+  - `cargo fmt --all --check`
+  - `cargo test -p tenferro-tensor --release --lib`
+  - `cargo test -p tenferro-prims --release --lib`
+  - `cargo test -p tenferro-linalg-prims --release --lib`
+  - `cargo test -p tenferro-linalg --release --lib`
+
+### Current active problem: solve-class AD rewrite
+
+The immediate in-progress task is rewriting solve-class AD rules tensor-natively, without falling back to `extract_data`, `tensor_from_data`, raw `Vec<T>` temporaries, or manual flat-buffer batch loops.
+
+Primary target files:
+
+- `tenferro-linalg/src/rrules/linear_systems.rs`
+- `tenferro-linalg/src/frules/linear_systems.rs`
+
+Current state of those files:
+
+- they still contain `extract_data(...)`
+- they still reconstruct outputs through `tensor_from_data(...)`
+- they still use direct raw-slice backend helpers such as `backend_mat_mul`, `backend_solve`, and `backend_solve_tri`
+- they still spell the batched linear algebra as manual per-batch flat-buffer loops
+
+Preparatory helper already added for this rewrite:
+
+- `tenferro-linalg/src/ad_helpers/views.rs`
+  - `matrix_transpose`
+  - `matrix_adjoint`
+  - `rhs_to_matrix`
+  - `matrix_to_rhs`
+
+Why this helper exists:
+
+- tenferro linalg treats the first two axes as matrix axes and the trailing axes as batch axes
+- `Tensor::mT()` / `Tensor::mH()` transpose the last two axes, so they are not the correct helper for batched linalg formulas in this crate
+- solve/QR/SVD rewrites therefore need first-two-axis matrix helpers
+
+Important current technical issue:
+
+- `matrix_adjoint` currently uses `tensor.conj()`
+- `Tensor::conj()` requires `T: tenferro_algebra::Conjugate`
+- the existing solve AD rule signatures are currently generic over `T: KernelLinalgScalar`
+- `KernelLinalgScalar` is only `LinalgScalar`; it does not itself imply `tenferro_algebra::Conjugate`
+- therefore the next implementation step must decide whether to:
+  - add an explicit `T: Conjugate` bound to the solve-class helpers/rules that need lazy tensor conjugation, or
+  - split transpose-only and adjoint-using paths more carefully so real-only formulas stay on `matrix_transpose` while complex-capable code opts into `matrix_adjoint`
+
+The newly added `ad_helpers/views.rs` had just been introduced when work paused and had not yet been recompiled/tested in the current segment. The next agent should validate that file first, then continue the solve rewrite.
+
 ---
 
 ## Current Baseline
