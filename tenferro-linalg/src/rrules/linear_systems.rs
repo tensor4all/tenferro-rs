@@ -77,7 +77,9 @@ pub fn solve_triangular_rrule<T, C>(
 ) -> AdResult<SolveGrad<T>>
 where
     T: KernelLinalgScalar + tenferro_algebra::Conjugate,
-    C: backend::TensorLinalgContextFor<T> + tenferro_prims::TensorResolveConjContextFor<T>,
+    C: backend::TensorLinalgContextFor<T>
+        + tenferro_prims::TensorResolveConjContextFor<T>
+        + tenferro_prims::TensorMetadataContextFor,
     C::Backend: 'static,
 {
     let x = solve_triangular(ctx, a, b, upper).map_err(to_ad_err)?;
@@ -108,9 +110,9 @@ where
     let neg_g_xh = prims_bridge::batched_gemm_alpha_tensors(ctx, &g, &x_h, n, nrhs, n, -T::one())
         .map_err(to_ad_err)?;
     let grad_a = if upper {
-        neg_g_xh.triu(0)
+        tenferro_prims::tensor_ops::triu(ctx, &neg_g_xh, 0).map_err(to_ad_err)?
     } else {
-        neg_g_xh.tril(0)
+        tenferro_prims::tensor_ops::tril(ctx, &neg_g_xh, 0).map_err(to_ad_err)?
     };
 
     Ok(SolveGrad {

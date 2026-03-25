@@ -6,6 +6,7 @@ mod combine;
 mod completion_event;
 mod constructor_fallibility;
 mod constructors_phase2;
+mod device_alloc;
 mod representation_helpers;
 mod rng_constructors;
 

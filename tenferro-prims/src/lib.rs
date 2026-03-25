@@ -17,6 +17,9 @@
 //!   bool/int casts and `where`
 //! - [`TensorRngPrims`] for dense eager RNG constructors such as `rand` and
 //!   `randn`
+//! - [`TensorIndexingPrims`] for index-based selection, gathering, and
+//!   scattering
+//! - [`TensorSortPrims`] for sort, argsort, and top-k operations
 //!
 //! Most families follow the same plan/execute pattern:
 //!
@@ -188,6 +191,7 @@ mod infra;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod shape_helpers;
+pub mod tensor_ops;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.
@@ -205,7 +209,11 @@ pub use cpu::CpuComplexRealPlan;
 #[doc(hidden)]
 pub use cpu::CpuComplexScalePlan;
 #[doc(hidden)]
+pub use cpu::CpuIndexingPlan;
+#[doc(hidden)]
 pub use cpu::CpuScalarPlan;
+#[doc(hidden)]
+pub use cpu::CpuSortPlan;
 pub use cpu::*;
 pub use families::*;
 pub use infra::*;
