@@ -3,7 +3,7 @@ use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::{AdResult, Differentiable, DualValue};
 
-use crate::api::{einsum, einsum_with_subscripts};
+use crate::api::{einsum, einsum_with_subscripts, einsum_with_subscripts_into};
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
 use crate::syntax::nested::NestedEinsum;
@@ -82,13 +82,19 @@ where
 
     for k in 0..n {
         let mut rev_inputs_subs = vec![subs.output.clone()];
-        let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-
+        // Wirtinger VJP: conjugate non-cotangent operands so that the
+        // reverse einsum computes  grad_k = einsum(cot, conj(other_ops)...).
+        // For real scalars conj() is a no-op (zero-cost flag toggle on Tensor).
+        let mut conj_store: Vec<Tensor<Alg::Scalar>> = Vec::new();
         for (i, &op) in operands.iter().enumerate() {
             if i != k {
                 rev_inputs_subs.push(subs.inputs[i].clone());
-                rev_operands.push(op);
+                conj_store.push(op.conj());
             }
+        }
+        let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
+        for c in &conj_store {
+            rev_operands.push(c);
         }
 
         let rev_subs = Subscripts {
@@ -158,16 +164,37 @@ where
             let mut ops: Vec<&Tensor<Alg::Scalar>> = primals.to_vec();
             ops[k] = tangent_k;
 
-            let term = if let Some(nested) = nested {
-                execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?
-            } else {
-                einsum_with_subscripts::<Alg, Backend>(ctx, subs, &ops, None)?
-            };
-
-            result = Some(match result {
-                None => term,
-                Some(existing) => Tensor::<Alg::Scalar>::accumulate_tangent(existing, &term),
-            });
+            match &mut result {
+                None => {
+                    let term = if let Some(nested) = nested {
+                        execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?
+                    } else {
+                        einsum_with_subscripts::<Alg, Backend>(ctx, subs, &ops, None)?
+                    };
+                    result = Some(term);
+                }
+                Some(existing) => {
+                    let one = <Alg::Scalar as num_traits::One>::one();
+                    if nested.is_some() {
+                        // Nested einsum does not support _into; materialize + add.
+                        let term =
+                            execute_nested::<Alg, Backend>(ctx, nested.unwrap(), &ops, None)?;
+                        einsum_with_subscripts_into::<Alg, Backend>(
+                            ctx,
+                            subs,
+                            &[&term],
+                            one,
+                            one,
+                            existing,
+                            None,
+                        )?;
+                    } else {
+                        einsum_with_subscripts_into::<Alg, Backend>(
+                            ctx, subs, &ops, one, one, existing, None,
+                        )?;
+                    }
+                }
+            }
         }
     }
 
@@ -227,9 +254,12 @@ where
 
     for k in 0..n {
         let mut rev_inputs_subs = vec![subs.output.clone()];
-        for (i, _) in primals.iter().enumerate() {
+        // Wirtinger VJP: conjugate non-cotangent operands (same as einsum_rrule).
+        let mut conj_store: Vec<Tensor<Alg::Scalar>> = Vec::new();
+        for (i, &op) in primals.iter().enumerate() {
             if i != k {
                 rev_inputs_subs.push(subs.inputs[i].clone());
+                conj_store.push(op.conj());
             }
         }
         let rev_subs = Subscripts {
@@ -238,18 +268,14 @@ where
         };
 
         let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-        for (i, &op) in primals.iter().enumerate() {
-            if i != k {
-                rev_operands.push(op);
-            }
+        for c in &conj_store {
+            rev_operands.push(c);
         }
         let grad_k = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
 
         let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent_tangent];
-        for (i, &op) in primals.iter().enumerate() {
-            if i != k {
-                ops.push(op);
-            }
+        for c in &conj_store {
+            ops.push(c);
         }
         let mut hvp_k = Some(einsum_with_subscripts::<Alg, Backend>(
             ctx, &rev_subs, &ops, None,
@@ -261,16 +287,27 @@ where
             }
             if let Some(tangent_j) = *tangent_j_opt {
                 let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-                for (i, &op) in primals.iter().enumerate() {
+                // conj_store has one entry per i != k, in order.
+                let mut ci = 0;
+                for (i, _) in primals.iter().enumerate() {
                     if i != k {
-                        ops.push(if i == j { tangent_j } else { op });
+                        ops.push(if i == j { tangent_j } else { &conj_store[ci] });
+                        ci += 1;
                     }
                 }
-                let term = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &ops, None)?;
-                hvp_k = Some(match hvp_k {
-                    None => term,
-                    Some(existing) => Tensor::<Alg::Scalar>::accumulate_tangent(existing, &term),
-                });
+                match &mut hvp_k {
+                    None => {
+                        hvp_k = Some(einsum_with_subscripts::<Alg, Backend>(
+                            ctx, &rev_subs, &ops, None,
+                        )?);
+                    }
+                    Some(existing) => {
+                        let one = <Alg::Scalar as num_traits::One>::one();
+                        einsum_with_subscripts_into::<Alg, Backend>(
+                            ctx, &rev_subs, &ops, one, one, existing, None,
+                        )?;
+                    }
+                }
             }
         }
 

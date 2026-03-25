@@ -92,17 +92,18 @@ fn einsum_rrule_matches_finite_difference_c64_one_stage_directional() {
         (grads[0].clone(), grads[1].clone())
     };
 
-    let objective = |a_now: &DenseTensor<Complex64>| -> Complex64 {
+    // Wirtinger VJP check: Re(sum(conj(grad) * d)) ~ real FD of Re(sum(conj(cot) * f(a)))
+    let objective = |a_now: &DenseTensor<Complex64>| -> f64 {
         let ad_a = AdTensor::new_primal(a_now.clone());
         let ad_b = AdTensor::new_primal(b.clone());
         let out = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
-        sum_mul_c64(out.primal(), &cotangent)
+        sum_conj_mul_real_c64(out.primal(), &cotangent)
     };
 
     let fd = (objective(&add_scaled_c64(&a, &da, eps)) - objective(&add_scaled_c64(&a, &da, -eps)))
         / (2.0 * eps);
-    let predicted = sum_mul_c64(&grad_a, &da);
-    let err = (predicted - fd).norm();
+    let predicted = sum_conj_mul_real_c64(&grad_a, &da);
+    let err = (predicted - fd).abs();
     assert!(
         err < 1e-8,
         "einsum complex rrule directional fd mismatch: {err}"
@@ -114,17 +115,17 @@ fn einsum_rrule_matches_finite_difference_c64_one_stage_directional() {
         Complex64::new(0.13, 0.09),
         Complex64::new(-0.05, -0.08),
     ]);
-    let objective_b = |b_now: &DenseTensor<Complex64>| -> Complex64 {
+    let objective_b = |b_now: &DenseTensor<Complex64>| -> f64 {
         let ad_a = AdTensor::new_primal(a.clone());
         let ad_b = AdTensor::new_primal(b_now.clone());
         let out = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
-        sum_mul_c64(out.primal(), &cotangent)
+        sum_conj_mul_real_c64(out.primal(), &cotangent)
     };
     let fd_b = (objective_b(&add_scaled_c64(&b, &db, eps))
         - objective_b(&add_scaled_c64(&b, &db, -eps)))
         / (2.0 * eps);
-    let predicted_b = sum_mul_c64(&grad_b, &db);
-    let err_b = (predicted_b - fd_b).norm();
+    let predicted_b = sum_conj_mul_real_c64(&grad_b, &db);
+    let err_b = (predicted_b - fd_b).abs();
     assert!(
         err_b < 1e-8,
         "einsum complex rrule dB directional fd mismatch: {err_b}"
