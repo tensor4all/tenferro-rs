@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
 /// Data storage for tensor elements.
@@ -374,6 +375,87 @@ impl<T> DataBuffer<T> {
                     },
                 )
             }
+        }
+    }
+}
+
+impl<T: Scalar> DataBuffer<T> {
+    /// Allocate a zero-filled buffer on the specified device.
+    ///
+    /// For CPU (`MainMemory`) this creates an owned `Vec<T>` filled with
+    /// `T::zero()`. For CUDA GPU memory (when the `cuda` feature is enabled)
+    /// this allocates directly on the device and zero-fills via host-to-device
+    /// copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported memory spaces or if device allocation
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::DataBuffer;
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let buf = DataBuffer::<f64>::zeros_on_device(4, LogicalMemorySpace::MainMemory).unwrap();
+    /// assert_eq!(buf.as_slice().unwrap(), &[0.0; 4]);
+    /// ```
+    pub fn zeros_on_device(n_elements: usize, memory_space: LogicalMemorySpace) -> Result<Self> {
+        match memory_space {
+            LogicalMemorySpace::MainMemory => Ok(Self::from_vec(vec![T::zero(); n_elements])),
+            #[cfg(feature = "cuda")]
+            LogicalMemorySpace::GpuMemory { .. } => {
+                crate::cuda_runtime::alloc_zeros_gpu(n_elements, memory_space)
+            }
+            _ => Err(Error::DeviceError(format!(
+                "zeros_on_device: unsupported memory space {memory_space:?}"
+            ))),
+        }
+    }
+
+    /// Allocate an uninitialized buffer on the specified device.
+    ///
+    /// For CPU (`MainMemory`) this creates an owned `Vec<T>` with the
+    /// requested capacity. The contents are **unspecified** (currently
+    /// zero-filled for safety, but callers must not rely on that).
+    ///
+    /// For CUDA GPU memory (when the `cuda` feature is enabled) this
+    /// allocates device memory without initialization.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unsupported memory spaces or if device allocation
+    /// fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro_tensor::DataBuffer;
+    /// use tenferro_device::LogicalMemorySpace;
+    ///
+    /// let buf = DataBuffer::<f64>::allocate_uninit_on_device(4, LogicalMemorySpace::MainMemory).unwrap();
+    /// assert_eq!(buf.len(), 4);
+    /// ```
+    pub fn allocate_uninit_on_device(
+        n_elements: usize,
+        memory_space: LogicalMemorySpace,
+    ) -> Result<Self> {
+        match memory_space {
+            LogicalMemorySpace::MainMemory => {
+                // Zero-fill for safety on CPU; the "uninit" contract means
+                // callers will overwrite, but we avoid UB by initializing.
+                Ok(Self::from_vec(vec![T::zero(); n_elements]))
+            }
+            #[cfg(feature = "cuda")]
+            LogicalMemorySpace::GpuMemory { .. } => {
+                // True uninit allocation on GPU — caller is responsible for
+                // writing before reading.
+                crate::cuda_runtime::alloc_gpu_uninit(n_elements, memory_space)
+            }
+            _ => Err(Error::DeviceError(format!(
+                "allocate_uninit_on_device: unsupported memory space {memory_space:?}"
+            ))),
         }
     }
 }

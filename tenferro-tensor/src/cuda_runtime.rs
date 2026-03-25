@@ -38,6 +38,28 @@ fn alloc_gpu_buffer<T: Scalar>(len: usize, target: LogicalMemorySpace) -> Result
     Ok(buffer_from_cuda_allocation(allocation, target))
 }
 
+/// Allocate a zero-filled GPU buffer.
+///
+/// Uses host-to-device copy from a zeroed host vector as a portable fallback.
+pub(crate) fn alloc_zeros_gpu<T: Scalar>(
+    len: usize,
+    target: LogicalMemorySpace,
+) -> Result<DataBuffer<T>> {
+    if len == 0 {
+        return alloc_gpu_buffer(len, target);
+    }
+    let zeros = vec![T::zero(); len];
+    copy_host_buffer_to_gpu(&zeros, target)
+}
+
+/// Allocate an uninitialized GPU buffer.
+pub(crate) fn alloc_gpu_uninit<T: Scalar>(
+    len: usize,
+    target: LogicalMemorySpace,
+) -> Result<DataBuffer<T>> {
+    alloc_gpu_buffer(len, target)
+}
+
 fn copy_host_buffer_to_gpu<T: Scalar>(
     host_data: &[T],
     target: LogicalMemorySpace,
