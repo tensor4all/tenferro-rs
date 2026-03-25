@@ -68,9 +68,9 @@
 //! let mut ctx = CpuContext::new(4);
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col);
-//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col).unwrap();
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col).unwrap();
 //!
 //! let desc = SemiringCoreDescriptor::BatchedGemm {
 //!     batch_dims: vec![],
@@ -108,8 +108,8 @@
 //! let mut ctx = CpuContext::new(4);
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-//! let mut c = Tensor::<f64>::zeros(&[3], mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+//! let mut c = Tensor::<f64>::zeros(&[3], mem, col).unwrap();
 //!
 //! let desc = ScalarPrimsDescriptor::Reduction {
 //!     modes_a: vec![0, 1],

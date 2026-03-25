@@ -110,7 +110,7 @@ where
 /// let col = MemoryOrder::ColumnMajor;
 /// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 /// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
-/// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
+/// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col).unwrap();
 /// einsum_binary_into::<Standard<f64>, CpuBackend>(
 ///     &mut ctx, "ij,jk->ik", &a, &b, 1.0, 0.0, &mut c, None
 /// )
@@ -159,7 +159,7 @@ where
 /// let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 /// let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
 /// let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
-/// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col);
+/// let mut c = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, col).unwrap();
 /// einsum_binary_with_subscripts_into::<Standard<f64>, CpuBackend>(
 ///     &mut ctx, &subs, &a, &b, 1.0, 0.0, &mut c, None
 /// ).unwrap();

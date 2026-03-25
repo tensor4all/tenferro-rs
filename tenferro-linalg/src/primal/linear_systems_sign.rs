@@ -363,6 +363,18 @@ where
     Ok(output)
 }
 
+/// Cast an `i32` permutation mask tensor to the target scalar type.
+///
+/// This trait is `#[doc(hidden)]` and not intended for external use.
+/// It is called internally by the LU decomposition to build permutation
+/// matrices.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Internal dispatch: used by `lu` internally.
+/// use tenferro_linalg::LiftPermutationMatrixTensor;
+/// ```
 #[doc(hidden)]
 pub trait LiftPermutationMatrixTensor<C>: LinalgScalar {
     fn lift_permutation_matrix_tensor(ctx: &mut C, input: &Tensor<i32>) -> Result<Tensor<Self>>;

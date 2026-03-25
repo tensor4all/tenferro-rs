@@ -13,6 +13,20 @@ fn batched_identity<T: KernelLinalgScalar>(
 }
 
 /// Raise a square matrix to an integer power.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::matrix_power;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 2.0], &[2, 2], col).unwrap();
+/// let a3 = matrix_power(&mut ctx, &a, 3).unwrap();
+/// assert_eq!(a3.dims(), &[2, 2]);
+/// ```
 pub fn matrix_power<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,

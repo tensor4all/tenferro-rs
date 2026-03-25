@@ -10,7 +10,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert_eq!(t.dims(), &[2, 3]);
     /// ```
     pub fn dims(&self) -> &[usize] {
@@ -22,7 +22,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let _strides = t.strides();
     /// ```
     pub fn strides(&self) -> &[isize] {
@@ -34,7 +34,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert_eq!(t.offset(), 0);
     /// ```
     pub fn offset(&self) -> isize {
@@ -46,7 +46,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let _buf = t.buffer();
     /// ```
     pub fn buffer(&self) -> &crate::DataBuffer<T> {
@@ -58,7 +58,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let _buf = t.buffer_mut();
     /// ```
     pub fn buffer_mut(&mut self) -> &mut crate::DataBuffer<T> {
@@ -70,7 +70,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert_eq!(t.ndim(), 2);
     /// ```
     pub fn ndim(&self) -> usize {
@@ -82,7 +82,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert_eq!(t.len(), 6);
     /// ```
     pub fn len(&self) -> usize {
@@ -94,7 +94,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[0, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[0, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(t.is_empty());
     /// ```
     pub fn is_empty(&self) -> bool {
@@ -106,7 +106,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert_eq!(t.logical_memory_space(), LogicalMemorySpace::MainMemory);
     /// ```
     pub fn logical_memory_space(&self) -> LogicalMemorySpace {
@@ -118,7 +118,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(t.preferred_compute_device().is_none());
     /// ```
     pub fn preferred_compute_device(&self) -> Option<ComputeDevice> {
@@ -130,7 +130,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// t.set_preferred_compute_device(Some(ComputeDevice::Cpu { device_id: 0 }));
     /// ```
     pub fn set_preferred_compute_device(&mut self, device: Option<ComputeDevice>) {
@@ -142,7 +142,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(!t.is_conjugated());
     /// ```
     pub fn is_conjugated(&self) -> bool {
@@ -154,7 +154,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(t.fw_grad().is_none());
     /// ```
     pub fn fw_grad(&self) -> Option<&Tensor<T>> {
@@ -166,7 +166,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(!t.has_fw_grad());
     /// ```
     pub fn has_fw_grad(&self) -> bool {
@@ -178,8 +178,8 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let grad = Tensor::<f64>::ones(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
+    /// let grad = Tensor::<f64>::ones(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// t.set_fw_grad(grad);
     /// ```
     pub fn set_fw_grad(&mut self, grad: Tensor<T>) {
@@ -191,8 +191,8 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// t.set_fw_grad(Tensor::<f64>::ones(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor));
+    /// let mut t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
+    /// t.set_fw_grad(Tensor::<f64>::ones(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap());
     /// let _grad = t.detach_fw_grad().unwrap();
     /// ```
     pub fn detach_fw_grad(&mut self) -> Option<Tensor<T>> {
@@ -204,7 +204,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let _devices = t.effective_compute_devices(OpKind::BatchedGemm).unwrap();
     /// ```
     pub fn effective_compute_devices(&self, op_kind: OpKind) -> Result<Vec<ComputeDevice>> {

@@ -46,7 +46,7 @@ pub(crate) use core::DynTensorTyped;
 pub use core::{
     AdMode, CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
-    Tensor,
+    Tensor, TensorScalarDowncast,
 };
 pub(crate) use core::{AdTensor, DynTensor};
 pub use error::{Error, Result};

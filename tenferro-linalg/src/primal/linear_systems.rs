@@ -17,6 +17,21 @@ fn inverse_rhs<T: KernelLinalgScalar>(
 }
 
 /// Solve a square linear system `A x = b`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::solve;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 1.0, 1.0, 3.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 7.0], &[2], col).unwrap();
+/// let x = solve(&mut ctx, &a, &b).unwrap();
+/// assert_eq!(x.dims(), &[2]);
+/// ```
 pub fn solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
@@ -30,6 +45,22 @@ where
 }
 
 /// Solve a square linear system with numerical status information.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::solve_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], col).unwrap();
+/// let result = solve_ex(&mut ctx, &a, &b).unwrap();
+/// assert_eq!(result.solution.dims(), &[2]);
+/// assert_eq!(result.info.len(), 1);
+/// ```
 pub fn solve_ex<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
@@ -49,6 +80,20 @@ where
 }
 
 /// Compute the inverse of a square matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::inv;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], col).unwrap();
+/// let inv_a = inv(&mut ctx, &a).unwrap();
+/// assert_eq!(inv_a.dims(), &[2, 2]);
+/// ```
 pub fn inv<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
     T: KernelLinalgScalar,
@@ -66,6 +111,21 @@ where
 }
 
 /// Compute the inverse with numerical status information.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::inv_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], col).unwrap();
+/// let result = inv_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.inverse.dims(), &[2, 2]);
+/// assert_eq!(result.info.len(), 1);
+/// ```
 pub fn inv_ex<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<InvExResult<T>>
 where
     T: KernelLinalgScalar,
@@ -93,6 +153,20 @@ where
 }
 
 /// Compute the determinant of a square matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::det;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 2.0], &[2, 2], col).unwrap();
+/// let d = det(&mut ctx, &a).unwrap();
+/// assert_eq!(d.ndim(), 0);
+/// ```
 pub fn det<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>
@@ -127,6 +201,17 @@ where
     )
 }
 
+/// Dispatch trait for [`slogdet`] — selects real or complex implementation.
+///
+/// This trait is `#[doc(hidden)]` and not intended for external use.
+/// Use [`slogdet`] directly instead.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Internal dispatch: users should call `slogdet` instead.
+/// use tenferro_linalg::SlogdetDispatch;
+/// ```
 #[doc(hidden)]
 pub trait SlogdetDispatch<C>: KernelLinalgScalar {
     fn slogdet_dispatch(
@@ -389,6 +474,21 @@ where
 }
 
 /// Compute sign and log-absolute-determinant of a square matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::slogdet;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 3.0], &[2, 2], col).unwrap();
+/// let result = slogdet(&mut ctx, &a).unwrap();
+/// assert_eq!(result.sign.ndim(), 0);
+/// assert_eq!(result.logabsdet.ndim(), 0);
+/// ```
 pub fn slogdet<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,

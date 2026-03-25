@@ -91,23 +91,23 @@
 //! use tenferro_algebra::Standard;
 //! // Batched GEMM: 10 independent matrix multiplications in one call
 //! // A: (batch=10, m=3, k=4), B: (batch=10, k=4, n=5) -> C: (batch=10, m=3, n=5)
-//! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
-//! let b = Tensor::<f64>::zeros(&[10, 4, 5], LogicalMemorySpace::MainMemory, col);
+//! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[10, 4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 //! let c =
 //!     einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bij,bjk->bik", &[&a, &b], None).unwrap();
 //! assert_eq!(c.dims(), &[10, 3, 5]);
 //!
 //! // Multiple batch dimensions: (batch1=2, batch2=3, m, k) x (batch1=2, batch2=3, k, n)
-//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col);
-//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col);
+//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col).unwrap();
 //! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "abij,abjk->abik", &[&a, &b], None)
 //!     .unwrap();
 //! assert_eq!(c.dims(), &[2, 3, 4, 6]);
 //!
 //! // Broadcast batch: A has batch dim, B is shared across batch
 //! // A: (batch=10, m=3, k=4), B: (k=4, n=5) -> C: (batch=10, m=3, n=5)
-//! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
+//! let a = Tensor::<f64>::zeros(&[10, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 //! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "bij,jk->bik", &[&a, &b], None)
 //!     .unwrap();
 //! assert_eq!(c.dims(), &[10, 3, 5]);
@@ -124,22 +124,22 @@
 //!
 //! // Batched matrix multiply with ellipsis: works with any number of batch dims
 //! // 1 batch dim: A[2,3,4] @ B[2,4,5] -> C[2,3,5]
-//! let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col);
-//! let b = Tensor::<f64>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col);
+//! let a = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[2, 4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 //! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
 //!     .unwrap();
 //! assert_eq!(c.dims(), &[2, 3, 5]);
 //!
 //! // 2 batch dims: A[2,3,4,5] @ B[2,3,5,6] -> C[2,3,4,6]
-//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col);
-//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col);
+//! let a = Tensor::<f64>::zeros(&[2, 3, 4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[2, 3, 5, 6], LogicalMemorySpace::MainMemory, col).unwrap();
 //! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
 //!     .unwrap();
 //! assert_eq!(c.dims(), &[2, 3, 4, 6]);
 //!
 //! // No batch dims: A[3,4] @ B[4,5] -> C[3,5]
-//! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 //! let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...jk->...ik", &[&a, &b], None)
 //!     .unwrap();
 //! assert_eq!(c.dims(), &[3, 5]);
@@ -192,9 +192,9 @@
 //! let mut ctx = CpuContext::new(4);
 //! let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 //! let tree = ContractionTree::optimize(&subs, &[&[3, 4], &[4, 5]]).unwrap();
-//! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col);
-//! let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[4, 5], LogicalMemorySpace::MainMemory, col).unwrap();
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], LogicalMemorySpace::MainMemory, col).unwrap();
 //!
 //! // Hot loop: reuse output buffer, zero allocation per iteration
 //! for _ in 0..1000 {
@@ -232,8 +232,8 @@
 //! let col = MemoryOrder::ColumnMajor;
 //! let mut gpu_ctx = /* CudaContext from BackendRegistry */;
 //!
-//! let a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col).unwrap();
 //!
 //! // Both einsum calls submit work to the GPU and return immediately.
 //! // The second call detects c's pending event and chains on the stream.
@@ -259,8 +259,8 @@
 //! // In production, obtain memory spaces via BackendRegistry (future API).
 //! let gpu_mem = LogicalMemorySpace::GpuMemory { device_id: 0 };
 //!
-//! let mut a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col);
-//! let mut b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col);
+//! let mut a = Tensor::<f64>::zeros(&[3, 4], gpu_mem, col).unwrap();
+//! let mut b = Tensor::<f64>::zeros(&[4, 5], gpu_mem, col).unwrap();
 //!
 //! // Pin tensors to CUDA device 1 (overrides automatic device selection).
 //! // This works when CUDA device 1 can access GpuMemory { device_id: 0 }

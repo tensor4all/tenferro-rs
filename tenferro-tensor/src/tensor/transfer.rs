@@ -9,7 +9,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let t2 = t.to_memory_space_async(LogicalMemorySpace::MainMemory).unwrap();
     /// assert_eq!(t2.dims(), &[2, 3]);
     /// ```
@@ -39,7 +39,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// t.wait();
     /// ```
     pub fn wait(&self) {
@@ -51,7 +51,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(t.is_ready());
     /// ```
     pub fn is_ready(&self) -> bool {

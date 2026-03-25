@@ -116,8 +116,6 @@ where
 
         let rev_output = subs.inputs[k].clone();
 
-        let rev_output = subs.inputs[k].clone();
-
         // Detect output-only labels: labels that appear in the reverse output
         // but not in any reverse input. This happens when the forward einsum
         // contracted labels that we now need to reconstruct (e.g., trace "ii->").

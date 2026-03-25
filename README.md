@@ -59,6 +59,8 @@ A general-purpose tensor computation library in Rust with CPU support today and 
 - Automatic differentiation (VJP/JVP)
 - C FFI for Julia/Python integration
 
+Extension crates (tropical semiring, burn bridge, ndarray interop) live under `extension/`.
+
 Built on top of [strided-rs](https://github.com/tensor4all/strided-rs) for cache-optimized strided array operations.
 
 ## GPU Status
@@ -68,6 +70,15 @@ basic allocation, CPU<->GPU transfer, and a small set of runtime-loaded
 primitive execution paths, but broader GPU coverage is still incomplete and
 HIP remains a stub. Outside explicit GPU implementation tasks, do not assume a
 GPU code path works just because the type, trait, or FFI entrypoint exists.
+
+## Two API paths
+
+tenferro offers two ways to work with tensors:
+
+- **Typed path:** `tenferro_tensor::Tensor<T>` -- fixed scalar type at compile time. Use with `tenferro-prims` + `tenferro-einsum` for computation. Best when you know the scalar type and do not need automatic gradient tracking.
+- **Dynamic AD path:** `tenferro::Tensor` -- dynamic scalar type with automatic differentiation (VJP/JVP). Use the `tenferro` umbrella crate. Best when you need gradients.
+
+The quickstart below uses the typed path; the [Autodiff quickstart](#autodiff-quickstart) shows the dynamic AD path.
 
 ## Quickstart
 
@@ -93,17 +104,30 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 fn main() {
     let col = MemoryOrder::ColumnMajor;
     let mem = LogicalMemorySpace::MainMemory;
+    // CpuContext::new(4) creates a CPU execution context using 4 threads.
     let mut ctx = CpuContext::new(4);
 
+    // Data is in column-major order: columns are [1,2] and [3,4].
     let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], col).unwrap();
     let b = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], col).unwrap();
+    // Standard<f64> = standard arithmetic (multiply and add) over f64.
     let c = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "ij,jk->ik", &[&a, &b], None)
         .unwrap();
 
     assert_eq!(c.dims(), &[2, 2]);
     assert_eq!(c.logical_memory_space(), mem);
+
+    // Read individual elements (column-major indexing)
+    assert_eq!(c.get(&[0, 0]), Some(&23.0));
+    // Extract all values as a Vec (column-major order)
+    let values = c.to_vec();
+    assert_eq!(values.len(), 4);
 }
 ```
+
+> **Convenience for row-major data:** If your input data is in row-major
+> (C-style) order, use `Tensor::<f64>::from_row_major_slice(&data, &dims)`
+> instead of specifying `MemoryOrder::RowMajor` manually.
 
 ### Autodiff quickstart
 
@@ -137,10 +161,90 @@ fn main() {
     let grads = grad(&[&loss], &[&x], None, GradOptions::default()).unwrap();
     // grads[0] ≈ exp(x) = [e^1, e^2, e^3]
     assert!(grads[0].is_some());
+
+    // 5. Extract actual gradient values.
+    let gx = grads[0].as_ref().unwrap();
+    let values = gx.try_to_vec::<f64>().unwrap();
+    // values ≈ [e^1, e^2, e^3]
+    assert!((values[0] - 1.0_f64.exp()).abs() < 1e-10);
 }
 ```
 
 For more examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor`.
+
+### Linear algebra quickstart
+
+```toml
+[dependencies]
+tenferro-device = { path = "../tenferro-rs/tenferro-device" }
+tenferro-tensor = { path = "../tenferro-rs/tenferro-tensor" }
+tenferro-prims  = { path = "../tenferro-rs/tenferro-prims" }
+tenferro-linalg = { path = "../tenferro-rs/tenferro-linalg" }
+```
+
+```rust
+use tenferro_linalg::{svd, solve};
+use tenferro_prims::CpuContext;
+use tenferro_tensor::{MemoryOrder, Tensor};
+
+fn main() {
+    let col = MemoryOrder::ColumnMajor;
+    let mut ctx = CpuContext::new(1);
+
+    // SVD: A = U * diag(S) * Vt
+    let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 2.0], &[2, 2], col).unwrap();
+    let result = svd(&mut ctx, &a, None).unwrap();
+    assert_eq!(result.s.dims(), &[2]); // singular values
+
+    // Solve: A x = b
+    let b = Tensor::<f64>::from_slice(&[5.0, 6.0], &[2, 1], col).unwrap();
+    let x = solve(&mut ctx, &a, &b).unwrap();
+    assert_eq!(x.dims(), &[2, 1]);
+}
+```
+
+### Tropical algebra quickstart
+
+Extension crate `tenferro-tropical` provides tropical semiring algebras
+(`MaxPlus`, `MinPlus`, `MaxMul`) that plug into the same einsum engine.
+
+```toml
+[dependencies]
+tenferro-algebra  = { path = "../tenferro-rs/tenferro-algebra" }
+tenferro-tensor   = { path = "../tenferro-rs/tenferro-tensor" }
+tenferro-prims    = { path = "../tenferro-rs/tenferro-prims" }
+tenferro-einsum   = { path = "../tenferro-rs/tenferro-einsum" }
+tenferro-tropical = { path = "../tenferro-rs/extension/tenferro-tropical" }
+```
+
+```rust
+use tenferro_einsum::einsum;
+use tenferro_prims::{CpuBackend, CpuContext};
+use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+
+fn main() {
+    let col = MemoryOrder::ColumnMajor;
+    let mut ctx = CpuContext::new(1);
+
+    // MaxPlus: "+" becomes max, "*" becomes +
+    let a = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(1.0), MaxPlus(2.0), MaxPlus(3.0), MaxPlus(4.0)],
+        &[2, 2], col,
+    ).unwrap();
+    let b = Tensor::<MaxPlus<f64>>::from_slice(
+        &[MaxPlus(5.0), MaxPlus(6.0), MaxPlus(7.0), MaxPlus(8.0)],
+        &[2, 2], col,
+    ).unwrap();
+
+    // C[i,k] = max_j(A[i,j] + B[j,k])
+    let c = einsum::<MaxPlusAlgebra<f64>, CpuBackend>(
+        &mut ctx, "ij,jk->ik", &[&a, &b], None,
+    ).unwrap();
+    assert_eq!(c.dims(), &[2, 2]);
+    assert_eq!(c.get(&[0, 0]), Some(&MaxPlus(9.0))); // max(1+5, 3+6)
+}
+```
 
 ### Influences
 

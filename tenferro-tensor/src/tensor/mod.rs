@@ -197,7 +197,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(t.is_contiguous());
     /// ```
     pub fn is_contiguous(&self) -> bool {
@@ -210,7 +210,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// assert!(t.is_col_major_contiguous());
     /// ```
     pub fn is_col_major_contiguous(&self) -> bool {
@@ -222,7 +222,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// assert!(t.is_row_major_contiguous());
     /// ```
     pub fn is_row_major_contiguous(&self) -> bool {

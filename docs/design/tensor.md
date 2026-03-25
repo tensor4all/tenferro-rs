@@ -29,15 +29,16 @@ enum BufferInner<T> {
 }
 
 /// Multi-dimensional dense tensor.
-pub struct Tensor<T: Scalar> {
+pub struct Tensor<T> {
     buffer: DataBuffer<T>,
-    dims: Vec<usize>,
-    strides: Vec<isize>,
+    dims: Arc<[usize]>,
+    strides: Arc<[isize]>,
     offset: isize,
     logical_memory_space: LogicalMemorySpace,
     preferred_compute_device: Option<ComputeDevice>,
     event: Option<CompletionEvent>,
     conjugated: bool,     // lazy conjugation flag
+    fw_grad: Option<Box<Tensor<T>>>,  // forward-mode AD tangent
 }
 ```
 
@@ -46,7 +47,8 @@ Key design points:
 - `clone()` is shallow (Arc refcount++, O(1))
 - `conj()` is lazy (Arc clone + conjugated flag flip, O(1))
 - Deep copy uses explicit materialization (`MakeContiguous`)
-- Fields: `dims` (`Vec<usize>`), `strides` (`Vec<isize>`), `offset` (`isize`) — no `SmallVec`
+- Fields: `dims` (`Arc<[usize]>`), `strides` (`Arc<[isize]>`), `offset` (`isize`) — no `SmallVec`
+- `fw_grad: Option<Box<Tensor<T>>>` carries the forward-mode AD tangent
 - `MemoryOrder` is only used at allocation time, **not stored** on the tensor
 - No direct dependency on strided-rs — prims backends build `StridedView` from
   `buffer.as_slice()` + `dims()` + `strides()` + `offset()`
@@ -57,18 +59,18 @@ Key design points:
 
 ```rust
 impl<T: Scalar> Tensor<T> {
-    pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
-    pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
+    pub fn zeros(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Result<Self>;
+    pub fn ones(dims: &[usize], memory_space: LogicalMemorySpace, order: MemoryOrder) -> Result<Self>;
     pub fn from_slice(data: &[T], dims: &[usize], order: MemoryOrder) -> Result<Self>;
     pub fn from_vec(data: Vec<T>, dims: &[usize], strides: &[isize], offset: isize) -> Result<Self>;
-    pub fn eye(n: usize, memory_space: LogicalMemorySpace, order: MemoryOrder) -> Self;
+    pub fn eye(n: usize, memory_space: LogicalMemorySpace, order: MemoryOrder) -> Result<Self>;
 }
 ```
 
 ## Metadata
 
 ```rust
-impl<T: Scalar> Tensor<T> {
+impl<T> Tensor<T> {
     pub fn dims(&self) -> &[usize];
     pub fn strides(&self) -> &[isize];
     pub fn ndim(&self) -> usize;
@@ -92,7 +94,7 @@ the same underlying buffer with only metadata (dims, strides, offset)
 changed.
 
 ```rust
-impl<T: Scalar> Tensor<T> {
+impl<T> Tensor<T> {
     pub fn permute(&self, perm: &[usize]) -> Result<Tensor<T>>;
     pub fn broadcast(&self, target_dims: &[usize]) -> Result<Tensor<T>>;
     pub fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>>;
@@ -108,11 +110,19 @@ impl<T: Scalar> Tensor<T> {
 impl<T: Scalar> Tensor<T> {
     pub fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
     pub fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
-    pub fn is_contiguous(&self) -> bool;
-    pub fn conj(&self) -> Tensor<T>;       // lazy: Arc clone + flag flip
-    pub fn into_conj(self) -> Tensor<T>;   // lazy: flag flip only (no refcount)
     pub fn tril(&self, diagonal: isize) -> Tensor<T>;
     pub fn triu(&self, diagonal: isize) -> Tensor<T>;
+    pub fn get(&self, index: &[usize]) -> Option<&T>;
+    pub fn to_vec(&self) -> Vec<T>;
+}
+
+impl<T: Conjugate> Tensor<T> {
+    pub fn conj(&self) -> Tensor<T>;       // lazy: Arc clone + flag flip
+    pub fn into_conj(self) -> Tensor<T>;   // lazy: flag flip only (no refcount)
+}
+
+impl<T> Tensor<T> {
+    pub fn is_contiguous(&self) -> bool;
     pub fn wait(&self);
     pub fn is_ready(&self) -> bool;
 }
@@ -121,7 +131,7 @@ impl<T: Scalar> Tensor<T> {
 ## Explicit Memory Movement
 
 ```rust
-impl<T: Scalar> Tensor<T> {
+impl<T> Tensor<T> {
     /// Asynchronous explicit move between logical memory spaces.
     /// Same source/destination space: zero-copy no-op.
     /// Different spaces: explicit transfer (never implicit in ops).
@@ -193,43 +203,52 @@ Because `DataBuffer<T>` uses `Arc`, view operations are zero-copy: they
 share the underlying buffer and only change metadata (dims, strides, offset).
 
 ```rust
-impl<T: Scalar> Tensor<T> {
+impl<T> Tensor<T> {
     // Zero-copy metadata operations → return Tensor (Arc shared)
     fn permute(&self, perm: &[usize]) -> Result<Tensor<T>>;
     fn broadcast(&self, dims: &[usize]) -> Result<Tensor<T>>;
     fn diagonal(&self, axes: &[(usize, usize)]) -> Result<Tensor<T>>;
+    fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>>;
     fn select(&self, dim: usize, index: usize) -> Result<Tensor<T>>;
     fn narrow(&self, dim: usize, start: usize, length: usize) -> Result<Tensor<T>>;
+    fn unsqueeze(&self, dim: isize) -> Result<Tensor<T>>;
+    fn squeeze(&self) -> Result<Tensor<T>>;
+    fn mT(&self) -> Result<Tensor<T>>;  // matrix transpose (last two axes)
+}
 
+impl<T: Scalar> Tensor<T> {
     // Consume self → Tensor (may reuse buffer if unique)
     fn into_contiguous(self, order: MemoryOrder) -> Tensor<T>;
-    fn into_conj(self) -> Tensor<T>;
-
     // Borrow → new Tensor (Arc shared or new allocation)
     fn contiguous(&self, order: MemoryOrder) -> Tensor<T>;
+}
+
+impl<T: Conjugate> Tensor<T> {
+    fn into_conj(self) -> Tensor<T>;
     fn conj(&self) -> Tensor<T>;  // lazy: Arc clone + flag flip
+    fn mH(&self) -> Result<Tensor<T>>;  // conjugate transpose
 }
 ```
 
 **einsum takes &Tensor references:**
 
 ```rust
-pub fn einsum<T, A, B>(
-    ctx: &mut B::Context,
+pub fn einsum<Alg, Backend>(
+    ctx: &mut BackendContext<Alg, Backend>,
     subscripts: &str,
-    operands: &[&Tensor<T>],
+    operands: &[&Tensor<Alg::Scalar>],
     size_dict: Option<&HashMap<u32, usize>>,
-) -> Result<Tensor<T>>
+) -> Result<Tensor<Alg::Scalar>>
 where
-    T: Scalar + HasAlgebra<Algebra = A>,
-    A: Semiring,
-    B: EinsumBackend<A>;
+    Alg: Semiring,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
+    Backend: EinsumBackend<Alg>;
 ```
 
 ### Ownership Safety Examples
 
 ```rust
-let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, ColumnMajor);
+let a = Tensor::<f64>::zeros(&[3, 4], LogicalMemorySpace::MainMemory, ColumnMajor).unwrap();
 
 // permute returns Tensor (Arc shared, zero-copy)
 let at = a.permute(&[1, 0]).unwrap();
@@ -272,7 +291,7 @@ let d = einsum("ij,jk->ik", &[&c, &e_gpu])?;
 //  → detects c.event → sets up stream dependency → no CPU wait
 
 // CPU data access triggers implicit synchronization
-let tv = d.tensor_view();  // tensor_view() calls wait() internally
+let slice = d.buffer().as_slice();  // as_slice() calls wait() internally
 ```
 
 For CPU tensors, `event` is always `None` with zero overhead.
@@ -295,7 +314,7 @@ enum CompletionEventInner {
 
 | Tier | Methods | Event handling | User visibility |
 |------|---------|---------------|-----------------|
-| **Public (CPU-read)** | `tensor_view()`, `permute()`, `broadcast()`, `diagonal()`, etc. | **Wait** if pending, return ready data | Yes |
+| **Public (CPU-read)** | `buffer().as_slice()`, `permute()`, `broadcast()`, `diagonal()`, etc. | **Wait** if pending, return ready data | Yes |
 | **Internal (pipeline)** | `pub(crate) as_operand_view()` | **Propagate** event | No (crate-internal) |
 | **Accelerator ops** | `einsum` (takes `&[&Tensor]`) | Calls `as_operand_view()` internally, **detects** events → stream dependency | Yes (transparent) |
 

@@ -29,6 +29,15 @@ mod private {
     use crate::KernelLinalgScalar;
     use tenferro_device::Result;
 
+    /// Slice-level CPU linalg operations dispatched to faer or LAPACK.
+    ///
+    /// This trait is internal and sealed by the `private` module.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Internal trait: not accessible outside the crate.
+    /// ```
     pub trait CpuLinalgOps: KernelLinalgScalar + super::LapackEigScalar {
         fn solve_slices(
             a: &[Self],
