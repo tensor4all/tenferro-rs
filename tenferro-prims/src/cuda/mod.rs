@@ -43,6 +43,7 @@ mod complex_scale;
 mod custom;
 mod execution;
 mod family_common;
+mod indexing;
 mod metadata;
 mod metadata_cast;
 mod planning;

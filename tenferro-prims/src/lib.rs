@@ -17,6 +17,8 @@
 //!   bool/int casts and `where`
 //! - [`TensorRngPrims`] for dense eager RNG constructors such as `rand` and
 //!   `randn`
+//! - [`TensorIndexingPrims`] for index-based selection, gathering, and
+//!   scattering
 //!
 //! Most families follow the same plan/execute pattern:
 //!
@@ -205,6 +207,8 @@ pub use cpu::CpuAnalyticPlan;
 pub use cpu::CpuComplexRealPlan;
 #[doc(hidden)]
 pub use cpu::CpuComplexScalePlan;
+#[doc(hidden)]
+pub use cpu::CpuIndexingPlan;
 #[doc(hidden)]
 pub use cpu::CpuScalarPlan;
 pub use cpu::*;

@@ -2,6 +2,7 @@ mod analytic;
 mod complex_real;
 mod complex_scale;
 mod context;
+mod indexing;
 // Metadata families are overwrite-based and use erased integer/bool tensor handles.
 mod metadata;
 mod metadata_cast;
@@ -14,6 +15,7 @@ pub use analytic::*;
 pub use complex_real::*;
 pub use complex_scale::*;
 pub use context::*;
+pub use indexing::*;
 pub use metadata::*;
 pub use metadata_cast::*;
 pub use rng::*;
