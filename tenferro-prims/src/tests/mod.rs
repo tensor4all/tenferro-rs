@@ -12,6 +12,7 @@ mod organization;
 mod rng_phase1;
 mod scalar_phase1;
 mod scalar_phase2;
+mod sort_phase1;
 mod tensor_ops;
 
 use tenferro_algebra::Standard;

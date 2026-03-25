@@ -24,6 +24,7 @@ mod rng;
 mod scalar;
 #[cfg(feature = "gemm-blas")]
 mod scratch;
+mod sort;
 
 pub use analytic::CpuAnalyticPlan;
 pub use complex_real::CpuComplexRealPlan;
@@ -33,6 +34,7 @@ pub use indexing::CpuIndexingPlan;
 pub use plan::CpuPlan;
 pub use rng::CpuRngPlan;
 pub use scalar::CpuScalarPlan;
+pub use sort::CpuSortPlan;
 
 /// Convert a CPU tensor to an immutable strided view.
 pub(crate) fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {

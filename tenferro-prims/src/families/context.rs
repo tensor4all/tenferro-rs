@@ -5,7 +5,7 @@ use tenferro_tensor::Tensor;
 use crate::{
     CpuBackend, CpuContext, CudaBackend, CudaContext, RocmBackend, RocmContext,
     TensorComplexRealPrims, TensorComplexScalePrims, TensorIndexingPrims, TensorMetadataContextFor,
-    TensorMetadataPrims, TensorScalarPrims, TensorSemiringCore,
+    TensorMetadataPrims, TensorScalarPrims, TensorSemiringCore, TensorSortPrims,
 };
 
 /// Bridge trait that binds a semiring execution context to its backend.
@@ -168,6 +168,35 @@ pub trait TensorIndexingContextFor<Alg: Algebra> {
     type IndexingBackend: TensorIndexingPrims<Alg, Context = Self>;
 }
 
+/// Bridge trait that binds a sort-family execution context to its backend.
+///
+/// High-level crates use this trait to stay generic over runtime context types
+/// while dispatching sort, argsort, and top-k operations through the correct
+/// backend marker type.
+///
+/// # Examples
+///
+/// ```ignore
+/// use tenferro_algebra::Standard;
+/// use tenferro_prims::{CpuContext, TensorSortContextFor};
+///
+/// fn accepts_context<C>(_: &mut C)
+/// where
+///     C: TensorSortContextFor<Standard<f64>>,
+/// {
+/// }
+///
+/// let mut ctx = CpuContext::new(1);
+/// accepts_context(&mut ctx);
+/// ```
+pub trait TensorSortContextFor<Alg: Algebra>
+where
+    Alg::Scalar: PartialOrd,
+{
+    /// Backend associated with this context for the sort family.
+    type SortBackend: TensorSortPrims<Alg, Context = Self>;
+}
+
 impl<Alg> TensorSemiringContextFor<Alg> for CpuContext
 where
     Alg: Semiring,
@@ -224,6 +253,15 @@ where
     CpuBackend: TensorIndexingPrims<Alg, Context = CpuContext>,
 {
     type IndexingBackend = CpuBackend;
+}
+
+impl<Alg> TensorSortContextFor<Alg> for CpuContext
+where
+    Alg: Algebra,
+    Alg::Scalar: PartialOrd,
+    CpuBackend: TensorSortPrims<Alg, Context = CpuContext>,
+{
+    type SortBackend = CpuBackend;
 }
 
 impl<Alg> TensorSemiringContextFor<Alg> for CudaContext
@@ -284,6 +322,15 @@ where
     type IndexingBackend = CudaBackend;
 }
 
+impl<Alg> TensorSortContextFor<Alg> for CudaContext
+where
+    Alg: Algebra,
+    Alg::Scalar: PartialOrd,
+    CudaBackend: TensorSortPrims<Alg, Context = CudaContext>,
+{
+    type SortBackend = CudaBackend;
+}
+
 impl<Alg> TensorSemiringContextFor<Alg> for RocmContext
 where
     Alg: Semiring,
@@ -340,4 +387,13 @@ where
     RocmBackend: TensorIndexingPrims<Alg, Context = RocmContext>,
 {
     type IndexingBackend = RocmBackend;
+}
+
+impl<Alg> TensorSortContextFor<Alg> for RocmContext
+where
+    Alg: Algebra,
+    Alg::Scalar: PartialOrd,
+    RocmBackend: TensorSortPrims<Alg, Context = RocmContext>,
+{
+    type SortBackend = RocmBackend;
 }

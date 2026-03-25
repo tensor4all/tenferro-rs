@@ -19,6 +19,7 @@
 //!   `randn`
 //! - [`TensorIndexingPrims`] for index-based selection, gathering, and
 //!   scattering
+//! - [`TensorSortPrims`] for sort, argsort, and top-k operations
 //!
 //! Most families follow the same plan/execute pattern:
 //!
@@ -211,6 +212,8 @@ pub use cpu::CpuComplexScalePlan;
 pub use cpu::CpuIndexingPlan;
 #[doc(hidden)]
 pub use cpu::CpuScalarPlan;
+#[doc(hidden)]
+pub use cpu::CpuSortPlan;
 pub use cpu::*;
 pub use families::*;
 pub use infra::*;

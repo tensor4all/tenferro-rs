@@ -10,6 +10,7 @@ mod rng;
 mod scalar;
 mod semiring_core;
 mod semiring_fast_path;
+mod sort;
 
 pub use analytic::*;
 pub use complex_real::*;
@@ -22,3 +23,4 @@ pub use rng::*;
 pub use scalar::*;
 pub use semiring_core::*;
 pub use semiring_fast_path::*;
+pub use sort::*;

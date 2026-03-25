@@ -52,6 +52,7 @@ mod rng;
 mod runtime;
 mod scalar;
 mod scalar_type;
+mod sort;
 mod wrappers;
 
 pub use analytic::CudaAnalyticPlan;
