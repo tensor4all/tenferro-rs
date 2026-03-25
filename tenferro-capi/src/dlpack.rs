@@ -142,7 +142,7 @@ impl Drop for ImportedDLPackGuard {
     }
 }
 
-fn row_major_strides(dims: &[usize]) -> tenferro_device::Result<Vec<isize>> {
+pub(crate) fn row_major_strides(dims: &[usize]) -> tenferro_device::Result<Vec<isize>> {
     let ndim = dims.len();
     if ndim == 0 {
         return Ok(vec![]);
