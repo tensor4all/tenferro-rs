@@ -3,6 +3,7 @@ mod combine;
 mod constructors;
 mod constructors_special;
 mod data_ops;
+mod element_access;
 mod metadata;
 mod structural;
 mod transfer;
