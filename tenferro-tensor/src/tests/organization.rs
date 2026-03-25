@@ -41,6 +41,7 @@ fn tensor_modules_stay_under_size_guideline() {
         "src/tensor/metadata.rs",
         "src/tensor/views.rs",
         "src/tensor/data_ops.rs",
+        "src/tensor/element_access.rs",
         "src/tensor/transfer.rs",
         "src/tensor/autodiff.rs",
     ] {

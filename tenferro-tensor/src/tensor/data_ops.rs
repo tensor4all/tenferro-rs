@@ -16,51 +16,6 @@ enum TriangularHalf {
 }
 
 impl<T> Tensor<T> {
-    /// Access a single element by multi-dimensional index.
-    ///
-    /// Returns `None` if the index is out of bounds or the underlying buffer
-    /// is not CPU-accessible.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tenferro_tensor::{MemoryOrder, Tensor};
-    ///
-    /// // Column-major: data is laid out column by column.
-    /// // from_slice with ColumnMajor and data [1,2,3,4] gives:
-    /// //   column 0 = [1, 2], column 1 = [3, 4]
-    /// //   matrix = [[1, 3],
-    /// //             [2, 4]]
-    /// let t = Tensor::<f64>::from_slice(
-    ///     &[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor,
-    /// ).unwrap();
-    /// assert_eq!(t.get(&[0, 0]), Some(&1.0));
-    /// assert_eq!(t.get(&[1, 0]), Some(&2.0));
-    /// assert_eq!(t.get(&[0, 1]), Some(&3.0));
-    /// assert_eq!(t.get(&[1, 1]), Some(&4.0));
-    /// assert_eq!(t.get(&[2, 0]), None); // out of bounds
-    /// ```
-    pub fn get(&self, index: &[usize]) -> Option<&T> {
-        if index.len() != self.dims.len() {
-            return None;
-        }
-        for (i, &idx) in index.iter().enumerate() {
-            if idx >= self.dims[i] {
-                return None;
-            }
-        }
-        let pos: isize = index.iter().zip(self.strides.iter()).try_fold(
-            self.offset,
-            |acc, (&idx, &stride)| {
-                (idx as isize)
-                    .checked_mul(stride)
-                    .and_then(|v| acc.checked_add(v))
-            },
-        )?;
-        let pos = usize::try_from(pos).ok()?;
-        self.buffer.as_slice().and_then(|s| s.get(pos))
-    }
-
     /// Return a lazily-conjugated tensor (shared buffer, flag flip).
     ///
     /// # Examples
@@ -118,6 +73,47 @@ impl<T> Tensor<T> {
 }
 
 impl<T: Scalar> Tensor<T> {
+    /// Create a deep copy with an exclusively-owned contiguous buffer.
+    ///
+    /// Unlike [`clone`](Clone::clone) (which is a shallow `Arc` refcount
+    /// bump), this always allocates a fresh buffer and copies element data.
+    /// The returned tensor is contiguous in column-major order and has
+    /// `buffer.is_unique() == true`, so [`set`](Tensor::set) and
+    /// [`get_mut`](Tensor::get_mut) are guaranteed to succeed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let a = Tensor::<f64>::from_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor,
+    /// ).unwrap();
+    /// let b = a.clone(); // shallow — shares buffer
+    ///
+    /// let mut c = a.deep_clone(); // deep — independent buffer
+    /// c.set(&[0, 0], 99.0).unwrap();
+    /// assert_eq!(c.get(&[0, 0]), Some(&99.0));
+    /// assert_eq!(a.get(&[0, 0]), Some(&1.0)); // original unchanged
+    /// ```
+    pub fn deep_clone(&self) -> Tensor<T> {
+        self.wait();
+        let order = MemoryOrder::ColumnMajor;
+        let mut data = vec![T::zero(); self.len()];
+        if !data.is_empty() {
+            let dst_strides = compute_contiguous_strides(&self.dims, order);
+            copy_strided(
+                self.cpu_backed_slice_or_panic("deep_clone"),
+                &self.dims,
+                &self.strides,
+                self.offset,
+                &mut data,
+                &dst_strides,
+            );
+        }
+        self.materialized_from_vec(data, order)
+    }
+
     /// Return a contiguous copy of this tensor in the given memory order.
     ///
     /// `order` controls the materialized output buffer only. It does not change
