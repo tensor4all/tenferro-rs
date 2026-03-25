@@ -3250,3 +3250,52 @@ fn einsum_binary_diag_ii_j_to_j() {
     assert_eq!(data[0], 30.0);
     assert_eq!(data[1], 45.0);
 }
+
+#[test]
+fn einsum_rrule_trace_produces_identity_gradient() {
+    let mut ctx = CpuContext::new(1);
+    // A = [[1, 3], [2, 4]] (col-major), trace = 5
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2]);
+    // grad should be identity * cotangent = [[1,0],[0,1]]
+    let g = &grads[0];
+    let vals = to_col_major_vec(g);
+    // col-major logical order: (0,0), (1,0), (0,1), (1,1)
+    assert!((vals[0] - 1.0).abs() < 1e-12, "grad[0,0]={}", vals[0]);
+    assert!((vals[1] - 0.0).abs() < 1e-12, "grad[1,0]={}", vals[1]);
+    assert!((vals[2] - 0.0).abs() < 1e-12, "grad[0,1]={}", vals[2]);
+    assert!((vals[3] - 1.0).abs() < 1e-12, "grad[1,1]={}", vals[3]);
+}
+
+#[test]
+fn einsum_rrule_trace_with_nonunit_cotangent() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[3.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    // grad = 3 * I = [[3,0],[0,3]]
+    let vals = to_col_major_vec(&grads[0]);
+    assert!((vals[0] - 3.0).abs() < 1e-12, "grad[0,0]={}", vals[0]);
+    assert!((vals[1] - 0.0).abs() < 1e-12, "grad[1,0]={}", vals[1]);
+    assert!((vals[2] - 0.0).abs() < 1e-12, "grad[0,1]={}", vals[2]);
+    assert!((vals[3] - 3.0).abs() < 1e-12, "grad[1,1]={}", vals[3]);
+}
+
+#[test]
+fn einsum_frule_trace_propagates_tangent() {
+    use tidu::DualValue;
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.1, 0.2, 0.3, 0.4], &[2, 2], COL).unwrap();
+    let dual_a = DualValue::with_tangent(a, da).unwrap();
+    let out = dual_einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&dual_a]).unwrap();
+    // primal: trace = 1 + 4 = 5
+    let primal = out.primal().buffer().as_slice().unwrap()[0];
+    assert!((primal - 5.0).abs() < 1e-12);
+    // tangent: d(trace)/dA . dA = trace(dA) = 0.1 + 0.4 = 0.5
+    let tangent = out.tangent().unwrap().buffer().as_slice().unwrap()[0];
+    assert!((tangent - 0.5).abs() < 1e-12);
+}
