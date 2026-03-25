@@ -1,4 +1,5 @@
 use super::*;
+use num_complex::Complex64;
 use tenferro_device::{Error, LogicalMemorySpace};
 
 #[test]
@@ -258,5 +259,79 @@ fn select_and_narrow_cover_success_and_bounds_checks() {
     assert!(
         matches!(narrow_range_err, Error::InvalidArgument(ref msg) if msg.contains("range out of bounds")),
         "expected narrow range error, got {narrow_range_err:?}"
+    );
+}
+
+#[test]
+fn m_t_swaps_last_two_axes_without_copying_data() {
+    let base = col_tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let transposed = base.mT().unwrap();
+
+    assert_eq!(transposed.dims(), &[3, 2]);
+    assert_eq!(transposed.strides(), &[2, 1]);
+    assert_eq!(
+        transposed.buffer().as_slice().unwrap().as_ptr(),
+        base.buffer().as_slice().unwrap().as_ptr()
+    );
+    assert_eq!(
+        transposed
+            .contiguous(MemoryOrder::ColumnMajor)
+            .buffer()
+            .as_slice()
+            .unwrap(),
+        &[1.0, 3.0, 5.0, 2.0, 4.0, 6.0]
+    );
+}
+
+#[test]
+fn m_t_and_m_h_require_matrix_rank() {
+    let vector = col_tensor(&[1.0, 2.0], &[2]);
+
+    let mt_err = vector.mT().unwrap_err();
+    assert!(
+        matches!(mt_err, Error::InvalidArgument(ref msg) if msg.contains("at least 2 dimensions")),
+        "expected rank error from mT, got {mt_err:?}"
+    );
+
+    let mh_err = vector.mH().unwrap_err();
+    assert!(
+        matches!(mh_err, Error::InvalidArgument(ref msg) if msg.contains("at least 2 dimensions")),
+        "expected rank error from mH, got {mh_err:?}"
+    );
+}
+
+#[test]
+fn m_h_swaps_last_two_axes_and_sets_lazy_conjugation() {
+    let base = Tensor::<Complex64>::from_slice(
+        &[
+            Complex64::new(1.0, 10.0),
+            Complex64::new(2.0, 20.0),
+            Complex64::new(3.0, 30.0),
+            Complex64::new(4.0, 40.0),
+        ],
+        &[2, 2],
+        MemoryOrder::ColumnMajor,
+    )
+    .unwrap();
+    let hermitian = base.mH().unwrap();
+
+    assert_eq!(hermitian.dims(), &[2, 2]);
+    assert_eq!(hermitian.strides(), &[2, 1]);
+    assert!(hermitian.is_conjugated());
+    assert_eq!(
+        hermitian.buffer().as_ptr().unwrap() as usize,
+        base.buffer().as_ptr().unwrap() as usize
+    );
+
+    let logical = hermitian.materialize_logical_contiguous(MemoryOrder::ColumnMajor);
+    assert!(!logical.is_conjugated());
+    assert_eq!(
+        logical.buffer().as_slice().unwrap(),
+        &[
+            Complex64::new(1.0, -10.0),
+            Complex64::new(3.0, -30.0),
+            Complex64::new(2.0, -20.0),
+            Complex64::new(4.0, -40.0),
+        ]
     );
 }

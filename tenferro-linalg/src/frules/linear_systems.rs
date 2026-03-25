@@ -34,40 +34,34 @@ where
         'static + tenferro_prims::TensorAnalyticPrims<tenferro_algebra::Standard<T>, Context = C>,
 {
     // dx = A^{-1} (db - dA x)
-    let x = solve(ctx, a, b)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(a)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    let x = solve(ctx, a, b).map_err(to_ad_err)?;
+    let (n, batch_dims) = validate_square(a).map_err(to_ad_err)?;
     let rhs = backend::tensor_helpers::validate_solve_rhs_shape(b, n, batch_dims, "solve_frule")
         .map_err(to_ad_err)?;
     let nrhs = rhs.nrhs;
+    let sr = rhs.structural_rank;
 
-    let (a_data, _) = extract_data(a)?;
-    let (x_data, _) = extract_data(&x)?;
-    let (da_data, _) = extract_data(tangent_a)?;
-    let (db_data, _) = extract_data(tangent_b)?;
+    // Promote x and tangent_b to matrix form [n, nrhs, batch...]
+    let x_mat = rhs_to_matrix(&x, sr).map_err(to_ad_err)?;
+    let db_mat = rhs_to_matrix(tangent_b, sr).map_err(to_ad_err)?;
 
-    let mut dx_data = vec![T::zero(); n * nrhs * bc];
+    // dA @ x  (n×n @ n×nrhs = n×nrhs)
+    let da_x = prims_bridge::batched_gemm_with_semiring_tensors(ctx, tangent_a, &x_mat, n, n, nrhs)
+        .map_err(to_ad_err)?;
 
-    for batch in 0..bc {
-        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
-        let db_b = &db_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+    // db - dA @ x
+    let rhs_tangent = prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &db_mat,
+        &da_x,
+        tenferro_prims::ScalarBinaryOp::Sub,
+    )
+    .map_err(to_ad_err)?;
 
-        // dA x (n×nrhs)
-        let da_x = backend_mat_mul(ctx, da_b, n, n, x_b, nrhs)?;
-        // db - dA x
-        let rhs = sub_vec(db_b, &da_x);
-        // A^{-1} (db - dA x)
-        let dx_b_vec = backend_solve(ctx, a_b, &rhs, n, nrhs)?;
-        dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b_vec);
-    }
+    // dx = A^{-1} (db - dA x)
+    let dx_mat = solve(ctx, a, &rhs_tangent).map_err(to_ad_err)?;
+    let dx = matrix_to_rhs(dx_mat, sr).map_err(to_ad_err)?;
 
-    let dims = rhs.output_dims;
-    let dx = tensor_from_data(dx_data, &dims)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((x, dx))
 }
 
@@ -115,53 +109,45 @@ where
     }
 
     // dX = A^{-1} (dB - proj(dA) X), with projection to the triangular tangent space.
-    let x = solve_triangular(ctx, a, b, upper)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-
-    let (n, batch_dims) = validate_square(a)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    let x = solve_triangular(ctx, a, b, upper).map_err(to_ad_err)?;
+    let (n, _) = validate_square(a).map_err(to_ad_err)?;
     let rhs = backend::tensor_helpers::validate_solve_rhs_shape(
         b,
         n,
-        batch_dims,
+        &a.dims()[2..],
         "solve_triangular_frule",
     )
     .map_err(to_ad_err)?;
     let nrhs = rhs.nrhs;
+    let sr = rhs.structural_rank;
 
-    let (a_data, _) = extract_data(a)?;
-    let (x_data, _) = extract_data(&x)?;
-    let (da_data, _) = extract_data(tangent_a)?;
-    let (db_data, _) = extract_data(tangent_b)?;
+    let x_mat = rhs_to_matrix(&x, sr).map_err(to_ad_err)?;
+    let db_mat = rhs_to_matrix(tangent_b, sr).map_err(to_ad_err)?;
 
-    let mut dx_data = vec![T::zero(); n * nrhs * bc];
+    // Project dA onto the same triangular structure as A.
+    let da_proj = if upper {
+        tangent_a.triu(0)
+    } else {
+        tangent_a.tril(0)
+    };
 
-    for batch in 0..bc {
-        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-        let x_b = &x_data[batch * n * nrhs..(batch + 1) * n * nrhs];
-        let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
-        let db_b = &db_data[batch * n * nrhs..(batch + 1) * n * nrhs];
+    // proj(dA) @ x
+    let da_x = prims_bridge::batched_gemm_with_semiring_tensors(ctx, &da_proj, &x_mat, n, n, nrhs)
+        .map_err(to_ad_err)?;
 
-        // Project dA onto the same triangular structure as A.
-        let da_proj = if upper { triu(da_b, n) } else { tril(da_b, n) };
+    // dB - proj(dA) @ x
+    let rhs_tangent = prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &db_mat,
+        &da_x,
+        tenferro_prims::ScalarBinaryOp::Sub,
+    )
+    .map_err(to_ad_err)?;
 
-        // dA * x, treating x as n x nrhs in column-major layout.
-        let da_x = prims_bridge::batched_gemm_with_semiring_context(ctx, &da_proj, n, n, x_b, nrhs)
-            .map_err(to_ad_err)?;
+    // dX = solve_triangular(A, rhs_tangent, upper)
+    let dx_mat = solve_triangular(ctx, a, &rhs_tangent, upper).map_err(to_ad_err)?;
+    let dx = matrix_to_rhs(dx_mat, sr).map_err(to_ad_err)?;
 
-        // RHS tangent: dB - dA * x
-        let rhs = sub_vec(db_b, &da_x);
-
-        // dX from triangular solve with the same structure.
-        let dx_b = backend_solve_tri(ctx, a_b, &rhs, n, nrhs, upper)?;
-
-        dx_data[batch * n * nrhs..(batch + 1) * n * nrhs].copy_from_slice(&dx_b);
-    }
-
-    let dims = rhs.output_dims;
-    let dx = tensor_from_data(dx_data, &dims)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((x, dx))
 }
 
@@ -199,30 +185,14 @@ where
         .map_err(to_ad_err)?;
 
     // dB = -B dA B where B = A^{-1}
-    let b_inv = inv(ctx, tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    let b_inv = inv(ctx, tensor).map_err(to_ad_err)?;
+    let (n, _) = validate_square(tensor).map_err(to_ad_err)?;
 
-    let (binv_data, _) = extract_data(&b_inv)?;
-    let (da_data, _) = extract_data(tangent)?;
+    let b_da = prims_bridge::batched_gemm_with_semiring_tensors(ctx, &b_inv, tangent, n, n, n)
+        .map_err(to_ad_err)?;
+    let db = prims_bridge::batched_gemm_alpha_tensors(ctx, &b_da, &b_inv, n, n, n, -T::one())
+        .map_err(to_ad_err)?;
 
-    let mut db_data = vec![T::zero(); n * n * bc];
-
-    for batch in 0..bc {
-        let b_b = &binv_data[batch * n * n..(batch + 1) * n * n];
-        let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
-
-        let b_da = backend_mat_mul(ctx, b_b, n, n, da_b, n)?;
-        let b_da_b = backend_mat_mul(ctx, &b_da, n, n, b_b, n)?;
-        let neg = scale_vec(&b_da_b, -T::one());
-        db_data[batch * n * n..(batch + 1) * n * n].copy_from_slice(&neg);
-    }
-
-    let dims = output_dims(&[n, n], batch_dims);
-    let db = tensor_from_data(db_data, &dims)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((b_inv, db))
 }
 
@@ -262,34 +232,23 @@ where
         .map_err(to_ad_err)?;
 
     // d(det) = det(A) * tr(A^{-1} dA)
-    let d = det(ctx, tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    let d = det(ctx, tensor).map_err(to_ad_err)?;
+    let (n, _) = validate_square(tensor).map_err(to_ad_err)?;
 
-    let (a_data, _) = extract_data(tensor)?;
-    let (d_data, _) = extract_data(&d)?;
-    let (da_data, _) = extract_data(tangent)?;
+    let a_inv = inv(ctx, tensor).map_err(to_ad_err)?;
+    let a_inv_da = prims_bridge::batched_gemm_with_semiring_tensors(ctx, &a_inv, tangent, n, n, n)
+        .map_err(to_ad_err)?;
+    let trace = trace_tensor(ctx, &a_inv_da).map_err(to_ad_err)?;
 
-    let mut dd_data = vec![T::zero(); bc];
+    // dd = det(A) * trace
+    let dd = prims_bridge::scalar_binary_same_shape(
+        ctx,
+        &d,
+        &trace,
+        tenferro_prims::ScalarBinaryOp::Mul,
+    )
+    .map_err(to_ad_err)?;
 
-    for batch in 0..bc {
-        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-        let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
-
-        let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
-        let a_inv_da = backend_mat_mul(ctx, &a_inv, n, n, da_b, n)?;
-        let mut trace = T::zero();
-        for i in 0..n {
-            trace = trace + a_inv_da[i + i * n];
-        }
-        dd_data[batch] = d_data[batch] * trace;
-    }
-
-    let dims = output_dims(&[], batch_dims);
-    let dd = tensor_from_data(dd_data, &dims)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
     Ok((d, dd))
 }
 
@@ -330,37 +289,25 @@ where
         .map_err(to_ad_err)?;
 
     // d(logabsdet) = Re(tr(A^{-1} dA)), d(sign) = 0 (for real)
-    let result = slogdet(ctx, tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let (n, batch_dims) = validate_square(tensor)
-        .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?;
-    let bc = batch_count(batch_dims);
+    let result = slogdet(ctx, tensor).map_err(to_ad_err)?;
+    let (n, batch_dims) = validate_square(tensor).map_err(to_ad_err)?;
 
-    let (a_data, _) = extract_data(tensor)?;
-    let (da_data, _) = extract_data(tangent)?;
+    let a_inv = inv(ctx, tensor).map_err(to_ad_err)?;
+    let a_inv_da = prims_bridge::batched_gemm_with_semiring_tensors(ctx, &a_inv, tangent, n, n, n)
+        .map_err(to_ad_err)?;
+    let dlog = trace_tensor(ctx, &a_inv_da).map_err(to_ad_err)?;
 
-    let mut dlog_data = vec![T::zero(); bc];
-    let dsign_data = vec![T::zero(); bc];
+    let dsign_dims = output_dims(&[], batch_dims);
+    let dsign = Tensor::zeros(
+        &dsign_dims,
+        tensor.logical_memory_space(),
+        MemoryOrder::ColumnMajor,
+    )
+    .map_err(to_ad_err)?;
 
-    for batch in 0..bc {
-        let a_b = &a_data[batch * n * n..(batch + 1) * n * n];
-        let da_b = &da_data[batch * n * n..(batch + 1) * n * n];
-
-        let a_inv = backend_solve(ctx, a_b, &eye::<T>(n), n, n)?;
-        let a_inv_da = backend_mat_mul(ctx, &a_inv, n, n, da_b, n)?;
-        let mut trace = T::zero();
-        for i in 0..n {
-            trace = trace + a_inv_da[i + i * n];
-        }
-        dlog_data[batch] = trace;
-    }
-
-    let dims = output_dims(&[], batch_dims);
     let dresult = SlogdetResult {
-        sign: tensor_from_data(dsign_data, &dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
-        logabsdet: tensor_from_data(dlog_data, &dims)
-            .map_err(|e| chainrules_core::AutodiffError::InvalidArgument(e.to_string()))?,
+        sign: dsign,
+        logabsdet: dlog,
     };
     Ok((result, dresult))
 }
