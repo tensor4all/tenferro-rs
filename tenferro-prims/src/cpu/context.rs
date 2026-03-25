@@ -138,9 +138,9 @@ impl CpuContext {
 /// let mut ctx = CpuContext::try_new(4).unwrap();
 /// let col = MemoryOrder::ColumnMajor;
 /// let mem = LogicalMemorySpace::MainMemory;
-/// let a_base = Tensor::<f64>::zeros(&[3, 4], mem, col);
+/// let a_base = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
 /// let a = a_base.permute(&[1, 0]).unwrap();
-/// let mut b = Tensor::<f64>::zeros(&[4, 3], mem, col);
+/// let mut b = Tensor::<f64>::zeros(&[4, 3], mem, col).unwrap();
 /// let plan = <CpuBackend as TensorSemiringCore<Standard<f64>>>::plan(
 ///     &mut ctx,
 ///     &SemiringCoreDescriptor::MakeContiguous,

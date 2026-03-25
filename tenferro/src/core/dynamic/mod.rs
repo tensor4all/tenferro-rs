@@ -7,6 +7,7 @@ mod tensor_ops;
 pub use dyn_ad_tensor::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, SlogdetResult, SolveExResult, SvdResult, Tensor,
+    TensorScalarDowncast,
 };
 pub use dyn_tensor::DynTensor;
 #[doc(hidden)]

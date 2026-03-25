@@ -19,7 +19,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let transposed = t.permute(&[1, 0]).unwrap();
     /// assert_eq!(transposed.dims(), &[3, 2]);
     /// ```
@@ -59,7 +59,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// let b = t.broadcast(&[4, 3]).unwrap();
     /// assert_eq!(b.dims(), &[4, 3]);
     /// ```
@@ -96,7 +96,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let d = t.diagonal(&[(0, 1)]).unwrap();
     /// assert_eq!(d.dims(), &[3]);
     /// ```
@@ -166,7 +166,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// let r = t.reshape(&[6]).unwrap();
     /// assert_eq!(r.dims(), &[6]);
     /// ```
@@ -196,7 +196,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let view = t.view_as_strided(vec![3, 2], vec![2, 1]).unwrap();
     /// assert_eq!(view.dims(), &[3, 2]);
     /// ```
@@ -215,7 +215,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let slice = t.select(2, 1).unwrap();
     /// assert_eq!(slice.dims(), &[2, 3]);
     /// ```
@@ -254,7 +254,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 10], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 10], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let sub = t.narrow(1, 2, 3).unwrap();
     /// assert_eq!(sub.dims(), &[2, 3]);
     /// ```
@@ -305,7 +305,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let u = t.unsqueeze(0).unwrap();
     /// assert_eq!(u.dims(), &[1, 2, 3]);
     ///
@@ -358,7 +358,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[1, 2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[1, 2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let s = t.squeeze().unwrap();
     /// assert_eq!(s.dims(), &[2, 3]);
     /// ```
@@ -394,7 +394,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let s = t.squeeze_dim(1).unwrap();
     /// assert_eq!(s.dims(), &[2, 3]);
     ///

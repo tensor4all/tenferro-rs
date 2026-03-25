@@ -164,7 +164,7 @@ where
 /// use tenferro_ndarray::try_tensor_to_ndarray;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
-/// let tensor = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+/// let tensor = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
 /// let array = try_tensor_to_ndarray(tensor).unwrap();
 /// assert_eq!(array.shape(), &[2, 2]);
 /// ```
@@ -190,7 +190,7 @@ pub fn try_tensor_to_ndarray<T: Scalar>(tensor: Tensor<T>) -> Result<ArrayD<T>> 
 /// use tenferro_ndarray::tensor_to_ndarray;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
-/// let tensor = Tensor::<f64>::zeros(&[2], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+/// let tensor = Tensor::<f64>::zeros(&[2], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
 /// let array = tensor_to_ndarray(tensor);
 /// assert_eq!(array.shape(), &[2]);
 /// ```

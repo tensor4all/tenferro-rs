@@ -1,6 +1,23 @@
 use super::*;
 
 /// Compute the cross product along the leading vector axis.
+///
+/// Both inputs must have a leading dimension of size 3.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::cross;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0], &[3], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[0.0, 1.0, 0.0], &[3], col).unwrap();
+/// let c = cross(&mut ctx, &a, &b).unwrap();
+/// assert_eq!(c.dims(), &[3]);
+/// ```
 pub fn cross<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
@@ -113,6 +130,27 @@ where
 }
 
 /// Form the explicit product of Householder reflectors.
+///
+/// Given a lower-triangular Householder factor matrix `a` of shape `(m, n, *)`
+/// and a vector `tau` of shape `(k, *)`, computes the orthogonal matrix `Q`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::householder_product;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// // Typically obtained from an intermediate QR step.
+/// let a = Tensor::<f64>::from_slice(
+///     &[1.0, 0.5, 0.0, 1.0], &[2, 2], col,
+/// ).unwrap();
+/// let tau = Tensor::<f64>::from_slice(&[1.0, 0.5], &[2], col).unwrap();
+/// let q = householder_product(&mut ctx, &a, &tau).unwrap();
+/// assert_eq!(q.dims(), &[2, 2]);
+/// ```
 pub fn householder_product<T: KernelLinalgScalar + tenferro_algebra::Conjugate, C>(
     ctx: &mut C,
     a: &Tensor<T>,
@@ -220,6 +258,20 @@ where
 }
 
 /// Build a Vandermonde matrix from leading-dimension vectors.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::vander;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let x = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], col).unwrap();
+/// let v = vander(&mut ctx, &x, None, false).unwrap();
+/// assert_eq!(v.dims(), &[3, 3]);
+/// ```
 pub fn vander<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     x: &Tensor<T>,
@@ -280,6 +332,24 @@ where
 }
 
 /// Invert a tensorized square operator.
+///
+/// Reshapes the tensor into a square matrix using `ind` to split the
+/// dimensions, computes the inverse, and reshapes back.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::tensorinv;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// // Shape [2, 2] with ind=1: left product = 2, right product = 2.
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], col).unwrap();
+/// let inv = tensorinv(&mut ctx, &a, 1).unwrap();
+/// assert_eq!(inv.dims(), &[2, 2]);
+/// ```
 pub fn tensorinv<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
@@ -322,6 +392,23 @@ where
 }
 
 /// Solve a tensorized linear system.
+///
+/// Reshapes `a` and `b` into a standard linear system and solves it.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::tensorsolve;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 1.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[3.0, 4.0], &[2], col).unwrap();
+/// let x = tensorsolve(&mut ctx, &a, &b, None).unwrap();
+/// assert_eq!(x.dims(), &[2]);
+/// ```
 pub fn tensorsolve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,

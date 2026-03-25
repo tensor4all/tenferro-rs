@@ -1,6 +1,23 @@
 use super::*;
 
 /// Compute the eigendecomposition of a general (non-symmetric) square matrix.
+///
+/// Returns complex eigenvalues and eigenvectors even for real inputs.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::eig;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 0.0, 2.0], &[2, 2], col).unwrap();
+/// let result = eig(&mut ctx, &a).unwrap();
+/// assert_eq!(result.values.dims(), &[2]);
+/// assert_eq!(result.vectors.dims(), &[2, 2]);
+/// ```
 pub fn eig<
     T: KernelLinalgScalar<Real = T, Complex = num_complex::Complex<T>> + num_traits::Float,
     C,
@@ -176,6 +193,22 @@ where
 }
 
 /// Compute the matrix exponential `exp(A)` of a square matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_device::LogicalMemorySpace;
+/// use tenferro_linalg::matrix_exp;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let mem = LogicalMemorySpace::MainMemory;
+/// let a = Tensor::<f64>::zeros(&[3, 3], mem, col).unwrap();
+/// let result = matrix_exp(&mut ctx, &a).unwrap();
+/// assert_eq!(result.dims(), &[3, 3]);
+/// ```
 #[allow(private_bounds)]
 pub fn matrix_exp<T, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where

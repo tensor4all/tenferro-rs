@@ -1,6 +1,7 @@
 mod accessors;
 mod basics;
 mod complex;
+mod downcast;
 mod eager_linalg;
 mod eager_scalar;
 mod eager_tensor;
@@ -17,6 +18,7 @@ use std::fmt;
 
 use num_complex::{Complex32, Complex64};
 
+pub use downcast::TensorScalarDowncast;
 pub use eager_linalg::{
     CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, SlogdetResult, SolveExResult, SvdResult,

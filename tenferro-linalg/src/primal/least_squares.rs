@@ -1,6 +1,21 @@
 use super::*;
 
 /// Solve the least squares problem: `x = argmin ||Ax - b||²`.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lstsq;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[1.0, 0.0, 1.0, 1.0], &[2, 2], col).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], col).unwrap();
+/// let result = lstsq(&mut ctx, &a, &b).unwrap();
+/// assert_eq!(result.x.dims(), &[2]);
+/// ```
 pub fn lstsq<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     a: &Tensor<T>,
@@ -52,6 +67,20 @@ where
 }
 
 /// Compute the Cholesky decomposition of a Hermitian positive-definite matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::cholesky;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[4.0, 2.0, 2.0, 3.0], &[2, 2], col).unwrap();
+/// let l = cholesky(&mut ctx, &a).unwrap();
+/// assert_eq!(l.dims(), &[2, 2]);
+/// ```
 pub fn cholesky<T: KernelLinalgScalar, C>(ctx: &mut C, tensor: &Tensor<T>) -> Result<Tensor<T>>
 where
     C: backend::TensorLinalgContextFor<T>,
@@ -61,6 +90,21 @@ where
 }
 
 /// Compute the Cholesky decomposition with numerical status information.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::cholesky_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[4.0, 2.0, 2.0, 3.0], &[2, 2], col).unwrap();
+/// let result = cholesky_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.l.dims(), &[2, 2]);
+/// assert_eq!(result.info.len(), 1);
+/// ```
 pub fn cholesky_ex<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,

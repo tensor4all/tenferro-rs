@@ -225,6 +225,21 @@ where
 }
 
 /// Compute the packed LU factorization of a batched matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 1.0, 1.0, 3.0], &[2, 2], col).unwrap();
+/// let result = lu_factor(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.pivots.len(), 2);
+/// ```
 pub fn lu_factor<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
@@ -242,6 +257,21 @@ where
 }
 
 /// Compute the packed LU factorization with numerical status information.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 1.0, 1.0, 3.0], &[2, 2], col).unwrap();
+/// let result = lu_factor_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.info.len(), 1);
+/// ```
 pub fn lu_factor_ex<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
@@ -264,6 +294,22 @@ where
 }
 
 /// Solve `A x = b` from a packed LU factorization.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::{lu_factor, lu_solve};
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 1.0, 1.0, 3.0], &[2, 2], col).unwrap();
+/// let lu = lu_factor(&mut ctx, &a).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 7.0], &[2], col).unwrap();
+/// let x = lu_solve(&mut ctx, &lu.factors, &lu.pivots, &b).unwrap();
+/// assert_eq!(x.dims(), &[2]);
+/// ```
 pub fn lu_solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     factors: &Tensor<T>,
@@ -287,7 +333,7 @@ where
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_device::LogicalMemorySpace;
 /// use tenferro_linalg::eigen;
 /// use tenferro_prims::CpuContext;

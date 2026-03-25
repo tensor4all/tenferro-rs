@@ -95,7 +95,7 @@ impl<T> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let tc = t.into_conj();
     /// assert!(tc.is_conjugated());
     /// ```
@@ -127,7 +127,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// let c = t.contiguous(MemoryOrder::RowMajor);
     /// assert!(c.is_contiguous());
     /// ```
@@ -176,7 +176,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let c = t.into_contiguous(MemoryOrder::ColumnMajor);
     /// assert!(c.is_contiguous());
     /// ```
@@ -205,7 +205,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// let col_major = t.into_column_major();
     /// assert!(col_major.is_col_major_contiguous());
     /// ```
@@ -379,7 +379,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let lower = a.tril(0);
     /// assert_eq!(lower.dims(), &[3, 3]);
     /// ```
@@ -392,7 +392,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let upper = a.triu(0);
     /// assert_eq!(upper.dims(), &[3, 3]);
     /// ```
