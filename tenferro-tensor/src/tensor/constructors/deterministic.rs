@@ -305,6 +305,35 @@ impl<T: Scalar> Tensor<T> {
         Ok(Self::main_memory_contiguous(data.to_vec(), dims, order))
     }
 
+    /// Create a tensor from a row-major data slice.
+    ///
+    /// This is a convenience wrapper around
+    /// [`from_slice`](Self::from_slice) with `MemoryOrder::RowMajor`.
+    /// It lets NumPy / C users pass data in their natural order while
+    /// tenferro internally stores it in column-major layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data.len()` does not match the product of `dims`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// // Row-major: data is laid out row by row.
+    /// // [[1, 2],
+    /// //  [3, 4]]
+    /// let t = Tensor::<f64>::from_row_major_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0],
+    ///     &[2, 2],
+    /// ).unwrap();
+    /// assert_eq!(t.dims(), &[2, 2]);
+    /// ```
+    pub fn from_row_major_slice(data: &[T], dims: &[usize]) -> Result<Self> {
+        Self::from_slice(data, dims, MemoryOrder::RowMajor)
+    }
+
     /// Create a tensor from an owned `Vec<T>` with explicit layout.
     ///
     /// # Errors
