@@ -16,6 +16,51 @@ enum TriangularHalf {
 }
 
 impl<T> Tensor<T> {
+    /// Access a single element by multi-dimensional index.
+    ///
+    /// Returns `None` if the index is out of bounds or the underlying buffer
+    /// is not CPU-accessible.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// // Column-major: data is laid out column by column.
+    /// // from_slice with ColumnMajor and data [1,2,3,4] gives:
+    /// //   column 0 = [1, 2], column 1 = [3, 4]
+    /// //   matrix = [[1, 3],
+    /// //             [2, 4]]
+    /// let t = Tensor::<f64>::from_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor,
+    /// ).unwrap();
+    /// assert_eq!(t.get(&[0, 0]), Some(&1.0));
+    /// assert_eq!(t.get(&[1, 0]), Some(&2.0));
+    /// assert_eq!(t.get(&[0, 1]), Some(&3.0));
+    /// assert_eq!(t.get(&[1, 1]), Some(&4.0));
+    /// assert_eq!(t.get(&[2, 0]), None); // out of bounds
+    /// ```
+    pub fn get(&self, index: &[usize]) -> Option<&T> {
+        if index.len() != self.dims.len() {
+            return None;
+        }
+        for (i, &idx) in index.iter().enumerate() {
+            if idx >= self.dims[i] {
+                return None;
+            }
+        }
+        let pos: isize = index.iter().zip(self.strides.iter()).try_fold(
+            self.offset,
+            |acc, (&idx, &stride)| {
+                (idx as isize)
+                    .checked_mul(stride)
+                    .and_then(|v| acc.checked_add(v))
+            },
+        )?;
+        let pos = usize::try_from(pos).ok()?;
+        self.buffer.as_slice().and_then(|s| s.get(pos))
+    }
+
     /// Return a lazily-conjugated tensor (shared buffer, flag flip).
     ///
     /// # Examples
@@ -166,6 +211,41 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn into_column_major(self) -> Tensor<T> {
         self.into_contiguous(MemoryOrder::ColumnMajor)
+    }
+
+    /// Copy tensor data into a flat `Vec<T>` in column-major order.
+    ///
+    /// The returned vector has length `self.len()` with elements laid out
+    /// in column-major (Fortran) order. For a 2-D tensor with shape
+    /// `[m, n]`, the first `m` elements are column 0, the next `m` are
+    /// column 1, and so on.
+    ///
+    /// This method internally materializes a contiguous copy when the
+    /// tensor is not already column-major contiguous, so it always
+    /// returns owned data regardless of the original layout.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let t = Tensor::<f64>::from_row_major_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// // Matrix (row-major input):
+    /// //   [[1, 2, 3],
+    /// //    [4, 5, 6]]
+    /// // Column-major output: col0=[1,4], col1=[2,5], col2=[3,6]
+    /// assert_eq!(t.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
+    /// ```
+    pub fn to_vec(&self) -> Vec<T> {
+        let c = self.contiguous(MemoryOrder::ColumnMajor);
+        let slice = c
+            .buffer()
+            .as_slice()
+            .expect("to_vec: CPU-only operation; GPU tensors are not supported");
+        slice.to_vec()
     }
 
     fn triangular_part(&self, diagonal: isize, half: TriangularHalf) -> Tensor<T> {

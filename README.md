@@ -105,8 +105,42 @@ fn main() {
 }
 ```
 
-If you want autodiff, start from `tenferro`. For more
-examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor`.
+### Autodiff quickstart
+
+For automatic differentiation, use the `tenferro` umbrella crate which
+wraps the lower-level crates with a dynamic, AD-aware `Tensor` type
+(similar to PyTorch's autograd):
+
+```toml
+[dependencies]
+tenferro       = { path = "../tenferro-rs/tenferro" }
+tenferro-prims = { path = "../tenferro-rs/tenferro-prims" }
+```
+
+```rust
+use tenferro::{backward, grad, set_default_runtime, BackwardOptions, GradOptions,
+               RuntimeContext, Tensor};
+use tenferro_prims::CpuContext;
+
+fn main() {
+    // 1. Configure the default runtime (required before any operation).
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    // 2. Create tensors and enable gradient tracking.
+    let mut x = Tensor::from_slice(&[1.0_f64, 2.0, 3.0], &[3]).unwrap();
+    x.set_requires_grad(true).unwrap();
+
+    // 3. Forward pass: loss = sum(exp(x))
+    let loss = x.exp().unwrap().sum().unwrap();
+
+    // 4. Compute gradients (functional style, like torch.autograd.grad).
+    let grads = grad(&[&loss], &[&x], None, GradOptions::default()).unwrap();
+    // grads[0] ≈ exp(x) = [e^1, e^2, e^3]
+    assert!(grads[0].is_some());
+}
+```
+
+For more examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor`.
 
 ### Influences
 
