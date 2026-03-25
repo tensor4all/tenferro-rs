@@ -15,6 +15,8 @@ for architecture, API design, and future phase plans.
 ## Workspace Architecture
 
 ```
+Facade: tenferro-tensor-compute  Typed computation facade — re-exports Tensor<T>,
+                                einsum, and linalg from a single crate
 Layer 5: tenferro-capi       C-API (FFI) for Julia/Python: exposes einsum + SVD
                              with stateless rrule/frule (f64 only),
                              DLPack v1.0 zero-copy tensor exchange
@@ -55,6 +57,14 @@ Small note: this graph omits transitively implied edges by default. If
 information, which keeps the layered structure readable.
 
 ## Crates
+
+<a id="tenferro-tensor-compute"></a>
+### [tenferro-tensor-compute](tenferro_tensor_compute/index.html) <small>(Facade)</small>
+
+Typed tensor computation facade. Re-exports the most commonly used items from
+`tenferro-tensor`, `tenferro-prims`, `tenferro-einsum`, and `tenferro-linalg`
+so downstream users need only a single dependency for `Tensor<T>` computation.
+Start here if you want typed tensors with einsum and linear algebra.
 
 <a id="tenferro-capi"></a>
 ### [tenferro-capi](tenferro_capi/index.html) <small>(Layer 5)</small>

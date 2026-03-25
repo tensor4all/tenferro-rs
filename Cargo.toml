@@ -8,6 +8,7 @@ members = [
     "tenferro-einsum",
     "tenferro-linalg-prims",
     "tenferro-linalg",
+    "tenferro-tensor-compute",
     "tenferro-capi",
     # extension
     "extension/tenferro-tropical",
