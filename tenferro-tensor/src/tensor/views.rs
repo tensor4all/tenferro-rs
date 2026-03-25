@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 
 use super::Tensor;

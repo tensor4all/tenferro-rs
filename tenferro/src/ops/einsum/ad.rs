@@ -49,15 +49,15 @@ where
             continue;
         };
         let mut rev_subs = reverse_subscripts(subscripts, k);
-        let mut rev_operands: Vec<&StructuredTensor<T>> = Vec::with_capacity(primals.len());
-        rev_operands.push(cotangent);
+        // Wirtinger VJP: conjugate non-cotangent operands.
+        let mut conj_store: Vec<StructuredTensor<T>> = Vec::new();
         for (idx, operand) in primals.iter().enumerate() {
             if idx != k {
-                rev_operands.push(operand);
+                conj_store.push(operand.conj());
             }
         }
 
-        // Inject delta tensors for output-only labels.
+        // Inject delta tensors for output-only labels (e.g., trace "ii->").
         let all_input_labels: HashSet<u32> = rev_subs
             .inputs
             .iter()
@@ -97,10 +97,15 @@ where
             delta_tensors.push(StructuredTensor::from_dense(eye));
             rev_subs.inputs.push(vec![label, label]);
         }
+
+        let mut rev_operands: Vec<&StructuredTensor<T>> = Vec::with_capacity(primals.len());
+        rev_operands.push(cotangent);
+        for c in &conj_store {
+            rev_operands.push(c);
+        }
         for dt in &delta_tensors {
             rev_operands.push(dt);
         }
-
         let grad = einsum_with_subscripts_in_ctx::<B, _, T>(ctx, &rev_subs, &rev_operands)?;
         input_grads.push((*node, grad));
     }

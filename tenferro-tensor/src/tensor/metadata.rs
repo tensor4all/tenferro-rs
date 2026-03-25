@@ -1,11 +1,10 @@
-use tenferro_algebra::Scalar;
 use tenferro_device::{
     preferred_compute_devices, ComputeDevice, Error, LogicalMemorySpace, OpKind, Result,
 };
 
 use super::Tensor;
 
-impl<T: Scalar> Tensor<T> {
+impl<T> Tensor<T> {
     /// Returns the shape (size of each dimension).
     ///
     /// # Examples

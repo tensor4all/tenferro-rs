@@ -1005,3 +1005,52 @@ fn complex_norm_branch_uses_complex_real_bridge_and_avoids_host_slicing() {
         "norm should avoid slice_bridge helpers"
     );
 }
+
+#[test]
+fn triangular_ad_rules_use_tensor_ops_triu_tril_instead_of_method_calls() {
+    let rrule = repo_file("src/rrules/linear_systems.rs");
+    let frule = repo_file("src/frules/linear_systems.rs");
+
+    for (name, contents) in [
+        ("rrules/linear_systems.rs", &rrule),
+        ("frules/linear_systems.rs", &frule),
+    ] {
+        assert!(
+            !contents.contains(".triu("),
+            "{name} should use tensor_ops::triu(...) instead of the method-call .triu(...)"
+        );
+        assert!(
+            !contents.contains(".tril("),
+            "{name} should use tensor_ops::tril(...) instead of the method-call .tril(...)"
+        );
+        assert!(
+            contents.contains("tensor_ops::triu") || contents.contains("tensor_ops::tril"),
+            "{name} should route triangular projections through tenferro_prims::tensor_ops"
+        );
+    }
+}
+
+#[test]
+fn ad_helpers_do_not_use_cpu_backed_slice_or_panic() {
+    let ad_helper_files = [
+        "src/ad_helpers/backend_ops.rs",
+        "src/ad_helpers/complex_ops.rs",
+        "src/ad_helpers/diagonal.rs",
+        "src/ad_helpers/layout.rs",
+        "src/ad_helpers/lu.rs",
+        "src/ad_helpers/matrix_exp.rs",
+        "src/ad_helpers/matrix_ops.rs",
+        "src/ad_helpers/mod.rs",
+        "src/ad_helpers/svd.rs",
+        "src/ad_helpers/validation.rs",
+        "src/ad_helpers/views.rs",
+    ];
+
+    for path in ad_helper_files {
+        let contents = repo_file(path);
+        assert!(
+            !contents.contains("cpu_backed_slice_or_panic"),
+            "{path} should not use cpu_backed_slice_or_panic"
+        );
+    }
+}

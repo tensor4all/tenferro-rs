@@ -13,7 +13,7 @@ fn matrix_transpose_permutation(ndim: usize) -> Result<Vec<usize>> {
     Ok(perm)
 }
 
-impl<T: Scalar> Tensor<T> {
+impl<T> Tensor<T> {
     /// Permute (reorder) the dimensions of the tensor.
     ///
     /// # Examples
@@ -474,7 +474,7 @@ impl<T: Scalar> Tensor<T> {
 
 impl<T> Tensor<T>
 where
-    T: Scalar + Conjugate,
+    T: Conjugate,
 {
     /// Return a zero-copy conjugate-transpose view over the last two axes.
     ///

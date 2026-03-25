@@ -43,6 +43,7 @@ mod complex_scale;
 mod custom;
 mod execution;
 mod family_common;
+mod indexing;
 mod metadata;
 mod metadata_cast;
 mod planning;
@@ -51,6 +52,7 @@ mod rng;
 mod runtime;
 mod scalar;
 mod scalar_type;
+mod sort;
 mod wrappers;
 
 pub use analytic::CudaAnalyticPlan;

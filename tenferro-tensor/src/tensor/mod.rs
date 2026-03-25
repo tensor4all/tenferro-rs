@@ -10,10 +10,10 @@ mod views;
 
 use std::sync::Arc;
 
-use tenferro_algebra::Scalar;
 use tenferro_device::{ComputeDevice, LogicalMemorySpace};
 
-use crate::{layout::compute_contiguous_strides, CompletionEvent, DataBuffer, MemoryOrder};
+use crate::layout::{compute_contiguous_strides, is_contiguous_in_order};
+use crate::{CompletionEvent, DataBuffer, MemoryOrder};
 
 pub use structural::KeepCountScalar;
 
@@ -53,7 +53,7 @@ pub use structural::KeepCountScalar;
 /// assert_eq!(t.dims(), &[2, 3]);
 /// assert_eq!(t.len(), 6);
 /// ```
-pub struct Tensor<T: Scalar> {
+pub struct Tensor<T> {
     buffer: DataBuffer<T>,
     dims: Arc<[usize]>,
     strides: Arc<[isize]>,
@@ -65,7 +65,7 @@ pub struct Tensor<T: Scalar> {
     fw_grad: Option<Box<Tensor<T>>>,
 }
 
-impl<T: Scalar> Clone for Tensor<T> {
+impl<T> Clone for Tensor<T> {
     /// Shallow clone: shares the underlying data buffer.
     ///
     /// For a deep copy, materialize into a new allocation with
@@ -85,7 +85,7 @@ impl<T: Scalar> Clone for Tensor<T> {
     }
 }
 
-impl<T: Scalar> std::fmt::Debug for Tensor<T> {
+impl<T> std::fmt::Debug for Tensor<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let has_pending_event = self.event.is_some();
         let has_fw_grad = self.fw_grad.is_some();
@@ -105,7 +105,11 @@ impl<T: Scalar> std::fmt::Debug for Tensor<T> {
     }
 }
 
-impl<T: Scalar> Tensor<T> {
+/// Methods that require no element-type bounds at all.
+///
+/// These operate only on tensor metadata (dims, strides, offset, buffer
+/// reference) and never read or write element values.
+impl<T> Tensor<T> {
     pub(crate) fn from_parts(
         buffer: DataBuffer<T>,
         dims: Arc<[usize]>,
@@ -186,5 +190,42 @@ impl<T: Scalar> Tensor<T> {
         self.buffer.as_slice().unwrap_or_else(|| {
             panic!("{operation}: CPU-only operation; GPU tensors are not supported")
         })
+    }
+
+    /// Returns `true` if the tensor data is contiguous in memory.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// assert!(t.is_contiguous());
+    /// ```
+    pub fn is_contiguous(&self) -> bool {
+        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
+            || is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
+    }
+
+    /// Check if the tensor has column-major contiguous layout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// assert!(t.is_col_major_contiguous());
+    /// ```
+    pub fn is_col_major_contiguous(&self) -> bool {
+        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
+    }
+
+    /// Check if the tensor has row-major contiguous layout.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// assert!(t.is_row_major_contiguous());
+    /// ```
+    pub fn is_row_major_contiguous(&self) -> bool {
+        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
     }
 }
