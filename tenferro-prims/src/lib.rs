@@ -188,6 +188,7 @@ mod infra;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod shape_helpers;
+pub mod tensor_ops;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.

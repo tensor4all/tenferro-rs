@@ -11,6 +11,7 @@ mod organization;
 mod rng_phase1;
 mod scalar_phase1;
 mod scalar_phase2;
+mod tensor_ops;
 
 use tenferro_algebra::Standard;
 use tenferro_device::LogicalMemorySpace;
