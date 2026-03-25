@@ -28,13 +28,27 @@ where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
 {
+    use std::collections::HashSet;
+
+    // Build a size dictionary for delta injection.
+    let size_dict: std::collections::HashMap<u32, usize> = {
+        let mut sd = std::collections::HashMap::new();
+        for (i, input_labels) in subscripts.inputs.iter().enumerate() {
+            let dims = primals[i].logical_dims();
+            for (j, &label) in input_labels.iter().enumerate() {
+                sd.entry(label).or_insert(dims[j]);
+            }
+        }
+        sd
+    };
+
     let mut input_grads = Vec::new();
 
     for (k, maybe_node) in reverse_nodes.iter().enumerate() {
         let Some(node) = maybe_node else {
             continue;
         };
-        let rev_subs = reverse_subscripts(subscripts, k);
+        let mut rev_subs = reverse_subscripts(subscripts, k);
         let mut rev_operands: Vec<&StructuredTensor<T>> = Vec::with_capacity(primals.len());
         rev_operands.push(cotangent);
         for (idx, operand) in primals.iter().enumerate() {
@@ -42,6 +56,51 @@ where
                 rev_operands.push(operand);
             }
         }
+
+        // Inject delta tensors for output-only labels.
+        let all_input_labels: HashSet<u32> = rev_subs
+            .inputs
+            .iter()
+            .flat_map(|labels| labels.iter().copied())
+            .collect();
+        let mut unique_missing = Vec::new();
+        {
+            let mut seen = HashSet::new();
+            for &label in &rev_subs.output {
+                if !all_input_labels.contains(&label) && seen.insert(label) {
+                    unique_missing.push(label);
+                }
+            }
+        }
+        let mut delta_tensors: Vec<StructuredTensor<T>> = Vec::new();
+        for &label in &unique_missing {
+            let dim = size_dict
+                .get(&label)
+                .copied()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: format!(
+                        "einsum structured pullback: missing dimension for label {}",
+                        label
+                    ),
+                })?;
+            let space = primals[0].payload().logical_memory_space();
+            let mut data = vec![T::zero(); dim * dim];
+            for i in 0..dim {
+                data[i * dim + i] = T::one();
+            }
+            let eye = tenferro_tensor::Tensor::from_slice(
+                &data,
+                &[dim, dim],
+                tenferro_tensor::MemoryOrder::ColumnMajor,
+            )
+            .map_err(Error::from)?;
+            delta_tensors.push(StructuredTensor::from_dense(eye));
+            rev_subs.inputs.push(vec![label, label]);
+        }
+        for dt in &delta_tensors {
+            rev_operands.push(dt);
+        }
+
         let grad = einsum_with_subscripts_in_ctx::<B, _, T>(ctx, &rev_subs, &rev_operands)?;
         input_grads.push((*node, grad));
     }

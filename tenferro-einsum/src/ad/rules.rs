@@ -1,9 +1,26 @@
+use std::collections::HashSet;
+
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::{AdResult, Differentiable, DualValue};
 
+use tenferro_device::LogicalMemorySpace;
+
 use crate::api::{einsum, einsum_with_subscripts};
+
+/// Creates an `n x n` identity tensor using only `Scalar` (zero/one) bounds.
+fn make_delta<T: Scalar>(n: usize, space: LogicalMemorySpace) -> Result<Tensor<T>> {
+    let mut data = vec![T::zero(); n * n];
+    for i in 0..n {
+        data[i * n + i] = T::one();
+    }
+    Ok(Tensor::from_slice(
+        &data,
+        &[n, n],
+        MemoryOrder::ColumnMajor,
+    )?)
+}
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
 use crate::syntax::nested::NestedEinsum;
@@ -80,6 +97,10 @@ where
     let n = operands.len();
     let mut grads = Vec::with_capacity(n);
 
+    // Build a size dictionary mapping labels to dimensions.
+    let shapes: Vec<&[usize]> = operands.iter().map(|op| op.dims()).collect();
+    let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None)?;
+
     for k in 0..n {
         let mut rev_inputs_subs = vec![subs.output.clone()];
         let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
@@ -91,9 +112,47 @@ where
             }
         }
 
+        let rev_output = subs.inputs[k].clone();
+
+        // Detect output-only labels: labels that appear in the reverse output
+        // but not in any reverse input. This happens when the forward einsum
+        // contracted labels that we now need to reconstruct (e.g., trace "ii->").
+        // For each such label, inject an identity (delta) tensor so the reverse
+        // einsum can produce the correct gradient.
+        let all_input_labels: HashSet<u32> = rev_inputs_subs
+            .iter()
+            .flat_map(|labels| labels.iter().copied())
+            .collect();
+        let mut unique_missing = Vec::new();
+        {
+            let mut seen = HashSet::new();
+            for &label in &rev_output {
+                if !all_input_labels.contains(&label) && seen.insert(label) {
+                    unique_missing.push(label);
+                }
+            }
+        }
+
+        let mut delta_tensors: Vec<Tensor<Alg::Scalar>> = Vec::new();
+        for &label in &unique_missing {
+            let dim = *size_dict.get(&label).ok_or_else(|| {
+                tenferro_device::Error::InvalidArgument(format!(
+                    "einsum rrule: missing dimension for label {}",
+                    label
+                ))
+            })?;
+            let space = operands[0].logical_memory_space();
+            let eye = make_delta::<Alg::Scalar>(dim, space)?;
+            rev_inputs_subs.push(vec![label, label]);
+            delta_tensors.push(eye);
+        }
+        for dt in &delta_tensors {
+            rev_operands.push(dt);
+        }
+
         let rev_subs = Subscripts {
             inputs: rev_inputs_subs,
-            output: subs.inputs[k].clone(),
+            output: rev_output,
         };
 
         let grad = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
@@ -223,6 +282,8 @@ where
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = primals.len();
+    let shapes: Vec<&[usize]> = primals.iter().map(|op| op.dims()).collect();
+    let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None)?;
     let mut results = Vec::with_capacity(n);
 
     for k in 0..n {
@@ -232,9 +293,40 @@ where
                 rev_inputs_subs.push(subs.inputs[i].clone());
             }
         }
+
+        let rev_output = subs.inputs[k].clone();
+
+        // Inject delta tensors for output-only labels (same as einsum_rrule).
+        let all_input_labels: HashSet<u32> = rev_inputs_subs
+            .iter()
+            .flat_map(|labels| labels.iter().copied())
+            .collect();
+        let mut unique_missing = Vec::new();
+        {
+            let mut seen = HashSet::new();
+            for &label in &rev_output {
+                if !all_input_labels.contains(&label) && seen.insert(label) {
+                    unique_missing.push(label);
+                }
+            }
+        }
+        let mut delta_tensors: Vec<Tensor<Alg::Scalar>> = Vec::new();
+        for &label in &unique_missing {
+            let dim = *size_dict.get(&label).ok_or_else(|| {
+                tenferro_device::Error::InvalidArgument(format!(
+                    "einsum hvp: missing dimension for label {}",
+                    label
+                ))
+            })?;
+            let space = primals[0].logical_memory_space();
+            let eye = make_delta::<Alg::Scalar>(dim, space)?;
+            rev_inputs_subs.push(vec![label, label]);
+            delta_tensors.push(eye);
+        }
+
         let rev_subs = Subscripts {
             inputs: rev_inputs_subs,
-            output: subs.inputs[k].clone(),
+            output: rev_output,
         };
 
         let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
@@ -243,6 +335,9 @@ where
                 rev_operands.push(op);
             }
         }
+        for dt in &delta_tensors {
+            rev_operands.push(dt);
+        }
         let grad_k = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
 
         let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent_tangent];
@@ -250,6 +345,9 @@ where
             if i != k {
                 ops.push(op);
             }
+        }
+        for dt in &delta_tensors {
+            ops.push(dt);
         }
         let mut hvp_k = Some(einsum_with_subscripts::<Alg, Backend>(
             ctx, &rev_subs, &ops, None,
@@ -265,6 +363,9 @@ where
                     if i != k {
                         ops.push(if i == j { tangent_j } else { op });
                     }
+                }
+                for dt in &delta_tensors {
+                    ops.push(dt);
                 }
                 let term = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &ops, None)?;
                 hvp_k = Some(match hvp_k {
