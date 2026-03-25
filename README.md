@@ -71,35 +71,32 @@ primitive execution paths, but broader GPU coverage is still incomplete and
 HIP remains a stub. Outside explicit GPU implementation tasks, do not assume a
 GPU code path works just because the type, trait, or FFI entrypoint exists.
 
-## Two API paths
+## Which crate should I use?
 
-tenferro offers two ways to work with tensors:
+| Crate | Use when |
+|-------|----------|
+| **`tenferro-tensor-compute`** | You want typed `Tensor<T>` with einsum and linalg — **start here** |
+| `tenferro` | You need automatic differentiation (VJP/JVP) |
+| `tenferro-tensor` | You only need the data type, no computation (library authors) |
 
-- **Typed path:** `tenferro_tensor::Tensor<T>` -- fixed scalar type at compile time. Use with `tenferro-prims` + `tenferro-einsum` for computation. Best when you know the scalar type and do not need automatic gradient tracking.
-- **Dynamic AD path:** `tenferro::Tensor` -- dynamic scalar type with automatic differentiation (VJP/JVP). Use the `tenferro` umbrella crate. Best when you need gradients.
+- **Typed path** (`tenferro-tensor-compute`): `Tensor<T>` with a fixed scalar type at compile time. Best when you know the scalar type and do not need automatic gradient tracking.
+- **Dynamic AD path** (`tenferro`): dynamic scalar type with automatic differentiation (VJP/JVP). Best when you need gradients.
 
 The quickstart below uses the typed path; the [Autodiff quickstart](#autodiff-quickstart) shows the dynamic AD path.
 
 ## Quickstart
 
-For a local checkout, a minimal CPU-only downstream crate needs these
-workspace members:
+For a local checkout, a single dependency is enough:
 
 ```toml
 [dependencies]
-tenferro-algebra = { path = "../tenferro-rs/tenferro-algebra" }
-tenferro-device = { path = "../tenferro-rs/tenferro-device" }
-tenferro-tensor = { path = "../tenferro-rs/tenferro-tensor" }
-tenferro-prims = { path = "../tenferro-rs/tenferro-prims" }
-tenferro-einsum = { path = "../tenferro-rs/tenferro-einsum" }
+tenferro-tensor-compute = { path = "../tenferro-rs/tenferro-tensor-compute" }
 ```
 
 ```rust
-use tenferro_algebra::Standard;
-use tenferro_device::LogicalMemorySpace;
-use tenferro_einsum::einsum;
-use tenferro_prims::{CpuBackend, CpuContext};
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor_compute::{
+    einsum, CpuBackend, CpuContext, LogicalMemorySpace, MemoryOrder, Standard, Tensor,
+};
 
 fn main() {
     let col = MemoryOrder::ColumnMajor;
@@ -174,18 +171,10 @@ For more examples, see the crate docs for `tenferro-einsum` and `tenferro-tensor
 
 ### Linear algebra quickstart
 
-```toml
-[dependencies]
-tenferro-device = { path = "../tenferro-rs/tenferro-device" }
-tenferro-tensor = { path = "../tenferro-rs/tenferro-tensor" }
-tenferro-prims  = { path = "../tenferro-rs/tenferro-prims" }
-tenferro-linalg = { path = "../tenferro-rs/tenferro-linalg" }
-```
+Linalg is included in `tenferro-tensor-compute` by default (the `linalg` feature).
 
 ```rust
-use tenferro_linalg::{svd, solve};
-use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor};
+use tenferro_tensor_compute::{svd, solve, CpuContext, MemoryOrder, Tensor};
 
 fn main() {
     let col = MemoryOrder::ColumnMajor;
