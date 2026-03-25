@@ -35,12 +35,17 @@ where
             continue;
         };
         let rev_subs = reverse_subscripts(subscripts, k);
-        let mut rev_operands: Vec<&StructuredTensor<T>> = Vec::with_capacity(primals.len());
-        rev_operands.push(cotangent);
+        // Wirtinger VJP: conjugate non-cotangent operands.
+        let mut conj_store: Vec<StructuredTensor<T>> = Vec::new();
         for (idx, operand) in primals.iter().enumerate() {
             if idx != k {
-                rev_operands.push(operand);
+                conj_store.push(operand.conj());
             }
+        }
+        let mut rev_operands: Vec<&StructuredTensor<T>> = Vec::with_capacity(primals.len());
+        rev_operands.push(cotangent);
+        for c in &conj_store {
+            rev_operands.push(c);
         }
         let grad = einsum_with_subscripts_in_ctx::<B, _, T>(ctx, &rev_subs, &rev_operands)?;
         input_grads.push((*node, grad));

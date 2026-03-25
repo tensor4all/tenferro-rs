@@ -231,19 +231,20 @@ fn einsum_backward_two_stage_matches_finite_difference_c64_directional() {
         grads[0].as_ref().expect("missing dA").clone()
     };
 
-    let objective = |a_now: &DenseTensor<Complex64>| -> Complex64 {
+    // Wirtinger VJP check: Re(sum(conj(grad) * d)) ~ real FD of Re(sum(conj(cot) * f(a)))
+    let objective = |a_now: &DenseTensor<Complex64>| -> f64 {
         let ad_a = AdTensor::new_primal(a_now.clone());
         let ad_b = AdTensor::new_primal(b.clone());
         let ad_c = AdTensor::new_primal(c.clone());
         let y1 = einsum("ij,jk->ik", &[&ad_a, &ad_b]).unwrap();
         let y2 = einsum("ij,jk->ik", &[&y1, &ad_c]).unwrap();
-        sum_mul_c64(y2.primal(), &cotangent)
+        sum_conj_mul_real_c64(y2.primal(), &cotangent)
     };
 
     let fd = (objective(&add_scaled_c64(&a, &da, eps)) - objective(&add_scaled_c64(&a, &da, -eps)))
         / (2.0 * eps);
-    let predicted = sum_mul_c64(&grad_a, &da);
-    let err = (predicted - fd).norm();
+    let predicted = sum_conj_mul_real_c64(&grad_a, &da);
+    let err = (predicted - fd).abs();
     assert!(
         err < 1e-8,
         "einsum complex 2-stage backward directional fd mismatch: {err}"
