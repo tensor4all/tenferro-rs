@@ -1,7 +1,7 @@
 use std::any::TypeId;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::{Conjugate, Scalar};
+use tenferro_algebra::Scalar;
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
 use tenferro_device::{checked_batch_count, unflatten_col_major_index_into};
@@ -13,6 +13,63 @@ use crate::{DataBuffer, MemoryOrder};
 enum TriangularHalf {
     Lower,
     Upper,
+}
+
+impl<T> Tensor<T> {
+    /// Return a lazily-conjugated tensor (shared buffer, flag flip).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    ///
+    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
+    /// let a = Tensor::from_slice(&data, &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let a_conj = a.conj();
+    /// assert!(a_conj.is_conjugated());
+    /// ```
+    pub fn conj(&self) -> Tensor<T>
+    where
+        T: tenferro_algebra::Conjugate,
+    {
+        Tensor::from_parts(
+            self.buffer.clone(),
+            self.dims.clone(),
+            self.strides.clone(),
+            self.offset,
+            self.logical_memory_space,
+            self.preferred_compute_device,
+            self.event.clone(),
+            !self.conjugated,
+            None,
+        )
+    }
+
+    /// Consume this tensor and return a lazily-conjugated version.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let tc = t.into_conj();
+    /// assert!(tc.is_conjugated());
+    /// ```
+    pub fn into_conj(self) -> Tensor<T>
+    where
+        T: tenferro_algebra::Conjugate,
+    {
+        Tensor::from_parts(
+            self.buffer,
+            self.dims,
+            self.strides,
+            self.offset,
+            self.logical_memory_space,
+            self.preferred_compute_device,
+            self.event,
+            !self.conjugated,
+            None,
+        )
+    }
 }
 
 impl<T: Scalar> Tensor<T> {
@@ -95,43 +152,6 @@ impl<T: Scalar> Tensor<T> {
         self.contiguous(order)
     }
 
-    /// Returns `true` if the tensor data is contiguous in memory.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// assert!(t.is_contiguous());
-    /// ```
-    pub fn is_contiguous(&self) -> bool {
-        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
-            || is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
-    }
-
-    /// Check if the tensor has column-major contiguous layout.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// assert!(t.is_col_major_contiguous());
-    /// ```
-    pub fn is_col_major_contiguous(&self) -> bool {
-        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
-    }
-
-    /// Check if the tensor has row-major contiguous layout.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
-    /// assert!(t.is_row_major_contiguous());
-    /// ```
-    pub fn is_row_major_contiguous(&self) -> bool {
-        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
-    }
-
     /// Consume this tensor and return a contiguous column-major version.
     ///
     /// This is a convenience wrapper around `into_contiguous(MemoryOrder::ColumnMajor)`
@@ -146,61 +166,6 @@ impl<T: Scalar> Tensor<T> {
     /// ```
     pub fn into_column_major(self) -> Tensor<T> {
         self.into_contiguous(MemoryOrder::ColumnMajor)
-    }
-
-    /// Return a lazily-conjugated tensor (shared buffer, flag flip).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use num_complex::Complex64;
-    ///
-    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
-    /// let a = Tensor::from_slice(&data, &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let a_conj = a.conj();
-    /// assert!(a_conj.is_conjugated());
-    /// ```
-    pub fn conj(&self) -> Tensor<T>
-    where
-        T: Conjugate,
-    {
-        Tensor::from_parts(
-            self.buffer.clone(),
-            self.dims.clone(),
-            self.strides.clone(),
-            self.offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            self.event.clone(),
-            !self.conjugated,
-            None,
-        )
-    }
-
-    /// Consume this tensor and return a lazily-conjugated version.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let tc = t.into_conj();
-    /// assert!(tc.is_conjugated());
-    /// ```
-    pub fn into_conj(self) -> Tensor<T>
-    where
-        T: Conjugate,
-    {
-        Tensor::from_parts(
-            self.buffer,
-            self.dims,
-            self.strides,
-            self.offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            self.event,
-            !self.conjugated,
-            None,
-        )
     }
 
     fn triangular_part(&self, diagonal: isize, half: TriangularHalf) -> Tensor<T> {

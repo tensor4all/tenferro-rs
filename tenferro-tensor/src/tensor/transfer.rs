@@ -31,7 +31,9 @@ impl<T: Scalar> Tensor<T> {
             ))
         }
     }
+}
 
+impl<T> Tensor<T> {
     /// Wait for any pending GPU computation to complete.
     ///
     /// # Examples

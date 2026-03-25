@@ -43,7 +43,7 @@ fn view_as_complex_strides(dims: &[usize], strides: &[isize]) -> Result<Vec<isiz
     Ok(output)
 }
 
-fn select_complex_component<T: Scalar>(view: Tensor<T>, component: usize) -> Result<Tensor<T>> {
+fn select_complex_component<T>(view: Tensor<T>, component: usize) -> Result<Tensor<T>> {
     view.select(view.ndim() - 1, component)
 }
 
