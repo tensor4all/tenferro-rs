@@ -3,8 +3,9 @@ use std::{any::TypeId, sync::Arc};
 use num_complex::{Complex32, Complex64};
 use tenferro_algebra::Scalar;
 use tenferro_device::cuda::runtime::{
-    self as device_cuda, ContiguousOrder, CudaBuffer, StridedCopySpec, StridedCopyTransform,
-    TriangularHalf, TriangularMergeSpec, TriangularPartSpec, ZeroTrailingByCountsSpec,
+    self as device_cuda, ContiguousOrder, CudaBuffer, RealBinaryOp, StridedCopySpec,
+    StridedCopyTransform, TriangularHalf, TriangularMergeSpec, TriangularPartSpec,
+    ZeroTrailingByCountsSpec,
 };
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 
@@ -391,6 +392,100 @@ pub(super) fn merge_strict_lower_and_upper_tensor<T: Scalar>(
     }
 
     Ok(output)
+}
+
+/// Element-wise addition of two GPU tensors: `result = a + b`.
+///
+/// Supports strided inputs; produces a contiguous column-major output.
+/// Uses `TypeId` dispatch to pick the correct f32/f64 binary kernel.
+/// Complex types are not yet supported and will return an error.
+pub(super) fn add_strided_tensor<T: Scalar>(a: &Tensor<T>, b: &Tensor<T>) -> Result<Tensor<T>> {
+    let space = a.logical_memory_space();
+    let runtime = gpu_runtime(space)?;
+    let dims = a.dims();
+    let out_strides = compute_contiguous_strides(dims, crate::MemoryOrder::ColumnMajor);
+    let output_buf = alloc_gpu_buffer::<T>(a.len(), space)?;
+    if a.is_empty() {
+        return Ok(Tensor::from_parts(
+            output_buf,
+            Arc::from(dims),
+            Arc::from(out_strides),
+            0,
+            space,
+            a.preferred_compute_device(),
+            None,
+            false,
+            None,
+        ));
+    }
+
+    let a_ptr = a
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("add_strided_tensor: lhs not on GPU".into()))?;
+    let b_ptr = b
+        .buffer()
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("add_strided_tensor: rhs not on GPU".into()))?;
+    let dst_ptr = output_buf
+        .as_device_ptr()
+        .ok_or_else(|| Error::DeviceError("add_strided_tensor: output not on GPU".into()))?
+        as *mut T;
+
+    if TypeId::of::<T>() == TypeId::of::<f32>() {
+        unsafe {
+            runtime.pointwise_binary_real_f32_raw(
+                RealBinaryOp::Add,
+                1.0_f32,
+                a_ptr as *const f32,
+                dims,
+                a.strides(),
+                a.offset(),
+                b_ptr as *const f32,
+                b.strides(),
+                b.offset(),
+                0.0_f32,
+                dst_ptr as *mut f32,
+                &out_strides,
+                0,
+            )?;
+        }
+    } else if TypeId::of::<T>() == TypeId::of::<f64>() {
+        unsafe {
+            runtime.pointwise_binary_real_f64_raw(
+                RealBinaryOp::Add,
+                1.0_f64,
+                a_ptr as *const f64,
+                dims,
+                a.strides(),
+                a.offset(),
+                b_ptr as *const f64,
+                b.strides(),
+                b.offset(),
+                0.0_f64,
+                dst_ptr as *mut f64,
+                &out_strides,
+                0,
+            )?;
+        }
+    } else {
+        return Err(Error::DeviceError(format!(
+            "add_strided_tensor: unsupported scalar type {} for GPU addition",
+            std::any::type_name::<T>()
+        )));
+    }
+
+    Ok(Tensor::from_parts(
+        output_buf,
+        Arc::from(dims),
+        Arc::from(out_strides),
+        0,
+        space,
+        a.preferred_compute_device(),
+        None,
+        false,
+        None,
+    ))
 }
 
 pub(super) fn transfer_tensor<T: Scalar>(
