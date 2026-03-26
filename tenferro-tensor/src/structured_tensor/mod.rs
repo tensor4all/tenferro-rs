@@ -1,6 +1,7 @@
 //! Structured tensor metadata layered on top of dense [`Tensor`] payloads.
 
 mod validation;
+mod views;
 
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
