@@ -1,5 +1,6 @@
 //! Structured tensor metadata layered on top of dense [`Tensor`] payloads.
 
+mod conversion;
 mod validation;
 mod views;
 
