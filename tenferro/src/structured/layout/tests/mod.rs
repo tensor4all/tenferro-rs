@@ -82,3 +82,56 @@ fn wrapper_newtype_exposes_inner_layout_methods() {
     assert_eq!(wrapped.logical_dims(), &[2, 2]);
     assert_eq!(wrapped.as_ref().dims(), &[2]);
 }
+
+#[test]
+fn wrapper_with_payload_like() {
+    let wrapped = diag_layout(vector(&[1.0, 2.0]), 2).unwrap();
+    let new_payload = vector(&[10.0, 20.0]);
+    let wrapped2 = wrapped.with_payload_like(new_payload).unwrap();
+    assert!(wrapped2.is_diag());
+    assert_eq!(wrapped2.payload().get(&[0]), Some(&10.0));
+}
+
+#[test]
+fn wrapper_into_payload() {
+    let wrapped = diag_layout(vector(&[1.0, 2.0]), 2).unwrap();
+    let payload = wrapped.into_payload();
+    assert_eq!(payload.dims(), &[2]);
+    assert_eq!(payload.get(&[0]), Some(&1.0));
+}
+
+#[test]
+fn wrapper_permute_logical() {
+    let wrapped = diag_layout(vector(&[1.0, 2.0]), 2).unwrap();
+    let p = wrapped.permute_logical(&[1, 0]).unwrap();
+    assert!(p.is_diag());
+}
+
+#[test]
+fn wrapper_conj() {
+    let wrapped = diag_layout(vector(&[1.0, 2.0]), 2).unwrap();
+    let c = wrapped.conj();
+    assert!(c.is_diag());
+    assert_eq!(c.logical_dims(), &[2, 2]);
+}
+
+#[test]
+fn wrapper_deref_mut() {
+    let mut wrapped = diag_layout(vector(&[1.0, 2.0]), 2).unwrap();
+    let inner: &mut tenferro_tensor::StructuredTensor<f64> = &mut wrapped;
+    assert!(inner.is_diag());
+}
+
+#[test]
+fn wrapper_from_inner() {
+    let inner = InnerStructuredTensor::from_diagonal_vector(vector(&[1.0]), 2).unwrap();
+    let wrapped: StructuredTensor<f64> = StructuredTensor(inner);
+    assert!(wrapped.is_diag());
+}
+
+#[test]
+fn wrapper_from_dense_tensor() {
+    let t = vector(&[1.0, 2.0]);
+    let wrapped: StructuredTensor<f64> = StructuredTensor(InnerStructuredTensor::from_dense(t));
+    assert!(wrapped.is_dense());
+}

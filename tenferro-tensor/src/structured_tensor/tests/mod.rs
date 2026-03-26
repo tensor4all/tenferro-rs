@@ -120,7 +120,7 @@ fn to_dense_diagonal() {
     let payload =
         Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let s = StructuredTensor::from_diagonal_vector(payload, 2).unwrap();
-    let dense = s.to_dense();
+    let dense = s.to_dense().unwrap();
     assert_eq!(dense.dims(), &[3, 3]);
     assert_eq!(dense.get(&[0, 0]), Some(&1.0));
     assert_eq!(dense.get(&[1, 1]), Some(&2.0));
@@ -134,7 +134,7 @@ fn to_dense_already_dense_is_clone() {
     let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
         .unwrap();
     let s = StructuredTensor::from_dense(t.clone());
-    let dense = s.to_dense();
+    let dense = s.to_dense().unwrap();
     assert_eq!(dense.to_vec(), t.to_vec());
 }
 
@@ -142,7 +142,7 @@ fn to_dense_already_dense_is_clone() {
 fn into_dense_diagonal() {
     let payload = Tensor::<f64>::from_slice(&[5.0, 6.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let s = StructuredTensor::from_diagonal_vector(payload, 2).unwrap();
-    let dense = s.into_dense();
+    let dense = s.into_dense().unwrap();
     assert_eq!(dense.dims(), &[2, 2]);
     assert_eq!(dense.get(&[0, 0]), Some(&5.0));
     assert_eq!(dense.get(&[1, 1]), Some(&6.0));
@@ -153,7 +153,7 @@ fn into_dense_diagonal() {
 fn to_dense_rank3_diagonal() {
     let payload = Tensor::<f64>::from_slice(&[10.0, 20.0], &[2], MemoryOrder::ColumnMajor).unwrap();
     let s = StructuredTensor::from_diagonal_vector(payload, 3).unwrap();
-    let dense = s.to_dense();
+    let dense = s.to_dense().unwrap();
     assert_eq!(dense.dims(), &[2, 2, 2]);
     assert_eq!(dense.get(&[0, 0, 0]), Some(&10.0));
     assert_eq!(dense.get(&[1, 1, 1]), Some(&20.0));
@@ -170,7 +170,7 @@ fn to_dense_block_diagonal() {
     )
     .unwrap();
     let s = StructuredTensor::new(vec![2, 3, 2, 3], vec![0, 1, 0, 1], payload).unwrap();
-    let dense = s.to_dense();
+    let dense = s.to_dense().unwrap();
     assert_eq!(dense.dims(), &[2, 3, 2, 3]);
     assert_eq!(dense.get(&[0, 0, 0, 0]), Some(&1.0));
     assert_eq!(dense.get(&[1, 2, 1, 2]), Some(&6.0));
@@ -182,6 +182,86 @@ fn to_dense_block_diagonal() {
 fn to_dense_empty_tensor() {
     let payload = Tensor::<f64>::from_slice(&[], &[0], MemoryOrder::ColumnMajor).unwrap();
     let s = StructuredTensor::from_diagonal_vector(payload, 2).unwrap();
-    let dense = s.to_dense();
+    let dense = s.to_dense().unwrap();
     assert_eq!(dense.dims(), &[0, 0]);
+}
+
+#[test]
+fn into_dense_already_dense_returns_payload() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let s = StructuredTensor::from_dense(t.clone());
+    let dense = s.into_dense().unwrap();
+    assert_eq!(dense.to_vec(), t.to_vec());
+}
+
+#[test]
+fn from_tensor_via_into() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0], &[3], MemoryOrder::ColumnMajor).unwrap();
+    let s: StructuredTensor<f64> = t.clone().into();
+    assert!(s.is_dense());
+    assert_eq!(s.payload().to_vec(), t.to_vec());
+}
+
+#[test]
+fn as_ref_returns_payload() {
+    let t = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
+    let s = StructuredTensor::from_dense(t);
+    let r: &Tensor<f64> = s.as_ref();
+    assert_eq!(r.dims(), &[1]);
+}
+
+#[test]
+fn from_diagonal_vector_rank0_rejected() {
+    let payload = Tensor::<f64>::from_slice(&[1.0], &[1], MemoryOrder::ColumnMajor).unwrap();
+    assert!(StructuredTensor::from_diagonal_vector(payload, 0).is_err());
+}
+
+#[test]
+fn from_diagonal_vector_non_rank1_rejected() {
+    let payload =
+        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    assert!(StructuredTensor::from_diagonal_vector(payload, 2).is_err());
+}
+
+#[test]
+fn with_payload_like() {
+    let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let s = StructuredTensor::from_diagonal_vector(payload, 2).unwrap();
+    let new_payload =
+        Tensor::<f64>::from_slice(&[10.0, 20.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let s2 = s.with_payload_like(new_payload).unwrap();
+    assert!(s2.is_diag());
+    assert_eq!(s2.payload().get(&[0]), Some(&10.0));
+}
+
+#[test]
+fn payload_dims_rank_mismatch_rejected() {
+    let payload =
+        Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+            .unwrap();
+    // axis_classes [0, 0] needs 1 class but payload is rank 2
+    assert!(StructuredTensor::new(vec![2, 2], vec![0, 0], payload).is_err());
+}
+
+#[test]
+fn logical_dims_axis_classes_length_mismatch_rejected() {
+    let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    // logical_dims length 3, axis_classes length 2
+    assert!(StructuredTensor::new(vec![2, 2, 2], vec![0, 0], payload).is_err());
+}
+
+#[test]
+fn permute_logical_out_of_range_rejected() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
+        .unwrap();
+    let s = StructuredTensor::from_dense(t);
+    assert!(s.permute_logical(&[0, 5]).is_err());
+}
+
+#[test]
+fn from_validated_parts_accessible() {
+    let payload = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    let s = StructuredTensor::from_validated_parts(vec![2, 2], vec![0, 0], payload);
+    assert!(s.is_diag());
 }

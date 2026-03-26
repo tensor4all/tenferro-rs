@@ -75,6 +75,8 @@
     "tenferro-prims/src/families/scalar.rs": 6,
     "tenferro-prims/src/families/sort.rs": 0,
     "tenferro-tensor/src/buffer.rs": 78,
-    "tenferro-tensor/src/tensor/structural.rs": 64
+    "tenferro-tensor/src/tensor/structural.rs": 64,
+    "tenferro-tensor/src/structured_tensor/conversion.rs": 75,
+    "tenferro/src/structured/layout.rs": 79
   }
 }
