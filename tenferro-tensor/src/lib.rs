@@ -86,11 +86,13 @@ mod cuda_runtime;
 mod buffer;
 mod completion_event;
 mod layout;
+pub mod structured_tensor;
 mod tensor;
 
 pub use buffer::DataBuffer;
 pub use completion_event::CompletionEvent;
 pub use layout::MemoryOrder;
+pub use structured_tensor::StructuredTensor;
 pub use tensor::{KeepCountScalar, Tensor};
 
 #[cfg(test)]
