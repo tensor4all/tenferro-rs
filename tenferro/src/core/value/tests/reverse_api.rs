@@ -8,7 +8,9 @@ fn rank0_f64(value: f64) -> DenseTensor<f64> {
 }
 
 fn structured_rank0_f64(value: f64) -> StructuredTensor<f64> {
-    StructuredTensor::from_dense(rank0_f64(value))
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(rank0_f64(
+        value,
+    )))
 }
 
 #[test]

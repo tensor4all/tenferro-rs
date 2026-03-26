@@ -81,7 +81,6 @@ where
                         label
                     ),
                 })?;
-            let space = primals[0].payload().logical_memory_space();
             let mut data = vec![T::zero(); dim * dim];
             for i in 0..dim {
                 data[i * dim + i] = T::one();
@@ -92,7 +91,9 @@ where
                 tenferro_tensor::MemoryOrder::ColumnMajor,
             )
             .map_err(Error::from)?;
-            delta_tensors.push(StructuredTensor::from_dense(eye));
+            delta_tensors.push(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(eye),
+            ));
             rev_subs.inputs.push(vec![label, label]);
         }
 

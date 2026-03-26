@@ -49,7 +49,11 @@ where
         .iter()
         .map(|&class_id| payload.dims()[class_id])
         .collect();
-    StructuredTensor::new(logical_dims, axis_classes.to_vec(), payload)
+    Ok(StructuredTensor(tenferro_tensor::StructuredTensor::new(
+        logical_dims,
+        axis_classes.to_vec(),
+        payload,
+    )?))
 }
 
 pub(super) fn diag_embed_ad_tensor_typed<T>(
@@ -71,12 +75,21 @@ where
     }
 
     match input.snapshot()? {
-        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(
-            StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?,
-        )),
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor(
+            tenferro_tensor::StructuredTensor::from_diagonal_vector(
+                primal.0.into_payload(),
+                logical_rank,
+            )?,
+        ))),
         AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
-            StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?,
-            StructuredTensor::from_diagonal_vector(tangent.into_payload(), logical_rank)?,
+            StructuredTensor(tenferro_tensor::StructuredTensor::from_diagonal_vector(
+                primal.0.into_payload(),
+                logical_rank,
+            )?),
+            StructuredTensor(tenferro_tensor::StructuredTensor::from_diagonal_vector(
+                tangent.0.into_payload(),
+                logical_rank,
+            )?),
         ),
         AdTensorSnapshot::Reverse {
             primal,
@@ -85,9 +98,18 @@ where
             tangent,
         } => {
             let output_primal =
-                StructuredTensor::from_diagonal_vector(primal.into_payload(), logical_rank)?;
+                StructuredTensor(tenferro_tensor::StructuredTensor::from_diagonal_vector(
+                    primal.0.into_payload(),
+                    logical_rank,
+                )?);
             let output_tangent = tangent
-                .map(|t| StructuredTensor::from_diagonal_vector(t.into_payload(), logical_rank))
+                .map(|t| {
+                    tenferro_tensor::StructuredTensor::from_diagonal_vector(
+                        t.0.into_payload(),
+                        logical_rank,
+                    )
+                    .map(StructuredTensor)
+                })
                 .transpose()?;
             let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
             let output_node = out
@@ -101,7 +123,9 @@ where
                 Box::new(move |cotangent| {
                     Ok(vec![(
                         input_node,
-                        StructuredTensor::from_dense(cotangent.payload().clone()),
+                        StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
+                            cotangent.payload().clone(),
+                        )),
                     )])
                 }),
             );
@@ -160,7 +184,9 @@ where
                 Box::new(move |cotangent| {
                     Ok(vec![(
                         input_node,
-                        StructuredTensor::from_dense(cotangent.payload().clone()),
+                        StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
+                            cotangent.payload().clone(),
+                        )),
                     )])
                 }),
             );

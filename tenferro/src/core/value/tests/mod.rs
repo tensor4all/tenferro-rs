@@ -14,11 +14,19 @@ fn dense_matrix(values: &[f64; 4]) -> DenseTensor<f64> {
 }
 
 fn diag2(values: &[f64; 2]) -> StructuredTensor<f64> {
-    StructuredTensor::from_diagonal_vector(
-        DenseTensor::<f64>::from_slice(values, &[2], MemoryOrder::ColumnMajor).unwrap(),
-        2,
+    StructuredTensor(
+        tenferro_tensor::StructuredTensor::from_diagonal_vector(
+            DenseTensor::<f64>::from_slice(values, &[2], MemoryOrder::ColumnMajor).unwrap(),
+            2,
+        )
+        .unwrap(),
     )
-    .unwrap()
+}
+
+fn dense_layout(values: &[f64; 4]) -> StructuredTensor<f64> {
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(dense_matrix(
+        values,
+    )))
 }
 
 #[test]
@@ -67,7 +75,7 @@ fn ad_tensor_new_reverse_rejects_tangent_layout_mismatch() {
 #[test]
 fn ad_tensor_try_from_structured_value_rejects_tangent_layout_mismatch() {
     let value = AdTensorSnapshot::Forward {
-        primal: StructuredTensor::from_dense(dense_matrix(&[1.0, 2.0, 3.0, 4.0])),
+        primal: dense_layout(&[1.0, 2.0, 3.0, 4.0]),
         tangent: diag2(&[5.0, 6.0]),
     };
     let err = match AdTensor::try_from(value) {

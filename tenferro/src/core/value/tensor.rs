@@ -143,10 +143,10 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```text
     /// use tidu::Tape;
-    /// use tenferro::{core::{AdTensor, DynTensor}};
+    /// use tenferro::{core::{AdTensor, DynTensor}, Tensor};
     ///
     /// let tape = Tape::<DynTensor>::new();
-    /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
+    /// let x = AdTensor::new_reverse_leaf(Tensor::<f64>::from_slice(&[1.0], &[]).unwrap(), &tape)?;
     /// # Ok::<(), tenferro::Error>(())
     /// ```
     pub fn new_reverse_leaf(
@@ -298,10 +298,10 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```text
     /// use tidu::Tape;
-    /// use tenferro::{core::{AdTensor, DynTensor}};
+    /// use tenferro::{core::{AdTensor, DynTensor}, Tensor};
     ///
     /// let tape = Tape::<DynTensor>::new();
-    /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
+    /// let x = AdTensor::new_reverse_leaf(Tensor::<f64>::from_slice(&[1.0], &[]).unwrap(), &tape)?;
     /// assert!(x.tape().is_some());
     /// # Ok::<(), tenferro::Error>(())
     /// ```
@@ -315,10 +315,10 @@ impl<T: Scalar> AdTensor<T> {
     ///
     /// ```text
     /// use tidu::Tape;
-    /// use tenferro::{core::{AdTensor, DynTensor}};
+    /// use tenferro::{core::{AdTensor, DynTensor}, Tensor};
     ///
     /// let tape = Tape::<DynTensor>::new();
-    /// let x = AdTensor::new_reverse_leaf(StructuredTensor::from_dense(todo!()), &tape)?;
+    /// let x = AdTensor::new_reverse_leaf(Tensor::<f64>::from_slice(&[1.0], &[]).unwrap(), &tape)?;
     /// assert!(x.node_id().is_some());
     /// # Ok::<(), tenferro::Error>(())
     /// ```
@@ -406,7 +406,9 @@ impl<T: Scalar + DynTensorTyped> Clone for AdTensor<T> {
 
 impl<T: Scalar> From<Tensor<T>> for AdTensor<T> {
     fn from(value: Tensor<T>) -> Self {
-        Self::new_primal(StructuredTensor::from_dense(value))
+        Self::new_primal(StructuredTensor(
+            tenferro_tensor::StructuredTensor::from_dense(value),
+        ))
     }
 }
 

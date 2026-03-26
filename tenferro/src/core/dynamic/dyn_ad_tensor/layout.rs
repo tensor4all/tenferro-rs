@@ -42,6 +42,10 @@ fn inverse_permutation(perm: &[usize]) -> Vec<usize> {
     inverse
 }
 
+fn dense_structured<T: Scalar>(payload: Tensor<T>) -> StructuredTensor<T> {
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(payload))
+}
+
 pub(super) fn diag_embed_ad_tensor_typed<T>(
     input: &AdTensor<T>,
     logical_rank: usize,
@@ -84,20 +88,20 @@ where
     }
 
     match input.snapshot()? {
-        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(dense_structured(
             primal
                 .into_payload()
                 .reshape(new_dims)
                 .map_err(Error::from)?,
         ))),
         AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
-            StructuredTensor::from_dense(
+            dense_structured(
                 primal
                     .into_payload()
                     .reshape(new_dims)
                     .map_err(Error::from)?,
             ),
-            StructuredTensor::from_dense(
+            dense_structured(
                 tangent
                     .into_payload()
                     .reshape(new_dims)
@@ -110,7 +114,7 @@ where
             tape,
             tangent,
         } => {
-            let output_primal = StructuredTensor::from_dense(
+            let output_primal = dense_structured(
                 primal
                     .into_payload()
                     .reshape(new_dims)
@@ -118,7 +122,7 @@ where
             );
             let output_tangent = tangent
                 .map(|t| {
-                    Result::Ok(StructuredTensor::from_dense(
+                    Result::Ok(dense_structured(
                         t.into_payload().reshape(new_dims).map_err(Error::from)?,
                     ))
                 })
@@ -134,9 +138,8 @@ where
                 output_node,
                 Box::new(move |cotangent| {
                     let contiguous = cotangent.payload().contiguous(MemoryOrder::ColumnMajor);
-                    let grad = StructuredTensor::from_dense(
-                        contiguous.reshape(&old_dims).map_err(Error::from)?,
-                    );
+                    let grad =
+                        dense_structured(contiguous.reshape(&old_dims).map_err(Error::from)?);
                     Ok(vec![(input_node, grad)])
                 }),
             );
@@ -301,12 +304,12 @@ where
 
     let original_dims = input.primal().dims().to_vec();
     match input.snapshot()? {
-        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(StructuredTensor::from_dense(
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(dense_structured(
             take_prefix_payload_typed(primal.payload(), axis, len)?,
         ))),
         AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
-            StructuredTensor::from_dense(take_prefix_payload_typed(primal.payload(), axis, len)?),
-            StructuredTensor::from_dense(take_prefix_payload_typed(tangent.payload(), axis, len)?),
+            dense_structured(take_prefix_payload_typed(primal.payload(), axis, len)?),
+            dense_structured(take_prefix_payload_typed(tangent.payload(), axis, len)?),
         ),
         AdTensorSnapshot::Reverse {
             primal,
@@ -314,15 +317,12 @@ where
             tape,
             tangent,
         } => {
-            let output_primal = StructuredTensor::from_dense(take_prefix_payload_typed(
-                primal.payload(),
-                axis,
-                len,
-            )?);
+            let output_primal =
+                dense_structured(take_prefix_payload_typed(primal.payload(), axis, len)?);
             let output_tangent = tangent
                 .as_ref()
                 .map(|t| {
-                    Result::Ok(StructuredTensor::from_dense(take_prefix_payload_typed(
+                    Result::Ok(dense_structured(take_prefix_payload_typed(
                         t.payload(),
                         axis,
                         len,
@@ -339,7 +339,7 @@ where
                 &tape,
                 output_node,
                 Box::new(move |cotangent| {
-                    let grad = StructuredTensor::from_dense(take_prefix_pullback_typed(
+                    let grad = dense_structured(take_prefix_pullback_typed(
                         cotangent.payload(),
                         axis,
                         &original_dims,

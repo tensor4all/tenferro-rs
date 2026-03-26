@@ -52,11 +52,12 @@ pub fn pullback_wrt<T: Scalar + DynTensorTyped + 'static>(
                 let grad = all_grads
                     .get(&node)
                     .map(|payload| {
-                        StructuredTensor::new(
+                        tenferro_tensor::StructuredTensor::new(
                             wrt_tensor.dims().to_vec(),
                             wrt_tensor.axis_classes().to_vec(),
                             payload.clone(),
                         )
+                        .map(StructuredTensor)
                     })
                     .transpose()?;
                 out.push(grad);

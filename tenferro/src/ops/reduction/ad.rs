@@ -27,13 +27,13 @@ where
     /// ```
     pub fn run(self) -> Result<AdTensor<T>> {
         let operands = [self.tensor];
-        let primal = StructuredTensor::from_dense(
+        let primal = StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
             super::super::scalar::primal::scalar_full_reduction_primal(
                 "sum_ad",
                 tenferro_prims::ScalarReductionOp::Sum,
                 self.tensor.primal(),
             )?,
-        );
+        ));
         let tangent = if has_forward(&operands) || has_any_tangent(&operands) {
             let zero_tangent = zero_like(self.tensor.primal())?;
             let tangent_input = if let Some(tangent) = self.tensor.structured_tangent() {
@@ -41,12 +41,14 @@ where
             } else {
                 &zero_tangent
             };
-            Some(StructuredTensor::from_dense(
-                super::super::scalar::primal::scalar_full_reduction_primal(
-                    "sum_ad",
-                    tenferro_prims::ScalarReductionOp::Sum,
-                    tangent_input,
-                )?,
+            Some(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(
+                    super::super::scalar::primal::scalar_full_reduction_primal(
+                        "sum_ad",
+                        tenferro_prims::ScalarReductionOp::Sum,
+                        tangent_input,
+                    )?,
+                ),
             ))
         } else {
             None

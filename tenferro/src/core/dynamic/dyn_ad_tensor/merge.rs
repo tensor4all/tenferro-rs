@@ -85,18 +85,18 @@ where
 {
     ensure_reverse_leaf_attached(input)?;
     let mapped = match input.snapshot()? {
-        AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(StructuredTensor::new(
+        AdTensorSnapshot::Primal(primal) => AdTensorSnapshot::Primal(rebuild_structured(
             primal.logical_dims().to_vec(),
             primal.axis_classes().to_vec(),
             tensor_map_unary_typed(primal.payload(), primal_map)?,
         )?),
         AdTensorSnapshot::Forward { primal, tangent } => AdTensorSnapshot::Forward {
-            primal: StructuredTensor::new(
+            primal: rebuild_structured(
                 primal.logical_dims().to_vec(),
                 primal.axis_classes().to_vec(),
                 tensor_map_unary_typed(primal.payload(), primal_map)?,
             )?,
-            tangent: StructuredTensor::new(
+            tangent: rebuild_structured(
                 tangent.logical_dims().to_vec(),
                 tangent.axis_classes().to_vec(),
                 tensor_map_unary_typed(tangent.payload(), primal_map)?,
@@ -109,7 +109,7 @@ where
             tangent,
         } => {
             let input_layout = primal.clone();
-            let output_primal = StructuredTensor::new(
+            let output_primal = rebuild_structured(
                 primal.logical_dims().to_vec(),
                 primal.axis_classes().to_vec(),
                 tensor_map_unary_typed(primal.payload(), primal_map)?,
@@ -117,7 +117,7 @@ where
             let output_tangent = tangent
                 .as_ref()
                 .map(|t| {
-                    StructuredTensor::new(
+                    rebuild_structured(
                         t.logical_dims().to_vec(),
                         t.axis_classes().to_vec(),
                         tensor_map_unary_typed(t.payload(), primal_map)?,
@@ -152,6 +152,18 @@ where
     T: Scalar + Copy + Add<Output = T>,
 {
     tensor_map_binary_typed(lhs, rhs, |x, y| x + y)
+}
+
+fn rebuild_structured<T: Scalar>(
+    logical_dims: Vec<usize>,
+    axis_classes: Vec<usize>,
+    payload: Tensor<T>,
+) -> Result<StructuredTensor<T>> {
+    Ok(StructuredTensor(tenferro_tensor::StructuredTensor::new(
+        logical_dims,
+        axis_classes,
+        payload,
+    )?))
 }
 
 struct AdTensorBinaryState<T: Scalar> {
@@ -222,7 +234,7 @@ where
     let rhs_state = split_ad_tensor_state(rhs);
     ensure_same_structured_layout("tensor add merge", &lhs_state.primal, &rhs_state.primal)?;
 
-    let primal = StructuredTensor::new(
+    let primal = rebuild_structured(
         lhs_state.primal.logical_dims().to_vec(),
         lhs_state.primal.axis_classes().to_vec(),
         tensor_add_typed(lhs_state.primal.payload(), rhs_state.primal.payload())?,
@@ -232,7 +244,7 @@ where
             ensure_same_structured_layout("tensor add merge tangent/lhs", &a, &lhs_state.primal)?;
             ensure_same_structured_layout("tensor add merge tangent/rhs", &b, &rhs_state.primal)?;
             ensure_same_structured_layout("tensor add merge tangent", &a, &b)?;
-            Some(StructuredTensor::new(
+            Some(rebuild_structured(
                 a.logical_dims().to_vec(),
                 a.axis_classes().to_vec(),
                 tensor_add_typed(a.payload(), b.payload())?,

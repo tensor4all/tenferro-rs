@@ -4,11 +4,19 @@ use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 use crate::structured::StructuredTensor;
 
 fn diag(values: &[f64], dim: usize) -> StructuredTensor<f64> {
-    StructuredTensor::from_diagonal_vector(
-        DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap(),
-        dim,
+    StructuredTensor(
+        tenferro_tensor::StructuredTensor::from_diagonal_vector(
+            DenseTensor::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap(),
+            dim,
+        )
+        .unwrap(),
     )
-    .unwrap()
+}
+
+fn dense(values: &[f64; 4]) -> StructuredTensor<f64> {
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
+        DenseTensor::<f64>::from_slice(values, &[2, 2], MemoryOrder::ColumnMajor).unwrap(),
+    ))
 }
 
 #[test]
@@ -63,21 +71,14 @@ fn accumulate_tangent_and_num_elements_follow_structured_layout() {
 #[should_panic(expected = "StructuredTensor::accumulate_tangent requires matching axis classes")]
 fn accumulate_tangent_rejects_mismatched_structured_layouts() {
     let diag = diag(&[1.0, 2.0], 2).seed_cotangent();
-    let dense = StructuredTensor::from_dense(
-        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-            .unwrap(),
-    )
-    .seed_cotangent();
+    let dense = dense(&[1.0, 2.0, 3.0, 4.0]).seed_cotangent();
 
     let _ = StructuredTensor::accumulate_tangent(diag, &dense);
 }
 
 #[test]
 fn dense_zero_and_seed_tangents_preserve_dense_layout() {
-    let dense = StructuredTensor::from_dense(
-        DenseTensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor)
-            .unwrap(),
-    );
+    let dense = dense(&[1.0, 2.0, 3.0, 4.0]);
     let zero = dense.zero_tangent();
     let seed = dense.seed_cotangent();
 

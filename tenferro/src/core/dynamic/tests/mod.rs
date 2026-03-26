@@ -40,6 +40,19 @@ fn vector_c64(values: &[Complex64]) -> DenseTensor<Complex64> {
     DenseTensor::<Complex64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn dense_structured<T: tenferro_algebra::Scalar>(tensor: DenseTensor<T>) -> StructuredTensor<T> {
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(tensor))
+}
+
+fn diag_structured<T: tenferro_algebra::Scalar>(
+    tensor: DenseTensor<T>,
+    logical_rank: usize,
+) -> StructuredTensor<T> {
+    StructuredTensor(
+        tenferro_tensor::StructuredTensor::from_diagonal_vector(tensor, logical_rank).unwrap(),
+    )
+}
+
 #[test]
 fn rank0_tensor_carries_scalar_metadata() {
     let x = Tensor::from_tensor(rank0_f64(1.0));
@@ -85,11 +98,10 @@ fn dyn_tensor_and_dyn_ad_tensor_dims() {
 
 #[test]
 fn dyn_tensor_preserves_diag_structure() {
-    let diag = StructuredTensor::from_diagonal_vector(
+    let diag = diag_structured(
         DenseTensor::<f64>::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
         2,
-    )
-    .unwrap();
+    );
     let x: DynTensor = diag.clone().into();
     assert!(x.is_diag());
     assert!(!x.is_dense());
@@ -105,11 +117,10 @@ fn dyn_tensor_preserves_diag_structure() {
 fn dyn_tensor_is_valid_homogeneous_tape_payload() {
     let tape = Tape::<DynTensor>::new();
     let leaf = tape.leaf(
-        StructuredTensor::from_diagonal_vector(
+        diag_structured(
             DenseTensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
             2,
         )
-        .unwrap()
         .into(),
     );
     assert!(leaf.requires_grad());
@@ -130,11 +141,10 @@ fn dyn_ad_tensor_reverse_graph_helpers_cover_same_and_different_graphs() {
 
 #[test]
 fn dyn_tensor_tangents_preserve_diag_layout() {
-    let diag: DynTensor = StructuredTensor::from_diagonal_vector(
+    let diag: DynTensor = diag_structured(
         DenseTensor::<f64>::from_slice(&[3.0, 4.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
         2,
     )
-    .unwrap()
     .into();
     let zero = diag.zero_tangent();
     let seed = diag.seed_cotangent();
@@ -148,12 +158,12 @@ fn dyn_tensor_tangents_preserve_diag_layout() {
 fn dyn_tensor_differentiable_contract_covers_all_runtime_variants() {
     let cases: Vec<(DynTensor, DynTensor, usize)> = vec![
         (
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<f32>::from_slice(&[1.0_f32, 2.0_f32], &[2], MemoryOrder::ColumnMajor)
                     .unwrap(),
             )
             .into(),
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<f32>::from_slice(
                     &[0.5_f32, -0.5_f32],
                     &[2],
@@ -165,18 +175,18 @@ fn dyn_tensor_differentiable_contract_covers_all_runtime_variants() {
             2,
         ),
         (
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<f64>::from_slice(&[3.0_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
             )
             .into(),
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<f64>::from_slice(&[1.25_f64], &[], MemoryOrder::ColumnMajor).unwrap(),
             )
             .into(),
             1,
         ),
         (
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<Complex32>::from_slice(
                     &[Complex32::new(1.0, 2.0)],
                     &[],
@@ -185,7 +195,7 @@ fn dyn_tensor_differentiable_contract_covers_all_runtime_variants() {
                 .unwrap(),
             )
             .into(),
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<Complex32>::from_slice(
                     &[Complex32::new(-0.25, 0.5)],
                     &[],
@@ -197,7 +207,7 @@ fn dyn_tensor_differentiable_contract_covers_all_runtime_variants() {
             1,
         ),
         (
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<Complex64>::from_slice(
                     &[Complex64::new(2.0, -1.0), Complex64::new(0.0, 3.0)],
                     &[2],
@@ -206,7 +216,7 @@ fn dyn_tensor_differentiable_contract_covers_all_runtime_variants() {
                 .unwrap(),
             )
             .into(),
-            StructuredTensor::from_dense(
+            dense_structured(
                 DenseTensor::<Complex64>::from_slice(
                     &[Complex64::new(0.5, 0.25), Complex64::new(-1.0, 1.0)],
                     &[2],
