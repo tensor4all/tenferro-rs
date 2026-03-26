@@ -29,7 +29,8 @@ use crate::cpu::common;
 pub struct CpuContext {
     pub(super) pool: rayon::ThreadPool,
     pub(super) plan_cache: PlanCache,
-    pub(super) temp_pool: TempPool,
+    #[allow(dead_code)]
+    temp_pool: TempPool,
     #[cfg(feature = "gemm-blas")]
     scratch: ScratchPool,
 }
@@ -119,15 +120,9 @@ impl CpuContext {
         &mut self.plan_cache
     }
 
-    /// Returns a mutable reference to the reusable temporary pool.
-    pub fn temp_pool_mut(&mut self) -> &mut TempPool {
+    #[allow(dead_code)]
+    pub(crate) fn temp_pool_mut(&mut self) -> &mut TempPool {
         &mut self.temp_pool
-    }
-
-    #[cfg(feature = "gemm-faer")]
-    /// Returns the faer parallelism policy derived from this context.
-    pub fn faer_parallelism(&self) -> faer::Par {
-        faer::Par::rayon(self.num_threads())
     }
 
     #[cfg(feature = "gemm-blas")]
