@@ -6,14 +6,14 @@ use crate::infra::plan_cache::PlanCache;
 
 #[cfg(feature = "gemm-blas")]
 use super::scratch::{ScratchBuf, ScratchPool};
+use super::temp_pool::TempPool;
 use crate::cpu::common;
 
 /// CPU execution context.
 ///
 /// Encapsulates CPU-side execution resources, analogous to cuTENSOR's
-/// `cutensorHandle_t`. Holds a rayon thread pool and a [`PlanCache`]
-/// for plan reuse. Intermediate buffer allocation relies on the global
-/// allocator (e.g., mimalloc/jemalloc) rather than a custom buffer pool.
+/// `cutensorHandle_t`. Holds a rayon thread pool, a [`PlanCache`] for plan
+/// reuse, and reusable temporary buffers for host-side execution helpers.
 ///
 /// # Examples
 ///
@@ -29,6 +29,7 @@ use crate::cpu::common;
 pub struct CpuContext {
     pub(super) pool: rayon::ThreadPool,
     pub(super) plan_cache: PlanCache,
+    pub(super) temp_pool: TempPool,
     #[cfg(feature = "gemm-blas")]
     scratch: ScratchPool,
 }
@@ -66,6 +67,7 @@ impl CpuContext {
         Ok(Self {
             pool,
             plan_cache: PlanCache::new(),
+            temp_pool: TempPool::default(),
             #[cfg(feature = "gemm-blas")]
             scratch: ScratchPool::default(),
         })
@@ -104,9 +106,28 @@ impl CpuContext {
         &self.pool
     }
 
+    /// Run a closure inside the owned rayon thread pool.
+    pub fn install<R>(&self, op: impl FnOnce() -> R + Send) -> R
+    where
+        R: Send,
+    {
+        self.pool.install(op)
+    }
+
     /// Returns a mutable reference to the plan cache.
     pub fn plan_cache_mut(&mut self) -> &mut PlanCache {
         &mut self.plan_cache
+    }
+
+    /// Returns a mutable reference to the reusable temporary pool.
+    pub fn temp_pool_mut(&mut self) -> &mut TempPool {
+        &mut self.temp_pool
+    }
+
+    #[cfg(feature = "gemm-faer")]
+    /// Returns the faer parallelism policy derived from this context.
+    pub fn faer_parallelism(&self) -> faer::Par {
+        faer::Par::rayon(self.num_threads())
     }
 
     #[cfg(feature = "gemm-blas")]
