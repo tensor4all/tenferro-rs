@@ -11,11 +11,11 @@ where
     type Tangent = StructuredTensor<T>;
 
     fn zero_tangent(&self) -> Self::Tangent {
-        StructuredTensor::from_validated_parts(
+        StructuredTensor(tenferro_tensor::StructuredTensor::from_validated_parts(
             self.logical_dims().to_vec(),
             self.axis_classes().to_vec(),
             self.payload().zero_tangent(),
-        )
+        ))
     }
 
     fn accumulate_tangent(a: Self::Tangent, b: &Self::Tangent) -> Self::Tangent {
@@ -31,8 +31,12 @@ where
         );
         let logical_dims = a.logical_dims().to_vec();
         let axis_classes = a.axis_classes().to_vec();
-        let payload = Tensor::<T>::accumulate_tangent(a.into_payload(), b.payload());
-        StructuredTensor::from_validated_parts(logical_dims, axis_classes, payload)
+        let payload = Tensor::<T>::accumulate_tangent(a.0.into_payload(), b.payload());
+        StructuredTensor(tenferro_tensor::StructuredTensor::from_validated_parts(
+            logical_dims,
+            axis_classes,
+            payload,
+        ))
     }
 
     fn num_elements(&self) -> usize {
@@ -40,11 +44,11 @@ where
     }
 
     fn seed_cotangent(&self) -> Self::Tangent {
-        StructuredTensor::from_validated_parts(
+        StructuredTensor(tenferro_tensor::StructuredTensor::from_validated_parts(
             self.logical_dims().to_vec(),
             self.axis_classes().to_vec(),
             self.payload().seed_cotangent(),
-        )
+        ))
     }
 }
 

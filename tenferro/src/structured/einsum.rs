@@ -107,7 +107,9 @@ where
         });
     }
     if layout.is_dense() {
-        return Ok(StructuredTensor::from_dense(dense.clone()));
+        return Ok(StructuredTensor(
+            tenferro_tensor::StructuredTensor::from_dense(dense.clone()),
+        ));
     }
 
     let input_labels = usize_vec_to_u32(layout.axis_classes())?;
@@ -116,7 +118,7 @@ where
     let subs = Subscripts::new(&inputs, &output_labels);
     let payload = tf_einsum::einsum_with_subscripts::<Standard<T>, B>(ctx, &subs, &[dense], None)
         .map_err(Error::from)?;
-    layout.with_payload_like(payload)
+    Ok(StructuredTensor(layout.0.with_payload_like(payload)?))
 }
 
 pub(crate) fn einsum_with_subscripts_in_ctx<B, C, T>(
@@ -184,11 +186,11 @@ where
     )
     .map_err(Error::from)?;
 
-    StructuredTensor::new(
+    Ok(StructuredTensor(tenferro_tensor::StructuredTensor::new(
         plan.output_dims.clone(),
         plan.output_axis_classes.clone(),
         compressed_output,
-    )
+    )?))
 }
 
 pub(crate) fn accumulate_tangent<T>(
@@ -212,8 +214,12 @@ where
 
     let logical_dims = lhs.logical_dims().to_vec();
     let axis_classes = lhs.axis_classes().to_vec();
-    let payload = Tensor::<T>::accumulate_tangent(lhs.into_payload(), rhs.payload());
-    StructuredTensor::new(logical_dims, axis_classes, payload)
+    let payload = Tensor::<T>::accumulate_tangent(lhs.0.into_payload(), rhs.payload());
+    Ok(StructuredTensor(tenferro_tensor::StructuredTensor::new(
+        logical_dims,
+        axis_classes,
+        payload,
+    )?))
 }
 
 pub(crate) fn reverse_subscripts(subscripts: &Subscripts, input_idx: usize) -> Subscripts {

@@ -192,10 +192,18 @@ impl DynTensor {
     /// ```
     pub fn to_dense(&self) -> Result<Self> {
         match self {
-            Self::F32(t) => Ok(Self::F32(StructuredTensor::from_dense(t.to_dense()?))),
-            Self::F64(t) => Ok(Self::F64(StructuredTensor::from_dense(t.to_dense()?))),
-            Self::C32(t) => Ok(Self::C32(StructuredTensor::from_dense(t.to_dense()?))),
-            Self::C64(t) => Ok(Self::C64(StructuredTensor::from_dense(t.to_dense()?))),
+            Self::F32(t) => Ok(Self::F32(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(t.to_dense()?),
+            ))),
+            Self::F64(t) => Ok(Self::F64(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(t.to_dense()?),
+            ))),
+            Self::C32(t) => Ok(Self::C32(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(t.to_dense()?),
+            ))),
+            Self::C64(t) => Ok(Self::C64(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(t.to_dense()?),
+            ))),
         }
     }
 
@@ -252,22 +260,22 @@ impl DynTensor {
 
     /// Returns typed payload ref when dtype is `f32`.
     pub fn payload_f32(&self) -> Option<&Tensor<f32>> {
-        self.as_f32().map(StructuredTensor::payload)
+        self.as_f32().map(|tensor| tensor.payload())
     }
 
     /// Returns typed payload ref when dtype is `f64`.
     pub fn payload_f64(&self) -> Option<&Tensor<f64>> {
-        self.as_f64().map(StructuredTensor::payload)
+        self.as_f64().map(|tensor| tensor.payload())
     }
 
     /// Returns typed payload ref when dtype is `Complex32`.
     pub fn payload_c32(&self) -> Option<&Tensor<Complex32>> {
-        self.as_c32().map(StructuredTensor::payload)
+        self.as_c32().map(|tensor| tensor.payload())
     }
 
     /// Returns typed payload ref when dtype is `Complex64`.
     pub fn payload_c64(&self) -> Option<&Tensor<Complex64>> {
-        self.as_c64().map(StructuredTensor::payload)
+        self.as_c64().map(|tensor| tensor.payload())
     }
 
     #[cfg(test)]
@@ -283,35 +291,27 @@ impl DynTensor {
         match (self, rhs) {
             (Self::F32(a), Self::F32(b)) => {
                 ensure_same_layout("try_sub", a, b)?;
-                Ok(Self::F32(a.with_payload_like(tensor_map_binary_typed(
-                    a.payload(),
-                    b.payload(),
-                    |x, y| x - y,
-                )?)?))
+                Ok(Self::F32(StructuredTensor(a.0.with_payload_like(
+                    tensor_map_binary_typed(a.payload(), b.payload(), |x, y| x - y)?,
+                )?)))
             }
             (Self::F64(a), Self::F64(b)) => {
                 ensure_same_layout("try_sub", a, b)?;
-                Ok(Self::F64(a.with_payload_like(tensor_map_binary_typed(
-                    a.payload(),
-                    b.payload(),
-                    |x, y| x - y,
-                )?)?))
+                Ok(Self::F64(StructuredTensor(a.0.with_payload_like(
+                    tensor_map_binary_typed(a.payload(), b.payload(), |x, y| x - y)?,
+                )?)))
             }
             (Self::C32(a), Self::C32(b)) => {
                 ensure_same_layout("try_sub", a, b)?;
-                Ok(Self::C32(a.with_payload_like(tensor_map_binary_typed(
-                    a.payload(),
-                    b.payload(),
-                    |x, y| x - y,
-                )?)?))
+                Ok(Self::C32(StructuredTensor(a.0.with_payload_like(
+                    tensor_map_binary_typed(a.payload(), b.payload(), |x, y| x - y)?,
+                )?)))
             }
             (Self::C64(a), Self::C64(b)) => {
                 ensure_same_layout("try_sub", a, b)?;
-                Ok(Self::C64(a.with_payload_like(tensor_map_binary_typed(
-                    a.payload(),
-                    b.payload(),
-                    |x, y| x - y,
-                )?)?))
+                Ok(Self::C64(StructuredTensor(a.0.with_payload_like(
+                    tensor_map_binary_typed(a.payload(), b.payload(), |x, y| x - y)?,
+                )?)))
             }
             _ => Err(Error::InvalidAdTensor {
                 message: format!(
@@ -326,38 +326,46 @@ impl DynTensor {
     /// Element-wise absolute value.
     pub fn abs_tensor(&self) -> Result<Self> {
         match self {
-            Self::F32(a) => Ok(Self::F32(
-                a.with_payload_like(tensor_map_unary_typed(a.payload(), |x: f32| x.abs())?)?,
-            )),
-            Self::F64(a) => Ok(Self::F64(
-                a.with_payload_like(tensor_map_unary_typed(a.payload(), |x: f64| x.abs())?)?,
-            )),
-            Self::C32(a) => Ok(Self::F32(StructuredTensor::new(
-                a.logical_dims().to_vec(),
-                a.axis_classes().to_vec(),
-                tensor_map_unary_typed(a.payload(), |z: Complex32| z.norm())?,
-            )?)),
-            Self::C64(a) => Ok(Self::F64(StructuredTensor::new(
-                a.logical_dims().to_vec(),
-                a.axis_classes().to_vec(),
-                tensor_map_unary_typed(a.payload(), |z: Complex64| z.norm())?,
-            )?)),
+            Self::F32(a) => Ok(Self::F32(StructuredTensor(a.0.with_payload_like(
+                tensor_map_unary_typed(a.payload(), |x: f32| x.abs())?,
+            )?))),
+            Self::F64(a) => Ok(Self::F64(StructuredTensor(a.0.with_payload_like(
+                tensor_map_unary_typed(a.payload(), |x: f64| x.abs())?,
+            )?))),
+            Self::C32(a) => Ok(Self::F32(StructuredTensor(
+                tenferro_tensor::StructuredTensor::new(
+                    a.logical_dims().to_vec(),
+                    a.axis_classes().to_vec(),
+                    tensor_map_unary_typed(a.payload(), |z: Complex32| z.norm())?,
+                )?,
+            ))),
+            Self::C64(a) => Ok(Self::F64(StructuredTensor(
+                tenferro_tensor::StructuredTensor::new(
+                    a.logical_dims().to_vec(),
+                    a.axis_classes().to_vec(),
+                    tensor_map_unary_typed(a.payload(), |z: Complex64| z.norm())?,
+                )?,
+            ))),
         }
     }
 
     /// Maximum element value as a rank-0 tensor.
     pub fn max(&self) -> Result<Self> {
         match self {
-            Self::F32(t) => Ok(Self::F32(StructuredTensor::from_dense(Tensor::from_slice(
-                &[tensor_max_typed(t.payload())?],
-                &[],
-                MemoryOrder::ColumnMajor,
-            )?))),
-            Self::F64(t) => Ok(Self::F64(StructuredTensor::from_dense(Tensor::from_slice(
-                &[tensor_max_typed(t.payload())?],
-                &[],
-                MemoryOrder::ColumnMajor,
-            )?))),
+            Self::F32(t) => Ok(Self::F32(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(Tensor::from_slice(
+                    &[tensor_max_typed(t.payload())?],
+                    &[],
+                    MemoryOrder::ColumnMajor,
+                )?),
+            ))),
+            Self::F64(t) => Ok(Self::F64(StructuredTensor(
+                tenferro_tensor::StructuredTensor::from_dense(Tensor::from_slice(
+                    &[tensor_max_typed(t.payload())?],
+                    &[],
+                    MemoryOrder::ColumnMajor,
+                )?),
+            ))),
             Self::C32(_) | Self::C64(_) => Err(Error::InvalidAdTensor {
                 message: "max is undefined for complex tensors; call abs_tensor() first"
                     .to_string(),
@@ -415,7 +423,9 @@ macro_rules! impl_dyn_tensor_from {
     ($variant:ident, $ty:ty) => {
         impl From<Tensor<$ty>> for DynTensor {
             fn from(value: Tensor<$ty>) -> Self {
-                Self::$variant(StructuredTensor::from_dense(value))
+                Self::$variant(StructuredTensor(
+                    tenferro_tensor::StructuredTensor::from_dense(value),
+                ))
             }
         }
 

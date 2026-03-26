@@ -2,6 +2,7 @@ mod support;
 
 use support::{diag_f64, with_axis_classes_f64};
 use tenferro::{grad, GradOptions, Tensor};
+use tenferro_device::Error as DeviceError;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
 fn dense2(values: &[f64], dims: &[usize]) -> Tensor {
@@ -67,8 +68,8 @@ fn permute_rejects_invalid_permutations() {
         Err(err) => err,
     };
     let message = match err {
-        tenferro::Error::InvalidAdTensor { message } => message,
-        other => panic!("expected InvalidAdTensor, got {other:?}"),
+        tenferro::Error::Backend(DeviceError::InvalidArgument(message)) => message,
+        other => panic!("expected backend invalid argument, got {other:?}"),
     };
     assert!(message.contains("perm"));
 }

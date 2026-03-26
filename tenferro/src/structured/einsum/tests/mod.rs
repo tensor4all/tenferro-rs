@@ -18,10 +18,23 @@ fn as_slice(tensor: &DenseTensor<f64>) -> &[f64] {
         .unwrap_or_else(|| panic!("expected CPU-backed contiguous tensor"))
 }
 
+fn dense_layout(values: &[f64], rows: usize, cols: usize) -> StructuredTensor<f64> {
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(matrix(
+        values, rows, cols,
+    )))
+}
+
+fn diag_layout(values: &[f64], logical_rank: usize) -> StructuredTensor<f64> {
+    StructuredTensor(
+        tenferro_tensor::StructuredTensor::from_diagonal_vector(vector(values), logical_rank)
+            .unwrap(),
+    )
+}
+
 #[test]
 fn public_structured_ops_cover_cpu_and_runtime_error_paths() {
-    let diag = StructuredTensor::from_diagonal_vector(vector(&[2.0, 3.0]), 2).unwrap();
-    let dense_layout = StructuredTensor::from_dense(matrix(&[1.0, 2.0, 3.0, 4.0], 2, 2));
+    let diag = diag_layout(&[2.0, 3.0], 2);
+    let dense_layout = dense_layout(&[1.0, 2.0, 3.0, 4.0], 2, 2);
     let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
 
     {
@@ -62,8 +75,8 @@ fn public_structured_ops_cover_cpu_and_runtime_error_paths() {
 #[test]
 fn compression_and_tangent_accumulation_cover_dense_and_diag_paths() {
     let mut ctx = CpuContext::new(1);
-    let dense_layout = StructuredTensor::from_dense(matrix(&[1.0, 2.0, 3.0, 4.0], 2, 2));
-    let diag_layout = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
+    let dense_layout = dense_layout(&[1.0, 2.0, 3.0, 4.0], 2, 2);
+    let diag_layout = diag_layout(&[1.0, 2.0], 2);
 
     let dense = compress_dense_to_layout_in_ctx::<CpuBackend, _, f64>(
         &mut ctx,
@@ -131,7 +144,7 @@ fn internal_helpers_cover_normalization_and_error_branches() {
     assert!(matches!(err, Error::InvalidAdTensor { .. }));
 
     let rank1_subs = Subscripts::new(&[&[0]], &[0]);
-    let diag = StructuredTensor::from_diagonal_vector(vector(&[1.0, 2.0]), 2).unwrap();
+    let diag = diag_layout(&[1.0, 2.0], 2);
     let err = einsum_with_subscripts_in_ctx::<CpuBackend, _, f64>(&mut ctx, &rank1_subs, &[&diag])
         .unwrap_err();
     assert!(matches!(err, Error::InvalidAdTensor { .. }));

@@ -38,7 +38,7 @@ impl<T: Scalar> AdTensor<T> {
 
     /// Returns compressed tangent payload tensor reference when available.
     pub fn tangent(&self) -> Option<&Tensor<T>> {
-        self.structured_tangent().map(StructuredTensor::payload)
+        self.structured_tangent().map(|tensor| tensor.payload())
     }
 
     /// Returns dimensions of the primal tensor.

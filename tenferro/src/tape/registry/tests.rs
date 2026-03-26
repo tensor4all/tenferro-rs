@@ -5,8 +5,12 @@ use tenferro_tensor::{MemoryOrder, Tensor};
 use super::*;
 use crate::structured::StructuredTensor;
 
+fn dense_structured<T: tenferro_algebra::Scalar>(tensor: Tensor<T>) -> StructuredTensor<T> {
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(tensor))
+}
+
 fn f64_scalar(value: f64) -> DynTensor {
-    DynTensor::from(StructuredTensor::from_dense(
+    DynTensor::from(dense_structured(
         Tensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap(),
     ))
 }
@@ -16,7 +20,7 @@ fn tensor_rule_adapter_rejects_cotangent_dtype_mismatch_and_reports_empty_inputs
     let adapter = TensorRuleAdapter::<f64> {
         rule: Box::new(|_| Ok(Vec::new())),
     };
-    let cotangent = DynTensor::from(StructuredTensor::from_dense(
+    let cotangent = DynTensor::from(dense_structured(
         Tensor::<Complex64>::from_slice(
             &[Complex64::new(1.0, -2.0)],
             &[],
@@ -53,7 +57,7 @@ fn mixed_tensor_rule_adapter_rejects_cotangent_dtype_mismatch_and_reports_empty_
     let adapter = MixedTensorRuleAdapter::<f64, Complex64> {
         rule: Box::new(|_| Ok(Vec::new())),
     };
-    let cotangent = DynTensor::from(StructuredTensor::from_dense(
+    let cotangent = DynTensor::from(dense_structured(
         Tensor::<Complex64>::from_slice(
             &[Complex64::new(1.0, -2.0)],
             &[],
@@ -79,7 +83,7 @@ fn mixed_tensor_rule_adapter_pullback_converts_gradient_dtype() {
             let seed = cotangent.payload().buffer().as_slice().unwrap()[0];
             Ok(vec![(
                 NodeId::new(7),
-                StructuredTensor::from_dense(
+                dense_structured(
                     Tensor::<Complex64>::from_slice(
                         &[Complex64::new(seed, -seed)],
                         &[],

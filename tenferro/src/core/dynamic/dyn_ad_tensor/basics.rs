@@ -79,7 +79,9 @@ impl Tensor {
         T: tenferro_algebra::Scalar + super::super::DynTensorTyped + 'static,
         AdTensor<T>: Into<Self>,
     {
-        Self::new_primal(StructuredTensor::from_dense(tensor))
+        Self::new_primal(StructuredTensor(
+            tenferro_tensor::StructuredTensor::from_dense(tensor),
+        ))
     }
 
     pub(crate) fn from_structured<T>(tensor: StructuredTensor<T>) -> Self

@@ -21,9 +21,15 @@ where
             message: "reverse-mode output requested but no reverse tape found".to_string(),
         })?;
         return AdTensor::new_reverse_output(
-            crate::structured::StructuredTensor::from_dense(primal),
+            crate::structured::StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
+                primal,
+            )),
             &tape,
-            tangent.map(crate::structured::StructuredTensor::from_dense),
+            tangent.map(|value| {
+                crate::structured::StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
+                    value,
+                ))
+            }),
         );
     }
 
@@ -32,14 +38,18 @@ where
             message: "forward-mode inputs must provide tangent output".to_string(),
         })?;
         return AdTensor::new_forward(
-            crate::structured::StructuredTensor::from_dense(primal),
-            crate::structured::StructuredTensor::from_dense(tangent),
+            crate::structured::StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
+                primal,
+            )),
+            crate::structured::StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(
+                tangent,
+            )),
         );
     }
 
-    Ok(AdTensor::new_primal(
-        crate::structured::StructuredTensor::from_dense(primal),
-    ))
+    Ok(AdTensor::new_primal(crate::structured::StructuredTensor(
+        tenferro_tensor::StructuredTensor::from_dense(primal),
+    )))
 }
 
 /// Builder for AD SVD.

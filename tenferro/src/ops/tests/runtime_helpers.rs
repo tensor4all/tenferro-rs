@@ -3,6 +3,19 @@ use crate::core::AdMode;
 use crate::ops::tests::support::{assert_forward_mode, assert_reverse_on_tape};
 use ::tidu::Tape;
 
+fn dense_structured<T: tenferro_algebra::Scalar>(tensor: DenseTensor<T>) -> StructuredTensor<T> {
+    StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(tensor))
+}
+
+fn diag_structured<T: tenferro_algebra::Scalar>(
+    tensor: DenseTensor<T>,
+    logical_rank: usize,
+) -> StructuredTensor<T> {
+    StructuredTensor(
+        tenferro_tensor::StructuredTensor::from_diagonal_vector(tensor, logical_rank).unwrap(),
+    )
+}
+
 #[test]
 fn runtime_helpers_cover_mode_and_shape_paths() {
     let primal =
@@ -104,17 +117,16 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
     let da =
         DenseTensor::<f64>::from_slice(&[0.5, 0.0, -0.5, 1.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
-    let diag_layout = StructuredTensor::from_diagonal_vector(
+    let diag_layout = diag_structured(
         DenseTensor::<f64>::from_slice(&[1.0, 1.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
         2,
-    )
-    .unwrap();
+    );
     let diag_grad =
         DenseTensor::<f64>::from_slice(&[9.0, 0.0, 0.0, 8.0], &[2, 2], MemoryOrder::ColumnMajor)
             .unwrap();
-    let structured_a = StructuredTensor::from_dense(a.clone());
-    let structured_b = StructuredTensor::from_dense(b.clone());
-    let structured_da = StructuredTensor::from_dense(da.clone());
+    let structured_a = dense_structured(a.clone());
+    let structured_b = dense_structured(b.clone());
+    let structured_da = dense_structured(da.clone());
     let expected = with_cpu_runtime("runtime_helper", |ctx| {
         tenferro_einsum::einsum::<Standard<f64>, CpuBackend>(ctx, "ij,jk->ik", &[&da, &b], None)
             .map_err(Error::from)

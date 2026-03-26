@@ -297,8 +297,8 @@ pub(crate) fn wrap_dense_ad_output<TIn: Scalar, TOut: Scalar>(
     wrap_structured_ad_output(
         op_name,
         inputs,
-        StructuredTensor::from_dense(primal),
-        tangent.map(StructuredTensor::from_dense),
+        StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(primal)),
+        tangent.map(|value| StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(value))),
     )
 }
 
@@ -357,8 +357,8 @@ pub(crate) fn wrap_same_type_dense_ad_output<T: Scalar + DynTensorTyped>(
     wrap_same_type_structured_ad_output(
         op_name,
         inputs,
-        StructuredTensor::from_dense(primal),
-        tangent.map(StructuredTensor::from_dense),
+        StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(primal)),
+        tangent.map(|value| StructuredTensor(tenferro_tensor::StructuredTensor::from_dense(value))),
     )
 }
 

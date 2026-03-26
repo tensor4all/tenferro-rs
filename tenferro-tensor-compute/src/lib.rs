@@ -61,7 +61,7 @@
 //! ```
 
 // --- Tensor type and layout ---
-pub use tenferro_tensor::{MemoryOrder, Tensor};
+pub use tenferro_tensor::{MemoryOrder, StructuredTensor, Tensor};
 
 // --- Device / memory ---
 pub use tenferro_device::LogicalMemorySpace;
