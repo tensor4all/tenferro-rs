@@ -1,9 +1,10 @@
 use num_complex::{Complex32, Complex64};
 use tenferro::{
-    backward, forward_ad, set_default_runtime, BackwardOptions, RuntimeContext, ScalarType, Tensor,
+    backward, forward_ad, set_default_runtime, BackwardOptions, MemoryOrder, RuntimeContext,
+    ScalarType, Tensor,
 };
 use tenferro_prims::CpuContext;
-use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
+use tenferro_tensor::Tensor as DenseTensor;
 
 fn scalar_f64(value: f64) -> DenseTensor<f64> {
     DenseTensor::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()
@@ -109,6 +110,12 @@ fn tensor_public_primal_constructor_handles_dense_and_diag() {
     let diag = Tensor::diag(&Tensor::from_tensor(vector_f64(&[3.0, 4.0]))).unwrap();
     assert!(diag.is_diag());
     assert_eq!(diag.dims(), &[2, 2]);
+}
+
+#[test]
+fn tensor_public_surface_reexports_memory_order() {
+    let dense = DenseTensor::from_slice(&[1.0_f64, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
+    assert_eq!(dense.dims(), &[2]);
 }
 
 #[test]
