@@ -161,7 +161,12 @@ impl<T> Tensor<T> {
     ///
     /// This is the strict metadata-only variant of reshape. The returned tensor
     /// shares storage with `self` and therefore requires the input layout to be
-    /// compatible with the requested shape.
+    /// contiguous (column-major). For PyTorch-style view-or-copy semantics that
+    /// handle non-contiguous inputs, use [`reshape`](Self::reshape) instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StrideError` if the tensor is not contiguous.
     ///
     /// # Examples
     ///
@@ -179,7 +184,12 @@ impl<T> Tensor<T> {
             });
         }
         if !self.is_contiguous() {
-            return Err(Error::StrideError("view requires contiguous data".into()));
+            return Err(Error::StrideError(format!(
+                "view requires contiguous data (use reshape for view-or-copy semantics): \
+                 current strides={:?}, expected contiguous for shape {:?}",
+                self.strides.as_ref(),
+                self.dims.as_ref()
+            )));
         }
 
         let new_strides = Arc::from(compute_contiguous_strides(
@@ -191,9 +201,13 @@ impl<T> Tensor<T> {
 
     /// Reshape the tensor to a new shape.
     ///
-    /// Reshape follows tenferro's internal column-major semantics. It returns a
-    /// zero-copy view when the current layout is compatible and otherwise
-    /// materializes a contiguous column-major tensor first.
+    /// Reshape follows tenferro's internal column-major semantics and PyTorch-style
+    /// view-or-copy behavior: it returns a zero-copy view when the current layout
+    /// is compatible with column-major ordering, and otherwise materializes a
+    /// contiguous column-major copy first before returning the view.
+    ///
+    /// For strict zero-copy semantics that reject non-contiguous inputs, use
+    /// [`view`](Self::view) instead.
     ///
     /// # Examples
     ///
