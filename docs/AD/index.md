@@ -75,7 +75,7 @@ one layer up in `tenferro` by composing runtime-generic tensor prims.
   - scalar/analytic: `add`, `atan2`, `pow`, `hypot`, `sqrt`, `exp`, `expm1`, `log`, `log1p`, `sin`, `cos`, `tanh`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `asinh`, `acosh`, `atanh`
   - linalg: `svd`, `qr`, `lu`, `eigen`, `eig`, `lstsq`, `cholesky`, `solve`, `inv`, `det`, `slogdet`, `pinv`, `matrix_exp`, `solve_triangular`, `norm`
 - Internal builder plumbing still lives in `*_ad(...).run()` builders, but the preferred public surface is now the `Tensor` method API
-  - `eig` reverse mode is same-domain only; real-input reverse mode is currently unsupported in the `tenferro` frontend
+  - `eig` is real-input-only at the public frontend; forward mode is supported, but reverse mode is currently unsupported because the output becomes complex while the `tenferro` tape stays homogeneous
 
 For a broader crate-by-crate support view, including primal coverage and
 runtime status, see [Supported Operations by Crate](../design/supported-ops.md).
