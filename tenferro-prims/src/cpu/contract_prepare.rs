@@ -13,6 +13,8 @@ use super::contract_gemm::run_dense;
 #[cfg(feature = "gemm-faer")]
 use super::contract_gemm::run_strided;
 use super::contract_gemm::{compute_layout, reordered_dims_strides};
+#[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
+use super::gemm_support::BlasGemm;
 use super::layout_fusion::try_fuse_group_in_order;
 use super::plan::{build_contract_gemm_spec, ContractGemmSpec};
 

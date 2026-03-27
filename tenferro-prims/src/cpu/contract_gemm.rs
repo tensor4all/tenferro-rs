@@ -1,10 +1,9 @@
 use strided_view::{StridedView, StridedViewMut};
 use tenferro_device::Result;
 
+#[cfg(feature = "gemm-faer")]
 use crate::CpuContext;
 
-#[cfg(feature = "gemm-blas")]
-use super::gemm_support::BlasGemm;
 #[cfg(feature = "gemm-faer")]
 use super::gemm_support::FaerGemm;
 use super::layout_fusion::try_fuse_group_in_order;
