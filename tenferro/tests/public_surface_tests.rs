@@ -119,7 +119,7 @@ fn tensor_public_surface_reexports_memory_order() {
 }
 
 #[test]
-fn tensor_debug_prints_semantic_summary() {
+fn tensor_debug_includes_dense_value_preview() {
     let x = Tensor::from_tensor(vector_f64(&[1.0, 2.0]));
     let rendered = format!("{x:?}");
     assert!(rendered.contains("Tensor"));
@@ -129,6 +129,32 @@ fn tensor_debug_prints_semantic_summary() {
     assert!(rendered.contains("mode: Primal"));
     assert!(rendered.contains("is_dense: true"));
     assert!(rendered.contains("is_diag: true"));
+    assert!(rendered.contains("preview"));
+    assert!(rendered.contains("[1.0, 2.0]"));
+}
+
+#[test]
+fn tensor_debug_structured_preview_uses_logical_values() {
+    let x = Tensor::diag(&Tensor::from_tensor(vector_f64(&[3.0, 4.0]))).unwrap();
+    let rendered = format!("{x:?}");
+    assert!(rendered.contains("dims: [2, 2]"));
+    assert!(rendered.contains("axis_classes: [0, 0]"));
+    assert!(rendered.contains("is_dense: false"));
+    assert!(rendered.contains("is_diag: true"));
+    assert!(rendered.contains("preview"));
+    assert!(rendered.contains("[[3.0, 0.0], [0.0, 4.0]]"));
+}
+
+#[test]
+fn tensor_debug_large_tensor_omits_preview_values() {
+    let values: Vec<f64> = (0..20).map(|i| i as f64).collect();
+    let x = Tensor::from_tensor(
+        DenseTensor::from_slice(&values, &[20], MemoryOrder::ColumnMajor).unwrap(),
+    );
+    let rendered = format!("{x:?}");
+    assert!(rendered.contains("dims: [20]"));
+    assert!(rendered.contains("preview: <omitted: 20 logical values>"));
+    assert!(!rendered.contains("[0.0, 1.0, 2.0"));
 }
 
 #[test]
