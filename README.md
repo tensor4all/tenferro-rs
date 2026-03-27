@@ -240,9 +240,9 @@ fn main() {
 The API and internal architecture are strongly influenced by
 [PyTorch / libtorch](https://github.com/pytorch/pytorch):
 
-- **Tensor type** — `Tensor<T>` with reference-counted storage and zero-copy
-  view operations (permute, broadcast, diagonal, narrow, select) mirrors
-  `at::Tensor` / `c10::Storage`.
+- **Tensor type** — `Tensor<T>` with reference-counted storage, explicit
+  zero-copy `view`, and PyTorch-style `reshape` semantics mirrors `at::Tensor`
+  / `c10::Storage`.
 - **Plan-based execution** — The primitive family traits keep a
   describe-plan-execute contract that follows the cuTENSOR / BLAS pattern used
   by PyTorch's GPU backend.
@@ -281,9 +281,10 @@ applications are expected to normalize at the boundary:
 - convert into tenferro's column-major canonical tensors for computation
 - materialize row-major buffers again when exporting back out
 
-That keeps the internal semantics simple and avoids ambiguous reshape behavior
-for unit-dimension layouts where row-major and column-major strides can look
-identical.
+That keeps the internal semantics simple while leaving `view` as an explicit
+zero-copy operation and `reshape` as a PyTorch-style view-or-copy operation,
+avoiding ambiguous layout interpretation for unit-dimension cases where
+row-major and column-major strides can look identical.
 
 For a detailed feature-by-feature mapping, see
 [`docs/design/reference/libtorch.md`](docs/design/reference/libtorch.md).

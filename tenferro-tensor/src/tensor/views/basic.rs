@@ -157,20 +157,20 @@ impl<T> Tensor<T> {
         Ok(self.shared_view_with(Arc::from(new_dims), Arc::from(new_strides), self.offset))
     }
 
-    /// Reshape the tensor to a new shape.
+    /// Return a zero-copy view with a different shape.
     ///
-    /// Reshape follows tenferro's internal column-major semantics for contiguous
-    /// tensors. Import/export helpers may accept other memory orders, but the
-    /// reshaped view itself is laid out as column-major metadata.
+    /// This is the strict metadata-only variant of reshape. The returned tensor
+    /// shares storage with `self` and therefore requires the input layout to be
+    /// compatible with the requested shape.
     ///
     /// # Examples
     ///
     /// ```ignore
     /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
-    /// let r = t.reshape(&[6]).unwrap();
+    /// let r = t.view(&[6]).unwrap();
     /// assert_eq!(r.dims(), &[6]);
     /// ```
-    pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>> {
+    pub fn view(&self, new_dims: &[usize]) -> Result<Tensor<T>> {
         self.wait();
         if self.len() != new_dims.iter().product::<usize>() {
             return Err(Error::ShapeMismatch {
@@ -179,9 +179,7 @@ impl<T> Tensor<T> {
             });
         }
         if !self.is_contiguous() {
-            return Err(Error::StrideError(
-                "reshape requires contiguous data".into(),
-            ));
+            return Err(Error::StrideError("view requires contiguous data".into()));
         }
 
         let new_strides = Arc::from(compute_contiguous_strides(
@@ -189,6 +187,39 @@ impl<T> Tensor<T> {
             crate::MemoryOrder::ColumnMajor,
         ));
         Ok(self.shared_view_with(Arc::from(new_dims), new_strides, self.offset))
+    }
+
+    /// Reshape the tensor to a new shape.
+    ///
+    /// Reshape follows tenferro's internal column-major semantics. It returns a
+    /// zero-copy view when the current layout is compatible and otherwise
+    /// materializes a contiguous column-major tensor first.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
+    /// let r = t.reshape(&[6]).unwrap();
+    /// assert_eq!(r.dims(), &[6]);
+    /// ```
+    pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>>
+    where
+        T: tenferro_algebra::Scalar,
+    {
+        if self.len() != new_dims.iter().product::<usize>() {
+            return Err(Error::ShapeMismatch {
+                expected: self.dims.to_vec(),
+                got: new_dims.to_vec(),
+            });
+        }
+
+        match self.view(new_dims) {
+            Ok(view) => Ok(view),
+            Err(Error::StrideError(_)) => self
+                .contiguous(crate::MemoryOrder::ColumnMajor)
+                .view(new_dims),
+            Err(err) => Err(err),
+        }
     }
 
     /// Create a zero-copy view with explicit dims and strides.

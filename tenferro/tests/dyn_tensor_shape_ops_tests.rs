@@ -14,6 +14,10 @@ fn vector_c32(values: &[Complex32]) -> DenseTensor<Complex32> {
     DenseTensor::<Complex32>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn tensor3(values: &[f64]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[2, 3, 4], MemoryOrder::ColumnMajor).unwrap()
+}
+
 fn diag_tensor(values: &[f64]) -> Tensor {
     Tensor::diag(&Tensor::from_tensor(vector(values))).unwrap()
 }
@@ -44,6 +48,42 @@ fn dyn_ad_tensor_reshape_preserves_forward_mode() {
     assert_eq!(
         as_slice(tangent.as_f64().unwrap().primal()),
         &[0.5, -0.25, 0.75, 1.0]
+    );
+}
+
+#[test]
+fn dyn_ad_tensor_reshape_non_contiguous_preserves_forward_mode() {
+    let data: Vec<f64> = (1..=24).map(|x| x as f64).collect();
+    let tangent_data: Vec<f64> = (101..=124).map(|x| x as f64).collect();
+    let expected_primal = tensor3(&data)
+        .permute(&[2, 0, 1])
+        .unwrap()
+        .contiguous(MemoryOrder::ColumnMajor);
+    let expected_tangent = tensor3(&tangent_data)
+        .permute(&[2, 0, 1])
+        .unwrap()
+        .contiguous(MemoryOrder::ColumnMajor);
+
+    let (reshaped, tangent) = forward_ad::dual_level(|fw| {
+        let x = fw.make_dual(
+            &Tensor::from_tensor(tensor3(&data))
+                .permute(&[2, 0, 1])
+                .unwrap(),
+            &Tensor::from_tensor(tensor3(&tangent_data))
+                .permute(&[2, 0, 1])
+                .unwrap(),
+        )?;
+        let reshaped = x.reshape(&[24])?;
+        fw.unpack_dual(&reshaped)
+    })
+    .unwrap();
+
+    let reshaped = reshaped.as_f64().unwrap();
+    assert_eq!(reshaped.dims(), &[24]);
+    assert_eq!(as_slice(reshaped.primal()), expected_primal.to_vec());
+    assert_eq!(
+        as_slice(tangent.unwrap().as_f64().unwrap().primal()),
+        expected_tangent.to_vec()
     );
 }
 

@@ -137,9 +137,80 @@ where
                 &tape,
                 output_node,
                 Box::new(move |cotangent| {
-                    let contiguous = cotangent.payload().contiguous(MemoryOrder::ColumnMajor);
-                    let grad =
-                        dense_structured(contiguous.reshape(&old_dims).map_err(Error::from)?);
+                    let grad = dense_structured(
+                        cotangent
+                            .payload()
+                            .reshape(&old_dims)
+                            .map_err(Error::from)?,
+                    );
+                    Ok(vec![(input_node, grad)])
+                }),
+            );
+            Ok(out)
+        }
+    }
+}
+
+pub(super) fn view_ad_tensor_typed<T>(
+    input: &AdTensor<T>,
+    new_dims: &[usize],
+) -> Result<AdTensor<T>>
+where
+    T: Scalar + Copy + DynTensorTyped + 'static,
+{
+    ensure_dense_ad_tensor_layout(input, "view")?;
+    ensure_reverse_leaf_attached(input)?;
+
+    let old_dims = input.primal().dims().to_vec();
+    let old_len: usize = old_dims.iter().product();
+    let new_len: usize = new_dims.iter().product();
+    if old_len != new_len {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "view requires element count to stay constant, got old_dims={old_dims:?}, new_dims={new_dims:?}"
+            ),
+        });
+    }
+
+    match input.snapshot()? {
+        AdTensorSnapshot::Primal(primal) => Ok(AdTensor::new_primal(dense_structured(
+            primal.into_payload().view(new_dims).map_err(Error::from)?,
+        ))),
+        AdTensorSnapshot::Forward { primal, tangent } => AdTensor::new_forward(
+            dense_structured(primal.into_payload().view(new_dims).map_err(Error::from)?),
+            dense_structured(tangent.into_payload().view(new_dims).map_err(Error::from)?),
+        ),
+        AdTensorSnapshot::Reverse {
+            primal,
+            node: input_node,
+            tape,
+            tangent,
+        } => {
+            let output_primal =
+                dense_structured(primal.into_payload().view(new_dims).map_err(Error::from)?);
+            let output_tangent = tangent
+                .map(|t| {
+                    Result::Ok(dense_structured(
+                        t.into_payload().view(new_dims).map_err(Error::from)?,
+                    ))
+                })
+                .transpose()?;
+            let out = AdTensor::new_reverse_output(output_primal, &tape, output_tangent)?;
+            let output_node = out
+                .reverse_node_id()
+                .ok_or_else(|| Error::InvalidAdTensor {
+                    message: "view reverse output is missing a tape node".to_string(),
+                })?;
+            tape::register_rule::<T>(
+                &tape,
+                output_node,
+                Box::new(move |cotangent| {
+                    let grad = dense_structured(
+                        cotangent
+                            .payload()
+                            .reshape(&old_dims)
+                            .map_err(Error::from)?,
+                    );
                     Ok(vec![(input_node, grad)])
                 }),
             );

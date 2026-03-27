@@ -2,7 +2,7 @@ use tenferro_tensor::MemoryOrder;
 
 use super::layout::{
     contiguous_ad_tensor_typed, diag_embed_ad_tensor_typed, permute_ad_tensor_typed,
-    reshape_ad_tensor_typed, take_prefix_ad_tensor_typed,
+    reshape_ad_tensor_typed, take_prefix_ad_tensor_typed, view_ad_tensor_typed,
 };
 use super::Tensor;
 use crate::Result;
@@ -48,7 +48,40 @@ impl Tensor {
         }
     }
 
+    /// Return a zero-copy view of a dense tensor while preserving AD mode.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro::Tensor;
+    ///
+    /// let x = Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+    /// let y = x.view(&[4]).unwrap();
+    /// assert_eq!(y.dims(), &[4]);
+    /// ```
+    pub fn view(&self, new_dims: &[usize]) -> Result<Self> {
+        match self {
+            Self::F32(v) => Ok(Self::F32(view_ad_tensor_typed(v, new_dims)?)),
+            Self::F64(v) => Ok(Self::F64(view_ad_tensor_typed(v, new_dims)?)),
+            Self::C32(v) => Ok(Self::C32(view_ad_tensor_typed(v, new_dims)?)),
+            Self::C64(v) => Ok(Self::C64(view_ad_tensor_typed(v, new_dims)?)),
+        }
+    }
+
     /// Reshape a dense tensor while preserving AD mode.
+    ///
+    /// Returns a zero-copy view when the current layout is compatible and
+    /// otherwise materializes a contiguous tensor first.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use tenferro::Tensor;
+    ///
+    /// let x = Tensor::from_slice(&[1.0_f64, 2.0, 3.0, 4.0], &[2, 2]).unwrap();
+    /// let y = x.reshape(&[4]).unwrap();
+    /// assert_eq!(y.dims(), &[4]);
+    /// ```
     pub fn reshape(&self, new_dims: &[usize]) -> Result<Self> {
         match self {
             Self::F32(v) => Ok(Self::F32(reshape_ad_tensor_typed(v, new_dims)?)),
