@@ -86,7 +86,7 @@ fn detach_remains_compute_tensor_while_snapshot_is_export_boundary() {
 
     let snapshot = x.primal_snapshot();
     assert_eq!(snapshot.scalar_type(), tenferro::ScalarType::F64);
-    assert_eq!(snapshot.dims(), &[]);
+    assert!(snapshot.dims().is_empty());
 }
 
 #[test]

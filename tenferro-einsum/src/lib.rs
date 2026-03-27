@@ -283,12 +283,13 @@
 pub(crate) mod ad;
 pub(crate) mod api;
 mod execution;
+mod layout;
 mod planning;
 mod syntax;
 
 // Public re-exports: types
 pub use execution::{BackendContext, EinsumBackend};
-pub use planning::ContractionTree;
+pub use planning::{ContractionOptimizerOptions, ContractionTree};
 pub use syntax::{NestedEinsum, Subscripts};
 
 // Public re-exports: functions

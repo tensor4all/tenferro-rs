@@ -218,6 +218,9 @@ pub use cpu::*;
 pub use families::*;
 pub use infra::*;
 
+#[doc(hidden)]
+pub fn print_and_reset_contract_profile() {}
+
 #[cfg(feature = "cuda")]
 pub use cuda::*;
 #[cfg(feature = "cuda")]
@@ -238,6 +241,13 @@ pub use gpu_stubs::RocmPlan;
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
+
+/// Reusable typed temporary vector pool exposed through backend contexts.
+#[doc(hidden)]
+pub trait TensorTempPoolContext {
+    fn take_temp_vec<T: Send + 'static>(&mut self, len: usize) -> Vec<T>;
+    fn put_temp_vec<T: Send + 'static>(&mut self, vec: Vec<T>);
+}
 
 // ===========================================================================
 // Helpers for multi-index iteration

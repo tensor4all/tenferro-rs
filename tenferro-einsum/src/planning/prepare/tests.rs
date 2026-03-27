@@ -34,7 +34,7 @@ fn prepare_one_operand_zero_copy_fuses_groups() {
     let mut pool = BufferPool::new();
     let input = tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
 
-    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend>(
+    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend, _>(
         &mut ctx,
         &input,
         &[0, 1],
@@ -60,7 +60,7 @@ fn prepare_one_operand_partial_fallback_when_group2_nonfusable() {
     let input = tensor(&data, &[2, 3, 4]);
     let fallback_shape = [3, 8];
 
-    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend>(
+    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend, _>(
         &mut ctx,
         &input,
         &[0, 1, 2],
@@ -72,7 +72,7 @@ fn prepare_one_operand_partial_fallback_when_group2_nonfusable() {
         &mut pool,
     )
     .unwrap();
-    let expected = permute_or_copy::<Standard<f64>, CpuBackend>(
+    let expected = permute_or_copy::<Standard<f64>, CpuBackend, _>(
         &mut ctx,
         &input,
         &[0, 1, 2],
@@ -95,9 +95,14 @@ fn permute_or_copy_transposed_scalar_contraction_materializes_target_order() {
     let rhs = tensor(&[0.5, 1.0, -1.2, 0.7, 0.2, -0.4], &[3, 2]);
     let expected = tensor(&[0.5, 0.7, 1.0, 0.2, -1.2, -0.4], &[2, 3]);
 
-    let prepared =
-        permute_or_copy::<Standard<f64>, CpuBackend>(&mut ctx, &rhs, &[1, 0], &[0, 1], &mut pool)
-            .unwrap();
+    let prepared = permute_or_copy::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &rhs,
+        &[1, 0],
+        &[0, 1],
+        &mut pool,
+    )
+    .unwrap();
 
     assert_eq!(prepared.dims(), &[2, 3]);
     assert!(prepared.is_col_major_contiguous());
@@ -112,7 +117,7 @@ fn prepare_one_operand_transposed_scalar_contraction_materializes_target_order()
     let fallback_shape = [6, 1];
     let expected = tensor(&[0.5, 0.7, 1.0, 0.2, -1.2, -0.4], &fallback_shape);
 
-    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend>(
+    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend, _>(
         &mut ctx,
         &rhs,
         &[1, 0],
@@ -139,7 +144,7 @@ fn prepare_one_operand_partial_fallback_when_group1_nonfusable() {
     let input = tensor(&data, &[2, 3, 4]);
     let fallback_shape = [8, 3];
 
-    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend>(
+    let prepared = prepare_one_operand::<Standard<f64>, CpuBackend, _>(
         &mut ctx,
         &input,
         &[0, 1, 2],
@@ -151,7 +156,7 @@ fn prepare_one_operand_partial_fallback_when_group1_nonfusable() {
         &mut pool,
     )
     .unwrap();
-    let expected = permute_or_copy::<Standard<f64>, CpuBackend>(
+    let expected = permute_or_copy::<Standard<f64>, CpuBackend, _>(
         &mut ctx,
         &input,
         &[0, 1, 2],
@@ -173,16 +178,21 @@ fn permute_or_copy_transpose_materializes_contiguous_copy() {
     let mut pool = BufferPool::new();
     let input = tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
 
-    let prepared =
-        permute_or_copy::<Standard<f64>, CpuBackend>(&mut ctx, &input, &[0, 1], &[1, 0], &mut pool)
-            .unwrap();
+    let prepared = permute_or_copy::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &input,
+        &[0, 1],
+        &[1, 0],
+        &mut pool,
+    )
+    .unwrap();
 
     assert_eq!(prepared.dims(), &[3, 2]);
     assert!(prepared.is_contiguous());
-    assert!((tensor_get(&prepared, &[0, 0]).unwrap() - 1.0).abs() < 1e-10);
-    assert!((tensor_get(&prepared, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
-    assert!((tensor_get(&prepared, &[2, 0]).unwrap() - 5.0).abs() < 1e-10);
-    assert!((tensor_get(&prepared, &[0, 1]).unwrap() - 2.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&prepared, &[0, 0]).unwrap() - 1.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&prepared, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&prepared, &[2, 0]).unwrap() - 5.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&prepared, &[0, 1]).unwrap() - 2.0).abs() < 1e-10);
 }
 
 #[test]
@@ -191,9 +201,14 @@ fn permute_or_copy_returns_contiguous_view_for_unit_extent_permute() {
     let mut pool = BufferPool::new();
     let input = tensor(&[1.0, 2.0], &[2, 1]);
 
-    let prepared =
-        permute_or_copy::<Standard<f64>, CpuBackend>(&mut ctx, &input, &[0, 1], &[1, 0], &mut pool)
-            .unwrap();
+    let prepared = permute_or_copy::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &input,
+        &[0, 1],
+        &[1, 0],
+        &mut pool,
+    )
+    .unwrap();
 
     assert_eq!(prepared.dims(), &[1, 2]);
     assert!(prepared.is_contiguous());
@@ -206,13 +221,13 @@ fn make_contiguous_if_needed_copies_only_when_required() {
     let mut pool = BufferPool::new();
     let contiguous = tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let shared =
-        make_contiguous_if_needed::<Standard<f64>, CpuBackend>(&mut ctx, &contiguous, &mut pool)
+        make_contiguous_if_needed::<Standard<f64>, CpuBackend, _>(&mut ctx, &contiguous, &mut pool)
             .unwrap();
     assert_eq!(shared.buffer().as_ptr(), contiguous.buffer().as_ptr());
 
     let transposed = contiguous.permute(&[1, 0]).unwrap();
     let copied =
-        make_contiguous_if_needed::<Standard<f64>, CpuBackend>(&mut ctx, &transposed, &mut pool)
+        make_contiguous_if_needed::<Standard<f64>, CpuBackend, _>(&mut ctx, &transposed, &mut pool)
             .unwrap();
 
     assert!(copied.is_contiguous());
@@ -221,9 +236,9 @@ fn make_contiguous_if_needed_copies_only_when_required() {
         copied.logical_memory_space(),
         LogicalMemorySpace::MainMemory
     );
-    assert!((tensor_get(&copied, &[0, 0]).unwrap() - 1.0).abs() < 1e-10);
-    assert!((tensor_get(&copied, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
-    assert!((tensor_get(&copied, &[0, 1]).unwrap() - 2.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&copied, &[0, 0]).unwrap() - 1.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&copied, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&copied, &[0, 1]).unwrap() - 2.0).abs() < 1e-10);
 }
 
 #[test]
@@ -233,7 +248,7 @@ fn make_contiguous_if_needed_accepts_semiring_core_only_backend() {
     let contiguous = tensor(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
     let transposed = contiguous.permute(&[1, 0]).unwrap();
 
-    let copied = make_contiguous_if_needed::<Standard<f64>, SemiringOnlyCpuBackend>(
+    let copied = make_contiguous_if_needed::<Standard<f64>, SemiringOnlyCpuBackend, _>(
         &mut ctx,
         &transposed,
         &mut pool,
@@ -242,5 +257,6 @@ fn make_contiguous_if_needed_accepts_semiring_core_only_backend() {
 
     assert!(copied.is_contiguous());
     assert_eq!(copied.dims(), &[2, 2]);
-    assert!((tensor_get(&copied, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
+    assert!((tensor_get::<f64>(&copied, &[1, 0]).unwrap() - 3.0).abs() < 1e-10);
 }
+use crate::execution::pool::BufferPool;

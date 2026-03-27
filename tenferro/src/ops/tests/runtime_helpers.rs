@@ -139,7 +139,7 @@ fn runtime_helpers_cover_scalar_and_tangent_accumulation() {
         &a,
     )
     .unwrap();
-    assert_eq!(summed.dims(), &[]);
+    assert!(summed.dims().is_empty());
     assert_eq!(
         scalar_from_rank0_tensor(&summed, "runtime_helper").unwrap(),
         10.0

@@ -40,7 +40,7 @@ fn reverse_scale_accepts_rank0_tensor_scalar_on_same_tape() {
 
     assert_eq!(grads.len(), 2);
     assert_eq!(grads[0].as_ref().unwrap().dims(), &[2]);
-    assert_eq!(grads[1].as_ref().unwrap().dims(), &[]);
+    assert!(grads[1].as_ref().unwrap().dims().is_empty());
 }
 
 #[test]

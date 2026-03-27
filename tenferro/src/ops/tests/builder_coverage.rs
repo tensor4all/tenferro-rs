@@ -196,7 +196,7 @@ fn primal_linalg_builders_cover_all_ops() {
     let out_power = matrix_power(&a).exponent(3).run().unwrap();
     assert_eq!(out_power.dims(), &[2, 2]);
     let out_cond = cond(&a).kind(NormKind::Spectral).run().unwrap();
-    assert_eq!(out_cond.dims(), &[]);
+    assert!(out_cond.dims().is_empty());
     let cross_a =
         DenseTensor::<f64>::from_slice(&[1.0, 0.0, 0.0], &[3], MemoryOrder::ColumnMajor).unwrap();
     let cross_b =

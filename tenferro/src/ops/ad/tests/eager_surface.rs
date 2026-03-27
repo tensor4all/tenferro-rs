@@ -46,15 +46,15 @@ fn eager_ad_linalg_and_einsum_cover_all_ops() {
     assert_eq!(cholesky(&ad_a).unwrap().dims(), &[2, 2]);
     assert_eq!(solve(&ad_a, &ad_b).unwrap().dims(), &[2]);
     assert_eq!(inv(&ad_a).unwrap().dims(), &[2, 2]);
-    assert_eq!(det(&ad_a).unwrap().dims(), &[]);
+    assert!(det(&ad_a).unwrap().dims().is_empty());
     let out_slogdet = slogdet(&ad_a).unwrap();
-    assert_eq!(out_slogdet.sign.dims(), &[]);
+    assert!(out_slogdet.sign.dims().is_empty());
     let out_eig = eig(&ad_general).unwrap();
     assert_eq!(out_eig.values.dims(), &[2]);
     assert_eq!(pinv(&ad_rect).unwrap().dims(), &[3, 2]);
     assert_eq!(matrix_exp(&ad_a).unwrap().dims(), &[2, 2]);
     assert_eq!(solve_triangular(&ad_a, &ad_b).unwrap().dims(), &[2]);
-    assert_eq!(norm(&ad_a).unwrap().dims(), &[]);
+    assert!(norm(&ad_a).unwrap().dims().is_empty());
 }
 
 #[test]

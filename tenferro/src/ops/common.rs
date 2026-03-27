@@ -1,5 +1,6 @@
 use crate::core::AdMode;
 use ::tidu::{NodeId as ChainNodeId, Tape};
+use tenferro_prims::TensorTempPoolContext;
 
 use super::*;
 use crate::{DynTensor, DynTensorTyped};
@@ -49,7 +50,7 @@ pub(crate) fn derive_reverse_tape_handle<S: Scalar + DynTensorTyped>(
     }
 
     if operands.iter().any(|op| op.requires_grad()) {
-        let tape = tape.unwrap_or_else(Tape::new);
+        let tape = tape.unwrap_or_default();
         for op in operands {
             op.ensure_reverse_leaf_on(&tape)?;
         }
@@ -151,6 +152,7 @@ pub(crate) fn dense_input_snapshot_in_backend<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     let primal = to_dense_in_ctx::<B, _, T>(ctx, input.structured_primal())?
         .contiguous(MemoryOrder::ColumnMajor);
@@ -219,6 +221,7 @@ pub(crate) fn compress_pullback_like_in_backend<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     let dense = normalize_pullback_shape(grad, layout.logical_dims(), op_name)?;
     if layout.is_dense() {
@@ -384,6 +387,7 @@ pub(crate) fn sum_einsum_tangent_terms<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     let mut out_tangent: Option<Tensor<T>> = None;
 
@@ -415,6 +419,7 @@ pub(crate) fn sum_structured_einsum_tangent_terms<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     let mut out_tangent: Option<StructuredTensor<T>> = None;
 

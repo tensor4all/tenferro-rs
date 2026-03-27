@@ -204,6 +204,16 @@ fn cpu_context_thread_pool() {
 }
 
 #[test]
+fn cpu_context_install_runs_in_owned_thread_pool() {
+    let ctx = CpuContext::new(11);
+    let num_threads = ctx.install(|| rayon::current_num_threads());
+    assert_eq!(num_threads, 11);
+
+    let thread_index = ctx.install(rayon::current_thread_index);
+    assert!(thread_index.is_some());
+}
+
+#[test]
 fn cpu_context_plan_cache() {
     let mut ctx = CpuContext::new(1);
     let _cache = ctx.plan_cache_mut();

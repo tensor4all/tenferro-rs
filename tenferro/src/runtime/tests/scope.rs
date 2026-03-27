@@ -15,7 +15,7 @@ fn with_runtime_installs_scope_and_restores_previous_default() {
     })
     .unwrap();
 
-    assert_eq!(out.dims(), &[]);
+    assert!(out.dims().is_empty());
     assert!(matches!(
         crate::with_default_runtime(|ctx| Ok(ctx.name())),
         Err(Error::RuntimeNotConfigured)

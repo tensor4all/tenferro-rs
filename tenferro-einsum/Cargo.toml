@@ -16,6 +16,8 @@ tidu.workspace = true
 strided-view.workspace = true
 strided-perm.workspace = true
 num-traits.workspace = true
+omeco.workspace = true
+smallvec = "1.13"
 
 [features]
 profile-dispatch = []

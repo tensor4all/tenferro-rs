@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::super::*;
+use tenferro_prims::TensorTempPoolContext;
 
 /// Builder for AD einsum.
 /// # Examples
@@ -27,6 +28,7 @@ fn structured_einsum_pullback_in_backend<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     // Build size dictionary for delta injection.
     let size_dict: std::collections::HashMap<u32, usize> = {
@@ -122,6 +124,7 @@ fn dense_einsum_pullback_in_backend<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     let primal_refs: Vec<&Tensor<T>> = primals.iter().collect();
     let gradients =
@@ -164,6 +167,7 @@ fn run_einsum_ad_in_backend<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     if size_dict.is_none() && !subscripts.contains('(') {
         let subs = Subscripts::parse(subscripts).map_err(Error::from)?;

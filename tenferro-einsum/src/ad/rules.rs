@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::{AdResult, Differentiable, DualValue};
 
@@ -15,11 +16,7 @@ fn make_delta<T: Scalar>(n: usize, _space: LogicalMemorySpace) -> Result<Tensor<
     for i in 0..n {
         data[i * n + i] = T::one();
     }
-    Ok(Tensor::from_slice(
-        &data,
-        &[n, n],
-        MemoryOrder::ColumnMajor,
-    )?)
+    Tensor::from_slice(&data, &[n, n], MemoryOrder::ColumnMajor)
 }
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
@@ -52,6 +49,7 @@ where
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.primal()).collect();
     let output = einsum::<Alg, Backend>(ctx, subscripts, &primals, None)
@@ -92,6 +90,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = operands.len();
@@ -248,6 +247,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)?;
     let nested = if subscripts.contains('(') {
@@ -270,6 +270,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let n = primals.len();
     let mut result: Option<Tensor<Alg::Scalar>> = None;
@@ -290,10 +291,9 @@ where
                 }
                 Some(existing) => {
                     let one = <Alg::Scalar as num_traits::One>::one();
-                    if nested.is_some() {
+                    if let Some(nested) = nested {
                         // Nested einsum does not support _into; materialize + add.
-                        let term =
-                            execute_nested::<Alg, Backend>(ctx, nested.unwrap(), &ops, None)?;
+                        let term = execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?;
                         einsum_with_subscripts_into::<Alg, Backend>(
                             ctx,
                             subs,
@@ -362,6 +362,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = primals.len();

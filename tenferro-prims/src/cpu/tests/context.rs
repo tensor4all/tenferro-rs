@@ -18,6 +18,20 @@ fn cpu_context_try_new_rejects_zero_threads_and_exposes_accessors() {
 }
 
 #[test]
+fn cpu_context_default_constructor_uses_detected_thread_count() {
+    let ctx = CpuContext::new_default();
+    assert_eq!(ctx.num_threads(), CpuContext::default_num_threads());
+    assert!(ctx.num_threads() >= 1);
+}
+
+#[test]
+fn cpu_context_reuses_global_thread_pool_for_same_thread_count() {
+    let ctx_a = CpuContext::new(3);
+    let ctx_b = CpuContext::new(3);
+    assert!(std::ptr::eq(ctx_a.thread_pool(), ctx_b.thread_pool()));
+}
+
+#[test]
 fn cpu_backend_resolve_conj_covers_both_fast_and_materializing_paths() {
     let mut ctx = CpuContext::new(1);
 

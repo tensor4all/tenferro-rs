@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
 use tidu::{AdResult, Differentiable, NodeId, ReverseRule};
 
@@ -20,6 +21,7 @@ where
     Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     pub(super) ctx: Arc<Mutex<BackendContext<Alg, Backend>>>,
     pub(super) subscripts: Subscripts,
@@ -36,6 +38,7 @@ where
     Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     fn pullback(
         &self,

@@ -2,15 +2,15 @@ use std::collections::HashMap;
 
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
-use tenferro_prims::{
-    SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
-    TensorSemiringFastPath,
-};
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
 
 use crate::execution::backend::{BackendContext, BackendPlan, EinsumBackend};
-use crate::execution::dispatch::execute_pairwise_with_plan;
-use crate::execution::pool::BufferPool;
+use crate::execution::chain::{
+    execute_binary_step, execute_binary_step_with_plans, execute_linear_chain_tree,
+    maybe_plan_ewmul_for_step, maybe_plan_gemm_for_step,
+};
+use crate::execution::pool::TensorBufferPool;
 use crate::execution::unary::execute_single_tensor_einsum;
 use crate::execution::util::{alloc_tensor_from_pool, infer_memory_space};
 use crate::planning::tree::ContractionTree;
@@ -19,26 +19,62 @@ use crate::syntax::nested::NestedEinsum;
 // Import einsum_with_subscripts for recursive NestedEinsum execution.
 use crate::api::einsum_with_subscripts;
 
+fn maybe_plan_ewmul_for_tree_step<Alg, Backend>(
+    ctx: &mut BackendContext<Alg, Backend>,
+    tree: &ContractionTree,
+    step_idx: usize,
+    operands: &[&Tensor<Alg::Scalar>],
+    output: &Tensor<Alg::Scalar>,
+) -> Option<BackendPlan<Alg, Backend>>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
+    Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+{
+    let sp = &tree.step_plans[step_idx];
+    let n_inputs = tree.subscripts.inputs.len();
+    let step = &tree.steps[step_idx];
+    let shape_a: &[usize] = if step.left < n_inputs {
+        operands[step.left].dims()
+    } else {
+        &tree.step_output_shapes[step.left - n_inputs]
+    };
+    let shape_b: &[usize] = if step.right < n_inputs {
+        operands[step.right].dims()
+    } else {
+        &tree.step_output_shapes[step.right - n_inputs]
+    };
+    let shape_c: &[usize] = if step_idx == tree.steps.len() - 1 {
+        output.dims()
+    } else {
+        &tree.step_output_shapes[step_idx]
+    };
+    maybe_plan_ewmul_for_step::<Alg, Backend>(ctx, sp, shape_a, shape_b, shape_c)
+}
+
 /// Execute a ContractionTree against concrete input tensors.
 ///
 /// When `lazy_final` is true, the final step may produce a non-contiguous
 /// view (lazy permute) instead of a physical copy. This is safe when the
 /// output tensor is internally allocated (e.g. by `einsum_with_plan`) but
 /// NOT when it is a user-provided buffer (e.g. `einsum_with_plan_into`).
-pub(crate) fn execute_tree<Alg, Backend>(
+pub(crate) fn execute_tree<Alg, Backend, P>(
     ctx: &mut BackendContext<Alg, Backend>,
     tree: &ContractionTree,
     operands: &[&Tensor<Alg::Scalar>],
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
-    pool: &mut BufferPool<Alg::Scalar>,
+    pool: &mut P,
     lazy_final: bool,
 ) -> Result<()>
 where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+    P: TensorBufferPool<Alg::Scalar> + ?Sized,
 {
     let n_inputs = tree.subscripts.inputs.len();
 
@@ -49,7 +85,7 @@ where
                 "ContractionTree with no steps requires exactly 1 input".into(),
             ));
         }
-        return execute_single_tensor_einsum::<Alg, Backend>(
+        return execute_single_tensor_einsum::<Alg, Backend, P>(
             ctx,
             &tree.subscripts.inputs[0],
             &tree.subscripts.output,
@@ -61,6 +97,30 @@ where
         );
     }
 
+    if tree.subscripts.inputs.len() == 2 && tree.steps.len() == 1 {
+        let step = &tree.steps[0];
+        return execute_binary_step::<Alg, Backend, P>(
+            ctx,
+            &tree.step_plans[0],
+            &tree.operand_subs[step.left],
+            &tree.operand_subs[step.right],
+            &tree.subscripts.output,
+            operands[step.left],
+            operands[step.right],
+            alpha,
+            beta,
+            output,
+            pool,
+            lazy_final,
+        );
+    }
+
+    if let Some(chain) = tree.linear_chain_plan() {
+        return execute_linear_chain_tree::<Alg, Backend, P>(
+            ctx, tree, &chain, operands, alpha, beta, output, pool, lazy_final,
+        );
+    }
+
     // Multi-tensor case: follow the contraction tree.
     // Step plans are pre-compiled and cached in the ContractionTree.
     let step_plans = &tree.step_plans;
@@ -68,83 +128,21 @@ where
     // Pre-compute Backend prim plans for ElementwiseMul extension.
     // Only pre-compute for steps where all dimensions are batch (m==n==k==1)
     // and no diagonal extraction is needed (shapes are known at plan time).
-    let use_ewmul = <Backend as TensorSemiringFastPath<Alg>>::has_fast_path(
-        SemiringFastPathDescriptor::ElementwiseBinary {
-            op: SemiringBinaryOp::Mul,
-        },
-    );
-    let prim_plans: Vec<Option<BackendPlan<Alg, Backend>>> = if use_ewmul {
-        step_plans
-            .iter()
-            .enumerate()
-            .map(|(step_idx, sp)| {
-                // Only pre-compute EwMul for pure batch steps without diagonal extraction.
-                // Diagonal extraction changes shapes at runtime, so we can't plan ahead.
-                if sp.gemm.m != 1 || sp.gemm.n != 1 || sp.gemm.k != 1 {
-                    return None;
-                }
-                if sp.diag_a.is_some() || sp.diag_b.is_some() {
-                    return None;
-                }
-                let step = &tree.steps[step_idx];
-                let shape_a: &[usize] = if step.left < n_inputs {
-                    operands[step.left].dims()
-                } else {
-                    &tree.step_output_shapes[step.left - n_inputs]
-                };
-                let shape_b: &[usize] = if step.right < n_inputs {
-                    operands[step.right].dims()
-                } else {
-                    &tree.step_output_shapes[step.right - n_inputs]
-                };
-                let is_last = step_idx == tree.steps.len() - 1;
-                let shape_c: &[usize] = if is_last {
-                    output.dims()
-                } else {
-                    &tree.step_output_shapes[step_idx]
-                };
-                let desc = SemiringFastPathDescriptor::ElementwiseBinary {
-                    op: SemiringBinaryOp::Mul,
-                };
-                let shapes = [shape_a, shape_b, shape_c];
-                <Backend as TensorSemiringFastPath<Alg>>::plan(ctx, &desc, &shapes).ok()
-            })
-            .collect()
-    } else {
-        (0..step_plans.len()).map(|_| None).collect()
-    };
+    let prim_plans: Vec<Option<BackendPlan<Alg, Backend>>> = step_plans
+        .iter()
+        .enumerate()
+        .map(|(step_idx, _)| {
+            maybe_plan_ewmul_for_tree_step::<Alg, Backend>(ctx, tree, step_idx, operands, output)
+        })
+        .collect();
 
     // Pre-compute BatchedGemm plans for all steps.
     // Shapes are fully determined by StepPlan (m, k, n, batch_sizes) —
     // independent of actual tensor data or strides.
-    let use_contract = <Backend as TensorSemiringFastPath<Alg>>::has_fast_path(
-        SemiringFastPathDescriptor::Contract {
-            modes_a: Vec::new(),
-            modes_b: Vec::new(),
-            modes_c: Vec::new(),
-        },
-    );
-    let gemm_plans: Vec<Option<BackendPlan<Alg, Backend>>> = if !use_contract {
-        step_plans
-            .iter()
-            .map(|sp| {
-                let desc = SemiringCoreDescriptor::BatchedGemm {
-                    batch_dims: sp.gemm.batch_sizes.clone(),
-                    m: sp.gemm.m,
-                    n: sp.gemm.n,
-                    k: sp.gemm.k,
-                };
-                let shapes = [
-                    sp.gemm.a_gemm_shape.as_slice(),
-                    sp.gemm.b_gemm_shape.as_slice(),
-                    sp.gemm.c_gemm_shape.as_slice(),
-                ];
-                <Backend as TensorSemiringCore<Alg>>::plan(ctx, &desc, &shapes).ok()
-            })
-            .collect()
-    } else {
-        (0..step_plans.len()).map(|_| None).collect()
-    };
+    let gemm_plans: Vec<Option<BackendPlan<Alg, Backend>>> = step_plans
+        .iter()
+        .map(|sp| maybe_plan_gemm_for_step::<Alg, Backend>(ctx, sp, false))
+        .collect();
 
     // Use Vec-indexed storage instead of HashMap for O(1) access.
     let memory_space = infer_memory_space(operands)?;
@@ -187,7 +185,7 @@ where
 
         if is_last {
             // Last step: write directly to output with alpha/beta.
-            execute_pairwise_with_plan::<Alg, Backend>(
+            execute_binary_step_with_plans::<Alg, Backend, P>(
                 ctx,
                 &step_plans[step_idx],
                 prim_plans[step_idx].as_ref(),
@@ -211,8 +209,8 @@ where
             let subs_result = &tree.operand_subs[result_idx];
             let result_shape = &tree.step_output_shapes[step_idx];
             let mut result =
-                alloc_tensor_from_pool::<Alg::Scalar>(result_shape, memory_space, pool)?;
-            execute_pairwise_with_plan::<Alg, Backend>(
+                alloc_tensor_from_pool::<Alg::Scalar, _, _>(ctx, result_shape, memory_space, pool)?;
+            execute_binary_step_with_plans::<Alg, Backend, P>(
                 ctx,
                 &step_plans[step_idx],
                 prim_plans[step_idx].as_ref(),
@@ -267,6 +265,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     // Validate operand count at the top level
     let n_leaves = nested.count_leaves();
@@ -290,6 +289,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     match nested {
         NestedEinsum::Leaf(idx) => Ok(operands[*idx].clone()),

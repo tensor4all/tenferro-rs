@@ -5,6 +5,7 @@
 //! owning backend markers themselves.
 
 mod context;
+#[cfg(any(feature = "cuda", test))]
 pub(crate) mod linalg_utils;
 mod tensor_api;
 mod tensor_helpers;
