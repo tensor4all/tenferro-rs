@@ -421,4 +421,5 @@ pub(crate) fn compile_step_plans(
 }
 
 #[cfg(test)]
+#[path = "plan_tests.rs"]
 mod tests;
