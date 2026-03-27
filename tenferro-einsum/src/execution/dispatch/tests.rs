@@ -3,7 +3,10 @@ use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;
-use crate::execution::chain::{execute_binary_step, execute_binary_step_with_plans};
+use crate::execution::chain::{
+    execute_binary_step, execute_binary_step_with_plans, execute_linear_chain_tree,
+    maybe_plan_ewmul_for_step, maybe_plan_gemm_for_step,
+};
 use crate::execution::execute::execute_tree;
 use crate::execution::util::{compute_output_shape, tensor_get, unflatten_index};
 use crate::planning::plan::{compile_pairwise_step_plan, GemmPlan, ReducePlan, StepPlan};
@@ -225,6 +228,408 @@ impl TensorSemiringFastPath<Standard<f64>> for NoDynamicBatchedGemmPlanCpuBacken
     fn has_fast_path(_desc: SemiringFastPathDescriptor) -> bool {
         false
     }
+}
+
+struct ContractFastPathCpuBackend;
+
+impl TensorSemiringCore<Standard<f64>> for ContractFastPathCpuBackend {
+    type Plan = <CpuBackend as TensorSemiringCore<Standard<f64>>>::Plan;
+    type Context = CpuContext;
+
+    fn plan(
+        ctx: &mut Self::Context,
+        desc: &SemiringCoreDescriptor,
+        shapes: &[&[usize]],
+    ) -> Result<Self::Plan> {
+        <CpuBackend as TensorSemiringCore<Standard<f64>>>::plan(ctx, desc, shapes)
+    }
+
+    fn execute(
+        ctx: &mut Self::Context,
+        plan: &Self::Plan,
+        alpha: f64,
+        inputs: &[&Tensor<f64>],
+        beta: f64,
+        output: &mut Tensor<f64>,
+    ) -> Result<()> {
+        <CpuBackend as TensorSemiringCore<Standard<f64>>>::execute(
+            ctx, plan, alpha, inputs, beta, output,
+        )
+    }
+}
+
+impl TensorSemiringFastPath<Standard<f64>> for ContractFastPathCpuBackend {
+    type Plan = <CpuBackend as TensorSemiringFastPath<Standard<f64>>>::Plan;
+    type Context = CpuContext;
+
+    fn plan(
+        _ctx: &mut Self::Context,
+        _desc: &SemiringFastPathDescriptor,
+        _shapes: &[&[usize]],
+    ) -> Result<Self::Plan> {
+        panic!(
+            "ContractFastPathCpuBackend should not need a concrete fast-path plan in these tests"
+        )
+    }
+
+    fn execute(
+        _ctx: &mut Self::Context,
+        _plan: &Self::Plan,
+        _alpha: f64,
+        _inputs: &[&Tensor<f64>],
+        _beta: f64,
+        _output: &mut Tensor<f64>,
+    ) -> Result<()> {
+        panic!("ContractFastPathCpuBackend should not execute a concrete fast path in these tests")
+    }
+
+    fn has_fast_path(desc: SemiringFastPathDescriptor) -> bool {
+        matches!(desc, SemiringFastPathDescriptor::Contract { .. })
+    }
+}
+
+#[test]
+fn maybe_plan_ewmul_for_step_plans_pure_batch_mul() {
+    let subs = [0_u32, 1_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    let plan = compile_pairwise_step_plan(&subs, &subs, &subs, &size_dict).unwrap();
+    assert!(plan.strict_binary.is_none());
+
+    let mut ctx = CpuContext::new(1);
+    let ewmul_plan = maybe_plan_ewmul_for_step::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &plan,
+        &[2, 3],
+        &[2, 3],
+        &[2, 3],
+    );
+
+    assert!(ewmul_plan.is_some());
+}
+
+#[test]
+fn maybe_plan_ewmul_for_step_skips_strict_binary_steps() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [2_u32, 0_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+    assert!(plan.strict_binary.is_some());
+
+    let mut ctx = CpuContext::new(1);
+    let ewmul_plan = maybe_plan_ewmul_for_step::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &plan,
+        &[2, 3],
+        &[3, 4],
+        &[4, 2],
+    );
+
+    assert!(ewmul_plan.is_none());
+}
+
+#[test]
+fn maybe_plan_ewmul_for_step_skips_without_fast_path() {
+    let subs = [0_u32, 1_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    let plan = compile_pairwise_step_plan(&subs, &subs, &subs, &size_dict).unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let ewmul_plan = maybe_plan_ewmul_for_step::<Standard<f64>, NoFastPathCpuBackend>(
+        &mut ctx,
+        &plan,
+        &[2, 3],
+        &[2, 3],
+        &[2, 3],
+    );
+
+    assert!(ewmul_plan.is_none());
+}
+
+#[test]
+fn maybe_plan_ewmul_for_step_skips_non_unit_gemm_shapes() {
+    let subs = [0_u32, 1_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    let mut plan = compile_pairwise_step_plan(&subs, &subs, &subs, &size_dict).unwrap();
+    plan.gemm.m = 2;
+
+    let mut ctx = CpuContext::new(1);
+    let ewmul_plan = maybe_plan_ewmul_for_step::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &plan,
+        &[2, 3],
+        &[2, 3],
+        &[2, 3],
+    );
+
+    assert!(ewmul_plan.is_none());
+}
+
+#[test]
+fn maybe_plan_ewmul_for_step_skips_when_diagonal_extraction_is_required() {
+    let subs = [0_u32, 1_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    let mut plan = compile_pairwise_step_plan(&subs, &subs, &subs, &size_dict).unwrap();
+    plan.diag_a = Some(crate::planning::plan::DiagPlan {
+        stages: Vec::new(),
+        result_subs: vec![0, 1],
+    });
+
+    let mut ctx = CpuContext::new(1);
+    let ewmul_plan = maybe_plan_ewmul_for_step::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &plan,
+        &[2, 3],
+        &[2, 3],
+        &[2, 3],
+    );
+
+    assert!(ewmul_plan.is_none());
+}
+
+#[test]
+fn maybe_plan_gemm_for_step_plans_without_contract_fast_path() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [2_u32, 0_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let gemm_plan =
+        maybe_plan_gemm_for_step::<Standard<f64>, NoFastPathCpuBackend>(&mut ctx, &plan, false);
+
+    assert!(gemm_plan.is_some());
+}
+
+#[test]
+fn maybe_plan_gemm_for_step_skips_strict_binary_when_requested() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [2_u32, 0_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+    assert!(plan.strict_binary.is_some());
+
+    let mut ctx = CpuContext::new(1);
+    let gemm_plan = maybe_plan_gemm_for_step::<Standard<f64>, CpuBackend>(&mut ctx, &plan, true);
+
+    assert!(gemm_plan.is_none());
+}
+
+#[test]
+fn maybe_plan_gemm_for_step_skips_when_contract_fast_path_exists() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [2_u32, 0_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let gemm_plan = maybe_plan_gemm_for_step::<Standard<f64>, ContractFastPathCpuBackend>(
+        &mut ctx, &plan, false,
+    );
+
+    assert!(gemm_plan.is_none());
+}
+
+#[test]
+fn execute_binary_step_with_plans_uses_strict_binary_when_no_cached_plan_exists() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [2_u32, 0_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+    assert!(plan.strict_binary.is_some());
+
+    let a = tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let b = tensor(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+    );
+    let expected = tensor(
+        &[22.0, 49.0, 76.0, 103.0, 28.0, 64.0, 100.0, 136.0],
+        &[4, 2],
+    );
+    let mut output = zeros(&[4, 2]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_binary_step_with_plans::<Standard<f64>, NoMakeContiguousCpuBackend, _>(
+        &mut ctx,
+        &plan,
+        None,
+        None,
+        &subs_a,
+        &subs_b,
+        &subs_c,
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_binary_step_with_plans_falls_back_when_strict_binary_is_absent() {
+    let subs = [0_u32, 1_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    let plan = compile_pairwise_step_plan(&subs, &subs, &subs, &size_dict).unwrap();
+    assert!(plan.strict_binary.is_none());
+
+    let a = tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let b = tensor(&[6.0, 5.0, 4.0, 3.0, 2.0, 1.0], &[2, 3]);
+    let expected = tensor(&[6.0, 10.0, 12.0, 12.0, 10.0, 6.0], &[2, 3]);
+    let mut output = zeros(&[2, 3]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_binary_step_with_plans::<Standard<f64>, NoFastPathCpuBackend, _>(
+        &mut ctx,
+        &plan,
+        None,
+        None,
+        &subs,
+        &subs,
+        &subs,
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_linear_chain_tree_rejects_binary_tree_without_attachments() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 2][..], &[2, 2][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]).unwrap();
+    let chain = tree.linear_chain_plan().unwrap();
+    assert!(chain.attachments.is_empty());
+
+    let a = tensor(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
+    let b = tensor(&[5.0, 7.0, 6.0, 8.0], &[2, 2]);
+    let mut output = zeros(&[2, 2]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    let err = execute_linear_chain_tree::<Standard<f64>, NoFastPathCpuBackend, _>(
+        &mut ctx,
+        &tree,
+        &chain,
+        &[&a, &b],
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("linear chain execution requires at least one attachment"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn execute_linear_chain_tree_handles_mixed_attachment_directions() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4]], &[0, 4]);
+    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..], &[2, 2][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (4, 2), (3, 5)]).unwrap();
+    let chain = tree.linear_chain_plan().unwrap();
+    assert_eq!(chain.first_pair, (0, 1));
+    assert_eq!(chain.attachments.len(), 2);
+    assert!(chain.attachments[0].prev_on_left);
+    assert!(!chain.attachments[1].prev_on_left);
+
+    let a = tensor(&[1.0, 3.0, 2.0, 4.0], &[2, 2]);
+    let b = tensor(&[5.0, 7.0, 6.0, 8.0], &[2, 2]);
+    let c = tensor(&[2.0, 0.0, 1.0, 3.0], &[2, 2]);
+    let d = tensor(&[1.0, 2.0, 0.0, 1.0], &[2, 2]);
+
+    let ab = crate::einsum_binary_with_subscripts::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        &Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]),
+        &a,
+        &b,
+        None,
+    )
+    .unwrap();
+    let abc = crate::einsum_binary_with_subscripts::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        &Subscripts::new(&[&[0, 2], &[2, 3]], &[0, 3]),
+        &ab,
+        &c,
+        None,
+    )
+    .unwrap();
+    let expected = crate::einsum_binary_with_subscripts::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        &Subscripts::new(&[&[3, 4], &[0, 3]], &[0, 4]),
+        &d,
+        &abc,
+        None,
+    )
+    .unwrap();
+
+    let mut output = zeros(&[2, 2]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+    execute_linear_chain_tree::<Standard<f64>, NoFastPathCpuBackend, _>(
+        &mut ctx,
+        &tree,
+        &chain,
+        &[&a, &b, &c, &d],
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    assert_tensor_close(&output, &expected);
 }
 
 #[derive(Default)]

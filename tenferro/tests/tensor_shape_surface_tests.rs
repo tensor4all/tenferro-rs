@@ -34,6 +34,10 @@ fn vector_c64(values: &[Complex64]) -> DenseTensor<Complex64> {
     DenseTensor::<Complex64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
 }
 
+fn tensor3(values: &[f64]) -> DenseTensor<f64> {
+    DenseTensor::<f64>::from_slice(values, &[2, 3, 4], MemoryOrder::ColumnMajor).unwrap()
+}
+
 fn diag_f64(values: &[f64]) -> Tensor {
     Tensor::diag(&Tensor::from_tensor(vector(values))).unwrap()
 }
@@ -88,6 +92,38 @@ fn tensor_shape_transform_methods_cover_dense_paths() {
     assert_eq!(
         as_slice(contiguous.as_f64().unwrap().primal()),
         &[1.0, 3.0, 2.0, 4.0]
+    );
+}
+
+#[test]
+fn tensor_view_non_contiguous_fails() {
+    let data: Vec<f64> = (1..=24).map(|x| x as f64).collect();
+    let tensor = Tensor::from_tensor(tensor3(&data))
+        .permute(&[2, 0, 1])
+        .unwrap();
+
+    let err = tensor.view(&[24]).unwrap_err();
+    assert!(
+        err.to_string().contains("view requires contiguous data"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn tensor_reshape_non_contiguous_materializes() {
+    let data: Vec<f64> = (1..=24).map(|x| x as f64).collect();
+    let base = tensor3(&data);
+    let expected = base
+        .permute(&[2, 0, 1])
+        .unwrap()
+        .contiguous(MemoryOrder::ColumnMajor);
+    let tensor = Tensor::from_tensor(base).permute(&[2, 0, 1]).unwrap();
+
+    let reshaped = tensor.reshape(&[24]).unwrap();
+    assert_eq!(reshaped.dims(), &[24]);
+    assert_eq!(
+        as_slice(reshaped.as_f64().unwrap().primal()),
+        expected.to_vec()
     );
 }
 

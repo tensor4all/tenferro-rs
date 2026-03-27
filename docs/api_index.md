@@ -117,10 +117,11 @@ execution.
 ### [tenferro-tensor](tenferro_tensor/index.html) <small>(Layer 2)</small>
 
 `Tensor<T>` type with `DataBuffer` (Rust-owned or externally-owned via DLPack),
-shape/strides metadata, and zero-copy view operations (`permute`, `broadcast`,
-`diagonal`, `reshape`, `select`, `narrow`). `TensorView<'a, T>` for borrowed
-views. Factory functions: `zeros`, `ones`, `eye`. Triangular extraction:
-`tril`, `triu`.
+shape/strides metadata, strict zero-copy view operations (`view`, `permute`,
+`broadcast`, `diagonal`, `select`, `narrow`), and PyTorch-style `reshape`
+that may materialize when a zero-copy view is not possible. `TensorView<'a, T>`
+for borrowed views. Factory functions: `zeros`, `ones`, `eye`. Triangular
+extraction: `tril`, `triu`.
 
 <a id="tenferro-prims"></a>
 ### [tenferro-prims](tenferro_prims/index.html) <small>(Layer 3)</small>
