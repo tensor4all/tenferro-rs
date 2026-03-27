@@ -53,3 +53,4 @@ pub use error::{Error, Result};
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use scalar_value::ScalarValue;
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
+pub use tenferro_tensor::MemoryOrder;
