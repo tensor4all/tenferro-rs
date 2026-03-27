@@ -103,15 +103,19 @@ See `eigen.md` for the symmetric case.
 one runtime-typed tensor payload, and scalar AD values are rank-0 tensors
 rather than a separate scalar graph type.
 
-That means `eig_ad(...).run()` is split as follows:
+That means the public `tenferro::Tensor::eig()` wrapper is currently split as
+follows:
 
-- primal / forward mode: supported
-- reverse mode with complex inputs and complex outputs: same-domain reverse path
-- reverse mode with real inputs and complex outputs: currently unsupported
+- real inputs in primal mode: supported
+- real inputs in forward mode: supported
+- reverse mode: currently unsupported in the `tenferro` frontend
+- complex inputs: currently rejected at the public frontend
 
-The old mixed-type reverse bridge (`Complex -> Real`) was removed to keep the
-the `tenferro` frontend tape homogeneous. Dense `eig_rrule` still exists in
-`tenferro-linalg`; the restriction is in the frontend wrapper layer.
+The frontend keeps reverse-mode tapes homogeneous, but `eig()` turns real
+inputs into complex outputs. The old mixed-type reverse bridge was removed, so
+the public wrapper cannot currently register a reverse pullback. Dense
+`eig_rrule` / `eig_frule` still exist in `tenferro-linalg` for real typed
+inputs; the restriction is in the frontend wrapper layer.
 
 ## References
 

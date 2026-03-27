@@ -13,7 +13,7 @@ here.
 
 ### Structural tensor operations
 
-- Shape/view: `reshape`, `reshape_owned`, `permute`, `broadcast_to`
+- Shape/view: `reshape`, `reshape_owned`, `permute`, `broadcast`
 - Matrix helpers: `transpose_last2`, `diagonal`
 - Indexing/view selection: `slice_axis`, `select_axis`
 - Materialization helpers: `to_tensor`, `to_owned`, contiguous conversion APIs
@@ -182,7 +182,22 @@ Internal builder APIs are implemented for:
   `sinh_ad`, `cosh_ad`, `asinh_ad`, `acosh_ad`, `atanh_ad`,
   `sum_ad`, `mean_ad`, `var_ad`, `std_ad`
 - Linalg: `svd_ad`, `qr_ad`, `lu_ad`, `eigen_ad`, `lstsq_ad`, `cholesky_ad`, `solve_ad`, `inv_ad`, `det_ad`, `slogdet_ad`, `eig_ad`, `pinv_ad`, `matrix_exp_ad`, `solve_triangular_ad`, `norm_ad`
-  - `eig_ad` reverse mode is same-domain only in `tenferro`; real-input reverse mode is intentionally rejected to keep the tape homogeneous
+  - `eig_ad` is real-input-only at the public frontend; forward mode is supported, but reverse mode is intentionally rejected because the output becomes complex while the frontend tape stays homogeneous
+
+### Complex linalg AD coverage
+
+For current public `tenferro::Tensor` behavior, complex linalg support splits
+into three buckets: full AD for a small subset, primal-only complex execution
+for several ops whose stateless rules are still real-only, and some entrypoints
+that remain real-input-only today.
+
+| Operation | `tenferro::Tensor` with complex input | `tenferro-linalg` stateless AD | Notes |
+| --- | --- | --- | --- |
+| `svd` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | singular values remain real |
+| `solve`, `solve_triangular` | primal + forward + reverse | complex-capable `_frule` / `_rrule` | operands must share dtype |
+| `qr`, `lu`, `eigen`, `cholesky`, `inv`, `matrix_exp` | primal only | current `_frule` / `_rrule` are real-only | the dynamic wrapper rejects non-primal complex tensors |
+| `det`, `slogdet`, `pinv`, `norm`, `lstsq` | complex input unsupported | current `_frule` / `_rrule` are real-only | use real tensors only today |
+| `eig` | complex input unsupported; real-input eager reverse is also unsupported | `eig_frule` / `eig_rrule` exist for real inputs | the frontend still lacks a mixed real-to-complex reverse bridge |
 
 ### Runtime status
 
