@@ -2,26 +2,33 @@ use std::collections::{HashMap, HashSet};
 
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
-use crate::execution::pool::BufferPool;
+use crate::execution::pool::TensorBufferPool;
 use crate::planning::plan::DiagPlan;
 use crate::syntax::subscripts::Subscripts;
 
 pub(crate) const MAX_POOLED_BYTES: usize = 64 * 1024 * 1024; // 64 MB
 
 /// Allocate a column-major tensor from the buffer pool, or fresh if too large.
-pub(crate) fn alloc_tensor_from_pool<T: Scalar>(
+pub(crate) fn alloc_tensor_from_pool<T, Ctx, P>(
+    ctx: &mut Ctx,
     dims: &[usize],
     memory_space: LogicalMemorySpace,
-    pool: &mut BufferPool<T>,
-) -> Result<Tensor<T>> {
+    pool: &mut P,
+) -> Result<Tensor<T>>
+where
+    T: Scalar,
+    Ctx: TensorTempPoolContext,
+    P: TensorBufferPool<T> + ?Sized,
+{
     let numel = dims.iter().product::<usize>().max(1);
     let bytes = numel.saturating_mul(std::mem::size_of::<T>());
     if bytes > MAX_POOLED_BYTES {
         return Tensor::zeros(dims, memory_space, MemoryOrder::ColumnMajor);
     }
-    let data = pool.take(numel);
+    let data = pool.take_with_ctx(ctx, numel);
     // Column-major strides: [1, d0, d0*d1, ...]
     let mut strides = Vec::with_capacity(dims.len());
     let mut s = 1isize;

@@ -38,7 +38,7 @@ fn tensor_scalar_semantics_use_rank0_tensor_and_casts() {
     );
 
     let y = x.scale(&alpha).unwrap();
-    assert_eq!(y.dims(), &[]);
+    assert!(y.dims().is_empty());
     assert_eq!(y.scalar_type(), ScalarType::C64);
 
     let cast = y.to_scalar_type(ScalarType::F64).unwrap();

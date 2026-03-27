@@ -1,8 +1,11 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+
 use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
-use crate::infra::plan_cache::PlanCache;
+use crate::{infra::plan_cache::PlanCache, TensorTempPoolContext};
 
 #[cfg(feature = "gemm-blas")]
 use super::scratch::{ScratchBuf, ScratchPool};
@@ -27,7 +30,7 @@ use crate::cpu::common;
 /// # }
 /// ```
 pub struct CpuContext {
-    pub(super) pool: rayon::ThreadPool,
+    pub(super) pool: Arc<rayon::ThreadPool>,
     pub(super) plan_cache: PlanCache,
     #[allow(dead_code)]
     temp_pool: TempPool,
@@ -35,7 +38,61 @@ pub struct CpuContext {
     scratch: ScratchPool,
 }
 
+fn shared_thread_pools() -> &'static Mutex<HashMap<usize, Arc<rayon::ThreadPool>>> {
+    static SHARED_THREAD_POOLS: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> =
+        OnceLock::new();
+    SHARED_THREAD_POOLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn shared_thread_pool(num_threads: usize) -> Result<Arc<rayon::ThreadPool>> {
+    let mut pools = shared_thread_pools()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(pool) = pools.get(&num_threads) {
+        return Ok(Arc::clone(pool));
+    }
+
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()
+            .map_err(|e| Error::DeviceError(format!("failed to build rayon thread pool: {e}")))?,
+    );
+    pools.insert(num_threads, Arc::clone(&pool));
+    Ok(pool)
+}
+
+#[cfg(target_os = "linux")]
+fn affinity_thread_count() -> Option<usize> {
+    let mut set = std::mem::MaybeUninit::<libc::cpu_set_t>::zeroed();
+    let rc = unsafe {
+        libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), set.as_mut_ptr())
+    };
+    if rc != 0 {
+        return None;
+    }
+    let set = unsafe { set.assume_init() };
+    let count = unsafe { libc::CPU_COUNT(&set) as usize };
+    (count > 0).then_some(count)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn affinity_thread_count() -> Option<usize> {
+    None
+}
+
 impl CpuContext {
+    /// Return the backend-defined default CPU thread count.
+    ///
+    /// On Linux this prefers the current process CPU affinity mask. Other
+    /// platforms fall back to [`std::thread::available_parallelism`].
+    pub fn default_num_threads() -> usize {
+        affinity_thread_count()
+            .or_else(|| std::thread::available_parallelism().ok().map(usize::from))
+            .unwrap_or(1)
+            .max(1)
+    }
+
     /// Create a new CPU context with the given number of threads.
     ///
     /// # Errors
@@ -61,17 +118,18 @@ impl CpuContext {
                 "CpuContext::try_new requires num_threads >= 1".into(),
             ));
         }
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .build()
-            .map_err(|e| Error::DeviceError(format!("failed to build rayon thread pool: {e}")))?;
         Ok(Self {
-            pool,
+            pool: shared_thread_pool(num_threads)?,
             plan_cache: PlanCache::new(),
             temp_pool: TempPool::default(),
             #[cfg(feature = "gemm-blas")]
             scratch: ScratchPool::default(),
         })
+    }
+
+    /// Create a new CPU context using the backend-defined default thread count.
+    pub fn try_new_default() -> Result<Self> {
+        Self::try_new(Self::default_num_threads())
     }
 
     /// Create a new CPU context with the given number of threads.
@@ -97,6 +155,12 @@ impl CpuContext {
             .unwrap_or_else(|e| panic!("failed to initialize CpuContext: {e}"))
     }
 
+    /// Create a new CPU context using the backend-defined default thread count.
+    pub fn new_default() -> Self {
+        Self::try_new_default()
+            .unwrap_or_else(|e| panic!("failed to initialize CpuContext with defaults: {e}"))
+    }
+
     /// Returns the number of threads in the pool.
     pub fn num_threads(&self) -> usize {
         self.pool.current_num_threads()
@@ -104,7 +168,7 @@ impl CpuContext {
 
     /// Returns a reference to the underlying rayon thread pool.
     pub fn thread_pool(&self) -> &rayon::ThreadPool {
-        &self.pool
+        self.pool.as_ref()
     }
 
     /// Run a closure inside the owned rayon thread pool.
@@ -133,6 +197,22 @@ impl CpuContext {
     #[cfg(feature = "gemm-blas")]
     pub(super) fn put_scratch<T>(&mut self, buf: ScratchBuf<T>) {
         self.scratch.put(buf);
+    }
+}
+
+impl Default for CpuContext {
+    fn default() -> Self {
+        Self::new_default()
+    }
+}
+
+impl TensorTempPoolContext for CpuContext {
+    fn take_temp_vec<T: Send + 'static>(&mut self, len: usize) -> Vec<T> {
+        self.temp_pool_mut().take_vec::<T>(len)
+    }
+
+    fn put_temp_vec<T: Send + 'static>(&mut self, vec: Vec<T>) {
+        self.temp_pool_mut().put_vec(vec);
     }
 }
 

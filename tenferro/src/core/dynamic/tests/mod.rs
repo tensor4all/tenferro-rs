@@ -57,7 +57,7 @@ fn diag_structured<T: tenferro_algebra::Scalar>(
 fn rank0_tensor_carries_scalar_metadata() {
     let x = Tensor::from_tensor(rank0_f64(1.0));
     assert_eq!(x.scalar_type(), ScalarType::F64);
-    assert_eq!(x.dims(), &[]);
+    assert!(x.dims().is_empty());
 }
 
 #[test]

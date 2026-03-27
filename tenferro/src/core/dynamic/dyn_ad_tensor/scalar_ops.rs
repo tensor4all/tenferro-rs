@@ -102,7 +102,7 @@ fn extract_rank0_scalar<T>(scalar: &AdTensor<T>, op_name: &'static str) -> Resul
 where
     T: Scalar + Copy,
 {
-    if scalar.dims() != [] {
+    if !scalar.dims().is_empty() {
         return Err(Error::InvalidAdTensor {
             message: format!(
                 "{op_name} requires a rank-0 scalar tensor, got dims={:?}",
@@ -120,7 +120,7 @@ where
     scalar
         .tangent()
         .map(|tangent| {
-            if tangent.dims() != [] {
+            if !tangent.dims().is_empty() {
                 return Err(Error::InvalidAdTensor {
                     message: format!(
                         "{op_name} requires a rank-0 scalar tangent tensor, got dims={:?}",

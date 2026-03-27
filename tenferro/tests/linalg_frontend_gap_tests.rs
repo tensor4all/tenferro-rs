@@ -144,7 +144,7 @@ fn tensor_frontend_exposes_missing_primal_linalg_wrappers() {
     assert_eq!(squared.dims(), &[2, 2]);
 
     let cond = matrix.cond().unwrap();
-    assert_eq!(cond.dims(), &[]);
+    assert!(cond.dims().is_empty());
 
     let cross = vector_f64(&[1.0, 0.0, 0.0])
         .cross(&vector_f64(&[0.0, 1.0, 0.0]))

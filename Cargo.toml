@@ -53,3 +53,4 @@ lapack-inject = "0.1.0"
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12000"] }
 ndarray = "0.17.2"
 sha2 = "0.10"
+omeco = "0.2.4"

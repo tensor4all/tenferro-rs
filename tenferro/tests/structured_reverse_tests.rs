@@ -196,7 +196,7 @@ fn root_sum_reverse_keeps_diag_cotangent_space() {
     let cotangent = Tensor::from_tensor(scalar(1.5));
     let grads = grad_wrt(&out, &cotangent, &[&x]);
 
-    assert_eq!(out.dims(), &[]);
+    assert!(out.dims().is_empty());
     assert!(grads[0].as_ref().unwrap().is_diag());
     assert_eq!(
         grads[0].as_ref().unwrap().as_f64().unwrap().primal().dims(),

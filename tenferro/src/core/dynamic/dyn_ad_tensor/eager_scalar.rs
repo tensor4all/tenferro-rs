@@ -19,7 +19,7 @@ macro_rules! define_dyn_unary_method {
         #[doc = "    DenseTensor::<f64>::from_slice(&[0.0], &[], MemoryOrder::ColumnMajor).unwrap(),"]
         #[doc = ");"]
         #[doc = concat!("let y = x.", stringify!($fn_name), "().unwrap();")]
-        #[doc = "assert_eq!(y.dims(), &[]);"]
+        #[doc = "assert!(y.dims().is_empty());"]
         #[doc = "```"]
         pub fn $fn_name(&self) -> Result<Self> {
             match self {
@@ -48,7 +48,7 @@ macro_rules! define_dyn_reduction_method {
         #[doc = "    DenseTensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),"]
         #[doc = ");"]
         #[doc = concat!("let y = x.", stringify!($fn_name), "().unwrap();")]
-        #[doc = "assert_eq!(y.dims(), &[]);"]
+        #[doc = "assert!(y.dims().is_empty());"]
         #[doc = "```"]
         pub fn $fn_name(&self) -> Result<Self> {
             match self {
@@ -74,7 +74,7 @@ macro_rules! define_dyn_reduction_method {
         #[doc = "    DenseTensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),"]
         #[doc = ");"]
         #[doc = concat!("let y = x.", stringify!($fn_name), "().unwrap();")]
-        #[doc = "assert_eq!(y.dims(), &[]);"]
+        #[doc = "assert!(y.dims().is_empty());"]
         #[doc = "```"]
         pub fn $fn_name(&self) -> Result<Self> {
             match self {
@@ -111,7 +111,7 @@ macro_rules! define_dyn_binary_method {
         #[doc = "    DenseTensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),"]
         #[doc = ");"]
         #[doc = concat!("let out = lhs.", stringify!($fn_name), "(&rhs).unwrap();")]
-        #[doc = "assert_eq!(out.dims(), &[]);"]
+        #[doc = "assert!(out.dims().is_empty());"]
         #[doc = "```"]
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
             let (_, lhs, rhs) = promote_pair_to_common(self, rhs)?;
@@ -146,7 +146,7 @@ macro_rules! define_dyn_binary_method {
         #[doc = "    DenseTensor::<f64>::from_slice(&[3.0], &[], MemoryOrder::ColumnMajor).unwrap(),"]
         #[doc = ");"]
         #[doc = concat!("let out = lhs.", stringify!($fn_name), "(&rhs).unwrap();")]
-        #[doc = "assert_eq!(out.dims(), &[]);"]
+        #[doc = "assert!(out.dims().is_empty());"]
         #[doc = "```"]
         pub fn $fn_name(&self, rhs: &Self) -> Result<Self> {
             let (_, lhs, rhs) = promote_pair_to_common(self, rhs)?;

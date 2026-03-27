@@ -122,7 +122,7 @@ impl Tensor {
     ///     DenseTensor::<f64>::from_slice(&[1.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap(),
     /// );
     /// let y = x.sum().unwrap();
-    /// assert_eq!(y.dims(), &[]);
+    /// assert!(y.dims().is_empty());
     /// ```
     pub fn sum(&self) -> Result<Self> {
         match self {
@@ -157,7 +157,7 @@ impl Tensor {
     ///     .unwrap(),
     /// );
     /// let out = Tensor::einsum("i,i->", &[&a, &b]).unwrap();
-    /// assert_eq!(out.dims(), &[]);
+    /// assert!(out.dims().is_empty());
     /// ```
     pub fn einsum(subscripts: &str, operands: &[&Self]) -> Result<Self> {
         Self::einsum_with_refs(subscripts, operands)
@@ -193,7 +193,7 @@ impl Tensor {
     ///     ),
     /// ];
     /// let out = Tensor::einsum_owned("i,i->", operands).unwrap();
-    /// assert_eq!(out.dims(), &[]);
+    /// assert!(out.dims().is_empty());
     /// ```
     pub fn einsum_owned(subscripts: &str, operands: Vec<Self>) -> Result<Self> {
         Self::einsum_with_owned(subscripts, operands)

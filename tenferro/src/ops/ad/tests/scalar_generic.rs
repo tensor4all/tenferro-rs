@@ -70,11 +70,11 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     assert_eq!(out_hypot.dims(), &[2]);
 
     let out_reduced = mean_ad(&out_binary).run().unwrap();
-    assert_eq!(out_reduced.dims(), &[]);
+    assert!(out_reduced.dims().is_empty());
     let out_var = var_ad(&out_binary).run().unwrap();
     let out_std = std_ad(&out_binary).run().unwrap();
-    assert_eq!(out_var.dims(), &[]);
-    assert_eq!(out_std.dims(), &[]);
+    assert!(out_var.dims().is_empty());
+    assert!(out_std.dims().is_empty());
 
     let eager_unary = crate::ops::ad::exp(&ad_x).unwrap();
     let eager_sqrt = crate::ops::ad::sqrt(&ad_x).unwrap();
@@ -110,7 +110,7 @@ fn ad_unary_binary_reduction_generic_surface_exists() {
     assert_eq!(eager_pow.dims(), &[2]);
     assert_eq!(eager_hypot.dims(), &[2]);
     assert_eq!(eager_binary.dims(), &[2]);
-    assert_eq!(eager_mean.dims(), &[]);
+    assert!(eager_mean.dims().is_empty());
 }
 
 #[test]

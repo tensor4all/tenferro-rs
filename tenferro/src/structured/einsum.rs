@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use chainrules_core::Differentiable as _;
 use tenferro_algebra::{Scalar, Standard};
 use tenferro_einsum::{self as tf_einsum, Subscripts};
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
 
 use crate::runtime::contracts::EinsumRuntimeValue;
@@ -64,6 +65,7 @@ pub(crate) fn to_dense_in_ctx<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     if tensor.is_dense() {
         return Ok(tensor.payload().clone());
@@ -96,6 +98,7 @@ pub(crate) fn compress_dense_to_layout_in_ctx<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     if dense.dims() != layout.logical_dims() {
         return Err(Error::InvalidAdTensor {
@@ -129,6 +132,7 @@ pub(crate) fn einsum_with_subscripts_in_ctx<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     let operand_meta: Vec<OperandAxisClasses> = operands
         .iter()
@@ -265,6 +269,7 @@ fn normalize_payload_for_roots<B, C, T>(
 where
     T: EinsumRuntimeValue,
     B: DenseEinsumBackend<T, C>,
+    C: TensorTempPoolContext,
 {
     if payload.dims().len() != roots.len() {
         return Err(Error::InvalidAdTensor {

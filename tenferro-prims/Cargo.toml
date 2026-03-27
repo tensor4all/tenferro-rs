@@ -34,6 +34,7 @@ strided-traits.workspace = true
 strided-perm.workspace = true
 strided-kernel.workspace = true
 rayon = "1.10"
+libc = "0.2"
 libloading.workspace = true
 num-complex.workspace = true
 num-traits.workspace = true

@@ -5,11 +5,12 @@ use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
 
+use crate::cpu::TempPool;
 use crate::{
     MetadataCastPrimsDescriptor, MetadataPrimsDescriptor, MetadataScalarTensorRef,
     MetadataTensorMut, MetadataTensorRef, PlanCache, SemiringCoreDescriptor,
     SemiringFastPathDescriptor, TensorMetadataCastPrims, TensorMetadataPrims, TensorSemiringCore,
-    TensorSemiringFastPath,
+    TensorSemiringFastPath, TensorTempPoolContext,
 };
 
 // ===========================================================================
@@ -33,6 +34,7 @@ pub struct CudaContext {
     _stream: *mut c_void,
     _workspace: Vec<u8>,
     _plan_cache: PlanCache,
+    temp_pool: TempPool,
 }
 
 #[cfg(not(feature = "cuda"))]
@@ -43,6 +45,7 @@ impl CudaContext {
             _stream: std::ptr::null_mut(),
             _workspace: Vec::new(),
             _plan_cache: PlanCache::new(),
+            temp_pool: TempPool::default(),
         }
     }
 
@@ -77,6 +80,17 @@ impl CudaContext {
 impl Default for CudaContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(not(feature = "cuda"))]
+impl TensorTempPoolContext for CudaContext {
+    fn take_temp_vec<T: Send + 'static>(&mut self, len: usize) -> Vec<T> {
+        self.temp_pool.take_vec::<T>(len)
+    }
+
+    fn put_temp_vec<T: Send + 'static>(&mut self, vec: Vec<T>) {
+        self.temp_pool.put_vec(vec);
     }
 }
 
@@ -318,6 +332,7 @@ pub struct RocmContext {
     _stream: *mut c_void,
     _workspace: Vec<u8>,
     _plan_cache: PlanCache,
+    temp_pool: TempPool,
 }
 
 impl RocmContext {
@@ -327,6 +342,7 @@ impl RocmContext {
             _stream: std::ptr::null_mut(),
             _workspace: Vec::new(),
             _plan_cache: PlanCache::new(),
+            temp_pool: TempPool::default(),
         }
     }
 }
@@ -334,6 +350,16 @@ impl RocmContext {
 impl Default for RocmContext {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl TensorTempPoolContext for RocmContext {
+    fn take_temp_vec<T: Send + 'static>(&mut self, len: usize) -> Vec<T> {
+        self.temp_pool.take_vec::<T>(len)
+    }
+
+    fn put_temp_vec<T: Send + 'static>(&mut self, vec: Vec<T>) {
+        self.temp_pool.put_vec(vec);
     }
 }
 

@@ -275,7 +275,7 @@ fn test_ellipsis_sum_all() {
 
     let result = einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...->", &[&a], None).unwrap();
 
-    assert_eq!(result.dims(), &[]);
+    assert!(result.dims().is_empty());
 }
 
 #[test]
@@ -627,7 +627,7 @@ fn test_ellipsis_full_contraction_scalar() {
     let result =
         einsum::<Standard<f64>, CpuBackend>(&mut ctx, "...ij,...ij->", &[&a, &b], None).unwrap();
 
-    assert_eq!(result.dims(), &[]);
+    assert!(result.dims().is_empty());
 
     let result_data = result.buffer().as_slice().unwrap();
     let expected: f64 = (1..=6).map(|i| (i * i) as f64).sum();

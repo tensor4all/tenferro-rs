@@ -1,22 +1,22 @@
-// One and Zero are needed to call Alg::Scalar::one() / ::zero() via the
-// Scalar supertrait. Rust incorrectly flags these as unused when the call
-// site is an associated type (Alg::Scalar) rather than a concrete type.
+// One and Zero are needed to call Alg::Scalar::one() / ::zero() via the Scalar
+// supertrait. Rust incorrectly flags these as unused for associated types.
 #[allow(unused_imports)]
 use num_traits::{One, Zero};
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, Result};
 use tenferro_prims::{
     SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore,
-    TensorSemiringFastPath,
+    TensorSemiringFastPath, TensorTempPoolContext,
 };
 use tenferro_tensor::Tensor;
 
 use crate::execution::backend::{BackendContext, BackendPlan, EinsumBackend};
-use crate::execution::pool::BufferPool;
+use crate::execution::pool::TensorBufferPool;
 use crate::execution::util::{alloc_tensor_from_pool, apply_diag_plan};
+use crate::layout::try_fuse_group_in_target_order;
 use crate::planning::classify::compute_permutation;
 use crate::planning::plan::{GemmPlan, ReducePlan, StepPlan};
-use crate::planning::prepare::{prepare_one_operand, try_fuse_group_in_target_order};
+use crate::planning::prepare::prepare_one_operand;
 
 #[cfg(feature = "profile-dispatch")]
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,7 +79,7 @@ pub fn print_and_reset_profile() {
 /// When `lazy_output` is true and `alpha=1, beta=0`, the output may be a
 /// non-contiguous view (lazy permute) instead of a physical copy. Only safe
 /// for intermediate tensors consumed by subsequent einsum steps.
-pub(crate) fn execute_pairwise_with_plan<Alg, Backend>(
+pub(crate) fn execute_pairwise_with_plan<Alg, Backend, P>(
     ctx: &mut BackendContext<Alg, Backend>,
     plan: &StepPlan,
     ewmul_plan: Option<&BackendPlan<Alg, Backend>>,
@@ -92,13 +92,15 @@ pub(crate) fn execute_pairwise_with_plan<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
-    pool: &mut BufferPool<Alg::Scalar>,
+    pool: &mut P,
     lazy_output: bool,
 ) -> Result<()>
 where
     Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+    P: TensorBufferPool<Alg::Scalar> + ?Sized,
 {
     // 1. Diagonal extraction (zero-copy view)
     let a_diag;
@@ -121,14 +123,14 @@ where
     let _reduce_t0 = std::time::Instant::now();
     let a_reduced;
     let a_ref = if let Some(ref reduce) = plan.gemm.reduce_a {
-        a_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, a_ref, pool)?;
+        a_reduced = execute_reduce_with_plan::<Alg, Backend, P>(ctx, reduce, a_ref, pool)?;
         &a_reduced
     } else {
         a_ref
     };
     let b_reduced;
     let b_ref = if let Some(ref reduce) = plan.gemm.reduce_b {
-        b_reduced = execute_reduce_with_plan::<Alg, Backend>(ctx, reduce, b_ref, pool)?;
+        b_reduced = execute_reduce_with_plan::<Alg, Backend, P>(ctx, reduce, b_ref, pool)?;
         &b_reduced
     } else {
         b_ref
@@ -216,7 +218,7 @@ where
     }
 
     // 5. Fallback: prepare + BatchedGemm + permute
-    execute_gemm_after_reduce::<Alg, Backend>(
+    execute_gemm_after_reduce::<Alg, Backend, P>(
         ctx,
         &plan.gemm,
         gemm_plan,
@@ -232,19 +234,22 @@ where
 }
 
 /// Execute pre-reduction of unique-only axes using a pre-computed plan.
-fn execute_reduce_with_plan<Alg, Backend>(
+fn execute_reduce_with_plan<Alg, Backend, P>(
     ctx: &mut BackendContext<Alg, Backend>,
     reduce: &ReducePlan,
     tensor: &Tensor<Alg::Scalar>,
-    pool: &mut BufferPool<Alg::Scalar>,
+    pool: &mut P,
 ) -> Result<Tensor<Alg::Scalar>>
 where
     Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+    P: TensorBufferPool<Alg::Scalar> + ?Sized,
 {
     let memory_space = tensor.logical_memory_space();
-    let mut reduced = alloc_tensor_from_pool::<Alg::Scalar>(&reduce.out_shape, memory_space, pool)?;
+    let mut reduced =
+        alloc_tensor_from_pool::<Alg::Scalar, _, _>(ctx, &reduce.out_shape, memory_space, pool)?;
     let desc = SemiringCoreDescriptor::ReduceAdd {
         modes_a: reduce.original_subs.clone(),
         modes_c: reduce.kept_subs.clone(),
@@ -269,7 +274,7 @@ where
 ///
 /// When `lazy_output` is true and `alpha=1, beta=0`, skips the physical
 /// permute and returns a zero-copy view with rearranged strides.
-fn execute_gemm_after_reduce<Alg, Backend>(
+fn execute_gemm_after_reduce<Alg, Backend, P>(
     ctx: &mut BackendContext<Alg, Backend>,
     plan: &GemmPlan,
     gemm_plan: Option<&BackendPlan<Alg, Backend>>,
@@ -279,13 +284,15 @@ fn execute_gemm_after_reduce<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
-    pool: &mut BufferPool<Alg::Scalar>,
+    pool: &mut P,
     lazy_output: bool,
 ) -> Result<()>
 where
     Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+    P: TensorBufferPool<Alg::Scalar> + ?Sized,
 {
     let memory_space = a_ref.logical_memory_space();
     let nb = plan.batch_sizes.len();
@@ -294,7 +301,7 @@ where
     // Layout: [g1, g2, batch...] — batch dims are trailing (col-major friendly)
     #[cfg(feature = "profile-dispatch")]
     let _prep_t0 = std::time::Instant::now();
-    let a_prepared = prepare_one_operand::<Alg, Backend>(
+    let a_prepared = prepare_one_operand::<Alg, Backend, P>(
         ctx,
         a_ref,
         &plan.subs_a,
@@ -305,7 +312,7 @@ where
         &plan.a_gemm_shape,
         pool,
     )?;
-    let b_prepared = prepare_one_operand::<Alg, Backend>(
+    let b_prepared = prepare_one_operand::<Alg, Backend, P>(
         ctx,
         b_ref,
         &plan.subs_b,
@@ -350,7 +357,8 @@ where
         fused_dims.extend_from_slice(&c_dims[n_lo + n_ro..]);
         fused_strides.extend_from_slice(&c_strides[n_lo + n_ro..]);
 
-        let placeholder = alloc_tensor_from_pool::<Alg::Scalar>(&[], memory_space, pool)?;
+        let placeholder =
+            alloc_tensor_from_pool::<Alg::Scalar, _, _>(ctx, &[], memory_space, pool)?;
         let out_tensor = std::mem::replace(output, placeholder);
         let mut c_fused = out_tensor.view_as_strided(fused_dims, fused_strides)?;
         drop(out_tensor); // Arc refcount → 1
@@ -392,8 +400,12 @@ where
         drop(c_fused); // Arc refcount → 1
         *output = restored;
     } else {
-        let mut temp =
-            alloc_tensor_from_pool::<Alg::Scalar>(&plan.c_gemm_shape, memory_space, pool)?;
+        let mut temp = alloc_tensor_from_pool::<Alg::Scalar, _, _>(
+            ctx,
+            &plan.c_gemm_shape,
+            memory_space,
+            pool,
+        )?;
         let owned_plan;
         let prim_plan: &BackendPlan<Alg, Backend> = if let Some(gp) = gemm_plan {
             gp
@@ -472,7 +484,6 @@ where
         PERMUTE_NS.fetch_add(_perm_t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
     }
 
-    // Return prepared operand buffers to pool (no longer needed after GEMM).
     if let Some(data) = a_prepared.try_into_data_vec() {
         pool.return_buf(data);
     }
@@ -482,7 +493,6 @@ where
 
     #[cfg(feature = "profile-dispatch")]
     CALL_COUNT.fetch_add(1, Ordering::Relaxed);
-
     Ok(())
 }
 

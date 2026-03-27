@@ -1,6 +1,13 @@
 use std::any::{Any, TypeId};
 use std::collections::{BTreeMap, HashMap};
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TempPoolStats {
+    pub(crate) hits: usize,
+    pub(crate) misses: usize,
+}
+
 /// Reusable CPU-side temporary storage for typed vectors.
 ///
 /// The pool is crate-private for now so later CPU execution helpers can use it
@@ -9,6 +16,8 @@ use std::collections::{BTreeMap, HashMap};
 #[allow(dead_code)]
 pub(crate) struct TempPool {
     typed_vecs: HashMap<TypeId, BTreeMap<usize, Vec<Box<dyn Any + Send>>>>,
+    #[cfg(test)]
+    stats: TempPoolStats,
 }
 
 #[allow(dead_code)]
@@ -28,6 +37,13 @@ impl TempPool {
             self.typed_vecs.remove(&type_id);
         }
 
+        #[cfg(test)]
+        if taken.is_some() {
+            self.stats.hits += 1;
+        } else {
+            self.stats.misses += 1;
+        }
+
         taken.unwrap_or_else(|| Vec::with_capacity(len))
     }
 
@@ -44,6 +60,11 @@ impl TempPool {
             .entry(cap)
             .or_default()
             .push(Box::new(vec));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn stats(&self) -> TempPoolStats {
+        self.stats
     }
 }
 

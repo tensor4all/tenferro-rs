@@ -11,7 +11,7 @@ use support::{
 #[test]
 fn rank0_forward_tensor_exposes_primal_tangent_and_metadata() {
     let x = forward_rank0_f64(2.0_f64, 0.5_f64);
-    assert_eq!(x.dims(), &[]);
+    assert!(x.dims().is_empty());
     assert_eq!(x.scalar_type(), tenferro::ScalarType::F64);
     assert!(!x.requires_grad());
     assert!(x.grad().is_none());
@@ -35,7 +35,7 @@ fn rank0_forward_tensor_exposes_primal_tangent_and_metadata() {
 fn rank0_reverse_tensor_roundtrips_complex_primal_and_node_metadata() {
     let x = reverse_rank0_c64(Complex64::new(1.0, -2.0));
 
-    assert_eq!(x.dims(), &[]);
+    assert!(x.dims().is_empty());
     assert!(x.requires_grad());
     assert!(x.grad().is_none());
     assert_eq!(rank0_value_c64(&x), Complex64::new(1.0, -2.0));
@@ -70,7 +70,7 @@ fn rank0_real_imag_compose_roundtrip_preserves_forward_mode() {
 fn rank0_explicit_cast_preserves_rank0_forward_tangent_across_precision_changes() {
     let x = forward_rank0_f32(2.5_f32, -0.75_f32);
     let y = x.to_scalar_type(ScalarType::F64).unwrap();
-    assert_eq!(y.dims(), &[]);
+    assert!(y.dims().is_empty());
     assert_eq!(y.scalar_type(), ScalarType::F64);
     assert!(!y.requires_grad());
     assert!(y.grad().is_none());

@@ -10,6 +10,8 @@ mod complex_real;
 mod complex_scale;
 mod context;
 mod contract;
+mod contract_gemm;
+mod contract_prepare;
 mod execution;
 mod family_reduction;
 mod gemm_support;
@@ -25,7 +27,7 @@ mod scalar;
 #[cfg(feature = "gemm-blas")]
 mod scratch;
 mod sort;
-mod temp_pool;
+pub(crate) mod temp_pool;
 
 pub use analytic::CpuAnalyticPlan;
 pub use complex_real::CpuComplexRealPlan;
@@ -36,6 +38,7 @@ pub use plan::CpuPlan;
 pub use rng::CpuRngPlan;
 pub use scalar::CpuScalarPlan;
 pub use sort::CpuSortPlan;
+pub(crate) use temp_pool::TempPool;
 
 /// Convert a CPU tensor to an immutable strided view.
 pub(crate) fn tensor_to_view<T: Scalar>(t: &Tensor<T>) -> Result<StridedView<'_, T>> {

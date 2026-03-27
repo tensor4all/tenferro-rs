@@ -169,7 +169,7 @@ fn tensor_public_rank0_complex_scale_does_not_require_adtensor() {
     );
 
     let y = x.scale(&alpha).unwrap();
-    assert_eq!(y.dims(), &[]);
+    assert!(y.dims().is_empty());
     assert_eq!(
         y.as_c64().unwrap().primal().buffer().as_slice().unwrap(),
         &[Complex64::new(0.0, 6.0)]
@@ -282,14 +282,14 @@ fn tensor_public_scalar_eager_methods_do_not_require_typed_api() {
     );
 
     let m = x.mean().unwrap();
-    assert_eq!(m.dims(), &[]);
+    assert!(m.dims().is_empty());
     assert_eq!(
         m.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
         &[0.5]
     );
 
     let s = x.sum().unwrap();
-    assert_eq!(s.dims(), &[]);
+    assert!(s.dims().is_empty());
     assert_eq!(
         s.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
         &[1.0]
@@ -299,10 +299,10 @@ fn tensor_public_scalar_eager_methods_do_not_require_typed_api() {
     assert_eq!(t.scalar_type(), tenferro::ScalarType::F64);
 
     let v = x.var().unwrap();
-    assert_eq!(v.dims(), &[]);
+    assert!(v.dims().is_empty());
 
     let std = x.std().unwrap();
-    assert_eq!(std.dims(), &[]);
+    assert!(std.dims().is_empty());
 }
 
 #[test]
@@ -420,7 +420,7 @@ fn tensor_public_linalg_single_result_methods_do_not_require_typed_api() {
     );
 
     let det = a.det().unwrap();
-    assert_eq!(det.dims(), &[]);
+    assert!(det.dims().is_empty());
     assert_eq!(
         det.as_f64().unwrap().primal().buffer().as_slice().unwrap(),
         &[11.0]

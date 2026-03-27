@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
-use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore};
+use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore, TensorTempPoolContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::execution::backend::BackendContext;
-use crate::execution::pool::BufferPool;
+use crate::execution::pool::TensorBufferPool;
 use crate::execution::util::{alloc_tensor_from_pool, apply_diag_plan};
 use crate::planning::classify::compute_permutation;
 use crate::planning::plan::compute_diag_plan_for_labels;
@@ -39,7 +39,7 @@ where
 }
 
 /// Execute a single-tensor einsum operation via semiring-core prims.
-pub(crate) fn execute_single_tensor_einsum<Alg, Backend>(
+pub(crate) fn execute_single_tensor_einsum<Alg, Backend, P>(
     ctx: &mut BackendContext<Alg, Backend>,
     subs_a: &[u32],
     subs_c: &[u32],
@@ -47,12 +47,14 @@ pub(crate) fn execute_single_tensor_einsum<Alg, Backend>(
     alpha: Alg::Scalar,
     beta: Alg::Scalar,
     output: &mut Tensor<Alg::Scalar>,
-    pool: &mut BufferPool<Alg::Scalar>,
+    pool: &mut P,
 ) -> Result<()>
 where
     Alg: Semiring,
     Alg::Scalar: Scalar + HasAlgebra<Algebra = Alg>,
     Backend: TensorSemiringCore<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+    P: TensorBufferPool<Alg::Scalar> + ?Sized,
 {
     // Count label occurrences in input and output
     let mut label_positions: HashMap<u32, Vec<usize>> = HashMap::new();
@@ -306,14 +308,15 @@ where
                     Ok(current.dims()[pos])
                 })
                 .collect::<Result<_>>()?;
-            let mut intermediate = alloc_tensor_from_pool::<Alg::Scalar>(
+            let mut intermediate = alloc_tensor_from_pool::<Alg::Scalar, _, _>(
+                ctx,
                 &inter_shape,
                 output.logical_memory_space(),
                 pool,
             )?;
             // Recursive call for trace/reduce: current_subs → inter_subs
             // inter_subs has no repeated labels, so this hits a different branch.
-            execute_single_tensor_einsum::<Alg, Backend>(
+            execute_single_tensor_einsum::<Alg, Backend, P>(
                 ctx,
                 &current_subs,
                 &inter_subs,
@@ -329,7 +332,7 @@ where
 
         // Stage 3+4: Now current_subs has unique labels. Recursive call handles
         // permute + AntiDiag for repeated output labels (or just permute/identity).
-        execute_single_tensor_einsum::<Alg, Backend>(
+        execute_single_tensor_einsum::<Alg, Backend, P>(
             ctx,
             &current_subs,
             subs_c,

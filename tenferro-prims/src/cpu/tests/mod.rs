@@ -1,4 +1,5 @@
 mod context;
+mod contract;
 mod organization;
 mod temp_pool;
 

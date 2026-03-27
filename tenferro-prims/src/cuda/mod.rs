@@ -32,9 +32,11 @@ use tenferro_algebra::{Conjugate, Scalar, Standard};
 use tenferro_device::{cuda::runtime as device_cuda, Error, Result};
 use tenferro_tensor::Tensor;
 
+use crate::cpu::TempPool;
 use crate::cuda_ffi::*;
 use crate::{
     SemiringCoreDescriptor, SemiringFastPathDescriptor, TensorSemiringCore, TensorSemiringFastPath,
+    TensorTempPoolContext,
 };
 
 mod analytic;
@@ -87,6 +89,7 @@ pub struct CudaContext {
     pub(super) shared_runtime: Arc<device_cuda::CudaRuntime>,
     /// Helper runtime for custom pointwise complex kernels.
     custom: Arc<CustomCudaRuntime>,
+    temp_pool: TempPool,
 }
 
 impl CudaContext {
@@ -131,6 +134,16 @@ impl CudaContext {
     /// ```
     pub fn shared_runtime(&self) -> &Arc<device_cuda::CudaRuntime> {
         &self.shared_runtime
+    }
+}
+
+impl TensorTempPoolContext for CudaContext {
+    fn take_temp_vec<T: Send + 'static>(&mut self, len: usize) -> Vec<T> {
+        self.temp_pool.take_vec::<T>(len)
+    }
+
+    fn put_temp_vec<T: Send + 'static>(&mut self, vec: Vec<T>) {
+        self.temp_pool.put_vec(vec);
     }
 }
 
@@ -253,6 +266,7 @@ impl CudaBackend {
             vtable: Arc::clone(&vtable),
             shared_runtime,
             custom,
+            temp_pool: TempPool::default(),
         };
 
         Ok((

@@ -431,9 +431,9 @@ fn exercise_real_linalg_suite(matrix: &Tensor, triangular: &Tensor, rhs: &Tensor
     let solve_triangular = triangular.solve_triangular(rhs).unwrap();
     assert_eq!(solve_triangular.dims(), &[2]);
     let det = matrix.det().unwrap();
-    assert_eq!(det.dims(), &[]);
+    assert!(det.dims().is_empty());
     let slogdet = matrix.slogdet().unwrap();
-    assert_eq!(slogdet.sign.dims(), &[]);
+    assert!(slogdet.sign.dims().is_empty());
     let inv = matrix.inv().unwrap();
     assert_eq!(inv.dims(), &[2, 2]);
     let pinv = matrix.pinv().unwrap();
@@ -441,7 +441,7 @@ fn exercise_real_linalg_suite(matrix: &Tensor, triangular: &Tensor, rhs: &Tensor
     let expm = matrix.matrix_exp().unwrap();
     assert_eq!(expm.dims(), &[2, 2]);
     let norm = matrix.norm().unwrap();
-    assert_eq!(norm.dims(), &[]);
+    assert!(norm.dims().is_empty());
     let lstsq = matrix.lstsq(rhs).unwrap();
     assert_eq!(lstsq.x.dims(), &[2]);
 }
