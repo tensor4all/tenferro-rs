@@ -445,3 +445,7 @@ pub(super) fn try_execute_contract_gemm<T: Scalar + 'static>(
 
     result.map(Some)
 }
+
+#[cfg(test)]
+#[path = "contract_prepare_tests.rs"]
+mod tests;
