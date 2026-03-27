@@ -76,8 +76,7 @@ fn take_typed_vec_from_bucket<T: Send + 'static>(
     let cap = bucket.range(min_capacity..).next().map(|(&cap, _)| cap)?;
     let boxed = {
         let entries = bucket.get_mut(&cap)?;
-        let boxed = entries.pop()?;
-        boxed
+        entries.pop()?
     };
     if bucket.get(&cap).is_some_and(|entries| entries.is_empty()) {
         bucket.remove(&cap);

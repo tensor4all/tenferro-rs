@@ -16,11 +16,7 @@ fn make_delta<T: Scalar>(n: usize, _space: LogicalMemorySpace) -> Result<Tensor<
     for i in 0..n {
         data[i * n + i] = T::one();
     }
-    Ok(Tensor::from_slice(
-        &data,
-        &[n, n],
-        MemoryOrder::ColumnMajor,
-    )?)
+    Tensor::from_slice(&data, &[n, n], MemoryOrder::ColumnMajor)
 }
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
@@ -295,10 +291,9 @@ where
                 }
                 Some(existing) => {
                     let one = <Alg::Scalar as num_traits::One>::one();
-                    if nested.is_some() {
+                    if let Some(nested) = nested {
                         // Nested einsum does not support _into; materialize + add.
-                        let term =
-                            execute_nested::<Alg, Backend>(ctx, nested.unwrap(), &ops, None)?;
+                        let term = execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?;
                         einsum_with_subscripts_into::<Alg, Backend>(
                             ctx,
                             subs,

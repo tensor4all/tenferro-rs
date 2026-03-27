@@ -59,8 +59,8 @@ where
     let permuted = if current_subs == target_subs {
         tensor.clone()
     } else {
-        let perm = compute_permutation(current_subs, target_subs)
-            .map_err(|e| Error::InvalidArgument(e))?;
+        let perm =
+            compute_permutation(current_subs, target_subs).map_err(Error::InvalidArgument)?;
         tensor.permute(&perm)?
     };
 

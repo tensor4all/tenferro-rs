@@ -50,7 +50,7 @@ pub(crate) fn derive_reverse_tape_handle<S: Scalar + DynTensorTyped>(
     }
 
     if operands.iter().any(|op| op.requires_grad()) {
-        let tape = tape.unwrap_or_else(Tape::new);
+        let tape = tape.unwrap_or_default();
         for op in operands {
             op.ensure_reverse_leaf_on(&tape)?;
         }

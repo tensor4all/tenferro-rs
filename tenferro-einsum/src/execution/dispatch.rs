@@ -450,14 +450,14 @@ where
                 *output = temp_expanded;
             } else {
                 let perm = compute_permutation(&plan.canonical_modes, subs_c)
-                    .map_err(|e| Error::InvalidArgument(e))?;
+                    .map_err(Error::InvalidArgument)?;
                 *output = temp_expanded.permute(&perm)?;
             }
         } else {
             // Physical permute is a structural view plus MakeContiguous.
             let permuted = if plan.needs_final_permute {
                 let perm = compute_permutation(&plan.canonical_modes, subs_c)
-                    .map_err(|e| Error::InvalidArgument(e))?;
+                    .map_err(Error::InvalidArgument)?;
                 temp_expanded.permute(&perm)?
             } else {
                 temp_expanded.clone()

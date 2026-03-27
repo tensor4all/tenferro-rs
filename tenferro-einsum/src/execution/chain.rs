@@ -135,14 +135,14 @@ where
     }
 
     if let Some(strict) = &step_plan.strict_binary {
-        if !left.is_conjugated() && !right.is_conjugated() {
-            if try_execute_strict_binary_plan_into::<Alg, Backend>(
+        let strict_done = !left.is_conjugated()
+            && !right.is_conjugated()
+            && try_execute_strict_binary_plan_into::<Alg, Backend>(
                 ctx, strict, left, right, alpha, beta, output,
             )?
-            .is_some()
-            {
-                return Ok(());
-            }
+            .is_some();
+        if strict_done {
+            return Ok(());
         }
     }
     execute_pairwise_with_plan::<Alg, Backend, P>(

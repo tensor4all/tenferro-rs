@@ -331,11 +331,9 @@ pub(super) fn try_execute_contract_gemm<T: Scalar + 'static>(
     } else {
         None
     };
-    let mut out_temp = if let Some(dims) = prepared_output_dims.as_ref() {
-        Some(temporary_output::<T>(ctx, dims))
-    } else {
-        None
-    };
+    let mut out_temp = prepared_output_dims
+        .as_ref()
+        .map(|dims| temporary_output::<T>(ctx, dims));
 
     let result = (|| {
         if let Some(temp) = out_temp.as_mut() {
