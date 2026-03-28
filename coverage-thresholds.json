@@ -77,6 +77,9 @@
     "tenferro-tensor/src/buffer.rs": 78,
     "tenferro-tensor/src/tensor/structural.rs": 64,
     "tenferro-tensor/src/structured_tensor/conversion.rs": 75,
-    "tenferro/src/structured/layout.rs": 79
+    "tenferro/src/structured/layout.rs": 79,
+    "tenferro/src/autograd_api.rs": 65,
+    "tenferro/src/ops/einsum/dense_rule.rs": 35,
+    "tenferro/src/tape/registry.rs": 50
   }
 }

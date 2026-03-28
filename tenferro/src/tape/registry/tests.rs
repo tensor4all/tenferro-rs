@@ -16,9 +16,10 @@ fn f64_scalar(value: f64) -> DynTensor {
 }
 
 #[test]
-fn tensor_rule_adapter_rejects_cotangent_dtype_mismatch_and_reports_empty_inputs() {
-    let adapter = TensorRuleAdapter::<f64> {
-        rule: Box::new(|_| Ok(Vec::new())),
+fn closure_rule_adapter_rejects_cotangent_dtype_mismatch_and_reports_empty_inputs() {
+    let adapter = ClosureRuleAdapter::<f64> {
+        pullback_fn: Box::new(|_| Ok(Vec::new())),
+        input_node_ids: vec![],
     };
     let cotangent = DynTensor::from(dense_structured(
         Tensor::<Complex64>::from_slice(
@@ -40,12 +41,14 @@ fn tensor_rule_adapter_rejects_cotangent_dtype_mismatch_and_reports_empty_inputs
 }
 
 #[test]
-fn tensor_rule_adapter_pullback_with_tangents_reports_hvp_not_supported() {
-    let adapter = TensorRuleAdapter::<f64> {
-        rule: Box::new(|_| Ok(Vec::new())),
+fn closure_rule_adapter_pullback_with_tangents_reports_hvp_not_supported() {
+    let adapter = ClosureRuleAdapter::<f64> {
+        pullback_fn: Box::new(|_| Ok(Vec::new())),
+        input_node_ids: vec![],
     };
 
-    match adapter.pullback_with_tangents(&f64_scalar(1.0), &f64_scalar(0.5)) {
+    let input_tangents_fn = |_: NodeId| -> Option<&DynTensor> { None };
+    match adapter.pullback_with_tangents(&f64_scalar(1.0), &f64_scalar(0.5), &input_tangents_fn) {
         Err(AutodiffError::HvpNotSupported) => {}
         Err(err) => panic!("unexpected HVP error: {err}"),
         Ok(_) => panic!("VJP-only rule should not claim HVP support"),
@@ -56,6 +59,7 @@ fn tensor_rule_adapter_pullback_with_tangents_reports_hvp_not_supported() {
 fn mixed_tensor_rule_adapter_rejects_cotangent_dtype_mismatch_and_reports_empty_inputs() {
     let adapter = MixedTensorRuleAdapter::<f64, Complex64> {
         rule: Box::new(|_| Ok(Vec::new())),
+        input_node_ids: vec![],
     };
     let cotangent = DynTensor::from(dense_structured(
         Tensor::<Complex64>::from_slice(
@@ -93,6 +97,7 @@ fn mixed_tensor_rule_adapter_pullback_converts_gradient_dtype() {
                 ),
             )])
         }),
+        input_node_ids: vec![NodeId::new(7)],
     };
 
     let cotangent = f64_scalar(2.5);

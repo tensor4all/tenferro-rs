@@ -243,9 +243,11 @@ where
             .next()
             .flatten();
 
-        tape::register_rule::<T>(
+        let input_node_ids: Vec<_> = input_spec.iter().map(|s| s.node).collect();
+        tape::register_closure_rule::<T>(
             &tape,
             node,
+            input_node_ids,
             Box::new(move |cotangent| {
                 let grad = pullback_fn(&input_primal, &primal, cotangent.payload())?;
                 let Some(spec) = &input_spec else {
@@ -344,9 +346,14 @@ where
     if let Some((node, tape)) = out.reverse_handle() {
         let reverse_specs = collect_reverse_input_specs(&operands);
 
-        tape::register_rule::<T>(
+        let input_node_ids: Vec<_> = reverse_specs
+            .iter()
+            .filter_map(|s| s.as_ref().map(|s| s.node))
+            .collect();
+        tape::register_closure_rule::<T>(
             &tape,
             node,
+            input_node_ids,
             Box::new(move |cotangent| {
                 let (grad_lhs, grad_rhs) =
                     pullback_fn(&lhs_primal, &rhs_primal, &primal, cotangent.payload())?;

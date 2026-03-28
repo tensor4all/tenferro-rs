@@ -292,11 +292,15 @@ where
                 Some(existing) => {
                     let one = <Alg::Scalar as num_traits::One>::one();
                     if let Some(nested) = nested {
-                        // Nested einsum does not support _into; materialize + add.
+                        // Nested einsum does not support _into; materialize then
+                        // accumulate via an identity contraction (the nested tree
+                        // may have fewer roots than `subs.inputs`).
                         let term = execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?;
+                        let out_labels: &[u32] = &subs.output;
+                        let identity_subs = Subscripts::new(&[out_labels], out_labels);
                         einsum_with_subscripts_into::<Alg, Backend>(
                             ctx,
-                            subs,
+                            &identity_subs,
                             &[&term],
                             one,
                             one,

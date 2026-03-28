@@ -30,9 +30,10 @@ fn tensor_pullback_routes_through_registered_rule_chain() {
     let x_node = x.node_id().unwrap();
     let y_node = y.node_id().unwrap();
 
-    register_rule::<f64>(
+    register_closure_rule::<f64>(
         &tape,
         y_node,
+        vec![x_node],
         Box::new(move |cotangent| {
             let seed = cotangent.payload().buffer().as_slice().unwrap()[0];
             Ok(vec![(
@@ -73,9 +74,10 @@ fn tensor_pullback_rule_rejects_hvp_when_only_vjp_is_registered() {
     let x_node = x.node_id().unwrap();
     let y_node = y.node_id().unwrap();
 
-    register_rule::<f64>(
+    register_closure_rule::<f64>(
         &tape,
         y_node,
+        vec![x_node],
         Box::new(move |cotangent| {
             let seed = cotangent.payload().buffer().as_slice().unwrap()[0];
             Ok(vec![(
@@ -88,9 +90,15 @@ fn tensor_pullback_rule_rejects_hvp_when_only_vjp_is_registered() {
         }),
     );
 
+    let mut leaf_tangents = std::collections::HashMap::new();
+    leaf_tangents.insert(
+        x.node_id().unwrap(),
+        crate::DynTensor::from(dense_structured(f64_vec(&[0.5, -0.5]))),
+    );
     match tape.hvp(
         &y.as_tracked()
             .expect("reverse output should expose tracked value"),
+        &leaf_tangents,
     ) {
         Err(AutodiffError::HvpNotSupported) => {}
         Err(err) => panic!("unexpected hvp error: {err}"),
@@ -104,9 +112,10 @@ fn tensor_pullback_rule_maps_rule_errors_to_invalid_argument() {
     let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
     let y_node = y.node_id().unwrap();
 
-    register_rule::<f64>(
+    register_closure_rule::<f64>(
         &tape,
         y_node,
+        vec![],
         Box::new(|_| {
             Err(crate::Error::InvalidAdTensor {
                 message: "synthetic pullback failure".to_string(),
@@ -145,7 +154,7 @@ fn tensor_pullback_rejects_mismatched_registered_rule_dtype() {
     let y = AdTensor::new_reverse_output(f64_scalar(3.0), &tape, None).unwrap();
     let y_node = y.node_id().unwrap();
 
-    register_rule::<Complex64>(&tape, y_node, Box::new(|_| Ok(Vec::new())));
+    register_closure_rule::<Complex64>(&tape, y_node, vec![], Box::new(|_| Ok(Vec::new())));
 
     match pullback(&y, &f64_scalar(1.0)) {
         Err(crate::Error::Autodiff(AutodiffError::InvalidArgument(message))) => {

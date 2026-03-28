@@ -63,9 +63,11 @@ where
                 .flatten();
             let input_layout = self.tensor.structured_primal().clone();
 
-            tape::register_rule::<T>(
+            let input_node_ids: Vec<_> = input_node.into_iter().collect();
+            tape::register_closure_rule::<T>(
                 &tape,
                 node,
+                input_node_ids,
                 Box::new(move |cotangent| {
                     let Some(input_node) = input_node else {
                         return Ok(Vec::new());

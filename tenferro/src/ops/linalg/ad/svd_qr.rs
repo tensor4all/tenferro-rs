@@ -149,9 +149,10 @@ where
             if let Some((node, tape)) = out_u.reverse_handle() {
                 let spec = spec.clone();
                 let options = options.clone();
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -188,6 +189,7 @@ where
                 tape::register_mixed_rule::<T::Real, T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -221,9 +223,10 @@ where
                 let spec = spec.clone();
                 let options = options.clone();
                 let a_primal = input_primal.clone();
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -350,9 +353,10 @@ where
             if let Some((node, tape)) = out_q.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -383,9 +387,10 @@ where
             if let Some((node, tape)) = out_r.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,

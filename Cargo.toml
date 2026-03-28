@@ -34,9 +34,9 @@ thiserror = "2"
 criterion = "0.5"
 serde = "1"
 serde_json = "1"
-chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs", rev = "c45a23093df0b4d8967888a8b1b7bb40ffbfeb18" }
-chainrules = { git = "https://github.com/tensor4all/chainrules-rs", rev = "c45a23093df0b4d8967888a8b1b7bb40ffbfeb18" }
-tidu = { git = "https://github.com/tensor4all/tidu-rs", rev = "56053580ecc5ef9ffa41e49208ad66d2e84e731e" }
+chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs", branch = "deferred-hvp-tangents" }
+chainrules = { git = "https://github.com/tensor4all/chainrules-rs", branch = "deferred-hvp-tangents" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs", rev = "ea504cd" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }

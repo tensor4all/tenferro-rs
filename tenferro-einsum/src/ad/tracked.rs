@@ -107,7 +107,6 @@ where
         ctx: ctx.clone(),
         subscripts: subs,
         primals: primals.iter().map(|&t| t.clone()).collect(),
-        input_tangents: operands.iter().map(|op| op.tangent().cloned()).collect(),
         input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
         _phantom: PhantomData,
     };

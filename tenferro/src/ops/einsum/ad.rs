@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use super::super::*;
+use super::dense_rule::DenseEinsumRule;
 use tenferro_prims::TensorTempPoolContext;
 
 /// Builder for AD einsum.
@@ -114,50 +115,6 @@ where
     Ok(input_grads)
 }
 
-fn dense_einsum_pullback_in_backend<B, C, T>(
-    ctx: &mut C,
-    subscripts: &str,
-    reverse_specs: &[Option<ReverseInputSpec<T>>],
-    primals: &[Tensor<T>],
-    cotangent: &Tensor<T>,
-) -> Result<Vec<(NodeId, StructuredTensor<T>)>>
-where
-    T: EinsumRuntimeValue,
-    B: DenseEinsumBackend<T, C>,
-    C: TensorTempPoolContext,
-{
-    let primal_refs: Vec<&Tensor<T>> = primals.iter().collect();
-    let gradients =
-        tf_einsum::einsum_rrule::<Standard<T>, B>(ctx, subscripts, &primal_refs, cotangent)
-            .map_err(Error::from)?;
-    if gradients.len() != reverse_specs.len() {
-        return Err(Error::InvalidAdTensor {
-            message: format!(
-                "einsum_ad pullback arity mismatch: expected {}, got {}",
-                reverse_specs.len(),
-                gradients.len()
-            ),
-        });
-    }
-
-    let mut input_grads = Vec::new();
-    for (k, grad) in gradients.into_iter().enumerate() {
-        let Some(spec) = &reverse_specs[k] else {
-            continue;
-        };
-        let grad = spec
-            .layout
-            .with_payload_like(compress_pullback_like_in_backend::<B, _, T>(
-                ctx,
-                "einsum_ad",
-                grad,
-                &spec.layout,
-            )?)?;
-        input_grads.push((spec.node, grad));
-    }
-    Ok(input_grads)
-}
-
 fn run_einsum_ad_in_backend<B, C, T>(
     ctx: &mut C,
     subscripts: &str,
@@ -191,9 +148,11 @@ where
             let primal_owned: Vec<StructuredTensor<T>> =
                 primals.iter().map(|tensor| (*tensor).clone()).collect();
 
-            tape::register_rule::<T>(
+            let input_node_ids: Vec<_> = reverse_nodes.iter().filter_map(|n| *n).collect();
+            tape::register_closure_rule::<T>(
                 &tape,
                 node,
+                input_node_ids,
                 Box::new(move |cotangent| {
                     dispatch_einsum_runtime!(T, "einsum_ad_pullback_structured", |ctx, Backend| {
                         structured_einsum_pullback_in_backend::<Backend, _, T>(
@@ -247,16 +206,10 @@ where
         tape::register_rule::<T>(
             &tape,
             node,
-            Box::new(move |cotangent| {
-                dispatch_einsum_runtime!(T, "einsum_ad_pullback", |ctx, Backend| {
-                    dense_einsum_pullback_in_backend::<Backend, _, T>(
-                        ctx,
-                        &subscripts,
-                        &reverse_specs,
-                        &primal_owned,
-                        cotangent.payload(),
-                    )
-                })
+            Box::new(DenseEinsumRule {
+                subscripts,
+                primals: primal_owned,
+                reverse_specs,
             }),
         );
     }

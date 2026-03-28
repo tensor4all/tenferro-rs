@@ -133,9 +133,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "reshape reverse output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     let grad = dense_structured(
                         cotangent
@@ -201,9 +202,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "view reverse output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     let grad = dense_structured(
                         cotangent
@@ -249,9 +251,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "permute reverse output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     Ok(vec![(input_node, cotangent.permute_logical(&inverse)?)])
                 }),
@@ -406,9 +409,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "take_prefix reverse output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     let grad = dense_structured(take_prefix_pullback_typed(
                         cotangent.payload(),
