@@ -17,7 +17,7 @@
 /// # Examples
 ///
 /// ```
-/// use tenferro_tropical::ArgmaxTracker;
+/// use tenferro_ext_tropical::ArgmaxTracker;
 ///
 /// // Create a tracker for a 3x5 output
 /// let tracker = ArgmaxTracker::new(&[3, 5]);
@@ -42,7 +42,7 @@ impl ArgmaxTracker {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tropical::ArgmaxTracker;
+    /// use tenferro_ext_tropical::ArgmaxTracker;
     ///
     /// let tracker = ArgmaxTracker::new(&[3, 5]);
     /// assert_eq!(tracker.output_shape(), &[3, 5]);
@@ -75,7 +75,7 @@ impl ArgmaxTracker {
     /// # Examples
     ///
     /// ```
-    /// use tenferro_tropical::ArgmaxTracker;
+    /// use tenferro_ext_tropical::ArgmaxTracker;
     ///
     /// let tracker = ArgmaxTracker::new(&[3, 5]);
     /// let k = tracker.winner_index(&[1, 2]);

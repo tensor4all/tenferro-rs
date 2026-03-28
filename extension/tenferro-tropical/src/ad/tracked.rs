@@ -21,8 +21,8 @@ use super::TropicalScalar;
 ///
 /// ```ignore
 /// use tidu::ReverseRule;
-/// use tenferro_tropical::ad::TropicalEinsumReverseRule;
-/// use tenferro_tropical::MaxPlus;
+/// use tenferro_ext_tropical::ad::TropicalEinsumReverseRule;
+/// use tenferro_ext_tropical::MaxPlus;
 /// use tenferro_tensor::Tensor;
 /// ```
 pub struct TropicalEinsumReverseRule<T: TropicalScalar> {
@@ -73,8 +73,8 @@ where
 ///
 /// ```ignore
 /// use tidu::Tape;
-/// use tenferro_tropical::ad::tracked_tropical_einsum;
-/// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+/// use tenferro_ext_tropical::ad::tracked_tropical_einsum;
+/// use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
@@ -159,8 +159,8 @@ where
 ///
 /// ```ignore
 /// use tenferro_tensor::{MemoryOrder, Tensor};
-/// use tenferro_tropical::MaxPlus;
-/// use tenferro_tropical::ad::promote_to_tropical;
+/// use tenferro_ext_tropical::MaxPlus;
+/// use tenferro_ext_tropical::ad::promote_to_tropical;
 ///
 /// let t = Tensor::<f64>::from_slice(&[1.0, 2.0], &[2], MemoryOrder::ColumnMajor).unwrap();
 /// let tropical = promote_to_tropical::<MaxPlus<f64>>(&t).unwrap();
@@ -186,8 +186,8 @@ pub fn promote_to_tropical<T: TropicalScalar>(tensor: &Tensor<T::Inner>) -> Resu
 ///
 /// ```ignore
 /// use tenferro_tensor::{MemoryOrder, Tensor};
-/// use tenferro_tropical::MaxPlus;
-/// use tenferro_tropical::ad::extract_inner;
+/// use tenferro_ext_tropical::MaxPlus;
+/// use tenferro_ext_tropical::ad::extract_inner;
 ///
 /// let t = Tensor::<MaxPlus<f64>>::from_slice(
 ///     &[MaxPlus(1.0), MaxPlus(2.0)], &[2], MemoryOrder::ColumnMajor,

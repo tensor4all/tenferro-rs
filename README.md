@@ -73,6 +73,14 @@ GPU code path works just because the type, trait, or FFI entrypoint exists.
 
 ## Which crate should I use?
 
+### Public Crate Choices
+
+The workspace now uses three naming buckets:
+
+- `end-user public`: crates most users should start with
+- `protocol public`: lower-level public contracts for backends and extensions
+- `internal`: implementation-only crates that will use the `tenferro-internal-` prefix
+
 | Crate | Use when |
 |-------|----------|
 | **`tenferro-tensor-compute`** | You want typed `Tensor<T>` with einsum and linalg — **start here** |
@@ -83,6 +91,13 @@ GPU code path works just because the type, trait, or FFI entrypoint exists.
 - **Dynamic AD path** (`tenferro`): dynamic scalar type with automatic differentiation (VJP/JVP). Best when you need gradients.
 
 The quickstart below uses the typed path; the [Autodiff quickstart](#autodiff-quickstart) shows the dynamic AD path.
+
+### Internal Crate Policy
+
+Implementation-only crates will use the `tenferro-internal-` prefix, live under
+`internal/`, and set `publish = false`. Downstream users should depend on the
+documented public crates instead of depending on internal implementation crates
+directly.
 
 ## Quickstart
 
@@ -194,7 +209,7 @@ fn main() {
 
 ### Tropical algebra quickstart
 
-Extension crate `tenferro-tropical` provides tropical semiring algebras
+Extension crate `tenferro-ext-tropical` provides tropical semiring algebras
 (`MaxPlus`, `MinPlus`, `MaxMul`) that plug into the same einsum engine.
 
 ```toml
@@ -203,14 +218,14 @@ tenferro-algebra  = { path = "../tenferro-rs/tenferro-algebra" }
 tenferro-tensor   = { path = "../tenferro-rs/tenferro-tensor" }
 tenferro-prims    = { path = "../tenferro-rs/tenferro-prims" }
 tenferro-einsum   = { path = "../tenferro-rs/tenferro-einsum" }
-tenferro-tropical = { path = "../tenferro-rs/extension/tenferro-tropical" }
+tenferro-ext-tropical = { path = "../tenferro-rs/extension/tenferro-tropical" }
 ```
 
 ```rust
 use tenferro_einsum::einsum;
 use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
 
 fn main() {
     let col = MemoryOrder::ColumnMajor;

@@ -3,12 +3,12 @@
 use num_traits::{One, Zero};
 use tenferro_algebra::{Scalar, Semiring};
 use tenferro_device::Result;
+use tenferro_ext_tropical::{MaxMul, MaxPlus, MinPlus};
 use tenferro_prims::{
     CpuBackend, CpuContext, SemiringBinaryOp, SemiringCoreDescriptor, SemiringFastPathDescriptor,
     TensorSemiringCore, TensorSemiringFastPath,
 };
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tenferro_tropical::{MaxMul, MaxPlus, MinPlus};
 
 fn permuted_view<T: Scalar>(tensor: &Tensor<T>, perm: &[usize]) -> Tensor<T> {
     tensor.permute(perm).unwrap()
@@ -410,7 +410,7 @@ fn maxmul_f32_arithmetic() {
 #[test]
 fn has_algebra_maxplus_f64() {
     use tenferro_algebra::HasAlgebra;
-    use tenferro_tropical::MaxPlusAlgebra;
+    use tenferro_ext_tropical::MaxPlusAlgebra;
     fn check_f64<T: HasAlgebra<Algebra = MaxPlusAlgebra<f64>>>() {}
     fn check_f32<T: HasAlgebra<Algebra = MaxPlusAlgebra<f32>>>() {}
     check_f64::<MaxPlus<f64>>();
@@ -420,7 +420,7 @@ fn has_algebra_maxplus_f64() {
 #[test]
 fn has_algebra_minplus_f64() {
     use tenferro_algebra::HasAlgebra;
-    use tenferro_tropical::MinPlusAlgebra;
+    use tenferro_ext_tropical::MinPlusAlgebra;
     fn check_f64<T: HasAlgebra<Algebra = MinPlusAlgebra<f64>>>() {}
     fn check_f32<T: HasAlgebra<Algebra = MinPlusAlgebra<f32>>>() {}
     check_f64::<MinPlus<f64>>();
@@ -430,7 +430,7 @@ fn has_algebra_minplus_f64() {
 #[test]
 fn has_algebra_maxmul_f64() {
     use tenferro_algebra::HasAlgebra;
-    use tenferro_tropical::MaxMulAlgebra;
+    use tenferro_ext_tropical::MaxMulAlgebra;
     fn check_f64<T: HasAlgebra<Algebra = MaxMulAlgebra<f64>>>() {}
     fn check_f32<T: HasAlgebra<Algebra = MaxMulAlgebra<f32>>>() {}
     check_f64::<MaxMul<f64>>();
@@ -444,7 +444,7 @@ fn has_algebra_maxmul_f64() {
 #[test]
 fn semiring_maxplus() {
     use tenferro_algebra::Semiring;
-    use tenferro_tropical::MaxPlusAlgebra;
+    use tenferro_ext_tropical::MaxPlusAlgebra;
 
     let z = MaxPlusAlgebra::<f64>::zero();
     let o = MaxPlusAlgebra::<f64>::one();
@@ -460,7 +460,7 @@ fn semiring_maxplus() {
 #[test]
 fn semiring_minplus() {
     use tenferro_algebra::Semiring;
-    use tenferro_tropical::MinPlusAlgebra;
+    use tenferro_ext_tropical::MinPlusAlgebra;
 
     let z = MinPlusAlgebra::<f64>::zero();
     let o = MinPlusAlgebra::<f64>::one();
@@ -476,7 +476,7 @@ fn semiring_minplus() {
 #[test]
 fn semiring_maxmul() {
     use tenferro_algebra::Semiring;
-    use tenferro_tropical::MaxMulAlgebra;
+    use tenferro_ext_tropical::MaxMulAlgebra;
 
     let z = MaxMulAlgebra::<f64>::zero();
     let o = MaxMulAlgebra::<f64>::one();
@@ -496,7 +496,7 @@ fn semiring_maxmul() {
 #[test]
 fn semiring_maxplus_f32() {
     use tenferro_algebra::Semiring;
-    use tenferro_tropical::MaxPlusAlgebra;
+    use tenferro_ext_tropical::MaxPlusAlgebra;
 
     let z = MaxPlusAlgebra::<f32>::zero();
     let o = MaxPlusAlgebra::<f32>::one();
@@ -514,7 +514,7 @@ fn semiring_maxplus_f32() {
 #[test]
 fn semiring_minplus_f32() {
     use tenferro_algebra::Semiring;
-    use tenferro_tropical::MinPlusAlgebra;
+    use tenferro_ext_tropical::MinPlusAlgebra;
 
     let z = MinPlusAlgebra::<f32>::zero();
     let o = MinPlusAlgebra::<f32>::one();
@@ -532,7 +532,7 @@ fn semiring_minplus_f32() {
 #[test]
 fn semiring_maxmul_f32() {
     use tenferro_algebra::Semiring;
-    use tenferro_tropical::MaxMulAlgebra;
+    use tenferro_ext_tropical::MaxMulAlgebra;
 
     let z = MaxMulAlgebra::<f32>::zero();
     let o = MaxMulAlgebra::<f32>::one();
@@ -581,7 +581,7 @@ fn tropical_satisfies_scalar() {
 
 #[test]
 fn argmax_tracker_new() {
-    use tenferro_tropical::ArgmaxTracker;
+    use tenferro_ext_tropical::ArgmaxTracker;
     let tracker = ArgmaxTracker::new(&[3, 5]);
     assert_eq!(tracker.output_shape(), &[3, 5]);
     assert_eq!(tracker.indices().len(), 15); // 3 * 5
@@ -590,7 +590,7 @@ fn argmax_tracker_new() {
 
 #[test]
 fn argmax_tracker_winner_index() {
-    use tenferro_tropical::ArgmaxTracker;
+    use tenferro_ext_tropical::ArgmaxTracker;
     let mut tracker = ArgmaxTracker::new(&[2, 3]);
     // Manually set some winner indices
     // Layout is column-major: (0,0), (1,0), (0,1), (1,1), (0,2), (1,2)
@@ -602,7 +602,7 @@ fn argmax_tracker_winner_index() {
 
 #[test]
 fn argmax_tracker_winner_index_rejects_wrong_rank() {
-    use tenferro_tropical::ArgmaxTracker;
+    use tenferro_ext_tropical::ArgmaxTracker;
 
     let tracker = ArgmaxTracker::new(&[2, 3]);
     let result = std::panic::catch_unwind(|| tracker.winner_index(&[1]));
@@ -611,7 +611,7 @@ fn argmax_tracker_winner_index_rejects_wrong_rank() {
 
 #[test]
 fn argmax_tracker_winner_index_rejects_out_of_bounds_position() {
-    use tenferro_tropical::ArgmaxTracker;
+    use tenferro_ext_tropical::ArgmaxTracker;
 
     let tracker = ArgmaxTracker::new(&[2, 3]);
     let result = std::panic::catch_unwind(|| tracker.winner_index(&[2, 0]));
@@ -654,13 +654,13 @@ fn maxplus_matmul_2x2() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -708,13 +708,13 @@ fn minplus_matmul_2x2() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -761,13 +761,13 @@ fn maxmul_matmul_2x2() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxMulAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -858,13 +858,13 @@ fn shortest_path_minplus_bellman_ford_step() {
         n: 1,
         k: 3,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3, 3], &[3, 1], &[3, 1]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -888,7 +888,7 @@ fn shortest_path_minplus_bellman_ford_step() {
         MemoryOrder::ColumnMajor,
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -937,13 +937,13 @@ fn viterbi_maxmul_hmm_step() {
         n: 1,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxMulAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 1], &[2, 1]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -982,13 +982,13 @@ fn maxplus_reduce_sum() {
         modes_a: vec![0, 1],
         modes_c: vec![0],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1025,10 +1025,12 @@ fn maxplus_make_contiguous_from_transposed_view() {
     )
     .unwrap();
 
-    let plan =
-        tropical_make_contiguous_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, a.dims())
-            .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_make_contiguous_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
+        &mut ctx,
+        a.dims(),
+    )
+    .unwrap();
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1081,13 +1083,13 @@ fn maxplus_trace_3x3() {
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3, 3], &[]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1139,13 +1141,13 @@ fn maxplus_trace_partial_3d() {
         modes_c: vec![2],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2, 3], &[3]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1193,13 +1195,13 @@ fn maxplus_anti_trace_scalar_to_diag() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1264,13 +1266,13 @@ fn maxplus_matmul_2x2_f32() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f32>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f32>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f32>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f32>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1326,13 +1328,13 @@ fn minplus_matmul_2x2_f32() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f32>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MinPlusAlgebra<f32>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f32>>(
+    tropical_core_execute::<tenferro_ext_tropical::MinPlusAlgebra<f32>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -1388,13 +1390,13 @@ fn maxmul_matmul_2x2_f32() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxMulAlgebra<f32>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxMulAlgebra<f32>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f32>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxMulAlgebra<f32>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -1451,13 +1453,13 @@ fn maxplus_matmul_accumulate_with_beta() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(2.0), // alpha
@@ -1506,13 +1508,13 @@ fn maxplus_anti_diag_vector_to_matrix() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1569,13 +1571,13 @@ fn maxplus_make_contiguous() {
     .unwrap();
 
     let desc = SemiringCoreDescriptor::MakeContiguous;
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3, 2], &[3, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1626,13 +1628,13 @@ fn maxplus_anti_trace_vec_to_3d() {
         modes_c: vec![0, 1, 2], // output: modes 0, 1, 2
         paired: vec![(0, 1)],   // diagonal on modes 0 and 1
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3], &[2, 2, 3]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -1685,10 +1687,12 @@ fn maxplus_make_contiguous_from_transposed_view_with_alpha_beta() {
     let a = permuted_view(&base, &[1, 0]);
     let mut c = Tensor::from_slice(&c_init, &[2, 2], MemoryOrder::ColumnMajor).unwrap();
 
-    let plan =
-        tropical_make_contiguous_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, a.dims())
-            .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_make_contiguous_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
+        &mut ctx,
+        a.dims(),
+    )
+    .unwrap();
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(10.0), // alpha
@@ -1729,13 +1733,13 @@ fn maxplus_make_contiguous_with_alpha_beta() {
     let mut output = Tensor::from_slice(&out_init, &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let desc = SemiringCoreDescriptor::MakeContiguous;
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(1.0), // alpha
@@ -1774,13 +1778,13 @@ fn maxplus_reduce_with_beta_accumulate() {
         modes_a: vec![0, 1],
         modes_c: vec![0],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha = one
@@ -1824,13 +1828,13 @@ fn maxplus_trace_with_beta_accumulate() {
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha
@@ -1865,13 +1869,13 @@ fn minplus_reduce_column_min() {
         modes_a: vec![0, 1],
         modes_c: vec![0],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MinPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MinPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MinPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MinPlus::one(),
@@ -1903,10 +1907,12 @@ fn maxmul_make_contiguous_from_transposed_view() {
     )
     .unwrap();
 
-    let plan =
-        tropical_make_contiguous_plan::<tenferro_tropical::MaxMulAlgebra<f64>>(&mut ctx, a.dims())
-            .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxMulAlgebra<f64>>(
+    let plan = tropical_make_contiguous_plan::<tenferro_ext_tropical::MaxMulAlgebra<f64>>(
+        &mut ctx,
+        a.dims(),
+    )
+    .unwrap();
+    tropical_core_execute::<tenferro_ext_tropical::MaxMulAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxMul::one(),
@@ -1955,13 +1961,13 @@ fn maxplus_anti_trace_accumulate_beta() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 2]],
     )
     .unwrap();
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus(0.0), // alpha
@@ -2000,11 +2006,14 @@ fn tropical_reduction_surface_only_exposes_semiring_add() {
         modes_a: vec![0],
         modes_c: vec![],
     };
-    let plan =
-        tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(&mut ctx, &desc, &[&[2], &[]])
-            .unwrap();
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
+        &mut ctx,
+        &desc,
+        &[&[2], &[]],
+    )
+    .unwrap();
 
-    tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2032,7 +2041,7 @@ fn tropical_plan_contract_returns_error() {
         modes_b: vec![1, 2],
         modes_c: vec![0, 2],
     };
-    let result = tropical_fast_path_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_fast_path_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3], &[3, 4], &[2, 4]],
@@ -2048,7 +2057,7 @@ fn tropical_plan_elementwise_mul_returns_error() {
     let desc = SemiringFastPathDescriptor::ElementwiseBinary {
         op: SemiringBinaryOp::Mul,
     };
-    let result = tropical_fast_path_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_fast_path_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2], &[2]],
@@ -2071,7 +2080,7 @@ fn tropical_execute_gemm_wrong_arity_returns_error() {
         n: 2,
         k: 2,
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2, 2], &[2, 2]],
@@ -2087,7 +2096,7 @@ fn tropical_execute_gemm_wrong_arity_returns_error() {
     .unwrap();
 
     // Pass 1 input instead of 2
-    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2108,7 +2117,7 @@ fn tropical_execute_reduce_wrong_arity_returns_error() {
         modes_a: vec![0, 1],
         modes_c: vec![0],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
@@ -2119,7 +2128,7 @@ fn tropical_execute_reduce_wrong_arity_returns_error() {
         Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2141,7 +2150,7 @@ fn tropical_execute_trace_wrong_arity_returns_error() {
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[]],
@@ -2152,7 +2161,7 @@ fn tropical_execute_trace_wrong_arity_returns_error() {
         Tensor::from_slice(&[MaxPlus::<f64>::zero()], &[], MemoryOrder::ColumnMajor).unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2174,7 +2183,7 @@ fn tropical_execute_anti_trace_wrong_arity_returns_error() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 2]],
@@ -2189,7 +2198,7 @@ fn tropical_execute_anti_trace_wrong_arity_returns_error() {
     .unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2211,7 +2220,7 @@ fn tropical_execute_anti_diag_wrong_arity_returns_error() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 2]],
@@ -2226,7 +2235,7 @@ fn tropical_execute_anti_diag_wrong_arity_returns_error() {
     .unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2244,7 +2253,7 @@ fn tropical_execute_make_contiguous_wrong_arity_returns_error() {
 
     let mut ctx = CpuContext::new(1);
     let desc = SemiringCoreDescriptor::MakeContiguous;
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2]],
@@ -2255,7 +2264,7 @@ fn tropical_execute_make_contiguous_wrong_arity_returns_error() {
         Tensor::from_slice(&[MaxPlus::<f64>::zero(); 2], &[2], MemoryOrder::ColumnMajor).unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),
@@ -2283,16 +2292,16 @@ fn tropical_no_extensions() {
     };
 
     assert!(!tropical_has_fast_path::<
-        tenferro_tropical::MaxPlusAlgebra<f64>,
+        tenferro_ext_tropical::MaxPlusAlgebra<f64>,
     >(contract.clone()));
     assert!(!tropical_has_fast_path::<
-        tenferro_tropical::MaxPlusAlgebra<f64>,
+        tenferro_ext_tropical::MaxPlusAlgebra<f64>,
     >(mul));
     assert!(!tropical_has_fast_path::<
-        tenferro_tropical::MinPlusAlgebra<f64>,
+        tenferro_ext_tropical::MinPlusAlgebra<f64>,
     >(contract.clone()));
     assert!(!tropical_has_fast_path::<
-        tenferro_tropical::MaxMulAlgebra<f64>,
+        tenferro_ext_tropical::MaxMulAlgebra<f64>,
     >(contract));
 }
 
@@ -2310,7 +2319,7 @@ fn tropical_plan_reduce_mode_rank_mismatch_returns_error() {
         modes_a: vec![0, 1],
         modes_c: vec![0],
     };
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3, 4], &[2]],
@@ -2328,7 +2337,7 @@ fn tropical_plan_reduce_output_shape_mismatch_returns_error() {
         modes_c: vec![0],
     };
     // Output shape [3] doesn't match input mode 0 which has size 2
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[3]],
@@ -2347,7 +2356,7 @@ fn tropical_plan_trace_paired_dims_unequal_returns_error() {
         modes_c: vec![],
         paired: vec![(0, 1)],
     };
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3], &[]],
@@ -2366,7 +2375,7 @@ fn tropical_plan_trace_output_shape_mismatch_returns_error() {
         modes_c: vec![2],
         paired: vec![(0, 1)],
     };
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2, 3], &[4]],
@@ -2379,7 +2388,7 @@ fn tropical_plan_make_contiguous_shape_mismatch_returns_error() {
     use tenferro_device::Error;
 
     let mut ctx = CpuContext::new(1);
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &SemiringCoreDescriptor::MakeContiguous,
         &[&[2, 3], &[2, 2]],
@@ -2398,7 +2407,7 @@ fn tropical_plan_anti_trace_paired_dims_unequal_returns_error() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[], &[2, 3]],
@@ -2417,7 +2426,7 @@ fn tropical_plan_anti_trace_input_shape_mismatch_returns_error() {
         modes_c: vec![0, 1, 2],
         paired: vec![(0, 1)],
     };
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[3], &[2, 2, 4]],
@@ -2436,7 +2445,7 @@ fn tropical_plan_anti_diag_paired_dims_unequal_returns_error() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 3]],
@@ -2455,7 +2464,7 @@ fn tropical_plan_anti_diag_input_shape_mismatch_returns_error() {
         modes_c: vec![0, 1],
         paired: vec![(0, 1)],
     };
-    let result = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let result = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[3, 3]],
@@ -2473,7 +2482,7 @@ fn tropical_plan_trace_empty_paired_returns_error() {
         modes_c: vec![0],
         paired: vec![],
     };
-    let err = match tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = match tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 2], &[2]],
@@ -2495,7 +2504,7 @@ fn tropical_plan_antidiag_invalid_pair_anchor_returns_error() {
         // first paired label must exist in modes_a, but here it's 1
         paired: vec![(1, 0)],
     };
-    let err = match tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = match tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2], &[2, 2]],
@@ -2518,7 +2527,7 @@ fn tropical_plan_batched_gemm_shape_mismatch_returns_error() {
         k: 3,
     };
     // B shape is wrong (should be [3, 2], here [4, 2])
-    let err = match tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = match tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &desc,
         &[&[2, 3], &[4, 2], &[2, 2]],
@@ -2534,7 +2543,7 @@ fn tropical_execute_wrong_input_arity_returns_error() {
     use tenferro_device::Error;
 
     let mut ctx = CpuContext::new(1);
-    let plan = tropical_core_plan::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let plan = tropical_core_plan::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &SemiringCoreDescriptor::MakeContiguous,
         &[&[2, 2], &[2, 2]],
@@ -2549,7 +2558,7 @@ fn tropical_execute_wrong_input_arity_returns_error() {
     .unwrap();
 
     let no_inputs: [&Tensor<MaxPlus<f64>>; 0] = [];
-    let err = tropical_core_execute::<tenferro_tropical::MaxPlusAlgebra<f64>>(
+    let err = tropical_core_execute::<tenferro_ext_tropical::MaxPlusAlgebra<f64>>(
         &mut ctx,
         &plan,
         MaxPlus::one(),

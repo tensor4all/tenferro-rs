@@ -4,12 +4,14 @@
 //! operations to only the winning elements.
 
 use tenferro_device::Error;
-use tenferro_tensor::{MemoryOrder, Tensor};
-use tenferro_tropical::ad::{
+use tenferro_ext_tropical::ad::{
     extract_inner, promote_to_tropical, tracked_tropical_einsum, tropical_einsum_rrule,
     TropicalScalar,
 };
-use tenferro_tropical::{MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra};
+use tenferro_ext_tropical::{
+    MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra,
+};
+use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::Tape;
 
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;

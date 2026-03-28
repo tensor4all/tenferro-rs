@@ -1,7 +1,24 @@
 # Architecture
 
 This document describes the current high-level layering of the tenferro
-workspace after the prims/linalg protocol split.
+workspace after the prims/linalg protocol split and introduces the public /
+internal crate taxonomy used by the workspace.
+
+## Workspace Crate Taxonomy
+
+The workspace now uses a public / internal crate taxonomy with three naming buckets:
+
+- `end-user public` crates are the recommended starting points for users
+- `protocol public` crates expose execution contracts and foundation APIs
+- `internal` crates are implementation-only and will use the `tenferro-internal-` prefix
+
+This naming rule is intentionally simple: package names should make the public
+vs internal boundary obvious, while README and API docs explain which public
+crate is best for a given use case.
+
+Internal implementation crates will live under `internal/` and set
+`publish = false` explicitly so they are easy to spot in both the workspace
+layout and the manifest metadata.
 
 ## Layered Architecture
 

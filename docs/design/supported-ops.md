@@ -222,7 +222,7 @@ The exported C surface currently focuses on a narrow, stable subset:
 - SVD entrypoints
 - AD rule entrypoints for the supported FFI tensor/value wrappers
 
-## `tenferro-burn`
+## `tenferro-ext-burn`
 
 ### Burn bridge surface
 
@@ -236,7 +236,7 @@ The exported C surface currently focuses on a narrow, stable subset:
 - `NdArray<f64>` forward execution and `Autodiff<B, C>` backward execution are implemented.
 - Invalid subscripts, malformed nested einsum trees, and conversion failures now flow through checked helpers before any public panic-wrapper boundary.
 
-## `tenferro-mdarray`
+## `tenferro-ext-mdarray`
 
 ### mdarray bridge surface
 

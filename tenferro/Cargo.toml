@@ -14,6 +14,8 @@ thiserror.workspace = true
 chainrules-core.workspace = true
 chainrules.workspace = true
 tidu.workspace = true
+tenferro-internal-error = { path = "../internal/tenferro-internal-error" }
+tenferro-internal-runtime = { path = "../internal/tenferro-internal-runtime" }
 tenferro-algebra = { path = "../tenferro-algebra" }
 tenferro-device = { path = "../tenferro-device" }
 tenferro-einsum = { path = "../tenferro-einsum" }

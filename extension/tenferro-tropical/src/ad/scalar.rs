@@ -8,8 +8,8 @@ use tenferro_algebra::{HasAlgebra, Scalar, Standard};
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_tropical::MaxPlus;
-/// use tenferro_tropical::ad::TropicalScalar;
+/// use tenferro_ext_tropical::MaxPlus;
+/// use tenferro_ext_tropical::ad::TropicalScalar;
 ///
 /// let x = MaxPlus(3.0_f64);
 /// assert_eq!(x.inner(), 3.0);

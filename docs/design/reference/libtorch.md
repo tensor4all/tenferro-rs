@@ -756,7 +756,7 @@ implemented.
 | **AD core traits** | `chainrules-core` | `Differentiable`, `ReverseRule`, `ForwardRule` |
 | **AD tape engine** | `tidu` | `Tape`, `TrackedValue`, `DualValue`, `pullback` |
 | **C FFI** | `tenferro-capi` | Opaque handles, DLPack interop |
-| **Tropical algebras** | `tenferro-tropical` | MaxPlus, MinPlus, MaxMul |
+| **Tropical algebras** | `tenferro-ext-tropical` | MaxPlus, MinPlus, MaxMul |
 
 ### Key Design Differences from PyTorch
 

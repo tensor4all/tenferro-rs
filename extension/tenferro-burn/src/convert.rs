@@ -43,7 +43,7 @@ fn row_major_strides(dims: &[usize]) -> Vec<isize> {
 ///
 /// ```ignore
 /// use burn::backend::NdArray;
-/// use tenferro_burn::convert::try_burn_to_tenferro;
+/// use tenferro_ext_burn::convert::try_burn_to_tenferro;
 ///
 /// let burn_prim: <NdArray<f64> as burn::tensor::backend::Backend>::FloatTensorPrimitive =
 ///     todo!();
@@ -72,7 +72,7 @@ pub fn try_burn_to_tenferro<B: Backend<FloatElem = f64>>(
 ///
 /// ```ignore
 /// use burn::backend::NdArray;
-/// use tenferro_burn::convert::burn_to_tenferro;
+/// use tenferro_ext_burn::convert::burn_to_tenferro;
 ///
 /// let burn_prim: <NdArray<f64> as burn::tensor::backend::Backend>::FloatTensorPrimitive =
 ///     todo!();
@@ -101,7 +101,7 @@ pub fn burn_to_tenferro<B: Backend<FloatElem = f64>>(tensor: FloatTensor<B>) -> 
 /// ```ignore
 /// use burn::backend::NdArray;
 /// use burn::backend::ndarray::NdArrayDevice;
-/// use tenferro_burn::convert::try_tenferro_to_burn;
+/// use tenferro_ext_burn::convert::try_tenferro_to_burn;
 ///
 /// let tenferro_t: tenferro_tensor::Tensor<f64> = todo!();
 /// let device = NdArrayDevice::Cpu;
@@ -129,7 +129,7 @@ pub fn try_tenferro_to_burn<B: Backend<FloatElem = f64>>(
 ///
 /// ```ignore
 /// use burn::backend::NdArray;
-/// use tenferro_burn::convert::tenferro_to_burn;
+/// use tenferro_ext_burn::convert::tenferro_to_burn;
 ///
 /// let device = Default::default();
 /// let tenferro_t: tenferro_tensor::Tensor<f64> = todo!();
