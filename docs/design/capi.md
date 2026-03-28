@@ -318,12 +318,12 @@ C headers are generated via `cbindgen` from the two FFI crates:
 ```bash
 cbindgen --config cbindgen.toml --crate tenferro-capi --output tenferro.h
 cbindgen \
-  --config extension/tenferro-tropical-capi/cbindgen.toml \
+  --config extension/tenferro-ext-tropical-capi/cbindgen.toml \
   --crate tenferro-ext-tropical-capi \
-  --output tenferro_tropical.h
+  --output tenferro_ext_tropical.h
 ```
 
-`tenferro_tropical.h` is the extension header and includes `tenferro.h`.
+`tenferro_ext_tropical.h` is the extension header and includes `tenferro.h`.
 
 ### Symbol Naming
 All public symbols use the `tfe_` prefix. Tropical extension uses `tfe_tropical_` prefix.

@@ -38,6 +38,33 @@ fn manifest_array_entries(manifest: &str, key: &str) -> Vec<String> {
     values
 }
 
+fn manifest_package_name(manifest: &str) -> Option<String> {
+    let mut in_package = false;
+
+    for line in manifest.lines() {
+        let trimmed = line.trim();
+        if !in_package {
+            in_package = trimmed == "[package]";
+            continue;
+        }
+
+        if trimmed.starts_with('[') {
+            break;
+        }
+        if trimmed.starts_with("name = ") {
+            return Some(
+                trimmed
+                    .trim_start_matches("name = ")
+                    .trim()
+                    .trim_matches('"')
+                    .to_string(),
+            );
+        }
+    }
+
+    None
+}
+
 #[test]
 fn workspace_and_docs_use_the_taxonomy_vocabulary() {
     let cargo = fs::read_to_string(repo_path("Cargo.toml")).unwrap();
@@ -156,5 +183,74 @@ fn workspace_and_docs_use_the_taxonomy_vocabulary() {
             "internal crate manifests must set publish = false explicitly: {}",
             relative.display()
         );
+    }
+}
+
+#[test]
+fn extension_and_internal_directory_basenames_match_package_names() {
+    let cargo = fs::read_to_string(repo_path("Cargo.toml")).unwrap();
+    let workspace_members = manifest_array_entries(&cargo, "members");
+
+    for member in workspace_members {
+        if !(member.starts_with("extension/") || member.starts_with("internal/")) {
+            continue;
+        }
+
+        let manifest_path = repo_path(&format!("{member}/Cargo.toml"));
+        let manifest = fs::read_to_string(&manifest_path).unwrap();
+        let package_name =
+            manifest_package_name(&manifest).expect("member manifest should define package.name");
+        let basename = manifest_path
+            .parent()
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .expect("member path should have a UTF-8 directory basename");
+
+        assert_eq!(
+            basename, package_name,
+            "directory basename should match package.name for {member}"
+        );
+    }
+}
+
+#[test]
+fn current_docs_do_not_use_pre_rename_extension_crate_names() {
+    let files = [
+        "README.md",
+        "docs/design/capi.md",
+        "docs/design/einsum.md",
+        "docs/design/gpu-backend-design.md",
+        "docs/design/reference/einsum-algorithm-comparison.md",
+        "docs/design/testing.md",
+        "tenferro-algebra/src/lib.rs",
+        "docs/design/integrations/burn.md",
+        "extension/tenferro-ext-mdarray/src/lib.rs",
+        "extension/tenferro-ext-ndarray/src/lib.rs",
+        "extension/tenferro-ext-tropical-capi/src/lib.rs",
+    ];
+    let forbidden = [
+        "tenferro-tropical",
+        "tenferro_tropical",
+        "tenferro-burn",
+        "tenferro_burn",
+        "tenferro-mdarray",
+        "tenferro_mdarray",
+        "tenferro-ndarray",
+        "tenferro_ndarray",
+        "extension/tenferro-tropical",
+        "extension/tenferro-tropical-capi",
+        "extension/tenferro-burn",
+        "extension/tenferro-mdarray",
+        "extension/tenferro-ndarray",
+    ];
+
+    for relative in files {
+        let contents = fs::read_to_string(repo_path(relative)).unwrap();
+        for needle in forbidden {
+            assert!(
+                !contents.contains(needle),
+                "{relative} should not reference the pre-rename extension name {needle}"
+            );
+        }
     }
 }

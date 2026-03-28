@@ -24,7 +24,7 @@
 //! // Core tensor operations
 //! tfe_tensor_f64 *t = tfe_tensor_f64_from_data(...);
 //!
-//! // Tropical einsum (from tenferro-tropical-capi)
+//! // Tropical einsum (from tenferro-ext-tropical-capi)
 //! const tfe_tensor_f64 *ops[] = {a, b};
 //! tfe_tensor_f64 *c = tfe_tropical_einsum_maxplus_f64("ij,jk->ik", ops, 2, &status);
 //! ```
@@ -35,16 +35,16 @@
 //!
 //! ```text
 //! cbindgen \
-//!   --config extension/tenferro-tropical-capi/cbindgen.toml \
-//!   --crate tenferro-tropical-capi \
-//!   --output tenferro_tropical.h
+//!   --config extension/tenferro-ext-tropical-capi/cbindgen.toml \
+//!   --crate tenferro-ext-tropical-capi \
+//!   --output tenferro_ext_tropical.h
 //! ```
 //!
 //! # Example (C pseudocode)
 //!
 //! ```c
 //! #include "tenferro.h"
-//! #include "tenferro_tropical.h"
+//! #include "tenferro_ext_tropical.h"
 //!
 //! tfe_status_t status;
 //! size_t shape[] = {3, 4};
