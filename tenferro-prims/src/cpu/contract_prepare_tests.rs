@@ -269,3 +269,186 @@ fn try_execute_contract_gemm_materializes_only_rhs_when_needed() {
         }
     }
 }
+
+#[test]
+fn col_major_strides_produces_correct_values() {
+    assert_eq!(col_major_strides(&[3, 4, 5]), &[1_isize, 3, 12]);
+    assert_eq!(col_major_strides(&[1]), &[1_isize]);
+    {
+        let empty: &[usize] = &[];
+        let empty_strides = col_major_strides(empty);
+        assert!(empty_strides.is_empty());
+    }
+}
+
+#[test]
+fn element_count_handles_empty_and_nonempty_dims() {
+    assert_eq!(element_count(&[]), 1);
+    assert_eq!(element_count(&[3]), 3);
+    assert_eq!(element_count(&[2, 3, 4]), 24);
+}
+
+#[test]
+fn perm_for_returns_correct_permutation() {
+    assert_eq!(perm_for(&[1, 0], &[0, 1]), Some(vec![1, 0]));
+    assert_eq!(perm_for(&[0, 1], &[0, 1]), Some(vec![0, 1]));
+    assert_eq!(perm_for(&[0], &[1]), None);
+}
+
+#[test]
+fn operand_strategy_borrows_when_all_groups_fusible() {
+    let dims: Vec<usize> = vec![2, 3, 4, 5, 6, 7];
+    let strides = col_major_strides(&dims);
+    assert_eq!(
+        operand_strategy(&dims, &strides, 2, 2, 2),
+        ContractOperandStrategy::Borrowed
+    );
+}
+
+#[test]
+fn operand_strategy_materializes_when_strides_non_contiguous() {
+    let dims: Vec<usize> = vec![2, 3, 4, 5, 6, 7];
+    let mut strides = col_major_strides(&dims);
+    strides[5] = 9999;
+    assert_eq!(
+        operand_strategy(&dims, &strides, 2, 2, 2),
+        ContractOperandStrategy::Materialize
+    );
+}
+
+#[test]
+fn output_strategy_direct_when_fusible() {
+    let dims: Vec<usize> = vec![2, 3, 4, 5, 6];
+    let strides = col_major_strides(&dims);
+    assert_eq!(
+        output_strategy(&dims, &strides, 1, 2, 2),
+        ContractOutputStrategy::Direct
+    );
+}
+
+#[test]
+fn output_strategy_temporary_when_noncontiguous() {
+    let dims: Vec<usize> = vec![2, 3, 4, 5, 6];
+    let mut strides = col_major_strides(&dims);
+    strides[4] = 9999;
+    assert_eq!(
+        output_strategy(&dims, &strides, 1, 2, 2),
+        ContractOutputStrategy::Temporary
+    );
+}
+
+#[test]
+fn group_is_fusible_with_contiguous_strides() {
+    let dims: &[usize] = &[2, 3];
+    let strides = col_major_strides(dims);
+    assert!(group_is_fusible(dims, &strides));
+}
+
+#[test]
+fn group_is_fusible_rejects_noncontiguous() {
+    assert!(!group_is_fusible(&[2_usize, 3], &[1_isize, 100]));
+}
+
+#[test]
+fn try_execute_contract_gemm_materializes_lhs_and_uses_temporary_output() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_with_layout(&[3, 2, 4], &[1, 100, 200], |idx| {
+        1.0 + idx[0] as f64 + 0.1 * idx[1] as f64 + 0.01 * idx[2] as f64
+    });
+    let b = tensor_from_fn(&[4, 5], |idx| {
+        -0.5 + 0.2 * idx[0] as f64 + 0.05 * idx[1] as f64
+    });
+    let mut out = tensor_with_layout(&[3, 2, 5], &[2, 1, 100], |_| 0.0);
+
+    let a_view = tensor_to_view(&a).unwrap();
+    let b_view = tensor_to_view(&b).unwrap();
+    let mut out_view = tensor_to_view_mut(&mut out).unwrap();
+
+    let prep = inspect_contract_preparation(
+        &mut ctx,
+        &[&a_view, &b_view],
+        &mut out_view,
+        &[0, 1, 2],
+        &[2, 3],
+        &[0, 1, 3],
+        &build_contract_gemm_spec(&[0, 1, 2], &[2, 3], &[0, 1, 3]).unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(prep.a_strategy, ContractOperandStrategy::Materialize);
+    assert_eq!(prep.b_strategy, ContractOperandStrategy::Borrowed);
+    assert_eq!(prep.output_strategy, ContractOutputStrategy::Temporary);
+
+    let result = try_execute_contract_gemm(
+        &mut ctx,
+        1.0,
+        &[&a_view, &b_view],
+        0.0,
+        &mut out_view,
+        &[0, 1, 2],
+        &[2, 3],
+        &[0, 1, 3],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result, Some(()));
+
+    let expected = expected_contract_012_23_to_013(&a, &b);
+    for i in 0..expected.dims()[0] {
+        for j in 0..expected.dims()[1] {
+            for k in 0..expected.dims()[2] {
+                let actual = out.get(&[i, j, k]).copied().unwrap();
+                let target = expected.get(&[i, j, k]).copied().unwrap();
+                assert!(
+                    (actual - target).abs() < 1.0e-10,
+                    "mismatch at [{i}, {j}, {k}]: actual={actual} target={target}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn try_execute_contract_gemm_with_beta_accumulates_into_existing_output() {
+    let mut ctx = CpuContext::new(1);
+    let a = tensor_from_fn(&[2, 3], |idx| (idx[0] * 3 + idx[1] + 1) as f64);
+    let b = tensor_from_fn(&[3, 2], |idx| (idx[0] * 2 + idx[1] + 1) as f64 * 0.5);
+    let init_val = 7.0;
+    let mut out =
+        Tensor::from_slice(&vec![init_val; 4], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+
+    let a_view = tensor_to_view(&a).unwrap();
+    let b_view = tensor_to_view(&b).unwrap();
+    let mut out_view = tensor_to_view_mut(&mut out).unwrap();
+
+    let result = try_execute_contract_gemm(
+        &mut ctx,
+        1.0,
+        &[&a_view, &b_view],
+        1.0,
+        &mut out_view,
+        &[0, 1],
+        &[1, 2],
+        &[0, 2],
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(result, Some(()));
+
+    for i in 0..2 {
+        for j in 0..2 {
+            let mut expected = init_val;
+            for k in 0..3 {
+                expected += a.get(&[i, k]).copied().unwrap() * b.get(&[k, j]).copied().unwrap();
+            }
+            let actual = out.get(&[i, j]).copied().unwrap();
+            assert!(
+                (actual - expected).abs() < 1.0e-10,
+                "mismatch at [{i}, {j}]: actual={actual} expected={expected}"
+            );
+        }
+    }
+}
