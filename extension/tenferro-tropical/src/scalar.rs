@@ -24,7 +24,7 @@ use tenferro_algebra::Conjugate;
 /// # Examples
 ///
 /// ```
-/// use tenferro_tropical::MaxPlus;
+/// use tenferro_ext_tropical::MaxPlus;
 ///
 /// let a = MaxPlus(3.0_f64);
 /// let b = MaxPlus(5.0_f64);
@@ -48,7 +48,7 @@ pub struct MaxPlus<T>(pub T);
 /// # Examples
 ///
 /// ```
-/// use tenferro_tropical::MinPlus;
+/// use tenferro_ext_tropical::MinPlus;
 ///
 /// let a = MinPlus(3.0_f64);
 /// let b = MinPlus(5.0_f64);
@@ -73,7 +73,7 @@ pub struct MinPlus<T>(pub T);
 /// # Examples
 ///
 /// ```
-/// use tenferro_tropical::MaxMul;
+/// use tenferro_ext_tropical::MaxMul;
 ///
 /// let a = MaxMul(0.3_f64);
 /// let b = MaxMul(0.7_f64);

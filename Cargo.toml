@@ -10,6 +10,9 @@ members = [
     "tenferro-linalg",
     "tenferro-tensor-compute",
     "tenferro-capi",
+    # internal
+    "internal/tenferro-internal-error",
+    "internal/tenferro-internal-runtime",
     # extension
     "extension/tenferro-tropical",
     "extension/tenferro-tropical-capi",
@@ -17,6 +20,10 @@ members = [
     "extension/tenferro-mdarray",
     "extension/tenferro-ndarray",
     "tenferro",
+]
+default-members = [
+    "tenferro-tensor",
+    "tenferro-tensor-compute",
 ]
 resolver = "2"
 

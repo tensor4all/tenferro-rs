@@ -81,7 +81,7 @@ define_tropical_algebra!(
     ///
     /// ```
     /// use tenferro_algebra::Semiring;
-    /// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+    /// use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
     ///
     /// let z = <MaxPlusAlgebra<f64> as Semiring>::zero();
     /// assert_eq!(z, MaxPlus(f64::NEG_INFINITY));
@@ -100,7 +100,7 @@ define_tropical_algebra!(
     ///
     /// ```
     /// use tenferro_algebra::Semiring;
-    /// use tenferro_tropical::{MinPlus, MinPlusAlgebra};
+    /// use tenferro_ext_tropical::{MinPlus, MinPlusAlgebra};
     ///
     /// let z = <MinPlusAlgebra<f64> as Semiring>::zero();
     /// assert_eq!(z, MinPlus(f64::INFINITY));
@@ -117,7 +117,7 @@ define_tropical_algebra!(
     ///
     /// ```
     /// use tenferro_algebra::Semiring;
-    /// use tenferro_tropical::{MaxMul, MaxMulAlgebra};
+    /// use tenferro_ext_tropical::{MaxMul, MaxMulAlgebra};
     ///
     /// let z = <MaxMulAlgebra<f64> as Semiring>::zero();
     /// assert_eq!(z, MaxMul(0.0f64));

@@ -34,7 +34,7 @@
 //! ## Scalar arithmetic
 //!
 //! ```
-//! use tenferro_tropical::MaxPlus;
+//! use tenferro_ext_tropical::MaxPlus;
 //!
 //! let a = MaxPlus(3.0_f64);
 //! let b = MaxPlus(5.0_f64);
@@ -48,7 +48,7 @@
 //!
 //! ```
 //! use tenferro_algebra::HasAlgebra;
-//! use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+//! use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
 //!
 //! // MaxPlus<f64> maps to MaxPlusAlgebra<f64>
 //! fn check_f64<T: HasAlgebra<Algebra = MaxPlusAlgebra<f64>>>() {}
@@ -67,7 +67,7 @@
 //!     CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore,
 //! };
 //! use tenferro_tensor::{MemoryOrder, Tensor};
-//! use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+//! use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
 //!
 //! let mut ctx = CpuContext::new(1);
 //! let col = MemoryOrder::ColumnMajor;

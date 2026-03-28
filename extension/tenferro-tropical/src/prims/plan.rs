@@ -18,7 +18,7 @@ use super::view::mode_position;
 /// use tenferro_device::LogicalMemorySpace;
 /// use tenferro_prims::{CpuBackend, CpuContext, SemiringCoreDescriptor, TensorSemiringCore};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
-/// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra, TropicalPlan};
+/// use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra, TropicalPlan};
 ///
 /// let mut ctx = CpuContext::new(1);
 /// let col = MemoryOrder::ColumnMajor;

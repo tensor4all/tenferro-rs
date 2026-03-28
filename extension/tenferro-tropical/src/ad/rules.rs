@@ -19,8 +19,8 @@ use super::TropicalScalar;
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_tropical::ad::tropical_einsum_rrule;
-/// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+/// use tenferro_ext_tropical::ad::tropical_einsum_rrule;
+/// use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
@@ -78,8 +78,8 @@ where
 /// # Examples
 ///
 /// ```ignore
-/// use tenferro_tropical::ad::tropical_einsum_frule;
-/// use tenferro_tropical::{MaxPlus, MaxPlusAlgebra};
+/// use tenferro_ext_tropical::ad::tropical_einsum_frule;
+/// use tenferro_ext_tropical::{MaxPlus, MaxPlusAlgebra};
 /// use tenferro_prims::{CpuBackend, CpuContext};
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///

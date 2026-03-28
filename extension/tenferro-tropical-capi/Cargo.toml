@@ -1,5 +1,5 @@
 [package]
-name = "tenferro-tropical-capi"
+name = "tenferro-ext-tropical-capi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ crate-type = ["cdylib", "staticlib"]
 tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-device = { path = "../../tenferro-device" }
 tenferro-capi = { path = "../../tenferro-capi" }
-tenferro-tropical = { path = "../tenferro-tropical" }
+tenferro_tropical = { package = "tenferro-ext-tropical", path = "../tenferro-tropical" }
 tenferro-einsum = { path = "../../tenferro-einsum" }
 tenferro-prims = { path = "../../tenferro-prims" }
 tenferro-tensor = { path = "../../tenferro-tensor" }

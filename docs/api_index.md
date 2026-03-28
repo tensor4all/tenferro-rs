@@ -5,6 +5,17 @@ Provides dense tensor types with CPU/GPU support, a cuTENSOR/hipTensor-compatibl
 operation protocol, high-level einsum with N-ary contraction tree optimization,
 and automatic differentiation.
 
+## Workspace Crate Taxonomy
+
+The workspace uses a simple naming rule:
+
+- `end-user public` crates are the primary user-facing entry points
+- `protocol public` crates expose lower-level execution contracts and substrate APIs
+- `internal` crates are internal implementation crates and will use the `tenferro-internal-` prefix
+
+The intent is to make crate choice obvious from the package name and to keep
+implementation-only crates clearly separated from stable public surfaces.
+
 **Current phase**: active implementation. The workspace now has working dense
 CPU functionality, partial/experimental GPU coverage, and a family-based
 primitive execution layer shared across einsum, tropical algebra, and linalg.
@@ -30,6 +41,10 @@ Layer 2: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
 Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
                              Scalar trait, Conjugate trait
          tenferro-device     Device enum, Error/Result types
+Internal: tenferro-internal-error   Internal shared error definitions re-exported
+                                     by public frontend crates where needed
+          tenferro-internal-runtime Internal runtime default/scope management
+                                     used by `tenferro::runtime`
 
 Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
@@ -40,11 +55,13 @@ Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
 
-Extension:  tenferro-tropical       Tropical semiring operations (MaxPlus, MinPlus, MaxMul)
-            tenferro-tropical-capi  C-API for tropical einsum
-            tenferro-burn           Burn deep learning framework bridge
-            tenferro-mdarray        mdarray multidimensional array bridge
-            tenferro     Dynamic dyadic tensor API and AD runtime bridge
+End-user:   tenferro                Dynamic tensor frontend and AD runtime bridge
+
+Extension:  tenferro-ext-tropical       Tropical semiring operations (MaxPlus, MinPlus, MaxMul)
+            tenferro-ext-tropical-capi   C-API for tropical einsum
+            tenferro-ext-burn            Burn deep learning framework bridge
+            tenferro-ext-mdarray         mdarray multidimensional array bridge
+            tenferro-ext-ndarray         ndarray multidimensional array bridge
 ```
 
 ### Dependency Graph
@@ -153,6 +170,18 @@ minimum element type requirements. `Conjugate` trait for complex conjugation
 Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
 `ComputeDevice` (Cpu, Cuda, Rocm), workspace-wide `Error`/`Result` types.
 
+<a id="tenferro-internal-error"></a>
+### [tenferro-internal-error](tenferro_internal_error/index.html) <small>(Internal)</small>
+
+Internal shared error crate. Owns common error variants and conversion helpers
+used by public frontend crates, but is not itself a stable end-user surface.
+
+<a id="tenferro-internal-runtime"></a>
+### [tenferro-internal-runtime](tenferro_internal_runtime/index.html) <small>(Internal)</small>
+
+Internal runtime scope management crate. Owns `RuntimeContext`, scoped runtime
+installation helpers, and default-runtime lookup used behind `tenferro::runtime`.
+
 ## External Crates
 
 <a id="chainrules-core"></a>
@@ -185,8 +214,8 @@ top of the same tape model.
 
 ## Extension Crates (extension/)
 
-<a id="tenferro-tropical"></a>
-### [tenferro-tropical](tenferro_tropical/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-tropical"></a>
+### [tenferro-ext-tropical](tenferro_ext_tropical/index.html) <small>(Extension)</small>
 
 Tropical semiring tensor operations. Extends the tenferro algebra-parameterized
 architecture with three tropical semirings: MaxPlus (⊕=max, ⊗=+),
@@ -197,16 +226,16 @@ markers (`MaxPlusAlgebra`, etc.), semiring-family implementations for each
 algebra, and `ArgmaxTracker` for recording winner indices during tropical
 forward passes.
 
-<a id="tenferro-tropical-capi"></a>
-### [tenferro-tropical-capi](tenferro_tropical_capi/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-tropical-capi"></a>
+### [tenferro-ext-tropical-capi](tenferro_ext_tropical_capi/index.html) <small>(Extension)</small>
 
 C-API (FFI) for tropical semiring tensor operations. Extends `tenferro-capi`
 with tropical einsum functions (`tfe_tropical_einsum_<algebra>_f64`) and
 their AD rules (rrule/frule) for MaxPlus, MinPlus, and MaxMul semirings.
 Reuses `TfeTensorF64` handles from `tenferro-capi`.
 
-<a id="tenferro-burn"></a>
-### [tenferro-burn](tenferro_burn/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-burn"></a>
+### [tenferro-ext-burn](tenferro_ext_burn/index.html) <small>(Extension)</small>
 
 Bridge between the [Burn](https://burn.dev) deep learning framework and tenferro
 tensor network operations. Defines `TensorNetworkOps` backend extension trait
@@ -215,8 +244,8 @@ for `Autodiff<B, C>`, and provides both checked (`try_einsum`,
 `try_burn_to_tenferro`, `try_tenferro_to_burn`) and convenience panic-wrapper
 conversion/einsum utilities.
 
-<a id="tenferro-mdarray"></a>
-### [tenferro-mdarray](tenferro_mdarray/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-mdarray"></a>
+### [tenferro-ext-mdarray](tenferro_ext_mdarray/index.html) <small>(Extension)</small>
 
 Bridge between [mdarray](https://crates.io/crates/mdarray) multidimensional
 arrays and tenferro tensors. Provides checked
@@ -224,8 +253,8 @@ arrays and tenferro tensors. Provides checked
 (`mdarray_to_tensor`, `tensor_to_mdarray`) conversion functions for
 bidirectional data exchange between `Array<T, DynRank>` and `Tensor<T>`.
 
-<a id="tenferro-ndarray"></a>
-### [tenferro-ndarray](tenferro_ndarray/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-ndarray"></a>
+### [tenferro-ext-ndarray](tenferro_ext_ndarray/index.html) <small>(Extension)</small>
 
 Bridge between [ndarray](https://docs.rs/ndarray) arrays and tenferro tensors.
 Provides checked (`try_ndarray_to_tensor`, `try_tensor_to_ndarray`) and
@@ -235,7 +264,7 @@ bidirectional data exchange between dense `ndarray` values and
 `try_ndarray_to_frontend(...)` for direct conversion into `tenferro::Tensor`.
 
 <a id="tenferro"></a>
-### [tenferro](tenferro/index.html) <small>(Extension)</small>
+### [tenferro](tenferro/index.html) <small>(End-user public)</small>
 
 User-facing dynamic tensor frontend. `Tensor` is the canonical public tensor
 object; rank-0 tensors act as scalar coefficients, and diagonal or

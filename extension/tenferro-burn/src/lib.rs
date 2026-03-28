@@ -15,7 +15,7 @@
 //! ```ignore
 //! use burn::backend::NdArray;
 //! use burn::tensor::Tensor;
-//! use tenferro_burn::einsum;
+//! use tenferro_ext_burn::einsum;
 //!
 //! // Matrix multiplication via einsum
 //! let a: Tensor<NdArray<f64>, 2> = Tensor::ones([3, 4], &Default::default());
@@ -45,7 +45,7 @@ use burn::tensor::{Tensor, TensorMetadata, TensorPrimitive};
 /// # Examples
 ///
 /// ```
-/// use tenferro_burn::Error;
+/// use tenferro_ext_burn::Error;
 ///
 /// let err = Error::InternalInvariant("example");
 /// assert!(err.to_string().contains("example"));
@@ -63,7 +63,7 @@ pub enum Error {
 /// # Examples
 ///
 /// ```
-/// use tenferro_burn::{Error, Result};
+/// use tenferro_ext_burn::{Error, Result};
 ///
 /// let result: Result<()> = Err(Error::InvalidArgument("bad einsum".into()));
 /// assert!(result.is_err());
@@ -83,7 +83,7 @@ pub(crate) fn panic_on_error<T>(result: Result<T>) -> T {
 ///
 /// ```ignore
 /// use burn::backend::NdArray;
-/// use tenferro_burn::TensorNetworkOps;
+/// use tenferro_ext_burn::TensorNetworkOps;
 ///
 /// // NdArray<f64> implements TensorNetworkOps
 /// let result = <NdArray<f64> as TensorNetworkOps>::tn_einsum(
@@ -145,7 +145,7 @@ pub(crate) fn primitive_einsum<B: Backend<FloatElem = f64>>(
 /// ```ignore
 /// use burn::backend::NdArray;
 /// use burn::tensor::Tensor;
-/// use tenferro_burn::try_einsum;
+/// use tenferro_ext_burn::try_einsum;
 ///
 /// let a: Tensor<NdArray<f64>, 2> = Tensor::ones([3, 4], &Default::default());
 /// let b: Tensor<NdArray<f64>, 2> = Tensor::ones([4, 5], &Default::default());
@@ -178,7 +178,7 @@ pub fn try_einsum<B: TensorNetworkOps, const D: usize>(
 /// ```ignore
 /// use burn::backend::NdArray;
 /// use burn::tensor::Tensor;
-/// use tenferro_burn::einsum;
+/// use tenferro_ext_burn::einsum;
 ///
 /// let a: Tensor<NdArray<f64>, 2> = Tensor::ones([2, 2], &Default::default());
 /// let b: Tensor<NdArray<f64>, 2> = Tensor::ones([2, 2], &Default::default());

@@ -5,9 +5,11 @@
 //! Contract extension is unavailable.
 
 use tenferro_einsum::einsum;
+use tenferro_ext_tropical::{
+    MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra,
+};
 use tenferro_prims::CpuBackend;
 use tenferro_tensor::{MemoryOrder, Tensor};
-use tenferro_tropical::{MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra};
 
 const COL: MemoryOrder = MemoryOrder::ColumnMajor;
 

@@ -1,0 +1,12 @@
+[package]
+name = "tenferro-internal-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Internal shared runtime holder for tenferro surface crates."
+
+[dependencies]
+tenferro-internal-error = { path = "../tenferro-internal-error" }
+tenferro-prims = { path = "../../tenferro-prims" }

@@ -1,5 +1,5 @@
 [package]
-name = "tenferro-mdarray"
+name = "tenferro-ext-mdarray"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

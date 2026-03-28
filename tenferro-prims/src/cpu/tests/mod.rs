@@ -1,3 +1,4 @@
+mod common;
 mod context;
 mod contract;
 mod organization;
