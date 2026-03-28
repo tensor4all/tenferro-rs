@@ -326,3 +326,7 @@ where
         "linear chain execution requires at least one attachment or a binary fast path".into(),
     ))
 }
+
+#[cfg(test)]
+#[path = "chain_tests.rs"]
+mod tests;

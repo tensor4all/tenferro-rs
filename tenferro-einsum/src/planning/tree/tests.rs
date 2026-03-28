@@ -228,3 +228,142 @@ fn self_greedy_pair_optimizer_returns_valid_sequence() {
     assert_eq!(pairs[0], (0, 1));
     assert_eq!(pairs[1], (2, 3));
 }
+
+#[test]
+fn from_pairs_rejects_duplicate_pair_indices() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 0)]);
+    match result {
+        Err(Error::InvalidArgument(msg)) if msg.contains("distinct") => {}
+        other => panic!(
+            "expected InvalidArgument with 'distinct', got: {:?}",
+            other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
+        ),
+    }
+}
+
+#[test]
+fn from_pairs_rejects_pair_referencing_nonexistent_operand() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 5)]);
+    match result {
+        Err(Error::InvalidArgument(msg)) if msg.contains("non-existent") => {}
+        other => panic!(
+            "expected InvalidArgument with 'non-existent', got: {:?}",
+            other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
+        ),
+    }
+}
+
+#[test]
+fn from_pairs_rejects_pair_referencing_dead_operand() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
+    let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (0, 3)]);
+    match result {
+        Err(Error::InvalidArgument(msg)) if msg.contains("no longer live") => {}
+        other => panic!(
+            "expected InvalidArgument with 'no longer live', got: {:?}",
+            other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
+        ),
+    }
+}
+
+#[test]
+fn from_pairs_rejects_wrong_step_count() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
+    let result = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1)]);
+    match result {
+        Err(Error::InvalidArgument(msg)) if msg.contains("must have") => {}
+        other => panic!(
+            "expected InvalidArgument with 'must have', got: {:?}",
+            other.as_ref().map(|_| "Ok").map_err(|e| e.to_string())
+        ),
+    }
+}
+
+#[test]
+fn optimize_single_operand_returns_tree_with_no_steps() {
+    let subs = Subscripts::new(&[&[0, 1]], &[0, 1]);
+    let tree = ContractionTree::optimize(&subs, &[&[3, 4][..]]).unwrap();
+    assert_eq!(tree.step_count(), 0);
+    assert_eq!(tree.step_pair(0), None);
+}
+
+#[test]
+fn optimize_with_options_falls_back_to_self_greedy_when_omeco_returns_none() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2]], &[0, 2]);
+    let shapes = [&[2, 3][..], &[3, 4][..]];
+    let tree = ContractionTree::optimize_with_options(
+        &subs,
+        &shapes,
+        &ContractionOptimizerOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(tree.step_count(), 1);
+    assert_eq!(tree.step_pair(0), Some((0, 1)));
+}
+
+#[test]
+fn step_subscripts_returns_correct_labels_for_each_step() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[2, 3][..], &[3, 4][..], &[4, 5][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(1, 2), (0, 3)]).unwrap();
+
+    let (lhs0, rhs0, out0) = tree.step_subscripts(0).unwrap();
+    assert_eq!(lhs0, &[1, 2]);
+    assert_eq!(rhs0, &[2, 3]);
+    assert_eq!(out0, &[1, 3]);
+
+    let (lhs1, rhs1, out1) = tree.step_subscripts(1).unwrap();
+    assert_eq!(lhs1, &[0, 1]);
+    assert_eq!(rhs1, &[1, 3]);
+    assert_eq!(out1, &[0, 3]);
+}
+
+#[test]
+fn linear_chain_plan_accepts_prev_on_right_for_first_attachment() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (2, 3)]).unwrap();
+    let plan = tree.linear_chain_plan().unwrap();
+    assert_eq!(plan.first_pair, (0, 1));
+    assert_eq!(plan.attachments.len(), 1);
+    assert!(!plan.attachments[0].prev_on_left);
+    assert_eq!(plan.attachments[0].operand, 2);
+}
+
+#[test]
+fn self_greedy_with_four_operands_chooses_cheapest_pairs() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4]], &[0, 4]);
+    let size_dict: HashMap<u32, usize> = [(0, 10), (1, 2), (2, 10), (3, 2), (4, 10)]
+        .iter()
+        .cloned()
+        .collect();
+    let pairs = optimize_self_greedy_pairs(&subs, &size_dict);
+    assert_eq!(pairs.len(), 3);
+    let mut live: Vec<usize> = (0..4).collect();
+    let mut next = 4;
+    for &(l, r) in &pairs {
+        assert!(l < next);
+        assert!(r < next);
+        assert_ne!(l, r);
+        live.retain(|&x| x != l && x != r);
+        live.push(next);
+        next += 1;
+    }
+    assert_eq!(live.len(), 1);
+}
+
+#[test]
+fn nested_to_pairs_handles_leaf_nodes() {
+    let nested = NestedEinsum::leaf(42);
+    let mut next_operand = 43;
+    let mut pairs = Vec::new();
+    let result = nested_to_pairs(&nested, &mut next_operand, &mut pairs).unwrap();
+    assert_eq!(result, 42);
+    assert!(pairs.is_empty());
+}
