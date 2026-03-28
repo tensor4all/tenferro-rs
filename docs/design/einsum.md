@@ -427,7 +427,7 @@ Backend selection is determined by `T: HasAlgebra → infers algebra A`:
 
 ```rust
 // impl<S: Scalar> TensorSemiringCore<Standard<S>> for CpuBackend  → faer/cblas GEMM  [current]
-// impl TensorSemiringCore<MaxPlus> for CpuBackend                 → tropical-gemm (tenferro-tropical)
+// impl TensorSemiringCore<MaxPlus> for CpuBackend                 → tropical-gemm (tenferro-ext-tropical)
 // impl<S: Scalar> TensorSemiringCore<Standard<S>> for CudaBackend → cuTENSOR   [partial]
 // impl<S: Scalar> TensorSemiringCore<Standard<S>> for RocmBackend → hipTensor  [stub]
 // impl TensorSemiringCore<MyAlgebra> for CpuBackend               → user-provided kernels

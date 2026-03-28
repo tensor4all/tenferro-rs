@@ -29,7 +29,7 @@ fn labels_to_notation(labels: &[u32]) -> Result<String> {
         .map(|&label| {
             char::from_u32(label).ok_or_else(|| {
                 Error::InvalidArgument(format!(
-                    "tenferro-burn received a non-Unicode einsum label {label}"
+                    "tenferro-ext-burn received a non-Unicode einsum label {label}"
                 ))
             })
         })
@@ -220,7 +220,7 @@ where
 {
     match inputs.len() {
         0 => Err(Error::InvalidArgument(
-            "tenferro-burn autodiff einsum requires at least one input tensor".into(),
+            "tenferro-ext-burn autodiff einsum requires at least one input tensor".into(),
         )),
         1 => Ok(unary_einsum::<B, C>(
             &subscripts_to_notation(subscripts)?,
@@ -247,7 +247,7 @@ where
             let shape_refs: Vec<&[usize]> = shapes.iter().map(Vec::as_slice).collect();
             let tree = ContractionTree::optimize(subscripts, &shape_refs).map_err(|err| {
                 Error::InvalidArgument(format!(
-                    "tenferro-burn autodiff einsum could not optimize the pairwise contraction path: {err}"
+                    "tenferro-ext-burn autodiff einsum could not optimize the pairwise contraction path: {err}"
                 ))
             })?;
             let mut slots: Vec<Option<FloatTensor<Autodiff<B, C>>>> =
@@ -319,7 +319,7 @@ where
     fn tn_einsum(subscripts: &str, inputs: Vec<FloatTensor<Self>>) -> FloatTensor<Self> {
         let nested = panic_on_error(NestedEinsum::parse(subscripts).map_err(|err| {
             Error::InvalidArgument(format!(
-                "tenferro-burn autodiff einsum received invalid subscripts or mismatched parentheses: {err}"
+                "tenferro-ext-burn autodiff einsum received invalid subscripts or mismatched parentheses: {err}"
             ))
         }));
         panic_on_error(try_execute_nested_einsum::<B, C>(&nested, &inputs))

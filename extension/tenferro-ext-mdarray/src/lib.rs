@@ -19,7 +19,7 @@
 //! use mdarray::{Array, DynRank};
 //! use tenferro_device::LogicalMemorySpace;
 //! use tenferro_tensor::{MemoryOrder, Tensor};
-//! use tenferro_mdarray::{mdarray_to_tensor, tensor_to_mdarray};
+//! use tenferro_ext_mdarray::{mdarray_to_tensor, tensor_to_mdarray};
 //!
 //! // mdarray -> tenferro
 //! let md: Array<f64, DynRank> = mdarray::tensor![1.0, 2.0, 3.0, 4.0].into_dyn();
@@ -66,7 +66,7 @@ fn row_major_strides(dims: &[usize]) -> Vec<isize> {
 /// ```ignore
 /// use mdarray::{Array, DynRank};
 /// use tenferro_tensor::Tensor;
-/// use tenferro_mdarray::try_mdarray_to_tensor;
+/// use tenferro_ext_mdarray::try_mdarray_to_tensor;
 ///
 /// let md: Array<f64, DynRank> = mdarray::tensor![1.0, 2.0, 3.0].into_dyn();
 /// let t: Tensor<f64> = try_mdarray_to_tensor(md).unwrap();
@@ -84,7 +84,7 @@ pub fn try_mdarray_to_tensor<T: Scalar>(array: Array<T, DynRank>) -> Result<Tens
 ///
 /// ```ignore
 /// use mdarray::{Array, DynRank};
-/// use tenferro_mdarray::mdarray_to_tensor;
+/// use tenferro_ext_mdarray::mdarray_to_tensor;
 ///
 /// let md: Array<f64, DynRank> = mdarray::tensor![1.0, 2.0, 3.0].into_dyn();
 /// let t = mdarray_to_tensor(md);
@@ -104,7 +104,7 @@ pub fn mdarray_to_tensor<T: Scalar>(array: Array<T, DynRank>) -> Tensor<T> {
 /// ```ignore
 /// use mdarray::{Array, DynRank};
 /// use tenferro_tensor::Tensor;
-/// use tenferro_mdarray::try_tensor_to_mdarray;
+/// use tenferro_ext_mdarray::try_tensor_to_mdarray;
 ///
 /// use tenferro_device::LogicalMemorySpace;
 /// use tenferro_tensor::MemoryOrder;
@@ -132,7 +132,7 @@ pub fn try_tensor_to_mdarray<T: Scalar>(tensor: Tensor<T>) -> Result<Array<T, Dy
 ///
 /// ```ignore
 /// use tenferro_device::LogicalMemorySpace;
-/// use tenferro_mdarray::tensor_to_mdarray;
+/// use tenferro_ext_mdarray::tensor_to_mdarray;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let t: Tensor<f64> = Tensor::zeros(

@@ -14,11 +14,11 @@ members = [
     "internal/tenferro-internal-error",
     "internal/tenferro-internal-runtime",
     # extension
-    "extension/tenferro-tropical",
-    "extension/tenferro-tropical-capi",
-    "extension/tenferro-burn",
-    "extension/tenferro-mdarray",
-    "extension/tenferro-ndarray",
+    "extension/tenferro-ext-tropical",
+    "extension/tenferro-ext-tropical-capi",
+    "extension/tenferro-ext-burn",
+    "extension/tenferro-ext-mdarray",
+    "extension/tenferro-ext-ndarray",
     "tenferro",
 ]
 default-members = [

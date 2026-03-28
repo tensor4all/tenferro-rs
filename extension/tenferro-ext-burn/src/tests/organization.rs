@@ -6,7 +6,7 @@ fn repo_file(path: &str) -> String {
 }
 
 // IMPORTANT: Do not delete or weaken these tests.
-// They guard the checked-helper architecture that keeps tenferro-burn from
+// They guard the checked-helper architecture that keeps tenferro-ext-burn from
 // drifting back to scattered expect(...) calls and ad hoc panic sites.
 
 #[test]
@@ -16,7 +16,7 @@ fn burn_bridge_uses_checked_helper_entrypoints() {
 
     assert!(
         lib.contains("pub fn try_einsum"),
-        "tenferro-burn should expose a fallible try_einsum helper so checked flows exist alongside the infallible convenience wrapper"
+        "tenferro-ext-burn should expose a fallible try_einsum helper so checked flows exist alongside the infallible convenience wrapper"
     );
     assert!(
         convert.contains("pub fn try_burn_to_tenferro")
@@ -37,6 +37,6 @@ fn burn_bridge_library_code_does_not_use_expect() {
 
     assert!(
         !sources.contains(".expect("),
-        "tenferro-burn library code should funnel failure through checked helpers instead of scattered expect(...) calls"
+        "tenferro-ext-burn library code should funnel failure through checked helpers instead of scattered expect(...) calls"
     );
 }

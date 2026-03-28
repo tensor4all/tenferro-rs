@@ -218,7 +218,7 @@ tenferro-algebra  = { path = "../tenferro-rs/tenferro-algebra" }
 tenferro-tensor   = { path = "../tenferro-rs/tenferro-tensor" }
 tenferro-prims    = { path = "../tenferro-rs/tenferro-prims" }
 tenferro-einsum   = { path = "../tenferro-rs/tenferro-einsum" }
-tenferro-ext-tropical = { path = "../tenferro-rs/extension/tenferro-tropical" }
+tenferro-ext-tropical = { path = "../tenferro-rs/extension/tenferro-ext-tropical" }
 ```
 
 ```rust

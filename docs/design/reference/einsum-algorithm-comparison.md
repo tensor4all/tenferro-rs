@@ -242,9 +242,9 @@ plan caching) and **tenferro-prims** (`TensorPrims` GPU impl):
 **Converged design**: The algebra trait is split across two crates:
 - `tenferro-algebra` (POC): `HasAlgebra` trait (T → A mapping), `Semiring` trait,
   `Standard<T>` type. Minimal foundation.
-- `tenferro-tropical` (separate crate): `MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`,
+- `tenferro-ext-tropical` (separate crate): `MaxPlus<T>`, `MinPlus<T>`, `MaxMul<T>`,
   `impl TensorPrims<MaxPlus> for CpuBackend`. Being external proves the
-  extensibility pattern (orphan rule: MaxPlus is local to tenferro-tropical).
+  extensibility pattern (orphan rule: MaxPlus is local to tenferro-ext-tropical).
 
 ## 7. Summary: Best-of-Both for tenferro-prims + tenferro-einsum
 
@@ -331,8 +331,8 @@ Leibniz rule.
 1. **Algebra trait** — semiring-generic `zero()`, `add()`, `mul()` interface.
    (→ tenferro-algebra: HasAlgebra, Semiring, Standard<T>)
 2. **Tropical-gemm dispatch** — `TypeId`-based runtime specialization for SIMD
-   tropical kernels. (→ tenferro-tropical: `TensorPrims<MaxPlus> for CpuBackend`)
-3. **Argmax tracking** — tropical backward pass support. (→ tenferro-tropical)
+   tropical kernels. (→ tenferro-ext-tropical: `TensorPrims<MaxPlus> for CpuBackend`)
+3. **Argmax tracking** — tropical backward pass support. (→ tenferro-ext-tropical)
 4. **cuTENSOR integration** — direct contraction without reshape-to-GEMM,
    plan caching. (→ Contract extended op on GPU + tenferro-device)
 5. **TreeSA optimizer** — simulated annealing for better contraction orders
@@ -346,8 +346,8 @@ Leibniz rule.
    dynamically-queried extended ops, plan-based execution. (→ tenferro-prims)
 2. **`anti_trace` / `anti_diag`** — AD adjoint operations for trace and
    diagonal. (→ core ops in `TensorPrims<A>`)
-3. **`tenferro-tropical` as separate crate** — proves extensibility of
-   algebra-parameterized design. (→ tenferro-tropical)
+3. **`tenferro-ext-tropical` as separate crate** — proves extensibility of
+   algebra-parameterized design. (→ tenferro-ext-tropical)
 4. **Adjoint pair documentation** — clean VJP/JVP rules for each primitive.
    (→ chainrules-core)
 5. **Global + per-call override** — `einsum()` uses global default,

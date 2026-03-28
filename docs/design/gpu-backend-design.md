@@ -21,7 +21,7 @@ GPU backends.
    libraries at runtime. No compile-time GPU SDK dependency. Caller
    (Julia/Python) provides the `.so` path.
 3. **Layer 1 core infrastructure** — GPU backends are not extensions
-   (unlike `tenferro-tropical`). They live in `tenferro-prims` alongside
+   (unlike `tenferro-ext-tropical`). They live in `tenferro-prims` alongside
    `CpuBackend`.
 4. **Family-native primitives** — each GPU backend implements
    `TensorSemiringCore<Standard<S>>`, `TensorSemiringFastPath<Standard<S>>`,
@@ -355,7 +355,7 @@ such as `tropical-gemm-cuda` (or an equivalent CUDA/HIP kernel library).
 The expected integration shape is:
 
 ```rust
-// tenferro-tropical (future GPU support)
+// tenferro-ext-tropical (future GPU support)
 pub struct TropicalCudaBackend {
     _lib: libloading::Library,   // tropical-gemm-cuda.so, loaded at runtime
 }
@@ -367,7 +367,7 @@ impl TensorSemiringCore<MaxPlus<f64>> for TropicalCudaBackend {
 }
 ```
 
-This backend lives in `tenferro-tropical`, not in `tenferro-prims`, preserving
+This backend lives in `tenferro-ext-tropical`, not in `tenferro-prims`, preserving
 the same separation used for the CPU tropical path.
 
 ### Argmax state for AD

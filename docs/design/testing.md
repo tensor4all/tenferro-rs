@@ -132,7 +132,7 @@ plus finite-difference verification from `tests/showcase.rs`.
 | 3-tensor chain grad | `test_backward_3tensor_chain` | Full chain rule |
 | Finite-diff verification | `test_einsum_gradient_verification` (showcase.rs) | Central differences |
 
-### tenferro-tropical
+### tenferro-ext-tropical
 
 Port from `tests/tropical.rs` and tropical-related tests in other files.
 
@@ -304,7 +304,7 @@ Notes:
 #### Error path: `ModeNotSupported`
 
 These tests verify the explicit error contract for unsupported AD modes
-(issue #68). They live in `tenferro-tropical/tests/` and must not depend
+(issue #68). They live in `extension/tenferro-ext-tropical/tests/` and must not depend
 on a full AD tape.
 
 | Test | Expected result |
