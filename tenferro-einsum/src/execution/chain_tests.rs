@@ -3,7 +3,7 @@ use tenferro_prims::{CpuBackend, CpuContext};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use super::*;
-use crate::execution::pool::{BufferPool, TensorBufferPool};
+use crate::execution::pool::BufferPool;
 use crate::planning::plan::compile_pairwise_step_plan;
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
