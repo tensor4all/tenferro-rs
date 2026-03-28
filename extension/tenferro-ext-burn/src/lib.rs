@@ -52,9 +52,9 @@ use burn::tensor::{Tensor, TensorMetadata, TensorPrimitive};
 /// ```
 #[derive(Debug, ThisError)]
 pub enum Error {
-    #[error("invalid tenferro-burn argument: {0}")]
+    #[error("invalid tenferro-ext-burn argument: {0}")]
     InvalidArgument(String),
-    #[error("tenferro-burn internal invariant violated: {0}")]
+    #[error("tenferro-ext-burn internal invariant violated: {0}")]
     InternalInvariant(&'static str),
 }
 
@@ -104,7 +104,9 @@ pub(crate) fn try_primitive_einsum<B: Backend<FloatElem = f64>>(
     inputs: Vec<FloatTensor<B>>,
 ) -> Result<FloatTensor<B>> {
     let first = inputs.first().ok_or_else(|| {
-        Error::InvalidArgument("tenferro-burn::einsum requires at least one input tensor".into())
+        Error::InvalidArgument(
+            "tenferro-ext-burn::einsum requires at least one input tensor".into(),
+        )
     })?;
     let device = B::float_device(first);
     let tenferro_inputs: Vec<_> = inputs
@@ -163,7 +165,7 @@ pub fn try_einsum<B: TensorNetworkOps, const D: usize>(
 
     if output.rank() != D {
         return Err(Error::InvalidArgument(format!(
-            "tenferro-burn::einsum expected output rank {D}, got {}",
+            "tenferro-ext-burn::einsum expected output rank {D}, got {}",
             output.rank()
         )));
     }

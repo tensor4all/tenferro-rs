@@ -1,4 +1,4 @@
-//! Tests for tenferro-tropical: scalar types, algebra, argmax, and semiring families.
+//! Tests for tenferro-ext-tropical: scalar types, algebra, argmax, and semiring families.
 
 use num_traits::{One, Zero};
 use tenferro_algebra::{Scalar, Semiring};

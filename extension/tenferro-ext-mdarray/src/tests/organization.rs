@@ -6,7 +6,7 @@ fn repo_file(path: &str) -> String {
 }
 
 // IMPORTANT: Do not delete or weaken these tests.
-// They guard the checked-helper split and keep tenferro-mdarray from
+// They guard the checked-helper split and keep tenferro-ext-mdarray from
 // drifting back to panic-only conversion entrypoints.
 
 #[test]
@@ -15,7 +15,7 @@ fn mdarray_bridge_exposes_checked_conversion_helpers() {
     assert!(
         lib.contains("pub fn try_mdarray_to_tensor")
             && lib.contains("pub fn try_tensor_to_mdarray"),
-        "tenferro-mdarray should expose explicit checked conversion helpers alongside convenience wrappers"
+        "tenferro-ext-mdarray should expose explicit checked conversion helpers alongside convenience wrappers"
     );
 }
 
@@ -24,6 +24,6 @@ fn mdarray_bridge_library_code_does_not_use_expect() {
     let lib = repo_file("src/lib.rs");
     assert!(
         !lib.contains(".expect("),
-        "tenferro-mdarray library code should avoid expect(...) and route fallible conversions through checked helpers"
+        "tenferro-ext-mdarray library code should avoid expect(...) and route fallible conversions through checked helpers"
     );
 }

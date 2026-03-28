@@ -14,7 +14,7 @@ crate-type = ["cdylib", "staticlib"]
 tenferro-algebra = { path = "../../tenferro-algebra" }
 tenferro-device = { path = "../../tenferro-device" }
 tenferro-capi = { path = "../../tenferro-capi" }
-tenferro_tropical = { package = "tenferro-ext-tropical", path = "../tenferro-tropical" }
+tenferro_ext_tropical = { package = "tenferro-ext-tropical", path = "../tenferro-ext-tropical" }
 tenferro-einsum = { path = "../../tenferro-einsum" }
 tenferro-prims = { path = "../../tenferro-prims" }
 tenferro-tensor = { path = "../../tenferro-tensor" }

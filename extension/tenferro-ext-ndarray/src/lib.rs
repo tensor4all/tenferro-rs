@@ -20,7 +20,7 @@
 //!
 //! ```ignore
 //! use ndarray::Array2;
-//! use tenferro_ndarray::{ndarray_to_tensor, tensor_to_ndarray};
+//! use tenferro_ext_ndarray::{ndarray_to_tensor, tensor_to_ndarray};
 //!
 //! let array = Array2::from_shape_vec((2, 2), vec![1.0_f64, 2.0, 3.0, 4.0]).unwrap();
 //! let tensor = ndarray_to_tensor(array);
@@ -55,7 +55,7 @@ fn shape_error(err: ndarray::ShapeError) -> Error {
 fn ensure_main_memory(space: LogicalMemorySpace) -> Result<()> {
     if space != LogicalMemorySpace::MainMemory {
         return Err(Error::InvalidArgument(
-            "tenferro-ndarray currently supports CPU/main-memory tensors only".into(),
+            "tenferro-ext-ndarray currently supports CPU/main-memory tensors only".into(),
         ));
     }
     Ok(())
@@ -105,7 +105,7 @@ fn into_owned_data<T: Scalar>(tensor: Tensor<T>, context: &str) -> Result<Vec<T>
 ///
 /// ```ignore
 /// use ndarray::Array2;
-/// use tenferro_ndarray::try_ndarray_to_tensor;
+/// use tenferro_ext_ndarray::try_ndarray_to_tensor;
 ///
 /// let array = Array2::from_shape_vec((1, 2), vec![1.0_f64, 2.0]).unwrap();
 /// let tensor = try_ndarray_to_tensor(array).unwrap();
@@ -136,7 +136,7 @@ where
 ///
 /// ```ignore
 /// use ndarray::Array2;
-/// use tenferro_ndarray::ndarray_to_tensor;
+/// use tenferro_ext_ndarray::ndarray_to_tensor;
 ///
 /// let array = Array2::from_shape_vec((1, 2), vec![1.0_f64, 2.0]).unwrap();
 /// let tensor = ndarray_to_tensor(array);
@@ -161,7 +161,7 @@ where
 ///
 /// ```ignore
 /// use tenferro_device::LogicalMemorySpace;
-/// use tenferro_ndarray::try_tensor_to_ndarray;
+/// use tenferro_ext_ndarray::try_tensor_to_ndarray;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let tensor = Tensor::<f64>::zeros(&[2, 2], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
@@ -187,7 +187,7 @@ pub fn try_tensor_to_ndarray<T: Scalar>(tensor: Tensor<T>) -> Result<ArrayD<T>> 
 ///
 /// ```ignore
 /// use tenferro_device::LogicalMemorySpace;
-/// use tenferro_ndarray::tensor_to_ndarray;
+/// use tenferro_ext_ndarray::tensor_to_ndarray;
 /// use tenferro_tensor::{MemoryOrder, Tensor};
 ///
 /// let tensor = Tensor::<f64>::zeros(&[2], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
@@ -206,7 +206,7 @@ pub fn tensor_to_ndarray<T: Scalar>(tensor: Tensor<T>) -> ArrayD<T> {
 ///
 /// ```ignore
 /// use ndarray::Array2;
-/// use tenferro_ndarray::try_ndarray_to_frontend;
+/// use tenferro_ext_ndarray::try_ndarray_to_frontend;
 ///
 /// let array = Array2::from_shape_vec((1, 2), vec![1.0_f64, 2.0]).unwrap();
 /// let tensor = try_ndarray_to_frontend(array).unwrap();
@@ -256,7 +256,7 @@ impl FrontendScalar for num_complex::Complex64 {
 ///
 /// ```ignore
 /// use ndarray::Array2;
-/// use tenferro_ndarray::try_ndarray_to_frontend;
+/// use tenferro_ext_ndarray::try_ndarray_to_frontend;
 ///
 /// let array = Array2::from_shape_vec((1, 2), vec![1.0_f64, 2.0]).unwrap();
 /// let tensor = try_ndarray_to_frontend(array).unwrap();

@@ -4,13 +4,15 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use tenferro_algebra::Conjugate;
 use tenferro_capi::{tfe_status_t, TfeTensorF64};
 use tenferro_einsum::{einsum, EinsumBackend};
-use tenferro_prims::{CpuBackend, CpuContext, TensorSemiringCore, TensorSemiringFastPath};
-use tenferro_tensor::Tensor;
-use tenferro_tropical::ad::{
+use tenferro_ext_tropical::ad::{
     extract_inner, promote_to_tropical, tropical_einsum_frule, tropical_einsum_rrule,
     TropicalScalar,
 };
-use tenferro_tropical::{MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra};
+use tenferro_ext_tropical::{
+    MaxMul, MaxMulAlgebra, MaxPlus, MaxPlusAlgebra, MinPlus, MinPlusAlgebra,
+};
+use tenferro_prims::{CpuBackend, CpuContext, TensorSemiringCore, TensorSemiringFastPath};
+use tenferro_tensor::Tensor;
 
 use crate::ffi_utils::{
     collect_operand_handles, collect_optional_tangent_handles, cpu_context, parse_subscripts,
