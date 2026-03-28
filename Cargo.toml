@@ -9,10 +9,16 @@ members = [
     "tenferro-linalg-prims",
     "tenferro-linalg",
     "tenferro-tensor-compute",
+    "tenferro-dynamic-compute",
     "tenferro-capi",
     # internal
     "internal/tenferro-internal-error",
     "internal/tenferro-internal-runtime",
+    "internal/tenferro-internal-frontend-core",
+    "internal/tenferro-internal-ad-core",
+    "internal/tenferro-internal-ad-ops",
+    "internal/tenferro-internal-ad-linalg",
+    "internal/tenferro-internal-ad-surface",
     # extension
     "extension/tenferro-ext-tropical",
     "extension/tenferro-ext-tropical-capi",

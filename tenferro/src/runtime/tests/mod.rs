@@ -1,2 +1,0 @@
-mod organization;
-mod scope;

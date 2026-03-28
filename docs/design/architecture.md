@@ -23,6 +23,14 @@ layout and the manifest metadata.
 ## Layered Architecture
 
 ```
+End-user Facades:
+    tenferro-tensor-compute
+        Typed primal tensor compute
+    tenferro-dynamic-compute
+        Dynamic primal tensor compute without AD
+    tenferro
+        Dynamic AD-aware tensor facade
+
 Layer 5: tenferro-capi
     FFI entry points for tensor, einsum, and linalg functionality
 
@@ -50,6 +58,17 @@ Shared: tenferro-algebra
     workspace error and device abstractions
         chainrules-core / chainrules / tidu
     AD traits, scalar rules, and engine
+
+Internal frontend: tenferro-internal-frontend-core
+    Dynamic tensor substrate, scalar metadata, and structured-layout helpers
+Internal AD core: tenferro-internal-ad-core
+    `AdTensor<T>`, homogeneous tape glue, and shared AD helper functions
+Internal AD surface: tenferro-internal-ad-surface
+    Dynamic AD tensor surface, eager AD entrypoints, and builder-style linalg wrappers
+Internal AD linalg: tenferro-internal-ad-linalg
+    Typed linalg AD builders, eager entry points, and result wiring
+Internal runtime: tenferro-internal-runtime
+    Default-runtime ownership and capability-driven runtime dispatch
 
 Layer 1: CPU/GPU backend implementations
     faer / BLAS / LAPACK / cuTENSOR / future GPU linalg providers
@@ -160,8 +179,32 @@ chainrules-core ────────┤
   tenferro-einsum   extensions     tenferro-linalg
         └───────────────┬───────────────┘
                         ▼
-                  tenferro-capi
+            tenferro-internal-frontend-core
+                        │
+        ┌───────────────┴────────────────┐
+        ▼                                ▼
+tenferro-dynamic-compute        tenferro-internal-ad-core
+                                        │
+                                        ├──────────────┐
+                                        ▼              ▼
+                           tenferro-internal-ad-linalg tenferro-internal-ad-ops
+                                        │              │
+                                        └──────┬───────┘
+                                               ▼
+                                 tenferro-internal-ad-surface
+                                               │
+                                               ▼
+                                           tenferro
+                                        │
+                                        ▼
+                                  tenferro-capi
 ```
+
+`tenferro-internal-ad-linalg` owns the typed linalg AD bodies, while
+`tenferro-internal-ad-ops` owns the typed scalar, reduction, and einsum AD
+builders. `tenferro-internal-ad-surface` owns the dynamic AD `Tensor` surface,
+the eager AD entrypoints (`grad`, `backward`, `forward_ad`), and the
+builder-style linalg wrappers that used to live directly under `tenferro`.
 
 ## Performance Principles
 

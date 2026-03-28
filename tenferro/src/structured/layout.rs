@@ -78,6 +78,3 @@ impl<T: Scalar> AsRef<Tensor<T>> for StructuredTensor<T> {
         self.0.payload()
     }
 }
-
-#[cfg(test)]
-mod tests;

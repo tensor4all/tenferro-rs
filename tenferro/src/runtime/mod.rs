@@ -1,5 +1,7 @@
 mod context;
+#[cfg(test)]
 pub(crate) mod contracts;
+#[cfg(test)]
 pub(crate) mod dispatch;
 
 use crate::Result;
@@ -81,6 +83,3 @@ pub fn with_runtime<R>(ctx: RuntimeContext, f: impl FnOnce() -> Result<R>) -> Re
 pub fn with_default_runtime<R>(f: impl FnOnce(&mut RuntimeContext) -> Result<R>) -> Result<R> {
     tenferro_internal_runtime::with_default_runtime(f)
 }
-
-#[cfg(test)]
-mod tests;

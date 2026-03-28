@@ -12,6 +12,8 @@
 //! ```
 
 mod context;
+pub mod contracts;
+pub mod dispatch;
 
 pub use context::{
     set_default_runtime, with_default_runtime, with_runtime, DefaultRuntimeGuard, RuntimeContext,
