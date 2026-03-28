@@ -117,9 +117,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "diag_embed reverse output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     Ok(vec![(
                         input_node,
@@ -178,9 +179,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "with_axis_classes reverse output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     Ok(vec![(
                         input_node,

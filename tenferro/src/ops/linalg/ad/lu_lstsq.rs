@@ -94,9 +94,10 @@ where
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 let pivot = self.pivot;
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -129,9 +130,10 @@ where
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
                 let pivot = self.pivot;
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -267,9 +269,14 @@ where
                 let reverse_specs = reverse_specs.clone();
                 let a_primal = a_primal.clone();
                 let b_primal = b_primal.clone();
-                tape::register_rule::<T>(
+                let input_node_ids: Vec<_> = reverse_specs
+                    .iter()
+                    .filter_map(|s| s.as_ref().map(|s| s.node))
+                    .collect();
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    input_node_ids,
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
@@ -312,9 +319,14 @@ where
                 let reverse_specs = reverse_specs.clone();
                 let zero_a = zero_like(self.a.structured_primal().payload())?;
                 let zero_b = zero_like(self.b.structured_primal().payload())?;
-                tape::register_rule::<T>(
+                let input_node_ids: Vec<_> = reverse_specs
+                    .iter()
+                    .filter_map(|s| s.as_ref().map(|s| s.node))
+                    .collect();
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    input_node_ids,
                     Box::new(move |_cotangent| {
                         let mut input_grads = Vec::new();
                         if let Some(spec) = &reverse_specs[0] {

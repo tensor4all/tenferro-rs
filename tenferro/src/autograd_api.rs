@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use chainrules_core::Differentiable;
 
-use crate::{Error, Result, Tensor};
+use crate::core::{DynTensor, NodeId};
+use crate::{AdTensor, Error, Result, Tensor};
 
 /// Options for reverse-mode gradient accumulation.
 ///
@@ -208,4 +211,182 @@ pub fn backward(
         }
     }
     Ok(())
+}
+
+/// Options for HVP computation.
+///
+/// # Examples
+///
+/// ```rust
+/// use tenferro::HvpOptions;
+///
+/// let opts = HvpOptions::default();
+/// assert!(!opts.retain_graph);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct HvpOptions {
+    /// If true, do not free the computation graph after HVP.
+    pub retain_graph: bool,
+}
+
+/// Result of a Hessian-vector product computation.
+///
+/// # Examples
+///
+/// ```ignore
+/// let result = hvp(&output, &[&x], &[&v], HvpOptions::default())?;
+/// let grad = result.gradients[0].as_ref();
+/// let hvp_val = result.hvps[0].as_ref();
+/// ```
+#[derive(Debug)]
+pub struct HvpResult {
+    /// Gradients of the output with respect to each input.
+    pub gradients: Vec<Option<Tensor>>,
+    /// Hessian-vector products for each input.
+    pub hvps: Vec<Option<Tensor>>,
+}
+
+fn dyn_primal_from_snapshot(snapshot: DynTensor) -> Tensor {
+    match snapshot {
+        DynTensor::F32(value) => Tensor::from(AdTensor::new_primal(value)),
+        DynTensor::F64(value) => Tensor::from(AdTensor::new_primal(value)),
+        DynTensor::C32(value) => Tensor::from(AdTensor::new_primal(value)),
+        DynTensor::C64(value) => Tensor::from(AdTensor::new_primal(value)),
+    }
+}
+
+fn reverse_handle(value: &Tensor) -> Option<(NodeId, tidu::Tape<DynTensor>)> {
+    match value {
+        Tensor::F32(value) => value.reverse_handle(),
+        Tensor::F64(value) => value.reverse_handle(),
+        Tensor::C32(value) => value.reverse_handle(),
+        Tensor::C64(value) => value.reverse_handle(),
+    }
+}
+
+fn as_tracked_dyn(output: &Tensor) -> Option<tidu::TrackedValue<DynTensor>> {
+    match output {
+        Tensor::F32(value) => value.as_tracked(),
+        Tensor::F64(value) => value.as_tracked(),
+        Tensor::C32(value) => value.as_tracked(),
+        Tensor::C64(value) => value.as_tracked(),
+    }
+}
+
+fn input_to_dyn_tensor(input: &Tensor) -> DynTensor {
+    match input {
+        Tensor::F32(value) => DynTensor::F32(value.structured_primal().clone()),
+        Tensor::F64(value) => DynTensor::F64(value.structured_primal().clone()),
+        Tensor::C32(value) => DynTensor::C32(value.structured_primal().clone()),
+        Tensor::C64(value) => DynTensor::C64(value.structured_primal().clone()),
+    }
+}
+
+/// Computes gradient and Hessian-vector product for a scalar output.
+///
+/// `output` must be a scalar (rank-0) `tenferro::Tensor` on a reverse-mode tape.
+/// `inputs` are the `tenferro::Tensor`s to differentiate with respect to.
+/// `v` provides the tangent direction for each input (same shapes as inputs).
+///
+/// Returns both gradients and HVPs for each input.
+///
+/// # Examples
+///
+/// ```ignore
+/// // f(x) = einsum("i,i->", &[&x, &x])  (= sum(x^2))
+/// // H = 2I, Hv = 2v
+/// let result = hvp(&output, &[&x], &[&v], HvpOptions::default())?;
+/// ```
+pub fn hvp(
+    output: &Tensor,
+    inputs: &[&Tensor],
+    v: &[&Tensor],
+    options: HvpOptions,
+) -> Result<HvpResult> {
+    let num_elements: usize = output.dims().iter().product::<usize>().max(1);
+    if !output.dims().is_empty() || num_elements != 1 {
+        return Err(Error::Autodiff(
+            chainrules_core::AutodiffError::NonScalarLoss { num_elements },
+        ));
+    }
+
+    if v.len() != inputs.len() {
+        return Err(Error::InvalidAdTensor {
+            message: format!(
+                "hvp: v length {} does not match inputs length {}",
+                v.len(),
+                inputs.len()
+            ),
+        });
+    }
+
+    for (i, (input, vi)) in inputs.iter().zip(v.iter()).enumerate() {
+        if input.dims() != vi.dims() {
+            return Err(Error::InvalidAdTensor {
+                message: format!(
+                    "hvp: shape mismatch at index {}: input dims {:?} vs v dims {:?}",
+                    i,
+                    input.dims(),
+                    vi.dims()
+                ),
+            });
+        }
+    }
+
+    let tape = reverse_tape(output).ok_or(Error::UnsupportedAdOp { op: "hvp" })?;
+
+    // Build leaf_tangents HashMap: NodeId -> DynTensor
+    let mut leaf_tangents: HashMap<NodeId, DynTensor> = HashMap::new();
+    for (input, vi) in inputs.iter().zip(v.iter()) {
+        if let Some((node, input_tape)) = reverse_handle(input) {
+            if !input_tape.same_tape(&tape) {
+                return Err(Error::MixedReverseTape {
+                    expected: tape.id() as u64,
+                    found: input_tape.id() as u64,
+                });
+            }
+            leaf_tangents.insert(node, input_to_dyn_tensor(vi));
+        }
+    }
+
+    let tracked = as_tracked_dyn(output).ok_or(Error::InvalidAdTensor {
+        message: "hvp requires reverse-mode output tensor".to_string(),
+    })?;
+
+    let tidu_result = tape.hvp(&tracked, &leaf_tangents).map_err(Error::from)?;
+
+    // Project results to requested inputs
+    let mut gradients = Vec::with_capacity(inputs.len());
+    let mut hvps = Vec::with_capacity(inputs.len());
+
+    for input in inputs {
+        match reverse_handle(input) {
+            Some((node, _)) => {
+                gradients.push(
+                    tidu_result
+                        .gradients
+                        .get(node)
+                        .cloned()
+                        .map(dyn_primal_from_snapshot),
+                );
+                hvps.push(
+                    tidu_result
+                        .hvp
+                        .get(node)
+                        .cloned()
+                        .map(dyn_primal_from_snapshot),
+                );
+            }
+            None => {
+                gradients.push(None);
+                hvps.push(None);
+            }
+        }
+    }
+
+    if !options.retain_graph {
+        tape.free_graph();
+    }
+
+    Ok(HvpResult { gradients, hvps })
 }

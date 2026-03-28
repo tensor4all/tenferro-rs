@@ -57,9 +57,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "same-type linear output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     let grad = input_layout
                         .with_payload_like(tensor_map_unary_typed(cotangent.payload(), map)?)?;
@@ -133,6 +134,7 @@ where
             tape::register_mixed_rule::<TOut, TIn>(
                 &tape,
                 output_node,
+                vec![input_node],
                 Box::new(move |cotangent| {
                     let grad = input_layout.with_payload_like(tensor_map_unary_typed(
                         cotangent.payload(),
@@ -285,9 +287,11 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "tensor merge output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            let input_node_ids: Vec<_> = std::iter::once(lhs_node).chain(rhs_node).collect();
+            tape::register_closure_rule::<T>(
                 &lhs_tape,
                 output_node,
+                input_node_ids,
                 Box::new(move |cotangent| {
                     let mut input_grads = Vec::new();
                     input_grads.push((lhs_node, cotangent.clone()));
@@ -306,9 +310,10 @@ where
                 .ok_or_else(|| Error::InvalidAdTensor {
                     message: "tensor merge output is missing a tape node".to_string(),
                 })?;
-            tape::register_rule::<T>(
+            tape::register_closure_rule::<T>(
                 &rhs_tape,
                 output_node,
+                vec![rhs_node],
                 Box::new(move |cotangent| Ok(vec![(rhs_node, cotangent.clone())])),
             );
             Ok(out.snapshot()?)

@@ -79,9 +79,11 @@ macro_rules! run_unary_tensor_ad {
                 .next()
                 .flatten();
 
-            tape::register_rule::<$ty>(
+            let input_node_ids: Vec<_> = input_spec.iter().map(|s| s.node).collect();
+            tape::register_closure_rule::<$ty>(
                 &tape,
                 node,
+                input_node_ids,
                 Box::new(move |cotangent| {
                     let grad = $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(
                         $ty,
@@ -175,9 +177,14 @@ macro_rules! run_binary_tensor_ad {
         if let Some((node, tape)) = out.reverse_handle() {
             let reverse_specs = collect_reverse_input_specs(&operands);
 
-            tape::register_rule::<$ty>(
+            let input_node_ids: Vec<_> = reverse_specs
+                .iter()
+                .filter_map(|s| s.as_ref().map(|s| s.node))
+                .collect();
+            tape::register_closure_rule::<$ty>(
                 &tape,
                 node,
+                input_node_ids,
                 Box::new(move |cotangent| {
                     let (grad_lhs, grad_rhs) =
                         $crate::ops::linalg::ad::common::dispatch_linalg_ad_runtime!(

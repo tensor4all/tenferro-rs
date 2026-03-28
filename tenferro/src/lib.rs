@@ -39,7 +39,7 @@ pub mod snapshot;
 mod structured;
 mod tape;
 
-pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
+pub use autograd_api::{backward, grad, hvp, BackwardOptions, GradOptions, HvpOptions, HvpResult};
 #[cfg(test)]
 pub(crate) use core::AdValue;
 pub(crate) use core::DynTensorTyped;

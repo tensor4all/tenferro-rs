@@ -180,9 +180,14 @@ where
                 message: "tensor-scalar reverse output is missing a tape node".to_string(),
             })?;
 
-        crate::tape::register_rule::<T>(
+        let input_node_ids: Vec<_> = [tensor_node, scalar_node]
+            .iter()
+            .filter_map(|n| *n)
+            .collect();
+        crate::tape::register_closure_rule::<T>(
             &tape,
             output_node,
+            input_node_ids,
             Box::new(move |cotangent| {
                 let mut input_grads = Vec::new();
                 if let Some(node) = tensor_node {

@@ -80,9 +80,10 @@ where
             if let Some((node, tape)) = out_sign.reverse_handle() {
                 let spec = spec.clone();
                 let zero = zero_like(spec.layout.payload())?;
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |_cotangent| {
                         Ok(vec![(
                             spec.node,
@@ -95,9 +96,10 @@ where
             if let Some((node, tape)) = out_logabsdet.reverse_handle() {
                 let spec = spec.clone();
                 let a_primal = input_primal.clone();
-                tape::register_rule::<T>(
+                tape::register_closure_rule::<T>(
                     &tape,
                     node,
+                    vec![spec.node],
                     Box::new(move |cotangent| {
                         let grad = dispatch_linalg_ad_runtime!(
                             T,
