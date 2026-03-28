@@ -36,11 +36,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-workspace-crates: "true"
+      - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: taiki-e/install-action@nextest
       - name: Run unit and integration tests
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
         run: cargo nextest run --workspace --release --no-fail-fast
       - name: Run doc tests
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
         run: cargo test --doc --workspace --release
+      - name: Show sccache stats
+        if: always()
+        shell: bash
+        run: ${SCCACHE_PATH} --show-stats
 
   test-inject-prims:
     name: cargo test (prims inject)
