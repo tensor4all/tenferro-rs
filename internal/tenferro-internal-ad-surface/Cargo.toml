@@ -1,0 +1,31 @@
+[package]
+name = "tenferro-internal-ad-surface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Internal dynamic autodiff surface for tenferro."
+
+[lib]
+doctest = false
+
+[dependencies]
+num-complex.workspace = true
+num-traits.workspace = true
+chainrules-core.workspace = true
+chainrules.workspace = true
+tidu.workspace = true
+tenferro-internal-error = { path = "../tenferro-internal-error" }
+tenferro-internal-runtime = { path = "../tenferro-internal-runtime" }
+tenferro-internal-frontend-core = { path = "../tenferro-internal-frontend-core" }
+tenferro-internal-ad-core = { path = "../tenferro-internal-ad-core" }
+tenferro-internal-ad-ops = { path = "../tenferro-internal-ad-ops" }
+tenferro-internal-ad-linalg = { path = "../tenferro-internal-ad-linalg" }
+tenferro-dynamic-compute = { path = "../../tenferro-dynamic-compute" }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-prims = { path = "../../tenferro-prims" }
+tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-linalg = { path = "../../tenferro-linalg" }

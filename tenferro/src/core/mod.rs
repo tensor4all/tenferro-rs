@@ -9,7 +9,4 @@ pub use dynamic::{
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
     Tensor, TensorScalarDowncast,
 };
-pub(crate) use value::AdTensorSnapshot;
-#[cfg(test)]
-pub use value::AdValue;
 pub use value::{AdMode, AdTensor, NodeId};

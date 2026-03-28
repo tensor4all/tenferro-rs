@@ -178,18 +178,27 @@ There is no fallback heterogeneous graph path for `V::Tangent != V`.
 
 ## DyadTensor Code Layout
 
-`tenferro` keeps the implementation tree aligned with the way users
-follow operations:
+The current workspace splits the AD frontend into a thin public facade plus
+internal implementation crates:
 
-- `core/` owns AD values and dynamic wrappers
-- `runtime/` owns default-runtime selection and capability dispatch
-- `tape/` owns reverse-mode rule storage
-- `ops/einsum`, `ops/scalar`, `ops/reduction`, and `ops/linalg/*` keep primal
-  entry points, eager AD entry points, builders, and tests near the operation
-  family they implement
+- `tenferro-dynamic-compute` owns the public dynamic primal surface
+- `tenferro` owns the public dynamic AD surface and user-facing helpers such as
+  `grad`, `backward`, `pullback`, and the AD-aware `Tensor`
+- `tenferro-internal-frontend-core` owns the shared dynamic tensor substrate
+  and structured-layout helpers
+- `tenferro-internal-ad-core` owns `AdTensor<T>`, homogeneous tape glue, and
+  shared AD helper functions that were previously embedded in
+  `tenferro/src/ops/common.rs`
+- `tenferro-internal-ad-surface` owns the dynamic AD `Tensor` surface,
+  `grad`/`backward`/`forward_ad`, and the builder-style linalg wrappers used by
+  the public `tenferro` facade
+- `tenferro-internal-ad-ops` owns the typed scalar, reduction, and einsum AD
+  builders and local pullback helpers used behind `tenferro`
+- `tenferro-internal-ad-linalg` owns the typed linalg AD builders, eager
+  linalg helpers, and typed linalg AD result structs used by `tenferro`
 
-This avoids the older bucket-style layout where one `svd` path had to be traced
-across unrelated roots such as `api/`, `dyn_types/`, and `reverse_tape/`.
+This keeps the public AD surface operation-first while allowing the heaviest
+typed codegen to move out of the `tenferro` facade.
 
 ## Context and Mutation Semantics
 

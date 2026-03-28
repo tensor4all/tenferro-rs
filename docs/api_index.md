@@ -43,6 +43,21 @@ Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
          tenferro-device     Device enum, Error/Result types
 Internal: tenferro-internal-error   Internal shared error definitions re-exported
                                      by public frontend crates where needed
+          tenferro-internal-frontend-core
+                                     Shared dynamic tensor substrate and
+                                     structured-layout helpers for the
+                                     `tenferro*` surface crates
+          tenferro-internal-ad-core  Homogeneous AD tensor state, tape glue,
+                                     and shared operation helpers
+          tenferro-internal-ad-surface
+                                     Dynamic AD surface, eager AD entrypoints,
+                                     and builder-style linalg wrappers
+          tenferro-internal-ad-linalg
+                                     Typed linalg AD bodies and result wiring
+                                     used behind `tenferro`
+          tenferro-internal-ad-ops   Typed scalar/einsum/reduction AD bodies
+                                     and eager helper wiring used behind
+                                     `tenferro`
           tenferro-internal-runtime Internal runtime default/scope management
                                      used by `tenferro::runtime`
 
@@ -55,7 +70,10 @@ Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
 
-End-user:   tenferro                Dynamic tensor frontend and AD runtime bridge
+End-user:   tenferro-tensor         Typed tensor data container
+            tenferro-tensor-compute Typed tensor compute facade
+            tenferro-dynamic-compute Dynamic tensor compute facade without AD
+            tenferro                Dynamic tensor frontend and AD runtime bridge
 
 Extension:  tenferro-ext-tropical       Tropical semiring operations (MaxPlus, MinPlus, MaxMul)
             tenferro-ext-tropical-capi   C-API for tropical einsum
@@ -82,6 +100,13 @@ Typed tensor computation facade. Re-exports the most commonly used items from
 `tenferro-tensor`, `tenferro-prims`, `tenferro-einsum`, and `tenferro-linalg`
 so downstream users need only a single dependency for `Tensor<T>` computation.
 Start here if you want typed tensors with einsum and linear algebra.
+
+<a id="tenferro-dynamic-compute"></a>
+### [tenferro-dynamic-compute](tenferro_dynamic_compute/index.html) <small>(End-user public)</small>
+
+Dynamic tensor compute facade without autodiff. This crate exposes the
+runtime-dtype `Tensor` surface for users who need mixed-dtype or late-bound
+scalar selection without pulling in tape state or gradient APIs.
 
 <a id="tenferro-capi"></a>
 ### [tenferro-capi](tenferro_capi/index.html) <small>(Layer 5)</small>
@@ -181,6 +206,43 @@ used by public frontend crates, but is not itself a stable end-user surface.
 
 Internal runtime scope management crate. Owns `RuntimeContext`, scoped runtime
 installation helpers, and default-runtime lookup used behind `tenferro::runtime`.
+
+<a id="tenferro-internal-frontend-core"></a>
+### [tenferro-internal-frontend-core](tenferro_internal_frontend_core/index.html) <small>(Internal)</small>
+
+Internal shared dynamic frontend substrate. Owns `DynTensor`, scalar-type
+metadata, structured tensor helpers, and the structured einsum/layout
+machinery used by both `tenferro-dynamic-compute` and the AD-aware `tenferro`
+surface.
+
+<a id="tenferro-internal-ad-core"></a>
+### [tenferro-internal-ad-core](tenferro_internal_ad_core/index.html) <small>(Internal)</small>
+
+Internal AD state crate. Owns `AdTensor<T>`, reverse-tape attachment, snapshot
+plumbing, and the shared AD helper functions used across einsum, scalar,
+reduction, and linalg operation builders.
+
+<a id="tenferro-internal-ad-surface"></a>
+### [tenferro-internal-ad-surface](tenferro_internal_ad_surface/index.html) <small>(Internal)</small>
+
+Internal dynamic AD surface crate. Owns the dynamic `Tensor` enum used by the
+public `tenferro` facade, eager AD entrypoints such as `grad`, `backward`, and
+`forward_ad`, plus the builder-style linalg wrappers that dynamic AD methods
+call through.
+
+<a id="tenferro-internal-ad-linalg"></a>
+### [tenferro-internal-ad-linalg](tenferro_internal_ad_linalg/index.html) <small>(Internal)</small>
+
+Internal typed linalg AD crate. Owns the SVD/QR/LU/eigen/slogdet/solve-family
+builder bodies, eager linalg AD entry points, and typed linalg AD result
+structs that are re-exported through `tenferro`.
+
+<a id="tenferro-internal-ad-ops"></a>
+### [tenferro-internal-ad-ops](tenferro_internal_ad_ops/index.html) <small>(Internal)</small>
+
+Internal typed AD operation crate. Owns the scalar, reduction, and einsum AD
+builder bodies and local pullback helpers that are re-exported through
+`tenferro`.
 
 ## External Crates
 

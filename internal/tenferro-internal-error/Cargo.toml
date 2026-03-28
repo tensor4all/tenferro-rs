@@ -7,6 +7,9 @@ authors.workspace = true
 publish = false
 description = "Internal shared error contract for tenferro surface crates."
 
+[lib]
+doctest = false
+
 [dependencies]
 thiserror.workspace = true
 chainrules-core.workspace = true

@@ -84,20 +84,41 @@ The workspace now uses three naming buckets:
 | Crate | Use when |
 |-------|----------|
 | **`tenferro-tensor-compute`** | You want typed `Tensor<T>` with einsum and linalg — **start here** |
+| `tenferro-dynamic-compute` | You want runtime-selected dtypes without automatic differentiation |
 | `tenferro` | You need automatic differentiation (VJP/JVP) |
 | `tenferro-tensor` | You only need the data type, no computation (library authors) |
 
 - **Typed path** (`tenferro-tensor-compute`): `Tensor<T>` with a fixed scalar type at compile time. Best when you know the scalar type and do not need automatic gradient tracking.
+- **Dynamic primal path** (`tenferro-dynamic-compute`): dynamic scalar type without automatic differentiation. Best when you need runtime dtype selection but no tape/gradient state.
 - **Dynamic AD path** (`tenferro`): dynamic scalar type with automatic differentiation (VJP/JVP). Best when you need gradients.
 
-The quickstart below uses the typed path; the [Autodiff quickstart](#autodiff-quickstart) shows the dynamic AD path.
+The quickstart below uses the typed path; `tenferro-dynamic-compute` is the non-AD dynamic alternative, and the [Autodiff quickstart](#autodiff-quickstart) shows the dynamic AD path.
 
 ### Internal Crate Policy
 
 Implementation-only crates will use the `tenferro-internal-` prefix, live under
 `internal/`, and set `publish = false`. Downstream users should depend on the
 documented public crates instead of depending on internal implementation crates
-directly.
+directly. In the current split, crates such as
+`tenferro-internal-frontend-core`, `tenferro-internal-ad-core`,
+`tenferro-internal-ad-surface`, `tenferro-internal-ad-ops`, and
+`tenferro-internal-ad-linalg` exist to keep the public `tenferro*` crates thin
+and to isolate heavy codegen.
+
+Current implementation homes:
+
+- `tenferro-internal-frontend-core`: shared dynamic tensor substrate and
+  structured-layout helpers used by both `tenferro-dynamic-compute` and
+  `tenferro`
+- `tenferro-internal-ad-core`: `AdTensor<T>`, homogeneous tape glue, and the
+  shared AD operation helpers that used to live in `tenferro/src/ops/common.rs`
+- `tenferro-internal-ad-surface`: the dynamic AD tensor surface, eager AD
+  entrypoints (`grad`, `backward`, `forward_ad`), and the builder-style linalg
+  wrappers used behind `tenferro`
+- `tenferro-internal-ad-linalg`: typed linalg AD builders, eager helpers, and
+  result types used behind `tenferro`
+- `tenferro-internal-ad-ops`: typed scalar, reduction, and einsum AD builders,
+  eager helpers, and pullback helpers used behind `tenferro`
 
 ## Quickstart
 
@@ -140,6 +161,18 @@ fn main() {
 > **Convenience for row-major data:** If your input data is in row-major
 > (C-style) order, use `Tensor::<f64>::from_row_major_slice(&data, &dims)`
 > instead of specifying `MemoryOrder::RowMajor` manually.
+
+### Dynamic runtime-dtype path
+
+Use `tenferro-dynamic-compute` when you need runtime-selected scalar types but
+do not want autodiff state. This is the dynamic non-AD home introduced by the
+current crate split.
+
+- Prefer `tenferro-tensor-compute` if you know the dtype at compile time and
+  want the most complete typed surface today.
+- Prefer `tenferro-dynamic-compute` if your application selects dtypes at
+  runtime and you want to stay out of tape / gradient machinery.
+- Prefer `tenferro` if you need the same dynamic surface plus autodiff.
 
 ### Autodiff quickstart
 

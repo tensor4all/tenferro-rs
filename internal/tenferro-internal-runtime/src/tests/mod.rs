@@ -3,6 +3,10 @@ use tenferro_prims::{CpuContext, CudaContext, RocmContext};
 
 use crate::{set_default_runtime, with_default_runtime, with_runtime, RuntimeContext};
 
+mod context_shim_contract;
+mod organization;
+mod scope_contract;
+
 #[test]
 fn default_runtime_roundtrip() {
     let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
