@@ -2,9 +2,7 @@ use num_complex::Complex64;
 use tenferro::{set_default_runtime, RuntimeContext, Tensor};
 use tenferro_prims::CpuContext;
 
-mod support;
-
-use support::{
+use crate::support::{
     dyn_rank0_value_f64, dyn_values_f64, grad_wrt, primal_rank0_f64, reverse_rank0_f64,
     reverse_rank0_f64_like, reverse_vector_f64, reverse_vector_f64_like, vector_c64, vector_f64,
 };

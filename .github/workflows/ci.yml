@@ -42,12 +42,37 @@ jobs:
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: sccache
-        run: cargo nextest run --workspace --release --no-fail-fast
+        run: cargo nextest run --workspace --exclude tenferro-capi --exclude tenferro-ext-tropical-capi --release --no-fail-fast
       - name: Run doc tests
         env:
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: sccache
-        run: cargo test --doc --workspace --release
+        run: cargo test --doc --workspace --exclude tenferro-capi --exclude tenferro-ext-tropical-capi --release
+      - name: Show sccache stats
+        if: always()
+        shell: bash
+        run: ${SCCACHE_PATH} --show-stats
+
+  test-ffi:
+    name: cargo test (ffi)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-workspace-crates: "true"
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Run FFI tests
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+        run: cargo test -p tenferro-capi -p tenferro-ext-tropical-capi --release --no-fail-fast
+      - name: Run FFI doc tests
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
+        run: cargo test --doc -p tenferro-capi -p tenferro-ext-tropical-capi --release
       - name: Show sccache stats
         if: always()
         shell: bash

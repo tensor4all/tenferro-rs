@@ -1,9 +1,7 @@
 use num_complex::{Complex32, Complex64};
 use tenferro::{ScalarType, Tensor};
 
-mod support;
-
-use support::{
+use crate::support::{
     forward_rank0_c32, forward_rank0_f32, forward_rank0_f64, grad_wrt, primal_rank0_c64,
     rank0_value_c32, rank0_value_c64, reverse_rank0_c32, reverse_rank0_c64, reverse_rank0_f32,
 };

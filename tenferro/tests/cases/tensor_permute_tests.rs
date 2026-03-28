@@ -1,6 +1,4 @@
-mod support;
-
-use support::{diag_f64, with_axis_classes_f64};
+use crate::support::{diag_f64, with_axis_classes_f64};
 use tenferro::{grad, GradOptions, Tensor};
 use tenferro_device::Error as DeviceError;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};

@@ -1,7 +1,5 @@
-mod support;
-
+use crate::support::{forward_rank0_f64, reverse_rank0_f64};
 use num_complex::Complex64;
-use support::{forward_rank0_f64, reverse_rank0_f64};
 use tenferro::{AdMode, ScalarValue, Tensor};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 

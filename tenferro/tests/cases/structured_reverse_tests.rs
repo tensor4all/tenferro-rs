@@ -4,9 +4,7 @@ use tenferro::{Error, Tensor};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-mod support;
-
-use support::{grad_wrt, reverse_rank0_f64_like, vector_c64, vector_f64};
+use crate::support::{grad_wrt, reverse_rank0_f64_like, vector_c64, vector_f64};
 
 fn scalar(value: f64) -> DenseTensor<f64> {
     DenseTensor::<f64>::from_slice(&[value], &[], MemoryOrder::ColumnMajor).unwrap()

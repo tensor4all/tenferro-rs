@@ -3,9 +3,7 @@ use tenferro::{set_default_runtime, RuntimeContext, ScalarType, Tensor};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::Tensor as DenseTensor;
 
-mod support;
-
-use support::{
+use crate::support::{
     forward_rank0_f64, forward_tensor_c64, grad_wrt, reverse_rank0_f64_like, reverse_vector_c64,
     scalar_c32, scalar_c64, scalar_f32, scalar_f64, vector_c64, vector_f32,
 };

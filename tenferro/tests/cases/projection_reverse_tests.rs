@@ -1,9 +1,7 @@
 use num_complex::Complex64;
 use tenferro::{Error, Tensor};
 
-mod support;
-
-use support::{
+use crate::support::{
     grad_wrt, reverse_rank0_c64, reverse_rank0_f64, reverse_rank0_f64_like, reverse_vector_c64,
     scalar_c64, vector_f64,
 };

@@ -2,9 +2,7 @@ use num_complex::Complex64;
 use tenferro::{forward_ad, ScalarType, Tensor};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-mod support;
-
-use support::{primal_rank0_c64, primal_rank0_f64};
+use crate::support::{primal_rank0_c64, primal_rank0_f64};
 
 #[test]
 fn scale_preserves_forward_tensor_and_scalar_ad() {

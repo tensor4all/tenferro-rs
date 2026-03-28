@@ -14,6 +14,20 @@ use crate::{
     TensorMetadataCastPrims, TensorMetadataPrims, TensorResolveConjContextFor, TensorRngPrims,
 };
 
+fn open_test_host_library() -> libloading::Library {
+    #[cfg(target_os = "linux")]
+    const TEST_HOST_LIBRARY: &str = "libm.so.6";
+    #[cfg(target_os = "macos")]
+    const TEST_HOST_LIBRARY: &str = "/usr/lib/libSystem.B.dylib";
+    #[cfg(target_os = "windows")]
+    const TEST_HOST_LIBRARY: &str = "kernel32.dll";
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    const TEST_HOST_LIBRARY: &str = "libc.so";
+
+    unsafe { libloading::Library::new(TEST_HOST_LIBRARY) }
+        .unwrap_or_else(|err| panic!("failed to open test host library {TEST_HOST_LIBRARY}: {err}"))
+}
+
 fn dummy_real_tensor() -> Tensor<f64> {
     Tensor::from_slice(&[2.0, 3.0], &[2], MemoryOrder::ColumnMajor).unwrap()
 }
@@ -49,7 +63,7 @@ fn cuda_backend_drop_clears_handle() {
 
     let backend = CudaBackend {
         _handle: 0x1234 as *mut c_void,
-        _lib: unsafe { libloading::Library::new("libm.so.6").unwrap() },
+        _lib: open_test_host_library(),
     };
 
     let handle_ptr = &backend._handle as *const *mut c_void as usize;
@@ -65,7 +79,7 @@ fn rocm_backend_drop_clears_handle() {
 
     let backend = RocmBackend {
         _handle: 0x1234 as *mut c_void,
-        _lib: unsafe { libloading::Library::new("libm.so.6").unwrap() },
+        _lib: open_test_host_library(),
     };
 
     let handle_ptr = &backend._handle as *const *mut c_void as usize;

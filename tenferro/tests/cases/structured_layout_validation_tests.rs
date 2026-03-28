@@ -2,9 +2,7 @@ use num_complex::Complex64;
 use tenferro::{Error, Tensor};
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
-mod support;
-
-use support::primal_rank0_f64;
+use crate::support::primal_rank0_f64;
 
 fn vector(values: &[f64]) -> DenseTensor<f64> {
     DenseTensor::<f64>::from_slice(values, &[values.len()], MemoryOrder::ColumnMajor).unwrap()
