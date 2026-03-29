@@ -3298,3 +3298,73 @@ fn einsum_frule_trace_propagates_tangent() {
     let tangent = out.tangent().unwrap().buffer().as_slice().unwrap()[0];
     assert!((tangent - 0.5).abs() < 1e-12);
 }
+
+#[test]
+fn einsum_rrule_diagonal_extraction_unit_cotangent() {
+    let mut ctx = CpuContext::new(1);
+    // A = [[1, 3], [2, 4]] (col-major), diag(A) = [1, 4]
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0, 1.0], &[2], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->i", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2]);
+    // grad = diag(cotangent) = diag([1, 1]) = I = [[1,0],[0,1]]
+    let g = to_col_major_vec(&grads[0]);
+    assert!((g[0] - 1.0).abs() < 1e-12, "grad[0,0]={}", g[0]);
+    assert!((g[1] - 0.0).abs() < 1e-12, "grad[1,0]={}", g[1]);
+    assert!((g[2] - 0.0).abs() < 1e-12, "grad[0,1]={}", g[2]);
+    assert!((g[3] - 1.0).abs() < 1e-12, "grad[1,1]={}", g[3]);
+}
+
+#[test]
+fn einsum_rrule_diagonal_extraction_nonunit_cotangent() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[2.0, 5.0], &[2], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->i", &[&a], &cotangent).unwrap();
+    // grad = diag([2, 5]) = [[2,0],[0,5]]
+    let g = to_col_major_vec(&grads[0]);
+    assert!((g[0] - 2.0).abs() < 1e-12, "grad[0,0]={}", g[0]);
+    assert!((g[1] - 0.0).abs() < 1e-12, "grad[1,0]={}", g[1]);
+    assert!((g[2] - 0.0).abs() < 1e-12, "grad[0,1]={}", g[2]);
+    assert!((g[3] - 5.0).abs() < 1e-12, "grad[1,1]={}", g[3]);
+}
+
+    // Verify the HVP via finite differences
+    let da = Tensor::<f64>::from_slice(&[0.1, 0.0, 0.0, 0.1], &[2, 2], COL).unwrap();
+    let eps = 1e-6;
+    let a_plus_eps = {
+        let vals = a.buffer().as_slice().unwrap();
+        let da_vals = da.buffer().as_slice().unwrap();
+        let mut result = vec![0.0; 4];
+        for i in 0..4 {
+            result[i] = vals[i] + eps * da_vals[i];
+        }
+        Tensor::<f64>::from_slice(&result, &[2, 2], COL).unwrap()
+    };
+    let cotangent_tangent = Tensor::<f64>::from_slice(&[2.0], &[], COL).unwrap();
+
+    let hvps = einsum_hvp::<S, CpuBackend>(
+        &mut ctx,
+        "ii->",
+        &[&a],
+        &[Some(&da)],
+        &cotangent,
+        &cotangent_tangent,
+    )
+    .unwrap();
+
+    assert_eq!(hvps.len(), 1);
+    let (ref grad, ref hvp_val) = hvps[0];
+    assert_eq!(grad.dims(), &[2, 2]);
+    assert_eq!(hvp_val.dims(), &[2, 2]);
+    assert_tensors_close(&grad, &expected_grad, "hvp_grad");
+    let expected_hvp = Tensor::<f64>::from_slice(&[2.0, 0.0, 0.0, 2.0], &[2, 2], COL).unwrap();
+    assert_tensors_close(&hvp_val, &expected_hvp, "hvp_hvp");
+}
+
+    // hvp = 7 * I = [[7,0],[0,7]]
+    let hv = to_col_major_vec(hvp);
+    assert!((hv[0] - 7.0).abs() < 1e-12);
+    assert!((hv[3] - 7.0).abs() < 1e-12);
+}
