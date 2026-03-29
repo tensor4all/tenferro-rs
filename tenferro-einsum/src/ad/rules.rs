@@ -4,12 +4,49 @@ use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::{AdResult, Differentiable, DualValue};
 
-use crate::ad::delta::build_delta_context;
+use crate::ad::delta::{prepare_reverse_context, DeltaContext, ReverseContext};
 use crate::api::{einsum, einsum_with_subscripts, einsum_with_subscripts_into};
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
+
+fn apply_embed<Alg, Backend>(
+    ctx: &mut BackendContext<Alg, Backend>,
+    dctx: &DeltaContext<Alg::Scalar>,
+    base: Tensor<Alg::Scalar>,
+) -> Result<Tensor<Alg::Scalar>>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
+    Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+{
+    if let Some(ref es) = dctx.embed_subs {
+        einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&base], None)
+    } else {
+        Ok(base)
+    }
+}
+
+/// Evaluate the base reverse einsum and, if needed, apply a diagonal-embedding
+/// pass so that repeated output labels (e.g. trace `"ii->"`) are correctly
+/// handled in the reverse-mode gradient.
+fn eval_with_embed<Alg, Backend>(
+    ctx: &mut BackendContext<Alg, Backend>,
+    rctx: &ReverseContext<Alg::Scalar>,
+    leading: &Tensor<Alg::Scalar>,
+) -> Result<Tensor<Alg::Scalar>>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
+    Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+{
+    let ops = rctx.assemble_rev_operands(leading);
+    let base = einsum_with_subscripts::<Alg, Backend>(ctx, &rctx.dctx.base_subs, &ops, None)?;
+    apply_embed::<Alg, Backend>(ctx, &rctx.dctx, base)
+}
 
 /// Dual einsum (forward-mode JVP propagation).
 ///
@@ -89,41 +126,8 @@ where
     let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None)?;
 
     for k in 0..n {
-        let mut rev_inputs_subs = vec![subs.output.clone()];
-        // Wirtinger VJP: conjugate non-cotangent operands so that the
-        // reverse einsum computes  grad_k = einsum(cot, conj(other_ops)...).
-        // For real scalars conj() is a no-op (zero-cost flag toggle on Tensor).
-        let mut conj_store: Vec<Tensor<Alg::Scalar>> = Vec::new();
-        for (i, &op) in operands.iter().enumerate() {
-            if i != k {
-                rev_inputs_subs.push(subs.inputs[i].clone());
-                conj_store.push(op.conj());
-            }
-        }
-
-        let rev_output = subs.inputs[k].clone();
-
-        let dctx = build_delta_context::<Alg::Scalar>(
-            &subs,
-            &rev_inputs_subs,
-            &rev_output,
-            &size_dict,
-            operands[0].logical_memory_space(),
-        )?;
-
-        let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-        for c in &conj_store {
-            ops.push(c);
-        }
-        for dt in &dctx.delta_tensors {
-            ops.push(dt);
-        }
-        let base = einsum_with_subscripts::<Alg, Backend>(ctx, &dctx.base_subs, &ops, None)?;
-        let grad = if let Some(ref es) = dctx.embed_subs {
-            einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&base], None)?
-        } else {
-            base
-        };
+        let rctx = prepare_reverse_context::<Alg::Scalar>(&subs, operands, k, &size_dict)?;
+        let grad = eval_with_embed::<Alg, Backend>(ctx, &rctx, cotangent)?;
         grads.push(grad);
     }
 
@@ -283,52 +287,14 @@ where
     let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None)?;
 
     for k in 0..n {
-        let mut rev_inputs_subs = vec![subs.output.clone()];
-        // Wirtinger VJP: conjugate non-cotangent operands (same as einsum_rrule).
-        let mut conj_store: Vec<Tensor<Alg::Scalar>> = Vec::new();
-        for (i, &op) in primals.iter().enumerate() {
-            if i != k {
-                rev_inputs_subs.push(subs.inputs[i].clone());
-                conj_store.push(op.conj());
-            }
-        }
+        let rctx = prepare_reverse_context::<Alg::Scalar>(&subs, primals, k, &size_dict)?;
 
-        let rev_output = subs.inputs[k].clone();
+        let grad_k = eval_with_embed::<Alg, Backend>(ctx, &rctx, cotangent)?;
 
-        let dctx = build_delta_context::<Alg::Scalar>(
-            &subs,
-            &rev_inputs_subs,
-            &rev_output,
-            &size_dict,
-            primals[0].logical_memory_space(),
-        )?;
-
-        let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-        for c in &conj_store {
-            rev_operands.push(c);
-        }
-        for dt in &dctx.delta_tensors {
-            rev_operands.push(dt);
-        }
-        let grad_k_base =
-            einsum_with_subscripts::<Alg, Backend>(ctx, &dctx.base_subs, &rev_operands, None)?;
-        let grad_k = if let Some(ref es) = dctx.embed_subs {
-            einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&grad_k_base], None)?
-        } else {
-            grad_k_base
-        };
-
-        let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent_tangent];
-        for c in &conj_store {
-            ops.push(c);
-        }
-        for dt in &dctx.delta_tensors {
-            ops.push(dt);
-        }
         let mut hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(
             ctx,
-            &dctx.base_subs,
-            &ops,
+            &rctx.dctx.base_subs,
+            &rctx.assemble_rev_operands(cotangent_tangent),
             None,
         )?);
 
@@ -337,22 +303,12 @@ where
                 continue;
             }
             if let Some(tangent_j) = *tangent_j_opt {
-                let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-                let mut ci = 0;
-                for (i, _) in primals.iter().enumerate() {
-                    if i != k {
-                        ops.push(if i == j { tangent_j } else { &conj_store[ci] });
-                        ci += 1;
-                    }
-                }
-                for dt in &dctx.delta_tensors {
-                    ops.push(dt);
-                }
+                let ops = rctx.assemble_rev_operands_with_sub(cotangent, j, k, tangent_j);
                 match &mut hvp_base {
                     None => {
                         hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(
                             ctx,
-                            &dctx.base_subs,
+                            &rctx.dctx.base_subs,
                             &ops,
                             None,
                         )?);
@@ -361,7 +317,7 @@ where
                         let one = <Alg::Scalar as num_traits::One>::one();
                         einsum_with_subscripts_into::<Alg, Backend>(
                             ctx,
-                            &dctx.base_subs,
+                            &rctx.dctx.base_subs,
                             &ops,
                             one,
                             one,
@@ -374,13 +330,7 @@ where
         }
 
         let hvp_k = match hvp_base {
-            Some(t) => {
-                if let Some(ref es) = dctx.embed_subs {
-                    einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&t], None)?
-                } else {
-                    t
-                }
-            }
+            Some(t) => apply_embed::<Alg, Backend>(ctx, &rctx.dctx, t)?,
             None => {
                 let space = primals[k].logical_memory_space();
                 Tensor::zeros(primals[k].dims(), space, MemoryOrder::ColumnMajor)?
