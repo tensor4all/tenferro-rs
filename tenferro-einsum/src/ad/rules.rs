@@ -11,6 +11,9 @@ use crate::execution::execute::execute_nested;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
 
+/// Evaluate the base reverse einsum and, if needed, apply a diagonal-embedding
+/// pass so that repeated output labels (e.g. trace `"ii->"`) are correctly
+/// handled in the reverse-mode gradient.
 fn eval_with_embed<Alg, Backend>(
     ctx: &mut BackendContext<Alg, Backend>,
     rctx: &ReverseContext<Alg::Scalar>,
@@ -286,21 +289,7 @@ where
                 continue;
             }
             if let Some(tangent_j) = *tangent_j_opt {
-                let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-                let mut ci = 0;
-                for (i, _) in primals.iter().enumerate() {
-                    if i != k {
-                        ops.push(if i == j {
-                            tangent_j
-                        } else {
-                            &rctx.conj_store[ci]
-                        });
-                        ci += 1;
-                    }
-                }
-                for dt in &rctx.dctx.delta_tensors {
-                    ops.push(dt);
-                }
+                let ops = rctx.assemble_rev_operands_with_sub(cotangent, j, k, tangent_j);
                 match &mut hvp_base {
                     None => {
                         hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(

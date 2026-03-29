@@ -92,12 +92,19 @@ pub(super) fn build_delta_context<T: Scalar>(
     })
 }
 
+/// Pre-built reverse-mode context for a single operand index `k`.
+///
+/// Holds the conjugated non-`k` operands (`conj_store`) and the delta-context
+/// (`dctx`) that supplies any identity tensors and embedding subscripts needed
+/// when the reverse subscript contains output-only labels (e.g. trace `"ii->"`).
 pub(super) struct ReverseContext<T> {
     pub conj_store: Vec<Tensor<T>>,
     pub dctx: DeltaContext<T>,
 }
 
 impl<T> ReverseContext<T> {
+    /// Assemble the full operand list for a reverse einsum, prepending `leading`
+    /// followed by the conjugated operands and delta tensors.
     pub fn assemble_rev_operands<'a>(&'a self, leading: &'a Tensor<T>) -> Vec<&'a Tensor<T>> {
         let mut ops: Vec<&Tensor<T>> = vec![leading];
         for c in &self.conj_store {
@@ -108,8 +115,43 @@ impl<T> ReverseContext<T> {
         }
         ops
     }
+
+    /// Like `assemble_rev_operands`, but replaces the conjugated operand for
+    /// primal index `sub_j` with `tangent`.  `skip_k` is the primal index being
+    /// differentiated (already excluded from `conj_store`).
+    pub fn assemble_rev_operands_with_sub<'a>(
+        &'a self,
+        leading: &'a Tensor<T>,
+        sub_j: usize,
+        skip_k: usize,
+        tangent: &'a Tensor<T>,
+    ) -> Vec<&'a Tensor<T>> {
+        let n = self.conj_store.len() + 1;
+        let mut ops: Vec<&Tensor<T>> = vec![leading];
+        let mut ci = 0;
+        for i in 0..n {
+            if i == skip_k {
+                continue;
+            }
+            if i == sub_j {
+                ops.push(tangent);
+            } else {
+                ops.push(&self.conj_store[ci]);
+            }
+            ci += 1;
+        }
+        for dt in &self.dctx.delta_tensors {
+            ops.push(dt);
+        }
+        ops
+    }
 }
 
+/// Build a `ReverseContext` for differentiating with respect to operand `k`.
+///
+/// Constructs the conjugated operand store, the reverse subscript inputs, and
+/// any delta (identity) tensors needed when the reverse output subscript
+/// contains labels not present in the reverse inputs (e.g. trace `"ii->"`).
 pub(super) fn prepare_reverse_context<T: Scalar + Conjugate>(
     subs: &Subscripts,
     operands: &[&Tensor<T>],
