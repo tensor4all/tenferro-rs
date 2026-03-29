@@ -4,12 +4,30 @@ use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::{AdResult, Differentiable, DualValue};
 
-use crate::ad::delta::{prepare_reverse_context, ReverseContext};
+use crate::ad::delta::{prepare_reverse_context, DeltaContext, ReverseContext};
 use crate::api::{einsum, einsum_with_subscripts, einsum_with_subscripts_into};
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
+
+fn apply_embed<Alg, Backend>(
+    ctx: &mut BackendContext<Alg, Backend>,
+    dctx: &DeltaContext<Alg::Scalar>,
+    base: Tensor<Alg::Scalar>,
+) -> Result<Tensor<Alg::Scalar>>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
+    Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+{
+    if let Some(ref es) = dctx.embed_subs {
+        einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&base], None)
+    } else {
+        Ok(base)
+    }
+}
 
 /// Evaluate the base reverse einsum and, if needed, apply a diagonal-embedding
 /// pass so that repeated output labels (e.g. trace `"ii->"`) are correctly
@@ -27,11 +45,7 @@ where
 {
     let ops = rctx.assemble_rev_operands(leading);
     let base = einsum_with_subscripts::<Alg, Backend>(ctx, &rctx.dctx.base_subs, &ops, None)?;
-    if let Some(ref es) = rctx.dctx.embed_subs {
-        einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&base], None)
-    } else {
-        Ok(base)
-    }
+    apply_embed::<Alg, Backend>(ctx, &rctx.dctx, base)
 }
 
 /// Dual einsum (forward-mode JVP propagation).
@@ -316,13 +330,7 @@ where
         }
 
         let hvp_k = match hvp_base {
-            Some(t) => {
-                if let Some(ref es) = rctx.dctx.embed_subs {
-                    einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&t], None)?
-                } else {
-                    t
-                }
-            }
+            Some(t) => apply_embed::<Alg, Backend>(ctx, &rctx.dctx, t)?,
             None => {
                 let space = primals[k].logical_memory_space();
                 Tensor::zeros(primals[k].dims(), space, MemoryOrder::ColumnMajor)?
