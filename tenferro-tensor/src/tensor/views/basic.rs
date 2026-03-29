@@ -13,13 +13,13 @@ fn matrix_transpose_permutation(ndim: usize) -> Result<Vec<usize>> {
     Ok(perm)
 }
 
-impl<T: Scalar> Tensor<T> {
+impl<T> Tensor<T> {
     /// Permute (reorder) the dimensions of the tensor.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let transposed = t.permute(&[1, 0]).unwrap();
     /// assert_eq!(transposed.dims(), &[3, 2]);
     /// ```
@@ -59,7 +59,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// let b = t.broadcast(&[4, 3]).unwrap();
     /// assert_eq!(b.dims(), &[4, 3]);
     /// ```
@@ -96,7 +96,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let d = t.diagonal(&[(0, 1)]).unwrap();
     /// assert_eq!(d.dims(), &[3]);
     /// ```
@@ -157,20 +157,25 @@ impl<T: Scalar> Tensor<T> {
         Ok(self.shared_view_with(Arc::from(new_dims), Arc::from(new_strides), self.offset))
     }
 
-    /// Reshape the tensor to a new shape.
+    /// Return a zero-copy view with a different shape.
     ///
-    /// Reshape follows tenferro's internal column-major semantics for contiguous
-    /// tensors. Import/export helpers may accept other memory orders, but the
-    /// reshaped view itself is laid out as column-major metadata.
+    /// This is the strict metadata-only variant of reshape. The returned tensor
+    /// shares storage with `self` and therefore requires the input layout to be
+    /// contiguous (column-major). For PyTorch-style view-or-copy semantics that
+    /// handle non-contiguous inputs, use [`reshape`](Self::reshape) instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StrideError` if the tensor is not contiguous.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
-    /// let r = t.reshape(&[6]).unwrap();
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
+    /// let r = t.view(&[6]).unwrap();
     /// assert_eq!(r.dims(), &[6]);
     /// ```
-    pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>> {
+    pub fn view(&self, new_dims: &[usize]) -> Result<Tensor<T>> {
         self.wait();
         if self.len() != new_dims.iter().product::<usize>() {
             return Err(Error::ShapeMismatch {
@@ -179,9 +184,12 @@ impl<T: Scalar> Tensor<T> {
             });
         }
         if !self.is_contiguous() {
-            return Err(Error::StrideError(
-                "reshape requires contiguous data".into(),
-            ));
+            return Err(Error::StrideError(format!(
+                "view requires contiguous data (use reshape for view-or-copy semantics): \
+                 current strides={:?}, expected contiguous for shape {:?}",
+                self.strides.as_ref(),
+                self.dims.as_ref()
+            )));
         }
 
         let new_strides = Arc::from(compute_contiguous_strides(
@@ -191,12 +199,49 @@ impl<T: Scalar> Tensor<T> {
         Ok(self.shared_view_with(Arc::from(new_dims), new_strides, self.offset))
     }
 
+    /// Reshape the tensor to a new shape.
+    ///
+    /// Reshape follows tenferro's internal column-major semantics and PyTorch-style
+    /// view-or-copy behavior: it returns a zero-copy view when the current layout
+    /// is compatible with column-major ordering, and otherwise materializes a
+    /// contiguous column-major copy first before returning the view.
+    ///
+    /// For strict zero-copy semantics that reject non-contiguous inputs, use
+    /// [`view`](Self::view) instead.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
+    /// let r = t.reshape(&[6]).unwrap();
+    /// assert_eq!(r.dims(), &[6]);
+    /// ```
+    pub fn reshape(&self, new_dims: &[usize]) -> Result<Tensor<T>>
+    where
+        T: tenferro_algebra::Scalar,
+    {
+        if self.len() != new_dims.iter().product::<usize>() {
+            return Err(Error::ShapeMismatch {
+                expected: self.dims.to_vec(),
+                got: new_dims.to_vec(),
+            });
+        }
+
+        match self.view(new_dims) {
+            Ok(view) => Ok(view),
+            Err(Error::StrideError(_)) => self
+                .contiguous(crate::MemoryOrder::ColumnMajor)
+                .view(new_dims),
+            Err(err) => Err(err),
+        }
+    }
+
     /// Create a zero-copy view with explicit dims and strides.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let view = t.view_as_strided(vec![3, 2], vec![2, 1]).unwrap();
     /// assert_eq!(view.dims(), &[3, 2]);
     /// ```
@@ -215,7 +260,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let slice = t.select(2, 1).unwrap();
     /// assert_eq!(slice.dims(), &[2, 3]);
     /// ```
@@ -254,7 +299,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 10], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 10], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let sub = t.narrow(1, 2, 3).unwrap();
     /// assert_eq!(sub.dims(), &[2, 3]);
     /// ```
@@ -305,7 +350,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let u = t.unsqueeze(0).unwrap();
     /// assert_eq!(u.dims(), &[1, 2, 3]);
     ///
@@ -358,7 +403,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[1, 2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[1, 2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let s = t.squeeze().unwrap();
     /// assert_eq!(s.dims(), &[2, 3]);
     /// ```
@@ -394,7 +439,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 1, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let s = t.squeeze_dim(1).unwrap();
     /// assert_eq!(s.dims(), &[2, 3]);
     ///
@@ -474,7 +519,7 @@ impl<T: Scalar> Tensor<T> {
 
 impl<T> Tensor<T>
 where
-    T: Scalar + Conjugate,
+    T: Conjugate,
 {
     /// Return a zero-copy conjugate-transpose view over the last two axes.
     ///

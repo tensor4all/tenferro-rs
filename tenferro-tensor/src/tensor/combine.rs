@@ -49,8 +49,8 @@ impl<T: Scalar> Tensor<T> {
     /// use tenferro_device::LogicalMemorySpace;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let b = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
+    /// let b = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     ///
     /// let stacked = Tensor::stack(&[&a, &b], 0).unwrap();
     /// assert_eq!(stacked.dims(), &[2, 2, 3]);
@@ -148,8 +148,8 @@ impl<T: Scalar> Tensor<T> {
     /// use tenferro_device::LogicalMemorySpace;
     /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let b = Tensor::<f64>::zeros(&[2, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let a = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
+    /// let b = Tensor::<f64>::zeros(&[2, 4], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     ///
     /// let concatenated = Tensor::cat(&[&a, &b], 1).unwrap();
     /// assert_eq!(concatenated.dims(), &[2, 7]);

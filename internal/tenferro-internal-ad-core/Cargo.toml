@@ -1,0 +1,24 @@
+[package]
+name = "tenferro-internal-ad-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish = false
+description = "Internal autodiff tensor state and tape glue for tenferro."
+
+[lib]
+doctest = false
+
+[dependencies]
+chainrules-core.workspace = true
+num-complex.workspace = true
+tidu.workspace = true
+tenferro-internal-error = { path = "../tenferro-internal-error" }
+tenferro-internal-frontend-core = { path = "../tenferro-internal-frontend-core" }
+tenferro-internal-runtime = { path = "../tenferro-internal-runtime" }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-prims = { path = "../../tenferro-prims" }
+tenferro-tensor = { path = "../../tenferro-tensor" }

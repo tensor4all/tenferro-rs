@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
 use tidu::{AdResult, Differentiable, NodeId, ReverseRule};
 
@@ -20,11 +21,11 @@ where
     Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     pub(super) ctx: Arc<Mutex<BackendContext<Alg, Backend>>>,
     pub(super) subscripts: Subscripts,
     pub(super) primals: Vec<Tensor<Alg::Scalar>>,
-    pub(super) input_tangents: Vec<Option<Tensor<Alg::Scalar>>>,
     pub(super) input_node_ids: Vec<Option<NodeId>>,
     pub(super) _phantom: PhantomData<Alg>,
 }
@@ -36,6 +37,7 @@ where
     Backend: EinsumBackend<Alg> + Send + Sync,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     fn pullback(
         &self,
@@ -70,23 +72,9 @@ where
                 output: self.subscripts.inputs[k].clone(),
             };
 
-            let mut grad =
+            let grad =
                 einsum_with_subscripts::<Alg, Backend>(&mut *ctx, &rev_subs, &rev_operands, None)
                     .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
-
-            if rev_operands.iter().any(|t| t.has_fw_grad()) {
-                let tangents: Vec<Option<&Tensor<Alg::Scalar>>> =
-                    rev_operands.iter().map(|t| t.fw_grad()).collect();
-                if let Ok(grad_tangent) = einsum_frule_impl::<Alg, Backend>(
-                    &mut *ctx,
-                    &rev_subs,
-                    None,
-                    &rev_operands,
-                    &tangents,
-                ) {
-                    grad.set_fw_grad(grad_tangent);
-                }
-            }
 
             results.push((node_id, grad));
         }
@@ -98,11 +86,48 @@ where
         self.input_node_ids.iter().filter_map(|id| *id).collect()
     }
 
-    fn pullback_with_tangents(
+    fn forward_tangents<'t>(
+        &self,
+        input_tangents: &dyn Fn(NodeId) -> Option<&'t Tensor<Alg::Scalar>>,
+    ) -> AdResult<Option<Tensor<Alg::Scalar>>>
+    where
+        Tensor<Alg::Scalar>: 't,
+    {
+        let tangents: Vec<Option<&Tensor<Alg::Scalar>>> = self
+            .input_node_ids
+            .iter()
+            .map(|maybe_id| maybe_id.and_then(|id| input_tangents(id)))
+            .collect();
+        if tangents.iter().all(|t| t.is_none()) {
+            return Ok(None);
+        }
+        let primals: Vec<&Tensor<Alg::Scalar>> = self.primals.iter().collect();
+        let mut ctx = self.ctx.lock().map_err(|_| {
+            tidu::AutodiffError::InvalidArgument(
+                "einsum reverse-rule backend context lock is poisoned".to_string(),
+            )
+        })?;
+        Ok(Some(
+            einsum_frule_impl::<Alg, Backend>(
+                &mut *ctx,
+                &self.subscripts,
+                None,
+                &primals,
+                &tangents,
+            )
+            .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?,
+        ))
+    }
+
+    fn pullback_with_tangents<'t>(
         &self,
         cotangent: &Tensor<Alg::Scalar>,
         cotangent_tangent: &Tensor<Alg::Scalar>,
-    ) -> AdResult<Vec<(NodeId, Tensor<Alg::Scalar>, Tensor<Alg::Scalar>)>> {
+        input_tangents: &dyn Fn(NodeId) -> Option<&'t Tensor<Alg::Scalar>>,
+    ) -> AdResult<Vec<(NodeId, Tensor<Alg::Scalar>, Tensor<Alg::Scalar>)>>
+    where
+        Tensor<Alg::Scalar>: 't,
+    {
         let n = self.primals.len();
         let mut results = Vec::new();
         let mut ctx = self.ctx.lock().map_err(|_| {
@@ -125,7 +150,7 @@ where
                 if i != k {
                     rev_inputs_subs.push(self.subscripts.inputs[i].clone());
                     rev_operands.push(primal);
-                    rev_tangents.push(self.input_tangents[i].as_ref());
+                    rev_tangents.push(self.input_node_ids[i].and_then(|id| input_tangents(id)));
                 }
             }
 

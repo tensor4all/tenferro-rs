@@ -3,13 +3,14 @@
 //! This crate provides [`Tensor<T>`], a multi-dimensional array type composed of
 //! shape, strides, and a device-aware [`DataBuffer`]. It supports:
 //!
-//! - **Zero-copy view operations**: [`Tensor::permute`], [`Tensor::broadcast`],
-//!   [`Tensor::diagonal`], [`Tensor::select`], [`Tensor::narrow`] modify only
-//!   metadata (dims/strides)
+//! - **Zero-copy view operations**: [`Tensor::view`], [`Tensor::permute`],
+//!   [`Tensor::broadcast`], [`Tensor::diagonal`], [`Tensor::select`],
+//!   [`Tensor::narrow`] modify only metadata (dims/strides)
 //! - **Data operations**: [`Tensor::contiguous`] / [`Tensor::into_contiguous`] copy
 //!   data into a contiguous layout (the consuming variant avoids allocation when
-//!   the tensor is already contiguous); [`Tensor::tril`] / [`Tensor::triu`] extract
-//!   triangular parts
+//!   the tensor is already contiguous); [`Tensor::reshape`] returns a zero-copy
+//!   view when possible and otherwise materializes first; [`Tensor::tril`] /
+//!   [`Tensor::triu`] extract triangular parts
 //! - **Factory functions**: [`Tensor::zeros`], [`Tensor::ones`], [`Tensor::eye`]
 //! - **DLPack interop**: [`DataBuffer`] supports both Rust-owned (`Vec<T>`) and
 //!   externally-owned memory (e.g., imported via DLPack) with automatic cleanup.
@@ -18,8 +19,9 @@
 //!
 //! tenferro uses **column-major** layout as its internal canonical order.
 //! [`MemoryOrder`] is still accepted at import/materialization boundaries
-//! (e.g., [`Tensor::from_slice`], [`Tensor::contiguous`]), but view semantics
-//! such as [`Tensor::reshape`] follow the column-major internal contract.
+//! (e.g., [`Tensor::from_slice`], [`Tensor::contiguous`]), but shape/view
+//! semantics such as [`Tensor::view`] and [`Tensor::reshape`] follow the
+//! column-major internal contract.
 //!
 //! This matches Julia, Fortran, Eigen3's default layout, and BLAS/LAPACK-style
 //! linear algebra backends. Row-major ecosystems should normalize at the
@@ -57,11 +59,14 @@
 //! let m = Tensor::<f64>::from_slice(&data, &[2, 3], MemoryOrder::ColumnMajor).unwrap();
 //! ```
 //!
-//! ## Transpose and reshape
+//! ## Transpose, view, and reshape
 //!
 //! ```ignore
 //! let mt = m.permute(&[1, 0]).unwrap();
 //! assert_eq!(mt.dims(), &[3, 2]);
+//!
+//! let flat_view = m.view(&[6]).unwrap();
+//! assert_eq!(flat_view.dims(), &[6]);
 //!
 //! let flat = m.reshape(&[6]).unwrap();
 //! assert_eq!(flat.dims(), &[6]);
@@ -86,11 +91,13 @@ mod cuda_runtime;
 mod buffer;
 mod completion_event;
 mod layout;
+pub mod structured_tensor;
 mod tensor;
 
 pub use buffer::DataBuffer;
 pub use completion_event::CompletionEvent;
 pub use layout::MemoryOrder;
+pub use structured_tensor::StructuredTensor;
 pub use tensor::{KeepCountScalar, Tensor};
 
 #[cfg(test)]

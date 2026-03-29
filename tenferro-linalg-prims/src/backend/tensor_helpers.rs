@@ -1,9 +1,13 @@
 //! Shared tensor validation and helper utilities for backend implementations.
 
-use tenferro_algebra::{Conjugate, Scalar};
+#[cfg(any(feature = "cuda", test))]
+use tenferro_algebra::Conjugate;
+#[cfg(feature = "cuda")]
+use tenferro_algebra::Scalar;
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
 use tenferro_device::{Error, Result};
+#[cfg(any(feature = "cuda", test))]
 use tenferro_prims::TensorResolveConjContextFor;
 use tenferro_tensor::{KeepCountScalar, MemoryOrder, Tensor};
 
@@ -42,6 +46,7 @@ pub fn materialize_broadcasted_batches<T: LinalgScalar>(
     materialize_broadcasted_batches_impl(src, structural_rank, batch_indexer, op_name, arg_name)
 }
 
+#[cfg(any(feature = "cuda", test))]
 pub(crate) fn materialize_broadcasted_batches_resolving_conj<T, C>(
     ctx: &mut C,
     src: &Tensor<T>,

@@ -6,20 +6,25 @@ use tenferro_algebra::Scalar;
 use tenferro_device::{Error, LogicalMemorySpace, Result};
 use tenferro_tensor::Tensor;
 
+#[cfg(any(feature = "cuda", test))]
 use super::wrappers::{
     CublasApi, CublasHandleWrapper, CublasStatus, CusolverDnApi, CusolverDnHandleWrapper,
     CusolverStatus,
 };
 
+#[cfg(any(feature = "cuda", test))]
 const CUBLAS_STATUS_SUCCESS: CublasStatus = 0;
+#[cfg(any(feature = "cuda", test))]
 const CUSOLVER_STATUS_SUCCESS: CusolverStatus = 0;
 
+#[cfg(any(feature = "cuda", test))]
 pub(super) struct CudaLibraryCandidates {
     pub cublas: Vec<String>,
     pub cusolver: Vec<String>,
 }
 
 #[allow(dead_code)]
+#[cfg(any(feature = "cuda", test))]
 pub(super) struct CudaLinalgRuntime {
     pub cublas_handle: CublasHandleWrapper,
     pub cusolver_handle: CusolverDnHandleWrapper,
@@ -27,6 +32,10 @@ pub(super) struct CudaLinalgRuntime {
     _cublas_api: CublasApi,
     _cusolver_api: CusolverDnApi,
 }
+
+#[allow(dead_code)]
+#[cfg(not(any(feature = "cuda", test)))]
+pub(super) struct CudaLinalgRuntime;
 
 #[cfg(feature = "cuda")]
 pub(super) struct DeviceAllocation {
@@ -40,6 +49,7 @@ pub(super) fn unsupported<T>(op: &str) -> Result<T> {
     )))
 }
 
+#[cfg(any(feature = "cuda", test))]
 pub(super) fn check_cublas_status(status: CublasStatus, op: &str) -> Result<()> {
     if status == CUBLAS_STATUS_SUCCESS {
         Ok(())
@@ -50,6 +60,7 @@ pub(super) fn check_cublas_status(status: CublasStatus, op: &str) -> Result<()> 
     }
 }
 
+#[cfg(any(feature = "cuda", test))]
 pub(super) fn check_cusolver_status(status: CusolverStatus, op: &str) -> Result<()> {
     if status == CUSOLVER_STATUS_SUCCESS {
         Ok(())
@@ -60,6 +71,7 @@ pub(super) fn check_cusolver_status(status: CusolverStatus, op: &str) -> Result<
     }
 }
 
+#[cfg(any(feature = "cuda", test))]
 pub(super) fn default_library_candidates() -> CudaLibraryCandidates {
     let mut cublas = env_candidates("TENFERRO_CUBLAS_LIB");
     cublas.extend(
@@ -121,6 +133,7 @@ pub(super) fn load_runtime(_ctx: &tenferro_prims::CudaContext) -> Result<CudaLin
     unsupported("load_runtime")
 }
 
+#[cfg(any(feature = "cuda", test))]
 impl CudaLinalgRuntime {
     pub(super) fn cublas_api(&self) -> &CublasApi {
         &self._cublas_api
@@ -212,6 +225,7 @@ fn tensor_device_id<T: Scalar>(tensor: &Tensor<T>, label: &str) -> Result<usize>
     }
 }
 
+#[cfg(any(feature = "cuda", test))]
 fn env_candidates(var: &str) -> Vec<String> {
     std::env::var_os(var)
         .into_iter()

@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
 use tidu::{AdResult, Differentiable, TrackedValue};
 
@@ -41,6 +42,7 @@ where
     Backend: EinsumBackend<Alg> + Send + Sync + 'static,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
     BackendContext<Alg, Backend>: Send,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)
         .map_err(|e| tidu::AutodiffError::InvalidArgument(format!("{e}")))?;
@@ -105,7 +107,6 @@ where
         ctx: ctx.clone(),
         subscripts: subs,
         primals: primals.iter().map(|&t| t.clone()).collect(),
-        input_tangents: operands.iter().map(|op| op.tangent().cloned()).collect(),
         input_node_ids: operands.iter().map(|op| op.node_id()).collect(),
         _phantom: PhantomData,
     };

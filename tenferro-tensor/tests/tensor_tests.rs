@@ -546,15 +546,46 @@ fn reshape_incompatible_size() {
 }
 
 #[test]
-fn reshape_non_contiguous_fails() {
+fn view_contiguous_succeeds() {
+    let t = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let v = t.view(&[4]).unwrap();
+    assert_eq!(v.dims(), &[4]);
+    assert_eq!(v.strides(), &[1]);
+    assert_eq!(v.buffer().as_slice().unwrap(), &[1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn view_non_contiguous_fails() {
     let t = Tensor::<f64>::zeros(&[2, 3, 4], MEM, COL).unwrap();
     let tp = t.permute(&[2, 0, 1]).unwrap();
     assert!(
+        matches!(tp.view(&[24]), Err(tenferro_device::Error::StrideError(_))),
+        "expected StrideError for non-contiguous view"
+    );
+}
+
+#[test]
+fn reshape_non_contiguous_materializes_and_preserves_logical_values() {
+    let data: Vec<f64> = (1..=24).map(|x| x as f64).collect();
+    let t = Tensor::<f64>::from_slice(&data, &[2, 3, 4], COL).unwrap();
+    let tp = t.permute(&[2, 0, 1]).unwrap();
+    let expected = tp.contiguous(COL).to_vec();
+    let r = tp.reshape(&[24]).unwrap();
+    assert_eq!(r.dims(), &[24]);
+    assert_eq!(r.strides(), &[1]);
+    assert!(r.is_contiguous());
+    assert_eq!(r.to_vec(), expected);
+}
+
+#[test]
+fn view_incompatible_size_fails() {
+    let t = Tensor::<f64>::zeros(&[2, 3], MEM, COL).unwrap();
+    assert!(
         matches!(
-            tp.reshape(&[24]),
-            Err(tenferro_device::Error::StrideError(_))
+            t.view(&[5]),
+            Err(tenferro_device::Error::ShapeMismatch { .. })
         ),
-        "expected StrideError for non-contiguous reshape"
+        "expected ShapeMismatch for incompatible total size"
     );
 }
 

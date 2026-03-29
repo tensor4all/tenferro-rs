@@ -4,6 +4,17 @@ mod norm_impl;
 
 pub(crate) use norm_impl::norm_real_impl;
 
+/// Dispatch trait for [`norm`] — selects real or complex implementation.
+///
+/// This trait is `#[doc(hidden)]` and not intended for external use.
+/// Use [`norm`] directly instead.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Internal dispatch: users should call `norm` instead.
+/// use tenferro_linalg::NormPrimal;
+/// ```
 #[doc(hidden)]
 pub trait NormPrimal<C>: KernelLinalgScalar {
     fn norm_primal(

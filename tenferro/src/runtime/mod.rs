@@ -1,11 +1,15 @@
 mod context;
+#[cfg(test)]
 pub(crate) mod contracts;
+#[cfg(test)]
 pub(crate) mod dispatch;
 
 use crate::Result;
-use tenferro_prims::{CpuContext, CudaContext, RocmContext};
 
-pub use context::DefaultRuntimeGuard;
+/// Guard returned by [`set_default_runtime`].
+///
+/// When dropped, the previous runtime context is restored.
+pub use tenferro_internal_runtime::DefaultRuntimeGuard;
 
 /// Runtime execution context used by builder `.run()` entry points.
 ///
@@ -23,53 +27,7 @@ pub use context::DefaultRuntimeGuard;
 ///
 /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 /// ```
-pub enum RuntimeContext {
-    /// CPU runtime context.
-    Cpu(CpuContext),
-    /// CUDA runtime context.
-    Cuda(CudaContext),
-    /// ROCm runtime context.
-    Rocm(RocmContext),
-}
-
-impl RuntimeContext {
-    /// Returns the runtime name.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use tenferro::RuntimeContext;
-    /// use tenferro_prims::CpuContext;
-    ///
-    /// let rt = RuntimeContext::Cpu(CpuContext::new(1));
-    /// assert_eq!(rt.name(), "cpu");
-    /// ```
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Cpu(_) => "cpu",
-            Self::Cuda(_) => "cuda",
-            Self::Rocm(_) => "rocm",
-        }
-    }
-}
-
-impl From<CpuContext> for RuntimeContext {
-    fn from(value: CpuContext) -> Self {
-        Self::Cpu(value)
-    }
-}
-
-impl From<CudaContext> for RuntimeContext {
-    fn from(value: CudaContext) -> Self {
-        Self::Cuda(value)
-    }
-}
-
-impl From<RocmContext> for RuntimeContext {
-    fn from(value: RocmContext) -> Self {
-        Self::Rocm(value)
-    }
-}
+pub use tenferro_internal_runtime::RuntimeContext;
 
 /// Sets the default runtime context for builder `.run()`.
 ///
@@ -82,7 +40,7 @@ impl From<RocmContext> for RuntimeContext {
 /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
 /// ```
 pub fn set_default_runtime(ctx: RuntimeContext) -> DefaultRuntimeGuard {
-    context::set_runtime_context(ctx)
+    tenferro_internal_runtime::set_default_runtime(ctx)
 }
 
 /// Runs `f` with an explicitly supplied runtime installed for the duration of
@@ -104,8 +62,7 @@ pub fn set_default_runtime(ctx: RuntimeContext) -> DefaultRuntimeGuard {
 /// assert!(out.is_ok());
 /// ```
 pub fn with_runtime<R>(ctx: RuntimeContext, f: impl FnOnce() -> Result<R>) -> Result<R> {
-    let _guard = context::set_runtime_context(ctx);
-    f()
+    tenferro_internal_runtime::with_runtime(ctx, f)
 }
 
 /// Runs `f` with the default runtime context.
@@ -124,8 +81,5 @@ pub fn with_runtime<R>(ctx: RuntimeContext, f: impl FnOnce() -> Result<R>) -> Re
 /// assert_eq!(name, "cpu");
 /// ```
 pub fn with_default_runtime<R>(f: impl FnOnce(&mut RuntimeContext) -> Result<R>) -> Result<R> {
-    context::with_runtime_context(f)
+    tenferro_internal_runtime::with_default_runtime(f)
 }
-
-#[cfg(test)]
-mod tests;

@@ -28,28 +28,36 @@
 //!   [`Tensor::diag`], [`Tensor::diag_embed`], and
 //!   [`Tensor::with_axis_classes`].
 
-mod autograd_api;
 mod core;
 pub mod error;
-pub mod forward_ad;
+#[cfg(test)]
 mod ops;
 pub mod runtime;
 mod scalar_value;
 pub mod snapshot;
+#[cfg(test)]
 mod structured;
+#[cfg(test)]
 mod tape;
 
-pub use autograd_api::{backward, grad, BackwardOptions, GradOptions};
+pub mod forward_ad {
+    pub use tenferro_internal_ad_surface::forward_ad::*;
+}
+
 #[cfg(test)]
-pub(crate) use core::AdValue;
 pub(crate) use core::DynTensorTyped;
 pub use core::{
     AdMode, CholeskyExResult, EigResult, EigenResult, InvExResult, LstsqResult, LuFactorExResult,
     LuFactorResult, LuResult, QrResult, ScalarType, SlogdetResult, SolveExResult, SvdResult,
-    Tensor,
+    Tensor, TensorScalarDowncast,
 };
+#[cfg(test)]
 pub(crate) use core::{AdTensor, DynTensor};
 pub use error::{Error, Result};
 pub use runtime::{set_default_runtime, with_default_runtime, DefaultRuntimeGuard, RuntimeContext};
 pub use scalar_value::ScalarValue;
 pub use tenferro_device::{ComputeDevice, LogicalMemorySpace};
+pub use tenferro_internal_ad_surface::{
+    backward, grad, hvp, BackwardOptions, GradOptions, HvpOptions, HvpResult,
+};
+pub use tenferro_tensor::MemoryOrder;

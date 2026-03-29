@@ -78,11 +78,11 @@ impl<T: Scalar> Semiring for Standard<T> {
 ## Tropical Extensibility
 
 Tropical types (`MaxPlus`, `MinPlus`, `MaxMul`) are in the separate
-`tenferro-tropical` crate, not here. This separation proves that the
+`tenferro-ext-tropical` crate, not here. This separation proves that the
 algebra extension mechanism works for external crates.
 
 ```rust
-// tenferro-tropical crate
+// tenferro-ext-tropical crate
 pub struct MaxPlus<T>(pub T);
 pub struct MaxPlusAlgebra<T>(PhantomData<T>);
 
@@ -174,7 +174,7 @@ Work through these in order; each step unblocks the next.
 5. **Tropical algebras already carry their scalar via `Semiring::Scalar`.**
    - `MaxPlus<T>`, `MinPlus<T>`, etc. define `type Scalar = T` in their
      `Semiring` impls. No special case needed.
-   - Confirm tropical `HasAlgebra` impls are in `tenferro-tropical`, not in
+   - Confirm tropical `HasAlgebra` impls are in `tenferro-ext-tropical`, not in
      `tenferro-algebra`. Tropical types must not leak into the algebra core.
 
 6. **Keep primitive-family method signatures centered on `A::Scalar`.**

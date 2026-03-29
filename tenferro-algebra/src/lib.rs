@@ -18,7 +18,7 @@
 //! External crates define new algebras by implementing `HasAlgebra` for their
 //! scalar types and then implementing the primitive family traits they need
 //! (for example `TensorSemiringCore<MyAlgebra> for CpuBackend`) under the
-//! orphan rule. For example, `tenferro-tropical` defines `MaxPlus<T>`.
+//! orphan rule. For example, `tenferro-ext-tropical` defines `MaxPlus<T>`.
 //!
 //! # Examples
 //!

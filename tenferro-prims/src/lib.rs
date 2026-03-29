@@ -17,6 +17,9 @@
 //!   bool/int casts and `where`
 //! - [`TensorRngPrims`] for dense eager RNG constructors such as `rand` and
 //!   `randn`
+//! - [`TensorIndexingPrims`] for index-based selection, gathering, and
+//!   scattering
+//! - [`TensorSortPrims`] for sort, argsort, and top-k operations
 //!
 //! Most families follow the same plan/execute pattern:
 //!
@@ -65,9 +68,9 @@
 //! let mut ctx = CpuContext::new(4);
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col);
-//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+//! let b = Tensor::<f64>::zeros(&[4, 5], mem, col).unwrap();
+//! let mut c = Tensor::<f64>::zeros(&[3, 5], mem, col).unwrap();
 //!
 //! let desc = SemiringCoreDescriptor::BatchedGemm {
 //!     batch_dims: vec![],
@@ -105,8 +108,8 @@
 //! let mut ctx = CpuContext::new(4);
 //! let col = MemoryOrder::ColumnMajor;
 //! let mem = LogicalMemorySpace::MainMemory;
-//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col);
-//! let mut c = Tensor::<f64>::zeros(&[3], mem, col);
+//! let a = Tensor::<f64>::zeros(&[3, 4], mem, col).unwrap();
+//! let mut c = Tensor::<f64>::zeros(&[3], mem, col).unwrap();
 //!
 //! let desc = ScalarPrimsDescriptor::Reduction {
 //!     modes_a: vec![0, 1],
@@ -188,6 +191,7 @@ mod infra;
 #[cfg(all(feature = "gemm-blas", feature = "provider-inject"))]
 pub mod inject;
 mod shape_helpers;
+pub mod tensor_ops;
 
 // CUDA backend: real implementation when `cuda` feature is enabled,
 // otherwise stub types that return errors.
@@ -205,10 +209,17 @@ pub use cpu::CpuComplexRealPlan;
 #[doc(hidden)]
 pub use cpu::CpuComplexScalePlan;
 #[doc(hidden)]
+pub use cpu::CpuIndexingPlan;
+#[doc(hidden)]
 pub use cpu::CpuScalarPlan;
+#[doc(hidden)]
+pub use cpu::CpuSortPlan;
 pub use cpu::*;
 pub use families::*;
 pub use infra::*;
+
+#[doc(hidden)]
+pub fn print_and_reset_contract_profile() {}
 
 #[cfg(feature = "cuda")]
 pub use cuda::*;
@@ -230,6 +241,13 @@ pub use gpu_stubs::RocmPlan;
 use tenferro_algebra::Scalar;
 use tenferro_device::{Error, Result};
 use tenferro_tensor::Tensor;
+
+/// Reusable typed temporary vector pool exposed through backend contexts.
+#[doc(hidden)]
+pub trait TensorTempPoolContext {
+    fn take_temp_vec<T: Send + 'static>(&mut self, len: usize) -> Vec<T>;
+    fn put_temp_vec<T: Send + 'static>(&mut self, vec: Vec<T>);
+}
 
 // ===========================================================================
 // Helpers for multi-index iteration

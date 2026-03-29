@@ -8,14 +8,28 @@ members = [
     "tenferro-einsum",
     "tenferro-linalg-prims",
     "tenferro-linalg",
+    "tenferro-tensor-compute",
+    "tenferro-dynamic-compute",
     "tenferro-capi",
+    # internal
+    "internal/tenferro-internal-error",
+    "internal/tenferro-internal-runtime",
+    "internal/tenferro-internal-frontend-core",
+    "internal/tenferro-internal-ad-core",
+    "internal/tenferro-internal-ad-ops",
+    "internal/tenferro-internal-ad-linalg",
+    "internal/tenferro-internal-ad-surface",
     # extension
-    "extension/tenferro-tropical",
-    "extension/tenferro-tropical-capi",
-    "extension/tenferro-burn",
-    "extension/tenferro-mdarray",
-    "extension/tenferro-ndarray",
+    "extension/tenferro-ext-tropical",
+    "extension/tenferro-ext-tropical-capi",
+    "extension/tenferro-ext-burn",
+    "extension/tenferro-ext-mdarray",
+    "extension/tenferro-ext-ndarray",
     "tenferro",
+]
+default-members = [
+    "tenferro-tensor",
+    "tenferro-tensor-compute",
 ]
 resolver = "2"
 
@@ -33,9 +47,9 @@ thiserror = "2"
 criterion = "0.5"
 serde = "1"
 serde_json = "1"
-chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs", rev = "b1a17ae458bfd9f8976a12d7302c6abd3db31048" }
-chainrules = { git = "https://github.com/tensor4all/chainrules-rs", rev = "b1a17ae458bfd9f8976a12d7302c6abd3db31048" }
-tidu = { git = "https://github.com/tensor4all/tidu-rs", rev = "cec1690c7d05a1d89433644b8cf6b4047d012c26" }
+chainrules-core = { git = "https://github.com/tensor4all/chainrules-rs", branch = "deferred-hvp-tangents" }
+chainrules = { git = "https://github.com/tensor4all/chainrules-rs", branch = "deferred-hvp-tangents" }
+tidu = { git = "https://github.com/tensor4all/tidu-rs", rev = "ea504cd" }
 strided-view = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-traits = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722" }
 strided-perm = { git = "https://github.com/tensor4all/strided-rs", rev = "ea37986f4d9cb99cfc1f62a1d4aea561cb3a9722", features = ["parallel"] }
@@ -52,3 +66,4 @@ lapack-inject = "0.1.0"
 cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "nvrtc", "dynamic-loading", "cuda-12000"] }
 ndarray = "0.17.2"
 sha2 = "0.10"
+omeco = "0.2.4"

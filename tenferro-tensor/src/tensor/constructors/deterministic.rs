@@ -101,6 +101,10 @@ impl<T: Scalar> Tensor<T> {
 
     /// Create a tensor filled with zeros.
     ///
+    /// Allocates directly on the target device without an intermediate CPU
+    /// buffer. For GPU targets (with the `cuda` feature) this avoids the
+    /// CPU-allocate-then-transfer overhead.
+    ///
     /// # Examples
     ///
     /// ```ignore
@@ -119,17 +123,27 @@ impl<T: Scalar> Tensor<T> {
         order: MemoryOrder,
     ) -> Result<Self> {
         let n_elements: usize = dims.iter().product();
-        Self::finish_allocation(
-            Self::main_memory_contiguous(vec![T::zero(); n_elements], dims, order),
+        let buffer = DataBuffer::zeros_on_device(n_elements, memory_space)?;
+        let strides = crate::layout::compute_contiguous_strides(dims, order);
+        Ok(Self::from_parts(
+            buffer,
+            Arc::from(dims),
+            Arc::from(strides),
+            0,
             memory_space,
-        )
+            None,
+            None,
+            false,
+            None,
+        ))
     }
 
     /// Create a tensor with allocated storage.
     ///
     /// The current safe implementation initializes the backing storage to
     /// zero, which keeps the constructor deterministic while preserving the
-    /// requested layout and device placement.
+    /// requested layout and device placement. For GPU targets this allocates
+    /// uninitialised device memory directly.
     ///
     /// The `*_like` family preserves a row-major layout only when the source
     /// tensor is row-major contiguous and not column-major contiguous.
@@ -152,7 +166,20 @@ impl<T: Scalar> Tensor<T> {
         memory_space: LogicalMemorySpace,
         order: MemoryOrder,
     ) -> Result<Self> {
-        Self::zeros(dims, memory_space, order)
+        let n_elements: usize = dims.iter().product();
+        let buffer = DataBuffer::allocate_uninit_on_device(n_elements, memory_space)?;
+        let strides = crate::layout::compute_contiguous_strides(dims, order);
+        Ok(Self::from_parts(
+            buffer,
+            Arc::from(dims),
+            Arc::from(strides),
+            0,
+            memory_space,
+            None,
+            None,
+            false,
+            None,
+        ))
     }
 
     /// Create a tensor filled with ones.
@@ -204,8 +231,21 @@ impl<T: Scalar> Tensor<T> {
         memory_space: LogicalMemorySpace,
     ) -> Result<Self> {
         let storage_len = Self::required_storage_len(dims, strides, offset)?;
-        let tensor = Self::from_vec(vec![T::zero(); storage_len], dims, strides, offset)?;
-        Self::finish_allocation(tensor, memory_space)
+        // Allocate zeros (not uninit) because the storage may contain gaps
+        // between strided elements that should not hold garbage.
+        let buffer = DataBuffer::zeros_on_device(storage_len, memory_space)?;
+        validate_layout_against_len(dims, strides, offset, buffer.len())?;
+        Ok(Self::from_parts(
+            buffer,
+            Arc::from(dims),
+            Arc::from(strides),
+            offset,
+            memory_space,
+            None,
+            None,
+            false,
+            None,
+        ))
     }
 
     /// Create a tensor filled with `value`.
@@ -263,6 +303,35 @@ impl<T: Scalar> Tensor<T> {
             )));
         }
         Ok(Self::main_memory_contiguous(data.to_vec(), dims, order))
+    }
+
+    /// Create a tensor from a row-major data slice.
+    ///
+    /// This is a convenience wrapper around
+    /// [`from_slice`](Self::from_slice) with `MemoryOrder::RowMajor`.
+    /// It lets NumPy / C users pass data in their natural order while
+    /// tenferro internally stores it in column-major layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `data.len()` does not match the product of `dims`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// // Row-major: data is laid out row by row.
+    /// // [[1, 2],
+    /// //  [3, 4]]
+    /// let t = Tensor::<f64>::from_row_major_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0],
+    ///     &[2, 2],
+    /// ).unwrap();
+    /// assert_eq!(t.dims(), &[2, 2]);
+    /// ```
+    pub fn from_row_major_slice(data: &[T], dims: &[usize]) -> Result<Self> {
+        Self::from_slice(data, dims, MemoryOrder::RowMajor)
     }
 
     /// Create a tensor from an owned `Vec<T>` with explicit layout.

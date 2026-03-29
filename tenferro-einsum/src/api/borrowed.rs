@@ -1,20 +1,23 @@
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 
 use crate::ad::einsum_frule_impl;
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::{execute_nested, execute_tree};
-use crate::execution::pool::BufferPool;
+use crate::execution::pool::with_context_buffer_pool;
 use crate::execution::util::{compute_output_shape, infer_memory_space};
 use crate::planning::tree::ContractionTree;
 use crate::syntax::ellipsis::expand_ellipsis_in_notation;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
 
-use super::canonical::canonicalize_col_major_operands;
+use super::binary::maybe_execute_binary_operands;
+use super::canonical::{canonicalize_col_major_operands_borrowed, CanonicalOperand};
 
 /// Execute einsum using string notation.
 ///
@@ -77,8 +80,9 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
-    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    let shapes: SmallVec<[&[usize]; 4]> = operands.iter().map(|t| t.dims()).collect();
     let expanded_notation = expand_ellipsis_in_notation(subscripts, &shapes)?;
 
     let subs = Subscripts::parse(&expanded_notation)?;
@@ -133,8 +137,15 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
-    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    if let Some(result) =
+        maybe_execute_binary_operands::<Alg, Backend>(ctx, subscripts, operands, size_dict)
+    {
+        return result;
+    }
+
+    let shapes: SmallVec<[&[usize]; 4]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)?;
     einsum_with_plan::<Alg, Backend>(ctx, &tree, operands, size_dict)
 }
@@ -166,8 +177,9 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
-    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    let shapes: SmallVec<[&[usize]; 4]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::from_pairs(subscripts, &shapes, pairs)?;
     einsum_with_plan::<Alg, Backend>(ctx, &tree, operands, size_dict)
 }
@@ -197,6 +209,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let mut sd = tree.size_dict.clone();
     if let Some(extra) = size_dict {
@@ -205,21 +218,25 @@ where
         }
     }
     let output_shape = compute_output_shape(&tree.subscripts.output, &sd)?;
-    let canonical_operands = canonicalize_col_major_operands(operands);
-    let canonical_refs: Vec<&Tensor<Alg::Scalar>> = canonical_operands.iter().collect();
+    let canonical_operands = canonicalize_col_major_operands_borrowed(operands);
+    let canonical_refs: SmallVec<[&Tensor<Alg::Scalar>; 4]> = canonical_operands
+        .iter()
+        .map(CanonicalOperand::as_tensor)
+        .collect();
     let memory_space = infer_memory_space(&canonical_refs)?;
-    let mut output =
-        Tensor::<Alg::Scalar>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor)?;
-    let mut pool = BufferPool::new();
-    execute_tree::<Alg, Backend>(
-        ctx,
-        tree,
-        &canonical_refs,
-        Alg::one(),
-        Alg::zero(),
-        &mut output,
-        &mut pool,
-        true,
-    )?;
-    Ok(output)
+    with_context_buffer_pool(ctx, |ctx, pool| {
+        let mut output =
+            Tensor::<Alg::Scalar>::zeros(&output_shape, memory_space, MemoryOrder::ColumnMajor)?;
+        execute_tree::<Alg, Backend, _>(
+            ctx,
+            tree,
+            &canonical_refs,
+            Alg::one(),
+            Alg::zero(),
+            &mut output,
+            pool,
+            true,
+        )?;
+        Ok(output)
+    })
 }

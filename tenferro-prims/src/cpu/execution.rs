@@ -145,6 +145,7 @@ pub(super) fn execute_semiring_plan<S: Scalar>(
         } => {
             validate_execute_inputs(inputs, 2, "Contract")?;
             execute_contract(
+                ctx,
                 alpha,
                 &view_refs,
                 beta,

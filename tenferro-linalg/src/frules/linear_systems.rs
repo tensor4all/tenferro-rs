@@ -126,9 +126,9 @@ where
 
     // Project dA onto the same triangular structure as A.
     let da_proj = if upper {
-        tangent_a.triu(0)
+        tenferro_prims::tensor_ops::triu(ctx, tangent_a, 0).map_err(to_ad_err)?
     } else {
-        tangent_a.tril(0)
+        tenferro_prims::tensor_ops::tril(ctx, tangent_a, 0).map_err(to_ad_err)?
     };
 
     // proj(dA) @ x

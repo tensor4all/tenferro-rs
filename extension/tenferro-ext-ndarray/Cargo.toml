@@ -1,0 +1,20 @@
+[package]
+name = "tenferro-ext-ndarray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Bridge between ndarray arrays and tenferro tensors."
+
+[features]
+default = []
+frontend = ["dep:tenferro"]
+
+[dependencies]
+ndarray.workspace = true
+num-complex.workspace = true
+tenferro = { path = "../../tenferro", optional = true }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-tensor = { path = "../../tenferro-tensor" }

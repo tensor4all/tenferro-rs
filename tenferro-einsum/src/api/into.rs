@@ -1,17 +1,20 @@
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::Tensor;
 
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::{execute_nested, execute_tree};
-use crate::execution::pool::BufferPool;
+use crate::execution::pool::with_context_buffer_pool;
 use crate::planning::tree::ContractionTree;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
 
-use super::canonical::canonicalize_col_major_operands;
+use super::binary::maybe_execute_binary_operands_into;
+use super::canonical::{canonicalize_col_major_operands_borrowed, CanonicalOperand};
 
 /// Execute einsum using string notation, accumulating into an existing output.
 ///
@@ -39,6 +42,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)?;
     if subscripts.contains('(') {
@@ -92,8 +96,15 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
-    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    if let Some(result) = maybe_execute_binary_operands_into::<Alg, Backend>(
+        ctx, subscripts, operands, alpha, beta, output, size_dict,
+    ) {
+        return result;
+    }
+
+    let shapes: SmallVec<[&[usize]; 4]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::optimize(subscripts, &shapes)?;
     einsum_with_plan_into::<Alg, Backend>(ctx, &tree, operands, alpha, beta, output, size_dict)
 }
@@ -129,8 +140,9 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
-    let shapes: Vec<&[usize]> = operands.iter().map(|t| t.dims()).collect();
+    let shapes: SmallVec<[&[usize]; 4]> = operands.iter().map(|t| t.dims()).collect();
     let tree = ContractionTree::from_pairs(subscripts, &shapes, pairs)?;
     einsum_with_plan_into::<Alg, Backend>(ctx, &tree, operands, alpha, beta, output, size_dict)
 }
@@ -165,19 +177,24 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let _ = size_dict;
-    let canonical_operands = canonicalize_col_major_operands(operands);
-    let canonical_refs: Vec<&Tensor<Alg::Scalar>> = canonical_operands.iter().collect();
-    let mut pool = BufferPool::new();
-    execute_tree::<Alg, Backend>(
-        ctx,
-        tree,
-        &canonical_refs,
-        alpha,
-        beta,
-        output,
-        &mut pool,
-        false,
-    )
+    let canonical_operands = canonicalize_col_major_operands_borrowed(operands);
+    let canonical_refs: SmallVec<[&Tensor<Alg::Scalar>; 4]> = canonical_operands
+        .iter()
+        .map(CanonicalOperand::as_tensor)
+        .collect();
+    with_context_buffer_pool(ctx, |ctx, pool| {
+        execute_tree::<Alg, Backend, _>(
+            ctx,
+            tree,
+            &canonical_refs,
+            alpha,
+            beta,
+            output,
+            pool,
+            false,
+        )
+    })
 }

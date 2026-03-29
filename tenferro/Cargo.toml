@@ -7,16 +7,28 @@ authors.workspace = true
 publish.workspace = true
 description = "AD-aware ergonomic tensor wrapper on top of tenferro APIs."
 
+[lib]
+test = false
+
 [dependencies]
+tenferro-internal-error = { path = "../internal/tenferro-internal-error" }
+tenferro-internal-ad-surface = { path = "../internal/tenferro-internal-ad-surface" }
+tenferro-internal-frontend-core = { path = "../internal/tenferro-internal-frontend-core" }
+tenferro-internal-runtime = { path = "../internal/tenferro-internal-runtime" }
+tenferro-device = { path = "../tenferro-device" }
+tenferro-tensor = { path = "../tenferro-tensor" }
+
+[dev-dependencies]
 num-complex.workspace = true
 num-traits.workspace = true
-thiserror.workspace = true
 chainrules-core.workspace = true
 chainrules.workspace = true
 tidu.workspace = true
+tenferro-internal-ad-core = { path = "../internal/tenferro-internal-ad-core" }
+tenferro-internal-ad-ops = { path = "../internal/tenferro-internal-ad-ops" }
+tenferro-internal-ad-linalg = { path = "../internal/tenferro-internal-ad-linalg" }
+tenferro-dynamic-compute = { path = "../tenferro-dynamic-compute" }
 tenferro-algebra = { path = "../tenferro-algebra" }
-tenferro-device = { path = "../tenferro-device" }
 tenferro-einsum = { path = "../tenferro-einsum" }
 tenferro-prims = { path = "../tenferro-prims" }
-tenferro-tensor = { path = "../tenferro-tensor" }
 tenferro-linalg = { path = "../tenferro-linalg" }

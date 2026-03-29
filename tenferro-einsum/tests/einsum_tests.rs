@@ -1207,7 +1207,12 @@ fn tracked_einsum_hvp_rejects_poisoned_backend_context() {
 
     poison_mutex(&ctx);
 
-    let err = tape.hvp(&loss).err().unwrap();
+    let mut leaf_tangents = std::collections::HashMap::new();
+    leaf_tangents.insert(
+        a.node_id().unwrap(),
+        Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap(),
+    );
+    let err = tape.hvp(&loss, &leaf_tangents).err().unwrap();
     assert!(matches!(err, tidu::AutodiffError::InvalidArgument(msg) if msg.contains("poisoned")));
 }
 
@@ -2451,24 +2456,19 @@ fn einsum_no_fw_grad_unchanged() {
 /// But the forward pass C = A@B, dC = dA@B, and loss = sum(C), dloss = sum(dC).
 /// The pullback sees cotangent = ones (no fw_grad) and primals [A, B] where A has fw_grad.
 /// Reverse einsum for grad_A: einsum("ik,jk->ij", cot, B). Neither cot nor B has fw_grad.
-/// So grad_A should NOT have fw_grad. This is correct: the HVP of a linear function is 0.
-///
 /// For a more interesting case, use loss = sum(C^2) where C = A @ B:
 /// grad_A = 2*C @ B^T, and d(grad_A)/dt = 2*(dA@B)@B^T
 #[test]
 fn hvp_via_fw_grad_composition() {
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
 
     // A = [[1, 3], [2, 4]] (col-major), B = [[5, 7], [6, 8]] (col-major)
-    let mut a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let a_data = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
     let b_data = Tensor::<f64>::from_slice(&[5.0, 6.0, 7.0, 8.0], &[2, 2], COL).unwrap();
-
-    // Tangent direction: dA = ones
-    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
-    a_data.set_fw_grad(da);
 
     let tape = Tape::<Tensor<f64>>::new();
     let a = tape.leaf(a_data.clone());
@@ -2479,8 +2479,13 @@ fn hvp_via_fw_grad_composition() {
     let c = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,jk->ik", &[&a, &b]).unwrap();
     let loss = tracked_einsum::<S, CpuBackend>(ctx.clone(), "ij,ij->", &[&c, &c]).unwrap();
 
-    let grads = tape.pullback(&loss).unwrap();
-    let ga = grads.get(a_id).unwrap();
+    // Tangent direction: dA = ones
+    let da = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
+    let mut leaf_tangents = HashMap::new();
+    leaf_tangents.insert(a_id, da);
+
+    let hvp_result = tape.hvp(&loss, &leaf_tangents).unwrap();
+    let ga = hvp_result.gradients.get(a_id).unwrap();
 
     // grad_A should match 2*C @ B^T
     let c_val = einsum::<S, CpuBackend>(
@@ -2514,7 +2519,6 @@ fn hvp_via_fw_grad_composition() {
     }
 
     // HVP: d(grad_A)/dt = 2*(dA@B)@B^T where dA = ones
-    // dA@B = ones @ B = einsum("ij,jk->ik", ones, B)
     let ones = Tensor::<f64>::ones(&[2, 2], MEM, COL).unwrap();
     let da_b = einsum::<S, CpuBackend>(
         &mut ctx.lock().unwrap(),
@@ -2523,7 +2527,6 @@ fn hvp_via_fw_grad_composition() {
         None,
     )
     .unwrap();
-    // 2*(dA@B)@B^T = einsum("ik,jk->ij", 2*dA_B, B)
     let two_da_b =
         einsum::<S, CpuBackend>(&mut ctx.lock().unwrap(), "ij,->ij", &[&da_b, &two], None).unwrap();
     let expected_hvp = einsum::<S, CpuBackend>(
@@ -2534,9 +2537,7 @@ fn hvp_via_fw_grad_composition() {
     )
     .unwrap();
 
-    // grad_A should carry fw_grad = HVP
-    assert!(ga.has_fw_grad(), "gradient should carry fw_grad for HVP");
-    let hvp = ga.fw_grad().unwrap();
+    let hvp = hvp_result.hvp.get(a_id).unwrap();
     let hvp_data = hvp.buffer().as_slice().unwrap();
     let exp_hvp_data = expected_hvp.buffer().as_slice().unwrap();
     for i in 0..4 {
@@ -2551,21 +2552,19 @@ fn hvp_via_fw_grad_composition() {
 
 #[test]
 fn hvp_via_leaf_with_tangent_tracks_einsum_direction() {
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tidu::Tape;
 
     let ctx = Arc::new(Mutex::new(CpuContext::new(1)));
     let tape = Tape::<Tensor<f64>>::new();
-    let x = tape
-        .leaf_with_tangent(
-            Tensor::<f64>::ones(&[3], MEM, COL).unwrap(),
-            Tensor::<f64>::ones(&[3], MEM, COL).unwrap(),
-        )
-        .unwrap();
+    let x = tape.leaf(Tensor::<f64>::ones(&[3], MEM, COL).unwrap());
     let x_id = x.node_id().unwrap();
 
     let loss = tracked_einsum::<S, CpuBackend>(ctx, "i,i->", &[&x, &x]).unwrap();
-    let hvp = tape.hvp(&loss).unwrap();
+    let mut leaf_tangents = HashMap::new();
+    leaf_tangents.insert(x_id, Tensor::<f64>::ones(&[3], MEM, COL).unwrap());
+    let hvp = tape.hvp(&loss, &leaf_tangents).unwrap();
 
     assert_tensors_close(
         hvp.gradients.get(x_id).unwrap(),
@@ -3249,4 +3248,53 @@ fn einsum_binary_diag_ii_j_to_j() {
     let data = c.buffer().as_slice().unwrap();
     assert_eq!(data[0], 30.0);
     assert_eq!(data[1], 45.0);
+}
+
+#[test]
+fn einsum_rrule_trace_produces_identity_gradient() {
+    let mut ctx = CpuContext::new(1);
+    // A = [[1, 3], [2, 4]] (col-major), trace = 5
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[1.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    assert_eq!(grads.len(), 1);
+    assert_eq!(grads[0].dims(), &[2, 2]);
+    // grad should be identity * cotangent = [[1,0],[0,1]]
+    let g = &grads[0];
+    let vals = to_col_major_vec(g);
+    // col-major logical order: (0,0), (1,0), (0,1), (1,1)
+    assert!((vals[0] - 1.0).abs() < 1e-12, "grad[0,0]={}", vals[0]);
+    assert!((vals[1] - 0.0).abs() < 1e-12, "grad[1,0]={}", vals[1]);
+    assert!((vals[2] - 0.0).abs() < 1e-12, "grad[0,1]={}", vals[2]);
+    assert!((vals[3] - 1.0).abs() < 1e-12, "grad[1,1]={}", vals[3]);
+}
+
+#[test]
+fn einsum_rrule_trace_with_nonunit_cotangent() {
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let cotangent = Tensor::<f64>::from_slice(&[3.0], &[], COL).unwrap();
+    let grads = einsum_rrule::<S, CpuBackend>(&mut ctx, "ii->", &[&a], &cotangent).unwrap();
+    // grad = 3 * I = [[3,0],[0,3]]
+    let vals = to_col_major_vec(&grads[0]);
+    assert!((vals[0] - 3.0).abs() < 1e-12, "grad[0,0]={}", vals[0]);
+    assert!((vals[1] - 0.0).abs() < 1e-12, "grad[1,0]={}", vals[1]);
+    assert!((vals[2] - 0.0).abs() < 1e-12, "grad[0,1]={}", vals[2]);
+    assert!((vals[3] - 3.0).abs() < 1e-12, "grad[1,1]={}", vals[3]);
+}
+
+#[test]
+fn einsum_frule_trace_propagates_tangent() {
+    use tidu::DualValue;
+    let mut ctx = CpuContext::new(1);
+    let a = Tensor::<f64>::from_slice(&[1.0, 2.0, 3.0, 4.0], &[2, 2], COL).unwrap();
+    let da = Tensor::<f64>::from_slice(&[0.1, 0.2, 0.3, 0.4], &[2, 2], COL).unwrap();
+    let dual_a = DualValue::with_tangent(a, da).unwrap();
+    let out = dual_einsum::<S, CpuBackend>(&mut ctx, "ii->", &[&dual_a]).unwrap();
+    // primal: trace = 1 + 4 = 5
+    let primal = out.primal().buffer().as_slice().unwrap()[0];
+    assert!((primal - 5.0).abs() < 1e-12);
+    // tangent: d(trace)/dA . dA = trace(dA) = 0.1 + 0.4 = 0.5
+    let tangent = out.tangent().unwrap().buffer().as_slice().unwrap()[0];
+    assert!((tangent - 0.5).abs() < 1e-12);
 }

@@ -19,7 +19,7 @@ Layer 2: tenferro-tensor
 Dependencies: `tenferro-device`, `tenferro-tensor`, `tenferro-einsum`,
 `tenferro-linalg`.
 
-Tropical extension: `tenferro-tropical-capi` (separate shared library)
+Tropical extension: `tenferro-ext-tropical-capi` (separate shared library)
 reuses `TfeTensorF64` handles and adds tropical einsum functions.
 
 **Error mapping for unsupported AD modes:** `AutodiffError::ModeNotSupported`
@@ -202,7 +202,7 @@ and `float64` dtype today.
 
 ---
 
-## Tropical Extension (tenferro-tropical-capi)
+## Tropical Extension (tenferro-ext-tropical-capi)
 
 Separate shared library reusing `TfeTensorF64` handles. Algebra is
 selected by function name, not tensor type (`MaxPlus<f64>` is
@@ -318,12 +318,12 @@ C headers are generated via `cbindgen` from the two FFI crates:
 ```bash
 cbindgen --config cbindgen.toml --crate tenferro-capi --output tenferro.h
 cbindgen \
-  --config extension/tenferro-tropical-capi/cbindgen.toml \
-  --crate tenferro-tropical-capi \
-  --output tenferro_tropical.h
+  --config extension/tenferro-ext-tropical-capi/cbindgen.toml \
+  --crate tenferro-ext-tropical-capi \
+  --output tenferro_ext_tropical.h
 ```
 
-`tenferro_tropical.h` is the extension header and includes `tenferro.h`.
+`tenferro_ext_tropical.h` is the extension header and includes `tenferro.h`.
 
 ### Symbol Naming
 All public symbols use the `tfe_` prefix. Tropical extension uses `tfe_tropical_` prefix.

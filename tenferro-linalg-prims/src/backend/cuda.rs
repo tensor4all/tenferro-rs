@@ -7,6 +7,7 @@ mod solve;
 mod solve_triangular;
 mod svdvals;
 mod thin_svd;
+#[cfg(any(feature = "cuda", test))]
 mod wrappers;
 
 use num_complex::{Complex32, Complex64};

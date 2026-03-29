@@ -140,10 +140,10 @@ Key point: tenferro's internal `Tape` / `TrackedValue` are **not used**. Only th
 
 ### Crate Structure
 
-The bridge crate `tenferro-burn`:
+The bridge crate `tenferro-ext-burn`:
 
 ```
-tenferro-burn/
+tenferro-ext-burn/
 ├── Cargo.toml
 └── src/
     ├── lib.rs          — TensorNetworkOps trait, public API, checked wrappers
@@ -156,13 +156,13 @@ tenferro-burn/
 
 ```rust
 use burn::tensor::Tensor;
-use tenferro_burn::TensorNetworkOps;
+use tenferro_ext_burn::TensorNetworkOps;
 
 // User-facing function
 pub fn try_einsum<B: TensorNetworkOps, const D: usize>(
     subscripts: &str,
     inputs: Vec<Tensor<B, D>>,
-) -> tenferro_burn::Result<Tensor<B, D>>;
+) -> tenferro_ext_burn::Result<Tensor<B, D>>;
 
 // Used inside a Burn Module
 struct HybridModel<B: TensorNetworkOps> {
@@ -173,7 +173,7 @@ struct HybridModel<B: TensorNetworkOps> {
 impl<B: TensorNetworkOps> HybridModel<B> {
     fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
         let h = self.linear.forward(x);
-        tenferro_burn::einsum("ij,jkl,lm->im", vec![h, self.tn_core.clone(), ...])
+        tenferro_ext_burn::einsum("ij,jkl,lm->im", vec![h, self.tn_core.clone(), ...])
     }
 }
 ```
@@ -239,7 +239,7 @@ tenferro has its own AD engine (`tidu::Tape`), but using two separate AD tapes w
 
 ### Why a separate crate?
 
-`tenferro-burn` depends on both Burn and tenferro-rs. Neither core library should depend on the other. The bridge crate is optional — users who don't need Burn don't pull in the dependency.
+`tenferro-ext-burn` depends on both Burn and tenferro-rs. Neither core library should depend on the other. The bridge crate is optional — users who don't need Burn don't pull in the dependency.
 
 ### Why start with NdArray backend?
 

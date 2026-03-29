@@ -5,6 +5,17 @@ Provides dense tensor types with CPU/GPU support, a cuTENSOR/hipTensor-compatibl
 operation protocol, high-level einsum with N-ary contraction tree optimization,
 and automatic differentiation.
 
+## Workspace Crate Taxonomy
+
+The workspace uses a simple naming rule:
+
+- `end-user public` crates are the primary user-facing entry points
+- `protocol public` crates expose lower-level execution contracts and substrate APIs
+- `internal` crates are internal implementation crates and will use the `tenferro-internal-` prefix
+
+The intent is to make crate choice obvious from the package name and to keep
+implementation-only crates clearly separated from stable public surfaces.
+
 **Current phase**: active implementation. The workspace now has working dense
 CPU functionality, partial/experimental GPU coverage, and a family-based
 primitive execution layer shared across einsum, tropical algebra, and linalg.
@@ -15,6 +26,8 @@ for architecture, API design, and future phase plans.
 ## Workspace Architecture
 
 ```
+Facade: tenferro-tensor-compute  Typed computation facade — re-exports Tensor<T>,
+                                einsum, and linalg from a single crate
 Layer 5: tenferro-capi       C-API (FFI) for Julia/Python: exposes einsum + SVD
                              with stateless rrule/frule (f64 only),
                              DLPack v1.0 zero-copy tensor exchange
@@ -28,6 +41,25 @@ Layer 2: tenferro-tensor     Tensor<T> = DataBuffer + shape + strides,
 Shared:  tenferro-algebra    HasAlgebra trait, Semiring trait, Standard type,
                              Scalar trait, Conjugate trait
          tenferro-device     Device enum, Error/Result types
+Internal: tenferro-internal-error   Internal shared error definitions re-exported
+                                     by public frontend crates where needed
+          tenferro-internal-frontend-core
+                                     Shared dynamic tensor substrate and
+                                     structured-layout helpers for the
+                                     `tenferro*` surface crates
+          tenferro-internal-ad-core  Homogeneous AD tensor state, tape glue,
+                                     and shared operation helpers
+          tenferro-internal-ad-surface
+                                     Dynamic AD surface, eager AD entrypoints,
+                                     and builder-style linalg wrappers
+          tenferro-internal-ad-linalg
+                                     Typed linalg AD bodies and result wiring
+                                     used behind `tenferro`
+          tenferro-internal-ad-ops   Typed scalar/einsum/reduction AD bodies
+                                     and eager helper wiring used behind
+                                     `tenferro`
+          tenferro-internal-runtime Internal runtime default/scope management
+                                     used by `tenferro::runtime`
 
 Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
                              ForwardRule<V> (no tensor deps)
@@ -38,11 +70,16 @@ Extern:  chainrules-core     Core AD traits: Differentiable, ReverseRule<V>,
 Foundation: strided-rs       Independent workspace (used only by tenferro-prims)
                              (strided-traits -> strided-view -> strided-kernel)
 
-Extension:  tenferro-tropical       Tropical semiring operations (MaxPlus, MinPlus, MaxMul)
-            tenferro-tropical-capi  C-API for tropical einsum
-            tenferro-burn           Burn deep learning framework bridge
-            tenferro-mdarray        mdarray multidimensional array bridge
-            tenferro     Dynamic dyadic tensor API and AD runtime bridge
+End-user:   tenferro-tensor         Typed tensor data container
+            tenferro-tensor-compute Typed tensor compute facade
+            tenferro-dynamic-compute Dynamic tensor compute facade without AD
+            tenferro                Dynamic tensor frontend and AD runtime bridge
+
+Extension:  tenferro-ext-tropical       Tropical semiring operations (MaxPlus, MinPlus, MaxMul)
+            tenferro-ext-tropical-capi   C-API for tropical einsum
+            tenferro-ext-burn            Burn deep learning framework bridge
+            tenferro-ext-mdarray         mdarray multidimensional array bridge
+            tenferro-ext-ndarray         ndarray multidimensional array bridge
 ```
 
 ### Dependency Graph
@@ -55,6 +92,21 @@ Small note: this graph omits transitively implied edges by default. If
 information, which keeps the layered structure readable.
 
 ## Crates
+
+<a id="tenferro-tensor-compute"></a>
+### [tenferro-tensor-compute](tenferro_tensor_compute/index.html) <small>(Facade)</small>
+
+Typed tensor computation facade. Re-exports the most commonly used items from
+`tenferro-tensor`, `tenferro-prims`, `tenferro-einsum`, and `tenferro-linalg`
+so downstream users need only a single dependency for `Tensor<T>` computation.
+Start here if you want typed tensors with einsum and linear algebra.
+
+<a id="tenferro-dynamic-compute"></a>
+### [tenferro-dynamic-compute](tenferro_dynamic_compute/index.html) <small>(End-user public)</small>
+
+Dynamic tensor compute facade without autodiff. This crate exposes the
+runtime-dtype `Tensor` surface for users who need mixed-dtype or late-bound
+scalar selection without pulling in tape state or gradient APIs.
 
 <a id="tenferro-capi"></a>
 ### [tenferro-capi](tenferro_capi/index.html) <small>(Layer 5)</small>
@@ -107,10 +159,11 @@ execution.
 ### [tenferro-tensor](tenferro_tensor/index.html) <small>(Layer 2)</small>
 
 `Tensor<T>` type with `DataBuffer` (Rust-owned or externally-owned via DLPack),
-shape/strides metadata, and zero-copy view operations (`permute`, `broadcast`,
-`diagonal`, `reshape`, `select`, `narrow`). `TensorView<'a, T>` for borrowed
-views. Factory functions: `zeros`, `ones`, `eye`. Triangular extraction:
-`tril`, `triu`.
+shape/strides metadata, strict zero-copy view operations (`view`, `permute`,
+`broadcast`, `diagonal`, `select`, `narrow`), and PyTorch-style `reshape`
+that may materialize when a zero-copy view is not possible. `TensorView<'a, T>`
+for borrowed views. Factory functions: `zeros`, `ones`, `eye`. Triangular
+extraction: `tril`, `triu`.
 
 <a id="tenferro-prims"></a>
 ### [tenferro-prims](tenferro_prims/index.html) <small>(Layer 3)</small>
@@ -141,6 +194,55 @@ minimum element type requirements. `Conjugate` trait for complex conjugation
 
 Shared infrastructure: `LogicalMemorySpace` (MainMemory, GpuMemory),
 `ComputeDevice` (Cpu, Cuda, Rocm), workspace-wide `Error`/`Result` types.
+
+<a id="tenferro-internal-error"></a>
+### [tenferro-internal-error](tenferro_internal_error/index.html) <small>(Internal)</small>
+
+Internal shared error crate. Owns common error variants and conversion helpers
+used by public frontend crates, but is not itself a stable end-user surface.
+
+<a id="tenferro-internal-runtime"></a>
+### [tenferro-internal-runtime](tenferro_internal_runtime/index.html) <small>(Internal)</small>
+
+Internal runtime scope management crate. Owns `RuntimeContext`, scoped runtime
+installation helpers, and default-runtime lookup used behind `tenferro::runtime`.
+
+<a id="tenferro-internal-frontend-core"></a>
+### [tenferro-internal-frontend-core](tenferro_internal_frontend_core/index.html) <small>(Internal)</small>
+
+Internal shared dynamic frontend substrate. Owns `DynTensor`, scalar-type
+metadata, structured tensor helpers, and the structured einsum/layout
+machinery used by both `tenferro-dynamic-compute` and the AD-aware `tenferro`
+surface.
+
+<a id="tenferro-internal-ad-core"></a>
+### [tenferro-internal-ad-core](tenferro_internal_ad_core/index.html) <small>(Internal)</small>
+
+Internal AD state crate. Owns `AdTensor<T>`, reverse-tape attachment, snapshot
+plumbing, and the shared AD helper functions used across einsum, scalar,
+reduction, and linalg operation builders.
+
+<a id="tenferro-internal-ad-surface"></a>
+### [tenferro-internal-ad-surface](tenferro_internal_ad_surface/index.html) <small>(Internal)</small>
+
+Internal dynamic AD surface crate. Owns the dynamic `Tensor` enum used by the
+public `tenferro` facade, eager AD entrypoints such as `grad`, `backward`, and
+`forward_ad`, plus the builder-style linalg wrappers that dynamic AD methods
+call through.
+
+<a id="tenferro-internal-ad-linalg"></a>
+### [tenferro-internal-ad-linalg](tenferro_internal_ad_linalg/index.html) <small>(Internal)</small>
+
+Internal typed linalg AD crate. Owns the SVD/QR/LU/eigen/slogdet/solve-family
+builder bodies, eager linalg AD entry points, and typed linalg AD result
+structs that are re-exported through `tenferro`.
+
+<a id="tenferro-internal-ad-ops"></a>
+### [tenferro-internal-ad-ops](tenferro_internal_ad_ops/index.html) <small>(Internal)</small>
+
+Internal typed AD operation crate. Owns the scalar, reduction, and einsum AD
+builder bodies and local pullback helpers that are re-exported through
+`tenferro`.
 
 ## External Crates
 
@@ -174,8 +276,8 @@ top of the same tape model.
 
 ## Extension Crates (extension/)
 
-<a id="tenferro-tropical"></a>
-### [tenferro-tropical](tenferro_tropical/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-tropical"></a>
+### [tenferro-ext-tropical](tenferro_ext_tropical/index.html) <small>(Extension)</small>
 
 Tropical semiring tensor operations. Extends the tenferro algebra-parameterized
 architecture with three tropical semirings: MaxPlus (⊕=max, ⊗=+),
@@ -186,16 +288,16 @@ markers (`MaxPlusAlgebra`, etc.), semiring-family implementations for each
 algebra, and `ArgmaxTracker` for recording winner indices during tropical
 forward passes.
 
-<a id="tenferro-tropical-capi"></a>
-### [tenferro-tropical-capi](tenferro_tropical_capi/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-tropical-capi"></a>
+### [tenferro-ext-tropical-capi](tenferro_ext_tropical_capi/index.html) <small>(Extension)</small>
 
 C-API (FFI) for tropical semiring tensor operations. Extends `tenferro-capi`
 with tropical einsum functions (`tfe_tropical_einsum_<algebra>_f64`) and
 their AD rules (rrule/frule) for MaxPlus, MinPlus, and MaxMul semirings.
 Reuses `TfeTensorF64` handles from `tenferro-capi`.
 
-<a id="tenferro-burn"></a>
-### [tenferro-burn](tenferro_burn/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-burn"></a>
+### [tenferro-ext-burn](tenferro_ext_burn/index.html) <small>(Extension)</small>
 
 Bridge between the [Burn](https://burn.dev) deep learning framework and tenferro
 tensor network operations. Defines `TensorNetworkOps` backend extension trait
@@ -204,8 +306,8 @@ for `Autodiff<B, C>`, and provides both checked (`try_einsum`,
 `try_burn_to_tenferro`, `try_tenferro_to_burn`) and convenience panic-wrapper
 conversion/einsum utilities.
 
-<a id="tenferro-mdarray"></a>
-### [tenferro-mdarray](tenferro_mdarray/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-mdarray"></a>
+### [tenferro-ext-mdarray](tenferro_ext_mdarray/index.html) <small>(Extension)</small>
 
 Bridge between [mdarray](https://crates.io/crates/mdarray) multidimensional
 arrays and tenferro tensors. Provides checked
@@ -213,8 +315,8 @@ arrays and tenferro tensors. Provides checked
 (`mdarray_to_tensor`, `tensor_to_mdarray`) conversion functions for
 bidirectional data exchange between `Array<T, DynRank>` and `Tensor<T>`.
 
-<a id="tenferro-ndarray"></a>
-### [tenferro-ndarray](tenferro_ndarray/index.html) <small>(Extension)</small>
+<a id="tenferro-ext-ndarray"></a>
+### [tenferro-ext-ndarray](tenferro_ext_ndarray/index.html) <small>(Extension)</small>
 
 Bridge between [ndarray](https://docs.rs/ndarray) arrays and tenferro tensors.
 Provides checked (`try_ndarray_to_tensor`, `try_tensor_to_ndarray`) and
@@ -224,7 +326,7 @@ bidirectional data exchange between dense `ndarray` values and
 `try_ndarray_to_frontend(...)` for direct conversion into `tenferro::Tensor`.
 
 <a id="tenferro"></a>
-### [tenferro](tenferro/index.html) <small>(Extension)</small>
+### [tenferro](tenferro/index.html) <small>(End-user public)</small>
 
 User-facing dynamic tensor frontend. `Tensor` is the canonical public tensor
 object; rank-0 tensors act as scalar coefficients, and diagonal or

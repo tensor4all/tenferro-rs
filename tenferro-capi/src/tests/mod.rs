@@ -1,4 +1,5 @@
 mod organization;
+mod row_major_strides_tests;
 
 use std::os::raw::c_void;
 use std::sync::{

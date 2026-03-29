@@ -2,24 +2,21 @@ use std::collections::HashSet;
 
 use tenferro_algebra::{Conjugate, HasAlgebra, Scalar, Semiring};
 use tenferro_device::Result;
+use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::{AdResult, Differentiable, DualValue};
 
 use tenferro_device::LogicalMemorySpace;
 
-use crate::api::{einsum, einsum_with_subscripts};
+use crate::api::{einsum, einsum_with_subscripts, einsum_with_subscripts_into};
 
 /// Creates an `n x n` identity tensor using only `Scalar` (zero/one) bounds.
-fn make_delta<T: Scalar>(n: usize, space: LogicalMemorySpace) -> Result<Tensor<T>> {
+fn make_delta<T: Scalar>(n: usize, _space: LogicalMemorySpace) -> Result<Tensor<T>> {
     let mut data = vec![T::zero(); n * n];
     for i in 0..n {
         data[i * n + i] = T::one();
     }
-    Ok(Tensor::from_slice(
-        &data,
-        &[n, n],
-        MemoryOrder::ColumnMajor,
-    )?)
+    Tensor::from_slice(&data, &[n, n], MemoryOrder::ColumnMajor)
 }
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
@@ -52,6 +49,7 @@ where
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
     Tensor<Alg::Scalar>: Differentiable<Tangent = Tensor<Alg::Scalar>>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let primals: Vec<&Tensor<Alg::Scalar>> = operands.iter().map(|op| op.primal()).collect();
     let output = einsum::<Alg, Backend>(ctx, subscripts, &primals, None)
@@ -92,6 +90,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = operands.len();
@@ -103,12 +102,14 @@ where
 
     for k in 0..n {
         let mut rev_inputs_subs = vec![subs.output.clone()];
-        let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-
+        // Wirtinger VJP: conjugate non-cotangent operands so that the
+        // reverse einsum computes  grad_k = einsum(cot, conj(other_ops)...).
+        // For real scalars conj() is a no-op (zero-cost flag toggle on Tensor).
+        let mut conj_store: Vec<Tensor<Alg::Scalar>> = Vec::new();
         for (i, &op) in operands.iter().enumerate() {
             if i != k {
                 rev_inputs_subs.push(subs.inputs[i].clone());
-                rev_operands.push(op);
+                conj_store.push(op.conj());
             }
         }
 
@@ -117,45 +118,105 @@ where
         // Detect output-only labels: labels that appear in the reverse output
         // but not in any reverse input. This happens when the forward einsum
         // contracted labels that we now need to reconstruct (e.g., trace "ii->").
-        // For each such label, inject an identity (delta) tensor so the reverse
-        // einsum can produce the correct gradient.
         let all_input_labels: HashSet<u32> = rev_inputs_subs
             .iter()
             .flat_map(|labels| labels.iter().copied())
             .collect();
-        let mut unique_missing = Vec::new();
-        {
-            let mut seen = HashSet::new();
-            for &label in &rev_output {
-                if !all_input_labels.contains(&label) && seen.insert(label) {
-                    unique_missing.push(label);
+        let has_output_only = rev_output.iter().any(|l| !all_input_labels.contains(l));
+
+        let grad = if has_output_only {
+            // For subscripts with output-only labels (e.g. trace "ii->"),
+            // the reverse einsum "->ii" is invalid. Build the gradient
+            // directly: cotangent broadcast-multiplied with the appropriate
+            // identity structure.
+            //
+            // Step 1: build a delta tensor whose subscripts cover ALL
+            //         output-only labels with fresh paired indices.
+            // Step 2: einsum the cotangent with any remaining operands and
+            //         the delta, producing a tensor with the right unique
+            //         output labels.
+            // Step 3: use "i->ii" (diagonal embedding) via forward einsum
+            //         if the output has repeated labels.
+            //
+            // For the common single-operand trace "ii->":
+            //   unique output labels = {i}, reverse needs shape [n, n]
+            //   grad = cotangent * eye(n)
+            let unique_output: Vec<u32> = {
+                let mut seen = HashSet::new();
+                rev_output
+                    .iter()
+                    .filter(|l| seen.insert(**l))
+                    .copied()
+                    .collect()
+            };
+            // Build a delta tensor for each missing label
+            let mut delta_subs: Vec<u32> = Vec::new();
+            let mut delta_tensors: Vec<Tensor<Alg::Scalar>> = Vec::new();
+            for &label in &unique_output {
+                if !all_input_labels.contains(&label) {
+                    let dim = *size_dict.get(&label).ok_or_else(|| {
+                        tenferro_device::Error::InvalidArgument(format!(
+                            "einsum rrule: missing dimension for label {}",
+                            label
+                        ))
+                    })?;
+                    let space = operands[0].logical_memory_space();
+                    delta_tensors.push(make_delta::<Alg::Scalar>(dim, space)?);
+                    delta_subs.push(label);
                 }
             }
-        }
+            // Build subscripts: cotangent + conj_ops + deltas -> unique_output
+            let mut fwd_inputs = rev_inputs_subs.clone();
+            for &label in &delta_subs {
+                // delta with subscript [label, label_fresh] where label_fresh
+                // is a new label not used anywhere.
+                let max_label = subs
+                    .inputs
+                    .iter()
+                    .flat_map(|v| v.iter())
+                    .chain(subs.output.iter())
+                    .copied()
+                    .max()
+                    .unwrap_or(0);
+                let fresh = max_label + 1 + (fwd_inputs.len() as u32);
+                fwd_inputs.push(vec![label, fresh]);
+            }
+            let fwd_subs = Subscripts {
+                inputs: fwd_inputs,
+                output: unique_output.clone(),
+            };
+            let mut fwd_ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
+            for c in &conj_store {
+                fwd_ops.push(c);
+            }
+            for dt in &delta_tensors {
+                fwd_ops.push(dt);
+            }
+            // This gives a tensor with unique_output labels
+            let base = einsum_with_subscripts::<Alg, Backend>(ctx, &fwd_subs, &fwd_ops, None)?;
 
-        let mut delta_tensors: Vec<Tensor<Alg::Scalar>> = Vec::new();
-        for &label in &unique_missing {
-            let dim = *size_dict.get(&label).ok_or_else(|| {
-                tenferro_device::Error::InvalidArgument(format!(
-                    "einsum rrule: missing dimension for label {}",
-                    label
-                ))
-            })?;
-            let space = operands[0].logical_memory_space();
-            let eye = make_delta::<Alg::Scalar>(dim, space)?;
-            rev_inputs_subs.push(vec![label, label]);
-            delta_tensors.push(eye);
-        }
-        for dt in &delta_tensors {
-            rev_operands.push(dt);
-        }
-
-        let rev_subs = Subscripts {
-            inputs: rev_inputs_subs,
-            output: rev_output,
+            // If unique_output != rev_output, need diagonal embedding
+            if unique_output == rev_output {
+                base
+            } else {
+                // Diagonal embedding: e.g. "i->ii"
+                let embed_subs = Subscripts {
+                    inputs: vec![unique_output],
+                    output: rev_output.clone(),
+                };
+                einsum_with_subscripts::<Alg, Backend>(ctx, &embed_subs, &[&base], None)?
+            }
+        } else {
+            let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
+            for c in &conj_store {
+                rev_operands.push(c);
+            }
+            let rev_subs = Subscripts {
+                inputs: rev_inputs_subs,
+                output: rev_output,
+            };
+            einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?
         };
-
-        let grad = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
         grads.push(grad);
     }
 
@@ -186,6 +247,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)?;
     let nested = if subscripts.contains('(') {
@@ -208,6 +270,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let n = primals.len();
     let mut result: Option<Tensor<Alg::Scalar>> = None;
@@ -217,16 +280,40 @@ where
             let mut ops: Vec<&Tensor<Alg::Scalar>> = primals.to_vec();
             ops[k] = tangent_k;
 
-            let term = if let Some(nested) = nested {
-                execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?
-            } else {
-                einsum_with_subscripts::<Alg, Backend>(ctx, subs, &ops, None)?
-            };
-
-            result = Some(match result {
-                None => term,
-                Some(existing) => Tensor::<Alg::Scalar>::accumulate_tangent(existing, &term),
-            });
+            match &mut result {
+                None => {
+                    let term = if let Some(nested) = nested {
+                        execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?
+                    } else {
+                        einsum_with_subscripts::<Alg, Backend>(ctx, subs, &ops, None)?
+                    };
+                    result = Some(term);
+                }
+                Some(existing) => {
+                    let one = <Alg::Scalar as num_traits::One>::one();
+                    if let Some(nested) = nested {
+                        // Nested einsum does not support _into; materialize then
+                        // accumulate via an identity contraction (the nested tree
+                        // may have fewer roots than `subs.inputs`).
+                        let term = execute_nested::<Alg, Backend>(ctx, nested, &ops, None)?;
+                        let out_labels: &[u32] = &subs.output;
+                        let identity_subs = Subscripts::new(&[out_labels], out_labels);
+                        einsum_with_subscripts_into::<Alg, Backend>(
+                            ctx,
+                            &identity_subs,
+                            &[&term],
+                            one,
+                            one,
+                            existing,
+                            None,
+                        )?;
+                    } else {
+                        einsum_with_subscripts_into::<Alg, Backend>(
+                            ctx, subs, &ops, one, one, existing, None,
+                        )?;
+                    }
+                }
+            }
         }
     }
 
@@ -279,6 +366,7 @@ where
     Alg: Semiring,
     Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
     Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
 {
     let subs = Subscripts::parse(subscripts)?;
     let n = primals.len();
@@ -286,11 +374,17 @@ where
     let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None)?;
     let mut results = Vec::with_capacity(n);
 
+    let shapes: Vec<&[usize]> = primals.iter().map(|op| op.dims()).collect();
+    let size_dict = crate::execution::util::build_size_dict(&subs, &shapes, None)?;
+
     for k in 0..n {
         let mut rev_inputs_subs = vec![subs.output.clone()];
-        for (i, _) in primals.iter().enumerate() {
+        // Wirtinger VJP: conjugate non-cotangent operands (same as einsum_rrule).
+        let mut conj_store: Vec<Tensor<Alg::Scalar>> = Vec::new();
+        for (i, &op) in primals.iter().enumerate() {
             if i != k {
                 rev_inputs_subs.push(subs.inputs[i].clone());
+                conj_store.push(op.conj());
             }
         }
 
@@ -330,10 +424,11 @@ where
         };
 
         let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-        for (i, &op) in primals.iter().enumerate() {
-            if i != k {
-                rev_operands.push(op);
-            }
+        for c in &conj_store {
+            rev_operands.push(c);
+        }
+        for dt in &delta_tensors {
+            rev_operands.push(dt);
         }
         for dt in &delta_tensors {
             rev_operands.push(dt);
@@ -341,10 +436,11 @@ where
         let grad_k = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
 
         let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent_tangent];
-        for (i, &op) in primals.iter().enumerate() {
-            if i != k {
-                ops.push(op);
-            }
+        for c in &conj_store {
+            ops.push(c);
+        }
+        for dt in &delta_tensors {
+            ops.push(dt);
         }
         for dt in &delta_tensors {
             ops.push(dt);
@@ -359,19 +455,30 @@ where
             }
             if let Some(tangent_j) = *tangent_j_opt {
                 let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-                for (i, &op) in primals.iter().enumerate() {
+                // conj_store has one entry per i != k, in order.
+                let mut ci = 0;
+                for (i, _) in primals.iter().enumerate() {
                     if i != k {
-                        ops.push(if i == j { tangent_j } else { op });
+                        ops.push(if i == j { tangent_j } else { &conj_store[ci] });
+                        ci += 1;
                     }
                 }
                 for dt in &delta_tensors {
                     ops.push(dt);
                 }
-                let term = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &ops, None)?;
-                hvp_k = Some(match hvp_k {
-                    None => term,
-                    Some(existing) => Tensor::<Alg::Scalar>::accumulate_tangent(existing, &term),
-                });
+                match &mut hvp_k {
+                    None => {
+                        hvp_k = Some(einsum_with_subscripts::<Alg, Backend>(
+                            ctx, &rev_subs, &ops, None,
+                        )?);
+                    }
+                    Some(existing) => {
+                        let one = <Alg::Scalar as num_traits::One>::one();
+                        einsum_with_subscripts_into::<Alg, Backend>(
+                            ctx, &rev_subs, &ops, one, one, existing, None,
+                        )?;
+                    }
+                }
             }
         }
 

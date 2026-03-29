@@ -1,0 +1,14 @@
+language = "C"
+pragma_once = true
+cpp_compat = true
+usize_is_size_t = true
+documentation = true
+style = "Both"
+include_guard = "TENFERRO_EXT_TROPICAL_H"
+sort_by = "Name"
+sys_includes = ["stdbool.h", "stddef.h", "stdint.h"]
+includes = ["tenferro.h"]
+
+[parse]
+clean = true
+parse_deps = false

@@ -2,12 +2,13 @@ use std::collections::HashMap;
 
 use tenferro_algebra::{HasAlgebra, Scalar, Semiring};
 use tenferro_device::{Error, LogicalMemorySpace, Result};
-use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore};
+use tenferro_prims::{SemiringCoreDescriptor, TensorSemiringCore, TensorTempPoolContext};
 use tenferro_tensor::Tensor;
 
 use crate::execution::backend::BackendContext;
-use crate::execution::pool::BufferPool;
+use crate::execution::pool::TensorBufferPool;
 use crate::execution::util::alloc_tensor_from_pool;
+use crate::layout::try_fuse_group_in_target_order;
 use crate::planning::classify::compute_permutation;
 
 #[cfg(feature = "profile-dispatch")]
@@ -35,42 +36,8 @@ fn record_prepare_fallback(dims: &[usize]) {
     PREPARE_FALLBACK_ELEMS.fetch_add(n_elems as u64, Ordering::Relaxed);
 }
 
-pub(crate) fn try_fuse_group_in_target_order(
-    dims: &[usize],
-    strides: &[isize],
-) -> Option<(usize, isize)> {
-    match dims.len() {
-        0 => Some((1, 0)),
-        1 => Some((dims[0], strides[0])),
-        _ => {
-            if dims.len() != strides.len() {
-                return None;
-            }
-
-            let first_non_singleton = dims.iter().position(|&d| d > 1);
-            let Some(base_idx) = first_non_singleton else {
-                return Some((dims.iter().product(), *strides.first().unwrap_or(&0)));
-            };
-
-            let base_stride = strides[base_idx];
-            let mut expected_abs = base_stride.unsigned_abs();
-            for (&dim, &stride) in dims.iter().zip(strides.iter()) {
-                if dim <= 1 {
-                    continue;
-                }
-                if stride.unsigned_abs() != expected_abs {
-                    return None;
-                }
-                expected_abs = expected_abs.checked_mul(dim)?;
-            }
-
-            Some((dims.iter().product(), base_stride))
-        }
-    }
-}
-
 /// Prepare a single operand for GEMM: permute and try to fuse dimension groups.
-pub(crate) fn prepare_one_operand<A, B>(
+pub(crate) fn prepare_one_operand<A, B, P>(
     ctx: &mut BackendContext<A, B>,
     tensor: &Tensor<A::Scalar>,
     current_subs: &[u32],
@@ -79,19 +46,21 @@ pub(crate) fn prepare_one_operand<A, B>(
     n_group1: usize,
     n_group2: usize,
     fallback_shape: &[usize],
-    pool: &mut BufferPool<A::Scalar>,
+    pool: &mut P,
 ) -> Result<Tensor<A::Scalar>>
 where
     A: Semiring,
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
     B: TensorSemiringCore<A>,
+    BackendContext<A, B>: TensorTempPoolContext,
+    P: TensorBufferPool<A::Scalar> + ?Sized,
 {
     // Step 1: Permute (metadata-only, zero-copy)
     let permuted = if current_subs == target_subs {
         tensor.clone()
     } else {
-        let perm = compute_permutation(current_subs, target_subs)
-            .map_err(|e| Error::InvalidArgument(e))?;
+        let perm =
+            compute_permutation(current_subs, target_subs).map_err(Error::InvalidArgument)?;
         tensor.permute(&perm)?
     };
 
@@ -139,7 +108,7 @@ where
             partial_strides.extend_from_slice(g2_strides);
             partial_strides.extend_from_slice(batch_strides);
             let partial = permuted.view_as_strided(partial_dims, partial_strides)?;
-            let contiguous = make_contiguous_if_needed::<A, B>(ctx, &partial, pool)?;
+            let contiguous = make_contiguous_if_needed::<A, B, P>(ctx, &partial, pool)?;
             contiguous.reshape(fallback_shape)
         }
         (None, Some((size2, stride2))) => {
@@ -156,7 +125,7 @@ where
             partial_strides.push(stride2);
             partial_strides.extend_from_slice(batch_strides);
             let partial = permuted.view_as_strided(partial_dims, partial_strides)?;
-            let contiguous = make_contiguous_if_needed::<A, B>(ctx, &partial, pool)?;
+            let contiguous = make_contiguous_if_needed::<A, B, P>(ctx, &partial, pool)?;
             contiguous.reshape(fallback_shape)
         }
         (None, None) => {
@@ -164,7 +133,7 @@ where
             // layout, then reshape for GEMM.
             #[cfg(feature = "profile-dispatch")]
             record_prepare_fallback(dims);
-            let contiguous = make_contiguous_if_needed::<A, B>(ctx, &permuted, pool)?;
+            let contiguous = make_contiguous_if_needed::<A, B, P>(ctx, &permuted, pool)?;
             contiguous.reshape(fallback_shape)
         }
     }
@@ -174,21 +143,23 @@ where
 /// only when the result is non-contiguous. Falls back to MakeContiguous when
 /// `current_subs == target_subs`.
 #[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn permute_or_copy<A, B>(
+pub(crate) fn permute_or_copy<A, B, P>(
     ctx: &mut BackendContext<A, B>,
     tensor: &Tensor<A::Scalar>,
     current_subs: &[u32],
     target_subs: &[u32],
-    pool: &mut BufferPool<A::Scalar>,
+    pool: &mut P,
 ) -> Result<Tensor<A::Scalar>>
 where
     A: Semiring,
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
     B: TensorSemiringCore<A>,
+    BackendContext<A, B>: TensorTempPoolContext,
+    P: TensorBufferPool<A::Scalar> + ?Sized,
 {
     if current_subs == target_subs {
         // No permutation needed; ensure contiguous
-        return make_contiguous_if_needed::<A, B>(ctx, tensor, pool);
+        return make_contiguous_if_needed::<A, B, P>(ctx, tensor, pool);
     }
 
     // Build axis permutation: where does each target label come from?
@@ -209,7 +180,8 @@ where
 
     // Otherwise copy to a contiguous pooled buffer
     let memory_space = tensor.logical_memory_space();
-    let mut contiguous = alloc_tensor_from_pool::<A::Scalar>(view.dims(), memory_space, pool)?;
+    let mut contiguous =
+        alloc_tensor_from_pool::<A::Scalar, _, _>(ctx, view.dims(), memory_space, pool)?;
     let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [view.dims(), contiguous.dims()];
     let plan = <B as TensorSemiringCore<A>>::plan(ctx, &desc, &shapes)?;
@@ -225,15 +197,17 @@ where
 }
 
 /// Ensure a tensor is contiguous, copying if necessary.
-pub(crate) fn make_contiguous_if_needed<A, B>(
+pub(crate) fn make_contiguous_if_needed<A, B, P>(
     ctx: &mut BackendContext<A, B>,
     tensor: &Tensor<A::Scalar>,
-    pool: &mut BufferPool<A::Scalar>,
+    pool: &mut P,
 ) -> Result<Tensor<A::Scalar>>
 where
     A: Semiring,
     A::Scalar: Scalar + HasAlgebra<Algebra = A>,
     B: TensorSemiringCore<A>,
+    BackendContext<A, B>: TensorTempPoolContext,
+    P: TensorBufferPool<A::Scalar> + ?Sized,
 {
     if tensor.is_col_major_contiguous() {
         return Ok(tensor.clone());
@@ -244,8 +218,12 @@ where
     if tensor.logical_memory_space() == LogicalMemorySpace::MainMemory {
         if let Some(src_data) = tensor.buffer().as_slice() {
             let dims = tensor.dims();
-            let mut result =
-                alloc_tensor_from_pool::<A::Scalar>(dims, LogicalMemorySpace::MainMemory, pool)?;
+            let mut result = alloc_tensor_from_pool::<A::Scalar, _, _>(
+                ctx,
+                dims,
+                LogicalMemorySpace::MainMemory,
+                pool,
+            )?;
 
             let src =
                 strided_view::StridedView::new(src_data, dims, tensor.strides(), tensor.offset())
@@ -272,7 +250,8 @@ where
     }
 
     let memory_space = tensor.logical_memory_space();
-    let mut result = alloc_tensor_from_pool::<A::Scalar>(tensor.dims(), memory_space, pool)?;
+    let mut result =
+        alloc_tensor_from_pool::<A::Scalar, _, _>(ctx, tensor.dims(), memory_space, pool)?;
     let desc = SemiringCoreDescriptor::MakeContiguous;
     let shapes = [tensor.dims(), result.dims()];
     let plan = <B as TensorSemiringCore<A>>::plan(ctx, &desc, &shapes)?;

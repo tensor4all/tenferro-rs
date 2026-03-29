@@ -40,7 +40,7 @@ Status labels in the matrix use:
 
 | Family | Primal | VJP | JVP | Oracle-HVP | CPU/GPU generic | Layer-clean | Notes |
 |--------|--------|-----|-----|------------|-----------------|-------------|-------|
-| Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | `permute`, `reshape`, `broadcast`, and `diagonal` exist as tensor views; AD coverage is not yet documented as a first-class family surface |
+| Structural (`tenferro-tensor`) | Yes | Partial | Partial | No | Yes | Yes | `view`, `permute`, `broadcast`, and `diagonal` are zero-copy tensor views, while `reshape` now follows PyTorch-style view-or-copy semantics; AD coverage is not yet documented as a first-class family surface |
 | Semiring core / fast path (`tenferro-prims`) | Yes | Partial | Partial | Yes | Partial | Yes | `einsum` is strong, `Permute` is gone from the prim surface, and semiring execution now routes directly through the family contracts; the remaining gap is GPU capability breadth, not legacy layering |
 | Scalar (`TensorScalarPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Neg/Conj/Abs/Reciprocal/Real/Imag/Square`, binary `Add/Sub/Mul/Div/Maximum/Minimum/Clamp*`, and reductions `Sum/Prod/Mean/Max/Min`; predicate/select tensor ops such as `where` are still absent |
 | Analytic (`TensorAnalyticPrims`) | Partial | Partial | Partial | No | Partial | Partial | CPU phase 1 now executes unary `Sqrt/Rsqrt/Exp/Expm1/Log/Log1p/Sin/Cos/Tan/Tanh/Asin/Acos/Atan/Sinh/Cosh/Asinh/Acosh/Atanh`, binary `Pow/Atan2/Hypot/Xlogy`, and reductions `Var/Std`; GPU custom-kernel coverage is still absent |

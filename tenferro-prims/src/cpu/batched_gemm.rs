@@ -196,6 +196,7 @@ pub(super) fn execute_batched_gemm_contiguous<T: Scalar + 'static>(
 #[cfg(feature = "gemm-faer")]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_batched_gemm_strided<T: FaerGemm>(
+    ctx: &CpuContext,
     alpha: T,
     inputs: &[&StridedView<T>],
     beta: T,
@@ -224,70 +225,98 @@ pub(super) fn execute_batched_gemm_strided<T: FaerGemm>(
     let a_ptr = a.ptr();
     let b_ptr = b.ptr();
     let c_ptr = output.as_mut_ptr();
+    let a_addr = a_ptr as usize;
+    let b_addr = b_ptr as usize;
+    let c_addr = c_ptr as usize;
 
-    let do_batch = |a_off: isize, b_off: isize, c_off: isize| unsafe {
-        T::strided_gemm(
-            alpha,
-            a_ptr.offset(a_off),
-            m,
-            k,
-            a_row,
-            a_col,
-            b_ptr.offset(b_off),
-            n,
-            b_row,
-            b_col,
-            beta,
-            c_ptr.offset(c_off),
-            c_row,
-            c_col,
-        );
-    };
-
-    if nb == 0 {
-        do_batch(0, 0, 0);
-    } else {
-        let a_fused = try_fuse_group_in_order(batch_dims, a_batch);
-        let b_fused = try_fuse_group_in_order(batch_dims, b_batch);
-        let c_fused = try_fuse_group_in_order(batch_dims, c_batch);
-        let total = batch_iteration_count(batch_dims)?;
-
-        if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
-            (a_fused, b_fused, c_fused)
-        {
-            let mut a_off = 0isize;
-            let mut b_off = 0isize;
-            let mut c_off = 0isize;
-            for _ in 0..total {
-                do_batch(a_off, b_off, c_off);
-                a_off = advance_batch_offset(a_off, a_step)?;
-                b_off = advance_batch_offset(b_off, b_step)?;
-                c_off = advance_batch_offset(c_off, c_step)?;
+    ctx.install(move || {
+        let a_ptr = a_addr as *const T;
+        let b_ptr = b_addr as *const T;
+        let c_ptr = c_addr as *mut T;
+        if nb == 0 {
+            unsafe {
+                T::strided_gemm(
+                    alpha, a_ptr, m, k, a_row, a_col, b_ptr, n, b_row, b_col, beta, c_ptr, c_row,
+                    c_col,
+                );
             }
         } else {
-            let mut idx = vec![0usize; nb];
-            for flat in 0..total {
-                let a_off = batch_offset(flat, &idx, a_fused, a_batch)?;
-                let b_off = batch_offset(flat, &idx, b_fused, b_batch)?;
-                let c_off = batch_offset(flat, &idx, c_fused, c_batch)?;
-                do_batch(a_off, b_off, c_off);
+            let a_fused = try_fuse_group_in_order(batch_dims, a_batch);
+            let b_fused = try_fuse_group_in_order(batch_dims, b_batch);
+            let c_fused = try_fuse_group_in_order(batch_dims, c_batch);
+            let total = batch_iteration_count(batch_dims)?;
 
-                if flat + 1 < total {
-                    for ax in 0..nb {
-                        let next = idx[ax] + 1;
-                        if next < batch_dims[ax] {
-                            idx[ax] = next;
-                            break;
-                        } else {
-                            idx[ax] = 0;
+            if let (Some((_, a_step)), Some((_, b_step)), Some((_, c_step))) =
+                (a_fused, b_fused, c_fused)
+            {
+                let mut a_off = 0isize;
+                let mut b_off = 0isize;
+                let mut c_off = 0isize;
+                for _ in 0..total {
+                    unsafe {
+                        T::strided_gemm(
+                            alpha,
+                            a_ptr.offset(a_off),
+                            m,
+                            k,
+                            a_row,
+                            a_col,
+                            b_ptr.offset(b_off),
+                            n,
+                            b_row,
+                            b_col,
+                            beta,
+                            c_ptr.offset(c_off),
+                            c_row,
+                            c_col,
+                        );
+                    }
+                    a_off = advance_batch_offset(a_off, a_step)?;
+                    b_off = advance_batch_offset(b_off, b_step)?;
+                    c_off = advance_batch_offset(c_off, c_step)?;
+                }
+            } else {
+                let mut idx = vec![0usize; nb];
+                for flat in 0..total {
+                    let a_off = batch_offset(flat, &idx, a_fused, a_batch)?;
+                    let b_off = batch_offset(flat, &idx, b_fused, b_batch)?;
+                    let c_off = batch_offset(flat, &idx, c_fused, c_batch)?;
+                    unsafe {
+                        T::strided_gemm(
+                            alpha,
+                            a_ptr.offset(a_off),
+                            m,
+                            k,
+                            a_row,
+                            a_col,
+                            b_ptr.offset(b_off),
+                            n,
+                            b_row,
+                            b_col,
+                            beta,
+                            c_ptr.offset(c_off),
+                            c_row,
+                            c_col,
+                        );
+                    }
+
+                    if flat + 1 < total {
+                        for ax in 0..nb {
+                            let next = idx[ax] + 1;
+                            if next < batch_dims[ax] {
+                                idx[ax] = next;
+                                break;
+                            } else {
+                                idx[ax] = 0;
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -316,7 +345,17 @@ pub(super) fn execute_batched_gemm<T: Scalar + 'static>(
 
         #[cfg(feature = "gemm-faer")]
         {
-            return execute_batched_gemm_strided(alpha, &[a, b], beta, out, batch_dims, m, n, k);
+            return execute_batched_gemm_strided(
+                _ctx,
+                alpha,
+                &[a, b],
+                beta,
+                out,
+                batch_dims,
+                m,
+                n,
+                k,
+            );
         }
         #[cfg(all(feature = "gemm-blas", not(feature = "gemm-faer")))]
         {

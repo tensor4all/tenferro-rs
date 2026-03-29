@@ -1,0 +1,18 @@
+[package]
+name = "tenferro-ext-burn"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Bridge between Burn deep learning framework and tenferro tensor network operations."
+
+[dependencies]
+tenferro-tensor = { path = "../../tenferro-tensor" }
+tenferro-einsum = { path = "../../tenferro-einsum" }
+tenferro-prims = { path = "../../tenferro-prims" }
+tenferro-device = { path = "../../tenferro-device" }
+tenferro-algebra = { path = "../../tenferro-algebra" }
+
+burn = { version = "=0.21.0-pre.1", default-features = false, features = ["ndarray", "autodiff"] }
+thiserror.workspace = true

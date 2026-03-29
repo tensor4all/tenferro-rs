@@ -152,9 +152,40 @@ where
     C::Backend: 'static,
 {
     let result = <C::Backend as backend::TensorLinalgBackend<T>>::qr(ctx, tensor)?;
+    let (m, n, batch_dims) = validate_2d(tensor)?;
+    let k = m.min(n);
+    let bc = batch_count(batch_dims);
+    let (mut q_data, _) =
+        extract_data(&result.q).map_err(|e| Error::InvalidArgument(e.to_string()))?;
+    let (mut r_data, _) =
+        extract_data(&result.r).map_err(|e| Error::InvalidArgument(e.to_string()))?;
+
+    for batch in 0..bc {
+        let q_base = batch * m * k;
+        let r_base = batch * k * n;
+        for i in 0..k {
+            let diag = r_data[r_base + i + i * k];
+            if diag.imag_part() == T::Real::zero() {
+                continue;
+            }
+            let mag = diag.abs_real();
+            if mag == T::Real::zero() {
+                continue;
+            }
+            let phase = diag / T::from_real(mag);
+            for row in 0..m {
+                q_data[q_base + row + i * m] = q_data[q_base + row + i * m] * phase;
+            }
+            let phase_inv = phase.conj();
+            for col in 0..n {
+                r_data[r_base + i + col * k] = r_data[r_base + i + col * k] * phase_inv;
+            }
+        }
+    }
+
     Ok(QrResult {
-        q: result.q,
-        r: result.r,
+        q: tensor_from_data(q_data, result.q.dims())?,
+        r: tensor_from_data(r_data, result.r.dims())?,
     })
 }
 
@@ -225,6 +256,21 @@ where
 }
 
 /// Compute the packed LU factorization of a batched matrix.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 1.0, 1.0, 3.0], &[2, 2], col).unwrap();
+/// let result = lu_factor(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.pivots.len(), 2);
+/// ```
 pub fn lu_factor<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
@@ -242,6 +288,21 @@ where
 }
 
 /// Compute the packed LU factorization with numerical status information.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::lu_factor_ex;
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 1.0, 1.0, 3.0], &[2, 2], col).unwrap();
+/// let result = lu_factor_ex(&mut ctx, &a).unwrap();
+/// assert_eq!(result.factors.dims(), &[2, 2]);
+/// assert_eq!(result.info.len(), 1);
+/// ```
 pub fn lu_factor_ex<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
@@ -264,6 +325,22 @@ where
 }
 
 /// Solve `A x = b` from a packed LU factorization.
+///
+/// # Examples
+///
+/// ```
+/// use tenferro_linalg::{lu_factor, lu_solve};
+/// use tenferro_prims::CpuContext;
+/// use tenferro_tensor::{MemoryOrder, Tensor};
+///
+/// let mut ctx = CpuContext::new(1);
+/// let col = MemoryOrder::ColumnMajor;
+/// let a = Tensor::<f64>::from_slice(&[2.0, 1.0, 1.0, 3.0], &[2, 2], col).unwrap();
+/// let lu = lu_factor(&mut ctx, &a).unwrap();
+/// let b = Tensor::<f64>::from_slice(&[5.0, 7.0], &[2], col).unwrap();
+/// let x = lu_solve(&mut ctx, &lu.factors, &lu.pivots, &b).unwrap();
+/// assert_eq!(x.dims(), &[2]);
+/// ```
 pub fn lu_solve<T: KernelLinalgScalar, C>(
     ctx: &mut C,
     factors: &Tensor<T>,
@@ -287,7 +364,7 @@ where
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```
 /// use tenferro_device::LogicalMemorySpace;
 /// use tenferro_linalg::eigen;
 /// use tenferro_prims::CpuContext;

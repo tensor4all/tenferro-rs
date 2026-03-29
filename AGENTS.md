@@ -93,6 +93,21 @@ a developer reading `src/**` should not need to scroll through large unit-test
 blocks to understand the implementation. Prefer splitting larger extracted test
 suites by concern rather than keeping one monolithic test module.
 
+Tests follow implementation ownership.
+
+- Public facade crates should prefer integration tests for user-visible
+  behavior.
+- Private implementation details must be tested in the crate that owns the
+  implementation, typically an internal crate, not through a public facade
+  crate.
+- If a crate sets `[lib] test = false`, do not add `src/**/tests`, inline
+  `#[cfg(test)] mod tests`, or other crate-local unit-test entrypoints to that
+  crate.
+- If a private helper in a facade crate needs direct unit testing, move that
+  helper into the owning internal crate instead of re-enabling facade-crate lib
+  tests.
+- This rule is enforced by repository contract tests and must stay green in CI.
+
 ### ASCII Diagrams
 
 When writing ASCII flow diagrams or box diagrams in documentation or design docs:

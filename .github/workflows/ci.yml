@@ -34,8 +34,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Run tests
-        run: cargo test --workspace --release
+      - uses: taiki-e/install-action@nextest
+      - name: Run unit and integration tests
+        run: cargo nextest run --workspace --release --no-fail-fast
+      - name: Run doc tests
+        run: cargo test --doc --workspace --release
 
   test-inject-prims:
     name: cargo test (prims inject)

@@ -1,7 +1,7 @@
 use std::any::TypeId;
 
 use num_complex::{Complex32, Complex64};
-use tenferro_algebra::{Conjugate, Scalar};
+use tenferro_algebra::Scalar;
 #[cfg(feature = "cuda")]
 use tenferro_device::LogicalMemorySpace;
 use tenferro_device::{checked_batch_count, unflatten_col_major_index_into};
@@ -15,7 +15,105 @@ enum TriangularHalf {
     Upper,
 }
 
+impl<T> Tensor<T> {
+    /// Return a lazily-conjugated tensor (shared buffer, flag flip).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use num_complex::Complex64;
+    ///
+    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
+    /// let a = Tensor::from_slice(&data, &[2], MemoryOrder::ColumnMajor).unwrap();
+    /// let a_conj = a.conj();
+    /// assert!(a_conj.is_conjugated());
+    /// ```
+    pub fn conj(&self) -> Tensor<T>
+    where
+        T: tenferro_algebra::Conjugate,
+    {
+        Tensor::from_parts(
+            self.buffer.clone(),
+            self.dims.clone(),
+            self.strides.clone(),
+            self.offset,
+            self.logical_memory_space,
+            self.preferred_compute_device,
+            self.event.clone(),
+            !self.conjugated,
+            None,
+        )
+    }
+
+    /// Consume this tensor and return a lazily-conjugated version.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
+    /// let tc = t.into_conj();
+    /// assert!(tc.is_conjugated());
+    /// ```
+    pub fn into_conj(self) -> Tensor<T>
+    where
+        T: tenferro_algebra::Conjugate,
+    {
+        Tensor::from_parts(
+            self.buffer,
+            self.dims,
+            self.strides,
+            self.offset,
+            self.logical_memory_space,
+            self.preferred_compute_device,
+            self.event,
+            !self.conjugated,
+            None,
+        )
+    }
+}
+
 impl<T: Scalar> Tensor<T> {
+    /// Create a deep copy with an exclusively-owned contiguous buffer.
+    ///
+    /// Unlike [`clone`](Clone::clone) (which is a shallow `Arc` refcount
+    /// bump), this always allocates a fresh buffer and copies element data.
+    /// The returned tensor is contiguous in column-major order and has
+    /// `buffer.is_unique() == true`, so [`set`](Tensor::set) and
+    /// [`get_mut`](Tensor::get_mut) are guaranteed to succeed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
+    ///
+    /// let a = Tensor::<f64>::from_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0], &[2, 2], MemoryOrder::ColumnMajor,
+    /// ).unwrap();
+    /// let b = a.clone(); // shallow — shares buffer
+    ///
+    /// let mut c = a.deep_clone(); // deep — independent buffer
+    /// c.set(&[0, 0], 99.0).unwrap();
+    /// assert_eq!(c.get(&[0, 0]), Some(&99.0));
+    /// assert_eq!(a.get(&[0, 0]), Some(&1.0)); // original unchanged
+    /// ```
+    pub fn deep_clone(&self) -> Tensor<T> {
+        self.wait();
+        let order = MemoryOrder::ColumnMajor;
+        let mut data = vec![T::zero(); self.len()];
+        if !data.is_empty() {
+            let dst_strides = compute_contiguous_strides(&self.dims, order);
+            copy_strided(
+                self.cpu_backed_slice_or_panic("deep_clone"),
+                &self.dims,
+                &self.strides,
+                self.offset,
+                &mut data,
+                &dst_strides,
+            );
+        }
+        self.materialized_from_vec(data, order)
+    }
+
     /// Return a contiguous copy of this tensor in the given memory order.
     ///
     /// `order` controls the materialized output buffer only. It does not change
@@ -25,7 +123,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// let c = t.contiguous(MemoryOrder::RowMajor);
     /// assert!(c.is_contiguous());
     /// ```
@@ -74,7 +172,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let c = t.into_contiguous(MemoryOrder::ColumnMajor);
     /// assert!(c.is_contiguous());
     /// ```
@@ -95,43 +193,6 @@ impl<T: Scalar> Tensor<T> {
         self.contiguous(order)
     }
 
-    /// Returns `true` if the tensor data is contiguous in memory.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// assert!(t.is_contiguous());
-    /// ```
-    pub fn is_contiguous(&self) -> bool {
-        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
-            || is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
-    }
-
-    /// Check if the tensor has column-major contiguous layout.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// assert!(t.is_col_major_contiguous());
-    /// ```
-    pub fn is_col_major_contiguous(&self) -> bool {
-        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::ColumnMajor)
-    }
-
-    /// Check if the tensor has row-major contiguous layout.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
-    /// assert!(t.is_row_major_contiguous());
-    /// ```
-    pub fn is_row_major_contiguous(&self) -> bool {
-        is_contiguous_in_order(&self.dims, &self.strides, MemoryOrder::RowMajor)
-    }
-
     /// Consume this tensor and return a contiguous column-major version.
     ///
     /// This is a convenience wrapper around `into_contiguous(MemoryOrder::ColumnMajor)`
@@ -140,7 +201,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor);
+    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::RowMajor).unwrap();
     /// let col_major = t.into_column_major();
     /// assert!(col_major.is_col_major_contiguous());
     /// ```
@@ -148,59 +209,39 @@ impl<T: Scalar> Tensor<T> {
         self.into_contiguous(MemoryOrder::ColumnMajor)
     }
 
-    /// Return a lazily-conjugated tensor (shared buffer, flag flip).
+    /// Copy tensor data into a flat `Vec<T>` in column-major order.
+    ///
+    /// The returned vector has length `self.len()` with elements laid out
+    /// in column-major (Fortran) order. For a 2-D tensor with shape
+    /// `[m, n]`, the first `m` elements are column 0, the next `m` are
+    /// column 1, and so on.
+    ///
+    /// This method internally materializes a contiguous copy when the
+    /// tensor is not already column-major contiguous, so it always
+    /// returns owned data regardless of the original layout.
     ///
     /// # Examples
     ///
-    /// ```ignore
-    /// use num_complex::Complex64;
-    ///
-    /// let data = vec![Complex64::new(1.0, 2.0), Complex64::new(3.0, -4.0)];
-    /// let a = Tensor::from_slice(&data, &[2], MemoryOrder::ColumnMajor).unwrap();
-    /// let a_conj = a.conj();
-    /// assert!(a_conj.is_conjugated());
     /// ```
-    pub fn conj(&self) -> Tensor<T>
-    where
-        T: Conjugate,
-    {
-        Tensor::from_parts(
-            self.buffer.clone(),
-            self.dims.clone(),
-            self.strides.clone(),
-            self.offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            self.event.clone(),
-            !self.conjugated,
-            None,
-        )
-    }
-
-    /// Consume this tensor and return a lazily-conjugated version.
+    /// use tenferro_tensor::{MemoryOrder, Tensor};
     ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let t = Tensor::<f64>::zeros(&[2, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
-    /// let tc = t.into_conj();
-    /// assert!(tc.is_conjugated());
+    /// let t = Tensor::<f64>::from_row_major_slice(
+    ///     &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
+    ///     &[2, 3],
+    /// ).unwrap();
+    /// // Matrix (row-major input):
+    /// //   [[1, 2, 3],
+    /// //    [4, 5, 6]]
+    /// // Column-major output: col0=[1,4], col1=[2,5], col2=[3,6]
+    /// assert_eq!(t.to_vec(), vec![1.0, 4.0, 2.0, 5.0, 3.0, 6.0]);
     /// ```
-    pub fn into_conj(self) -> Tensor<T>
-    where
-        T: Conjugate,
-    {
-        Tensor::from_parts(
-            self.buffer,
-            self.dims,
-            self.strides,
-            self.offset,
-            self.logical_memory_space,
-            self.preferred_compute_device,
-            self.event,
-            !self.conjugated,
-            None,
-        )
+    pub fn to_vec(&self) -> Vec<T> {
+        let c = self.contiguous(MemoryOrder::ColumnMajor);
+        let slice = c
+            .buffer()
+            .as_slice()
+            .expect("to_vec: CPU-only operation; GPU tensors are not supported");
+        slice.to_vec()
     }
 
     fn triangular_part(&self, diagonal: isize, half: TriangularHalf) -> Tensor<T> {
@@ -334,7 +375,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let lower = a.tril(0);
     /// assert_eq!(lower.dims(), &[3, 3]);
     /// ```
@@ -347,7 +388,7 @@ impl<T: Scalar> Tensor<T> {
     /// # Examples
     ///
     /// ```ignore
-    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor);
+    /// let a = Tensor::<f64>::ones(&[3, 3], LogicalMemorySpace::MainMemory, MemoryOrder::ColumnMajor).unwrap();
     /// let upper = a.triu(0);
     /// assert_eq!(upper.dims(), &[3, 3]);
     /// ```

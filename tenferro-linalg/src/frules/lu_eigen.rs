@@ -20,7 +20,7 @@ use super::*;
 /// let da = Tensor::<f64>::ones(&[3, 3], mem, col).unwrap();
 /// let (result, dresult) = lu_frule(&mut ctx, &a, &da, LuPivot::Partial).unwrap();
 /// ```
-pub fn lu_frule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn lu_frule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     tangent: &Tensor<T>,
@@ -30,10 +30,11 @@ where
     T: KernelLinalgScalar,
     C: backend::TensorLinalgContextFor<T>
         + tenferro_prims::TensorMetadataContextFor
-        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>,
+        + tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T::Real>>,
     C::MetadataBackend: tenferro_prims::TensorMetadataPrims<Context = C>,
-    <C as tenferro_prims::TensorScalarContextFor<tenferro_algebra::Standard<T>>>::ScalarBackend:
-        tenferro_prims::TensorMetadataCastPrims<T, Context = C>,
+    <C as tenferro_prims::TensorScalarContextFor<
+        tenferro_algebra::Standard<T::Real>,
+    >>::ScalarBackend: tenferro_prims::TensorMetadataCastPrims<T::Real, Context = C>,
     T: crate::primal::LiftPermutationMatrixTensor<C>,
     C::Backend: 'static,
 {
@@ -67,65 +68,125 @@ where
             }
         }
 
-        // F = L^{-1} P dA U^{-1} (k×k for square part)
-        // First: L^{-1} PdA → solve L x = PdA
-        let l_sq: Vec<T> = {
-            let mut s = vec![T::zero(); k * k];
+        if m == n {
+            let l_sq = l_b.to_vec();
+            let u_sq = u_b.to_vec();
+            let linv_pda = backend_solve_tri(ctx, &l_sq, &pda, k, k, false)?;
+            let f_h = backend_solve_tri(
+                ctx,
+                &adjoint_transpose(&u_sq, k, k),
+                &adjoint_transpose(&linv_pda, k, k),
+                k,
+                k,
+                false,
+            )?;
+            let f = adjoint_transpose(&f_h, k, k);
+            let lower_f = tril_strict(&f, k);
+            let upper_f = triu(&f, k);
+
+            let dl_b_vec = backend_mat_mul(ctx, &l_sq, k, k, &lower_f, k)?;
+            let du_b_vec = backend_mat_mul(ctx, &upper_f, k, k, &u_sq, k)?;
+            dl_data[b * m * k..(b + 1) * m * k].copy_from_slice(&dl_b_vec);
+            du_data[b * k * n..(b + 1) * k * n].copy_from_slice(&du_b_vec);
+        } else if m < n {
+            let l_sq = l_b.to_vec();
+            let u1 = u_b[..k * k].to_vec();
+            let u2 = u_b[k * k..].to_vec();
+            let pda1 = pda[..k * k].to_vec();
+            let pda2 = pda[k * k..].to_vec();
+
+            let linv_pda1 = backend_solve_tri(ctx, &l_sq, &pda1, k, k, false)?;
+            let f_h = backend_solve_tri(
+                ctx,
+                &adjoint_transpose(&u1, k, k),
+                &adjoint_transpose(&linv_pda1, k, k),
+                k,
+                k,
+                false,
+            )?;
+            let f = adjoint_transpose(&f_h, k, k);
+            let lower_f = tril_strict(&f, k);
+            let upper_f = triu(&f, k);
+
+            let dl_b_vec = backend_mat_mul(ctx, &l_sq, k, k, &lower_f, k)?;
+            let du1 = backend_mat_mul(ctx, &upper_f, k, k, &u1, k)?;
+            let du2 = if n > k {
+                let linv_pda2 = backend_solve_tri(ctx, &l_sq, &pda2, k, n - k, false)?;
+                let correction = backend_mat_mul(ctx, &lower_f, k, k, &u2, n - k)?;
+                sub_vec(&linv_pda2, &correction)
+            } else {
+                Vec::new()
+            };
+
+            dl_data[b * m * k..(b + 1) * m * k].copy_from_slice(&dl_b_vec);
+            du_data[b * k * n..b * k * n + k * k].copy_from_slice(&du1);
+            if n > k {
+                du_data[b * k * n + k * k..(b + 1) * k * n].copy_from_slice(&du2);
+            }
+        } else {
+            let mut l1 = vec![T::zero(); k * k];
+            let mut l2 = vec![T::zero(); (m - k) * k];
             for j in 0..k {
                 for i in 0..k {
-                    s[i + j * k] = l_b[i + j * m];
+                    l1[i + j * k] = l_b[i + j * m];
+                }
+                for i in k..m {
+                    l2[(i - k) + j * (m - k)] = l_b[i + j * m];
                 }
             }
-            s
-        };
-        let pda_sq: Vec<T> = {
-            let mut s = vec![T::zero(); k * n];
-            for j in 0..n {
-                for i in 0..k {
-                    s[i + j * k] = pda[i + j * m];
-                }
-            }
-            s
-        };
-        let linv_pda = backend_solve_tri(ctx, &l_sq, &pda_sq, k, n, false)?;
+            let u_sq = u_b.to_vec();
 
-        // Then: (L^{-1} PdA) U^{-1} → solve (result) U = linv_pda
-        let u_sq: Vec<T> = {
-            let mut s = vec![T::zero(); k * k];
+            let mut pda1 = vec![T::zero(); k * k];
+            let mut pda2 = vec![T::zero(); (m - k) * k];
             for j in 0..k {
                 for i in 0..k {
-                    s[i + j * k] = u_b[i + j * k];
+                    pda1[i + j * k] = pda[i + j * m];
+                }
+                for i in k..m {
+                    pda2[(i - k) + j * (m - k)] = pda[i + j * m];
                 }
             }
-            s
-        };
-        // Solve x U = linv_pda → U^T x^T = linv_pda^T
-        let f_t = backend_solve_tri(
-            ctx,
-            &transpose(&u_sq, k, k),
-            &transpose(&linv_pda, k, n),
-            k,
-            k,
-            false,
-        )?;
-        let f = transpose(&f_t, k, k);
 
-        // dL = L tril_strict(F) (m×k)
-        let tril_f = tril_strict(&f, k);
-        let dl_b_vec = backend_mat_mul(ctx, &l_sq, k, k, &tril_f, k)?;
-        for j in 0..k {
-            for i in 0..k {
-                dl_data[b * m * k + i + j * m] = dl_b_vec[i + j * k];
-            }
-        }
+            let linv_pda1 = backend_solve_tri(ctx, &l1, &pda1, k, k, false)?;
+            let f_h = backend_solve_tri(
+                ctx,
+                &adjoint_transpose(&u_sq, k, k),
+                &adjoint_transpose(&linv_pda1, k, k),
+                k,
+                k,
+                false,
+            )?;
+            let f = adjoint_transpose(&f_h, k, k);
+            let lower_f = tril_strict(&f, k);
+            let upper_f = triu(&f, k);
 
-        // dU = triu(F) U (k×n)
-        let triu_f = triu(&f, k);
-        let du_b_vec = backend_mat_mul(ctx, &triu_f, k, k, &u_sq, k)?;
-        for j in 0..k {
-            for i in 0..k {
-                du_data[b * k * n + i + j * k] = du_b_vec[i + j * k];
+            let dl1 = backend_mat_mul(ctx, &l1, k, k, &lower_f, k)?;
+            let du_b_vec = backend_mat_mul(ctx, &upper_f, k, k, &u_sq, k)?;
+            let dl2 = if m > k {
+                let pda2_uinv_h = backend_solve_tri(
+                    ctx,
+                    &adjoint_transpose(&u_sq, k, k),
+                    &adjoint_transpose(&pda2, m - k, k),
+                    k,
+                    m - k,
+                    false,
+                )?;
+                let pda2_uinv = adjoint_transpose(&pda2_uinv_h, k, m - k);
+                let correction = backend_mat_mul(ctx, &l2, m - k, k, &upper_f, k)?;
+                sub_vec(&pda2_uinv, &correction)
+            } else {
+                Vec::new()
+            };
+
+            for j in 0..k {
+                for i in 0..k {
+                    dl_data[b * m * k + i + j * m] = dl1[i + j * k];
+                }
+                for i in k..m {
+                    dl_data[b * m * k + i + j * m] = dl2[(i - k) + j * (m - k)];
+                }
             }
+            du_data[b * k * n..(b + 1) * k * n].copy_from_slice(&du_b_vec);
         }
     }
 
