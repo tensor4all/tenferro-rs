@@ -388,37 +388,62 @@ where
 
         let rev_output = subs.inputs[k].clone();
 
-        // Inject delta tensors for output-only labels (same as einsum_rrule).
+        // Inject delta tensors for output-only labels.
+        // Uses [label, fresh] subscripts with diagonal embedding for repeated
+        // output labels — consistent with einsum_rrule.
         let all_input_labels: HashSet<u32> = rev_inputs_subs
             .iter()
             .flat_map(|labels| labels.iter().copied())
             .collect();
-        let mut unique_missing = Vec::new();
-        {
+        let unique_output: Vec<u32> = {
             let mut seen = HashSet::new();
-            for &label in &rev_output {
-                if !all_input_labels.contains(&label) && seen.insert(label) {
-                    unique_missing.push(label);
-                }
+            rev_output
+                .iter()
+                .filter(|l| seen.insert(**l))
+                .copied()
+                .collect()
+        };
+        let mut delta_subs: Vec<u32> = Vec::new();
+        let mut delta_tensors: Vec<Tensor<Alg::Scalar>> = Vec::new();
+        for &label in &unique_output {
+            if !all_input_labels.contains(&label) {
+                let dim = *size_dict.get(&label).ok_or_else(|| {
+                    tenferro_device::Error::InvalidArgument(format!(
+                        "einsum hvp: missing dimension for label {}",
+                        label
+                    ))
+                })?;
+                let space = primals[0].logical_memory_space();
+                delta_tensors.push(make_delta::<Alg::Scalar>(dim, space)?);
+                delta_subs.push(label);
             }
         }
-        let mut delta_tensors: Vec<Tensor<Alg::Scalar>> = Vec::new();
-        for &label in &unique_missing {
-            let dim = *size_dict.get(&label).ok_or_else(|| {
-                tenferro_device::Error::InvalidArgument(format!(
-                    "einsum hvp: missing dimension for label {}",
-                    label
-                ))
-            })?;
-            let space = primals[0].logical_memory_space();
-            let eye = make_delta::<Alg::Scalar>(dim, space)?;
-            rev_inputs_subs.push(vec![label, label]);
-            delta_tensors.push(eye);
+        let mut base_inputs = rev_inputs_subs.clone();
+        for &label in &delta_subs {
+            let max_label = subs
+                .inputs
+                .iter()
+                .flat_map(|v| v.iter())
+                .chain(subs.output.iter())
+                .copied()
+                .max()
+                .unwrap_or(0);
+            let fresh = max_label + 1 + (base_inputs.len() as u32);
+            base_inputs.push(vec![label, fresh]);
         }
-
-        let rev_subs = Subscripts {
-            inputs: rev_inputs_subs,
-            output: rev_output,
+        let base_output = unique_output.clone();
+        let base_subs = Subscripts {
+            inputs: base_inputs,
+            output: base_output,
+        };
+        let needs_embedding = unique_output != rev_output;
+        let embed_subs = if needs_embedding {
+            Some(Subscripts {
+                inputs: vec![unique_output],
+                output: rev_output.clone(),
+            })
+        } else {
+            None
         };
 
         let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
@@ -428,7 +453,13 @@ where
         for dt in &delta_tensors {
             rev_operands.push(dt);
         }
-        let grad_k = einsum_with_subscripts::<Alg, Backend>(ctx, &rev_subs, &rev_operands, None)?;
+        let grad_k_base =
+            einsum_with_subscripts::<Alg, Backend>(ctx, &base_subs, &rev_operands, None)?;
+        let grad_k = if let Some(ref es) = embed_subs {
+            einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&grad_k_base], None)?
+        } else {
+            grad_k_base
+        };
 
         let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent_tangent];
         for c in &conj_store {
@@ -437,8 +468,8 @@ where
         for dt in &delta_tensors {
             ops.push(dt);
         }
-        let mut hvp_k = Some(einsum_with_subscripts::<Alg, Backend>(
-            ctx, &rev_subs, &ops, None,
+        let mut hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(
+            ctx, &base_subs, &ops, None,
         )?);
 
         for (j, tangent_j_opt) in tangents.iter().enumerate().take(n) {
@@ -447,7 +478,6 @@ where
             }
             if let Some(tangent_j) = *tangent_j_opt {
                 let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-                // conj_store has one entry per i != k, in order.
                 let mut ci = 0;
                 for (i, _) in primals.iter().enumerate() {
                     if i != k {
@@ -458,24 +488,30 @@ where
                 for dt in &delta_tensors {
                     ops.push(dt);
                 }
-                match &mut hvp_k {
+                match &mut hvp_base {
                     None => {
-                        hvp_k = Some(einsum_with_subscripts::<Alg, Backend>(
-                            ctx, &rev_subs, &ops, None,
+                        hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(
+                            ctx, &base_subs, &ops, None,
                         )?);
                     }
                     Some(existing) => {
                         let one = <Alg::Scalar as num_traits::One>::one();
                         einsum_with_subscripts_into::<Alg, Backend>(
-                            ctx, &rev_subs, &ops, one, one, existing, None,
+                            ctx, &base_subs, &ops, one, one, existing, None,
                         )?;
                     }
                 }
             }
         }
 
-        let hvp_k = match hvp_k {
-            Some(t) => t,
+        let hvp_k = match hvp_base {
+            Some(t) => {
+                if let Some(ref es) = embed_subs {
+                    einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&t], None)?
+                } else {
+                    t
+                }
+            }
             None => {
                 let space = primals[k].logical_memory_space();
                 Tensor::zeros(primals[k].dims(), space, MemoryOrder::ColumnMajor)?
