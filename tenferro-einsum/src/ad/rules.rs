@@ -4,12 +4,32 @@ use tenferro_prims::TensorTempPoolContext;
 use tenferro_tensor::{MemoryOrder, Tensor};
 use tidu::{AdResult, Differentiable, DualValue};
 
-use crate::ad::delta::prepare_reverse_context;
+use crate::ad::delta::{prepare_reverse_context, ReverseContext};
 use crate::api::{einsum, einsum_with_subscripts, einsum_with_subscripts_into};
 use crate::execution::backend::{BackendContext, EinsumBackend};
 use crate::execution::execute::execute_nested;
 use crate::syntax::nested::NestedEinsum;
 use crate::syntax::subscripts::Subscripts;
+
+fn eval_with_embed<Alg, Backend>(
+    ctx: &mut BackendContext<Alg, Backend>,
+    rctx: &ReverseContext<Alg::Scalar>,
+    leading: &Tensor<Alg::Scalar>,
+) -> Result<Tensor<Alg::Scalar>>
+where
+    Alg: Semiring,
+    Alg::Scalar: Scalar + Conjugate + HasAlgebra<Algebra = Alg>,
+    Backend: EinsumBackend<Alg>,
+    BackendContext<Alg, Backend>: TensorTempPoolContext,
+{
+    let ops = rctx.assemble_rev_operands(leading);
+    let base = einsum_with_subscripts::<Alg, Backend>(ctx, &rctx.dctx.base_subs, &ops, None)?;
+    if let Some(ref es) = rctx.dctx.embed_subs {
+        einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&base], None)
+    } else {
+        Ok(base)
+    }
+}
 
 /// Dual einsum (forward-mode JVP propagation).
 ///
@@ -90,20 +110,7 @@ where
 
     for k in 0..n {
         let rctx = prepare_reverse_context::<Alg::Scalar>(&subs, operands, k, &size_dict)?;
-
-        let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-        for c in &rctx.conj_store {
-            ops.push(c);
-        }
-        for dt in &rctx.dctx.delta_tensors {
-            ops.push(dt);
-        }
-        let base = einsum_with_subscripts::<Alg, Backend>(ctx, &rctx.dctx.base_subs, &ops, None)?;
-        let grad = if let Some(ref es) = rctx.dctx.embed_subs {
-            einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&base], None)?
-        } else {
-            base
-        };
+        let grad = eval_with_embed::<Alg, Backend>(ctx, &rctx, cotangent)?;
         grads.push(grad);
     }
 
@@ -265,32 +272,12 @@ where
     for k in 0..n {
         let rctx = prepare_reverse_context::<Alg::Scalar>(&subs, primals, k, &size_dict)?;
 
-        let mut rev_operands: Vec<&Tensor<Alg::Scalar>> = vec![cotangent];
-        for c in &rctx.conj_store {
-            rev_operands.push(c);
-        }
-        for dt in &rctx.dctx.delta_tensors {
-            rev_operands.push(dt);
-        }
-        let grad_k_base =
-            einsum_with_subscripts::<Alg, Backend>(ctx, &rctx.dctx.base_subs, &rev_operands, None)?;
-        let grad_k = if let Some(ref es) = rctx.dctx.embed_subs {
-            einsum_with_subscripts::<Alg, Backend>(ctx, es, &[&grad_k_base], None)?
-        } else {
-            grad_k_base
-        };
+        let grad_k = eval_with_embed::<Alg, Backend>(ctx, &rctx, cotangent)?;
 
-        let mut ops: Vec<&Tensor<Alg::Scalar>> = vec![cotangent_tangent];
-        for c in &rctx.conj_store {
-            ops.push(c);
-        }
-        for dt in &rctx.dctx.delta_tensors {
-            ops.push(dt);
-        }
         let mut hvp_base = Some(einsum_with_subscripts::<Alg, Backend>(
             ctx,
             &rctx.dctx.base_subs,
-            &ops,
+            &rctx.assemble_rev_operands(cotangent_tangent),
             None,
         )?);
 

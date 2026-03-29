@@ -97,6 +97,19 @@ pub(super) struct ReverseContext<T> {
     pub dctx: DeltaContext<T>,
 }
 
+impl<T> ReverseContext<T> {
+    pub fn assemble_rev_operands<'a>(&'a self, leading: &'a Tensor<T>) -> Vec<&'a Tensor<T>> {
+        let mut ops: Vec<&Tensor<T>> = vec![leading];
+        for c in &self.conj_store {
+            ops.push(c);
+        }
+        for dt in &self.dctx.delta_tensors {
+            ops.push(dt);
+        }
+        ops
+    }
+}
+
 pub(super) fn prepare_reverse_context<T: Scalar + Conjugate>(
     subs: &Subscripts,
     operands: &[&Tensor<T>],
