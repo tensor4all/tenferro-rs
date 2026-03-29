@@ -270,6 +270,34 @@ impl Tensor {
         }
     }
 
+    /// Ensures that reverse-mode operands share one tape.
+    ///
+    /// Pending reverse leaves created by [`Tensor::set_requires_grad`] do not
+    /// attach to a concrete reverse tape until needed. Calling this helper on
+    /// a collection of tensors attaches all pending reverse leaves in the
+    /// collection to one common tape, while rejecting already-attached tensors
+    /// that belong to different tapes.
+    ///
+    /// This is useful before branch-local unary or linalg transforms on a
+    /// tensor network whose leaves should remain in one reverse graph.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use tenferro::{set_default_runtime, RuntimeContext, Tensor};
+    /// use tenferro_prims::CpuContext;
+    ///
+    /// let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+    /// let mut x = Tensor::from_slice(&[1.0_f64, 2.0], &[2]).unwrap();
+    /// let mut y = Tensor::from_slice(&[3.0_f64, 4.0], &[2]).unwrap();
+    /// x.set_requires_grad(true).unwrap();
+    /// y.set_requires_grad(true).unwrap();
+    /// Tensor::ensure_common_reverse_tape(&[&x, &y]).unwrap();
+    /// ```
+    pub fn ensure_common_reverse_tape(operands: &[&Self]) -> Result<()> {
+        ensure_common_reverse_tape(operands).map(|_| ())
+    }
+
     /// Returns the accumulated gradient for a reverse leaf, if available.
     ///
     /// # Examples
