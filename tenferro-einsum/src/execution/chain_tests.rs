@@ -8,6 +8,14 @@ use crate::planning::plan::compile_pairwise_step_plan;
 use crate::planning::tree::ContractionTree;
 use crate::syntax::subscripts::Subscripts;
 
+fn make_size_dict_for_matmul() -> std::collections::HashMap<u32, usize> {
+    let mut sd = std::collections::HashMap::new();
+    sd.insert(0, 2);
+    sd.insert(1, 3);
+    sd.insert(2, 4);
+    sd
+}
+
 fn tensor(data: &[f64], dims: &[usize]) -> Tensor<f64> {
     Tensor::from_slice(data, dims, MemoryOrder::ColumnMajor).unwrap()
 }
@@ -119,6 +127,199 @@ fn execute_binary_step_wrapper_with_beta_accumulation() {
     .unwrap();
 
     assert_tensor_close(&output, &tensor(&[3.0, 2.0, 3.0, 6.0], &[2, 2]));
+}
+
+#[test]
+fn maybe_plan_ewmul_returns_none_for_non_elementwise_gemm() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [0_u32, 2_u32];
+    let size_dict = make_size_dict_for_matmul();
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let a = tensor(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]);
+    let b = tensor(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+    );
+    let c = zeros(&[2, 4]);
+
+    assert!(maybe_plan_ewmul_for_step::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &plan,
+        a.dims(),
+        b.dims(),
+        c.dims(),
+    )
+    .is_none());
+}
+
+#[test]
+fn maybe_plan_ewmul_returns_none_for_diagonal_plan() {
+    let subs_a = [0_u32, 0_u32];
+    let subs_b = [0_u32];
+    let subs_c = &[0_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 3);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, subs_c, &size_dict).unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let a = tensor(&[1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 3.0], &[3, 3]);
+    let b = tensor(&[1.0, 2.0, 3.0], &[3]);
+    let c = zeros(&[3]);
+
+    assert!(maybe_plan_ewmul_for_step::<Standard<f64>, CpuBackend>(
+        &mut ctx,
+        &plan,
+        a.dims(),
+        b.dims(),
+        c.dims(),
+    )
+    .is_none());
+}
+
+#[test]
+fn maybe_plan_gemm_returns_none_when_skip_and_strict_binary() {
+    let subs_a = [0_u32];
+    let subs_b = [0_u32];
+    let subs_c = &[0_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 3);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, subs_c, &size_dict).unwrap();
+
+    if plan.strict_binary.is_some() {
+        let mut ctx = CpuContext::new(1);
+        assert!(
+            maybe_plan_gemm_for_step::<Standard<f64>, CpuBackend>(&mut ctx, &plan, true).is_none()
+        );
+    }
+}
+
+#[test]
+fn execute_linear_chain_four_operands_prev_on_left() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3], &[3, 4]], &[0, 4]);
+    let shapes = [&[2, 3][..], &[3, 2][..], &[2, 2][..], &[2, 3][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (4, 2), (5, 3)]).unwrap();
+    let chain = tree.linear_chain_plan().unwrap();
+
+    let a = tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let b = tensor(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]);
+    let c = tensor(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let d = tensor(&[2.0, 0.0, 0.0, 2.0, 1.0, 1.0], &[2, 3]);
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ab,bc,cd,de->ae",
+        &[&a, &b, &c, &d],
+        None,
+    )
+    .unwrap();
+
+    let mut output = zeros(expected.dims());
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_linear_chain_tree::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &tree,
+        &chain,
+        &[&a, &b, &c, &d],
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_linear_chain_with_beta_accumulation_into_existing_output() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (3, 2)]).unwrap();
+    let chain = tree.linear_chain_plan().unwrap();
+
+    let a = tensor(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let b = tensor(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+    let c = tensor(&[1.0, 0.0, 0.0, 1.0], &[2, 2]);
+
+    let init_val = 5.0;
+    let mut output = Tensor::from_slice(&[init_val; 4], &[2, 2], MemoryOrder::ColumnMajor).unwrap();
+
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_linear_chain_tree::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &tree,
+        &chain,
+        &[&a, &b, &c],
+        2.0,
+        1.0,
+        &mut output,
+        &mut pool,
+        false,
+    )
+    .unwrap();
+
+    let expected_vals = output.to_vec();
+    assert!(
+        expected_vals.iter().any(|&v| v != init_val),
+        "output should have been modified beyond the initial value"
+    );
+}
+
+#[test]
+fn execute_binary_step_with_plans_no_gemm_plan_uses_pairwise_fallback() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [0_u32, 2_u32];
+    let size_dict = make_size_dict_for_matmul();
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let a = tensor(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]);
+    let b = tensor(
+        &[
+            1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
+        ],
+        &[3, 4],
+    );
+    let mut output = zeros(&[2, 4]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_binary_step_with_plans::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &plan,
+        None,
+        None,
+        &subs_a,
+        &subs_b,
+        &subs_c,
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ij,jk->ik",
+        &[&a, &b],
+        None,
+    )
+    .unwrap();
+    assert_tensor_close(&output, &expected);
 }
 
 #[test]
