@@ -1,5 +1,7 @@
 use num_complex::{Complex32, Complex64};
-use tenferro::{forward_ad, set_default_runtime, RuntimeContext, ScalarType, Tensor};
+use tenferro::{
+    forward_ad, grad, set_default_runtime, GradOptions, RuntimeContext, ScalarType, Tensor,
+};
 use tenferro_prims::CpuContext;
 use tenferro_tensor::{MemoryOrder, Tensor as DenseTensor};
 
@@ -107,6 +109,102 @@ fn complex_forward_wrappers_cover_supported_svd_and_solve_paths() {
     .unwrap();
     assert_eq!(solve_primal.scalar_type(), ScalarType::C64);
     assert_eq!(solve_tangent.unwrap().scalar_type(), ScalarType::C64);
+}
+
+#[test]
+fn complex_forward_wrappers_cover_qr_and_lu_paths() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let a = matrix_c64(
+        &[
+            Complex64::new(4.0, 0.5),
+            Complex64::new(1.0, -0.25),
+            Complex64::new(1.0, 0.25),
+            Complex64::new(3.0, 1.0),
+        ],
+        &[2, 2],
+    );
+    let da = matrix_c64(
+        &[
+            Complex64::new(0.1, 0.0),
+            Complex64::new(-0.2, 0.05),
+            Complex64::new(0.3, -0.1),
+            Complex64::new(-0.4, 0.2),
+        ],
+        &[2, 2],
+    );
+
+    let (qr_primal, qr_tangent) = forward_ad::dual_level(|fw| {
+        let dual_a = fw.make_dual(&a, &da)?;
+        let qr = dual_a.qr()?;
+        fw.unpack_dual(&qr.q)
+    })
+    .unwrap();
+    assert_eq!(qr_primal.scalar_type(), ScalarType::C64);
+    assert_eq!(qr_tangent.unwrap().scalar_type(), ScalarType::C64);
+
+    let (lu_primal, lu_tangent) = forward_ad::dual_level(|fw| {
+        let dual_a = fw.make_dual(&a, &da)?;
+        let lu = dual_a.lu()?;
+        fw.unpack_dual(&lu.l)
+    })
+    .unwrap();
+    assert_eq!(lu_primal.scalar_type(), ScalarType::C64);
+    assert_eq!(lu_tangent.unwrap().scalar_type(), ScalarType::C64);
+}
+
+#[test]
+fn complex_reverse_wrappers_cover_qr_and_lu_paths() {
+    let _guard = set_default_runtime(RuntimeContext::Cpu(CpuContext::new(1)));
+
+    let mut a = matrix_c64(
+        &[
+            Complex64::new(4.0, 0.5),
+            Complex64::new(1.0, -0.25),
+            Complex64::new(1.0, 0.25),
+            Complex64::new(3.0, 1.0),
+        ],
+        &[2, 2],
+    );
+    a.set_requires_grad(true).unwrap();
+
+    let qr = a.qr().unwrap();
+    let qr_cotangent = matrix_c64(
+        &[
+            Complex64::new(1.0, -0.5),
+            Complex64::new(-0.25, 0.75),
+            Complex64::new(0.5, 0.25),
+            Complex64::new(-1.0, 0.125),
+        ],
+        &[2, 2],
+    );
+    let qr_grads = grad(
+        &[&qr.q],
+        &[&a],
+        Some(&[qr_cotangent]),
+        GradOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(qr_grads[0].as_ref().unwrap().scalar_type(), ScalarType::C64);
+
+    let lu = a.lu().unwrap();
+    let lu_cotangent = matrix_c64(
+        &[
+            Complex64::new(0.25, -0.125),
+            Complex64::new(0.5, 0.0),
+            Complex64::new(-0.75, 0.5),
+            Complex64::new(1.0, -0.25),
+        ],
+        &[2, 2],
+    );
+    let lu_grads = grad(
+        &[&lu.u],
+        &[&a],
+        Some(&[lu_cotangent]),
+        GradOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(lu_grads[0].as_ref().unwrap().scalar_type(), ScalarType::C64);
 }
 
 #[test]

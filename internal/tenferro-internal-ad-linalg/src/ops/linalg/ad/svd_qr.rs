@@ -290,7 +290,7 @@ pub struct QrAdBuilder<'a, T: Scalar> {
 
 impl<'a, T> QrAdBuilder<'a, T>
 where
-    T: RealLinalgRuntimeValue,
+    T: LinalgRuntimeValue,
 {
     /// Executes AD QR.
     /// # Examples
