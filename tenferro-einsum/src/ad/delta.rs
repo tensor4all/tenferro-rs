@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use tenferro_algebra::Scalar;
+use tenferro_algebra::{Conjugate, Scalar};
 use tenferro_device::{LogicalMemorySpace, Result};
 use tenferro_tensor::{MemoryOrder, Tensor};
 
@@ -90,4 +90,34 @@ pub(super) fn build_delta_context<T: Scalar>(
         base_subs,
         embed_subs,
     })
+}
+
+pub(super) struct ReverseContext<T> {
+    pub conj_store: Vec<Tensor<T>>,
+    pub dctx: DeltaContext<T>,
+}
+
+pub(super) fn prepare_reverse_context<T: Scalar + Conjugate>(
+    subs: &Subscripts,
+    operands: &[&Tensor<T>],
+    k: usize,
+    size_dict: &HashMap<u32, usize>,
+) -> Result<ReverseContext<T>> {
+    let mut rev_inputs_subs = vec![subs.output.clone()];
+    let mut conj_store = Vec::new();
+    for (i, &op) in operands.iter().enumerate() {
+        if i != k {
+            rev_inputs_subs.push(subs.inputs[i].clone());
+            conj_store.push(op.conj());
+        }
+    }
+    let rev_output = subs.inputs[k].clone();
+    let dctx = build_delta_context::<T>(
+        subs,
+        &rev_inputs_subs,
+        &rev_output,
+        size_dict,
+        operands[0].logical_memory_space(),
+    )?;
+    Ok(ReverseContext { conj_store, dctx })
 }
