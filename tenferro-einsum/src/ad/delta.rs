@@ -1,3 +1,17 @@
+//! Delta tensor helpers for reverse-mode einsum AD rules.
+//!
+//! When the reverse output subscript contains labels not present in the
+//! reverse inputs (e.g. trace `"ii->"` where the output-only label `i`
+//! requires an identity/delta tensor), this module supplies:
+//!
+//! * [`make_delta`] — constructs an identity matrix of dimension `n`.
+//! * [`build_delta_context`] — inspects reverse subscripts and assembles
+//!   the delta tensors, fresh label subscripts, and optional embedding
+//!   pass needed to handle repeated output labels.
+//! * [`ReverseContext`] / [`prepare_reverse_context`] — higher-level
+//!   helper that builds the full reverse-mode operand list (conjugated
+//!   non-`k` operands + delta tensors) for a given primal index `k`.
+
 use std::collections::{HashMap, HashSet};
 
 use tenferro_algebra::{Conjugate, Scalar};
