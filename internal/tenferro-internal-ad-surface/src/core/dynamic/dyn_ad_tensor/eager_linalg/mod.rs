@@ -149,19 +149,17 @@ impl Tensor {
                 })
             }
             Self::C32(value) => {
-                let dense = Self::dense_primal_complex_only(value, "qr")?;
-                let out = crate::ops::qr(&dense).run()?;
+                let out = ad::qr(value)?;
                 Ok(QrResult {
-                    q: Tensor::from_tensor(out.q),
-                    r: Tensor::from_tensor(out.r),
+                    q: out.q.into(),
+                    r: out.r.into(),
                 })
             }
             Self::C64(value) => {
-                let dense = Self::dense_primal_complex_only(value, "qr")?;
-                let out = crate::ops::qr(&dense).run()?;
+                let out = ad::qr(value)?;
                 Ok(QrResult {
-                    q: Tensor::from_tensor(out.q),
-                    r: Tensor::from_tensor(out.r),
+                    q: out.q.into(),
+                    r: out.r.into(),
                 })
             }
         }
@@ -194,21 +192,19 @@ impl Tensor {
                 })
             }
             Self::C32(value) => {
-                let dense = Self::dense_primal_complex_only(value, "lu")?;
-                let out = crate::ops::lu(&dense).run()?;
+                let out = ad::lu(value)?;
                 Ok(LuResult {
                     p: out.p.into(),
-                    l: Tensor::from_tensor(out.l),
-                    u: Tensor::from_tensor(out.u),
+                    l: out.l.into(),
+                    u: out.u.into(),
                 })
             }
             Self::C64(value) => {
-                let dense = Self::dense_primal_complex_only(value, "lu")?;
-                let out = crate::ops::lu(&dense).run()?;
+                let out = ad::lu(value)?;
                 Ok(LuResult {
                     p: out.p.into(),
-                    l: Tensor::from_tensor(out.l),
-                    u: Tensor::from_tensor(out.u),
+                    l: out.l.into(),
+                    u: out.u.into(),
                 })
             }
         }

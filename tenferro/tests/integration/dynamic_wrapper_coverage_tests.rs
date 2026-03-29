@@ -521,7 +521,7 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
     assert_eq!(reverse_svd_grad.scalar_type(), ScalarType::C64);
     assert_eq!(reverse_svd_grad.dims(), &[2, 2]);
 
-    let complex32_err = match reverse!(matrix_c32(
+    let mut reverse_complex32_qr = reverse!(matrix_c32(
         &[
             Complex32::new(4.0, 0.5),
             Complex32::new(1.0, -0.25),
@@ -529,15 +529,59 @@ fn tensor_dynamic_linalg_wrappers_cover_success_and_error_paths() {
             Complex32::new(3.0, 1.0),
         ],
         &[2, 2],
-    ))
-    .qr()
-    {
-        Ok(_) => panic!("complex reverse-mode qr should stay rejected by the dynamic wrapper"),
-        Err(err) => err,
-    };
-    assert!(
-        matches!(complex32_err, tenferro::Error::InvalidAdTensor { message } if message.contains("supports complex tensors only in primal mode"))
-    );
+    ));
+    reverse_complex32_qr.set_requires_grad(true).unwrap();
+    let reverse_complex32_qr_out = reverse_complex32_qr.qr().unwrap();
+    let reverse_complex32_qr_cotangent = primal!(matrix_c32(
+        &[
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    ));
+    let reverse_complex32_qr_grads = grad(
+        &[&reverse_complex32_qr_out.q],
+        &[&reverse_complex32_qr],
+        Some(&[reverse_complex32_qr_cotangent]),
+        GradOptions::default(),
+    )
+    .unwrap();
+    let reverse_complex32_qr_grad = reverse_complex32_qr_grads[0].as_ref().unwrap();
+    assert_eq!(reverse_complex32_qr_grad.scalar_type(), ScalarType::C32);
+    assert_eq!(reverse_complex32_qr_grad.dims(), &[2, 2]);
+
+    let mut reverse_complex32_lu = reverse!(matrix_c32(
+        &[
+            Complex32::new(4.0, 0.5),
+            Complex32::new(1.0, -0.25),
+            Complex32::new(1.0, 0.25),
+            Complex32::new(3.0, 1.0),
+        ],
+        &[2, 2],
+    ));
+    reverse_complex32_lu.set_requires_grad(true).unwrap();
+    let reverse_complex32_lu_out = reverse_complex32_lu.lu().unwrap();
+    let reverse_complex32_lu_cotangent = primal!(matrix_c32(
+        &[
+            Complex32::new(1.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(0.0, 0.0),
+            Complex32::new(1.0, 0.0),
+        ],
+        &[2, 2],
+    ));
+    let reverse_complex32_lu_grads = grad(
+        &[&reverse_complex32_lu_out.u],
+        &[&reverse_complex32_lu],
+        Some(&[reverse_complex32_lu_cotangent]),
+        GradOptions::default(),
+    )
+    .unwrap();
+    let reverse_complex32_lu_grad = reverse_complex32_lu_grads[0].as_ref().unwrap();
+    assert_eq!(reverse_complex32_lu_grad.scalar_type(), ScalarType::C32);
+    assert_eq!(reverse_complex32_lu_grad.dims(), &[2, 2]);
 
     let mismatch_err = matrix32.solve(&rhs64).unwrap_err();
     assert!(

@@ -205,7 +205,7 @@ where
 /// };
 /// let grad_a = qr_rrule(&mut ctx, &a, &cotangent).unwrap();
 /// ```
-pub fn qr_rrule<T: KernelLinalgScalar<Real = T> + num_traits::Float, C>(
+pub fn qr_rrule<T, C>(
     ctx: &mut C,
     tensor: &Tensor<T>,
     cotangent: &QrCotangent<T>,
@@ -246,20 +246,18 @@ where
         };
 
         if m >= n {
-            // For thin QR (m >= n): A = QR where Q is m×k, R is k×n.
-            // Match PyTorch's reduced-QR backward for the real case.
-            let r_drt = backend_mat_mul(ctx, r_b, k, n, &transpose(&dr_b, k, n), k)?;
-            let dqt_q = backend_mat_mul(ctx, &transpose(&dq_b, m, k), k, m, q_b, k)?;
-            let w = sub_vec(&r_drt, &dqt_q);
+            let r_drh = backend_mat_mul(ctx, r_b, k, n, &adjoint_transpose(&dr_b, k, n), k)?;
+            let dqh_q = backend_mat_mul(ctx, &adjoint_transpose(&dq_b, m, k), k, m, q_b, k)?;
+            let w = sub_vec(&r_drh, &dqh_q);
 
             let h = copyltu(&w, k);
             let qh = backend_mat_mul(ctx, q_b, m, k, &h, k)?;
             let rhs = add_vec(&dq_b, &qh);
 
             let r_square = r_b[..k * n].to_vec();
-            let rhs_t = transpose(&rhs, m, k);
-            let da_t = backend_solve_tri(ctx, &r_square, &rhs_t, k, m, true)?;
-            let da_first_k = transpose(&da_t, k, m);
+            let rhs_h = adjoint_transpose(&rhs, m, k);
+            let da_h = backend_solve_tri(ctx, &r_square, &rhs_h, k, m, true)?;
+            let da_first_k = adjoint_transpose(&da_h, k, m);
 
             for j in 0..k.min(n) {
                 for i in 0..m {
@@ -267,29 +265,21 @@ where
                 }
             }
         } else {
-            // Wide reduced QR follows the PyTorch backward:
-            // gA = pi*(Q trilImInvAdjSkew(Q^T gQ - gR R^T) R1^{-T}) + Q gR
-            let qtgq = backend_mat_mul(ctx, &transpose(q_b, m, k), k, m, &dq_b, k)?;
-            let gr_rt = backend_mat_mul(ctx, &dr_b, k, n, &transpose(r_b, k, n), k)?;
-            let wide_inner = sub_vec(&qtgq, &gr_rt);
-
-            let mut lower_skew = vec![T::zero(); k * k];
-            for j in 0..k {
-                for i in j..k {
-                    lower_skew[i + j * k] = wide_inner[i + j * k] - wide_inner[j + i * k];
-                }
-            }
+            let qhgq = backend_mat_mul(ctx, &adjoint_transpose(q_b, m, k), k, m, &dq_b, k)?;
+            let gr_rh = backend_mat_mul(ctx, &dr_b, k, n, &adjoint_transpose(r_b, k, n), k)?;
+            let wide_inner = sub_vec(&qhgq, &gr_rh);
+            let lower_skew = tril_im_inv_adj_skew(&wide_inner, k)?;
 
             let q_lower = backend_mat_mul(ctx, q_b, m, k, &lower_skew, k)?;
-            let q_lower_t = transpose(&q_lower, m, k);
             let mut r1 = vec![T::zero(); k * k];
             for j in 0..k {
                 for i in 0..k {
                     r1[i + j * k] = r_b[i + j * k];
                 }
             }
-            let leading_t = backend_solve_tri(ctx, &r1, &q_lower_t, k, m, true)?;
-            let leading = transpose(&leading_t, k, m);
+            let q_lower_h = adjoint_transpose(&q_lower, m, k);
+            let leading_h = backend_solve_tri(ctx, &r1, &q_lower_h, k, m, true)?;
+            let leading = adjoint_transpose(&leading_h, k, m);
 
             for j in 0..k {
                 for i in 0..m {

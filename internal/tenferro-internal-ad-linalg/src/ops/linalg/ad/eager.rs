@@ -55,7 +55,7 @@ eager_unary!(
     /// ```
     fn qr -> TypedQrResult<T> => qr_ad;
     where {
-        T: RealLinalgRuntimeValue,
+        T: LinalgRuntimeValue,
     }
 );
 
@@ -71,7 +71,7 @@ eager_unary!(
     /// ```
     fn lu -> TypedLuResult<T> => lu_ad;
     where {
-        T: crate::runtime::dispatch::RealLuLinalgDispatchValue,
+        T: crate::runtime::dispatch::LuLinalgDispatchValue,
     }
 );
 

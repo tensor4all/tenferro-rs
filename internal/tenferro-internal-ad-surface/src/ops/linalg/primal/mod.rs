@@ -13,3 +13,6 @@ pub use factorizations::*;
 pub use solve::*;
 pub use spectral::*;
 pub use tensorized::*;
+
+#[cfg(test)]
+mod tests;
