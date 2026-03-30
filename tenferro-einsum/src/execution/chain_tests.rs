@@ -360,3 +360,304 @@ fn execute_linear_chain_three_operands_with_pool_return() {
 
     assert_tensor_close(&output, &expected);
 }
+
+fn tensor_row_major(data: &[f64], dims: &[usize]) -> Tensor<f64> {
+    Tensor::from_slice(data, dims, MemoryOrder::RowMajor).unwrap()
+}
+
+fn tensor_with_strides(
+    data: &[f64],
+    dims: &[usize],
+    strides: &[isize],
+    offset: isize,
+) -> Tensor<f64> {
+    Tensor::from_vec(data.to_vec(), dims, strides, offset).unwrap()
+}
+
+#[test]
+fn execute_binary_step_with_row_major_inputs() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [0_u32, 2_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let a = tensor_row_major(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 3]);
+    let b = tensor_row_major(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+    );
+
+    let mut output = zeros(&[2, 4]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_binary_step::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &plan,
+        &subs_a,
+        &subs_b,
+        &subs_c,
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ij,jk->ik",
+        &[&a, &b],
+        None,
+    )
+    .unwrap();
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_binary_step_with_mixed_memory_orders() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [0_u32, 2_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let a = tensor(&[1.0, 4.0, 2.0, 5.0, 3.0, 6.0], &[2, 3]);
+    let b = tensor_row_major(
+        &[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0,
+        ],
+        &[3, 4],
+    );
+
+    let mut output = zeros(&[2, 4]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_binary_step::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &plan,
+        &subs_a,
+        &subs_b,
+        &subs_c,
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ij,jk->ik",
+        &[&a, &b],
+        None,
+    )
+    .unwrap();
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_binary_step_with_noncontiguous_input() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [0_u32, 2_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 3);
+    size_dict.insert(2, 4);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let large_data: Vec<f64> = (0..24).map(|i| (i + 1) as f64).collect();
+    let a = tensor_with_strides(&large_data, &[2, 3], &[1, 8], 0);
+
+    let b = tensor(
+        &[
+            1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0, 4.0, 8.0, 12.0,
+        ],
+        &[3, 4],
+    );
+
+    let a_contiguous = a.clone().into_contiguous(MemoryOrder::ColumnMajor);
+
+    let mut output = zeros(&[2, 4]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_binary_step::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &plan,
+        &subs_a,
+        &subs_b,
+        &subs_c,
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ij,jk->ik",
+        &[&a_contiguous, &b],
+        None,
+    )
+    .unwrap();
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn linear_chain_returns_intermediate_buffers_to_pool() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[3, 4][..], &[4, 5][..], &[5, 6][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (3, 2)]).unwrap();
+    let chain = tree.linear_chain_plan().unwrap();
+
+    let a = tensor(
+        &(0..12).map(|i| (i + 1) as f64).collect::<Vec<_>>(),
+        &[3, 4],
+    );
+    let b = tensor(
+        &(0..20).map(|i| (i + 1) as f64).collect::<Vec<_>>(),
+        &[4, 5],
+    );
+    let c = tensor(
+        &(0..30).map(|i| (i + 1) as f64).collect::<Vec<_>>(),
+        &[5, 6],
+    );
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ab,bc,cd->ad",
+        &[&a, &b, &c],
+        None,
+    )
+    .unwrap();
+
+    let mut output = zeros(expected.dims());
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_linear_chain_tree::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &tree,
+        &chain,
+        &[&a, &b, &c],
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_binary_step_with_both_noncontiguous_inputs() {
+    let subs_a = [0_u32, 1_u32];
+    let subs_b = [1_u32, 2_u32];
+    let subs_c = [0_u32, 2_u32];
+    let mut size_dict = std::collections::HashMap::new();
+    size_dict.insert(0, 2);
+    size_dict.insert(1, 2);
+    size_dict.insert(2, 2);
+    let plan = compile_pairwise_step_plan(&subs_a, &subs_b, &subs_c, &size_dict).unwrap();
+
+    let large_a: Vec<f64> = (0..16).map(|i| (i + 1) as f64).collect();
+    let a = tensor_with_strides(&large_a, &[2, 2], &[1, 6], 0);
+
+    let large_b: Vec<f64> = (0..16).map(|i| (i + 1) as f64 * 0.5).collect();
+    let b = tensor_with_strides(&large_b, &[2, 2], &[1, 6], 0);
+
+    let a_c = a.clone().into_contiguous(MemoryOrder::ColumnMajor);
+    let b_c = b.clone().into_contiguous(MemoryOrder::ColumnMajor);
+
+    let mut output = zeros(&[2, 2]);
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_binary_step::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &plan,
+        &subs_a,
+        &subs_b,
+        &subs_c,
+        &a,
+        &b,
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ij,jk->ik",
+        &[&a_c, &b_c],
+        None,
+    )
+    .unwrap();
+    assert_tensor_close(&output, &expected);
+}
+
+#[test]
+fn execute_linear_chain_with_row_major_operands() {
+    let subs = Subscripts::new(&[&[0, 1], &[1, 2], &[2, 3]], &[0, 3]);
+    let shapes = [&[2, 2][..], &[2, 2][..], &[2, 2][..]];
+    let tree = ContractionTree::from_pairs(&subs, &shapes, &[(0, 1), (3, 2)]).unwrap();
+    let chain = tree.linear_chain_plan().unwrap();
+
+    let a = tensor_row_major(&[1.0, 2.0, 3.0, 4.0], &[2, 2]);
+    let b = tensor_row_major(&[5.0, 6.0, 7.0, 8.0], &[2, 2]);
+    let c = tensor_row_major(&[2.0, 1.0, 0.0, 3.0], &[2, 2]);
+
+    let expected = crate::api::einsum::<Standard<f64>, CpuBackend>(
+        &mut CpuContext::new(1),
+        "ab,bc,cd->ad",
+        &[&a, &b, &c],
+        None,
+    )
+    .unwrap();
+
+    let mut output = zeros(expected.dims());
+    let mut ctx = CpuContext::new(1);
+    let mut pool = BufferPool::new();
+
+    execute_linear_chain_tree::<Standard<f64>, CpuBackend, _>(
+        &mut ctx,
+        &tree,
+        &chain,
+        &[&a, &b, &c],
+        1.0,
+        0.0,
+        &mut output,
+        &mut pool,
+        true,
+    )
+    .unwrap();
+
+    assert_tensor_close(&output, &expected);
+}
